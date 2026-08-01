@@ -59,6 +59,23 @@ function envelopeOf(row: EventRow): WebhookEvent {
   ) as WebhookEvent;
 }
 
+/**
+ * The error the registry logged alongside its phase line.
+ *
+ * `console.error` is called with the phase line AND the normalized exception,
+ * so an assertion that reads only the first argument cannot tell a logged
+ * failure from a logged label. `normalizeHookError` wraps an untyped throw, so
+ * the thrown text arrives as the wrapper's `cause` rather than its message; a
+ * typed throw arrives as itself, carrying its `logContext`. All three are
+ * rendered so a test can name the original failure whichever way it was thrown.
+ */
+function loggedFailure(spy: { mock: { calls: unknown[][] } }): string {
+  const error = spy.mock.calls[0]?.[1];
+  const cause = (error as { cause?: unknown } | undefined)?.cause;
+  const context = (error as { logContext?: unknown } | undefined)?.logContext;
+  return `${String(error)} ${String(cause ?? "")} ${JSON.stringify(context ?? {})}`;
+}
+
 async function events(handle: TestNextly): Promise<EventRow[]> {
   return handle.adapter.select<EventRow>("nextly_events");
 }
@@ -140,6 +157,10 @@ describe("webhook outbox capture (integration)", () => {
     // let a regression that swallows the hook error entirely still pass.
     expect(logged).toHaveBeenCalled();
     expect(String(logged.mock.calls[0][0])).toContain("afterCreate");
+    // The exception, not only the phase line: an implementation that logged
+    // the label and dropped the error would satisfy the assertion above while
+    // losing the operator's only diagnostic for a write reported successful.
+    expect(loggedFailure(logged)).toContain("afterCreate observer failed");
 
     const rows = await events(current);
     expect(rows).toHaveLength(1);
@@ -188,6 +209,10 @@ describe("webhook outbox capture (integration)", () => {
     // clean run while every item's side effect quietly broke.
     expect(logged).toHaveBeenCalled();
     expect(String(logged.mock.calls[0][0])).toContain("afterDelete");
+    // The exception, not only the phase line: an implementation that logged
+    // the label and dropped the error would satisfy the assertion above while
+    // losing the operator's only diagnostic for a write reported successful.
+    expect(loggedFailure(logged)).toContain("afterDelete observer failed");
 
     const rows = await events(current);
     expect(rows.map(r => r.type).sort()).toEqual([
