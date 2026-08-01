@@ -41,15 +41,44 @@ import { validate } from "./validation";
  */
 const ITERATIONS_PER_ROUND = 10;
 
+/** Wall-clock time of one round: `ITERATIONS_PER_ROUND` passes of the operation. */
+function timeRound(operation: () => void): number {
+  const started = performance.now();
+  for (let pass = 0; pass < ITERATIONS_PER_ROUND; pass += 1) operation();
+  return performance.now() - started;
+}
+
 function fastest(runs: number, operation: () => void): number {
   let best = Number.POSITIVE_INFINITY;
   for (let run = 0; run < runs; run += 1) {
-    const started = performance.now();
-    for (let pass = 0; pass < ITERATIONS_PER_ROUND; pass += 1) operation();
-    const elapsed = performance.now() - started;
-    if (elapsed < best) best = elapsed;
+    best = Math.min(best, timeRound(operation));
   }
   return best;
+}
+
+/**
+ * Fastest round of each of two operations, measured in alternation.
+ *
+ * Timing one operation to completion and then the other lets a burst of load
+ * land wholly on one side of a ratio. Another test file finishing during the
+ * first measurement inflates it and the ratio comes out low; during the second
+ * and it comes out high. Either way the number describes the machine rather
+ * than the code, which is the one thing this gate is arranged not to do.
+ * Alternating means a burst long enough to matter is seen by both sides, and
+ * taking each side's minimum then discards it.
+ */
+function fastestPair(
+  runs: number,
+  first: () => void,
+  second: () => void
+): { first: number; second: number } {
+  let bestFirst = Number.POSITIVE_INFINITY;
+  let bestSecond = Number.POSITIVE_INFINITY;
+  for (let run = 0; run < runs; run += 1) {
+    bestFirst = Math.min(bestFirst, timeRound(first));
+    bestSecond = Math.min(bestSecond, timeRound(second));
+  }
+  return { first: bestFirst, second: bestSecond };
 }
 
 /** The two document sizes compared. The spread is what gives the gate its power. */
@@ -61,11 +90,19 @@ const LARGE_NODES = 4000;
  *
  * The spread matters more than the threshold. At twice the size, linear work
  * costs 2x and quadratic work 4x, and a measured quadratic landed at 2.93x
- * against a 3x limit: near enough to slip through. At four times the size the
- * same two shapes cost 4x and 16x, so 8 sits a clean factor of two from either,
- * and noise would have to double a measurement to matter.
+ * against a 3x limit: near enough to slip through. Four times the size
+ * separates the two shapes properly, at 4x against 16x.
+ *
+ * Where to sit between them was measured rather than reasoned, because a
+ * quadratic in part of the work moves the ratio by less than a quadratic in all
+ * of it. Over repeated runs: unchanged code 4.05x–4.16x, a quadratic confined
+ * to the id-tracking step 6.96x–7.08x, and one dominating the traversal 10.16x.
+ * A limit of 6 sits in the gap, far enough above the linear band that noise
+ * would have to inflate one side by half, and below a regression that accounts
+ * for only a fraction of the total. Interleaving the two measurements is what
+ * keeps the linear band that tight, so the two belong together.
  */
-const MAX_GROWTH_FACTOR = 8;
+const MAX_GROWTH_FACTOR = 6;
 
 /**
  * A ceiling that no working implementation approaches, present only to catch a
@@ -96,8 +133,11 @@ describe("validation scales linearly with document size", () => {
       validate(small, ctx);
       validate(large, ctx);
 
-      const smallTime = fastest(5, () => void validate(small, ctx));
-      const largeTime = fastest(5, () => void validate(large, ctx));
+      const { first: smallTime, second: largeTime } = fastestPair(
+        5,
+        () => void validate(small, ctx),
+        () => void validate(large, ctx)
+      );
       const growth = largeTime / Math.max(smallTime, 0.001);
 
       expect(
@@ -170,8 +210,11 @@ describe("migration scales linearly with document size", () => {
       migrateDocument(small, source);
       migrateDocument(large, source);
 
-      const smallTime = fastest(5, () => void migrateDocument(small, source));
-      const largeTime = fastest(5, () => void migrateDocument(large, source));
+      const { first: smallTime, second: largeTime } = fastestPair(
+        5,
+        () => void migrateDocument(small, source),
+        () => void migrateDocument(large, source)
+      );
       const growth = largeTime / Math.max(smallTime, 0.001);
 
       expect(
@@ -181,4 +224,26 @@ describe("migration scales linearly with document size", () => {
     },
     MEASUREMENT_TIMEOUT_MS
   );
+});
+
+describe("the two sides of a ratio are measured together", () => {
+  it("alternates the operations instead of timing one to completion", () => {
+    // Sequential timing puts every pass of one side before the first pass of
+    // the other, which is exactly what lets a burst of load skew one of them.
+    // Interleaving is the property being asserted, so it is asserted directly
+    // rather than inferred from a timing that would be noise-dependent.
+    const order: string[] = [];
+    fastestPair(
+      3,
+      () => order.push("small"),
+      () => order.push("large")
+    );
+    expect(order.indexOf("large")).toBeLessThan(order.lastIndexOf("small"));
+    expect(order.filter(side => side === "small")).toHaveLength(
+      3 * ITERATIONS_PER_ROUND
+    );
+    expect(order.filter(side => side === "large")).toHaveLength(
+      3 * ITERATIONS_PER_ROUND
+    );
+  });
 });
