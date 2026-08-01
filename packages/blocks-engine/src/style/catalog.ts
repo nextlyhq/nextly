@@ -72,9 +72,6 @@ function dimension(
  * test holds the whole catalog to it.
  */
 const SELF_POSITIONS = [
-  // Aligns to the centre of the element's anchor, which no other position
-  // reproduces; the catalog already exposes anchor() on the insets.
-  "anchor-center",
   "center",
   "start",
   "end",
@@ -377,6 +374,11 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
       "normal",
       "stretch",
       ...BASELINE_POSITIONS,
+      // A standalone alternative in the grammar rather than a self position,
+      // so it takes no overflow-safety keyword: `safe anchor-center` is not a
+      // value. It aligns to the centre of the element's anchor, which no other
+      // position reproduces.
+      "anchor-center",
       ...withOverflowSafety(SELF_POSITIONS),
     ]),
     summary: "Cross-axis alignment of children.",

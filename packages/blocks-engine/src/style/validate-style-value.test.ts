@@ -2141,7 +2141,6 @@ describe("a CSS-wide keyword spelled with escapes on a numeric property", () => 
 describe("values only these vocabularies can express", () => {
   it("accepts alignment to an anchor's centre", () => {
     expect(codes({ alignItems: "anchor-center" })).toEqual([]);
-    expect(codes({ alignItems: "safe anchor-center" })).toEqual([]);
   });
 
   it("accepts an inline list item, which the legacy keyword cannot reach", () => {
@@ -2268,5 +2267,40 @@ describe("a design token reference carries nothing else", () => {
     expect(codes({ padding: { blockStart: { $token: "space.4" } } })).toEqual(
       []
     );
+  });
+});
+
+describe("a standalone alignment alternative", () => {
+  it("takes no overflow-safety keyword, since it is not a self position", () => {
+    expect(codes({ alignItems: "safe anchor-center" })).toEqual([
+      "invalid-style-value",
+    ]);
+    expect(codes({ alignItems: "unsafe anchor-center" })).toEqual([
+      "invalid-style-value",
+    ]);
+  });
+
+  it("still works alone, and leaves the real self positions expanding", () => {
+    expect(codes({ alignItems: "anchor-center" })).toEqual([]);
+    expect(codes({ alignItems: "safe center" })).toEqual([]);
+    expect(codes({ alignItems: "unsafe self-start" })).toEqual([]);
+  });
+});
+
+describe("tokens that are not identifiers still carry escapes", () => {
+  it("decodes a hexadecimal colour's digits", () => {
+    expect(checkColorValue("#\\66 ff")).toBeNull();
+    expect(checkColorValue("#\\66\\66\\66")).toBeNull();
+  });
+
+  it("decodes the unit an attribute declares", () => {
+    expect(codes({ width: "attr(data-width p\\78)" })).toEqual([]);
+  });
+
+  it("does not turn a wrong value into a right one", () => {
+    expect(checkColorValue("#ggg")).toBe("not-a-color");
+    expect(codes({ width: "attr(data-width de\\67)" })).toEqual([
+      "invalid-style-value",
+    ]);
   });
 });

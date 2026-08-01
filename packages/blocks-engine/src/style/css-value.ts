@@ -277,8 +277,7 @@ function attrProducesDimension(
   // the same answer it gives everywhere else it cannot read a grammar.
   if (declared.type === "Function") return identifierOf(declared) === "type";
   return (
-    declared.type === "Identifier" &&
-    LENGTH_UNITS.has(asciiLower(declared.name))
+    declared.type === "Identifier" && LENGTH_UNITS.has(identifierOf(declared))
   );
 }
 
@@ -616,7 +615,7 @@ function unquotedUrlText(children: Iterable<CssNode>): string | null {
         text += `${String(child.value)}%`;
         break;
       case "Hash":
-        text += `#${child.value}`;
+        text += `#${decodeIdentifier(child.value)}`;
         break;
       default:
         return null;
@@ -1190,7 +1189,11 @@ export function checkColorValue(value: string): CssValueRejection | null {
     // A hex literal. The parser accepts any token after `#`, so the digits and
     // the length are checked here rather than assumed.
     case "Hash":
-      return HEX_COLOR.test(node.value) ? null : "not-a-color";
+      // The digits carry escapes as any identifier does, so `#\66 ff` is the
+      // colour `#fff` and comparing the raw spelling refuses it.
+      return HEX_COLOR.test(decodeIdentifier(node.value))
+        ? null
+        : "not-a-color";
     case "Identifier": {
       const name = identifierOf(node);
       return COLOR_KEYWORDS.has(name) || SYSTEM_COLORS.has(name)
