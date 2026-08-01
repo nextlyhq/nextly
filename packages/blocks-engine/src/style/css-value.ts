@@ -222,8 +222,9 @@ const MATH_FUNCTION_ARITY: ReadonlyMap<string, readonly number[] | null> =
     ["clamp", [3]],
     ["mod", [2]],
     ["rem", [2]],
-    // A rounding strategy is optional, so two arguments or three.
-    ["round", [2, 3]],
+    // The strategy is optional and so is the interval, so anywhere from one
+    // argument to three.
+    ["round", [1, 2, 3]],
   ]);
 
 /**
@@ -377,6 +378,13 @@ const ANGLE_FUNCTION_ARITY: ReadonlyMap<string, readonly number[]> = new Map([
   ["atan", [1]],
   ["atan2", [2]],
 ]);
+
+/**
+ * `atan2()` relates two values rather than reading one ratio, so it takes any
+ * numeric type as long as both arguments agree. The other three are defined
+ * over a bare number.
+ */
+const ANGLE_FUNCTIONS_TAKING_ANY: ReadonlySet<string> = new Set(["atan2"]);
 
 const NUMBER_FUNCTION_DOMAIN: ReadonlyMap<string, NumericDomain> = new Map([
   ["sqrt", "number"],
@@ -827,12 +835,15 @@ function measurementRejection(
         const angleArgs = splitArguments(node.children);
         const angleArity = ANGLE_FUNCTION_ARITY.get(name) ?? [1];
         if (!angleArity.includes(angleArgs.length)) return "not-a-length";
+        const angleDomain: NumericDomain = ANGLE_FUNCTIONS_TAKING_ANY.has(name)
+          ? "any"
+          : "number";
         for (const arg of angleArgs) {
           const rejection = alternationRejection(arg, NO_KEYWORDS, {
             allowNegative: true,
             allowPercentage: false,
             functions: limits.functions,
-            domain: "number",
+            domain: angleDomain,
           });
           if (rejection !== null) return rejection;
         }

@@ -1025,7 +1025,6 @@ describe("how many arguments a math function takes", () => {
       "clamp(1px, 2px)",
       "abs(1px, 2px)",
       "mod(1px)",
-      "round(1px)",
       "min()",
     ]) {
       expect(codes({ width: value }), value).toEqual(["invalid-style-value"]);
@@ -1892,5 +1891,83 @@ describe("arithmetic operators are written as CSS requires", () => {
     ]) {
       expect(codes({ width: value }), value).toEqual([]);
     }
+  });
+});
+
+describe("a rounding interval is optional too", () => {
+  it("accepts the form that rounds to the default interval", () => {
+    expect(codes({ width: "calc(round(1.2) * 1px)" })).toEqual([]);
+    expect(codes({ width: "round(10px)" })).toEqual([]);
+    expect(codes({ width: "round(up, 10px)" })).toEqual([]);
+  });
+
+  it("still refuses a strategy out of place, or too many arguments", () => {
+    expect(codes({ width: "round(1px, up)" })).toEqual(["invalid-style-value"]);
+    expect(codes({ width: "round(1px, 2px, 3px, 4px)" })).toEqual([
+      "invalid-style-value",
+    ]);
+  });
+});
+
+describe("the angle function that relates two values", () => {
+  it("takes any numeric type, as long as it is given two", () => {
+    expect(codes({ width: "calc(sin(atan2(1px, 1px)) * 10px)" })).toEqual([]);
+    expect(codes({ width: "calc(sin(atan2(1, 1)) * 10px)" })).toEqual([]);
+  });
+
+  it("does not loosen the ones defined over a bare number", () => {
+    expect(codes({ width: "calc(sin(asin(1px)) * 10px)" })).toEqual([
+      "invalid-style-value",
+    ]);
+  });
+
+  it("is still held to its arity", () => {
+    expect(codes({ width: "calc(sin(atan2(1)) * 10px)" })).toEqual([
+      "invalid-style-value",
+    ]);
+  });
+});
+
+describe("containers that answer a scroll-state query", () => {
+  it("accepts the type alone and combined with a size type", () => {
+    for (const value of [
+      "scroll-state",
+      "inline-size scroll-state",
+      "scroll-state inline-size",
+      "size scroll-state",
+    ]) {
+      expect(codes({ containerType: value }), value).toEqual([]);
+    }
+  });
+
+  it("keeps the two size types mutually exclusive", () => {
+    expect(codes({ containerType: "inline-size size" })).toEqual([
+      "invalid-style-value",
+    ]);
+  });
+
+  it("leaves the plain types working", () => {
+    for (const value of ["normal", "size", "inline-size"]) {
+      expect(codes({ containerType: value }), value).toEqual([]);
+    }
+  });
+});
+
+describe("the contain size keyword", () => {
+  it("is accepted where a size belongs", () => {
+    for (const property of [
+      "width",
+      "height",
+      "minWidth",
+      "minHeight",
+      "maxWidth",
+      "maxHeight",
+    ]) {
+      expect(codes({ [property]: "contain" }), property).toEqual([]);
+    }
+  });
+
+  it("is not a length everywhere", () => {
+    expect(codes({ gap: "contain" })).toEqual(["invalid-style-value"]);
   });
 });

@@ -159,6 +159,9 @@ const SIZING_KEYWORDS = [
   "max-content",
   "fit-content",
   "stretch",
+  // Fits the content while respecting the containing block, which neither
+  // `stretch` nor `fit-content` reproduces.
+  "contain",
 ];
 const MAX_SIZING_KEYWORDS = [
   "none",
@@ -166,6 +169,7 @@ const MAX_SIZING_KEYWORDS = [
   "max-content",
   "fit-content",
   "stretch",
+  "contain",
 ];
 const FONT_SIZE_KEYWORDS = [
   // Scales with MathML script level; no absolute or relative size reproduces it.
@@ -861,7 +865,12 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "containerType",
     group: "container",
-    shape: keyword("container-type", ["normal", "inline-size", "size"]),
+    // A scroll-state container answers a different kind of query from a size
+    // one, and the two combine in either order.
+    shape: keyword("container-type", [
+      "normal",
+      ...unorderedCombinations([["inline-size", "size"], ["scroll-state"]]),
+    ]),
     summary: "Opt the element in as a query container for its descendants.",
   },
 ];
