@@ -34,6 +34,7 @@ import type {
 import { NextlyError } from "../../../errors/nextly-error";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { MetaService } from "../../meta/services/meta-service";
+import { isFieldGroupRegistry } from "../storage/resolve-storage-names";
 
 import { MIGRATION_TARGET } from "./manifest";
 import { rewriteConfigPath } from "./rewrite-config-path";
@@ -102,19 +103,22 @@ export const FIELD_GROUP_STORAGE_VOCABULARY: FieldGroupStorageVocabulary = {
 };
 
 /**
- * Registry tables holding stored field definitions.
+ * Registry tables holding stored field definitions, for one registry spelling.
  *
  * Spelled here rather than taken from `STORAGE_FORMAT`, because only one of them
  * names the field-group concept. The other two are collection and single
  * storage, and they hold field-group *references* inside their own definitions —
  * which is exactly why they have to be rewritten too, and why they do not move
  * when the concept is renamed.
+ *
+ * The field-group registry arrives as an argument because this rewrite is asked
+ * twice per run, against two different physical tables: as a data step while the
+ * legacy name is live, and again at settlement, by which point going up the
+ * migrated name is the one that exists.
  */
-const DEFINITION_TABLES = [
-  "dynamic_collections",
-  "dynamic_singles",
-  STORAGE_FORMAT.registryTable,
-] as const;
+function definitionTables(registryTable: string): readonly string[] {
+  return ["dynamic_collections", "dynamic_singles", registryTable];
+}
 
 /** The columns one registry row needs written back. */
 type Patch = Record<string, unknown>;
@@ -254,7 +258,11 @@ export function buildDataMigrationSteps(args: {
   const { meta, migrationId, from, to } = args;
 
   return [
-    registryDefinitionsStep(from, to),
+    // The legacy name, unconditionally. These steps execute only while it is
+    // the live one: before the renames going up, and after they are undone
+    // going down. Resolving here would be asking a question whose answer is
+    // already fixed by where the step sits.
+    registryDefinitionsStep(from, to, STORAGE_FORMAT.registryTable),
     schemaEventScopeStep(from, to),
     ...CONTENT_TARGETS.map(target =>
       contentStep({ meta, migrationId, target, from, to })
@@ -278,8 +286,10 @@ export function buildDataMigrationSteps(args: {
  */
 function registryDefinitionsStep(
   from: FieldGroupStorageVocabulary,
-  to: FieldGroupStorageVocabulary
+  to: FieldGroupStorageVocabulary,
+  registryTable: string
 ): MigrationStep {
+  const tables = definitionTables(registryTable);
   return {
     id: "data:registry-definitions",
     async run(session) {
@@ -290,7 +300,7 @@ function registryDefinitionsStep(
         // that from committing the rows already rewritten and leaving exactly
         // the mixed-vocabulary registry set this step exists to prevent.
         const staged: { table: string; id: string; patch: Patch }[] = [];
-        for (const table of DEFINITION_TABLES) {
+        for (const table of tables) {
           for (const row of await readRegistryRows(ctx, table)) {
             const patch = registryPatch(row, table, from, to);
             if (!patch.ok) return patch;
@@ -309,7 +319,7 @@ function registryDefinitionsStep(
     },
     async verify(session) {
       const outcome = await session.inTransaction(async ctx => {
-        for (const table of DEFINITION_TABLES) {
+        for (const table of tables) {
           for (const row of await readRegistryRows(ctx, table)) {
             const patch = registryPatch(row, table, from, to);
             if (!patch.ok) return patch;
@@ -377,7 +387,13 @@ function registryPatch(
   // Only the field-group registry records a path under the renamed directory.
   // A collection's `config_path` names `collections/`, and rewriting it would be
   // renaming a directory this migration has nothing to do with.
-  if (table === STORAGE_FORMAT.registryTable) {
+  //
+  // Asked under BOTH spellings rather than compared against the legacy one. The
+  // settlement check addresses this registry by whichever name the catalog
+  // holds, so a comparison against a single name would quietly stop examining
+  // `config_path` the moment the rename had happened — the one moment the check
+  // exists for.
+  if (isFieldGroupRegistry(table)) {
     const configPath = readProperty(row, {
       table,
       property: CONFIG_PATH_PROPERTY,
