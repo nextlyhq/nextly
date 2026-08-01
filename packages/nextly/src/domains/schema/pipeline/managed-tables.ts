@@ -1,4 +1,5 @@
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import { MIGRATION_TARGET } from "../../field-groups/migration/manifest";
 // Identifies which tables Nextly manages. Used as the tablesFilter
 // argument to drizzle-kit's pushSchema so we never touch user tables
 // or non-managed nextly_* tables.
@@ -21,8 +22,16 @@ export function isManagedTable(name: string): boolean {
 // They match the managed prefix above, so the diff/pushSchema pipeline MUST additionally
 // exclude them via `isCompanionTable`, or it would introspect/diff them against a desired state
 // that never declares them and spuriously add/drop the table.
+//
+// 🔴 The field-group prefix is matched under BOTH storage generations, which is
+// wider than `isManagedTable` above deliberately. A companion is recognised so
+// that callers can EXCLUDE it, and a caller that reaches a field-group table by
+// walking the catalog rather than through the managed filter — the orphan sweep
+// does exactly that — sees the migrated companion whether or not the pipeline
+// considers the prefix managed. Failing to recognise it there means probing a
+// companion as though it were an instance table, for a column it does not have.
 const COMPANION_TABLE_REGEX = new RegExp(
-  `^(dc_|single_|${STORAGE_FORMAT.tablePrefix}).+${STORAGE_FORMAT.companionSuffix}$`
+  `^(dc_|single_|${STORAGE_FORMAT.tablePrefix}|${MIGRATION_TARGET.tablePrefix}).+${STORAGE_FORMAT.companionSuffix}$`
 );
 
 export function isCompanionTable(name: string): boolean {
