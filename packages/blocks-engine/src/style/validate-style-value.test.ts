@@ -2304,3 +2304,71 @@ describe("tokens that are not identifiers still carry escapes", () => {
     ]);
   });
 });
+
+describe("operands of one math function describe one kind of quantity", () => {
+  it("refuses a length mixed with a bare number", () => {
+    for (const value of [
+      "min(1px, 2)",
+      "max(2, 1px)",
+      "clamp(1px, 2, 3px)",
+      "hypot(1px, 2)",
+      "mod(1px, 2)",
+      "round(1px, 2)",
+    ]) {
+      expect(codes({ width: value }), value).toEqual(["invalid-style-value"]);
+    }
+  });
+
+  it("treats a percentage as the length it resolves to", () => {
+    // A percentage resolves against the property, so mixing it with a length
+    // is ordinary CSS rather than a type error.
+    expect(codes({ width: "min(1px, 50%)" })).toEqual([]);
+    expect(codes({ width: "clamp(1px, 50%, 3px)" })).toEqual([]);
+  });
+
+  it("leaves consistent and unknowable operands alone", () => {
+    expect(codes({ width: "min(1px, 2px)" })).toEqual([]);
+    expect(codes({ width: "clamp(1rem, 2vw, 3rem)" })).toEqual([]);
+    expect(codes({ width: "min(1px, var(--x))" })).toEqual([]);
+    expect(codes({ width: "round(up, 10px, 1px)" })).toEqual([]);
+    expect(codes({ width: "calc(1px * 2)" })).toEqual([]);
+  });
+});
+
+describe("a functional attribute type", () => {
+  it("is refused, the only valid one being unreachable", () => {
+    // `type(<syntax>)` is the sole functional form, and its angle brackets are
+    // refused for every value before this is asked. Accepting a function here
+    // could only admit a wrong one.
+    expect(codes({ width: "attr(data-width type(foo))" })).toEqual([
+      "invalid-style-value",
+    ]);
+    expect(codes({ width: "attr(data-width type(length))" })).toEqual([
+      "invalid-style-value",
+    ]);
+  });
+
+  it("leaves a declared unit working", () => {
+    expect(codes({ width: "attr(data-width px)" })).toEqual([]);
+  });
+});
+
+describe("emptiness judged by CSS's whitespace, not JavaScript's", () => {
+  it("treats a value CSS reads as an identifier as a value", () => {
+    expect(checkCssValue(" ")).toBeNull();
+    expect(checkCssValue("　")).toBeNull();
+    expect(checkCssValue(" Font")).toBeNull();
+  });
+
+  it("still calls a value of real whitespace empty", () => {
+    expect(checkCssValue("   ")).toBe("unparsable");
+    expect(checkCssValue("\t\n")).toBe("unparsable");
+  });
+});
+
+describe("a block-level ruby box", () => {
+  it("is storable, the legacy keyword being inline-level", () => {
+    expect(codes({ display: "block ruby" })).toEqual([]);
+    expect(codes({ display: "ruby" })).toEqual([]);
+  });
+});

@@ -331,6 +331,9 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
       "table-caption",
       // Ruby annotation roles, which no other display mode reproduces.
       "ruby",
+      // A ruby box that participates in layout as a block; the legacy keyword
+      // is inline-level and cannot reproduce it.
+      "block ruby",
       "ruby-base",
       "ruby-text",
       "ruby-base-container",

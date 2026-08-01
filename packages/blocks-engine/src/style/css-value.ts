@@ -273,9 +273,13 @@ function attrProducesDimension(
   }
   const declared = first[1];
   if (declared === undefined) return false;
-  // `type(<syntax>)` names a syntax this module does not model; abstaining is
-  // the same answer it gives everywhere else it cannot read a grammar.
-  if (declared.type === "Function") return identifierOf(declared) === "type";
+  // A functional type is not accepted at all. The only valid one is
+  // `type(<syntax>)`, and its angle brackets are refused for every value
+  // before this runs — they are how `</style>` closes the element a stylesheet
+  // is emitted into — and css-tree cannot parse that grammar either. Accepting
+  // a function here could therefore only ever admit a WRONG one, such as
+  // `type(foo)`, while never admitting the right one.
+  if (declared.type === "Function") return false;
   return (
     declared.type === "Identifier" && LENGTH_UNITS.has(identifierOf(declared))
   );
@@ -768,7 +772,7 @@ export function checkCssValue(value: string): CssValueRejection | null {
   // trimming an oversized string scans and copies all of it before anything
   // decides the value was never going to be read.
   if (value.length > MAX_VALUE_LENGTH) return "too-long";
-  if (value.trim() === "") return "unparsable";
+  if (trimCssWhitespace(value) === "") return "unparsable";
   if (UNSAFE_VALUE_CHARS.test(value)) return "unsafe-characters";
   if (COMMENT_DELIMITERS.test(value)) return "unsafe-characters";
   if (nestingDepth(value) > MAX_VALUE_NESTING) return "too-deeply-nested";
@@ -1001,6 +1005,18 @@ function measurementRejection(
       if (arity !== null && !arity.includes(operands.length)) {
         return "not-a-length";
       }
+      // The operands of one function describe one kind of quantity: `min(1px,
+      // 2)` mixes a length with a number and is discarded. A percentage counts
+      // as a length here, because that is what it resolves against on a
+      // property taking one, and anything not a literal abstains.
+      const seen = new Set<string>();
+      for (const arg of operands) {
+        const category = literalCategory(arg);
+        if (category !== null) {
+          seen.add(category === "percentage" ? "length" : category);
+        }
+      }
+      if (seen.size > 1) return "not-a-length";
       for (const arg of operands) {
         // Inside a math function the sign of any one term says nothing about
         // the sign of the result, so the non-negative rule does not apply. The
