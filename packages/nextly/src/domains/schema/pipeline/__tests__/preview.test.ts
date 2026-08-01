@@ -44,8 +44,22 @@ describe("previewDesiredSchema", () => {
     { name: "id", type: "text", nullable: false },
     { name: "title", type: "text", nullable: false },
     { name: "slug", type: "text", nullable: false },
-    { name: "created_at", type: "integer", nullable: true },
-    { name: "updated_at", type: "integer", nullable: true },
+    // Nullable, with a default. The default is what makes an omitted INSERT work; NOT NULL is
+    // deliberately NOT applied, because tightening a column on a table a user already has is not
+    // an additive upgrade — see `upgrade-sim-045`, which fails any non-additive statement against
+    // a pre-existing table.
+    {
+      name: "created_at",
+      type: "integer",
+      nullable: true,
+      default: "(strftime('%s', 'now'))",
+    },
+    {
+      name: "updated_at",
+      type: "integer",
+      nullable: true,
+      default: "(strftime('%s', 'now'))",
+    },
     { name: "created_by", type: "text", nullable: true },
   ];
 
