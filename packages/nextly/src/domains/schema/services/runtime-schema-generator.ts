@@ -331,6 +331,12 @@ function buildSystemDrizzleColumn(
     // Row owner — nullable text (matches the id column type); no default so
     // system/seed creates and existing rows stay null.
     if (sys.name === "created_by") return pgText("created_by");
+    // No `defaultNow`, unlike the other two timestamps: a row that has never
+    // been published must read NULL, and a default would date a publication
+    // that did not happen.
+    if (sys.name === "first_published_at") {
+      return pgTimestamp("first_published_at");
+    }
     // title / slug — text NOT NULL.
     return pgText(sys.name).notNull();
   }
@@ -352,6 +358,10 @@ function buildSystemDrizzleColumn(
     if (sys.name === "created_by") {
       return mysqlVarchar("created_by", { length: 191 });
     }
+    // Nullable and undefaulted, unlike created_at/updated_at — see the pg branch.
+    if (sys.name === "first_published_at") {
+      return mysqlTimestamp("first_published_at");
+    }
     return mysqlVarchar(sys.name, { length: 255 }).notNull();
   }
   // sqlite
@@ -372,6 +382,10 @@ function buildSystemDrizzleColumn(
   }
   // Row owner — nullable text (matches the id column type).
   if (sys.name === "created_by") return sqliteText("created_by");
+  // Nullable and undefaulted, unlike created_at/updated_at — see the pg branch.
+  if (sys.name === "first_published_at") {
+    return sqliteInteger("first_published_at", { mode: "timestamp" });
+  }
   return sqliteText(sys.name).notNull();
 }
 

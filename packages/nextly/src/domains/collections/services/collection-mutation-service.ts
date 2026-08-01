@@ -2797,6 +2797,19 @@ export class CollectionMutationService extends BaseService {
         entryData[toSnakeCase(key)] = value;
       }
 
+      // A create that lands directly on published IS a first publication — there is no prior
+      // status it could be repeating, which is the same reason the transition check below treats
+      // it as a publish. Read from the post-hook `finalData` for that reason too: a hook that
+      // derives `status: "published"`, or a status the caller could not write itself, must stamp
+      // the value actually stored. Taken before the locale split, which strips `status` from a
+      // non-default-locale main payload.
+      if (
+        (collection as { status?: boolean }).status === true &&
+        finalData.status === "published"
+      ) {
+        entryData.first_published_at = now;
+      }
+
       // Authorize the published state this create will persist, judged on the
       // post-hook `finalData` rather than the raw body: a beforeCreate/stored
       // hook that derives `status: "published"`, or a status field the caller
@@ -3613,8 +3626,12 @@ export class CollectionMutationService extends BaseService {
           }
 
           if (hasMainStatus) {
+            // `COALESCE` rather than a read-then-write: this dates the FIRST publication, so it
+            // must not move on a republish, and expressing "only if absent" in the statement
+            // makes that true of concurrent publishes too. `nowExpr` keeps it dialect-correct
+            // without round-tripping a Date through a raw parameter.
             await tx.execute(
-              `UPDATE ${q(tableName)} SET ${q("status")} = ${ph(1)}, ${q("updated_at")} = ${nowExpr} WHERE ${q("id")} = ${ph(2)}`,
+              `UPDATE ${q(tableName)} SET ${q("status")} = ${ph(1)}, ${q("updated_at")} = ${nowExpr}, ${q("first_published_at")} = COALESCE(${q("first_published_at")}, ${nowExpr}) WHERE ${q("id")} = ${ph(2)}`,
               ["published", params.entryId]
             );
           }
@@ -4995,8 +5012,10 @@ export class CollectionMutationService extends BaseService {
           componentFieldData = { ...baseComponentFieldData };
           workingDraftDocument = undefined;
           // `let` because promote-on-publish rebinds it from the merged
-          // draft+payload after the working draft is folded in below.
-          let updatePayload = {
+          // draft+payload after the working draft is folded in below. Annotated
+          // rather than inferred: the literal's own shape would refuse the
+          // first-publish stamp appended before the UPDATE is assembled.
+          let updatePayload: Record<string, unknown> = {
             ...stripImmutableSystemFields(finalData),
             updatedAt: new Date(),
           };
@@ -5378,6 +5397,34 @@ export class CollectionMutationService extends BaseService {
             this.dialect === "postgresql"
               ? `$${sqlParams.length}` // length already incremented by push below
               : "?";
+
+          // A row becoming public for the first time records when, once and for good.
+          //
+          // `status` says what a document IS; nothing said what it HAS BEEN, so an unpublish
+          // erased every trace it was ever live while the links, feeds and search results it
+          // accumulated stayed exactly where they were. Anything asking "was this address ever
+          // public" — slug stability, redirect capture — needs a fact that survives that round
+          // trip.
+          //
+          // Written under the same row lock and in the same statement as the rest of the update,
+          // so it cannot disagree with the status it accompanies. Only when the locked row has
+          // none: this dates the FIRST publication, and a later republish must not move it. A
+          // non-default-locale write is excluded for the same reason its status is stripped from
+          // the main payload — it does not change the main row's lifecycle.
+          if (
+            collectionHasStatus &&
+            !isNonDefaultLocaleStatusWrite &&
+            (preUpdateRow as { first_published_at?: unknown } | undefined)
+              ?.first_published_at == null &&
+            resolvePublishTransition(
+              ((preUpdateRow as { status?: unknown } | undefined)?.status as
+                | string
+                | undefined) ?? null,
+              intendedStatus
+            ) === "publish"
+          ) {
+            updatePayload.firstPublishedAt = new Date();
+          }
 
           const setClauses = Object.entries(updatePayload)
             .map(([key, val]) => {
