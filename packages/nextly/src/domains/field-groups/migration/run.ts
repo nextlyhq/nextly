@@ -33,11 +33,6 @@ import {
 } from "../../schema/utils/resolve-catalog-name";
 import { forgetFieldGroupStorageNames } from "../storage/resolve-storage-names";
 
-import {
-  FIELD_GROUP_STORAGE_VOCABULARY,
-  LEGACY_STORAGE_VOCABULARY,
-  assertLedgersSettled,
-} from "./data-steps";
 import { resolveStorageVerdict } from "./guard";
 import {
   buildMigrationManifest,
@@ -330,20 +325,6 @@ export async function runFieldGroupMigration(
         // definitions are addressed through typed CRUD under the legacy name and
         // so are only expressible before the renames; asking them now would name
         // a table that no longer exists.
-        await assertLedgersSettled({
-          session,
-          meta,
-          migrationId,
-          from:
-            direction === "up"
-              ? LEGACY_STORAGE_VOCABULARY
-              : FIELD_GROUP_STORAGE_VOCABULARY,
-          to:
-            direction === "up"
-              ? FIELD_GROUP_STORAGE_VOCABULARY
-              : LEGACY_STORAGE_VOCABULARY,
-        });
-
         // Asked of the database rather than inferred from the steps having run.
         // A step reports its own postcondition; this asks whether the storage as
         // a whole is now what the generation claims, which is the question a

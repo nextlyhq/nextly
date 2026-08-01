@@ -64,6 +64,7 @@ import {
   FIELD_GROUP_STORAGE_VOCABULARY,
   LEGACY_STORAGE_VOCABULARY,
   assertLedgersSettled,
+  settleLedgersStep,
 } from "../data-steps";
 import { MIGRATION_TARGET } from "../manifest";
 import { runFieldGroupMigration } from "../run";
@@ -799,6 +800,49 @@ for (const entry of DIALECTS) {
           steps: "data:schema-event-scope",
         },
       });
+    });
+
+    /**
+     * 🔴 The property the post-hoc assertion did not have: a retry converges.
+     *
+     * The settle step re-runs the ledger rewrites before it checks them, so a
+     * straggler committed after its original step is simply rewritten. Asserted
+     * by planting one BEFORE the run reaches its final step is impossible to
+     * time reliably, so it is planted after a completed run and the migration is
+     * re-driven — which is exactly what an operator does after a refusal, and
+     * the case the previous design could never clear.
+     */
+    it("rewrites a straggler rather than refusing forever", async () => {
+      await migrate("up");
+
+      await insertRow(adapter, "nextly_schema_events", {
+        id: randomUUID(),
+        eventType: "core_apply",
+        source: "cli-migrate",
+        scopeKind: STORAGE_FORMAT.schemaEventScope,
+        status: "applied",
+      });
+      await expect(settlementResidue()).rejects.toMatchObject({
+        logContext: { steps: "data:schema-event-scope" },
+      });
+
+      // The step's own run, which is what a retry executes.
+      await withMigrationSession(
+        {
+          adapter: adapter as never,
+          dialect: entry.dialect as MigrationDialect,
+          label: "settle-retry",
+        },
+        session =>
+          settleLedgersStep({
+            meta: new MetaService(adapter as never, logger as never),
+            migrationId: "settle-retry",
+            from: LEGACY_STORAGE_VOCABULARY,
+            to: FIELD_GROUP_STORAGE_VOCABULARY,
+          }).run(session)
+      );
+
+      await expect(settlementResidue()).resolves.toBeUndefined();
     });
 
     it("reports a second run as already migrated", async () => {
