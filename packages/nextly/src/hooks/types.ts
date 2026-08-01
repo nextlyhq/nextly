@@ -37,12 +37,14 @@ import type { Nextly } from "../direct-api/nextly";
  * Hook execution order for a create operation:
  * 1. beforeOperation - Run before any operation (can modify args)
  * 2. beforeCreate - Run before validation and database insert
- * 3. afterCreate - Run after database insert completes
+ * 3. beforeChange - Run after validation, on the data about to be written
+ * 4. afterCreate - Run after database insert completes
  *
  * Hook execution order for an update operation:
  * 1. beforeOperation - Run before any operation (can modify args)
  * 2. beforeUpdate - Run before validation and database update
- * 3. afterUpdate - Run after database update completes
+ * 3. beforeChange - Run after validation, on the data about to be written
+ * 4. afterUpdate - Run after database update completes
  *
  * Hook execution order for a delete operation:
  * 1. beforeOperation - Run before any operation (can modify args)
@@ -53,17 +55,35 @@ import type { Nextly } from "../direct-api/nextly";
  * 1. beforeOperation - Run before any operation (can modify args)
  * 2. beforeRead - Run before database query
  * 3. afterRead - Run after database query completes
+ *
+ * `beforeCreate`/`beforeUpdate` and `beforeChange` are both pre-write, and the
+ * difference between them is the validation gate. A `beforeCreate` handler can
+ * supply or repair a value and have the rules applied to what it produced; a
+ * `beforeChange` handler receives data that has already passed them, which is
+ * what makes it the phase for deriving a stored value -- and also means what it
+ * returns is written without being re-checked.
  */
-export type HookType =
-  | "beforeOperation"
-  | "beforeCreate"
-  | "afterCreate"
-  | "beforeUpdate"
-  | "afterUpdate"
-  | "beforeDelete"
-  | "afterDelete"
-  | "beforeRead"
-  | "afterRead";
+export const HOOK_TYPES = [
+  "beforeOperation",
+  "beforeCreate",
+  "afterCreate",
+  "beforeUpdate",
+  "afterUpdate",
+  "beforeChange",
+  "beforeDelete",
+  "afterDelete",
+  "beforeRead",
+  "afterRead",
+] as const;
+
+/**
+ * Derived from {@link HOOK_TYPES} rather than declared separately, so anything
+ * that has to visit every phase -- clearing a collection's handlers, for one --
+ * can iterate the same list the type is built from. A hand-maintained array
+ * annotated `HookType[]` type-checks perfectly while missing a phase, which is
+ * how a newly added one went on being registered but never cleared.
+ */
+export type HookType = (typeof HOOK_TYPES)[number];
 
 /**
  * The phases whose handlers take a {@link HookContext}, which is every phase

@@ -61,10 +61,19 @@ export interface RegisterCollectionHooksResult {
  * The CollectionHooks interface uses slightly different naming
  * (beforeChange/afterChange) which needs to be mapped to the
  * HookRegistry types (beforeCreate/beforeUpdate, etc.)
+ *
+ * A phase maps onto several registry types only where the declaration genuinely
+ * covers both write paths at the same moment. `beforeChange` does not: it sits
+ * on the far side of the validation gate, so it has a queue of its own.
  */
 const HOOK_TYPE_MAPPINGS: Record<DataPhaseKey, HookContextPhase[]> = {
   beforeValidate: ["beforeCreate", "beforeUpdate"], // Validate runs before create/update
-  beforeChange: ["beforeCreate", "beforeUpdate"],
+  // Its own phase, not the pre-validation queue. Both declarations used to
+  // register onto `beforeCreate`/`beforeUpdate`, which fire before the
+  // validation gate, so `beforeChange` ran ahead of the validation its contract
+  // says it follows. One operation still covers create and update: the phase
+  // fires on both write paths and `context.operation` says which.
+  beforeChange: ["beforeChange"],
   afterChange: ["afterCreate", "afterUpdate"],
   beforeRead: ["beforeRead"],
   afterRead: ["afterRead"],
@@ -92,9 +101,9 @@ type DataPhaseKey = Exclude<keyof CollectionHooks, "beforeOperation">;
  *
  * **Hook Mapping:**
  * Collection hooks use semantic names that map to specific registry hooks:
- * - `beforeChange` → `beforeCreate` and `beforeUpdate`
+ * - `beforeChange` → `beforeChange` (runs after the validation gate)
  * - `afterChange` → `afterCreate` and `afterUpdate`
- * - `beforeValidate` → `beforeCreate` and `beforeUpdate` (runs first)
+ * - `beforeValidate` → `beforeCreate` and `beforeUpdate` (runs before the gate)
  * - Other hooks map directly (beforeRead, afterRead, beforeDelete, afterDelete)
  *
  * @param collections - Array of collection configurations from `defineCollection()`

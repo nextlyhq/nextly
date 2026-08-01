@@ -2555,6 +2555,19 @@ export class CollectionMutationService extends BaseService {
         }
       }
 
+      // Collection-level beforeChange hooks, on data the validation gate has
+      // just passed. Paired with the field-level phase below so the two
+      // declarations of that name mean the same moment.
+      await this.hookService.runBeforeChange({
+        collection: params.collectionName,
+        operation: "create",
+        data: finalData,
+        storedHooks,
+        queryDatabase: this.queryDatabaseFn,
+        user: params.user,
+        sharedContext,
+      });
+
       // Field-level beforeChange hooks transform the final stored value
       // (runs after validation, before hashing/serialization).
       await runFieldHooks({
@@ -4503,6 +4516,20 @@ export class CollectionMutationService extends BaseService {
           throw NextlyError.validation({ errors: validationIssues });
         }
       }
+
+      // Collection-level beforeChange hooks, on data the validation gate has
+      // just passed. Paired with the field-level phase below so the two
+      // declarations of that name mean the same moment.
+      await this.hookService.runBeforeChange({
+        collection: params.collectionName,
+        operation: "update",
+        data: finalData,
+        originalData: existingEntry,
+        storedHooks,
+        queryDatabase: this.queryDatabaseFn,
+        user: params.user,
+        sharedContext,
+      });
 
       // Field-level beforeChange hooks transform the final stored value
       // (runs after validation, before hashing/serialization).
@@ -6858,6 +6885,20 @@ export class CollectionMutationService extends BaseService {
         }
       }
 
+      // Collection-level beforeChange hooks, on data the validation gate has
+      // just passed. The executor keeps a stored hook's uniqueness read on this
+      // transaction's connection, as the pre-validation phase does.
+      await this.hookService.runBeforeChange({
+        collection: params.collectionName,
+        operation: "create",
+        data: finalData,
+        storedHooks,
+        queryDatabase: this.queryDatabaseFn,
+        user: params.user,
+        sharedContext,
+        executor: tx.getDrizzle(),
+      });
+
       // Field-level beforeChange hooks transform the final stored value
       // (runs after validation, before hashing/serialization).
       await runFieldHooks({
@@ -7402,6 +7443,21 @@ export class CollectionMutationService extends BaseService {
           throw NextlyError.validation({ errors: validationIssues });
         }
       }
+
+      // Collection-level beforeChange hooks, on data the validation gate has
+      // just passed. The executor keeps a stored hook's uniqueness read on this
+      // transaction's connection, as the pre-validation phase does.
+      await this.hookService.runBeforeChange({
+        collection: params.collectionName,
+        operation: "update",
+        data: finalData,
+        originalData: existingEntry,
+        storedHooks,
+        queryDatabase: this.queryDatabaseFn,
+        user: params.user,
+        sharedContext,
+        executor: tx.getDrizzle(),
+      });
 
       // Field-level beforeChange hooks transform the final stored value
       // (runs after validation, before hashing/serialization).
@@ -8274,10 +8330,22 @@ export class CollectionMutationService extends BaseService {
         }
       }
 
-      // Field-level beforeChange hooks transform the final stored value
-      // (runs after validation, before hashing/serialization). This hook can
-      // also set `slug`, so re-sanitize once more before storage.
+      // Collection-level then field-level beforeChange hooks, on data the
+      // validation gate has just passed. Both sit under the same `skipHooks`
+      // gate: the flag means this write runs no user hooks at all, so a
+      // collection-level handler running while the field-level one is skipped
+      // would be the gate half-applied.
       if (!skipHooks) {
+        await this.hookService.runBeforeChange({
+          collection: params.collectionName,
+          operation: "create",
+          data: finalData,
+          storedHooks,
+          queryDatabase: this.queryDatabaseFn,
+          user: params.user,
+          sharedContext,
+          executor: tx.getDrizzle(),
+        });
         await runFieldHooks({
           kind: "collection",
           slug: params.collectionName,
@@ -8286,6 +8354,8 @@ export class CollectionMutationService extends BaseService {
           operation: "create",
           user: params.user,
         });
+        // A beforeChange hook can also set `slug`, so re-sanitize before
+        // storage.
         await this.reSanitizeSlug(finalData, isSlugTaken);
       }
 
@@ -8888,9 +8958,21 @@ export class CollectionMutationService extends BaseService {
         }
       }
 
-      // Field-level beforeChange hooks transform the final stored value
-      // (runs after validation, before hashing/serialization).
+      // Collection-level then field-level beforeChange hooks, on data the
+      // validation gate has just passed. Both sit under the same `skipHooks`
+      // gate: the flag means this write runs no user hooks at all.
       if (!skipHooks) {
+        await this.hookService.runBeforeChange({
+          collection: params.collectionName,
+          operation: "update",
+          data: finalData,
+          originalData: existingEntry,
+          storedHooks,
+          queryDatabase: this.queryDatabaseFn,
+          user: params.user,
+          sharedContext,
+          executor: tx.getDrizzle(),
+        });
         await runFieldHooks({
           kind: "collection",
           slug: params.collectionName,
