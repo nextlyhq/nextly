@@ -34,7 +34,9 @@ import { buildNotificationEvent } from "../../../runtime/notifications/build-eve
 import type { MigrationScope } from "../../../runtime/notifications/types";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { FieldGroupSchemaService } from "../../field-groups/services/field-group-schema-service";
+import { chooseTypeColumns } from "../../field-groups/storage/resolve-storage-names";
 import { generateRuntimeSchema } from "../services/runtime-schema-generator";
+import { identifierCaseRules } from "../utils/resolve-catalog-name";
 
 import {
   countNulls as countNullsHelper,
@@ -600,6 +602,31 @@ export class PushSchemaPipeline {
             : await introspectLiveSnapshot(db, dialect, managedTableNames);
       }
 
+      // 🔴 Derived from the snapshot just taken, not from a fresh catalog read.
+      //
+      // That snapshot was introspected over exactly these table names, so it
+      // already carries the columns this needs — and deriving from it guarantees
+      // the desired shape and the live shape are read from ONE observation of
+      // the database. A second read could disagree with the first, and a diff
+      // computed across two disagreeing observations is the one thing this
+      // function must never produce.
+      const fieldGroupTypeColumns = chooseTypeColumns(
+        liveSnapshot.tables.map(table => ({
+          table: table.name,
+          columns: table.columns.map(column => column.name),
+        })),
+        Object.values(desired.components).map(c => c.tableName),
+        // MySQL is given the folding setting rather than queried for it. The
+        // names being matched are ones this apply itself asked the server to
+        // describe, so a case-insensitive table match cannot select a different
+        // object than the one requested — while an exact match would miss a
+        // server that reported it folded. Column names fold on MySQL
+        // regardless, which is what the discriminator lookup actually needs.
+        dialect === "mysql"
+          ? identifierCaseRules({ dialect, lowerCaseTableNames: 1 })
+          : identifierCaseRules({ dialect })
+      );
+
       const desiredSnapshot: NextlySchemaSnapshot = {
         tables: [
           ...Object.values(desired.collections).map(c =>
@@ -639,7 +666,10 @@ export class PushSchemaPipeline {
                 typeof buildDesiredTableFromComponentFields
               >[1],
               dialect,
-              { localized: (c as { localized?: boolean }).localized === true }
+              {
+                localized: (c as { localized?: boolean }).localized === true,
+                typeColumn: fieldGroupTypeColumns.get(c.tableName),
+              }
             )
           ),
         ],
@@ -729,7 +759,11 @@ export class PushSchemaPipeline {
       // Phase C+D: execute pre-resolution ops, then pushSchema for the rest.
       const drizzleSchema = this.testHooks._buildDrizzleSchemaOverride
         ? this.testHooks._buildDrizzleSchemaOverride(patchedDesired, dialect)
-        : this.buildDrizzleSchema(patchedDesired, dialect);
+        : this.buildDrizzleSchema(
+            patchedDesired,
+            dialect,
+            fieldGroupTypeColumns
+          );
 
       // Scope drizzleSchema down to the table(s) actually touched by
       // resolvedOps. Without this, a Builder save that touches one
@@ -1166,7 +1200,8 @@ export class PushSchemaPipeline {
 
   private buildDrizzleSchema(
     desired: DesiredSchema,
-    dialect: SupportedDialect
+    dialect: SupportedDialect,
+    typeColumns: Map<string, string>
   ): Record<string, unknown> {
     const out: Record<string, unknown> = {};
 
@@ -1256,11 +1291,18 @@ export class PushSchemaPipeline {
         c.fields,
         {
           localized: (c as { localized?: boolean }).localized === true,
-          // The DESIRED schema, handed to drizzle-kit to diff against the live
-          // one — so it names the discriminator this release's DDL creates, not
-          // whatever the database currently holds. Resolving here would make the
-          // desired shape follow the live shape and the diff always empty.
-          typeColumn: STORAGE_FORMAT.columns.type,
+          // 🔴 The discriminator is a SYSTEM column whose name no user ever
+          // chooses: the only two spellings are the two storage generations,
+          // and which one a table carries is a fact of that table rather than a
+          // preference the desired shape could hold an opinion about. Naming
+          // the other one turns a diff into "add this column, drop that one" —
+          // a destructive pair the classifier refuses and fresh-push strips, so
+          // every later apply carries an operation that can never succeed.
+          //
+          // A table the catalog does not describe, including one about to be
+          // created, resolves to the spelling this release's DDL writes.
+          typeColumn:
+            typeColumns.get(c.tableName) ?? STORAGE_FORMAT.columns.type,
         }
       );
       out[c.tableName] = componentTable;
