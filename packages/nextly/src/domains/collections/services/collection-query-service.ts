@@ -1298,6 +1298,10 @@ export class CollectionQueryService extends BaseService {
             // collection's field rules say nothing about another collection's
             // fields — so the caller has to reach the related row's own rules.
             enforceFieldAccess: true,
+            // This path finishes with the post-assembly pass, so the target's
+            // field rules run there, after its masking hooks have seen a whole
+            // row.
+            fieldAccessStage: "assembled" as const,
             user: params.user,
             overrideAccess: params.overrideAccess,
             authenticatedScope: params.authenticatedScope,
@@ -1451,14 +1455,26 @@ export class CollectionQueryService extends BaseService {
       // One state for the whole listing, for that same sharing: a per-entry pass
       // would run a shared row's hooks once per reference.
       const nestedHookState = this.relationshipService.createNestedHookState();
+      const nestedAccess = {
+        enforceFieldAccess: true,
+        user: params.user,
+        overrideAccess: params.overrideAccess,
+        authenticatedScope: params.authenticatedScope,
+      };
       for (const entry of expandedEntries) {
         await this.relationshipService.applyNestedFieldHooks(
           entry,
           params.collectionName,
-          { enforceFieldAccess: true, user: params.user },
+          nestedAccess,
           nestedHookState
         );
       }
+      // Once, after the whole listing: hiding a row as it is finished would take
+      // the evidence away from a rule on a row walked later.
+      await this.relationshipService.finalizeRelatedRows(
+        nestedHookState,
+        nestedAccess
+      );
 
       // Execute afterRead hooks (code-registered)
       // Hooks can transform the fetched data
@@ -2320,6 +2336,8 @@ export class CollectionQueryService extends BaseService {
           // Same reasoning as the list path: a related row is redacted by its
           // own collection's field rules, for this caller.
           enforceFieldAccess: true,
+          // Same deferral as the list path; this path runs the same pass.
+          fieldAccessStage: "assembled" as const,
           user: params.user,
           overrideAccess: params.overrideAccess,
           authenticatedScope: params.authenticatedScope,
@@ -2631,7 +2649,12 @@ export class CollectionQueryService extends BaseService {
       await this.relationshipService.applyNestedFieldHooks(
         expandedEntry,
         params.collectionName,
-        { enforceFieldAccess: true, user: params.user }
+        {
+          enforceFieldAccess: true,
+          user: params.user,
+          overrideAccess: params.overrideAccess,
+          authenticatedScope: params.authenticatedScope,
+        }
       );
 
       // Execute afterRead hooks (code-registered)

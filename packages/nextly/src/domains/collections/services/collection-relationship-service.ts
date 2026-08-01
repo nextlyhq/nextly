@@ -75,7 +75,7 @@ export const DEFAULT_RELATIONSHIP_DEPTH = 2;
 export const MAX_RELATIONSHIP_DEPTH = 5;
 
 /** Carried across one read's nested-hook pass. */
-interface NestedHookState {
+interface NestedHookStateBase {
   /**
    * Rows already visited. Batch expansion hands the same object to every parent
    * that references it, so this is what keeps a transform from compounding
@@ -84,10 +84,40 @@ interface NestedHookState {
   visited: Set<Record<string, unknown>>;
   /** One schema read per collection per read, rather than per row per depth. */
   fields: Map<string, FieldDefinition[]>;
+  /**
+   * Label field per target, keyed by collection AND the field's declared
+   * override, since two relationships can point at one collection and name
+   * different labels. Resolving it costs a metadata read, and the label is
+   * rebuilt for every related row.
+   */
+  labelFields: Map<string, Promise<string>>;
+  /**
+   * Every related row the pass reached, in visit order, with what is needed to
+   * finish it.
+   *
+   * Masking and hiding cannot be interleaved per row. The walk descends deepest
+   * first, so hiding a child's fields as it is finished removes exactly the
+   * evidence its PARENT's masking rule is about to read -- reproducing, one
+   * level down, the defect the reordering exists to fix. So the rows are
+   * collected here and hidden only once every hook in the document has run.
+   */
+  pending: Array<{
+    row: Record<string, unknown>;
+    collection: string;
+    field: FieldDefinition;
+  }>;
 }
 
+/** The state the walk carries; named separately so the interface reads first. */
+type NestedHookState = NestedHookStateBase;
+
 function createNestedHookState(): NestedHookState {
-  return { visited: new Set(), fields: new Map() };
+  return {
+    visited: new Set(),
+    fields: new Map(),
+    labelFields: new Map(),
+    pending: [],
+  };
 }
 
 /**
@@ -195,6 +225,14 @@ export interface RelationshipExpansionOptions {
    * is off. See {@link RelatedRowAccess.enforceCollectionAccess}.
    */
   enforceCollectionAccess?: boolean;
+
+  /**
+   * Defer the target's field read rules to the post-assembly pass. Only a
+   * caller that runs {@link CollectionRelationshipService.applyNestedFieldHooks}
+   * over the finished document may set this. See
+   * {@link RelatedRowAccess.fieldAccessStage}.
+   */
+  fieldAccessStage?: "fetch" | "assembled";
 
   /**
    * Collects the ids withheld because a target collection refused the caller,
@@ -1801,6 +1839,7 @@ export class CollectionRelationshipService extends BaseService {
     const access: RelatedRowAccess = {
       enforceFieldAccess: options.enforceFieldAccess,
       enforceCollectionAccess: options.enforceCollectionAccess,
+      fieldAccessStage: options.fieldAccessStage,
       user: options.user,
       overrideAccess: options.overrideAccess,
       authenticatedScope: options.authenticatedScope,
@@ -2392,6 +2431,7 @@ export class CollectionRelationshipService extends BaseService {
     const access: RelatedRowAccess = {
       enforceFieldAccess: options.enforceFieldAccess,
       enforceCollectionAccess: options.enforceCollectionAccess,
+      fieldAccessStage: options.fieldAccessStage,
       user: options.user,
       overrideAccess: options.overrideAccess,
       authenticatedScope: options.authenticatedScope,
@@ -2895,7 +2935,14 @@ export class CollectionRelationshipService extends BaseService {
         stripPasswordFieldValues(row, targetFields);
       }
     }
-    await this.applyRelatedRowReadAccess(targetCollection, rows, access);
+    // Secrets above are unconditional and stay here. The target's FIELD rules
+    // are the caller's to place: a read that finishes with the post-assembly
+    // pass defers them there so the row's own masking hooks are judged on a
+    // whole row, which is the order a direct read uses. Every other caller
+    // applies them now, because nothing later will.
+    if (access.fieldAccessStage !== "assembled") {
+      await this.applyRelatedRowReadAccess(targetCollection, rows, access);
+    }
   }
 
   /**
@@ -2928,13 +2975,48 @@ export class CollectionRelationshipService extends BaseService {
     entry: Record<string, unknown>,
     collectionName: string,
     access: RelatedRowAccess,
-    state: NestedHookState = createNestedHookState()
+    state?: NestedHookState
   ): Promise<void> {
     // Only a real read applies these. A caller clearing the flag is assembling
     // the evidence a document-dependent rule is judged on and wants the row
     // unredacted -- the same reason the access pass is gated on it.
     if (!access.enforceFieldAccess) return;
-    await this.walkNestedRows(entry, collectionName, access, state, 0);
+
+    // A caller that shares a state across a listing finishes the rows itself,
+    // once every entry has been walked. One that does not is a single document,
+    // so its walk is already complete here.
+    const shared = state ?? createNestedHookState();
+    await this.walkNestedRows(entry, collectionName, access, shared, 0);
+    if (!state) await this.finalizeRelatedRows(shared, access);
+  }
+
+  /**
+   * Hide denied fields on every related row the walk reached, then rebuild the
+   * labels.
+   *
+   * Separated from the walk because the two orders are not the same order. A
+   * field hook masks; a field rule hides; and the hooks of a row's PARENT run
+   * after the row itself is finished, so hiding as each row completes takes the
+   * evidence away from a rule that has not run yet. Masking the whole document
+   * first, then hiding it, is the order a direct read has always used -- one
+   * document, not one row at a time.
+   *
+   * Labels come last of all, from the values that survived: a label copies a
+   * field under another key, so one built earlier outlives the removal of its
+   * own source field.
+   */
+  async finalizeRelatedRows(
+    state: NestedHookState,
+    access: RelatedRowAccess
+  ): Promise<void> {
+    if (!access.enforceFieldAccess) return;
+    for (const { row, collection } of state.pending) {
+      await this.applyRelatedRowReadAccess(collection, [row], access);
+    }
+    for (const { row, collection, field } of state.pending) {
+      await this.refreshRelatedRowLabel(row, field, { collection }, state);
+    }
+    state.pending.length = 0;
   }
 
   /**
@@ -3100,6 +3182,15 @@ export class CollectionRelationshipService extends BaseService {
         user: access.user,
       });
 
+      // Queued, not applied. Hiding this row's denied fields now would remove
+      // the evidence its PARENT's masking rule reads a moment later, because
+      // this walk finishes a child before its parent's hooks run.
+      state.pending.push({
+        row: resolved.row,
+        collection: resolved.collection,
+        field,
+      });
+
       // Secrets are stripped from a related row when it is fetched, but a hook
       // on a sibling field can write one back -- deliberately or by copying the
       // row -- and the response-level defenses sanitize only the ROOT row,
@@ -3115,6 +3206,48 @@ export class CollectionRelationshipService extends BaseService {
       }
       stripSystemOwnerField(resolved.row);
     }
+  }
+
+  /**
+   * Rebuild a related row's display label from the fields that survived.
+   *
+   * The label copies a field's value under another key, so one derived at fetch
+   * outlives the removal of its own source field: a caller denied `internalName`
+   * would still read it as `label`. Rebuilt here, after the hooks and the field
+   * rules, it can only be made of values this caller may see.
+   *
+   * Falls back to the id, which is what the fetch-time derivation does when the
+   * source field is absent, so a row stays identifiable rather than losing its
+   * label entirely.
+   *
+   * Only rows that carry a label are touched. Expansion attaches one; a row
+   * reached some other way has no label to keep honest.
+   */
+  private async refreshRelatedRowLabel(
+    row: Record<string, unknown>,
+    field: FieldDefinition,
+    resolved: { collection: string },
+    state: NestedHookState
+  ): Promise<void> {
+    if (!("label" in row)) return;
+
+    const declared =
+      typeof field.options?.targetLabelField === "string"
+        ? field.options.targetLabelField
+        : "";
+    const cacheKey = `${resolved.collection}:${declared}`;
+    let pending = state.labelFields.get(cacheKey);
+    if (!pending) {
+      pending = isSystemEntity(resolved.collection)
+        ? Promise.resolve(
+            resolveSystemEntityLabelField(resolved.collection, declared)
+          )
+        : this.getBestLabelField(resolved.collection, declared || undefined);
+      state.labelFields.set(cacheKey, pending);
+    }
+
+    const labelField = await pending;
+    row.label = row[labelField] || row.id;
   }
 
   /**

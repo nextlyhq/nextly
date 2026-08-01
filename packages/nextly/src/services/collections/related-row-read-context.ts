@@ -90,6 +90,22 @@ export interface RelatedRowReadContext {
   enforceCollectionAccess?: boolean;
 
   /**
+   * WHEN the target's field read rules are applied to a related row.
+   *
+   * `"fetch"` -- the default -- applies them as the row is loaded. `"assembled"`
+   * defers them to the post-assembly pass, which is the order a direct read
+   * uses: the row's own field `afterRead` hooks run first, so a rule that masks
+   * a value can be judged on the whole row rather than on one a denied sibling
+   * has already been cut out of.
+   *
+   * Deferring is opt-in and the default is the safe one, because only a caller
+   * that actually runs the post-assembly pass can promise the rules run at all.
+   * A path that expands without it -- a Single, a write response -- leaves this
+   * unset and keeps its protection where it is.
+   */
+  fieldAccessStage?: "fetch" | "assembled";
+
+  /**
    * Ids withheld because a target collection refused this caller, keyed by
    * collection and id.
    *

@@ -63,10 +63,21 @@ async function boot(): Promise<TestNextly> {
     collections: [
       defineCollection({
         slug: ORGS,
-        fields: [text({ name: "name" }), text({ name: "classification" })],
+        access: { read: () => true, create: () => true, update: () => true },
+        fields: [
+          text({ name: "name" }),
+          // Denied to everyone, and the evidence the author's `clearance` rule
+          // masks on. Applying field rules at fetch removed it before that rule
+          // could read it.
+          text({
+            name: "classification",
+            access: { read: () => false },
+          }),
+        ],
       }),
       defineCollection({
         slug: AUTHORS,
+        access: { read: () => true, create: () => true, update: () => true },
         fields: [
           text({ name: "name" }),
           relationship({ name: "organization", relationTo: ORGS }),
@@ -122,6 +133,7 @@ async function boot(): Promise<TestNextly> {
       }),
       defineCollection({
         slug: POSTS,
+        access: { read: () => true, create: () => true, update: () => true },
         fields: [
           text({ name: "title" }),
           relationship({ name: "author", relationTo: AUTHORS }),
@@ -407,6 +419,34 @@ describe("a target's field hooks apply to rows reached through a relationship", 
     });
 
     expect(tokenHookRuns).toBeGreaterThan(0);
+  });
+
+  it("judges a masking rule before the denied sibling it reads is removed", async () => {
+    // The ordering the founder chose, and the defect it fixes. `classification`
+    // denies read, and the author's `secret` rule masks on it. Removing denied
+    // fields at fetch handed that rule a row its evidence had already been cut
+    // out of, so it read `undefined`, declined to mask, and the secret went out.
+    //
+    // Read WITHOUT overrideAccess: field rules are skipped for a trusted read,
+    // so an overriding caller cannot show this either way.
+    const t = await boot();
+    const postId = await seed(t);
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    const author = expanded.data!.author as Record<string, unknown>;
+    expect(author).toBeTruthy();
+    // Masked, because the rule saw the classification.
+    expect(author.secret).toBe("REDACTED");
+
+    // And the evidence is still withheld from the response: deferring WHEN the
+    // rules run must not change WHETHER they run.
+    const org = author.organization as Record<string, unknown> | undefined;
+    if (org) expect(org.classification).toBeUndefined();
   });
 
   it("masks a dropped relationship before a source hook can copy out of it", async () => {
