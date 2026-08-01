@@ -3912,7 +3912,6 @@ export class CollectionMutationService extends BaseService {
       // emit the post-commit "updated" reaction event so cache
       // revalidation / webhooks fire, matching a single-locale publish. Best-effort: a
       // reaction failure must not fail the already-committed publish.
-      let publishedDocument: Record<string, unknown> | undefined;
       try {
         const [updated] = await this.db
           .select()
@@ -3920,52 +3919,15 @@ export class CollectionMutationService extends BaseService {
           .where(eq(schema.id, params.entryId))
           .limit(1);
         if (updated) {
-          publishedDocument = updated as Record<string, unknown>;
           emitCollectionEvent(
             "updated",
             params.collectionName,
-            publishedDocument,
+            updated as Record<string, unknown>,
             params.user
           );
         }
       } catch {
         // Reaction/event emission is non-critical; the publish already committed.
-      }
-
-      // Run the collection's `afterUpdate` hooks, the same phase a single-locale
-      // publish runs. Without this a publish emitted its event and busted its
-      // caches while no declared hook ever saw it -- so a subscriber reached
-      // through a webhook and a hook in the same codebase disagreed about
-      // whether the content had gone live.
-      //
-      // Post-commit, so it is a side-effect phase: a handler's return is
-      // ignored and a throw is reported rather than raised, because the rows
-      // are already durable and failing here would describe a publish that
-      // happened as one that did not.
-      if (publishedDocument) {
-        const publishHookContext = this.hookService.buildHookContext({
-          collection: params.collectionName,
-          operation: "update" as const,
-          data: publishedDocument,
-          user: params.user,
-          context: {},
-        });
-        await this.hookService.hookRegistry.execute(
-          "afterUpdate",
-          publishHookContext
-        );
-        await this.hookService.storedHookExecutor.execute(
-          "afterUpdate",
-          this.hookService.getStoredHooks(publishCollection),
-          this.hookService.buildPrebuiltHookContext(
-            params.collectionName,
-            "update",
-            publishedDocument,
-            this.queryDatabaseFn,
-            params.user,
-            {}
-          )
-        );
       }
 
       // Publishing all locales makes every locale's slug public at once, so bust
