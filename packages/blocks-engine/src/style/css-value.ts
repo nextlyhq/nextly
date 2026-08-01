@@ -100,10 +100,61 @@ const DIMENSION_KEYWORDS: ReadonlySet<string> = new Set([
   "revert-layer",
 ]);
 
-/** Node types that carry a measurement on their own. */
-const SIZE_NODE_TYPES: ReadonlySet<string> = new Set([
-  "Dimension",
-  "Percentage",
+/**
+ * CSS length units. A `Dimension` node carries any unit at all, so an angle, a
+ * duration, a resolution or a grid fraction reaches a length property looking
+ * structurally identical to `16px`; only these are measurements of distance.
+ */
+const LENGTH_UNITS: ReadonlySet<string> = new Set([
+  "px",
+  "cm",
+  "mm",
+  "q",
+  "in",
+  "pt",
+  "pc",
+  "em",
+  "rem",
+  "ex",
+  "rex",
+  "ch",
+  "rch",
+  "ic",
+  "ric",
+  "cap",
+  "rcap",
+  "lh",
+  "rlh",
+  "vw",
+  "vh",
+  "vi",
+  "vb",
+  "vmin",
+  "vmax",
+  "svw",
+  "svh",
+  "svi",
+  "svb",
+  "svmin",
+  "svmax",
+  "lvw",
+  "lvh",
+  "lvi",
+  "lvb",
+  "lvmin",
+  "lvmax",
+  "dvw",
+  "dvh",
+  "dvi",
+  "dvb",
+  "dvmin",
+  "dvmax",
+  "cqw",
+  "cqh",
+  "cqi",
+  "cqb",
+  "cqmin",
+  "cqmax",
 ]);
 
 /**
@@ -142,13 +193,36 @@ function parseValue(value: string): CssNode | null {
   }
 }
 
+/**
+ * Functions that take a URL as a plain string rather than inside `url()`.
+ * `image-set("a.png" 1x)` loads that string as an image, so it needs the same
+ * scheme allowlist even though the parser gives it no `Url` node.
+ */
+const URL_STRING_FUNCTIONS: ReadonlySet<string> = new Set([
+  "image-set",
+  "-webkit-image-set",
+  "src",
+]);
+
 /** The first refused URL anywhere in a parsed value, or `null`. */
 function nestedUrlRejection(ast: CssNode): CssValueRejection | null {
   let rejection: CssValueRejection | null = null;
   walk(ast, {
     enter(node: CssNode) {
-      if (node.type !== "Url") return;
-      rejection ??= checkUrlValue(node.value);
+      if (node.type === "Url") {
+        rejection ??= checkUrlValue(node.value);
+        return;
+      }
+      if (
+        node.type !== "Function" ||
+        !URL_STRING_FUNCTIONS.has(node.name.toLowerCase())
+      ) {
+        return;
+      }
+      for (const child of node.children) {
+        if (child.type !== "String") continue;
+        rejection ??= checkUrlValue(child.value);
+      }
     },
   });
   return rejection;
@@ -167,10 +241,12 @@ function nestingDepth(value: string): number {
   let depth = 0;
   let deepest = 0;
   for (const character of value) {
-    if (character === "(") {
+    // Square brackets nest the parser and walker exactly as parentheses do —
+    // counting only one of them leaves the other free to exhaust the stack.
+    if (character === "(" || character === "[") {
       depth += 1;
       if (depth > deepest) deepest = depth;
-    } else if (character === ")") {
+    } else if (character === ")" || character === "]") {
       depth -= 1;
     }
   }
@@ -229,8 +305,11 @@ function measurementRejection(
   node: CssNode,
   insideFunction: boolean
 ): CssValueRejection | null {
-  if (SIZE_NODE_TYPES.has(node.type)) return null;
   switch (node.type) {
+    case "Dimension":
+      return LENGTH_UNITS.has(node.unit.toLowerCase()) ? null : "not-a-length";
+    case "Percentage":
+      return null;
     case "Number":
       return insideFunction || Number(node.value) === 0 ? null : "not-a-length";
     case "Identifier":
@@ -288,6 +367,9 @@ const COLOR_KEYWORDS: ReadonlySet<string> = new Set(
   )
 );
 
+/** A hex colour: three, four, six, or eight hexadecimal digits after the `#`. */
+const HEX_COLOR = /^(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+
 /** Functions that produce a colour. */
 const COLOR_FUNCTIONS: ReadonlySet<string> = new Set([
   "rgb",
@@ -327,9 +409,10 @@ export function checkColorValue(value: string): CssValueRejection | null {
   const node = parts[0];
   if (parts.length !== 1 || node === undefined) return "not-a-color";
   switch (node.type) {
-    // A hex literal.
+    // A hex literal. The parser accepts any token after `#`, so the digits and
+    // the length are checked here rather than assumed.
     case "Hash":
-      return null;
+      return HEX_COLOR.test(node.value) ? null : "not-a-color";
     case "Identifier":
       return COLOR_KEYWORDS.has(node.name.toLowerCase()) ? null : "not-a-color";
     case "Function":

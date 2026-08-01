@@ -455,6 +455,93 @@ describe("deeply nested values", () => {
   });
 });
 
+describe("dimension units", () => {
+  it("refuses units that do not measure distance", () => {
+    for (const value of ["20deg", "2s", "1fr", "96dpi", "1khz", "3turn"]) {
+      expect(codes({ width: value }), value).toEqual(["invalid-style-value"]);
+    }
+  });
+
+  it("accepts the length units, including container and viewport ones", () => {
+    for (const value of [
+      "16px",
+      "2rem",
+      "1.5em",
+      "10cqw",
+      "50dvh",
+      "2.5cm",
+      "12pt",
+      "3ch",
+    ]) {
+      expect(codes({ width: value }), value).toEqual([]);
+    }
+  });
+
+  it("applies the same rule inside a math function", () => {
+    expect(codes({ width: "calc(1px + 20deg)" })).toEqual([
+      "invalid-style-value",
+    ]);
+    expect(codes({ width: "calc(1px + 2rem)" })).toEqual([]);
+  });
+});
+
+describe("hex colors", () => {
+  it("refuses tokens that are not hex in a legal length", () => {
+    for (const value of ["#xyz", "#12", "#12345", "#1234567"]) {
+      expect(codes({ color: value }), value).toEqual(["invalid-style-value"]);
+    }
+  });
+
+  it("accepts the three, four, six, and eight digit forms", () => {
+    for (const value of ["#fff", "#ffff", "#ff8800", "#ff8800cc", "#ABCDEF"]) {
+      expect(codes({ color: value }), value).toEqual([]);
+    }
+  });
+});
+
+describe("urls written as strings", () => {
+  it("are checked inside image-set, which takes its url as a string", () => {
+    // The parser gives these no Url node, so a walk looking only for urls
+    // passes straight over the scheme.
+    for (const value of [
+      'image-set("javascript:alert1" 1x)',
+      'image-set("data:text/html,x" 1x)',
+      '-webkit-image-set("javascript:alert1" 1x)',
+      'src("javascript:alert1")',
+    ]) {
+      expect(checkCssValue(value), value).toBe("unsafe-url-scheme");
+    }
+  });
+
+  it("leaves ordinary image-set values and font names alone", () => {
+    expect(checkCssValue('image-set("/media/a.png" 1x)')).toBeNull();
+    expect(
+      checkCssValue('image-set("https://cdn.example.com/a.png" 2x)')
+    ).toBeNull();
+    expect(codes({ fontFamily: '"Helvetica Neue", sans-serif' })).toEqual([]);
+  });
+
+  it("surfaces through validation of a gradient", () => {
+    expect(
+      codes({ backgroundGradient: 'image-set("javascript:alert1" 1x)' })
+    ).toEqual(["invalid-style-value"]);
+  });
+});
+
+describe("square-bracket nesting", () => {
+  it("is bounded like parenthesis nesting", () => {
+    const deep = `${"[".repeat(1200)}${"]".repeat(1200)}`;
+    expect(checkCssValue(deep)).toBe("too-deeply-nested");
+    expect(() => check({ width: deep })).not.toThrow();
+  });
+
+  it("leaves a grid line-name list alone", () => {
+    expect(
+      codes({ gridTemplateColumns: "[full-start] 1fr [full-end]" })
+    ).toEqual([]);
+  });
+});
+
 describe("issue codes", () => {
   it("are all declared in the shared code table", () => {
     const emitted = [
