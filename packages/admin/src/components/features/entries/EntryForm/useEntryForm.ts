@@ -19,6 +19,7 @@ import { z } from "zod";
 
 import { useCreateEntry } from "@admin/hooks/queries/useCreateEntry";
 import { useDeleteEntry } from "@admin/hooks/queries/useDeleteEntry";
+import { useDiscardWorkingDraft } from "@admin/hooks/queries/useDiscardWorkingDraft";
 import { useUpdateEntry } from "@admin/hooks/queries/useUpdateEntry";
 import { generateClientSchema } from "@admin/lib/field-validation";
 import type { EntryValue } from "@admin/types/collection";
@@ -268,6 +269,9 @@ export interface UseEntryFormReturn {
   ) => Promise<void>;
   /** Handle entry deletion (edit mode only) */
   handleDelete: () => void;
+  /** Discard the pending working draft (draft/published split), reverting the
+   *  editor to the live published row. No-op outside edit mode. */
+  handleDiscardWorkingDraft: () => void;
   /** Handle form cancellation */
   handleCancel: () => void;
   /** Whether form is currently submitting */
@@ -631,6 +635,11 @@ export function useEntryForm({
     showToast: true,
   });
 
+  const discardMutation = useDiscardWorkingDraft({
+    collectionSlug: collection.name,
+    entryId: entry?.id ?? "",
+  });
+
   // Singular label for UI
   const singularLabel = getSingularLabel(collection);
 
@@ -704,6 +713,23 @@ export function useEntryForm({
     }
   }, [mode, entry?.id, deleteMutation, onDelete, onError]);
 
+  // Discard handler (draft/published split). Throws away the pending working
+  // draft and resets the editor to the live published values the discard
+  // returns; the hook also invalidates the entry so the cache refetches the
+  // same row. A no-op outside edit mode or before the entry exists.
+  const handleDiscardWorkingDraft = useCallback(async () => {
+    if (mode !== "edit" || !entry?.id) {
+      return;
+    }
+    try {
+      const result = await discardMutation.mutateAsync();
+      form.reset(getDefaultValues(fields, result.item));
+    } catch (error) {
+      console.error("Discard working draft error:", error);
+      onError?.(error);
+    }
+  }, [mode, entry?.id, discardMutation, form, fields, onError]);
+
   // Cancel handler
   const handleCancel = useCallback(() => {
     onCancel?.();
@@ -715,8 +741,14 @@ export function useEntryForm({
     handleDelete: () => {
       void handleDelete();
     },
+    handleDiscardWorkingDraft: () => {
+      void handleDiscardWorkingDraft();
+    },
     handleCancel,
-    isSubmitting: createMutation.isPending || updateMutation.isPending,
+    isSubmitting:
+      createMutation.isPending ||
+      updateMutation.isPending ||
+      discardMutation.isPending,
     isDeleting: deleteMutation.isPending,
     isDirty: form.formState.isDirty,
     mode,

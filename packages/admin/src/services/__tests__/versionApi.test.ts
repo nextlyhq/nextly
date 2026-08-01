@@ -6,10 +6,13 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { getSpy } = vi.hoisted(() => ({ getSpy: vi.fn() }));
+const { getSpy, delSpy } = vi.hoisted(() => ({
+  getSpy: vi.fn(),
+  delSpy: vi.fn(),
+}));
 
 vi.mock("@admin/lib/api/protectedApi", () => ({
-  protectedApi: { get: getSpy },
+  protectedApi: { get: getSpy, delete: delSpy },
 }));
 
 import { versionApi } from "../versionApi";
@@ -84,5 +87,20 @@ describe("versionApi.get", () => {
     await versionApi.get(single, 2);
 
     expect(getSpy).toHaveBeenCalledWith("/singles/settings/versions/2");
+  });
+});
+
+describe("versionApi.discardWorkingDraft", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    delSpy.mockResolvedValue({ message: "Working draft discarded.", item: {} });
+  });
+
+  it("DELETEs the working-draft sidecar under the collection entry", async () => {
+    await versionApi.discardWorkingDraft(collection);
+
+    expect(delSpy).toHaveBeenCalledWith(
+      "/collections/posts/entries/e1/versions/working-draft"
+    );
   });
 });

@@ -52,6 +52,7 @@ import {
   getCollectionFields,
   type EntryFormCollection,
   type EntryData,
+  type EntryFormIntent,
   type EntryFormMode,
 } from "./useEntryForm";
 import { useRailCollapsed } from "./useRailCollapsed";
@@ -191,6 +192,7 @@ export function EntryForm({
     form,
     handleSubmit,
     handleDelete,
+    handleDiscardWorkingDraft,
     handleCancel,
     isSubmitting,
     isDirty,
@@ -326,10 +328,25 @@ export function EntryForm({
   // Keyboard Shortcuts (standalone mode only)
   // ---------------------------------------------------------------------------
 
+  // Route Cmd/Ctrl+S to the same intent the primary Save button uses for this
+  // document's state, so a keyboard save and a button save behave identically:
+  // on a drafts collection a published entry stores a working draft
+  // (status-less), on a non-drafts collection it re-asserts published, and any
+  // other editing state saves a draft. Create mode and non-status collections
+  // keep the intent-less single-Save behavior.
+  const keyboardSaveIntent: EntryFormIntent | undefined =
+    mode === "edit" && hasStatus
+      ? (entry?.status as string | undefined) === "published"
+        ? collection.draftsEnabled === true
+          ? "save-working-draft"
+          : "save-changes"
+        : "save-draft"
+      : undefined;
+
   // Only enable shortcuts in standalone mode (not embedded modals)
   useEntryFormShortcuts({
     onSave: () => {
-      void handleSubmit();
+      void handleSubmit(undefined, keyboardSaveIntent);
     },
     onCancel: handleCancel,
     isDirty,
@@ -451,6 +468,7 @@ export function EntryForm({
                   }}
                   onCancel={handleCancel}
                   onDelete={handleDelete}
+                  onDiscardWorkingDraft={handleDiscardWorkingDraft}
                   isRailCollapsed={railCollapsed}
                   onToggleRail={mode === "edit" ? toggleRail : undefined}
                 />

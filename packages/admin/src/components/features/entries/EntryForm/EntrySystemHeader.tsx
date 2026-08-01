@@ -33,6 +33,7 @@ import { cn } from "@admin/lib/utils";
 import { useEntryLocale } from "../EntryLocaleContext";
 import { LanguageSwitcher } from "../LanguageSwitcher";
 
+import { DiscardDraftConfirmDialog } from "./DiscardDraftConfirmDialog";
 import { effectiveEntryStatus } from "./entry-address";
 import { ShowJSONDialog } from "./ShowJSONDialog";
 import { UnpublishConfirmDialog } from "./UnpublishConfirmDialog";
@@ -101,6 +102,10 @@ export interface EntrySystemHeaderProps {
    *  Fires only after the user confirms the modal. Sends `{ status: "draft" }`
    *  with no other field changes (matches Payload's Unpublish pattern). */
   onUnpublish?: () => void;
+  /** Discard-working-draft handler (draft/published split). Throws away the
+   *  pending working draft and reverts the editor to the live published row.
+   *  Shown as a confirmed menu action for a Changed document. */
+  onDiscardWorkingDraft?: () => void;
   /** Discard / Cancel handler. */
   onCancel?: () => void;
   /** Delete handler (edit mode only). */
@@ -181,6 +186,7 @@ export function EntrySystemHeader({
   onSaveChanges,
   onSaveWorkingDraft,
   onUnpublish,
+  onDiscardWorkingDraft,
   onCancel,
   onDelete,
   onDuplicate,
@@ -202,6 +208,7 @@ export function EntrySystemHeader({
   const { defaultLocale } = useLocalization();
   const inputRef = useRef<HTMLInputElement>(null);
   const [unpublishOpen, setUnpublishOpen] = useState(false);
+  const [discardDraftOpen, setDiscardDraftOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
 
   // Both collections and singles authorize a document write as `update-{slug}`.
@@ -276,6 +283,11 @@ export function EntrySystemHeader({
     draftsEnabled &&
     (entry as { _isWorkingDraft?: boolean } | null | undefined)
       ?._isWorkingDraft === true;
+  // The "Discard draft" revert is offered only for a Changed document (a pending
+  // working draft over a published row) and only to a caller who may update it —
+  // the server gates the discard on update access.
+  const showDiscardDraft =
+    hasWorkingDraft && !!onDiscardWorkingDraft && canUpdateDocument;
   const entryLabel =
     typeof entry?.title === "string" && entry.title.trim().length > 0
       ? entry.title
@@ -452,6 +464,15 @@ export function EntrySystemHeader({
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
+              {showDiscardDraft && (
+                <DropdownMenuItem
+                  onClick={() => setDiscardDraftOpen(true)}
+                  disabled={isSubmitting}
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  Discard draft
+                </DropdownMenuItem>
+              )}
               {isDirty && onCancel && (
                 <DropdownMenuItem onClick={onCancel} disabled={isSubmitting}>
                   <RotateCcw className="h-3.5 w-3.5" />
@@ -460,7 +481,9 @@ export function EntrySystemHeader({
               )}
               {onDuplicate && (
                 <>
-                  {isDirty && onCancel && <DropdownMenuSeparator />}
+                  {(showDiscardDraft || (isDirty && onCancel)) && (
+                    <DropdownMenuSeparator />
+                  )}
                   <DropdownMenuItem
                     onClick={onDuplicate}
                     disabled={isSubmitting}
@@ -547,6 +570,20 @@ export function EntrySystemHeader({
         onConfirm={() => {
           setUnpublishOpen(false);
           onUnpublish?.();
+        }}
+        isLoading={isSubmitting}
+      />
+
+      {/* Discarding a working draft deletes saved-but-unpublished edits, so it
+          is confirmed like Unpublish. Mounted at the root for the same reason:
+          it must survive whichever button-matrix branch rendered. */}
+      <DiscardDraftConfirmDialog
+        open={discardDraftOpen}
+        onOpenChange={setDiscardDraftOpen}
+        entryLabel={entryLabel}
+        onConfirm={() => {
+          setDiscardDraftOpen(false);
+          onDiscardWorkingDraft?.();
         }}
         isLoading={isSubmitting}
       />
