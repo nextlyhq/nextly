@@ -53,7 +53,10 @@ vertical writing modes, which the catalog can add later without a migration.
 - **css value** — a free-form CSS value, checked for syntax and safety but not
   against a property grammar (see below).
 - **url** — a URL emitted inside `url()`, with its scheme checked and the same
-  length cap every other value is held to.
+  length cap every other value is held to. A url leaf may also name keywords it
+  takes in place of a URL: `background.url` accepts `none`, which is what clears
+  an image set at an earlier state and has to be emitted bare rather than
+  wrapped.
 - **composite** — an object whose named parts each have their own shape, such as
   logical box sides, logical corners, or a structured `border`.
 - **union** — a value accepted in more than one shape, such as a corner radius

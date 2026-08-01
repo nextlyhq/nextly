@@ -78,24 +78,32 @@ function packageOf(specifier: string): string {
     : (parts[0] ?? specifier);
 }
 
+/**
+ * Every specifier a file imports at RUNTIME.
+ *
+ * Three forms, because a guard that knows only one of them is a guard the next
+ * import form walks straight past: `import … from "x"` and its re-export
+ * cousin, the bare side-effect `import "x"`, and a dynamic `import("x")`.
+ * `import type` is absent on purpose — it erases at build.
+ *
+ * Shared by both checks below so neither can fall behind the other on which
+ * forms count as reaching a package.
+ */
+function runtimeSpecifiers(source: string): string[] {
+  return [
+    ...source.matchAll(
+      /^\s*(?:import|export)\s+(?!type\s)[^;]*?\sfrom\s+["']([^"']+)["']/gm
+    ),
+    ...source.matchAll(/^\s*import\s+["']([^"']+)["']/gm),
+    ...source.matchAll(/import\s*\(\s*["']([^"']+)["']\s*\)/g),
+  ].flatMap(match => (match[1] === undefined ? [] : [match[1]]));
+}
+
 describe("the engine is runtime-free", () => {
   it("imports no package at runtime beyond the allowlist", () => {
     for (const file of sourceFiles()) {
       const source = readFileSync(file, "utf8");
-      // Matches `import ... from "x"` and `export ... from "x"` but not
-      // `import type ...` — type-only imports erase at build and are allowed.
-      // Also matches bare side-effect imports (`import "x";`) and dynamic
-      // imports, so every runtime import FORM the engine forbids is caught.
-      const runtimeImports = [
-        ...source.matchAll(
-          /^\s*(?:import|export)\s+(?!type\s)[^;]*?\sfrom\s+["']([^"']+)["']/gm
-        ),
-        ...source.matchAll(/^\s*import\s+["']([^"']+)["']/gm),
-        ...source.matchAll(/import\s*\(\s*["']([^"']+)["']\s*\)/g),
-      ].map(match => match[1]);
-
-      for (const specifier of runtimeImports) {
-        if (specifier === undefined) continue;
+      for (const specifier of runtimeSpecifiers(source)) {
         const pkg = packageOf(specifier);
         // Relative imports stay inside the package. Node builtins are refused
         // along with everything else: the engine promises to run in browsers
@@ -118,15 +126,8 @@ describe("the engine is runtime-free", () => {
     const allowed = new Set(["css-tree/parser", "css-tree/walker"]);
     for (const file of sourceFiles()) {
       const source = readFileSync(file, "utf8");
-      const specifiers = [
-        ...source.matchAll(
-          /^\s*(?:import|export)\s+(?!type\s)[^;]*?\sfrom\s+["']([^"']+)["']/gm
-        ),
-      ].map(match => match[1]);
-      for (const specifier of specifiers) {
-        if (specifier === undefined || packageOf(specifier) !== "css-tree") {
-          continue;
-        }
+      for (const specifier of runtimeSpecifiers(source)) {
+        if (packageOf(specifier) !== "css-tree") continue;
         expect(
           allowed,
           `${file} imports "${specifier}" at runtime — use css-tree/parser or css-tree/walker, whose module graphs do not reach node:module`

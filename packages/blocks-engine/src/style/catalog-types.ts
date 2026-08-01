@@ -111,6 +111,13 @@ export interface KeywordLeaf extends StyleLeafBase {
    * block axes separately, and there is no other way to express the second.
    */
   maxParts?: number;
+  /**
+   * Values from `values` that are a complete declaration on their own and may
+   * not join a shorthand, the way the CSS-wide keywords may not.
+   * `background-repeat: repeat-x` already names both axes, so pairing it with
+   * anything emits a declaration the browser discards.
+   */
+  soloValues?: readonly string[];
 }
 
 /** A length, percentage, or other CSS dimension, stored as a string (or `0`). */
@@ -170,6 +177,14 @@ export interface CssValueLeaf extends StyleLeafBase {
 /** A URL, emitted inside `url()`, with its scheme checked explicitly. */
 export interface UrlLeaf extends StyleLeafBase {
   kind: "url";
+  /**
+   * Keywords this property accepts in place of a URL, declared per property
+   * exactly as a dimension's are. `background-image: none` is what clears an
+   * image inherited from an earlier state, and without it that value is
+   * indistinguishable from a relative path and would emit `url("none")`.
+   * The CSS-wide keywords are accepted everywhere and are not listed here.
+   */
+  keywords?: readonly string[];
 }
 
 export type StyleLeaf =

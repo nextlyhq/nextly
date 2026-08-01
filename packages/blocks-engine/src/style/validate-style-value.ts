@@ -196,8 +196,13 @@ function leafIssues(
         if (isCssWideKeyword(written) || allowed(written)) return [];
         // Only a property declared as a shorthand reads its value as several
         // keywords; for every other one the whole string is the value, which is
-        // what keeps a two-word entry from being mistaken for two entries.
-        if (parts.length <= (leaf.maxParts ?? 1) && parts.every(allowed)) {
+        // what keeps a two-word entry from being mistaken for two entries. A
+        // value listed as solo is a complete declaration like a CSS-wide
+        // keyword, so it may not appear as one part of a shorthand.
+        const solo = leaf.soloValues ?? [];
+        const pairable = (part: string): boolean =>
+          allowed(part) && !solo.some(entry => entry.toLowerCase() === part);
+        if (parts.length <= (leaf.maxParts ?? 1) && parts.every(pairable)) {
           return [];
         }
       }
@@ -273,6 +278,19 @@ function leafIssues(
     case "url": {
       if (typeof value !== "string") {
         return [invalid(path, `${describeValue(value)} is not a string.`)];
+      }
+      // Bounded before normalising, as the keyword and numeric leaves are.
+      if (isOverlongValue(value)) return rejected(path, value, "too-long");
+      // A keyword stands in for the whole URL, so it is matched before the URL
+      // rules rather than beside them: a value the property accepts as a
+      // keyword is not a path and must not be judged as one.
+      const written = value.trim().toLowerCase();
+      const keywords = leaf.keywords ?? [];
+      if (
+        isCssWideKeyword(written) ||
+        keywords.some(entry => entry.toLowerCase() === written)
+      ) {
+        return [];
       }
       const rejection = checkUrlValue(value);
       return rejection === null ? [] : rejected(path, value, rejection);

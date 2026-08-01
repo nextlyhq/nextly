@@ -1267,3 +1267,61 @@ describe("keys a document did not put there", () => {
     expect(codes({ padding: parts } as never)).toEqual([]);
   });
 });
+
+describe("keywords that name every axis at once", () => {
+  it("accepts them standing alone", () => {
+    expect(codes({ background: { repeat: "repeat-x" } })).toEqual([]);
+    expect(codes({ background: { repeat: "repeat-y" } })).toEqual([]);
+  });
+
+  it("refuses them paired with anything, which browsers discard", () => {
+    for (const value of [
+      "repeat-x repeat-y",
+      "repeat-x no-repeat",
+      "no-repeat repeat-x",
+    ]) {
+      expect(codes({ background: { repeat: value } }), value).toEqual([
+        "invalid-style-value",
+      ]);
+    }
+  });
+
+  it("leaves the pairable keywords pairing", () => {
+    expect(codes({ background: { repeat: "repeat no-repeat" } })).toEqual([]);
+    expect(codes({ background: { repeat: "space round" } })).toEqual([]);
+  });
+});
+
+describe("clearing a value a property normally states as a URL", () => {
+  it("accepts the keyword that clears it, and the CSS-wide resets", () => {
+    for (const value of ["none", "initial", "unset", "inherit", "  none  "]) {
+      expect(codes({ background: { url: value } }), value).toEqual([]);
+    }
+  });
+
+  it("still judges anything else as a URL, with URL guidance", () => {
+    expect(
+      codes({ background: { url: "https://cdn.example.com/a.png" } })
+    ).toEqual([]);
+    const issues = check({ background: { url: "javascript:alert(1)" } });
+    expect(issues[0]?.code).toBe("invalid-style-value");
+    expect(issues[0]?.suggestion).toContain("http");
+  });
+
+  it("does not let the keyword shortcut skip the size cap", () => {
+    expect(codes({ background: { url: `${" ".repeat(9000)}none` } })).toEqual([
+      "invalid-style-value",
+    ]);
+  });
+});
+
+describe("blend modes the platform ships", () => {
+  it("accepts the additive ones", () => {
+    expect(codes({ mixBlendMode: "plus-lighter" })).toEqual([]);
+    expect(codes({ mixBlendMode: "plus-darker" })).toEqual([]);
+  });
+
+  it("still refuses one that is not a blend mode", () => {
+    expect(codes({ mixBlendMode: "nope" })).toEqual(["invalid-style-value"]);
+  });
+});

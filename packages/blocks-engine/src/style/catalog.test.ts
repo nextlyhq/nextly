@@ -290,3 +290,28 @@ describe("the reference doc and the catalog agree", () => {
     }
   });
 });
+
+describe("values a leaf accepts in place of its own value type", () => {
+  it("declares the keyword that clears a background image", () => {
+    // Validation alone cannot carry this: a bare word is a legal relative URL,
+    // so `none` passes either way. What decides whether the compiler emits
+    // `none` or `url("none")` is the descriptor, which is what is asserted.
+    const entry = getStyleProperty("background");
+    const shape = entry?.shape;
+    const urlLeaf = shape?.kind === "object" ? shape.fields.url : undefined;
+    expect(urlLeaf?.kind).toBe("url");
+    expect(urlLeaf?.kind === "url" ? urlLeaf.keywords : undefined).toContain(
+      "none"
+    );
+  });
+
+  it("names the repeat keywords that may not join a shorthand", () => {
+    const entry = getStyleProperty("background");
+    const shape = entry?.shape;
+    const repeat = shape?.kind === "object" ? shape.fields.repeat : undefined;
+    expect(repeat?.kind).toBe("keyword");
+    const solo = repeat?.kind === "keyword" ? repeat.soloValues : undefined;
+    expect(solo).toContain("repeat-x");
+    expect(solo).toContain("repeat-y");
+  });
+});

@@ -94,9 +94,17 @@ const FONT_SIZE_KEYWORDS = [
 function keyword(
   cssProperty: string,
   values: readonly string[],
-  maxParts = 1
+  maxParts = 1,
+  soloValues: readonly string[] = []
 ): KeywordLeaf {
-  return { kind: "keyword", cssProperty, tokenKinds: [], values, maxParts };
+  return {
+    kind: "keyword",
+    cssProperty,
+    tokenKinds: [],
+    values,
+    maxParts,
+    soloValues,
+  };
 }
 
 function color(cssProperty: string, descendant?: string): ColorLeaf {
@@ -118,8 +126,8 @@ function numberValue(
   return { kind: "number", cssProperty, tokenKinds, ...bounds };
 }
 
-function url(cssProperty: string): UrlLeaf {
-  return { kind: "url", cssProperty, tokenKinds: [] };
+function url(cssProperty: string, keywords: readonly string[] = []): UrlLeaf {
+  return { kind: "url", cssProperty, tokenKinds: [], keywords };
 }
 
 /**
@@ -553,13 +561,19 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
     shape: {
       kind: "object",
       fields: {
-        url: url("background-image"),
+        // `none` is what clears an image set at an earlier state, and it has
+        // to be a keyword rather than a path or it emits `url("none")`. A file
+        // really named `none` is still reachable as `./none`.
+        url: url("background-image", ["none"]),
         position: cssValue("background-position"),
         size: cssValue("background-size"),
+        // `repeat-x` and `repeat-y` each name both axes already, so they are
+        // the whole value; the other four pair up as inline-then-block.
         repeat: keyword(
           "background-repeat",
           ["repeat", "repeat-x", "repeat-y", "no-repeat", "space", "round"],
-          2
+          2,
+          ["repeat-x", "repeat-y"]
         ),
         attachment: keyword("background-attachment", [
           "scroll",
@@ -661,6 +675,8 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
       "saturation",
       "color",
       "luminosity",
+      "plus-darker",
+      "plus-lighter",
     ]),
     summary: "How the element blends with what is behind it.",
   },
