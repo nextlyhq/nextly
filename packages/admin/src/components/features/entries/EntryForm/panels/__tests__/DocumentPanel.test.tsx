@@ -167,6 +167,33 @@ describe("DocumentPanel", () => {
     expect(screen.getByText("Draft")).toBeInTheDocument();
     expect(screen.queryByText("Modified")).not.toBeInTheDocument();
   });
+
+  it("renders the Changed pill when a published entry has a pending working draft", () => {
+    // The server flags an overlay read with `_isWorkingDraft` while keeping the
+    // status at the live parent's "published"; that pairing is "Changed".
+    render(
+      <DocumentPanel
+        mode="edit"
+        entry={{ id: "x", status: "published", _isWorkingDraft: true }}
+        hasStatus
+      />
+    );
+    expect(screen.getByText("Changed")).toBeInTheDocument();
+    expect(screen.queryByText("Published")).not.toBeInTheDocument();
+  });
+
+  it("shows Changed (not Modified) when a working draft exists and the form is dirty", () => {
+    render(
+      <DocumentPanel
+        mode="edit"
+        entry={{ id: "x", status: "published", _isWorkingDraft: true }}
+        hasStatus
+        isDirty
+      />
+    );
+    expect(screen.getByText("Changed")).toBeInTheDocument();
+    expect(screen.queryByText("Modified")).not.toBeInTheDocument();
+  });
 });
 
 describe("pillStateFromForm", () => {
@@ -186,5 +213,27 @@ describe("pillStateFromForm", () => {
   it("returns 'draft' when status is undefined", () => {
     expect(pillStateFromForm(undefined, false)).toBe("draft");
     expect(pillStateFromForm(undefined, true)).toBe("draft");
+  });
+
+  it("returns 'changed' when published with a pending working draft", () => {
+    // A persisted working draft over a published row is the "Changed"
+    // lifecycle state (Payload's model): live is published, edits pend.
+    expect(pillStateFromForm("published", false, true)).toBe("changed");
+  });
+
+  it("prefers 'changed' over 'modified' when a working draft also has local edits", () => {
+    // The persisted working draft is the authoritative divergence; the enabled
+    // Save button already signals the extra unsaved edits, so 'changed' wins.
+    expect(pillStateFromForm("published", true, true)).toBe("changed");
+  });
+
+  it("stays 'draft' for a draft entry even if a working-draft flag is passed", () => {
+    // The working-draft overlay only ever applies to a published parent, so a
+    // draft-status entry is a plain draft, never 'changed'.
+    expect(pillStateFromForm("draft", false, true)).toBe("draft");
+  });
+
+  it("defaults hasWorkingDraft to false so a clean published entry is 'published'", () => {
+    expect(pillStateFromForm("published", false)).toBe("published");
   });
 });

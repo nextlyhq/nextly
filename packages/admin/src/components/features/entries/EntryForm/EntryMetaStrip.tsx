@@ -22,6 +22,10 @@ export interface EntryMetaStripProps {
   hasStatus: boolean;
   /** Current entry status ("draft" | "published" | other). Used for the pill. */
   status?: string | null;
+  /** Whether a pending working draft exists over a published entry
+   *  (draft/published split). When true the pill reads "Changed" instead of
+   *  "Published", mirroring the Document panel. Defaults to false. */
+  hasWorkingDraft?: boolean;
   /** Whether the rail is currently collapsed. Pill only renders when true,
    *  since DocumentPanel takes over that role when the rail is expanded. */
   isRailCollapsed: boolean;
@@ -39,6 +43,7 @@ export function EntryMetaStrip({
   slugField,
   hasStatus,
   status,
+  hasWorkingDraft = false,
   isRailCollapsed,
   lockSlug = false,
   hasPublicAddress = false,
@@ -50,7 +55,9 @@ export function EntryMetaStrip({
 
   return (
     <div className="px-6 py-2 border-b border-border flex items-center gap-3 text-xs text-muted-foreground">
-      {showStatusPill && <StatusPill status={status} />}
+      {showStatusPill && (
+        <StatusPill status={status} hasWorkingDraft={hasWorkingDraft} />
+      )}
       {showSlug && (
         <SlugInlineEditor
           slugField={slugField}
@@ -62,21 +69,34 @@ export function EntryMetaStrip({
   );
 }
 
-function StatusPill({ status }: { status: string }) {
+function StatusPill({
+  status,
+  hasWorkingDraft,
+}: {
+  status: string;
+  hasWorkingDraft: boolean;
+}) {
   const isPublished = status === "published";
+  // A published entry with a pending working draft is Payload's "Changed"
+  // state — the live row stays published while newer edits wait to be promoted.
+  const isChanged = isPublished && hasWorkingDraft;
   return (
     <span
       className={cn(
         "px-1.5 py-0.5 text-xs font-bold tracking-[0.1em] uppercase rounded shrink-0",
         // Why: Mobeen's request — neutral admin palette, not saturated. Use
         // muted bg + foreground/muted-foreground to blend with the rest of
-        // the chrome instead of standing out as candy-colour AI styling.
-        isPublished
-          ? "bg-muted text-foreground"
-          : "bg-muted text-muted-foreground"
+        // the chrome instead of standing out as candy-colour AI styling. The
+        // Changed state reuses the muted amber `warning` token (both modes) to
+        // match the Document panel's pending-changes pill.
+        isChanged
+          ? "bg-warning-100 text-warning-800 dark:bg-warning-950/40 dark:text-warning-200"
+          : isPublished
+            ? "bg-muted text-foreground"
+            : "bg-muted text-muted-foreground"
       )}
     >
-      {isPublished ? "Published" : "Draft"}
+      {isChanged ? "Changed" : isPublished ? "Published" : "Draft"}
     </span>
   );
 }
