@@ -198,6 +198,7 @@ const DIMENSION_FUNCTIONS: ReadonlySet<string> = new Set([
   "var",
   "env",
   "anchor-size",
+  "attr",
 ]);
 
 /**
@@ -255,6 +256,27 @@ function splitArguments(children: Iterable<CssNode>): CssNode[][] {
   return args;
 }
 
+/**
+ * CSS whitespace, which is narrower than JavaScript's `\s`: that also matches
+ * NO-BREAK SPACE and the Unicode spaces, and the CSS parser does not. It keeps
+ * those inside the identifier, so `block\u00a0` is a single token the browser
+ * discards rather than `block` with something trimmable after it. Normalising
+ * with `\s` would therefore accept a value that never renders.
+ */
+const CSS_WHITESPACE = /[ \t\r\n\f]+/;
+const CSS_WHITESPACE_EDGES = /^[ \t\r\n\f]+|[ \t\r\n\f]+$/g;
+
+/** A value with only CSS whitespace removed from either end. */
+export function trimCssWhitespace(value: string): string {
+  return value.replace(CSS_WHITESPACE_EDGES, "");
+}
+
+/** A value split on CSS whitespace, with no empty parts. */
+export function splitCssWhitespace(value: string): string[] {
+  const trimmed = trimCssWhitespace(value);
+  return trimmed === "" ? [] : trimmed.split(CSS_WHITESPACE);
+}
+
 /** True when a value is one of the keywords legal on every CSS property. */
 export function isCssWideKeyword(value: string): boolean {
   return CSS_WIDE_KEYWORDS.has(value.toLowerCase());
@@ -269,6 +291,19 @@ export function isCssWideKeyword(value: string): boolean {
  */
 const FUNCTION_IDENTIFIERS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ["round", new Set(["up", "down", "to-zero", "nearest"])],
+]);
+
+/**
+ * The numeric constants CSS defines for math expressions. They are operands
+ * rather than property values, so they are legal inside any math function and
+ * nowhere else: `calc(pi * 1px)` is a length, while a bare `pi` is not.
+ */
+const CALC_CONSTANTS: ReadonlySet<string> = new Set([
+  "pi",
+  "e",
+  "infinity",
+  "-infinity",
+  "nan",
 ]);
 
 /** Parse a CSS value, or `null` when it is not one. */
@@ -532,7 +567,10 @@ function measurementRejection(
       // a property keyword is a complete value, so `calc(auto)` and
       // `calc(inherit)` are discarded while `round(up, 10px, 1px)` is not.
       if (insideFunction) {
-        return keywords.has(node.name.toLowerCase()) ? null : "not-a-length";
+        const inner = node.name.toLowerCase();
+        return CALC_CONSTANTS.has(inner) || keywords.has(inner)
+          ? null
+          : "not-a-length";
       }
       const name = node.name.toLowerCase();
       return CSS_WIDE_KEYWORDS.has(name) || keywords.has(name)

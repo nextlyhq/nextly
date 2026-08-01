@@ -21,6 +21,8 @@ import {
   checkUrlValue,
   isCssWideKeyword,
   isOverlongValue,
+  splitCssWhitespace,
+  trimCssWhitespace,
 } from "./css-value";
 import type { CssValueRejection } from "./css-value";
 
@@ -185,7 +187,7 @@ function leafIssues(
         // string match a short keyword, and every copy made along the way is
         // work bought with a value that should never have been read.
         if (isOverlongValue(value)) return rejected(path, value, "too-long");
-        const parts = value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+        const parts = splitCssWhitespace(value.toLowerCase());
         // Collapsed rather than compared raw, so that a vocabulary entry
         // written as two words — `grid-auto-flow: row dense` is one value, not
         // two — still matches however the stored string was spaced.
@@ -222,7 +224,7 @@ function leafIssues(
       if (typeof value === "string") {
         // Bounded before normalising, for the same reason the keyword leaf is.
         if (isOverlongValue(value)) return rejected(path, value, "too-long");
-        if (isCssWideKeyword(value.trim())) return [];
+        if (isCssWideKeyword(trimCssWhitespace(value))) return [];
       }
       if (typeof value !== "number" || !Number.isFinite(value)) {
         return [invalid(path, `${describeValue(value)} is not a number.`)];
@@ -284,7 +286,7 @@ function leafIssues(
       // A keyword stands in for the whole URL, so it is matched before the URL
       // rules rather than beside them: a value the property accepts as a
       // keyword is not a path and must not be judged as one.
-      const written = value.trim().toLowerCase();
+      const written = trimCssWhitespace(value).toLowerCase();
       const keywords = leaf.keywords ?? [];
       if (
         isCssWideKeyword(written) ||

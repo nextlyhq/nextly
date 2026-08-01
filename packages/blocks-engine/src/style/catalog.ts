@@ -507,8 +507,17 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "fontStyle",
     group: "typography",
-    shape: keyword("font-style", ["normal", "italic", "oblique"]),
-    summary: "Upright or slanted text.",
+    // `oblique` takes an optional angle, which no closed keyword set can
+    // express; the vocabulary stays for an editor to offer, and the free-form
+    // variant is what makes `oblique 10deg` storable.
+    shape: {
+      kind: "union",
+      of: [
+        keyword("font-style", ["normal", "italic", "oblique"]),
+        cssValue("font-style"),
+      ],
+    },
+    summary: "Upright or slanted text, with an optional oblique angle.",
   },
   {
     property: "textDecoration",

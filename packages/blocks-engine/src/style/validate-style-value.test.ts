@@ -1325,3 +1325,82 @@ describe("blend modes the platform ships", () => {
     expect(codes({ mixBlendMode: "nope" })).toEqual(["invalid-style-value"]);
   });
 });
+
+describe("whitespace CSS does not treat as whitespace", () => {
+  const NBSP = " ";
+  const EM_SPACE = " ";
+
+  it("is refused, because the parser keeps it inside the identifier", () => {
+    expect(codes({ display: `block${NBSP}` })).toEqual(["invalid-style-value"]);
+    expect(codes({ display: `${EM_SPACE}block` })).toEqual([
+      "invalid-style-value",
+    ]);
+    expect(codes({ gridAutoFlow: `row${NBSP}dense` })).toEqual([
+      "invalid-style-value",
+    ]);
+    expect(codes({ opacity: `${NBSP}inherit` })).toEqual([
+      "invalid-style-value",
+    ]);
+  });
+
+  it("does not stop real CSS whitespace being normalised", () => {
+    expect(codes({ display: " block " })).toEqual([]);
+    expect(codes({ display: "\tblock\n" })).toEqual([]);
+    expect(codes({ display: "\fblock\r" })).toEqual([]);
+    expect(codes({ gridAutoFlow: "row\tdense" })).toEqual([]);
+    expect(codes({ opacity: " inherit " })).toEqual([]);
+    expect(codes({ background: { url: "  none  " } })).toEqual([]);
+  });
+
+  it("leaves a url leaf accepting the value, as a path rather than a keyword", () => {
+    // Both readings accept this, so validation cannot tell them apart; what
+    // changes is which one the compiler is told it has. The keyword shortcut
+    // still may not skip the checks that follow it.
+    expect(codes({ background: { url: `${NBSP}none` } })).toEqual([]);
+    expect(codes({ background: { url: `${NBSP}javascript:x` } })).toEqual([
+      "invalid-style-value",
+    ]);
+  });
+});
+
+describe("a slant given as an angle", () => {
+  it("is storable, which a closed keyword set cannot express", () => {
+    expect(codes({ fontStyle: "oblique 10deg" })).toEqual([]);
+    expect(codes({ fontStyle: "oblique -5deg" })).toEqual([]);
+  });
+
+  it("leaves the plain keywords working", () => {
+    for (const value of ["normal", "italic", "oblique"]) {
+      expect(codes({ fontStyle: value }), value).toEqual([]);
+    }
+  });
+
+  it("still refuses a value that is not CSS at all", () => {
+    expect(codes({ fontStyle: "oblique; color: red" })).toEqual([
+      "invalid-style-value",
+    ]);
+  });
+});
+
+describe("operands a math expression defines for itself", () => {
+  it("accepts the CSS math constants", () => {
+    expect(codes({ width: "calc(pi * 1px)" })).toEqual([]);
+    expect(codes({ width: "calc(e * 1rem)" })).toEqual([]);
+    expect(codes({ width: "calc(infinity * 1px)" })).toEqual([]);
+  });
+
+  it("does not let them stand as a whole value, or admit other identifiers", () => {
+    expect(codes({ width: "pi" })).toEqual(["invalid-style-value"]);
+    expect(codes({ width: "calc(nope * 1px)" })).toEqual([
+      "invalid-style-value",
+    ]);
+    expect(codes({ width: "calc(auto)" })).toEqual(["invalid-style-value"]);
+  });
+});
+
+describe("a dimension taken from an attribute", () => {
+  it("is accepted, since the declared unit makes the result one", () => {
+    expect(codes({ width: "attr(data-width px, 0px)" })).toEqual([]);
+    expect(codes({ width: "attr(data-width px)" })).toEqual([]);
+  });
+});
