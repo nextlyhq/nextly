@@ -29,6 +29,7 @@ import {
   coerceBuilderMaxPerDoc,
   resolveBuilderVersions,
 } from "../domains/versions/builder-versions";
+import { schemaDraftsEnabled } from "../domains/versions/draft-split-eligibility";
 import { resolveBuilderWebhooks } from "../domains/webhooks/builder-webhooks";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
@@ -42,7 +43,6 @@ import { getHandlerConfig } from "../route-handler/auth-handler";
 import type { CollectionRegistryService } from "../services/collections/collection-registry-service";
 import type { FieldGroupRegistryService } from "../services/field-groups/field-group-registry-service";
 import { requireBuilderEnabled } from "../shared/builder-access";
-import { hasPasswordField } from "../shared/lib/password-fields";
 import { simplePluralize } from "../shared/lib/pluralization";
 
 import { assertValidFieldsPayload } from "./fields-payload";
@@ -120,24 +120,27 @@ export const GET = withErrorHandler(
 
     // Derived flag: whether the draft/published working-draft split will actually
     // run for this collection. The admin editor reads it to decide whether a
-    // "Save" stores a working draft or writes the live row, so it MUST match the
-    // server's own `splitEnabled` gate (collection-mutation-service): a mismatch
-    // makes the editor present a status-less save as a pending draft while the
-    // server writes it live. The split needs the status + drafts lifecycle and is
-    // off for a localized document and for a reachable password field (top-level,
-    // in a group, or in a component), which cannot ride safely in a draft
-    // snapshot. Builder collections always resolve drafts off, so this is derived
-    // from the resolved config, never assumed. (An ineligible component — one that
-    // is localized or fails to resolve — also disables the split server-side; that
-    // resolution-state parity is a follow-up needing a shared eligibility helper.)
-    const draftsEnabled =
-      (collection as { status?: boolean }).status === true &&
-      (collection.versions as { drafts?: { enabled?: boolean } } | null)?.drafts
-        ?.enabled === true &&
-      (collection as { localized?: boolean }).localized !== true &&
-      !hasPasswordField(
-        enrichedFields as unknown as Parameters<typeof hasPasswordField>[0]
-      );
+    // "Save" stores a working draft or writes the live row, so it is derived from
+    // the SAME shared predicate the mutation service gates on — a mismatch would
+    // make the editor present a status-less save as a pending draft while the
+    // server writes it live. Resolution runs over the ORIGINAL fields (not the
+    // enriched ones, which drop the component localized/resolved markers), and a
+    // registry failure leaves the split off rather than failing the read.
+    let draftsEnabled = false;
+    try {
+      draftsEnabled = await schemaDraftsEnabled({
+        status: (collection as { status?: boolean }).status,
+        versions: collection.versions,
+        localized: (collection as { localized?: boolean }).localized,
+        fields: collection.fields,
+      });
+    } catch (eligibilityError) {
+      getNextlyLogger().warn({
+        kind: "collection-drafts-eligibility-failed",
+        slug,
+        err: String(eligibilityError),
+      });
+    }
 
     return respondDoc({
       ...(collectionWithViews as unknown as typeof collection),

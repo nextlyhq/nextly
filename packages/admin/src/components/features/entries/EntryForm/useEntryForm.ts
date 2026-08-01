@@ -254,6 +254,31 @@ export function mapIntentToPayload(
 }
 
 /**
+ * The submit intent a plain save (the keyboard Cmd/Ctrl+S shortcut) uses for an
+ * editor in a given lifecycle state, mirroring the primary Save button.
+ *
+ * `effectiveStatus` is the ACTIVE locale's status (from `effectiveEntryStatus`),
+ * not the main row's: on a non-default language the main row carries the default
+ * language's lifecycle, so keying the shortcut off it could publish or unpublish
+ * the wrong translation. A published document stores a working draft on a drafts
+ * collection or re-asserts published otherwise; any other state saves a draft; a
+ * non-status collection has no lifecycle intent (its single Save button submits
+ * without one).
+ */
+export function resolveDefaultSaveIntent(args: {
+  mode: EntryFormMode;
+  hasStatus: boolean;
+  effectiveStatus: string | undefined;
+  draftsEnabled: boolean;
+}): EntryFormIntent | undefined {
+  if (args.mode !== "edit" || !args.hasStatus) return undefined;
+  if (args.effectiveStatus === "published") {
+    return args.draftsEnabled ? "save-working-draft" : "save-changes";
+  }
+  return "save-draft";
+}
+
+/**
  * Return type for useEntryForm hook
  */
 export interface UseEntryFormReturn {
@@ -621,6 +646,10 @@ export function useEntryForm({
     setError: form.setError,
     // i18n M7: route the save to the active content language.
     locale,
+    // Match the editor's read mode so the optimistic update keys onto the same
+    // cached document the form is showing (the entry page reads with this same
+    // `draft` flag when the working-draft split is enabled).
+    draft: collection.draftsEnabled === true,
   });
 
   // Password fields submit "" to mean "keep the stored hash", so they are

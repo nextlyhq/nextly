@@ -100,6 +100,7 @@ import {
 } from "../../i18n/runtime/companion-readiness";
 import { assembleDocument } from "../../versions/assemble-document";
 import { captureInTx } from "../../versions/capture-in-tx";
+import { isDraftSplitEligible } from "../../versions/draft-split-eligibility";
 import {
   buildRestorePayload,
   type ComponentSchemas,
@@ -4756,42 +4757,21 @@ export class CollectionMutationService extends BaseService {
         !hasPasswordField(fields)
           ? await resolveComponentSchemas(fields as unknown as FieldConfig[])
           : null;
-      // A localized component stores its values per locale, but a working draft
-      // is keyed under one unlocalized slot, so a draft saved under one locale
-      // would be promoted under another and misfile the translation into the
-      // wrong companion. A component whose schema cannot be resolved is treated
-      // the same way: it could itself be localized, and promoting a draft while
-      // it stays unresolvable drops the component subtree (the restore filter
-      // cannot see inside a schema it cannot load) before the sidecar is deleted,
-      // silently losing the pending edit. Until per-locale drafts exist, either
-      // kind of component makes the collection ineligible for the split,
-      // alongside a localized document.
-      const hasIneligibleComponent = splitComponentSchemas
-        ? [...splitComponentSchemas.values()].some(
-            schema => schema.localized || !schema.resolved
-          )
-        : false;
-      // A password field cannot ride safely in a working draft: the snapshot
-      // strips passwords so no plaintext credential is stored at rest, and the
-      // promote filter drops any field whose subtree holds one, so a draft can
-      // neither carry a password change nor preserve an ordinary edit made
-      // alongside a password in the same component. Until drafts persist password
-      // changes through a secure path, a collection with a reachable password
-      // field (top-level or inside a reachable component) is excluded from the
-      // split and edits the live row directly, exactly as before the split.
-      const hasReachablePassword =
-        hasPasswordField(fields) ||
-        (splitComponentSchemas
-          ? [...splitComponentSchemas.values()].some(schema =>
-              hasPasswordField(schema.fields)
-            )
-          : false);
-      const splitEnabled =
-        collectionHasStatus &&
-        versionsConfig?.drafts?.enabled === true &&
-        !documentLocalized &&
-        !hasIneligibleComponent &&
-        !hasReachablePassword;
+      // Eligibility is decided by the shared predicate so the admin's
+      // `draftsEnabled` flag (surfaced on the schema read) can never disagree
+      // with whether a status-less update here actually stores a working draft.
+      // A localized document or component, an unresolved component, or a
+      // reachable password field all rule it out — a localized component would
+      // misfile a promoted draft into the wrong companion, an unresolved one
+      // drops its subtree on promote, and a password cannot ride a draft
+      // snapshot. See isDraftSplitEligible.
+      const splitEnabled = isDraftSplitEligible({
+        collectionHasStatus,
+        draftsVersioningEnabled: versionsConfig?.drafts?.enabled === true,
+        documentLocalized,
+        fields: fields as unknown as FieldConfig[],
+        componentSchemas: splitComponentSchemas,
+      });
       // No status named ⇒ neither the main row nor the write-locale companion
       // `_status` is being set (matches the transition guard's own build gate at
       // `transitionNextStatus !== undefined`).
