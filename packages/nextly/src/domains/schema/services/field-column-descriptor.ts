@@ -582,3 +582,42 @@ export function getSystemColumnDescriptors(
   }
   return cols;
 }
+
+/**
+ * Spell one system-column descriptor as the column definition of a `CREATE TABLE`.
+ *
+ * The module that owns what the columns ARE owns how they are written, so a DDL generator can
+ * iterate `getSystemColumnDescriptors` instead of restating the set. Restating it is what let a
+ * newly added system column reach the runtime schema and miss the physical table, which makes
+ * every read of that entity select a column that is not there.
+ *
+ * `quoteIdentifier` is the caller's, because quoting is a property of the generator's dialect
+ * handling rather than of the column.
+ *
+ * Clause order is `type [DEFAULT x] [PRIMARY KEY] [NOT NULL]`, which is what the generators
+ * already emitted by hand. A default is a literal DDL expression (`now()`, `'draft'`), not a
+ * value to be escaped: the descriptor stores it exactly as it must appear.
+ */
+export function renderSystemColumnSql(
+  column: SystemColumnDescriptor,
+  quoteIdentifier: (name: string) => string
+): string {
+  // `length` is redundant on some dialects and load-bearing on others: MySQL's descriptors carry
+  // the size inside `dialectType` ("varchar(36)") as well as in `length`, while PostgreSQL's
+  // status column is "varchar" with the 20 held only in `length`. Appending unconditionally would
+  // emit "varchar(36)(36)", so the size is added only when the type does not already state one.
+  const statesItsOwnSize = column.dialectType.includes("(");
+  const type =
+    column.length === undefined || statesItsOwnSize
+      ? column.dialectType
+      : `${column.dialectType}(${column.length})`;
+
+  const clauses = [quoteIdentifier(column.name), type];
+  if (column.default !== undefined) clauses.push(`DEFAULT ${column.default}`);
+  if (column.primaryKey) clauses.push("PRIMARY KEY");
+  // A primary key is already NOT NULL on every dialect, and the generators spelled it out. Kept
+  // so the emitted text does not change for the columns that were not the point of this.
+  if (!column.nullable) clauses.push("NOT NULL");
+
+  return clauses.join(" ");
+}
