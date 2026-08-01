@@ -1170,3 +1170,33 @@ describe("the truncation marker means work was actually skipped", () => {
     );
   });
 });
+
+describe("an empty breakpoint reached after the budget ran out", () => {
+  it("does not claim the document went unchecked", () => {
+    // The exemption belongs at both checks: this entry is reached at the top
+    // of the loop rather than after a charge, and skipping it costs nothing
+    // either way because it holds no values.
+    const byBreakpoint: Record<string, unknown> = {};
+    for (let index = 0; index < MAX_STYLE_ISSUES; index += 1) {
+      byBreakpoint[`bp${index}`] = {};
+    }
+    byBreakpoint.trailing = {};
+    const issues = validate(
+      invalidDoc({
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: "n1",
+            type: "core/box",
+            version: 1,
+            props: {},
+            styles: { base: byBreakpoint },
+          },
+        ],
+      }),
+      { breakpoints: FIXTURE_BREAKPOINTS, mode: "forgiving" }
+    );
+    expect(issues.filter(issue => issue.severity === "error")).toEqual([]);
+  });
+});

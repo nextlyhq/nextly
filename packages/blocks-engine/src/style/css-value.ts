@@ -339,16 +339,28 @@ const FUNCTION_IDENTIFIERS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
  * a length while `sqrt(4)` alone is not a width. The angle-returning inverses
  * are absent: they satisfy no leaf this module validates.
  */
-const NUMBER_FUNCTIONS: ReadonlySet<string> = new Set([
-  "sqrt",
-  "pow",
-  "log",
-  "exp",
-  "sign",
-  "sin",
-  "cos",
-  "tan",
+const NUMBER_FUNCTION_ARITY: ReadonlyMap<string, readonly number[]> = new Map([
+  ["sqrt", [1]],
+  ["exp", [1]],
+  ["sign", [1]],
+  ["sin", [1]],
+  ["cos", [1]],
+  ["tan", [1]],
+  ["pow", [2]],
+  // An optional base.
+  ["log", [1, 2]],
 ]);
+
+const NUMBER_FUNCTIONS: ReadonlySet<string> = new Set(
+  NUMBER_FUNCTION_ARITY.keys()
+);
+
+/**
+ * The one number function that takes a measurement: `sign()` reports which side
+ * of zero its argument falls, whatever the argument is made of, so
+ * `sign(1px)` is a number while `sqrt(1px)` is not a value at all.
+ */
+const NUMBER_FUNCTIONS_TAKING_ANY: ReadonlySet<string> = new Set(["sign"]);
 
 const CALC_CONSTANTS: ReadonlySet<string> = new Set([
   "pi",
@@ -588,6 +600,11 @@ interface MeasurementLimits {
   allowPercentage: boolean;
   /** Functions the property accepts beyond the universally legal ones. */
   functions?: ReadonlySet<string>;
+  /**
+   * Set while reading the arguments of a function that takes bare numbers, so
+   * a measurement there is refused: `sqrt(1px)` is not a value in any context.
+   */
+  dimensionless?: boolean;
 }
 
 function measurementRejection(
@@ -601,11 +618,13 @@ function measurementRejection(
 ): CssValueRejection | null {
   switch (node.type) {
     case "Dimension":
+      if (limits.dimensionless === true) return "not-a-length";
       if (!LENGTH_UNITS.has(asciiLower(node.unit))) return "not-a-length";
       return limits.allowNegative || !String(node.value).startsWith("-")
         ? null
         : "not-a-length";
     case "Percentage":
+      if (limits.dimensionless === true) return "not-a-length";
       if (!limits.allowPercentage) return "not-a-length";
       return limits.allowNegative || !String(node.value).startsWith("-")
         ? null
@@ -647,6 +666,24 @@ function measurementRejection(
       // argument grammars of their own. Reading any of them arithmetically
       // refuses valid values, and the characters that would make an argument
       // dangerous were already refused for the value as a whole.
+      if (NUMBER_FUNCTIONS.has(name)) {
+        // Allowlisted by name is not the same as unchecked: these have settled
+        // arities, and all but `sign()` take a bare number, so a measurement
+        // inside one is a value the browser discards.
+        const numberArity = NUMBER_FUNCTION_ARITY.get(name) ?? [1];
+        const numberArgs = splitArguments(node.children);
+        if (!numberArity.includes(numberArgs.length)) return "not-a-length";
+        for (const arg of numberArgs) {
+          const rejection = alternationRejection(arg, NO_KEYWORDS, {
+            allowNegative: true,
+            allowPercentage: false,
+            functions: limits.functions,
+            dimensionless: !NUMBER_FUNCTIONS_TAKING_ANY.has(name),
+          });
+          if (rejection !== null) return rejection;
+        }
+        return null;
+      }
       if (!MATH_FUNCTIONS.has(name)) return null;
       const ownIdentifiers = FUNCTION_IDENTIFIERS.get(name) ?? NO_KEYWORDS;
       const args = splitArguments(node.children);
@@ -664,6 +701,7 @@ function measurementRejection(
           allowNegative: true,
           allowPercentage: limits.allowPercentage,
           functions: limits.functions,
+          dimensionless: limits.dimensionless,
         });
         if (rejection !== null) return rejection;
       }

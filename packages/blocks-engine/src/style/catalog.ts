@@ -606,6 +606,9 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
     // out of each combination taking at most one of them.
     shape: keyword("text-transform", [
       "none",
+      // Its own value: MathML italicises single letters through it, and it
+      // combines with none of the case or width transforms.
+      "math-auto",
       ...unorderedCombinations([
         ["uppercase", "lowercase", "capitalize"],
         ["full-width"],

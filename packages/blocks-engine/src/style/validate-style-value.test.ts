@@ -1610,3 +1610,50 @@ describe("an elliptical logical corner", () => {
     ]);
   });
 });
+
+describe("arguments of a number-producing function", () => {
+  it("are held to the function's arity", () => {
+    for (const value of [
+      "calc(sqrt() * 1px)",
+      "calc(exp() * 1px)",
+      "calc(pow(2) * 1px)",
+      "calc(pow(2,3,4) * 1px)",
+    ]) {
+      expect(codes({ width: value }), value).toEqual(["invalid-style-value"]);
+    }
+  });
+
+  it("may not be a measurement, since these take bare numbers", () => {
+    expect(codes({ width: "calc(sqrt(1px) * 1px)" })).toEqual([
+      "invalid-style-value",
+    ]);
+  });
+
+  it("except for the one that reports a sign, which takes any numeric", () => {
+    expect(codes({ width: "calc(sign(1px) * 1px)" })).toEqual([]);
+  });
+
+  it("still accepts the well-formed calls", () => {
+    for (const value of [
+      "calc(sqrt(4) * 1px)",
+      "calc(pow(2,3) * 1px)",
+      "calc(log(8) * 1px)",
+      "calc(log(8,2) * 1px)",
+      "calc(sqrt(calc(4)) * 1px)",
+    ]) {
+      expect(codes({ width: value }), value).toEqual([]);
+    }
+  });
+});
+
+describe("a transform that combines with nothing", () => {
+  it("is accepted on its own", () => {
+    expect(codes({ textTransform: "math-auto" })).toEqual([]);
+  });
+
+  it("is refused beside a transform it excludes", () => {
+    expect(codes({ textTransform: "math-auto uppercase" })).toEqual([
+      "invalid-style-value",
+    ]);
+  });
+});
