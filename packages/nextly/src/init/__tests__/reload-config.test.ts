@@ -1917,12 +1917,11 @@ describe("reloadNextlyConfig", () => {
         "utf8"
       );
       const commits = source.match(/^\s*commitReload\(/gm) ?? [];
-      // Empty targets, the no-DDL branch, the no-DDL deferred branch, and
-      // after a successful apply. The post-apply localization branch
-      // deliberately publishes nothing: it returns before the runtime-schema
-      // refresh, so anything committed there would not be backed by the runtime
-      // it describes.
-      expect(commits).toHaveLength(4);
+      // Empty targets, the no-DDL branch, and after a successful apply. Two
+      // branches deliberately publish nothing: the post-apply localization
+      // failure returns before the runtime-schema refresh, and the no-DDL
+      // deferred branch skips the metadata sync for every entity.
+      expect(commits).toHaveLength(3);
     });
 
     it("keeps a late app hook behind the config's, across a reload", async () => {

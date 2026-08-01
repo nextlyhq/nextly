@@ -1892,12 +1892,15 @@ async function applyReload(opts?: {
       // field types are the ones that describe them.
       abandonReload();
 
-      // The entities that did NOT defer still have exactly the tables and
-      // metadata their config describes -- a save that edits one collection's
-      // hook while another's schema change is refused should not leave the
-      // first one stale merely because they arrived together. Hooks are held
-      // back per entity here, as they are on the applied path.
-      commitReload(deferredEntities);
+      // Publishes NOTHING, deliberately, and not per entity. This branch skips
+      // `syncCodeFirstMetadataOnly` for EVERY entity, not just the deferred
+      // one, so nobody's field tree was refreshed -- an unaffected collection's
+      // edited handler would run against its old serialized metadata, which is
+      // the same mismatch the deferred entity is being protected from. Holding
+      // one entity's hooks back while publishing another's would need the
+      // sync to run per entity first, and this branch does not run it at all.
+      //
+      // Their edits land on the next clean reload, which is one save away.
     }
     return;
   }
