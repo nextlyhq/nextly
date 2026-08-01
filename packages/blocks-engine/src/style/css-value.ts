@@ -450,6 +450,24 @@ function measurementRejection(
       }
       return null;
     }
+    case "Parentheses": {
+      // An explicitly grouped term is an operand whose contents follow the same
+      // rules, so `calc((1px + 2px) * 3)` is a length like its ungrouped form.
+      const inner = [...node.children];
+      if (inner.length === 0 || inner.length % 2 === 0) return "not-a-length";
+      for (let index = 0; index < inner.length; index += 1) {
+        const expectingOperator = index % 2 === 1;
+        const term = inner[index];
+        if (term === undefined) return "not-a-length";
+        if ((term.type === "Operator") !== expectingOperator) {
+          return "not-a-length";
+        }
+        if (expectingOperator) continue;
+        const rejection = measurementRejection(term, true, keywords, limits);
+        if (rejection !== null) return rejection;
+      }
+      return null;
+    }
     default:
       return "not-a-length";
   }

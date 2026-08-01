@@ -855,6 +855,22 @@ describe("operands and operators alternate", () => {
   });
 });
 
+describe("parenthesised terms in a length", () => {
+  it("are accepted, following the same rules as the expression around them", () => {
+    expect(codes({ width: "calc((1px + 2px) * 3)" })).toEqual([]);
+    expect(codes({ width: "calc(2 * (1px + 2em))" })).toEqual([]);
+  });
+
+  it("are still held to those rules", () => {
+    expect(codes({ width: "calc((1px 2px) * 3)" })).toEqual([
+      "invalid-style-value",
+    ]);
+    expect(codes({ width: "calc((red) * 3)" })).toEqual([
+      "invalid-style-value",
+    ]);
+  });
+});
+
 describe("issue codes", () => {
   it("are all declared in the shared code table", () => {
     const emitted = [
