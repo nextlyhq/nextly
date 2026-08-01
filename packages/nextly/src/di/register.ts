@@ -44,7 +44,8 @@ import {
   resetEmailProviderRegistry,
 } from "../domains/email/services/email-provider-registry";
 import {
-  resolveFieldGroupRegistryName,
+  assumeTypeColumn,
+  resolveFieldGroupRegistryTable,
   resolveTypeColumns,
 } from "../domains/field-groups/storage/resolve-storage-names";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
@@ -1199,12 +1200,12 @@ async function initializeSchemaRegistry(
     // `initializeSchemaRegistry`'s outer catch — which returns `undefined` and
     // skips config-table registration entirely, discarding a registry that was
     // otherwise fine.
-    const fieldGroupRegistry = await resolveFieldGroupRegistryName(
+    const fieldGroupRegistry = await resolveFieldGroupRegistryTable(
       adapter
     ).catch(() => undefined);
     await loadDynamicTables(
       adapter,
-      fieldGroupRegistry ?? STORAGE_FORMAT.registryTable,
+      fieldGroupRegistry?.name ?? STORAGE_FORMAT.registryTable,
       (tableName, fields, _hasStatus, localized) => {
         loadedFieldGroups.push({
           tableName,
@@ -1221,13 +1222,25 @@ async function initializeSchemaRegistry(
     // Contained for the same reason the registry resolution above is: a failure
     // here would reach `initializeSchemaRegistry`'s outer catch, which returns
     // `undefined` and skips config-table registration entirely — discarding a
-    // boot that was otherwise fine over one metadata probe. An empty map sends
-    // every table to the documented default below, which is the spelling this
-    // release's DDL writes.
+    // boot that was otherwise fine over one metadata probe.
     const fieldGroupTypeColumns = await resolveTypeColumns(
       adapter,
       loadedFieldGroups.map(entry => entry.tableName)
-    ).catch(() => new Map<string, string>());
+    ).catch((err: unknown) => {
+      // Loudly, because everything below now runs on an assumption rather than
+      // a reading, and a boot that quietly registers the wrong column name is
+      // indistinguishable from a healthy one until the first write fails.
+      console.warn(
+        `[Nextly schema] Could not read field-group discriminator columns; ` +
+          `falling back to the spelling the registry implies: ` +
+          `${err instanceof Error ? err.message : String(err)}`
+      );
+      return new Map<string, string>();
+    });
+    // What the tables the probe could not speak for are addressed as. The
+    // registry's own generation is the only evidence left once the catalog is
+    // unreadable, and it is not symmetric — see `assumeTypeColumn`.
+    const assumedTypeColumn = assumeTypeColumn(fieldGroupRegistry);
     for (const { tableName, fields, localized } of loadedFieldGroups) {
       const { FieldGroupSchemaService } = await import(
         "../services/field-groups/field-group-schema-service"
@@ -1238,8 +1251,7 @@ async function initializeSchemaRegistry(
         fields,
         {
           localized,
-          typeColumn:
-            fieldGroupTypeColumns.get(tableName) ?? STORAGE_FORMAT.columns.type,
+          typeColumn: fieldGroupTypeColumns.get(tableName) ?? assumedTypeColumn,
         }
       );
       registry.registerDynamicSchema(tableName, runtimeTable);

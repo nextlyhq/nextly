@@ -68,8 +68,12 @@ export interface StorageNameAdapter extends CatalogReadAdapter {
 
 /** The registry table a database holds, and whether it has been migrated. */
 export interface FieldGroupRegistryTable {
-  /** The name to address, always one of the two constants. */
-  name: string;
+  /**
+   * The name to address, always one of the two constants — typed as the union
+   * rather than `string` so a caller passing it to a signature that accepts
+   * only those two does not have to re-derive it from {@link migrated}.
+   */
+  name: FieldGroupRegistryName;
   /** `true` when the migrated registry is the one present. */
   migrated: boolean;
 }
@@ -173,6 +177,33 @@ export function chooseTypeColumns(
   return resolved;
 }
 
+/**
+ * The discriminator to assume when the catalog could not be read at all.
+ *
+ * 🔴 Not simply the legacy spelling. The storage migration renames the registry
+ * **last**, so a registry already carrying the migrated name proves every column
+ * rename ahead of it committed; assuming the legacy column there names one that
+ * exists on none of those tables, and every field-group read and write fails
+ * until the process restarts.
+ *
+ * The reverse is not claimed. A rollback renames the registry **first**, so a
+ * legacy registry does not prove the columns are legacy — and with the catalog
+ * unreadable there is nothing further to infer from, so that case takes the
+ * spelling this release's DDL writes, which is also the right answer for the
+ * database that has simply never migrated.
+ *
+ * Distinct from {@link chooseTypeColumns}'s own default for a table the catalog
+ * does not describe: that one answers about a table the catalog was able to
+ * speak for, this one answers when it could not speak at all.
+ */
+export function assumeTypeColumn(
+  registry: FieldGroupRegistryTable | undefined
+): string {
+  return registry?.migrated === true
+    ? MIGRATION_TARGET.columnType
+    : STORAGE_FORMAT.columns.type;
+}
+
 /** The discriminator on one table's column list. */
 function chooseTypeColumn(
   columns: readonly string[],
@@ -243,14 +274,11 @@ export type FieldGroupRegistryName =
   | typeof STORAGE_FORMAT.registryTable
   | typeof MIGRATION_TARGET.registryTable;
 
-/** The resolved registry name, narrowed to the union those signatures accept. */
+/** The resolved registry name, for callers that need nothing else about it. */
 export async function resolveFieldGroupRegistryName(
   adapter: StorageNameAdapter
 ): Promise<FieldGroupRegistryName> {
-  const resolved = await resolveFieldGroupRegistryTable(adapter);
-  return resolved.migrated
-    ? MIGRATION_TARGET.registryTable
-    : STORAGE_FORMAT.registryTable;
+  return (await resolveFieldGroupRegistryTable(adapter)).name;
 }
 
 /**

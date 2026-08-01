@@ -5,6 +5,7 @@ import { identifierCaseRules } from "../../../schema/utils/resolve-catalog-name"
 import { MIGRATION_TARGET } from "../../migration/manifest";
 import type { TableColumns } from "../../migration/reconcile";
 import {
+  assumeTypeColumn,
   chooseRegistryTable,
   chooseTypeColumns,
   forgetFieldGroupStorageNames,
@@ -262,5 +263,37 @@ describe("resolveFieldGroupRegistryTable", () => {
     await expect(resolveRegistryTableName(adapter)).resolves.toBe(
       LEGACY_REGISTRY
     );
+  });
+});
+
+/**
+ * 🔴 What the boot pass addresses tables as when the catalog cannot be read.
+ *
+ * The containment that keeps a metadata blip from aborting service registration
+ * leaves every table unresolved, and something still has to be registered. The
+ * spelling chosen there is not free: on migrated storage the legacy column is on
+ * none of those tables, so every field-group read and write fails until the
+ * process restarts — a boot that looks healthy and works for nothing.
+ */
+describe("assumeTypeColumn", () => {
+  // The registry renames last going up, so a migrated registry is proof that
+  // every column rename ahead of it committed.
+  it("assumes the migrated column when the registry has been renamed", () => {
+    expect(assumeTypeColumn({ name: MIGRATED_REGISTRY, migrated: true })).toBe(
+      MIGRATED_COLUMN
+    );
+  });
+
+  it("assumes the legacy column on a database that has not migrated", () => {
+    expect(assumeTypeColumn({ name: LEGACY_REGISTRY, migrated: false })).toBe(
+      LEGACY_COLUMN
+    );
+  });
+
+  // A rollback renames the registry FIRST, so a legacy registry proves nothing
+  // about the columns — and neither does a registry probe that itself failed.
+  // Both take the spelling this release's DDL writes rather than guess further.
+  it("assumes the legacy column when the registry could not be resolved", () => {
+    expect(assumeTypeColumn(undefined)).toBe(LEGACY_COLUMN);
   });
 });
