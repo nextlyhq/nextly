@@ -41,8 +41,9 @@ vertical writing modes, which the catalog can add later without a migration.
   centres a box while `padding: auto` means nothing. Values that are valid CSS
   but measure nothing are refused, including `"10"`, `"red"`, and units that
   measure something else such as `"20deg"` or `"2s"` — they would emit a
-  declaration the browser discards. Shorthands carrying more than one
-  measurement, such as `"4px 8px"` for a corner radius, are accepted.
+  declaration the browser discards. A few properties take more than
+  one measurement — `gap` takes a row and a column — but most take exactly one,
+  and a corner radius is expressed per corner rather than as a shorthand.
 - **number** — a unitless number, bounded where the property has natural limits.
 - **color** — a colour: a hex literal, one of the CSS named colours, a keyword
   such as `currentColor` or `transparent`, or a colour function including
