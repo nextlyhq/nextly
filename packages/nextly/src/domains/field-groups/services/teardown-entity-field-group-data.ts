@@ -40,6 +40,7 @@ import {
   indexCatalog,
   resolveCatalogName,
 } from "../../schema/utils/resolve-catalog-name";
+import { MIGRATION_TARGET } from "../migration/manifest";
 import { resolveRegistryTableName } from "../storage/resolve-storage-names";
 
 /** Bound on how deep component nesting is followed; mirrors MAX_FIELD_GROUP_NESTING_DEPTH. */
@@ -304,7 +305,15 @@ export async function teardownEntityComponentData(
   const registry = await registryTableName(adapter);
   const componentTables = [
     ...new Set([
-      ...discovered.filter(name => name.startsWith(STORAGE_FORMAT.tablePrefix)),
+      // Both prefixes. The registry-derived list below cannot recover a table
+      // whose metadata row is exactly what went missing, so prefix discovery is
+      // the only route to an orphan — and after the storage migration a
+      // generated table carries `fg_`, not `comp_`.
+      ...discovered.filter(
+        name =>
+          name.startsWith(STORAGE_FORMAT.tablePrefix) ||
+          name.startsWith(MIGRATION_TARGET.tablePrefix)
+      ),
       ...registered,
     ]),
     // The registry itself is metadata, never component storage. A row pointing
