@@ -22,14 +22,7 @@
 "@nextlyhq/tsconfig": patch
 ---
 
-Run hooks on the paths that were skipping them
-
-Publishing every locale now runs the collection's `afterUpdate` hooks. That
-path already emitted its updated event and busted its cache tags, so a
-subscriber reached through a webhook and a hook declared in the same codebase
-disagreed about whether the content had gone live. The phase runs post-commit,
-so a handler's return is ignored and a throw is reported rather than failing a
-publish that already happened.
+Bind the Direct API for hook contexts at registration
 
 `req.nextly` is now bound for hook contexts from the moment services are
 registered. It previously resolved through a binding that `getNextly()` created
