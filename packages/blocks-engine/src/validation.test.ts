@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { DOCUMENT_KINDS } from "./document";
 import type { BlockDocument, BreakpointSet } from "./document";
 import { documentBytes } from "./limits";
 import {
@@ -158,9 +159,44 @@ describe("the style budget covers the envelope's own keys", () => {
   });
 });
 
+describe("validation leaves the document alone", () => {
+  it("does not mangle or drop hostile prop content", () => {
+    // The corpus fixture asserts that such a document produces no issues, which
+    // is acceptance and not the guarantee that matters: props are opaque to the
+    // engine and escaping them belongs to the renderer, so validation must hand
+    // back exactly what it was given.
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/paragraph",
+          version: 1,
+          props: {
+            text: "</style><script>alert(1)</script>",
+            href: "javascript:alert(1)",
+            data: "}; body { display: none }",
+          },
+        },
+      ],
+    });
+    const before = structuredClone(doc);
+    validate(doc, { breakpoints: FIXTURE_BREAKPOINTS, mode: "strict" });
+    expect(doc).toEqual(before);
+  });
+});
+
 describe("validation fixture corpus", () => {
   for (const fixture of VALIDATION_FIXTURES) {
     it(fixture.name, () => {
+      // A fixture states which issues a document produces, and that assertion
+      // holds just as well if validation rewrote the document on its way
+      // through. Reading is the whole contract here — content is opaque bytes
+      // to the engine, which is what lets one document serve every writing
+      // system — so every fixture is entitled to the check, not only the ones
+      // written to be about it.
+      const before = structuredClone(fixture.doc);
       const issues = validate(fixture.doc, {
         breakpoints: FIXTURE_BREAKPOINTS,
         mode: fixture.mode,
@@ -172,6 +208,7 @@ describe("validation fixture corpus", () => {
       const actual = issues.map(i => `${i.path}\t${i.code}`).sort();
       const expected = fixture.expected.map(e => `${e.path}\t${e.code}`).sort();
       expect(actual).toEqual(expected);
+      expect(fixture.doc).toEqual(before);
     });
   }
 });
@@ -910,6 +947,33 @@ describe("limits", () => {
       }
     );
     expect(issues.some(i => i.code === "node-count-exceeded")).toBe(true);
+  });
+});
+
+describe("the document-kind vocabulary", () => {
+  it("is the frozen set the corpus is built from", () => {
+    // The kind fixtures are derived from this list, so an addition arrives with
+    // coverage. A removal would take its fixture with it and leave every test
+    // passing, which is what this pins: changing the vocabulary has to be
+    // deliberate enough to change it here too.
+    expect([...DOCUMENT_KINDS]).toEqual([
+      "page",
+      "pattern",
+      "component",
+      "region",
+      "template",
+    ]);
+  });
+
+  it("has a corpus fixture for every kind in it", () => {
+    for (const kind of DOCUMENT_KINDS) {
+      expect(
+        VALIDATION_FIXTURES.some(
+          f => f.doc.kind === kind && f.mode === "strict"
+        ),
+        `no fixture validates a ${kind} document`
+      ).toBe(true);
+    }
   });
 });
 

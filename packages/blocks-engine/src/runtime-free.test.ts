@@ -33,6 +33,16 @@ const SRC_DIR = dirname(fileURLToPath(import.meta.url));
  */
 const ALLOWED_RUNTIME_DEPENDENCIES = ["css-tree"];
 
+/**
+ * Files that are part of the test harness rather than the shipped engine.
+ *
+ * They may import the test runner, because nothing outside a test run ever
+ * loads them: they are excluded from the published build. What ships is what
+ * this guard governs, and drawing the line by suffix means a new harness file
+ * has to name itself as one.
+ */
+const HARNESS_SUFFIXES = [".test.ts", ".bench.ts", ".test-d.ts"];
+
 // Walk the whole src tree, not just its top level: a forbidden import in a
 // future subdirectory must fail this guard too, not slip past because the scan
 // only looked at immediate children.
@@ -43,7 +53,10 @@ function sourceFiles(dir: string = SRC_DIR): string[] {
     const full = join(dir, entry.name);
     if (entry.isDirectory()) {
       files.push(...sourceFiles(full));
-    } else if (entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts")) {
+    } else if (
+      entry.name.endsWith(".ts") &&
+      !HARNESS_SUFFIXES.some(suffix => entry.name.endsWith(suffix))
+    ) {
       files.push(full);
     }
   }

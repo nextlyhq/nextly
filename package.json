@@ -32,6 +32,7 @@
     "lint:workspace": "sherif",
     "_comment_testing": "=== Testing ===",
     "test": "turbo run test",
+    "bench": "pnpm --filter @nextlyhq/blocks-engine bench",
     "test:watch": "turbo run test:watch",
     "test:coverage": "turbo run test:coverage",
     "test:ui": "turbo run test:ui",

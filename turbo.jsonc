@@ -266,6 +266,13 @@
     //   - pnpm test:watch        = Watch mode (auto-rerun on changes)
     //   - pnpm test:coverage     = Generate HTML coverage report
     //   - pnpm test:ui           = Interactive test UI (localhost:51204)
+    // Benchmarks are a report, not a gate. Never cached, because a cached
+    // timing is a timing from another machine, and run for one package at a
+    // time so nothing else in the workspace is compiling while it measures.
+    "bench": {
+      "dependsOn": ["^build"],
+      "cache": false
+    },
     "test": {
       "dependsOn": ["^build"], // Need built dependencies for imports
       "inputs": [
