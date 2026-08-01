@@ -193,6 +193,9 @@ function ModalContent({
       entry={entry}
       mode="edit"
       embedded
+      // This modal reads the live row (no working-draft overlay), so the update
+      // keys its optimistic cache onto that same query rather than the drafts one.
+      readDraft={false}
       onSuccess={updatedEntry => onUpdate(updatedEntry)}
       onCancel={onCancel}
     />

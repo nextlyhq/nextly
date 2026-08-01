@@ -250,8 +250,12 @@ describe("EntrySystemHeader — discard working draft menu", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("hides Discard draft when the caller cannot update the document", async () => {
-    // The server gates the discard on update access, so the affordance is too.
+  it("keeps Discard draft without the flat update permission, since a code-first rule may grant it", async () => {
+    // The working-draft split is code-first only, so update can be granted by a
+    // collection `access.update` rule the flat `update-posts` permission does not
+    // list. Gating on that permission would hide Discard from an editor who can
+    // save the very draft it reverts; the server authorizes the discard as an
+    // update, and the sibling Save affordances are not gated on it either.
     canFor.mockImplementation((slug: string) => slug !== "update-posts");
     const user = userEvent.setup();
     render(
@@ -264,8 +268,8 @@ describe("EntrySystemHeader — discard working draft menu", () => {
 
     await user.click(screen.getByRole("button", { name: /more actions/i }));
     expect(
-      screen.queryByRole("menuitem", { name: /discard draft/i })
-    ).not.toBeInTheDocument();
+      screen.getByRole("menuitem", { name: /discard draft/i })
+    ).toBeInTheDocument();
   });
 });
 
