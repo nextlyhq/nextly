@@ -85,6 +85,7 @@ import {
   singleHookNamespace,
 } from "../hooks/register-single-hooks";
 import type { HookOwner } from "../hooks/types";
+import { getInitializedPlugins } from "../plugins/initialized-plugins";
 import type { RevalidateConfig } from "../revalidation/types";
 import { getProductionNotifier } from "../runtime/notifications/index";
 import { STORAGE_FORMAT } from "../schemas/storage-format";
@@ -636,8 +637,43 @@ function stageConfigHooks(newConfig: {
 
   // A slug is what the registry keys on, so an entity without one cannot have
   // had hooks registered for it and has nothing to replace.
+  // `init` does not re-run on a reload, so a plugin switched from disabled to
+  // enabled has no services and no subscriptions -- registering the hooks its
+  // collections declare would put handlers live that depend on both. Enabled in
+  // the config is not the same as running in this process, and only the second
+  // makes its hooks safe. An unknown set (registration has not happened yet)
+  // means no basis to exclude anyone.
+  // Only reconciled when the config actually carries a plugin list. An absent
+  // key is no information, and treating it as "every plugin is gone" would
+  // suspend the lot -- a far worse failure than the one being fixed. An EMPTY
+  // list is information, and does mean they are all gone.
+  const declaredPlugins = Array.isArray(newConfig.plugins)
+    ? newConfig.plugins
+    : undefined;
+
+  const initialized = getInitializedPlugins();
+  const runningNames = declaredPlugins
+    ? declaredPlugins
+        .filter(plugin => (plugin as { enabled?: boolean }).enabled !== false)
+        .map(plugin => (plugin as { name?: string }).name)
+        .filter((name): name is string => !!name)
+        .filter(name => initialized?.has(name) ?? true)
+    : undefined;
+  const stillRunning = runningNames
+    ? new Set(runningNames.map((name): HookOwner => `plugin:${name}`))
+    : undefined;
+  // Entities contributed by a plugin the config enables but the process never
+  // started are left out too, alongside the ones it disables.
+  const notRunning = declaredPlugins
+    ? declaredPlugins.filter(plugin => {
+        const name = (plugin as { name?: string }).name;
+        if (!name) return false;
+        return !runningNames?.includes(name);
+      })
+    : [];
+
   const disabledCollections = collectPluginContributedSlugs(
-    disabledPlugins,
+    notRunning.length > 0 ? notRunning : disabledPlugins,
     "collections"
   );
   const collections = (newConfig.collections ?? []).filter(
@@ -646,7 +682,7 @@ function stageConfigHooks(newConfig: {
   );
 
   const disabledSingles = collectPluginContributedSlugs(
-    disabledPlugins,
+    notRunning.length > 0 ? notRunning : disabledPlugins,
     "singles"
   );
   const singles = (newConfig.singles ?? []).filter(
@@ -667,22 +703,6 @@ function stageConfigHooks(newConfig: {
   // name it and it would keep running -- and, worse, deleting a plugin that was
   // previously disabled would actively resume it. So the candidates come from
   // the registry and the config only says which of them survive.
-  // Only reconciled when the config actually carries a plugin list. An absent
-  // key is no information, and treating it as "every plugin is gone" would
-  // suspend the lot -- a far worse failure than the one being fixed. An EMPTY
-  // list is information, and does mean they are all gone.
-  const declaredPlugins = Array.isArray(newConfig.plugins)
-    ? newConfig.plugins
-    : undefined;
-  const stillRunning = declaredPlugins
-    ? new Set(
-        declaredPlugins
-          .filter(plugin => (plugin as { enabled?: boolean }).enabled !== false)
-          .map(plugin => (plugin as { name?: string }).name)
-          .filter((name): name is string => !!name)
-          .map((name): HookOwner => `plugin:${name}`)
-      )
-    : undefined;
 
   return (deferredEntities: ReadonlySet<string>) => {
     // An entity whose schema change was deferred still has its PREVIOUS table,
@@ -1841,13 +1861,13 @@ async function applyReload(opts?: {
       // ignored. Excluded on the same terms as the post-DDL path.
       commitReload(
         new Set([
-          ...(synced.collections
+          ...(synced.collections && synced.components
             ? []
             : (newConfig.collections ?? [])
                 .map(collection => collection.slug)
                 .filter((slug): slug is string => !!slug)
                 .map(slug => `collection:${slug}`)),
-          ...(synced.singles
+          ...(synced.singles && synced.components
             ? []
             : (newConfig.singles ?? [])
                 .map(single => single.slug)
@@ -1871,6 +1891,13 @@ async function applyReload(opts?: {
       // The physical tables still match the PREVIOUS config, so the previous
       // field types are the ones that describe them.
       abandonReload();
+
+      // The entities that did NOT defer still have exactly the tables and
+      // metadata their config describes -- a save that edits one collection's
+      // hook while another's schema change is refused should not leave the
+      // first one stale merely because they arrived together. Hooks are held
+      // back per entity here, as they are on the applied path.
+      commitReload(deferredEntities);
     }
     return;
   }
@@ -2419,13 +2446,13 @@ async function applyReload(opts?: {
     commitReload(
       new Set([
         ...deferredEntities,
-        ...(collectionSynced
+        ...(collectionSynced && componentSynced
           ? []
           : (newConfig.collections ?? [])
               .map(collection => collection.slug)
               .filter((slug): slug is string => !!slug)
               .map(slug => `collection:${slug}`)),
-        ...(singleSynced
+        ...(singleSynced && componentSynced
           ? []
           : (newConfig.singles ?? [])
               .map(single => single.slug)
