@@ -67,6 +67,13 @@ describe("validation leaves the document alone", () => {
 describe("validation fixture corpus", () => {
   for (const fixture of VALIDATION_FIXTURES) {
     it(fixture.name, () => {
+      // A fixture states which issues a document produces, and that assertion
+      // holds just as well if validation rewrote the document on its way
+      // through. Reading is the whole contract here — content is opaque bytes
+      // to the engine, which is what lets one document serve every writing
+      // system — so every fixture is entitled to the check, not only the ones
+      // written to be about it.
+      const before = structuredClone(fixture.doc);
       const issues = validate(fixture.doc, {
         breakpoints: FIXTURE_BREAKPOINTS,
         mode: fixture.mode,
@@ -78,6 +85,7 @@ describe("validation fixture corpus", () => {
       const actual = issues.map(i => `${i.path}\t${i.code}`).sort();
       const expected = fixture.expected.map(e => `${e.path}\t${e.code}`).sort();
       expect(actual).toEqual(expected);
+      expect(fixture.doc).toEqual(before);
     });
   }
 });
