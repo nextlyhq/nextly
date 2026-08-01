@@ -1,24 +1,32 @@
 /**
  * Discarding a working draft removes the sidecar and then re-reads the live
- * published row to hand back to the editor. That re-read runs the full pipeline
- * and can fail — the row may be deleted concurrently, or an after-read hook or
- * database call may throw — in which case the service answers a failure envelope
- * with `data: null`. These pin that the failure is propagated as the error it
- * carries rather than reported as a successful discard of an empty document.
+ * published row to hand back to the editor. These pin two things:
+ *
+ * - the removal goes through the collections handler's LOCKED discard (which
+ *   serializes with concurrent draft saves), never the lock-less
+ *   versions-service delete; and
+ * - a failed re-read is propagated as the error it carries rather than reported
+ *   as a successful discard of an empty document (the live row may be deleted
+ *   concurrently, or an after-read hook or database call may throw).
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { deleteWorkingDraftSpy, getEntrySpy } = vi.hoisted(() => ({
-  deleteWorkingDraftSpy: vi.fn(),
+const { discardSpy, getEntrySpy, unlockedDeleteSpy } = vi.hoisted(() => ({
+  discardSpy: vi.fn(),
   getEntrySpy: vi.fn(),
+  unlockedDeleteSpy: vi.fn(),
 }));
 
 vi.mock("../../../di", () => ({
   getService: vi.fn((name: string) => {
-    if (name === "versionsService") {
-      return { deleteWorkingDraft: deleteWorkingDraftSpy };
+    if (name === "collectionsHandler") {
+      return { discardWorkingDraft: discardSpy, getEntry: getEntrySpy };
     }
-    if (name === "collectionsHandler") return { getEntry: getEntrySpy };
+    // The lock-less path the discard must no longer take; wired so the test can
+    // assert it is never called.
+    if (name === "versionsService") {
+      return { deleteWorkingDraft: unlockedDeleteSpy };
+    }
     return {};
   }),
 }));
@@ -34,13 +42,13 @@ const args = {
   user,
 };
 
-describe("discardWorkingDraft — propagating a failed post-discard read", () => {
+describe("discardWorkingDraft", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    deleteWorkingDraftSpy.mockResolvedValue(undefined);
+    discardSpy.mockResolvedValue(undefined);
   });
 
-  it("removes the null-locale sidecar then returns the live document on a successful re-read", async () => {
+  it("removes the sidecar through the locked handler, not the lock-less versions-service delete", async () => {
     getEntrySpy.mockResolvedValue({
       success: true,
       data: { id: "e1", title: "live", status: "published" },
@@ -50,10 +58,11 @@ describe("discardWorkingDraft — propagating a failed post-discard read", () =>
       title: "live",
       status: "published",
     });
-    expect(deleteWorkingDraftSpy).toHaveBeenCalledWith(
-      { scopeKind: "collection", scopeSlug: "posts", entryId: "e1" },
-      null
-    );
+    expect(discardSpy).toHaveBeenCalledWith({
+      collectionName: "posts",
+      entryId: "e1",
+    });
+    expect(unlockedDeleteSpy).not.toHaveBeenCalled();
   });
 
   it("throws the envelope's error when the re-read fails, so the discard is not reported as a success", async () => {
@@ -72,7 +81,7 @@ describe("discardWorkingDraft — propagating a failed post-discard read", () =>
       code: "NOT_FOUND",
     });
     // The removal still happened — the failure is only in reading back.
-    expect(deleteWorkingDraftSpy).toHaveBeenCalledTimes(1);
+    expect(discardSpy).toHaveBeenCalledTimes(1);
   });
 
   it("rebuilds the error from the status when the failure envelope carries no code", async () => {
