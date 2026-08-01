@@ -39,9 +39,13 @@
   "engines": {
     "node": ">=20.0.0"
   },
+  "dependencies": {
+    "css-tree": "^2.3.1"
+  },
   "devDependencies": {
     "@nextlyhq/eslint-config": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
+    "@types/css-tree": "^2.3.4",
     "@types/node": "^20.19.17",
     "eslint": "^9.39.1",
     "rimraf": "^6.1.3",

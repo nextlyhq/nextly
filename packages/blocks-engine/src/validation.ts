@@ -101,6 +101,12 @@ export const ISSUE_CODES = {
     "A single-sourced binding does not name which single it reads.",
   "invalid-component-instance":
     "A component-instance node does not reference a component.",
+  "unknown-style-property":
+    "A style values key is not a property in the style catalog.",
+  "invalid-style-value":
+    "A style value does not match the shape its property declares.",
+  "token-not-allowed":
+    "A design-token reference is used where only literal values are accepted.",
 } as const;
 
 /** A stable validation issue code. */
@@ -111,8 +117,12 @@ function escapePointer(token: string): string {
   return token.replace(/~/g, "~0").replace(/\//g, "~1");
 }
 
-/** Join a parent pointer with a child token. */
-function pointer(parent: string, token: string | number): string {
+/**
+ * Join a parent pointer with a child token. Exported for the style validator,
+ * which builds pointers into the same documents and must escape them the same
+ * way; it is not part of the package's public surface.
+ */
+export function pointer(parent: string, token: string | number): string {
   return `${parent}/${escapePointer(String(token))}`;
 }
 
@@ -142,7 +152,7 @@ const MAX_MESSAGE_VALUE_LENGTH = 120;
  * embedding an unbounded string, which an oversized malformed field could use
  * to force huge allocations. Long strings are truncated.
  */
-function describeValue(value: unknown): string {
+export function describeValue(value: unknown): string {
   if (typeof value === "string") {
     return value.length > MAX_MESSAGE_VALUE_LENGTH
       ? `${value.slice(0, MAX_MESSAGE_VALUE_LENGTH)}…`

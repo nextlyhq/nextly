@@ -109,6 +109,51 @@ export {
 } from "./registry";
 export type { RegisterOptions, SupportDefinition } from "./registry";
 
+export {
+  STYLE_CATALOG,
+  getStyleProperty,
+  stylePropertiesInGroup,
+  styleFlagsInGroup,
+} from "./style/catalog";
+export {
+  STYLE_GROUPS,
+  STYLE_GROUP_DEFS,
+  TOKEN_KINDS,
+  isStyleLeaf,
+  shapeLeaves,
+} from "./style/catalog-types";
+export type {
+  ColorLeaf,
+  CssValueLeaf,
+  DimensionLeaf,
+  KeywordLeaf,
+  LogicalCornersShape,
+  LogicalSidesShape,
+  NumberLeaf,
+  ObjectShape,
+  StyleGroup,
+  StyleGroupDef,
+  StyleLeaf,
+  StyleProperty,
+  StyleShape,
+  TokenKind,
+  UnionShape,
+  UrlLeaf,
+} from "./style/catalog-types";
+export { checkCssValue, checkUrlValue } from "./style/css-value";
+export type { CssValueRejection } from "./style/css-value";
+export {
+  validateStyleValues,
+  tokenKindAllowedAt,
+  tokenKindsForProperty,
+} from "./style/validate-style-value";
+export {
+  styleSupportDefinitions,
+  stylePropertiesForSupports,
+  supportsAllowStyleProperty,
+  styleGroupKeys,
+} from "./style/supports-map";
+
 export { migrateDocument, migrateProps, findMigrationGaps } from "./migration";
 export type {
   BlockMigrationInfo,

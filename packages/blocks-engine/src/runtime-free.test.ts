@@ -6,11 +6,16 @@ import type { Dirent } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 /**
- * The engine's core contract: no React and no Nextly at runtime, ever.
- * Documents must be usable from Node scripts, edge runtimes, browsers, and
- * external agents without a framework install. Type-only imports are fine
- * (they erase at build); runtime imports are a contract violation this test
- * turns into a hard failure.
+ * The engine's core contract: no framework at runtime, ever. Documents must be
+ * usable from Node scripts, edge runtimes, browsers, and external agents
+ * without a framework install. Type-only imports are fine (they erase at
+ * build); runtime imports are a contract violation this test turns into a hard
+ * failure.
+ *
+ * The guard is an ALLOWLIST rather than a list of banned packages: a blocklist
+ * only stops what someone thought to name, and the next dependency added
+ * without thought is exactly the one that breaks the promise. Adding an entry
+ * below is a deliberate act with a reason recorded beside it.
  */
 
 // `import.meta.dirname` only exists from Node 20.11; the package floor is
@@ -18,15 +23,15 @@ import { describe, expect, it } from "vitest";
 // across the whole supported range.
 const SRC_DIR = dirname(fileURLToPath(import.meta.url));
 
-/** Import specifiers the engine must never depend on at runtime. */
-const FORBIDDEN_RUNTIME_IMPORTS = [
-  "react",
-  "react-dom",
-  "nextly",
-  "next",
-  "@nextlyhq/admin",
-  "@nextlyhq/ui",
-];
+/**
+ * Packages the engine may import at runtime, and why.
+ *
+ * - `css-tree`: the style compiler's parser. Style values and custom CSS have
+ *   to be parsed to be made safe, and no seam moves that requirement
+ *   elsewhere. Pure JavaScript, ships a browser build, and pulls in only
+ *   `mdn-data` and `source-map-js`, so the "runs anywhere" promise holds.
+ */
+const ALLOWED_RUNTIME_DEPENDENCIES = ["css-tree"];
 
 // Walk the whole src tree, not just its top level: a forbidden import in a
 // future subdirectory must fail this guard too, not slip past because the scan
@@ -45,8 +50,23 @@ function sourceFiles(dir: string = SRC_DIR): string[] {
   return files;
 }
 
+/**
+ * The package a bare import specifier names: `css-tree/lexer` is `css-tree`,
+ * `@scope/pkg/sub` is `@scope/pkg`. Relative and `node:` specifiers are not
+ * packages and are reported as-is so the caller can rule on them.
+ */
+function packageOf(specifier: string): string {
+  if (specifier.startsWith(".") || specifier.startsWith("node:")) {
+    return specifier;
+  }
+  const parts = specifier.split("/");
+  return specifier.startsWith("@")
+    ? parts.slice(0, 2).join("/")
+    : (parts[0] ?? specifier);
+}
+
 describe("the engine is runtime-free", () => {
-  it("has no runtime imports of React, Next.js, or Nextly packages", () => {
+  it("imports no package at runtime beyond the allowlist", () => {
     for (const file of sourceFiles()) {
       const source = readFileSync(file, "utf8");
       // Matches `import ... from "x"` and `export ... from "x"` but not
@@ -63,26 +83,32 @@ describe("the engine is runtime-free", () => {
 
       for (const specifier of runtimeImports) {
         if (specifier === undefined) continue;
-        const forbidden = FORBIDDEN_RUNTIME_IMPORTS.some(
-          pkg => specifier === pkg || specifier.startsWith(`${pkg}/`)
-        );
+        const pkg = packageOf(specifier);
+        // Relative imports stay inside the package. Node builtins are refused
+        // along with everything else: the engine promises to run in browsers
+        // and edge runtimes, where they do not exist.
+        if (pkg.startsWith(".")) continue;
         expect(
-          forbidden,
-          `${file} imports "${specifier}" at runtime — the engine must stay runtime-free (use "import type" if only types are needed)`
-        ).toBe(false);
+          ALLOWED_RUNTIME_DEPENDENCIES,
+          `${file} imports "${specifier}" at runtime, which is not on the engine's allowlist — use "import type" if only types are needed, or add the package to ALLOWED_RUNTIME_DEPENDENCIES with a reason`
+        ).toContain(pkg);
       }
     }
   });
 
-  it("declares zero runtime dependencies in package.json", () => {
+  it("declares only allowlisted runtime dependencies in package.json", () => {
     const pkg = JSON.parse(
       readFileSync(join(SRC_DIR, "..", "package.json"), "utf8")
     ) as {
-      dependencies?: object;
+      dependencies?: Record<string, string>;
       peerDependencies?: object;
       optionalDependencies?: object;
     };
-    expect(pkg.dependencies ?? {}).toEqual({});
+    expect(Object.keys(pkg.dependencies ?? {}).sort()).toEqual(
+      [...ALLOWED_RUNTIME_DEPENDENCIES].sort()
+    );
+    // Peer and optional dependencies push an install decision onto consumers,
+    // which is the opposite of the "install it and it works anywhere" promise.
     expect(pkg.peerDependencies ?? {}).toEqual({});
     expect(pkg.optionalDependencies ?? {}).toEqual({});
   });
