@@ -61,12 +61,11 @@ function adapterDouble(opts: {
       if (opts.catalogFails) throw new Error("catalog unavailable");
       return opts.catalog ?? [];
     }),
-    // 🔴 The double REFUSES a table it does not hold, which is what makes the
-    // assertions below about *which* registry was addressed real rather than
-    // decorative. A permissive double would answer the same rows whatever name
-    // the code asked for, so a regression that queried the legacy or derived
-    // name would pass unnoticed — the exact shape of hollow test this suite
-    // exists to prevent.
+    // 🔴 Answers only for a table the catalog lists, and throws `no such table`
+    // otherwise — the same way a real driver behaves. That is what gives the
+    // assertions below their meaning: a double that returned these rows
+    // whatever name it was handed would be satisfied by code addressing the
+    // legacy or the derived registry just as readily as the right one.
     queryStatement: vi.fn(async (statement: SQL) => {
       if (opts.readFails) throw new Error("registry read failed");
       const addressed = identifiersIn(statement);
@@ -112,6 +111,10 @@ describe("readStoredFieldGroupTables", () => {
     expect(stored.usable).toBe(true);
   });
 
+  // The mirror of the case above, and not redundant with it: the resolution
+  // must pick each generation from the catalog rather than favouring either, so
+  // both directions are pinned. A rule that always answered "migrated" would
+  // satisfy the previous test on its own.
   it("addresses the legacy registry when that is the one present", async () => {
     forgetFieldGroupStorageNames();
     const adapter = adapterDouble({
