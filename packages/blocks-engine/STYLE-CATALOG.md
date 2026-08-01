@@ -163,7 +163,7 @@ the catalog.
 | Property       | Flag     | Value                                                | Tokens           | Emits                                             |
 | -------------- | -------- | ---------------------------------------------------- | ---------------- | ------------------------------------------------- |
 | `border`       | `line`   | composite: `width` (logical sides), `style`, `color` | dimension, color | `border-*-width`, `border-style`, `border-color`  |
-| `borderRadius` | `radius` | dimension, or logical corners                        | dimension        | `border-radius`, or `border-start-start-radius` … |
+| `borderRadius` | `radius` | one dimension, or logical corners                    | dimension        | `border-radius`, or `border-start-start-radius` … |
 
 ### shadow
 
@@ -218,9 +218,10 @@ Four things are checked on every value that reaches the stylesheet:
    discards. Inside a length, the contents of `calc()` and friends are checked
    too, so `calc(1px + red)` is refused; what `var()` and `env()` resolve to is
    not knowable here and is left alone.
-4. **Nesting depth.** Parsing and walking a value are recursive, so a value with
-   hundreds of nested brackets would exhaust the stack. Anything deeper than 32
-   levels is refused, which no real value approaches.
+4. **Size and nesting depth.** Parsing a value is recursive and allocates a node
+   per token, so both shapes of an oversized value are bounded: anything nested
+   deeper than 32 brackets, or longer than 8,192 characters, is refused. No real
+   declaration approaches either.
 
 **Grammar correctness for a property is deliberately not checked.** The
 reference grammar available to do it lags what browsers ship. Measured against

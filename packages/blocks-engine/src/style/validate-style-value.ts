@@ -192,6 +192,9 @@ function leafIssues(
       ];
     }
     case "number": {
+      // A later state or breakpoint needs these to reset an earlier value, and
+      // they are legal wherever a value is.
+      if (typeof value === "string" && isCssWideKeyword(value)) return [];
       if (typeof value !== "number" || !Number.isFinite(value)) {
         return [invalid(path, `${describeValue(value)} is not a number.`)];
       }
@@ -225,7 +228,6 @@ function leafIssues(
         maxParts: leaf.maxParts,
         allowNegative: leaf.allowNegative,
         allowPercentage: leaf.allowPercentage,
-        allowSlash: leaf.allowSlash,
       });
       return rejection === null ? [] : rejected(path, value, rejection);
     }

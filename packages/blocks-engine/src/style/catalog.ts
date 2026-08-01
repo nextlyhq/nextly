@@ -37,7 +37,6 @@ interface DimensionOptions {
   maxParts?: number;
   allowNegative?: boolean;
   allowPercentage?: boolean;
-  allowSlash?: boolean;
 }
 
 function dimension(
@@ -52,7 +51,6 @@ function dimension(
     maxParts: options.maxParts ?? 1,
     allowNegative: options.allowNegative ?? false,
     allowPercentage: options.allowPercentage ?? false,
-    allowSlash: options.allowSlash ?? false,
   };
 }
 
@@ -593,15 +591,12 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
     shape: {
       kind: "union",
       of: [
-        dimension("border-radius", {
-          maxParts: 8,
-          allowPercentage: true,
-          allowSlash: true,
-        }),
+        dimension("border-radius", { allowPercentage: true }),
         logicalCorners(),
       ],
     },
-    summary: "Corner rounding, uniform or per logical corner.",
+    summary:
+      "Corner rounding: one radius for all corners, or per logical corner.",
   },
 
   // --- shadow

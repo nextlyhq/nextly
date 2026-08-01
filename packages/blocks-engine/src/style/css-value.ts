@@ -96,6 +96,9 @@ function hasControlCharacter(value: string): boolean {
  * discarded by the browser on another: `margin: auto` is meaningful and
  * `padding: auto` is not.
  */
+/** No keyword is legal as a math operand. */
+const NO_KEYWORDS: ReadonlySet<string> = new Set();
+
 const CSS_WIDE_KEYWORDS: ReadonlySet<string> = new Set([
   "inherit",
   "initial",
@@ -310,8 +313,6 @@ export interface DimensionRules {
   allowNegative?: boolean;
   /** Whether a percentage resolves against anything for this property. */
   allowPercentage?: boolean;
-  /** Whether a `/` separates two groups, as in a corner radius. */
-  allowSlash?: boolean;
 }
 
 export function checkDimensionValue(
@@ -323,7 +324,6 @@ export function checkDimensionValue(
     maxParts = 1,
     allowNegative = false,
     allowPercentage = false,
-    allowSlash = false,
   } = rules;
   const rejection = checkCssValue(value);
   if (rejection !== null) return rejection;
@@ -332,13 +332,10 @@ export function checkDimensionValue(
   const allowed = new Set(keywords.map(keyword => keyword.toLowerCase()));
   let parts = 0;
   for (const child of ast.children) {
-    if (child.type === "Operator") {
-      // No length property takes a comma, and only a shorthand with two groups
-      // takes a slash; anything else here is a stray token the browser drops.
-      const operator = String(child.value).trim();
-      if (operator === "/" && allowSlash) continue;
-      return "not-a-length";
-    }
+    // No length property takes an operator at the top level. Corner radii are
+    // expressed per corner instead, which is also the only form that flips with
+    // writing direction.
+    if (child.type === "Operator") return "not-a-length";
     const childRejection = measurementRejection(child, false, allowed, {
       allowNegative,
       allowPercentage,
@@ -380,6 +377,9 @@ function measurementRejection(
     case "Number":
       return insideFunction || Number(node.value) === 0 ? null : "not-a-length";
     case "Identifier": {
+      // No identifier is a legal math operand: a keyword is a complete property
+      // value, and `calc(inherit)` is discarded like `calc(auto)`.
+      if (insideFunction) return "not-a-length";
       const name = node.name.toLowerCase();
       return CSS_WIDE_KEYWORDS.has(name) || keywords.has(name)
         ? null
@@ -394,10 +394,24 @@ function measurementRejection(
       // knowable here, and their arguments include an arbitrary fallback, so
       // their contents are not inspected.
       if (name === "var" || name === "env") return null;
+      // An operator has to separate two operands. css-tree will happily build a
+      // tree for `calc(1px,)` or `calc(/ 1px)`; the browser discards both.
+      const terms = [...node.children];
+      const isOperator = (index: number): boolean =>
+        terms[index]?.type === "Operator";
+      for (let index = 0; index < terms.length; index += 1) {
+        if (!isOperator(index)) continue;
+        const danglingEnd = index === 0 || index === terms.length - 1;
+        if (danglingEnd || isOperator(index - 1) || isOperator(index + 1)) {
+          return "not-a-length";
+        }
+      }
       for (const child of node.children) {
         // Inside a math function the sign of any one term says nothing about
-        // the sign of the result, so the non-negative rule does not apply.
-        const childRejection = measurementRejection(child, true, keywords, {
+        // the sign of the result, so the non-negative rule does not apply. The
+        // property's keywords are dropped: `auto` is a whole value, not an
+        // operand, and `calc(auto)` is discarded by the browser.
+        const childRejection = measurementRejection(child, true, NO_KEYWORDS, {
           allowNegative: true,
           allowPercentage: limits.allowPercentage,
         });

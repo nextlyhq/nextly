@@ -299,9 +299,15 @@ describe("dimension strings are lengths, not merely valid CSS", () => {
     }
   });
 
-  it("accepts a multi-part corner radius", () => {
-    expect(codes({ borderRadius: "4px 8px" })).toEqual([]);
-    expect(codes({ borderRadius: "4px / 8px" })).toEqual([]);
+  it("takes one radius as a scalar and the rest per corner", () => {
+    // The four-value shorthand is PHYSICAL (top-left … bottom-left) and does
+    // not flip with writing direction, so it has no place in a catalog whose
+    // storage keys are logical. Per-corner is the expressive form.
+    expect(codes({ borderRadius: "4px" })).toEqual([]);
+    expect(codes({ borderRadius: "4px 8px" })).toEqual(["invalid-style-value"]);
+    expect(
+      codes({ borderRadius: { startStart: "4px", endEnd: "8px" } })
+    ).toEqual([]);
   });
 });
 
@@ -623,11 +629,8 @@ describe("how many measurements a property takes", () => {
     ]);
   });
 
-  it("accepts the shorthands that legitimately carry more", () => {
+  it("accepts the shorthand that legitimately carries more", () => {
     expect(codes({ gap: "4px 8px" })).toEqual([]);
-    expect(codes({ borderRadius: "4px 8px" })).toEqual([]);
-    expect(codes({ borderRadius: "4px 8px 12px 16px" })).toEqual([]);
-    expect(codes({ borderRadius: "4px / 8px" })).toEqual([]);
   });
 
   it("refuses a third value on a two-part shorthand", () => {
@@ -752,8 +755,12 @@ describe("stray operators in a length", () => {
     expect(codes({ gap: "1px / 2px" })).toEqual(["invalid-style-value"]);
   });
 
-  it("except the slash a corner radius uses", () => {
-    expect(codes({ borderRadius: "4px / 8px" })).toEqual([]);
+  it("including every slash form a corner radius used to allow", () => {
+    for (const value of ["4px / 8px", "/ 1px", "1px /", "1px / / 2px"]) {
+      expect(codes({ borderRadius: value }), value).toEqual([
+        "invalid-style-value",
+      ]);
+    }
   });
 });
 
@@ -765,6 +772,45 @@ describe("values a stricter model used to refuse", () => {
   it("accepts auto to reset the stacking order", () => {
     expect(codes({ position: { zIndex: "auto" } })).toEqual([]);
     expect(codes({ position: { zIndex: 3 } })).toEqual([]);
+  });
+});
+
+describe("keywords and operators inside math functions", () => {
+  it("refuses a property keyword as an operand", () => {
+    // `auto` is a complete value, not a number to compute with.
+    for (const value of ["calc(auto)", "min(auto, 2px)", "calc(inherit)"]) {
+      expect(codes({ width: value }), value).toEqual(["invalid-style-value"]);
+    }
+  });
+
+  it("refuses an operator that separates nothing", () => {
+    for (const value of ["calc(1px,)", "calc(/ 1px)", "min(1px,)"]) {
+      expect(codes({ width: value }), value).toEqual(["invalid-style-value"]);
+    }
+  });
+
+  it("leaves well-formed math alone", () => {
+    for (const value of [
+      "calc(1px + 2em)",
+      "min(1px, 2em)",
+      "clamp(1rem, 5vw, 3rem)",
+      "calc(min(10px, 2em) * 2)",
+    ]) {
+      expect(codes({ width: value }), value).toEqual([]);
+    }
+  });
+});
+
+describe("CSS-wide keywords on numeric properties", () => {
+  it("are accepted, so a later state can reset an earlier value", () => {
+    for (const value of ["inherit", "initial", "unset", "revert"]) {
+      expect(codes({ opacity: value }), value).toEqual([]);
+    }
+    expect(codes({ position: { zIndex: "inherit" } })).toEqual([]);
+  });
+
+  it("still refuses a non-numeric string", () => {
+    expect(codes({ opacity: "half" })).toEqual(["invalid-style-value"]);
   });
 });
 

@@ -128,8 +128,6 @@ export interface DimensionLeaf extends StyleLeafBase {
   allowNegative?: boolean;
   /** Whether a percentage resolves against anything for this property. */
   allowPercentage?: boolean;
-  /** Whether a `/` separates two groups, as in a corner radius. */
-  allowSlash?: boolean;
 }
 
 /** A unitless number, optionally bounded. */
