@@ -237,49 +237,6 @@ export function buildMigrationPlan(args: BuildPlanArgs): MigrationStep[] {
   ];
 }
 
-/**
- * How many settlement checks every plan ends with.
- *
- * Stated once so the resume clamp and the plan agree about where they begin.
- * A plan test asserts the last steps of both directions are exactly these, so a
- * third check added without updating this fails rather than silently letting a
- * resume step over one.
- */
-export const SETTLE_STEP_COUNT = 2;
-
-/**
- * Where a run resumes, never past the settlement checks.
- *
- * 🔴 The runner records a step only once it has verified, so a crash between the
- * final record and the marker write would otherwise resume past every check and
- * settle on structural evidence alone. That is the worst moment to stop looking:
- * the interval between a crash and an operator's restart is unbounded, the
- * migration is not running through it, and writers are. Re-entering the checks
- * costs one pass over storage that is already clean, and heals it when it is
- * not, because each one re-runs its rewrite before verifying.
- *
- * Only the resume position is clamped. The recorded position itself is left
- * alone, because reconciliation reads it to decide which renames a previous run
- * completed, and a clamped value would describe work that did not happen.
- *
- * 🔴 A position past the end of the plan is passed through untouched rather than
- * clamped. Such a marker cannot be trusted — it is what a restore or a hand
- * repair leaves — and clamping would turn it into one that looks ordinary: the
- * runner's own past-the-end refusal would never see it, and a run would enter
- * the settlement checks having skipped every rename, rewriting vocabulary on
- * storage whose tables were never moved. The refusal is left to the runner
- * rather than raised here so there is one place that decides what an
- * irreconcilable marker means.
- */
-export function resumePosition(args: {
-  recorded: number;
-  planLength: number;
-}): number {
-  if (args.recorded > args.planLength) return args.recorded + 1;
-  const firstSettleStep = Math.max(args.planLength - SETTLE_STEP_COUNT + 1, 1);
-  return Math.min(args.recorded + 1, firstSettleStep);
-}
-
 /** How many data steps a plan carries, for translating a recorded position. */
 export function dataStepCount(args: {
   meta: MetaService;
