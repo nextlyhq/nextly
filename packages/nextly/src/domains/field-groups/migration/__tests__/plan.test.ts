@@ -7,8 +7,6 @@ import {
   directedRenameEntries,
   renamePositionOffset,
   renameRunRecord,
-  resumePosition,
-  SETTLE_STEP_COUNT,
 } from "../plan";
 import type { ManifestEntry } from "../manifest";
 import type { MigrationSession } from "../session";
@@ -48,7 +46,7 @@ const meta = {} as unknown as MetaService;
  * build. The builder no longer inverts internally, because the caller has to
  * reconcile the directed entries against the catalog before executing them.
  */
-function plan(direction: "up" | "down"): string[] {
+function planSteps(direction: "up" | "down") {
   return buildMigrationPlan({
     direction,
     ownedDataTables: [],
@@ -58,7 +56,11 @@ function plan(direction: "up" | "down"): string[] {
     meta,
     migrationId: "run-1",
     resolveRegistryTable: async () => "dynamic_field_groups",
-  }).map(step => step.id);
+  });
+}
+
+function plan(direction: "up" | "down"): string[] {
+  return planSteps(direction).map(step => step.id);
 }
 
 describe("assembling the steps one run executes", () => {
@@ -115,10 +117,6 @@ describe("assembling the steps one run executes", () => {
     // they are the same checks asked at the end of whichever direction ran. The
     // reversal property describes the work, so it is asserted over the work.
     const SETTLE = ["data:settle-ledgers", "data:settle-registry-definitions"];
-    // The clamp that keeps a resume from stepping over these counts them, so a
-    // check added without updating that count fails here rather than letting a
-    // resume settle without asking.
-    expect(SETTLE).toHaveLength(SETTLE_STEP_COUNT);
     const work = (ids: string[]): string[] =>
       ids.filter(id => !SETTLE.includes(id));
     expect(work(down).map(kind)).toEqual([...work(up).map(kind)].reverse());
@@ -257,57 +255,39 @@ describe("assembling the steps one run executes", () => {
   });
 });
 
-describe("where a resume re-enters the plan", () => {
-  // A plan of ten steps ends with the two settlement checks at positions 9 and
-  // 10, so nine is the earliest position a resume may ever start from.
-  const TEN = { planLength: 10 };
+describe("which steps a marker remembers", () => {
+  const settleSteps = () =>
+    planSteps("up").filter(step => step.id.startsWith("data:settle-"));
+  const workSteps = () =>
+    planSteps("up").filter(step => !step.id.startsWith("data:settle-"));
 
-  it("resumes at the step after the one recorded", () => {
-    expect(resumePosition({ recorded: 3, ...TEN })).toBe(4);
+  // 🔴 The settlement checks are gates, not work. A recorded position is what
+  // lets a later run step over something, so recording these would let the very
+  // resume they exist to protect skip them and settle on whatever the database
+  // looked like before the interruption.
+  it("declines to record the settlement checks", () => {
+    const settle = settleSteps();
+    expect(settle).toHaveLength(2);
+    expect(settle.every(step => step.recordsProgress === false)).toBe(true);
   });
 
-  it("starts at the beginning when nothing was recorded", () => {
-    expect(resumePosition({ recorded: 0, ...TEN })).toBe(1);
+  // The control: everything else does record, so the assertion above cannot be
+  // satisfied by a plan whose every step declines.
+  it("records every step that is actual work", () => {
+    const work = workSteps();
+    expect(work).not.toHaveLength(0);
+    expect(work.every(step => step.recordsProgress !== false)).toBe(true);
   });
 
-  // 🔴 The case the clamp exists for. The runner records a step once it has
-  // verified, so a crash between the final record and the marker write would
-  // otherwise resume at position 11, execute nothing at all, and settle on
-  // structural evidence alone - leaving the entire crash-to-restart interval,
-  // during which writers are active and the migration is not, unexamined.
-  it("re-enters the settlement checks even when every step was recorded", () => {
-    expect(resumePosition({ recorded: 10, ...TEN })).toBe(9);
-  });
-
-  it("re-enters them when only the last check is outstanding", () => {
-    expect(resumePosition({ recorded: 9, ...TEN })).toBe(9);
-  });
-
-  // The control: a recorded position before the checks is honoured as it is, so
-  // the clamp cannot be satisfied by a function that always returns the same
-  // step. Without this every assertion above passes for `() => 9`.
-  it("does not drag a resume forward to the checks", () => {
-    expect(resumePosition({ recorded: 1, ...TEN })).toBe(2);
-    expect(resumePosition({ recorded: 7, ...TEN })).toBe(8);
-  });
-
-  // 🔴 A marker recording more steps than the plan holds cannot be trusted: it
-  // is what a restore or a hand repair leaves behind. Clamping it would turn it
-  // into one that looks ordinary, so the runner's past-the-end refusal would
-  // never see it and a run would enter the settlement checks having skipped
-  // every rename - rewriting vocabulary on storage whose tables never moved.
-  // `runner.test.ts` covers the refusal itself; this is what still reaches it.
-  it("passes an out-of-range position through for the runner to refuse", () => {
-    expect(resumePosition({ recorded: 100, ...TEN })).toBe(101);
-    expect(resumePosition({ recorded: 11, ...TEN })).toBe(12);
-  });
-
-  // A plan shorter than the checks it ends with cannot exist, but the floor is
-  // stated rather than assumed: `runMigrationSteps` refuses a position below one
-  // outright, so an arithmetic edge would surface as a refusal to run at all.
-  it("never returns a position below the first step", () => {
-    expect(
-      resumePosition({ recorded: 0, planLength: SETTLE_STEP_COUNT - 1 })
-    ).toBe(1);
+  // The gates have to be the LAST steps: a recorded position counts positions
+  // in the plan, so a gate in the middle leaves a gap the next recording step
+  // cannot advance across.
+  it("puts every gate at the end of the plan", () => {
+    for (const direction of ["up", "down"] as const) {
+      const flags = planSteps(direction).map(
+        step => step.recordsProgress !== false
+      );
+      expect(flags).toEqual([...flags].sort((a, b) => Number(b) - Number(a)));
+    }
   });
 });
