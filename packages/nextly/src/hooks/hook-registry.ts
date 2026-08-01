@@ -247,10 +247,13 @@ export class HookRegistry {
     hookType: HookContextPhase,
     collection: string,
     handler: HookHandler,
-    // Defaults to the app's own config, which is what an unannotated caller is.
-    // A plugin passes its own name so a config reload can replace config-owned
-    // handlers without deleting the plugin's.
-    owner: HookOwner = "code"
+    // Defaults to the app rather than to its config, because this method is
+    // public and its own documentation tells an app to call it directly. Only a
+    // registrar that reads the config -- and can therefore rebuild what it
+    // removes -- may claim `"code"`, and those pass it explicitly. Anything
+    // else defaults to surviving a reload, which costs a stale handler at
+    // worst; the opposite default costs a handler that vanishes for good.
+    owner: HookOwner = "app"
   ): void {
     // The type already excludes `beforeOperation`, but JavaScript callers and
     // untypechecked code do not see that. Storing it here would put the handler
@@ -295,7 +298,7 @@ export class HookRegistry {
   registerBeforeOperation<T = unknown>(
     collection: string,
     handler: BeforeOperationHandler<T>,
-    owner: HookOwner = "code"
+    owner: HookOwner = "app"
   ): void {
     this.pushHandler(
       this.beforeOperationHooks,
@@ -329,7 +332,7 @@ export class HookRegistry {
     handler: HookHandler,
     // Removal is scoped to the caller's own registrations, so unregistering
     // reaches only what that owner registered.
-    owner: HookOwner = "code"
+    owner: HookOwner = "app"
   ): void {
     this.rejectBeforeOperation(
       hookType,
@@ -354,7 +357,7 @@ export class HookRegistry {
   unregisterBeforeOperation<T = unknown>(
     collection: string,
     handler: BeforeOperationHandler<T>,
-    owner: HookOwner = "code"
+    owner: HookOwner = "app"
   ): void {
     this.removeHandler(
       this.beforeOperationHooks,
@@ -470,6 +473,34 @@ export class HookRegistry {
     for (const handler of capture.beforeOperation) {
       this.registerBeforeOperation(capture.collection, handler, capture.owner);
     }
+  }
+
+  /**
+   * Every collection namespace holding at least one handler for `owner`.
+   *
+   * Lets a caller that rebuilds an owner's registrations find the namespaces it
+   * is no longer going to rebuild -- a collection deleted or renamed in the
+   * config still has its handlers here, and its table is deliberately retained
+   * rather than dropped, so it stays addressable and would go on running them.
+   *
+   * The wildcard is never reported: it belongs to no single entity, so a caller
+   * reconciling against a list of entities can only ever conclude it is absent.
+   */
+  collectionsOwnedBy(owner: HookOwner): string[] {
+    const found = new Set<string>();
+
+    const collect = (key: string, entries: RegisteredHook<unknown>[]): void => {
+      if (!entries.some(e => e.owner === owner)) return;
+      const collection = key.slice(key.indexOf(":") + 1);
+      if (collection !== "*") found.add(collection);
+    };
+
+    for (const [key, entries] of this.hooks) collect(key, entries);
+    for (const [key, entries] of this.beforeOperationHooks) {
+      collect(key, entries);
+    }
+
+    return [...found];
   }
 
   clearCollection(collection: string): void {
@@ -886,6 +917,38 @@ const globalRegistry: HookRegistry = globalForHooks.__nextly_hookRegistry;
  */
 export function getHookRegistry(): HookRegistry {
   return globalRegistry;
+}
+
+/**
+ * The registry `registerServices` actually wrote to.
+ *
+ * A caller may supply its own instance, and that is where the built-in,
+ * configured and plugin handlers went. Anything that later replaces or clears
+ * those registrations has to reach the same instance: writing to the global
+ * singleton instead would leave the live one holding the handlers it was
+ * supposed to lose, while the edited ones sit where no service will run them.
+ *
+ * On globalThis, like the singleton itself, so it survives the module
+ * re-evaluation Next.js and Turbopack do.
+ */
+const globalForActiveRegistry = globalThis as unknown as {
+  __nextly_activeHookRegistry?: HookRegistry;
+};
+
+/** Record which registry service registration bound its handlers to. */
+export function setActiveHookRegistry(
+  registry: HookRegistry | undefined
+): void {
+  globalForActiveRegistry.__nextly_activeHookRegistry = registry;
+}
+
+/**
+ * The registry in use, falling back to the process-global singleton when
+ * nothing has registered yet -- which is also the instance registration would
+ * pick by default.
+ */
+export function getActiveHookRegistry(): HookRegistry {
+  return globalForActiveRegistry.__nextly_activeHookRegistry ?? globalRegistry;
 }
 
 /**

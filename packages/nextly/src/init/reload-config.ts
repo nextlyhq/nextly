@@ -78,7 +78,7 @@ import { collectPluginContributedSlugs } from "../domains/webhooks/recording-pro
 import { resolveWebhookRecording } from "../domains/webhooks/resolve-recording-config";
 import { describeError } from "../errors/index";
 import { NextlyError } from "../errors/nextly-error";
-import { getHookRegistry } from "../hooks/hook-registry";
+import { getActiveHookRegistry } from "../hooks/hook-registry";
 import { reregisterCollectionHooks } from "../hooks/register-collection-hooks";
 import {
   reregisterSingleHooks,
@@ -623,7 +623,12 @@ function reregisterConfigHooks(newConfig: {
   singles?: SingleDef[];
   plugins?: unknown[];
 }): () => void {
-  const registry = getHookRegistry();
+  // The registry service registration actually bound its handlers to, which is
+  // not always the process-global singleton: a caller may supply its own, and
+  // replacing handlers anywhere else would leave the live registry running the
+  // ones it was supposed to lose while the edited ones sit where nothing reads
+  // them.
+  const registry = getActiveHookRegistry();
   const disabledPlugins = (newConfig.plugins ?? []).filter(
     plugin => (plugin as { enabled?: boolean }).enabled === false
   );
@@ -636,7 +641,7 @@ function reregisterConfigHooks(newConfig: {
   );
   const collections = (newConfig.collections ?? []).filter(
     (collection): collection is CollectionDef & { slug: string } =>
-      !!collection.slug
+      !!collection.slug && !disabledCollections.has(collection.slug)
   );
 
   const disabledSingles = collectPluginContributedSlugs(
@@ -644,47 +649,45 @@ function reregisterConfigHooks(newConfig: {
     "singles"
   );
   const singles = (newConfig.singles ?? []).filter(
-    (single): single is SingleDef & { slug: string } => !!single.slug
+    (single): single is SingleDef & { slug: string } =>
+      !!single.slug && !disabledSingles.has(single.slug)
   );
+
+  // What the re-registration below is going to rebuild.
+  const rebuilt = new Set<string>([
+    ...collections.map(collection => collection.slug),
+    ...singles.map(single => singleHookNamespace(single.slug)),
+  ]);
+
+  // Everything else the config currently owns handlers for, which the
+  // re-registration will NOT put back and so has to remove.
+  //
+  // Two ways a namespace lands here. An entity deleted or renamed in the config
+  // keeps its handlers, and its table is deliberately retained rather than
+  // dropped -- `nextly prune` is what removes an orphan -- so it stays
+  // addressable and would go on running hooks the config no longer declares. A
+  // plugin switched to `enabled: false` is the same shape: its declarations
+  // registered under the config's ownership while it was enabled, and merely
+  // leaving it out of the rebuild removes nothing.
+  const removed = registry
+    .collectionsOwnedBy("code")
+    .filter(namespace => !rebuilt.has(namespace));
 
   // Captured before anything is replaced, and returned as an undo. This runs
   // ahead of the schema work, so at this point it is not yet known whether the
   // reload will land -- and where it does not, the previous config stays in
   // effect and its handlers have to stay with it, or a hook written against a
   // renamed field would run against the schema that still has the old one.
-  //
-  // Covers the disabled slugs as well as the declared ones. A disabled plugin's
-  // slug is cleared below and may not appear in the new config at all, so
-  // capturing only what the config declares would leave that clear with no undo.
-  const namespaces = new Set<string>([
-    ...collections.map(collection => collection.slug),
-    ...disabledCollections,
-    ...singles.map(single => singleHookNamespace(single.slug)),
-    ...[...disabledSingles].map(singleHookNamespace),
-  ]);
-  const captured = [...namespaces].map(namespace =>
+  const captured = [...rebuilt, ...removed].map(namespace =>
     registry.captureCollectionOwnedBy(namespace, "code")
   );
 
-  // A plugin switched to `enabled: false` while the dev server is up still has
-  // the handlers its declarations registered at boot, under the config's own
-  // ownership. Leaving its slug out of the re-registration below would leave
-  // those in place -- the filter stops new ones being added and removes nothing
-  // -- so the plugin would go on running after being disabled. Cleared here
-  // instead, which also covers a slug the new config no longer declares at all.
-  for (const slug of disabledCollections) {
-    registry.clearCollectionOwnedBy(slug, "code");
-  }
-  for (const slug of disabledSingles) {
-    registry.clearCollectionOwnedBy(singleHookNamespace(slug), "code");
+  for (const namespace of removed) {
+    registry.clearCollectionOwnedBy(namespace, "code");
   }
 
-  reregisterCollectionHooks(
-    collections.filter(collection => !disabledCollections.has(collection.slug))
-  );
-  reregisterSingleHooks(
-    singles.filter(single => !disabledSingles.has(single.slug))
-  );
+  reregisterCollectionHooks(collections, registry);
+  reregisterSingleHooks(singles, registry);
 
   return () => {
     for (const capture of captured) {
@@ -1934,6 +1937,10 @@ async function applyReload(opts?: {
         `translations table for ${names}. Applying now would drop the columns holding that ` +
         `content. Fix the error above and save again.`
     );
+    // The schema and metadata never landed, so the previous config is still the
+    // one describing the database, and the work applied ahead of the schema
+    // pass has to come back with it.
+    abandonReload();
     return;
   }
 
@@ -1976,6 +1983,9 @@ async function applyReload(opts?: {
           `could not be copied back out of the translations table. Fix the error above and save ` +
           `again — the content is intact where it is.`
       );
+      // Same as the pre-apply failure above: nothing landed, so nothing that
+      // was applied optimistically may stay.
+      abandonReload();
       return;
     }
 

@@ -119,10 +119,14 @@ export function registerSingleHooks(
       // response stays equal to the stored Single without wrapping here.
       for (const hookType of hookTypes) {
         for (const handler of handlers) {
+          // Claimed as the config's, the twin of the collection registrar: this
+          // reads the config and can rebuild what a reload removes, so it is
+          // the one caller entitled to that ownership.
           registry.register(
             hookType,
             singleHookNamespace(single.slug),
-            handler as HookHandler
+            handler as HookHandler,
+            "code"
           );
           singleHookCount++;
         }

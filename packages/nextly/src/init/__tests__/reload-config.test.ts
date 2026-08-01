@@ -9,11 +9,17 @@
 // the gate behavior against actual diff output. Pipeline is still mocked
 // so we don't hit drizzle-kit.
 
+import { readFileSync } from "node:fs";
+
 import { getColumns } from "drizzle-orm";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { createLockingAdapter } from "../../domains/field-groups/migration/__tests__/helpers/locking-adapter";
-import { getHookRegistry } from "../../hooks/hook-registry";
+import {
+  HookRegistry,
+  getHookRegistry,
+  setActiveHookRegistry,
+} from "../../hooks/hook-registry";
 import { createPluginContext } from "../../plugins/plugin-context";
 
 import type { NextlySchemaSnapshot } from "../../domains/schema/pipeline/diff/types";
@@ -1498,6 +1504,121 @@ describe("reloadNextlyConfig", () => {
       await reloadNextlyConfig({ resolver: buildResolver() });
 
       expect(registry.getHookCount("afterRead", SLUG)).toBe(0);
+    });
+
+    it("stops running the hooks of a collection removed from the config", async () => {
+      // A removed code-first entity is RETAINED rather than dropped -- only
+      // `nextly prune` removes an orphan -- so it stays addressable and would
+      // go on running a hook that no longer exists in nextly.config.ts. Merely
+      // leaving it out of the re-registration removes nothing.
+      const registry = getHookRegistry();
+      const orphaned = vi.fn(() => undefined);
+      const { reloadNextlyConfig } = await import("../reload-config");
+
+      loadConfigSpy.mockResolvedValue({
+        config: { collections: [settledCollection({ afterRead: [orphaned] })] },
+      });
+      await reloadNextlyConfig({ resolver: buildResolver() });
+      expect(registry.getHookCount("afterRead", SLUG)).toBe(1);
+
+      loadConfigSpy.mockResolvedValue({ config: { collections: [] } });
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      expect(registry.getHookCount("afterRead", SLUG)).toBe(0);
+    });
+
+    it("leaves a plugin's handler on a removed collection alone", async () => {
+      // The sweep removes what the config can rebuild and nothing else. A
+      // plugin's registration is not rebuildable by a reload, so removing the
+      // collection from the config must not take it too.
+      const registry = getHookRegistry();
+      const ctx = createPluginContext(stubServices, registry, PLUGIN);
+      const fromPlugin = vi.fn(() => undefined);
+      const { reloadNextlyConfig } = await import("../reload-config");
+
+      loadConfigSpy.mockResolvedValue({
+        config: {
+          collections: [settledCollection({ afterRead: [() => undefined] })],
+        },
+      });
+      await reloadNextlyConfig({ resolver: buildResolver() });
+      ctx.hooks.on("afterRead", SLUG, fromPlugin);
+      expect(registry.getHookCount("afterRead", SLUG)).toBe(2);
+
+      loadConfigSpy.mockResolvedValue({ config: { collections: [] } });
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      expect(registry.getHookCount("afterRead", SLUG)).toBe(1);
+      await registry.execute("afterRead", {
+        collection: SLUG,
+        operation: "read",
+        data: {},
+        context: {},
+      });
+      expect(fromPlugin).toHaveBeenCalledTimes(1);
+    });
+
+    it("writes to the registry service registration bound, not the global one", async () => {
+      // A caller may supply its own registry, and that is where the live
+      // handlers went. Replacing them in the global singleton instead would
+      // leave the active registry running the handler the edit removed while
+      // the edited one sits where no service will reach it.
+      const active = new HookRegistry();
+      setActiveHookRegistry(active);
+      try {
+        const edited = vi.fn(() => undefined);
+        loadConfigSpy.mockResolvedValue({
+          config: { collections: [settledCollection({ afterRead: [edited] })] },
+        });
+        const { reloadNextlyConfig } = await import("../reload-config");
+        await reloadNextlyConfig({ resolver: buildResolver() });
+
+        expect(active.getHookCount("afterRead", SLUG)).toBe(1);
+        // And it did not go to the singleton, which is the instance it would
+        // have reached before.
+        expect(getHookRegistry().getHookCount("afterRead", SLUG)).toBe(0);
+      } finally {
+        setActiveHookRegistry(undefined);
+      }
+    });
+
+    it("abandons on every early return that is not a deliberate landing", () => {
+      // The hooks and the field-type registry are both applied optimistically,
+      // before the reload knows whether it will land, and each early return
+      // after that point either lands or has to undo them. Two i18n aborts were
+      // returning without undoing anything, which is how a rejected save left
+      // the new handlers running against the retained schema.
+      //
+      // Checked against the source because those branches need a failed content
+      // copy mid-migration to reach, and the regression is not one abort but
+      // the next one somebody adds. A new early return here should either
+      // abandon or be a considered addition to the count below.
+      const source = readFileSync(
+        new URL("../reload-config.ts", import.meta.url),
+        "utf8"
+      ).split("\n");
+      const start = source.findIndex(line =>
+        line.includes("reloadUndo.push(reregisterConfigHooks(newConfig))")
+      );
+      const end = source.findIndex(line =>
+        line.startsWith("// Decides whether a collection")
+      );
+      expect(start).toBeGreaterThan(0);
+      expect(end).toBeGreaterThan(start);
+
+      const unguarded = [];
+      for (let i = start; i < end; i++) {
+        if (!/^\s+return;\s*$/.test(source[i] ?? "")) continue;
+        const preceding = source.slice(Math.max(start, i - 8), i).join("\n");
+        if (!preceding.includes("abandonReload()")) unguarded.push(i + 1);
+      }
+
+      // Exactly one: the empty-target path, where nothing was managed and the
+      // new config IS the live one, so its handlers belong in place.
+      expect(unguarded).toHaveLength(1);
+      expect(
+        source.slice(Math.max(0, unguarded[0] - 12), unguarded[0]).join("\n")
+      ).toContain("republishRecordingPolicies");
     });
 
     it("puts the previous hooks back when the reload is abandoned", async () => {
