@@ -44,8 +44,8 @@ import {
   resetEmailProviderRegistry,
 } from "../domains/email/services/email-provider-registry";
 import {
-  assumeTypeColumn,
-  resolveFieldGroupRegistryTable,
+  resolveFieldGroupRegistryName,
+  resolveKnownTypeColumns,
   resolveTypeColumns,
 } from "../domains/field-groups/storage/resolve-storage-names";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
@@ -1200,12 +1200,12 @@ async function initializeSchemaRegistry(
     // `initializeSchemaRegistry`'s outer catch — which returns `undefined` and
     // skips config-table registration entirely, discarding a registry that was
     // otherwise fine.
-    const fieldGroupRegistry = await resolveFieldGroupRegistryTable(
+    const fieldGroupRegistry = await resolveFieldGroupRegistryName(
       adapter
     ).catch(() => undefined);
     await loadDynamicTables(
       adapter,
-      fieldGroupRegistry?.name ?? STORAGE_FORMAT.registryTable,
+      fieldGroupRegistry ?? STORAGE_FORMAT.registryTable,
       (tableName, fields, _hasStatus, localized) => {
         loadedFieldGroups.push({
           tableName,
@@ -1219,29 +1219,34 @@ async function initializeSchemaRegistry(
     // registry last, and a table an author named itself keeps its own name
     // while its column still moves, so the two generations can be mixed across
     // the very set being registered here.
-    // Contained for the same reason the registry resolution above is: a failure
-    // here would reach `initializeSchemaRegistry`'s outer catch, which returns
-    // `undefined` and skips config-table registration entirely — discarding a
-    // boot that was otherwise fine over one metadata probe.
-    const fieldGroupTypeColumns = await resolveTypeColumns(
+    // Never rejects, so this cannot reach `initializeSchemaRegistry`'s outer
+    // catch — which returns `undefined` and skips config-table registration
+    // entirely, discarding a boot that was otherwise fine over one metadata
+    // probe. A table it could not speak for is absent from the map.
+    const fieldGroupTypeColumns = await resolveKnownTypeColumns(
       adapter,
       loadedFieldGroups.map(entry => entry.tableName)
-    ).catch((err: unknown) => {
-      // Loudly, because everything below now runs on an assumption rather than
-      // a reading, and a boot that quietly registers the wrong column name is
-      // indistinguishable from a healthy one until the first write fails.
-      console.warn(
-        `[Nextly schema] Could not read field-group discriminator columns; ` +
-          `falling back to the spelling the registry implies: ` +
-          `${err instanceof Error ? err.message : String(err)}`
-      );
-      return new Map<string, string>();
-    });
-    // What the tables the probe could not speak for are addressed as. The
-    // registry's own generation is the only evidence left once the catalog is
-    // unreadable, and it is not symmetric — see `assumeTypeColumn`.
-    const assumedTypeColumn = assumeTypeColumn(fieldGroupRegistry);
+    );
     for (const { tableName, fields, localized } of loadedFieldGroups) {
+      const typeColumn = fieldGroupTypeColumns.get(tableName);
+      if (typeColumn === undefined) {
+        // 🔴 Left unregistered rather than registered on a guess.
+        //
+        // Both outcomes break this group's reads and writes until the next
+        // boot, so the choice is only in how. A guessed discriminator fails
+        // inside SQL, naming a column nobody wrote, and a dynamic-zone write
+        // would be aiming at that column; an absent registration fails as an
+        // unknown table, which says what actually happened. The same policy
+        // `loadDynamicTables` already applies to a row it cannot turn into a
+        // schema.
+        console.warn(
+          `[Nextly schema] Could not read the discriminator column of ` +
+            `'${tableName}'; leaving it unregistered rather than addressing ` +
+            `it by a name that was not verified. Field-group reads and writes ` +
+            `for it will fail until the next start.`
+        );
+        continue;
+      }
       const { FieldGroupSchemaService } = await import(
         "../services/field-groups/field-group-schema-service"
       );
@@ -1249,10 +1254,7 @@ async function initializeSchemaRegistry(
       const runtimeTable = compSchemaService.generateRuntimeSchema(
         tableName,
         fields,
-        {
-          localized,
-          typeColumn: fieldGroupTypeColumns.get(tableName) ?? assumedTypeColumn,
-        }
+        { localized, typeColumn }
       );
       registry.registerDynamicSchema(tableName, runtimeTable);
       if (localized) {

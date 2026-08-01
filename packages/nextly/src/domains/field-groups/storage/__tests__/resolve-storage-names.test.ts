@@ -1,18 +1,29 @@
 import { describe, expect, it, vi } from "vitest";
 
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+
 import { STORAGE_FORMAT } from "../../../../schemas/storage-format";
+import { introspectLiveSnapshot } from "../../../schema/pipeline/diff/introspect-live";
+import type { ColumnSpec } from "../../../schema/pipeline/diff/types";
 import { identifierCaseRules } from "../../../schema/utils/resolve-catalog-name";
 import { MIGRATION_TARGET } from "../../migration/manifest";
 import type { TableColumns } from "../../migration/reconcile";
 import {
-  assumeTypeColumn,
+  resolveKnownTypeColumns,
   chooseRegistryTable,
   chooseTypeColumns,
   forgetFieldGroupStorageNames,
   resolveFieldGroupRegistryTable,
   resolveRegistryTableName,
+  type CatalogReadAdapter,
   type StorageNameAdapter,
 } from "../resolve-storage-names";
+
+// The live-snapshot read is the only I/O `resolveTypeColumns` does that these
+// cases need to control; everything else in the module answers from the dialect.
+vi.mock("../../../schema/pipeline/diff/introspect-live", () => ({
+  introspectLiveSnapshot: vi.fn(),
+}));
 
 const LEGACY_REGISTRY = STORAGE_FORMAT.registryTable;
 const MIGRATED_REGISTRY = MIGRATION_TARGET.registryTable;
@@ -267,33 +278,90 @@ describe("resolveFieldGroupRegistryTable", () => {
 });
 
 /**
- * 🔴 What the boot pass addresses tables as when the catalog cannot be read.
+ * 🔴 What a boot addresses a table as when the probe cannot speak for it.
  *
- * The containment that keeps a metadata blip from aborting service registration
- * leaves every table unresolved, and something still has to be registered. The
- * spelling chosen there is not free: on migrated storage the legacy column is on
- * none of those tables, so every field-group read and write fails until the
- * process restarts — a boot that looks healthy and works for nothing.
+ * Nothing here may guess. The two generations coexist legitimately on one
+ * database — a group created after a migration carries the legacy column beside
+ * migrated siblings, an author-named table keeps its name while its column
+ * moves, and a crash between two rename steps leaves both — so no single answer
+ * derived from the database as a whole is right for every table in it.
  */
-describe("assumeTypeColumn", () => {
-  // The registry renames last going up, so a migrated registry is proof that
-  // every column rename ahead of it committed.
-  it("assumes the migrated column when the registry has been renamed", () => {
-    expect(assumeTypeColumn({ name: MIGRATED_REGISTRY, migrated: true })).toBe(
-      MIGRATED_COLUMN
+describe("resolveKnownTypeColumns", () => {
+  /** A column list in the shape the live snapshot reports. */
+  const columns = (names: string[]): ColumnSpec[] =>
+    names.map(name => ({ name, type: "text", nullable: true }));
+
+  /**
+   * SQLite so `readIdentifierCaseRules` answers from the dialect alone. The
+   * snapshot is served from `catalog`, and any table listed in `poison` throws
+   * the way a driver does when it cannot describe one — which fails the whole
+   * batch, since one query covers every table.
+   */
+  function adapterDouble(
+    catalog: Record<string, string[]>,
+    poison: string[] = []
+  ): CatalogReadAdapter {
+    vi.mocked(introspectLiveSnapshot).mockImplementation(
+      (_db: unknown, _dialect: SupportedDialect, tables?: string[]) => {
+        const asked = tables ?? [];
+        if (asked.some(table => poison.includes(table))) {
+          return Promise.reject(new Error("could not describe table"));
+        }
+        return Promise.resolve({
+          tables: asked
+            .filter(table => table in catalog)
+            .map(table => ({ name: table, columns: columns(catalog[table]) })),
+        });
+      }
     );
+    return { dialect: "sqlite", getDrizzle: <T>() => ({}) as T };
+  }
+
+  it("reads every table when the batch succeeds", async () => {
+    const adapter = adapterDouble({
+      fg_hero: [MIGRATED_COLUMN],
+      comp_late: [LEGACY_COLUMN],
+    });
+
+    const resolved = await resolveKnownTypeColumns(adapter, [
+      "fg_hero",
+      "comp_late",
+    ]);
+
+    expect(resolved.get("fg_hero")).toBe(MIGRATED_COLUMN);
+    expect(resolved.get("comp_late")).toBe(LEGACY_COLUMN);
   });
 
-  it("assumes the legacy column on a database that has not migrated", () => {
-    expect(assumeTypeColumn({ name: LEGACY_REGISTRY, migrated: false })).toBe(
-      LEGACY_COLUMN
+  // 🔴 The case the whole function exists for. One table takes the batch down,
+  // and the rest must still be registered from evidence rather than from a
+  // property of the database that does not describe them individually.
+  it("keeps the tables that can still answer when one poisons the batch", async () => {
+    const adapter = adapterDouble(
+      { fg_hero: [MIGRATED_COLUMN], comp_late: [LEGACY_COLUMN] },
+      ["fg_broken"]
     );
+
+    const resolved = await resolveKnownTypeColumns(adapter, [
+      "fg_hero",
+      "comp_late",
+      "fg_broken",
+    ]);
+
+    expect(resolved.get("fg_hero")).toBe(MIGRATED_COLUMN);
+    expect(resolved.get("comp_late")).toBe(LEGACY_COLUMN);
+    // Absent, not guessed. A migrated database holds both spellings at once, so
+    // there is no answer to fall back to that is right for every table.
+    expect(resolved.has("fg_broken")).toBe(false);
   });
 
-  // A rollback renames the registry FIRST, so a legacy registry proves nothing
-  // about the columns — and neither does a registry probe that itself failed.
-  // Both take the spelling this release's DDL writes rather than guess further.
-  it("assumes the legacy column when the registry could not be resolved", () => {
-    expect(assumeTypeColumn(undefined)).toBe(LEGACY_COLUMN);
+  it("answers for nothing when no table can be read", async () => {
+    const adapter = adapterDouble({}, ["fg_hero", "comp_late"]);
+
+    const resolved = await resolveKnownTypeColumns(adapter, [
+      "fg_hero",
+      "comp_late",
+    ]);
+
+    expect(resolved.size).toBe(0);
   });
 });

@@ -177,33 +177,6 @@ export function chooseTypeColumns(
   return resolved;
 }
 
-/**
- * The discriminator to assume when the catalog could not be read at all.
- *
- * 🔴 Not simply the legacy spelling. The storage migration renames the registry
- * **last**, so a registry already carrying the migrated name proves every column
- * rename ahead of it committed; assuming the legacy column there names one that
- * exists on none of those tables, and every field-group read and write fails
- * until the process restarts.
- *
- * The reverse is not claimed. A rollback renames the registry **first**, so a
- * legacy registry does not prove the columns are legacy — and with the catalog
- * unreadable there is nothing further to infer from, so that case takes the
- * spelling this release's DDL writes, which is also the right answer for the
- * database that has simply never migrated.
- *
- * Distinct from {@link chooseTypeColumns}'s own default for a table the catalog
- * does not describe: that one answers about a table the catalog was able to
- * speak for, this one answers when it could not speak at all.
- */
-export function assumeTypeColumn(
-  registry: FieldGroupRegistryTable | undefined
-): string {
-  return registry?.migrated === true
-    ? MIGRATION_TARGET.columnType
-    : STORAGE_FORMAT.columns.type;
-}
-
 /** The discriminator on one table's column list. */
 function chooseTypeColumn(
   columns: readonly string[],
@@ -326,6 +299,47 @@ export async function resolveTypeColumns(
     tables,
     rules
   );
+}
+
+/**
+ * The same resolution for a caller that must survive a probe it cannot repeat.
+ *
+ * 🔴 A table missing from the result means the probe could not speak for it,
+ * and there is deliberately nothing here that guesses on its behalf. No property
+ * of the database implies one table's discriminator: the two generations coexist
+ * legitimately — an author-named table keeps its name while its column moves, a
+ * group created after a migration carries the legacy column beside migrated
+ * siblings, and a crash between two rename steps leaves both — so any single
+ * answer applied to the whole set is wrong for some of it.
+ *
+ * The batch is attempted first because that is one catalog read for every table.
+ * Its realistic failure is one problematic table taking the query down with it,
+ * so the fallback asks per table rather than giving up on the set: the tables
+ * that can still answer are registered from evidence, and only the ones that
+ * genuinely cannot are left out.
+ */
+export async function resolveKnownTypeColumns(
+  adapter: CatalogReadAdapter,
+  tables: readonly string[]
+): Promise<Map<string, string>> {
+  try {
+    return await resolveTypeColumns(adapter, tables);
+  } catch {
+    const resolved = new Map<string, string>();
+    await Promise.all(
+      tables.map(async table => {
+        try {
+          const column = (await resolveTypeColumns(adapter, [table])).get(
+            table
+          );
+          if (column !== undefined) resolved.set(table, column);
+        } catch {
+          // Left out of the map, which is how the caller learns it is unknown.
+        }
+      })
+    );
+    return resolved;
+  }
 }
 
 async function readRegistryTable(
