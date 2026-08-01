@@ -7,6 +7,7 @@
  *  - !hasStatus → single Save / Create button
  *
  */
+import userEvent from "@testing-library/user-event";
 import { useForm, FormProvider } from "react-hook-form";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -41,6 +42,7 @@ interface HarnessProps {
     _isWorkingDraft?: boolean;
   } | null;
   isDirty?: boolean;
+  onDiscardWorkingDraft?: () => void;
 }
 
 function Harness({
@@ -49,6 +51,7 @@ function Harness({
   draftsEnabled = false,
   entry = null,
   isDirty = false,
+  onDiscardWorkingDraft,
 }: HarnessProps) {
   const methods = useForm({ defaultValues: { title: entry?.title ?? "" } });
   return (
@@ -65,6 +68,7 @@ function Harness({
         onSaveChanges={vi.fn()}
         onSaveWorkingDraft={vi.fn()}
         onUnpublish={vi.fn()}
+        onDiscardWorkingDraft={onDiscardWorkingDraft ?? vi.fn()}
       />
     </FormProvider>
   );
@@ -210,6 +214,58 @@ describe("EntrySystemHeader — drafts-enabled working-draft matrix", () => {
     expect(
       screen.getByRole("button", { name: /^unpublish$/i })
     ).toBeInTheDocument();
+  });
+});
+
+describe("EntrySystemHeader — discard working draft menu", () => {
+  it("offers Discard draft in the More menu for a Changed document", async () => {
+    const user = userEvent.setup();
+    render(
+      <Harness
+        mode="edit"
+        draftsEnabled
+        entry={{ id: "x", status: "published", _isWorkingDraft: true }}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: /more actions/i }));
+    expect(
+      screen.getByRole("menuitem", { name: /discard draft/i })
+    ).toBeInTheDocument();
+  });
+
+  it("hides Discard draft when there is no pending working draft", async () => {
+    const user = userEvent.setup();
+    render(
+      <Harness
+        mode="edit"
+        draftsEnabled
+        entry={{ id: "x", status: "published" }}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: /more actions/i }));
+    expect(
+      screen.queryByRole("menuitem", { name: /discard draft/i })
+    ).not.toBeInTheDocument();
+  });
+
+  it("hides Discard draft when the caller cannot update the document", async () => {
+    // The server gates the discard on update access, so the affordance is too.
+    canFor.mockImplementation((slug: string) => slug !== "update-posts");
+    const user = userEvent.setup();
+    render(
+      <Harness
+        mode="edit"
+        draftsEnabled
+        entry={{ id: "x", status: "published", _isWorkingDraft: true }}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: /more actions/i }));
+    expect(
+      screen.queryByRole("menuitem", { name: /discard draft/i })
+    ).not.toBeInTheDocument();
   });
 });
 
