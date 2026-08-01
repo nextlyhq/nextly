@@ -140,7 +140,12 @@ export type {
   UnionShape,
   UrlLeaf,
 } from "./style/catalog-types";
-export { checkCssValue, checkUrlValue } from "./style/css-value";
+export {
+  checkColorValue,
+  checkCssValue,
+  checkDimensionValue,
+  checkUrlValue,
+} from "./style/css-value";
 export type { CssValueRejection } from "./style/css-value";
 export {
   validateStyleValues,

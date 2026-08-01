@@ -33,7 +33,9 @@ export type CssValueRejection =
   | "unsafe-characters"
   | "unsafe-url-scheme"
   | "unsafe-url-characters"
-  | "not-a-length";
+  | "too-deeply-nested"
+  | "not-a-length"
+  | "not-a-color";
 
 /**
  * Characters that must never reach a declaration, even inside a value that
@@ -61,7 +63,22 @@ const URL_SCHEME = /^\s*([a-z][a-z0-9+.-]*):/i;
  * them through an escape, and the HTML parser honours `</style>` inside a URL
  * regardless of how the CSS quotes it.
  */
-const UNSAFE_URL_CHARS = /["'()\\\n\r<>]/;
+const UNSAFE_URL_CHARS = /["'()\\<>]/;
+
+/**
+ * True when a URL contains a control character. A URL parser strips these
+ * before reading the scheme, so `java\tscript:` becomes `javascript:` in the
+ * browser while looking like a scheme-less path to a check that does not.
+ * Refused outright rather than stripped: a URL carrying a control character is
+ * malformed however it was meant.
+ */
+function hasControlCharacter(value: string): boolean {
+  for (const character of value) {
+    const code = character.codePointAt(0) ?? 0;
+    if (code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
+}
 
 /**
  * Keywords a length-valued property may legitimately carry instead of a
@@ -138,12 +155,36 @@ function nestedUrlRejection(ast: CssNode): CssValueRejection | null {
 }
 
 /**
+ * Maximum bracket nesting in one value. Parsing and walking a value are both
+ * recursive, so a deeply nested value exhausts the stack — measured, a few
+ * hundred nested `calc()` calls is enough, well inside any document size limit.
+ * Counting brackets first is iterative and cannot itself overflow.
+ */
+const MAX_VALUE_NESTING = 32;
+
+/** Deepest bracket nesting in a value. */
+function nestingDepth(value: string): number {
+  let depth = 0;
+  let deepest = 0;
+  for (const character of value) {
+    if (character === "(") {
+      depth += 1;
+      if (depth > deepest) deepest = depth;
+    } else if (character === ")") {
+      depth -= 1;
+    }
+  }
+  return deepest;
+}
+
+/**
  * Check a CSS value for parseability and unsafe characters. Returns `null` when
  * the value is safe to emit.
  */
 export function checkCssValue(value: string): CssValueRejection | null {
   if (value.trim() === "") return "unparsable";
   if (UNSAFE_VALUE_CHARS.test(value)) return "unsafe-characters";
+  if (nestingDepth(value) > MAX_VALUE_NESTING) return "too-deeply-nested";
   const ast = parseValue(value);
   if (ast === null) return "unparsable";
   // A URL nested in a free-form value reaches the stylesheet exactly as a
@@ -172,33 +213,132 @@ export function checkDimensionValue(value: string): CssValueRejection | null {
   let sawMeasurement = false;
   for (const child of ast.children) {
     if (child.type === "Operator") continue;
-    if (SIZE_NODE_TYPES.has(child.type)) {
-      sawMeasurement = true;
-      continue;
-    }
-    if (child.type === "Function") {
-      if (!DIMENSION_FUNCTIONS.has(child.name.toLowerCase())) {
-        return "not-a-length";
-      }
-      sawMeasurement = true;
-      continue;
-    }
-    // Zero is the one number that is a complete length on its own.
-    if (child.type === "Number") {
-      if (Number(child.value) !== 0) return "not-a-length";
-      sawMeasurement = true;
-      continue;
-    }
-    if (child.type === "Identifier") {
-      if (!DIMENSION_KEYWORDS.has(child.name.toLowerCase())) {
-        return "not-a-length";
-      }
-      sawMeasurement = true;
-      continue;
-    }
-    return "not-a-length";
+    const childRejection = measurementRejection(child, false);
+    if (childRejection !== null) return childRejection;
+    sawMeasurement = true;
   }
   return sawMeasurement ? null : "not-a-length";
+}
+
+/**
+ * Whether one node can contribute to a length. `insideFunction` relaxes the
+ * bare-number rule, because a plain number is a legal multiplier inside a math
+ * function (`calc(2 * 1px)`) while meaning nothing on its own.
+ */
+function measurementRejection(
+  node: CssNode,
+  insideFunction: boolean
+): CssValueRejection | null {
+  if (SIZE_NODE_TYPES.has(node.type)) return null;
+  switch (node.type) {
+    case "Number":
+      return insideFunction || Number(node.value) === 0 ? null : "not-a-length";
+    case "Identifier":
+      return DIMENSION_KEYWORDS.has(node.name.toLowerCase())
+        ? null
+        : "not-a-length";
+    case "Operator":
+      return null;
+    case "Function": {
+      const name = node.name.toLowerCase();
+      if (!DIMENSION_FUNCTIONS.has(name)) return "not-a-length";
+      // What a custom property or an environment variable resolves to is not
+      // knowable here, and their arguments include an arbitrary fallback, so
+      // their contents are not inspected.
+      if (name === "var" || name === "env") return null;
+      for (const child of node.children) {
+        const childRejection = measurementRejection(child, true);
+        if (childRejection !== null) return childRejection;
+      }
+      return null;
+    }
+    default:
+      return "not-a-length";
+  }
+}
+
+/**
+ * Colour keywords: the CSS named colours, which are a closed set, plus the
+ * keywords that stand in for one.
+ */
+const COLOR_KEYWORDS: ReadonlySet<string> = new Set(
+  `transparent currentcolor inherit initial unset revert revert-layer
+   aliceblue antiquewhite aqua aquamarine azure beige bisque black
+   blanchedalmond blue blueviolet brown burlywood cadetblue chartreuse
+   chocolate coral cornflowerblue cornsilk crimson cyan darkblue darkcyan
+   darkgoldenrod darkgray darkgreen darkgrey darkkhaki darkmagenta
+   darkolivegreen darkorange darkorchid darkred darksalmon darkseagreen
+   darkslateblue darkslategray darkslategrey darkturquoise darkviolet deeppink
+   deepskyblue dimgray dimgrey dodgerblue firebrick floralwhite forestgreen
+   fuchsia gainsboro ghostwhite gold goldenrod gray green greenyellow grey
+   honeydew hotpink indianred indigo ivory khaki lavender lavenderblush
+   lawngreen lemonchiffon lightblue lightcoral lightcyan lightgoldenrodyellow
+   lightgray lightgreen lightgrey lightpink lightsalmon lightseagreen
+   lightskyblue lightslategray lightslategrey lightsteelblue lightyellow lime
+   limegreen linen magenta maroon mediumaquamarine mediumblue mediumorchid
+   mediumpurple mediumseagreen mediumslateblue mediumspringgreen
+   mediumturquoise mediumvioletred midnightblue mintcream mistyrose moccasin
+   navajowhite navy oldlace olive olivedrab orange orangered orchid
+   palegoldenrod palegreen paleturquoise palevioletred papayawhip peachpuff
+   peru pink plum powderblue purple rebeccapurple red rosybrown royalblue
+   saddlebrown salmon sandybrown seagreen seashell sienna silver skyblue
+   slateblue slategray slategrey snow springgreen steelblue tan teal thistle
+   tomato turquoise violet wheat white whitesmoke yellow yellowgreen`.split(
+    /\s+/
+  )
+);
+
+/** Functions that produce a colour. */
+const COLOR_FUNCTIONS: ReadonlySet<string> = new Set([
+  "rgb",
+  "rgba",
+  "hsl",
+  "hsla",
+  "hwb",
+  "lab",
+  "lch",
+  "oklab",
+  "oklch",
+  "color",
+  "color-mix",
+  "light-dark",
+  "device-cmyk",
+  "var",
+  "env",
+]);
+
+/**
+ * Check a value for a property that takes a colour. Everything
+ * `checkCssValue` checks, plus the requirement that what was written is a
+ * colour: `"16px"` and `"rotate(2deg)"` are valid CSS values that a browser
+ * discards when given as a colour.
+ *
+ * Which colour a function actually produces is not checked — the argument
+ * grammar of `oklch()` and friends moves faster than any data available here,
+ * and that is the same reason grammar matching is not used anywhere in this
+ * module.
+ */
+export function checkColorValue(value: string): CssValueRejection | null {
+  const rejection = checkCssValue(value);
+  if (rejection !== null) return rejection;
+  const ast = parseValue(value);
+  if (ast === null || ast.type !== "Value") return "not-a-color";
+  const parts = [...ast.children].filter(node => node.type !== "Operator");
+  const node = parts[0];
+  if (parts.length !== 1 || node === undefined) return "not-a-color";
+  switch (node.type) {
+    // A hex literal.
+    case "Hash":
+      return null;
+    case "Identifier":
+      return COLOR_KEYWORDS.has(node.name.toLowerCase()) ? null : "not-a-color";
+    case "Function":
+      return COLOR_FUNCTIONS.has(node.name.toLowerCase())
+        ? null
+        : "not-a-color";
+    default:
+      return "not-a-color";
+  }
 }
 
 /**
@@ -206,6 +346,9 @@ export function checkDimensionValue(value: string): CssValueRejection | null {
  */
 export function checkUrlValue(value: string): CssValueRejection | null {
   if (value.trim() === "") return "unsafe-url-scheme";
+  // Control characters come first: they are what would let a scheme hide from
+  // the check below while a browser still reads it.
+  if (hasControlCharacter(value)) return "unsafe-url-characters";
   // The scheme is checked first because a refused scheme is the more useful
   // thing to tell an author, and a hostile URL usually trips both guards.
   const scheme = URL_SCHEME.exec(value);

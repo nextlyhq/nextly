@@ -41,8 +41,10 @@ vertical writing modes, which the catalog can add later without a migration.
   declaration the browser discards. Shorthands carrying more than one
   measurement, such as `"4px 8px"` for a corner radius, are accepted.
 - **number** — a unitless number, bounded where the property has natural limits.
-- **color** — a CSS color string. Any color syntax the browser understands works,
-  including `oklch()` and `color-mix()`.
+- **color** — a colour: a hex literal, one of the CSS named colours, a keyword
+  such as `currentColor` or `transparent`, or a colour function including
+  `oklch()`, `color-mix()` and `light-dark()`. Values that are valid CSS but not
+  colours, such as `"16px"`, are refused.
 - **css value** — a free-form CSS value, checked for syntax and safety but not
   against a property grammar (see below).
 - **url** — a URL emitted inside `url()`, with its scheme checked.
@@ -197,7 +199,7 @@ absolutely-positioned children resolve their containing block.
 
 ## What is validated, and what is not
 
-Two things are checked on every value that reaches the stylesheet:
+Four things are checked on every value that reaches the stylesheet:
 
 1. **It parses as a CSS value.** A value that parses cannot carry a stray `;` or
    `}` and so cannot escape its own declaration.
@@ -206,6 +208,16 @@ Two things are checked on every value that reaches the stylesheet:
    quoted `javascript:` URL, so neither is caught by parsing alone. URL schemes
    are an allowlist — `http`, `https`, and URLs with no scheme at all, which
    resolve against the site's own origin.
+
+3. **That a value is the KIND its property takes.** A length has to be a
+   measurement and a colour has to be a colour, because `width: "red"` and
+   `color: "16px"` are both well-formed CSS values that a browser silently
+   discards. Inside a length, the contents of `calc()` and friends are checked
+   too, so `calc(1px + red)` is refused; what `var()` and `env()` resolve to is
+   not knowable here and is left alone.
+4. **Nesting depth.** Parsing and walking a value are recursive, so a value with
+   hundreds of nested brackets would exhaust the stack. Anything deeper than 32
+   levels is refused, which no real value approaches.
 
 **Grammar correctness for a property is deliberately not checked.** The
 reference grammar available to do it lags what browsers ship. Measured against

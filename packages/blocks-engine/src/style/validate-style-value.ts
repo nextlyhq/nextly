@@ -14,7 +14,12 @@ import type { ValidationIssue, ValidationMode } from "../validation";
 import { getStyleProperty } from "./catalog";
 import { isStyleLeaf, shapeLeaves } from "./catalog-types";
 import type { StyleLeaf, StyleShape, TokenKind } from "./catalog-types";
-import { checkCssValue, checkDimensionValue, checkUrlValue } from "./css-value";
+import {
+  checkColorValue,
+  checkCssValue,
+  checkDimensionValue,
+  checkUrlValue,
+} from "./css-value";
 import type { CssValueRejection } from "./css-value";
 
 /** Human-readable reasons a value was refused, keyed by the safety check's verdict. */
@@ -25,6 +30,8 @@ const REJECTION_MESSAGES = {
   "unsafe-url-scheme": "uses a URL scheme that is not allowed",
   "unsafe-url-characters": "contains characters that are not allowed in a URL",
   "not-a-length": "is not a length",
+  "not-a-color": "is not a color",
+  "too-deeply-nested": "is nested too deeply",
 } as const;
 
 /** True when a token of the given kind may be stored at this leaf. */
@@ -156,7 +163,13 @@ function leafIssues(
       const rejection = checkDimensionValue(value);
       return rejection === null ? [] : rejected(path, value, rejection);
     }
-    case "color":
+    case "color": {
+      if (typeof value !== "string") {
+        return [invalid(path, `${describeValue(value)} is not a string.`)];
+      }
+      const rejection = checkColorValue(value);
+      return rejection === null ? [] : rejected(path, value, rejection);
+    }
     case "cssValue": {
       if (typeof value !== "string") {
         return [invalid(path, `${describeValue(value)} is not a string.`)];

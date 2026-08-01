@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { StyleValues } from "../document";
 import { ISSUE_CODES } from "../validation";
-import { checkCssValue, checkUrlValue } from "./css-value";
+import { checkColorValue, checkCssValue, checkUrlValue } from "./css-value";
 import { validateStyleValues } from "./validate-style-value";
 
 /** Validate one style-values record at the document root, strictly. */
@@ -354,6 +354,104 @@ describe("functions in a length", () => {
     for (const value of ["rgb(1 2 3)", "rotate(20deg)", "foo()", "blur(3px)"]) {
       expect(codes({ width: value }), value).toEqual(["invalid-style-value"]);
     }
+  });
+});
+
+describe("control characters in a url", () => {
+  it("are refused, because a browser strips them before reading the scheme", () => {
+    // `java\tscript:` reaches the browser as `javascript:`, so a check that
+    // only looked for a literal scheme would wave it through.
+    expect(checkUrlValue("data\t:text/html;base64,WA==")).toBe(
+      "unsafe-url-characters"
+    );
+    expect(checkUrlValue("java\tscript:alert1")).toBe("unsafe-url-characters");
+    expect(checkUrlValue("a.png\u0000")).toBe("unsafe-url-characters");
+  });
+
+  it("surfaces through validation", () => {
+    expect(codes({ background: { url: "data\t:text/html,x" } })).toEqual([
+      "invalid-style-value",
+    ]);
+  });
+});
+
+describe("contents of a length-producing function", () => {
+  it("are checked, not just the function name", () => {
+    for (const value of [
+      "calc(rgb(1 2 3))",
+      "calc(1px + red)",
+      "min(rgb(1 2 3), 2px)",
+    ]) {
+      expect(codes({ width: value }), value).toEqual(["invalid-style-value"]);
+    }
+  });
+
+  it("still allow multipliers and nested math", () => {
+    for (const value of [
+      "calc(2 * 1px)",
+      "calc(100% - 2rem)",
+      "calc(min(10px, 2em) + 1rem)",
+      "clamp(1rem, calc(5vw + 1px), 3rem)",
+    ]) {
+      expect(codes({ width: value }), value).toEqual([]);
+    }
+  });
+
+  it("does not inspect what a custom property resolves to", () => {
+    expect(codes({ width: "var(--x, anything-at-all)" })).toEqual([]);
+  });
+});
+
+describe("color leaves take colors", () => {
+  it("refuses values that are valid CSS but not colors", () => {
+    for (const value of [
+      "16px",
+      "rotate(2deg)",
+      "url(https://x/y)",
+      "banana",
+    ]) {
+      expect(codes({ color: value }), value).toEqual(["invalid-style-value"]);
+    }
+  });
+
+  it("accepts hex, named colors, keywords, and color functions", () => {
+    for (const value of [
+      "#fff",
+      "#ff8800cc",
+      "red",
+      "rebeccapurple",
+      "currentColor",
+      "transparent",
+      "rgb(1 2 3)",
+      "hsl(200 50% 50%)",
+      "oklch(70% 0.1 200)",
+      "color-mix(in oklab, red, blue)",
+      "light-dark(white, black)",
+      "var(--site-color-primary)",
+    ]) {
+      expect(codes({ backgroundColor: value }), value).toEqual([]);
+    }
+  });
+
+  it("leaves free-form values unrestricted, which is what they are for", () => {
+    expect(codes({ filter: "blur(3px)" })).toEqual([]);
+    expect(codes({ transform: "rotate(2deg)" })).toEqual([]);
+  });
+});
+
+describe("deeply nested values", () => {
+  it("are refused before anything recursive touches them", () => {
+    const deep = `${"calc(".repeat(1200)}1px${")".repeat(1200)}`;
+    expect(checkCssValue(deep)).toBe("too-deeply-nested");
+    expect(() => check({ width: deep })).not.toThrow();
+    expect(codes({ width: deep })).toEqual(["invalid-style-value"]);
+  });
+
+  it("leaves ordinary nesting alone", () => {
+    expect(checkColorValue("color-mix(in oklab, rgb(1 2 3), blue)")).toBeNull();
+    expect(codes({ width: "calc(min(10px, max(2em, 1rem)) + 1px)" })).toEqual(
+      []
+    );
   });
 });
 
