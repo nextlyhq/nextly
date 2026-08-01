@@ -2554,6 +2554,11 @@ export class CollectionQueryService extends BaseService {
             >[3] = {
               depth: params.depth,
               enforceFieldAccess: true,
+              // The overlaid draft is the document the post-assembly pass runs
+              // over, so its related rows defer field rules for the same reason
+              // the live read does. Without this a draft read hides a denied
+              // sibling before the rule that masks on it has run.
+              fieldAccessStage: "assembled" as const,
               user: params.user,
               overrideAccess: params.overrideAccess,
               authenticatedScope: params.authenticatedScope,

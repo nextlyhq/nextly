@@ -3231,10 +3231,14 @@ export class CollectionRelationshipService extends BaseService {
   ): Promise<void> {
     if (!("label" in row)) return;
 
-    const declared =
-      typeof field.options?.targetLabelField === "string"
-        ? field.options.targetLabelField
-        : "";
+    // Read from both shapes expansion supports. A relationship storing the
+    // override at the field root would otherwise have its label rebuilt from an
+    // auto-selected field, so the same row came back labelled differently only
+    // because this pass ran.
+    const override =
+      field.options?.targetLabelField ??
+      (field as Record<string, unknown>).targetLabelField;
+    const declared = typeof override === "string" ? override : "";
     const cacheKey = `${resolved.collection}:${declared}`;
     let pending = state.labelFields.get(cacheKey);
     if (!pending) {

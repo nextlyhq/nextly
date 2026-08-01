@@ -422,10 +422,10 @@ describe("a target's field hooks apply to rows reached through a relationship", 
   });
 
   it("judges a masking rule before the denied sibling it reads is removed", async () => {
-    // The ordering the founder chose, and the defect it fixes. `classification`
-    // denies read, and the author's `secret` rule masks on it. Removing denied
-    // fields at fetch handed that rule a row its evidence had already been cut
-    // out of, so it read `undefined`, declined to mask, and the secret went out.
+    // `classification` denies read, and the author's `secret` rule masks on it.
+    // Removing denied fields as a row is fetched hands that rule a row its
+    // evidence has already been cut out of: it reads `undefined`, declines to
+    // mask, and the value it guards goes out. Masking has to run first.
     //
     // Read WITHOUT overrideAccess: field rules are skipped for a trusted read,
     // so an overriding caller cannot show this either way.
