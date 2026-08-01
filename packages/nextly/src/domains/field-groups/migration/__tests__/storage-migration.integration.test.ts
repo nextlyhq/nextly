@@ -50,16 +50,21 @@ import { dynamicSinglesSqlite } from "../../../../schemas/dynamic-singles/sqlite
 import { nextlyMetaTables } from "../../../../schemas/nextly-meta";
 import { userTables } from "../../../../schemas/users";
 import { schemaEventsTables } from "../../../../schemas/schema-events";
+import { getCoreSchema, getCoreTableNames } from "../../../../schemas";
 import { STORAGE_FORMAT } from "../../../../schemas/storage-format";
 import { versionsTables } from "../../../../schemas/versions";
 import { webhookTables } from "../../../../schemas/webhooks";
+import { diffSnapshots } from "../../../schema/pipeline/diff/diff";
 import { introspectLiveSnapshot } from "../../../schema/pipeline/diff/introspect-live";
 import { splitStatements } from "../../../schema/pipeline/sql-statement-utils";
 import { DynamicCollectionSchemaService } from "../../../dynamic-collections/services/dynamic-collection-schema-service";
 import { FieldGroupSchemaService } from "../../services/field-group-schema-service";
 import { MIGRATION_TARGET } from "../manifest";
 import { runFieldGroupMigration } from "../run";
-import { resolveTypeColumns } from "../../storage/resolve-storage-names";
+import {
+  resolveRegistryNameFromCatalog,
+  resolveTypeColumns,
+} from "../../storage/resolve-storage-names";
 import { MIGRATION_LOCK_TABLE } from "../session";
 
 interface TestAdapter {
@@ -141,6 +146,30 @@ function systemTablesFor(dialect: SupportedDialect): Record<string, unknown> {
     ...versionsTables(dialect),
     ...webhookTables(dialect),
   };
+}
+
+/**
+ * The Drizzle handle behind a test adapter.
+ *
+ * `TestAdapter` is the narrow surface these cases drive; the handle is not part
+ * of it, so the narrowing is written once here rather than at each call.
+ */
+function drizzleOf(adapter: unknown): unknown {
+  return (adapter as { getDrizzle(): unknown }).getDrizzle();
+}
+
+/** The kinds of core operation that name a given table, for an exact assertion. */
+function namesRegistry(
+  ops: ReadonlyArray<{
+    type: string;
+    table?: { name: string };
+    tableName?: string;
+  }>,
+  table: string
+): string[] {
+  return ops
+    .filter(op => (op.table?.name ?? op.tableName) === table)
+    .map(op => op.type);
 }
 
 const logger = {
@@ -369,7 +398,7 @@ for (const entry of DIALECTS) {
      */
     async function columnsOf(table: string): Promise<string[]> {
       const snapshot = await introspectLiveSnapshot(
-        (adapter as unknown as { getDrizzle(): unknown }).getDrizzle(),
+        drizzleOf(adapter),
         entry.dialect,
         [table]
       );
@@ -586,6 +615,64 @@ for (const entry of DIALECTS) {
         expect(columns).toContain(MIGRATION_TARGET.columnType);
         expect(columns).not.toContain(STORAGE_FORMAT.columns.type);
       }
+    });
+
+    /**
+     * 🔴 The command an operator runs right after upgrading, on the exact
+     * database this migration just produced.
+     *
+     * The core schema is a DESIRED shape, so a registry name in it that the
+     * database does not have is an instruction to CREATE that table — and the
+     * reader rule is legacy-if-present, so an empty `dynamic_components` beside
+     * the populated `dynamic_field_groups` makes every field group unreachable
+     * with nothing raised anywhere.
+     *
+     * The whole core schema is not reconciled here because this fixture holds
+     * only the tables the migration touches; the invariant under test is
+     * narrower and exact: **no core operation may name either registry.** Not
+     * the legacy one, which must not be created, and not the migrated one,
+     * whose shape the rename left matching.
+     */
+    it("proposes no core-schema change for the registry after a run", async () => {
+      await migrate("up");
+
+      const options = {
+        fieldGroupRegistryTable: await resolveRegistryNameFromCatalog(
+          adapter as never
+        ),
+      };
+      expect(options.fieldGroupRegistryTable).toBe(
+        MIGRATION_TARGET.registryTable
+      );
+
+      const live = await introspectLiveSnapshot(
+        drizzleOf(adapter),
+        entry.dialect,
+        getCoreTableNames(options)
+      );
+      const ops = diffSnapshots(live, getCoreSchema(entry.dialect, options));
+
+      expect(namesRegistry(ops, STORAGE_FORMAT.registryTable)).toEqual([]);
+      expect(namesRegistry(ops, MIGRATION_TARGET.registryTable)).toEqual([]);
+    });
+
+    // The negative control for the case above, and the reason it is worth its
+    // own leg: run the same reconcile WITHOUT resolving, and it proposes
+    // creating the legacy registry on a database that has just been migrated.
+    // That is the defect, reproduced against a real database.
+    it("would create the legacy registry if the reconcile did not resolve", async () => {
+      await migrate("up");
+
+      const live = await introspectLiveSnapshot(
+        drizzleOf(adapter),
+        entry.dialect,
+        getCoreTableNames()
+      );
+      const ops = diffSnapshots(live, getCoreSchema(entry.dialect));
+
+      expect(namesRegistry(ops, STORAGE_FORMAT.registryTable)).toContain(
+        "add_table"
+      );
     });
 
     it("reports a second run as already migrated", async () => {
