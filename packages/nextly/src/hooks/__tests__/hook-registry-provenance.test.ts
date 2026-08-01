@@ -11,7 +11,11 @@ import { describe, expect, it, vi } from "vitest";
 
 import { registerHook, unregisterHook } from "../../hooks";
 import { createPluginContext } from "../../plugins/plugin-context";
-import { HookRegistry, getHookRegistry } from "../hook-registry";
+import {
+  HookRegistry,
+  getHookRegistry,
+  type OwnedHookSet,
+} from "../hook-registry";
 import type { BeforeOperationHandler, HookHandler } from "../types";
 
 const SLUG = "provenance_posts";
@@ -274,5 +278,80 @@ describe("owner suspension", () => {
       .then(() => {
         expect(handler).toHaveBeenCalledTimes(1);
       });
+  });
+});
+
+describe("where a first-time config hook goes", () => {
+  // Boot fixes one thing about ordering: the config registers immediately after
+  // the plugins. When the config declares a handler for a phase that had none,
+  // there is no previous position to restore, so that is the anchor -- and it
+  // has to hold whether the app registered before boot or after it.
+  const config = (): OwnedHookSet => ({
+    byPhase: [{ hookType: "afterRead", handlers: [() => undefined] }],
+    beforeOperation: [],
+  });
+  const ownersOf = (registry: HookRegistry): string[] =>
+    registry.describeOwners("afterRead", SLUG);
+
+  it("goes after a plugin and before an app hook registered later", () => {
+    const registry = new HookRegistry();
+    registry.register("afterRead", SLUG, c => c.data, "plugin:seo");
+    registry.register("afterRead", SLUG, c => c.data, "app");
+
+    registry.replaceCollectionOwnedBy(SLUG, "code", config());
+
+    expect(ownersOf(registry)).toEqual(["plugin:seo", "code", "app"]);
+  });
+
+  it("stays behind an app hook registered before the plugins", () => {
+    // An app's `registerHook` runs when its module is evaluated, which can be
+    // before the first `getNextly()`. Ranking the owners would move the config
+    // in front of it and diverge from what a restart produces -- the opposite
+    // way round from the case above, which is why the anchor is the plugins
+    // rather than an assumed order over all three.
+    const registry = new HookRegistry();
+    registry.register("afterRead", SLUG, c => c.data, "app");
+    registry.register("afterRead", SLUG, c => c.data, "plugin:seo");
+
+    registry.replaceCollectionOwnedBy(SLUG, "code", config());
+
+    expect(ownersOf(registry)).toEqual(["app", "plugin:seo", "code"]);
+  });
+
+  it("appends any owner other than the config", () => {
+    // The plugin anchor is the CONFIG's, because boot is what puts the config
+    // there. Nothing fixes where a first-time app or plugin registration goes,
+    // so it appends -- anchoring those would invent an order boot does not
+    // produce, and would put an app hook in front of the config it was written
+    // to run after.
+    const registry = new HookRegistry();
+    registry.register("afterRead", SLUG, c => c.data, "plugin:seo");
+    registry.register("afterRead", SLUG, c => c.data, "code");
+
+    registry.replaceCollectionOwnedBy(SLUG, "app", {
+      byPhase: [{ hookType: "afterRead", handlers: [() => undefined] }],
+      beforeOperation: [],
+    });
+
+    expect(ownersOf(registry)).toEqual(["plugin:seo", "code", "app"]);
+  });
+});
+
+describe("hasHooks", () => {
+  it("reports a phase with only suspended handlers as having none", () => {
+    // `hasHooks` exists so a caller can SKIP running a phase. A suspended
+    // owner's handlers never execute, so counting them tells the caller to do
+    // work that does nothing.
+    const registry = new HookRegistry();
+    registry.register("afterRead", SLUG, c => c.data, "plugin:form-builder");
+    // The control: it is present and reported before suspension.
+    expect(registry.hasHooks("afterRead", SLUG)).toBe(true);
+
+    registry.setSuspendedOwners(["plugin:form-builder"]);
+
+    expect(registry.hasHooks("afterRead", SLUG)).toBe(false);
+    // Still REGISTERED, which is what makes resuming possible -- the raw count
+    // is introspection and stays raw.
+    expect(registry.getHookCount("afterRead", SLUG)).toBe(1);
   });
 });
