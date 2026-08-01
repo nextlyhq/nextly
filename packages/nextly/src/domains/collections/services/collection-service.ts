@@ -58,6 +58,7 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 // NextlyErrors at this boundary so callers see the new error model.
 import type { RequestActor } from "../../../auth/request-actor";
 import { NextlyError } from "../../../errors";
+import { errorFromServiceEnvelope } from "../../../errors/from-service-envelope";
 import type { RevalidationIntent } from "../../../revalidation/types";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { CollectionEntryService } from "../../../services/collections/collection-entry-service";
@@ -722,13 +723,16 @@ export class CollectionService extends BaseService {
     });
 
     if (!result.success) {
-      if (result.statusCode === 404) {
+      // Only a code-less legacy result takes the generic factory. A typed
+      // one -- a plugin's own error, or BUILDER_DISABLED -- keeps its code,
+      // message key and public data through the shared converter below.
+      if (!result.code && result.statusCode === 404) {
         // Generic "Not found." from the factory; identifiers go to logContext.
         throw NextlyError.notFound({
           logContext: { entity: "entry", collectionName, entryId },
         });
       }
-      if (result.statusCode === 403) {
+      if (!result.code && result.statusCode === 403) {
         // Generic forbidden message; the inner result.message often echoes
         // policy reasons that §13.8 keeps off the wire — drop them here and
         // preserve them in logContext only.
@@ -775,13 +779,16 @@ export class CollectionService extends BaseService {
     );
 
     if (!result.success) {
-      if (result.statusCode === 404) {
+      // Only a code-less legacy result takes the generic factory. A typed
+      // one -- a plugin's own error, or BUILDER_DISABLED -- keeps its code,
+      // message key and public data through the shared converter below.
+      if (!result.code && result.statusCode === 404) {
         // Generic "Not found." from the factory; identifiers go to logContext.
         throw NextlyError.notFound({
           logContext: { entity: "entry", collectionName, entryId },
         });
       }
-      if (result.statusCode === 403) {
+      if (!result.code && result.statusCode === 403) {
         // Generic forbidden message; the inner result.message often echoes
         // policy reasons that §13.8 keeps off the wire — drop them here and
         // preserve them in logContext only.
@@ -829,13 +836,16 @@ export class CollectionService extends BaseService {
     });
 
     if (!result.success) {
-      if (result.statusCode === 404) {
+      // Only a code-less legacy result takes the generic factory. A typed
+      // one -- a plugin's own error, or BUILDER_DISABLED -- keeps its code,
+      // message key and public data through the shared converter below.
+      if (!result.code && result.statusCode === 404) {
         // Generic "Not found." from the factory; identifiers go to logContext.
         throw NextlyError.notFound({
           logContext: { entity: "entry", collectionName, entryId },
         });
       }
-      if (result.statusCode === 403) {
+      if (!result.code && result.statusCode === 403) {
         // Generic forbidden message; the inner result.message often echoes
         // policy reasons that §13.8 keeps off the wire — drop them here and
         // preserve them in logContext only.
@@ -985,13 +995,16 @@ export class CollectionService extends BaseService {
     this.collectTxCommittedWrite(tx, result.success);
 
     if (!result.success) {
-      if (result.statusCode === 404) {
+      // Only a code-less legacy result takes the generic factory. A typed
+      // one -- a plugin's own error, or BUILDER_DISABLED -- keeps its code,
+      // message key and public data through the shared converter below.
+      if (!result.code && result.statusCode === 404) {
         // Generic "Not found." from the factory; identifiers go to logContext.
         throw NextlyError.notFound({
           logContext: { entity: "entry", collectionName, entryId },
         });
       }
-      if (result.statusCode === 403) {
+      if (!result.code && result.statusCode === 403) {
         // Generic forbidden message; the inner result.message often echoes
         // policy reasons that §13.8 keeps off the wire — drop them here and
         // preserve them in logContext only.
@@ -1059,13 +1072,16 @@ export class CollectionService extends BaseService {
     this.collectTxCommittedWrite(tx, result.success);
 
     if (!result.success) {
-      if (result.statusCode === 404) {
+      // Only a code-less legacy result takes the generic factory. A typed
+      // one -- a plugin's own error, or BUILDER_DISABLED -- keeps its code,
+      // message key and public data through the shared converter below.
+      if (!result.code && result.statusCode === 404) {
         // Generic "Not found." from the factory; identifiers go to logContext.
         throw NextlyError.notFound({
           logContext: { entity: "entry", collectionName, entryId },
         });
       }
-      if (result.statusCode === 403) {
+      if (!result.code && result.statusCode === 403) {
         // Generic forbidden message; the inner result.message often echoes
         // policy reasons that §13.8 keeps off the wire — drop them here and
         // preserve them in logContext only.
@@ -1096,59 +1112,32 @@ export class CollectionService extends BaseService {
    * inner legacy message moves to logContext for operators only and never
    * reaches the wire.
    */
+  /**
+   * Rebuild the error a failed service envelope came from.
+   *
+   * Delegates to the shared converter so a plugin calling
+   * `ctx.services.collections` is handed the same error a REST or Direct API
+   * caller would get. This kept its own status table, which sent anything
+   * outside 400/401/403/404/409 to an internal error -- so a hook throwing
+   * `rateLimited()` reached a plugin as a 500 -- and whose input type omitted
+   * `code`, `errors` and `publicData` entirely, so a validation failure also
+   * arrived without its per-field issues.
+   */
   private mapLegacyErrorToNextlyError(result: {
     success: boolean;
     statusCode: number;
+    code?: string;
     message: string;
+    messageKey?: string;
+    publicData?: unknown;
     data: unknown;
+    errors?: Array<{
+      path?: string;
+      field?: string;
+      code?: string;
+      message: string;
+    }>;
   }): NextlyError {
-    const { statusCode, message } = result;
-
-    switch (statusCode) {
-      case 400:
-        // Validation requires structured `errors`; with no per-field detail
-        // available from the legacy shape, surface a single generic entry
-        // and stash the original message in logContext.
-        return NextlyError.validation({
-          errors: [
-            {
-              path: "",
-              code: "INVALID",
-              message: "The request is invalid.",
-            },
-          ],
-          logContext: { innerMessage: message },
-        });
-      case 401:
-        return NextlyError.authRequired({
-          logContext: { innerMessage: message },
-        });
-      case 403:
-        return NextlyError.forbidden({
-          logContext: { innerMessage: message },
-        });
-      case 404:
-        return NextlyError.notFound({
-          logContext: { innerMessage: message },
-        });
-      case 409:
-        return NextlyError.duplicate({
-          logContext: { innerMessage: message },
-        });
-      case 422:
-        // No dedicated factory for business-rule violations — use the
-        // free-form constructor with the canonical code and 422 status
-        // per the migration mapping table.
-        return new NextlyError({
-          code: "BUSINESS_RULE_VIOLATION",
-          publicMessage: "The request could not be completed.",
-          statusCode: 422,
-          logContext: { innerMessage: message },
-        });
-      default:
-        return NextlyError.internal({
-          logContext: { innerMessage: message, statusCode },
-        });
-    }
+    return errorFromServiceEnvelope(result, { innerMessage: result.message });
   }
 }

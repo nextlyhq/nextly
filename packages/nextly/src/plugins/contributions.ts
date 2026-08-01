@@ -354,9 +354,14 @@ export interface PluginFieldValidateArgs {
    */
   data: Record<string, unknown>;
   /**
-   * Request context; carries `user` when the write is authenticated. Empty
-   * for a field inside a component instance, whose write path does not
-   * forward the parent's request.
+   * Request context; carries `user` when the write is authenticated. The
+   * parent write's request, forwarded unchanged, including to a field nested
+   * inside a component instance — which is validated by its own pass, in its
+   * own service, so the context has to be carried there rather than being in
+   * scope already.
+   *
+   * Empty for a write with no request behind it: an internal write, a seed,
+   * or an unauthenticated one.
    */
   req: Record<string, unknown>;
   /**

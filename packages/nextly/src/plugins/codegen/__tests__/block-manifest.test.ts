@@ -192,6 +192,22 @@ describe("buildBlockManifest rejects what boot would reject", () => {
     expect(message).toContain("index 0");
   });
 
+  it("refuses a version whose migration chain has a hole", () => {
+    // A version above 1 says stored nodes exist at older versions. Without the
+    // step between, registration refuses the block and those nodes could never
+    // be upgraded, so a manifest describing it would describe an app that does
+    // not start.
+    const message = issueOf(() =>
+      buildBlockManifest([
+        consumer(),
+        declaring("@acme/a", [{ ...block("acme/one"), version: 2 }]),
+      ])
+    );
+
+    expect(message).toContain("acme/one");
+    expect(message).toContain("no migration from version 1");
+  });
+
   it("refuses a block with no name", () => {
     const message = issueOf(() =>
       buildBlockManifest([consumer(), declaring("@acme/a", [{ version: 1 }])])
@@ -211,6 +227,22 @@ describe("buildBlockManifest rejects what boot would reject", () => {
     );
 
     expect(message).toContain("no description");
+  });
+
+  it("refuses a block with no example", () => {
+    // The block API requires a worked instance, so a declaration without one
+    // describes a block that could not have been built with defineBlock. It is
+    // also what a preview renders and what a generator few-shots from.
+    const message = issueOf(() =>
+      buildBlockManifest([
+        consumer(),
+        declaring("@acme/a", [
+          { name: "acme/x", version: 1, description: "No example." },
+        ]),
+      ])
+    );
+
+    expect(message).toContain("no example");
   });
 
   it("refuses the same block name from two plugins, naming both", () => {
@@ -236,6 +268,18 @@ describe("assertManifestPathIsFree", () => {
     // manifest, and with none the cleanup deletes the types output.
     expect(() =>
       assertManifestPathIsFree(`/app/src/${BLOCK_MANIFEST_FILENAME}`)
+    ).toThrow();
+  });
+
+  it("refuses one that differs only in case", () => {
+    // The default filesystem on macOS and Windows is case-insensitive, so this
+    // IS the manifest there — and the cleanup branch would delete it. Matching
+    // case-sensitively would have guarded Linux alone while the delete landed
+    // on the two platforms most users are on.
+    expect(() =>
+      assertManifestPathIsFree(
+        `/app/src/${BLOCK_MANIFEST_FILENAME.toUpperCase()}`
+      )
     ).toThrow();
   });
 

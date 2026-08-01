@@ -368,6 +368,20 @@ export {
   type ValidationIssue,
 } from "./plugins/validate-field-values";
 
+// The block manifest's published contract. Exported from the package root
+// because a schema nothing can import promises nothing: the file is read by an
+// editor build, a docs page or an agent, and none of them can reach an internal
+// module through the export map.
+export {
+  BLOCK_MANIFEST_FILENAME,
+  BLOCK_MANIFEST_VERSION,
+  blockManifestJsonSchema,
+  blockManifestSchema,
+  blockManifestEntrySchema,
+  type BlockManifest,
+  type BlockManifestEntry,
+} from "./plugins/codegen/block-manifest";
+
 // Plugin System - Types and helpers for creating plugins
 export {
   AdminPlacement,

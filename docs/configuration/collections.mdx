@@ -370,7 +370,7 @@ Hooks let you run custom logic at specific points in a document's lifecycle. Eve
 |---|---|---|
 | `beforeOperation` | Before any operation begins. | Yes (operation arguments) |
 | `beforeValidate` | Before validation during create/update. | Yes (data) |
-| `beforeChange` | Before the database write during create/update. | Yes (data) |
+| `beforeChange` | After validation passes, before the database write during create/update. | Yes (data) |
 | `afterChange` | After the database write during create/update. | No (side effects) |
 | `beforeRead` | Before reading from the database. | Yes (query parameters) |
 | `afterRead` | After reading from the database. | Yes (transform output) |
@@ -381,10 +381,16 @@ Hooks let you run custom logic at specific points in a document's lifecycle. Eve
 
 1. `beforeOperation`
 2. `beforeValidate` (create/update)
-3. `beforeChange` (create/update)
-4. **Database write or read**
-5. `afterChange` (create/update) **or** `afterRead` (reads)
-6. `beforeDelete` / `afterDelete` (deletes)
+3. **Validation** - the schema's declared rules are enforced
+4. `beforeChange` (create/update)
+5. **Database write or read**
+6. `afterChange` (create/update) **or** `afterRead` (reads)
+7. `beforeDelete` / `afterDelete` (deletes)
+
+The validation gate is what separates the two write hooks. Use `beforeValidate`
+to supply or repair a value you want the rules applied to; use `beforeChange` to
+derive the value that gets stored, knowing the document has already passed them.
+What a `beforeChange` handler returns is written without being re-validated.
 
 ### Hook handler signature
 

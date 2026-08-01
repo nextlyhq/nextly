@@ -33,6 +33,7 @@ import { toDbError } from "../../../database/errors";
 // only the internal error mapping changed. fromDatabaseError keeps driver
 // text out of the wire and routes identifying detail to logContext (§13.8).
 import { NextlyError } from "../../../errors";
+import { typedErrorEnvelopeFields } from "../../../errors/from-service-envelope";
 import type { ValidationPublicData } from "../../../errors/public-data";
 import { emitDocumentEvent } from "../../../events/domain-events";
 import { getEventBus } from "../../../events/event-bus";
@@ -237,6 +238,17 @@ function errorToServiceResult<T = unknown>(
       // The canonical code rides along so boundary translators can rebuild
       // the exact error (409 alone cannot separate DUPLICATE from CONFLICT).
       code: error.code,
+      // A localized error selects its message by key, so dropping it leaves a
+      // client unable to render anything but the default string.
+      ...(error.messageKey !== undefined
+        ? { messageKey: error.messageKey }
+        : {}),
+      // Public by definition -- it is what `toResponseJSON` puts on the wire --
+      // so it rides the envelope and the boundary can rebuild an error whose
+      // meaning lives in it rather than in its code.
+      ...(error.publicData !== undefined
+        ? { publicData: error.publicData }
+        : {}),
       message: error.publicMessage,
       data: null,
       ...(validationErrors ? { errors: validationErrors } : {}),
@@ -2543,6 +2555,19 @@ export class CollectionMutationService extends BaseService {
         }
       }
 
+      // Collection-level beforeChange hooks, on data the validation gate has
+      // just passed. Paired with the field-level phase below so the two
+      // declarations of that name mean the same moment.
+      await this.hookService.runBeforeChange({
+        collection: params.collectionName,
+        operation: "create",
+        data: finalData,
+        storedHooks,
+        queryDatabase: this.queryDatabaseFn,
+        user: params.user,
+        sharedContext,
+      });
+
       // Field-level beforeChange hooks transform the final stored value
       // (runs after validation, before hashing/serialization).
       await runFieldHooks({
@@ -2851,6 +2876,10 @@ export class CollectionMutationService extends BaseService {
             // i18n: thread the write locale so an embedded localized component writes
             // translatable fields to its companion within the same transaction.
             locale: params.locale,
+            // A component instance is validated by its own pass inside the field-group
+            // service, so the request has to travel with it for a field rule nested in
+            // a field group to see the same `user` a top-level field rule sees.
+            req: params.user ? { user: params.user } : {},
           });
         }
 
@@ -3948,6 +3977,10 @@ export class CollectionMutationService extends BaseService {
             ? error.message
             : "Failed to publish all languages",
         data: null,
+        // A typed error keeps its own status and code. Hardcoding 500 reported
+        // a hook's refusal or rate limit as a server fault, and left a boundary
+        // nothing to rebuild it from.
+        ...(typedErrorEnvelopeFields(error) ?? {}),
       };
     }
   }
@@ -4483,6 +4516,20 @@ export class CollectionMutationService extends BaseService {
           throw NextlyError.validation({ errors: validationIssues });
         }
       }
+
+      // Collection-level beforeChange hooks, on data the validation gate has
+      // just passed. Paired with the field-level phase below so the two
+      // declarations of that name mean the same moment.
+      await this.hookService.runBeforeChange({
+        collection: params.collectionName,
+        operation: "update",
+        data: finalData,
+        originalData: existingEntry,
+        storedHooks,
+        queryDatabase: this.queryDatabaseFn,
+        user: params.user,
+        sharedContext,
+      });
 
       // Field-level beforeChange hooks transform the final stored value
       // (runs after validation, before hashing/serialization).
@@ -5391,6 +5438,10 @@ export class CollectionMutationService extends BaseService {
                 // i18n: thread the write locale so an embedded localized component writes
                 // translatable fields to its companion within the same transaction.
                 locale: params.locale,
+                // A component instance is validated by its own pass inside the field-group
+                // service, so the request has to travel with it for a field rule nested in
+                // a field group to see the same `user` a top-level field rule sees.
+                req: params.user ? { user: params.user } : {},
               }
             );
           }
@@ -6599,6 +6650,14 @@ export class CollectionMutationService extends BaseService {
         message:
           error instanceof Error ? error.message : "Failed to delete entry",
         data: null,
+        // A typed error keeps its own status and code. Hardcoding 500 reported
+        // a hook's refusal or rate limit as a server fault, and left a boundary
+        // nothing to rebuild it from.
+        ...(typedErrorEnvelopeFields(error) ?? {}),
+        // A typed error keeps its own status and code. Hardcoding 500 reported
+        // a delete hook's refusal or rate limit as a server fault, and left a
+        // boundary nothing to rebuild it from.
+        ...(typedErrorEnvelopeFields(error) ?? {}),
         eventRecorded,
         revalidationIntent,
         committed: committedWrite,
@@ -6825,6 +6884,20 @@ export class CollectionMutationService extends BaseService {
           throw NextlyError.validation({ errors: validationIssues });
         }
       }
+
+      // Collection-level beforeChange hooks, on data the validation gate has
+      // just passed. The executor keeps a stored hook's uniqueness read on this
+      // transaction's connection, as the pre-validation phase does.
+      await this.hookService.runBeforeChange({
+        collection: params.collectionName,
+        operation: "create",
+        data: finalData,
+        storedHooks,
+        queryDatabase: this.queryDatabaseFn,
+        user: params.user,
+        sharedContext,
+        executor: tx.getDrizzle(),
+      });
 
       // Field-level beforeChange hooks transform the final stored value
       // (runs after validation, before hashing/serialization).
@@ -7370,6 +7443,21 @@ export class CollectionMutationService extends BaseService {
           throw NextlyError.validation({ errors: validationIssues });
         }
       }
+
+      // Collection-level beforeChange hooks, on data the validation gate has
+      // just passed. The executor keeps a stored hook's uniqueness read on this
+      // transaction's connection, as the pre-validation phase does.
+      await this.hookService.runBeforeChange({
+        collection: params.collectionName,
+        operation: "update",
+        data: finalData,
+        originalData: existingEntry,
+        storedHooks,
+        queryDatabase: this.queryDatabaseFn,
+        user: params.user,
+        sharedContext,
+        executor: tx.getDrizzle(),
+      });
 
       // Field-level beforeChange hooks transform the final stored value
       // (runs after validation, before hashing/serialization).
@@ -8028,6 +8116,10 @@ export class CollectionMutationService extends BaseService {
             ? error.message
             : "Failed to delete entry in transaction",
         data: null,
+        // A typed error keeps its own status and code. Hardcoding 500 reported
+        // a hook's refusal or rate limit as a server fault, and left a boundary
+        // nothing to rebuild it from.
+        ...(typedErrorEnvelopeFields(error) ?? {}),
         revalidationIntent,
       };
     }
@@ -8238,10 +8330,22 @@ export class CollectionMutationService extends BaseService {
         }
       }
 
-      // Field-level beforeChange hooks transform the final stored value
-      // (runs after validation, before hashing/serialization). This hook can
-      // also set `slug`, so re-sanitize once more before storage.
+      // Collection-level then field-level beforeChange hooks, on data the
+      // validation gate has just passed. Both sit under the same `skipHooks`
+      // gate: the flag means this write runs no user hooks at all, so a
+      // collection-level handler running while the field-level one is skipped
+      // would be the gate half-applied.
       if (!skipHooks) {
+        await this.hookService.runBeforeChange({
+          collection: params.collectionName,
+          operation: "create",
+          data: finalData,
+          storedHooks,
+          queryDatabase: this.queryDatabaseFn,
+          user: params.user,
+          sharedContext,
+          executor: tx.getDrizzle(),
+        });
         await runFieldHooks({
           kind: "collection",
           slug: params.collectionName,
@@ -8250,6 +8354,8 @@ export class CollectionMutationService extends BaseService {
           operation: "create",
           user: params.user,
         });
+        // A beforeChange hook can also set `slug`, so re-sanitize before
+        // storage.
         await this.reSanitizeSlug(finalData, isSlugTaken);
       }
 
@@ -8852,9 +8958,21 @@ export class CollectionMutationService extends BaseService {
         }
       }
 
-      // Field-level beforeChange hooks transform the final stored value
-      // (runs after validation, before hashing/serialization).
+      // Collection-level then field-level beforeChange hooks, on data the
+      // validation gate has just passed. Both sit under the same `skipHooks`
+      // gate: the flag means this write runs no user hooks at all.
       if (!skipHooks) {
+        await this.hookService.runBeforeChange({
+          collection: params.collectionName,
+          operation: "update",
+          data: finalData,
+          originalData: existingEntry,
+          storedHooks,
+          queryDatabase: this.queryDatabaseFn,
+          user: params.user,
+          sharedContext,
+          executor: tx.getDrizzle(),
+        });
         await runFieldHooks({
           kind: "collection",
           slug: params.collectionName,
@@ -9575,6 +9693,10 @@ export class CollectionMutationService extends BaseService {
         message:
           error instanceof Error ? error.message : "Failed to delete entry",
         data: null,
+        // A typed error keeps its own status and code. Hardcoding 500 reported
+        // a hook's refusal or rate limit as a server fault, and left a boundary
+        // nothing to rebuild it from.
+        ...(typedErrorEnvelopeFields(error) ?? {}),
         eventRecorded,
         revalidationIntent,
       };

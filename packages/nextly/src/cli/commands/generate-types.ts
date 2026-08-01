@@ -41,13 +41,11 @@ import { describeError } from "../../errors/index";
 // Reserved-option refusals are reported through the canonical error shape, so
 // the CLI renders them like any other declaration failure.
 import type { FieldGroupConfig } from "../../field-groups/config/types";
-import {
-  assertManifestPathIsFree,
-  BLOCK_MANIFEST_FILENAME,
-  buildBlockManifestArtifact,
-} from "../../plugins/codegen/block-manifest";
 import { collectCodegenNames } from "../../plugins/codegen/collect-codegen-names";
-import { buildImportMapArtifact } from "../../plugins/codegen/component-import-map";
+import {
+  buildImportMapArtifact,
+  COMPONENT_IMPORT_MAP_FILENAME,
+} from "../../plugins/codegen/component-import-map";
 // The option names the field identity would overwrite, refused here because a
 // code-defined user field never passes through the manifest schema.
 import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/types";
@@ -61,6 +59,11 @@ import type { UserFieldConfig } from "../../users/config/types";
 import { createContext, type CommandContext } from "../program";
 import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
 import { formatDuration, formatCount } from "../utils/logger";
+
+import {
+  applyBlockManifestState,
+  readBlockManifestState,
+} from "./generate-manifest";
 
 // ============================================================================
 // Types
@@ -186,34 +189,21 @@ export async function runGenerateTypes(
   // reaches zero on every count the moment that plugin is removed, and that is
   // exactly when its manifest most needs deleting. The path is recorded and
   // reported on the result further down, where that object exists.
-  const manifestCwd = options.cwd ?? process.cwd();
-  const manifestOutputPath =
-    options.output ?? configResult.config.typescript.outputFile;
-  // Checked before either branch: the cleanup path deletes by name, so a
-  // collision here would remove the types output rather than a stale manifest.
-  assertManifestPathIsFree(manifestOutputPath);
-  const blockManifest = buildBlockManifestArtifact(
+  // Settled through the same pair `generate:manifest` uses, so the command that
+  // writes the file and the command that checks it cannot disagree about what
+  // belongs on disk. `expected === null` is expressed by REMOVING any previous
+  // manifest: writing nothing would leave the last run's file still advertising
+  // blocks the app no longer has.
+  const manifestState = await readBlockManifestState(
     configResult.config.plugins ?? [],
-    manifestOutputPath
+    options.output ?? configResult.config.typescript.outputFile,
+    options.cwd ?? process.cwd()
   );
-  let writtenManifestPath: string | undefined;
-  if (blockManifest) {
-    writtenManifestPath = resolve(manifestCwd, blockManifest.path);
-    await ensureDir(dirname(writtenManifestPath));
-    await writeFile(writtenManifestPath, blockManifest.code, "utf-8");
+  await applyBlockManifestState(manifestState);
+  const writtenManifestPath =
+    manifestState.expected === null ? undefined : manifestState.path;
+  if (writtenManifestPath) {
     logger.debug(`Written block manifest to: ${writtenManifestPath}`);
-  } else {
-    // No manifest for this config, expressed by removing any previous one.
-    // Writing nothing would leave the last run's file on disk still
-    // advertising blocks the app no longer has -- worse than never having
-    // generated it, because it reads as current.
-    await rm(
-      resolve(
-        manifestCwd,
-        join(dirname(manifestOutputPath), BLOCK_MANIFEST_FILENAME)
-      ),
-      { force: true }
-    );
   }
 
   if (
@@ -344,6 +334,18 @@ async function generateTypes(
     await writeFile(importMapPath, importMap.code, "utf-8");
     result.componentImportMapFile = importMapPath;
     logger.debug(`Written plugin admin import map to: ${importMapPath}`);
+  } else {
+    // Nothing to register, which has to be expressed by removing any previous
+    // map. This one is worse than a stale data file: the generated module is
+    // IMPORTED by the app, so leaving it behind keeps importing a package that
+    // is no longer installed and breaks the next build.
+    await rm(
+      resolve(
+        cwd,
+        join(dirname(typesOutputPath), COMPONENT_IMPORT_MAP_FILENAME)
+      ),
+      { force: true }
+    );
   }
 
   // Generate Zod schemas if enabled

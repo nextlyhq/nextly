@@ -132,9 +132,16 @@ export interface SingleAdminOptions {
  * 3. `afterRead` - After fetching, can transform data
  *
  * **Hook Execution Order for Update:**
- * 1. `beforeChange` - Before validation and database write
- * 2. Database update
- * 3. `afterChange` - After database write, for side effects
+ * 1. `beforeValidate` - Before the schema's rules are enforced
+ * 2. Validation
+ * 3. `beforeChange` - After validation, on the data about to be written
+ * 4. Database update
+ * 5. `afterChange` - After database write, for side effects
+ *
+ * The validation gate is what separates the two write hooks. Supply or repair a
+ * value in `beforeValidate` if you want the rules applied to what you produced;
+ * use `beforeChange` to derive the value that gets stored, knowing the document
+ * has already passed them.
  *
  * @example
  * ```typescript
@@ -181,15 +188,39 @@ export interface SingleHooks {
   afterRead?: HookHandler[];
 
   /**
-   * Runs before updating the Single document.
-   * Can transform data before validation and database write.
+   * Runs before the schema's declared rules are enforced.
+   *
+   * The phase for coercing input, or for supplying a value you want validated:
+   * what it returns goes through the gate. Use it rather than `beforeChange`
+   * whenever the write would fail validation without your handler.
+   *
+   * @example
+   * ```typescript
+   * beforeValidate: [
+   *   async ({ data }) => {
+   *     // Normalize input before the rules are applied to it
+   *     return { ...data, siteName: data.siteName?.trim() };
+   *   },
+   * ]
+   * ```
+   */
+  beforeValidate?: HookHandler[];
+
+  /**
+   * Runs after validation passes, before the database write.
+   *
+   * The phase for deriving the value that gets stored, on a document that has
+   * already satisfied the schema. What it returns is written WITHOUT being
+   * re-validated, so a handler that supplies a required field belongs in
+   * `beforeValidate` instead -- by the time this runs, the write would already
+   * have been rejected.
    *
    * @example
    * ```typescript
    * beforeChange: [
    *   async ({ data }) => {
-   *     // Normalize data before saving
-   *     return { ...data, siteName: data.siteName?.trim() };
+   *     // Derive a stored value from data already known to be valid
+   *     return { ...data, slugified: slugify(data.siteName) };
    *   },
    * ]
    * ```

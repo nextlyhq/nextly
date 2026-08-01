@@ -12,7 +12,10 @@ import { NextlyError } from "../../../../errors";
 import { getI18nArchiveDdl } from "../../../../schemas/nextly-i18n-archive/ddl";
 import { ddlType } from "../ddl-types";
 import { fieldToLocalizedColumnSpec } from "../field-to-column-spec";
-import { buildCompanionTransitionStatements } from "../reconcile-companion";
+import {
+  type CompanionTransitionArgs,
+  buildCompanionTransitionStatements,
+} from "../reconcile-companion";
 
 let sqlite: Database.Database;
 
@@ -66,6 +69,10 @@ const FIELDS = [
   { name: "views", type: "number" as const },
 ];
 
+/** The main table above has no `status` column, so every case built on it says `wasStatus: false`.
+ *  The Draft/Published cases further down add the column and set their own value. */
+const NO_STATUS_HISTORY = { status: false, wasStatus: false } as const;
+
 beforeEach(() => {
   sqlite = new Database(":memory:");
   createMainTable();
@@ -85,7 +92,7 @@ describe("buildCompanionTransitionStatements — enable", () => {
       tableName: "single_hero",
       dialect: "sqlite",
       defaultLocale: "en",
-      status: false,
+      ...NO_STATUS_HISTORY,
       wasLocalized: false,
       isLocalized: true,
       oldFields: FIELDS,
@@ -122,7 +129,7 @@ describe("buildCompanionTransitionStatements — enable", () => {
       tableName: "single_hero",
       dialect: "sqlite",
       defaultLocale: "en",
-      status: false,
+      ...NO_STATUS_HISTORY,
       wasLocalized: false,
       isLocalized: true,
       oldFields: FIELDS,
@@ -166,7 +173,7 @@ describe("buildCompanionTransitionStatements — enable", () => {
       tableName: "single_hero",
       dialect: "sqlite",
       defaultLocale: "en",
-      status: false,
+      ...NO_STATUS_HISTORY,
       wasLocalized: false,
       isLocalized: true,
       oldFields: [...FIELDS, SUB_TITLE_FIELD],
@@ -196,7 +203,7 @@ describe("buildCompanionTransitionStatements — enable", () => {
       tableName: "single_hero",
       dialect: "sqlite",
       defaultLocale: "en",
-      status: false,
+      ...NO_STATUS_HISTORY,
       wasLocalized: false,
       isLocalized: true,
       oldFields: [...FIELDS, { name: "gallery", type: "component" as const }],
@@ -223,7 +230,7 @@ describe("buildCompanionTransitionStatements — disable", () => {
       tableName: "single_hero",
       dialect: "sqlite",
       defaultLocale: "en",
-      status: false,
+      ...NO_STATUS_HISTORY,
       wasLocalized: false,
       isLocalized: true,
       oldFields: FIELDS,
@@ -244,7 +251,7 @@ describe("buildCompanionTransitionStatements — disable", () => {
       tableName: "single_hero",
       dialect: "sqlite",
       defaultLocale: "en",
-      status: false,
+      ...NO_STATUS_HISTORY,
       wasLocalized: true,
       isLocalized: false,
       oldFields: FIELDS,
@@ -312,7 +319,21 @@ describe("buildCompanionTransitionStatements — disable", () => {
  * can only say the statement was emitted, which is true of a copy that never runs.
  */
 describe("buildCompanionTransitionStatements — disable with Draft/Published", () => {
-  const withStatus = (over: Record<string, unknown>) => ({
+  // Typed as the exact slice of the arguments these cases vary, not `Record<string, unknown>`.
+  // A `Record` spread erases what it contributes, so the result satisfied no required field and
+  // the helper could not tell a caller it had left one out — the failure mode these cases exist
+  // to catch, hidden in the fixture that sets them up.
+  type StatusCase = Pick<
+    CompanionTransitionArgs,
+    | "status"
+    | "wasStatus"
+    | "wasLocalized"
+    | "isLocalized"
+    | "companionExists"
+    | "companionHasStatus"
+  >;
+
+  const withStatus = (over: StatusCase): CompanionTransitionArgs => ({
     slug: "hero",
     tableName: "single_hero",
     dialect: "sqlite" as const,
@@ -333,6 +354,8 @@ describe("buildCompanionTransitionStatements — disable with Draft/Published", 
     const enable = buildCompanionTransitionStatements(
       withStatus({
         status: true,
+        // Main was given `status` just above, so it carried one before this save.
+        wasStatus: true,
         wasLocalized: false,
         isLocalized: true,
         companionExists: false,
@@ -375,6 +398,8 @@ describe("buildCompanionTransitionStatements — disable with Draft/Published", 
     const enable = buildCompanionTransitionStatements(
       withStatus({
         status: true,
+        // Draft/Published is on across this enable, so the entity already had `status`.
+        wasStatus: true,
         wasLocalized: false,
         isLocalized: true,
         companionExists: false,
@@ -405,7 +430,7 @@ describe("buildCompanionTransitionStatements — disable with Draft/Published", 
     // companion transition before the shared ALTER, so a copy here would fail the migration.
     const enable = buildCompanionTransitionStatements(
       withStatus({
-        status: false,
+        ...NO_STATUS_HISTORY,
         wasLocalized: false,
         isLocalized: true,
         companionExists: false,
