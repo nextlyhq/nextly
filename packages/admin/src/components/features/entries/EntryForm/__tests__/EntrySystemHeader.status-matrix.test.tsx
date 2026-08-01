@@ -32,11 +32,13 @@ beforeEach(() => {
 interface HarnessProps {
   mode: "create" | "edit";
   hasStatus?: boolean;
+  draftsEnabled?: boolean;
   entry?: {
     id: string;
     status?: string;
     title?: string;
     slug?: string;
+    _isWorkingDraft?: boolean;
   } | null;
   isDirty?: boolean;
 }
@@ -44,6 +46,7 @@ interface HarnessProps {
 function Harness({
   mode,
   hasStatus = true,
+  draftsEnabled = false,
   entry = null,
   isDirty = false,
 }: HarnessProps) {
@@ -53,12 +56,14 @@ function Harness({
       <EntrySystemHeader
         mode={mode}
         hasStatus={hasStatus}
+        draftsEnabled={draftsEnabled}
         isDirty={isDirty}
         entry={entry}
         collectionSlug="posts"
         onSaveDraft={vi.fn()}
         onPublish={vi.fn()}
         onSaveChanges={vi.fn()}
+        onSaveWorkingDraft={vi.fn()}
         onUnpublish={vi.fn()}
       />
     </FormProvider>
@@ -156,6 +161,55 @@ describe("EntrySystemHeader — button matrix", () => {
     expect(
       screen.queryByRole("button", { name: /^unpublish$/i })
     ).not.toBeInTheDocument();
+  });
+});
+
+describe("EntrySystemHeader — drafts-enabled working-draft matrix", () => {
+  it("published + drafts on, no pending draft → Save (not Save changes), Unpublish, no Publish", () => {
+    render(
+      <Harness
+        mode="edit"
+        draftsEnabled
+        entry={{ id: "x", status: "published", title: "Live" }}
+        isDirty
+      />
+    );
+    // The primary save on a drafts collection stores a working draft, so it
+    // reads "Save" rather than "Save changes"; nothing is pending to promote.
+    expect(screen.getByRole("button", { name: /^save$/i })).toBeEnabled();
+    expect(
+      screen.queryByRole("button", { name: /^save changes$/i })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /^publish$/i })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /^unpublish$/i })
+    ).toBeInTheDocument();
+  });
+
+  it("published + drafts on + pending working draft → Save + Publish + Unpublish", () => {
+    render(
+      <Harness
+        mode="edit"
+        draftsEnabled
+        entry={{
+          id: "x",
+          status: "published",
+          title: "Live",
+          _isWorkingDraft: true,
+        }}
+      />
+    );
+    // A pending working draft can be promoted, so Publish appears alongside the
+    // status-less Save and the Unpublish action.
+    expect(screen.getByRole("button", { name: /^save$/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /^publish$/i })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /^unpublish$/i })
+    ).toBeInTheDocument();
   });
 });
 

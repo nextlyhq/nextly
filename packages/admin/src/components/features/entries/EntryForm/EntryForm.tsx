@@ -461,8 +461,11 @@ export function EntryForm({
                   // affordances. Reading the main row instead would show "Published" beside a
                   // Publish button whenever a translation lags its default language.
                   status={
-                    effectiveEntryStatus(entry, locale, defaultLocale) ??
-                    "draft"
+                    effectiveEntryStatus(entry, locale, defaultLocale) ?? "draft"
+                  }
+                  hasWorkingDraft={
+                    (entry as { _isWorkingDraft?: boolean } | null | undefined)
+                      ?._isWorkingDraft === true
                   }
                   isRailCollapsed={railCollapsed}
                   hasPublicAddress={hasPublicAddress}

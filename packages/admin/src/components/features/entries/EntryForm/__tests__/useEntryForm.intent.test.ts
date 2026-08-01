@@ -52,6 +52,15 @@ describe("mapIntentToPayload", () => {
     expect(mapIntentToPayload(RAW, undefined)).toEqual(RAW);
   });
 
+  it("save-working-draft → passes rawData through without a status", () => {
+    // Why: a status-less save on a drafts-enabled published entry is exactly
+    // what tells the server to store a pending working draft and leave the
+    // live row untouched. Injecting any status would re-write the live row.
+    const result = mapIntentToPayload(RAW, "save-working-draft");
+    expect(result).toEqual(RAW);
+    expect(result).not.toHaveProperty("status");
+  });
+
   it("does not mutate the input rawData object", () => {
     const input = { ...RAW };
     mapIntentToPayload(input, "publish");
