@@ -57,6 +57,53 @@ function dimension(
 }
 
 /**
+ * The CSS Box Alignment vocabularies, built from the grammar rather than
+ * written out.
+ *
+ * `align-items` takes a SELF position, `justify-content` and `align-content`
+ * take a CONTENT position, and either may be preceded by an overflow-safety
+ * keyword. Spelling every combination by hand is where the gaps came from:
+ * each is a legal value with no other way to express it, and one missing entry
+ * is a declaration an author cannot store. Generating them means adding a
+ * position adds its safe and unsafe forms too.
+ *
+ * `left` and `right` are absent by policy rather than by oversight: the catalog
+ * stores logical values so one document serves both writing directions, and a
+ * test holds the whole catalog to it.
+ */
+const SELF_POSITIONS = [
+  "center",
+  "start",
+  "end",
+  "self-start",
+  "self-end",
+  "flex-start",
+  "flex-end",
+];
+
+const CONTENT_POSITIONS = ["center", "start", "end", "flex-start", "flex-end"];
+
+/** A position, and the same position with each overflow-safety keyword. */
+function withOverflowSafety(positions: readonly string[]): string[] {
+  return [
+    ...positions,
+    ...positions.map(position => `safe ${position}`),
+    ...positions.map(position => `unsafe ${position}`),
+  ];
+}
+
+/** Where a baseline may be taken from. */
+const BASELINE_POSITIONS = ["baseline", "first baseline", "last baseline"];
+
+/** How leftover space is spread between items. */
+const CONTENT_DISTRIBUTION = [
+  "space-between",
+  "space-around",
+  "space-evenly",
+  "stretch",
+];
+
+/**
  * Functions that produce a size rather than a length. Legal on the properties
  * that take a size and discarded elsewhere, which is why they travel with the
  * sizing keywords instead of being allowed wherever a measurement is.
@@ -219,6 +266,19 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
       "flow-root",
       "contents",
       "none",
+      // A marker box, and the table modes: native table layout has no other
+      // expression, and `display` has no free-form variant to fall back on.
+      "list-item",
+      "table",
+      "inline-table",
+      "table-row-group",
+      "table-header-group",
+      "table-footer-group",
+      "table-row",
+      "table-cell",
+      "table-column-group",
+      "table-column",
+      "table-caption",
     ]),
     summary: "How the element generates boxes for its children.",
   },
@@ -243,17 +303,11 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
     property: "justifyContent",
     group: "layout",
     shape: keyword("justify-content", [
-      "start",
-      "center",
-      "end",
+      "normal",
+      ...CONTENT_DISTRIBUTION,
       // Flex-relative rather than physical: these resolve against
       // `flex-direction` and flip with it, which `left` and `right` do not.
-      "flex-start",
-      "flex-end",
-      "space-between",
-      "space-around",
-      "space-evenly",
-      "stretch",
+      ...withOverflowSafety(CONTENT_POSITIONS),
     ]),
     summary: "Main-axis distribution. Logical by nature: start, never left.",
   },
@@ -261,13 +315,10 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
     property: "alignItems",
     group: "layout",
     shape: keyword("align-items", [
-      "start",
-      "center",
-      "end",
-      "flex-start",
-      "flex-end",
+      "normal",
       "stretch",
-      "baseline",
+      ...BASELINE_POSITIONS,
+      ...withOverflowSafety(SELF_POSITIONS),
     ]),
     summary: "Cross-axis alignment of children.",
   },
@@ -275,15 +326,10 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
     property: "alignContent",
     group: "layout",
     shape: keyword("align-content", [
-      "start",
-      "center",
-      "end",
-      "flex-start",
-      "flex-end",
-      "space-between",
-      "space-around",
-      "space-evenly",
-      "stretch",
+      "normal",
+      ...BASELINE_POSITIONS,
+      ...CONTENT_DISTRIBUTION,
+      ...withOverflowSafety(CONTENT_POSITIONS),
     ]),
     summary: "Cross-axis distribution of wrapped lines.",
   },
@@ -336,6 +382,10 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
       "dense",
       "row dense",
       "column dense",
+      // The grammar is unordered, so a serialisation stricter than CSS would
+      // refuse a value the browser accepts.
+      "dense row",
+      "dense column",
     ]),
     summary: "How auto-placed grid items are inserted.",
   },
@@ -498,7 +548,15 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "textAlign",
     group: "typography",
-    shape: keyword("text-align", ["start", "center", "end", "justify"]),
+    shape: keyword("text-align", [
+      // Resolves against the PARENT's direction, which neither `start` nor
+      // `inherit` reproduces when parent and child directions differ.
+      "match-parent",
+      "start",
+      "center",
+      "end",
+      "justify",
+    ]),
     summary: "Inline alignment. Logical: start flips with writing direction.",
   },
   {

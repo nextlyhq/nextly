@@ -125,19 +125,19 @@ is how a group states that it offers nothing finer than all-or-nothing.
 
 ### typography
 
-| Property         | Flag | Value                                         | Tokens             | Emits             |
-| ---------------- | ---- | --------------------------------------------- | ------------------ | ----------------- |
-| `fontFamily`     |      | css value                                     | fontFamily         | `font-family`     |
-| `fontSize`       |      | dimension                                     | dimension          | `font-size`       |
-| `fontWeight`     |      | keyword or number 1–1000                      | fontWeight, number | `font-weight`     |
-| `lineHeight`     |      | number or dimension                           | number, dimension  | `line-height`     |
-| `letterSpacing`  |      | dimension                                     | dimension          | `letter-spacing`  |
-| `wordSpacing`    |      | dimension                                     | dimension          | `word-spacing`    |
-| `textAlign`      |      | keyword (`start`/`end`, flips with direction) |                    | `text-align`      |
-| `textTransform`  |      | keyword                                       |                    | `text-transform`  |
-| `fontStyle`      |      | keyword                                       |                    | `font-style`      |
-| `textDecoration` |      | css value                                     |                    | `text-decoration` |
-| `textShadow`     |      | css value                                     | shadow             | `text-shadow`     |
+| Property         | Flag | Value                                           | Tokens             | Emits             |
+| ---------------- | ---- | ----------------------------------------------- | ------------------ | ----------------- |
+| `fontFamily`     |      | css value                                       | fontFamily         | `font-family`     |
+| `fontSize`       |      | dimension                                       | dimension          | `font-size`       |
+| `fontWeight`     |      | keyword or number 1–1000                        | fontWeight, number | `font-weight`     |
+| `lineHeight`     |      | number or dimension                             | number, dimension  | `line-height`     |
+| `letterSpacing`  |      | dimension                                       | dimension          | `letter-spacing`  |
+| `wordSpacing`    |      | dimension                                       | dimension          | `word-spacing`    |
+| `textAlign`      |      | keyword (`start`/`end`, flips with direction)   |                    | `text-align`      |
+| `textTransform`  |      | keyword                                         |                    | `text-transform`  |
+| `fontStyle`      |      | keyword or css value (`oblique` takes an angle) |                    | `font-style`      |
+| `textDecoration` |      | css value                                       |                    | `text-decoration` |
+| `textShadow`     |      | css value                                       | shadow             | `text-shadow`     |
 
 ### color
 

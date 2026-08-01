@@ -1447,3 +1447,66 @@ describe("vocabularies that were missing a standard member", () => {
     ]);
   });
 });
+
+describe("alignment values built from the box-alignment grammar", () => {
+  it("accepts a position with either overflow-safety keyword", () => {
+    expect(codes({ alignItems: "safe center" })).toEqual([]);
+    expect(codes({ alignItems: "unsafe center" })).toEqual([]);
+    expect(codes({ justifyContent: "safe center" })).toEqual([]);
+    expect(codes({ alignContent: "unsafe end" })).toEqual([]);
+  });
+
+  it("accepts the self-relative positions where the property takes them", () => {
+    expect(codes({ alignItems: "self-start" })).toEqual([]);
+    expect(codes({ alignItems: "self-end" })).toEqual([]);
+    expect(codes({ alignItems: "safe self-start" })).toEqual([]);
+  });
+
+  it("accepts a baseline taken from either end, and normal", () => {
+    expect(codes({ alignItems: "first baseline" })).toEqual([]);
+    expect(codes({ alignItems: "last baseline" })).toEqual([]);
+    expect(codes({ alignContent: "first baseline" })).toEqual([]);
+    expect(codes({ justifyContent: "normal" })).toEqual([]);
+  });
+
+  it("keeps the physical values out, prefixed or not", () => {
+    for (const property of ["alignItems", "justifyContent", "alignContent"]) {
+      for (const value of ["left", "right", "safe left", "unsafe right"]) {
+        expect(codes({ [property]: value }), `${property}: ${value}`).toEqual([
+          "invalid-style-value",
+        ]);
+      }
+    }
+  });
+
+  it("does not let two positions pair up", () => {
+    expect(codes({ alignItems: "self-start self-end" })).toEqual([
+      "invalid-style-value",
+    ]);
+  });
+});
+
+describe("values a closed vocabulary had simply missed", () => {
+  it("accepts the table and list-marker display modes", () => {
+    for (const value of ["table", "inline-table", "table-cell", "list-item"]) {
+      expect(codes({ display: value }), value).toEqual([]);
+    }
+  });
+
+  it("accepts either ordering of the unordered grid-flow grammar", () => {
+    expect(codes({ gridAutoFlow: "dense row" })).toEqual([]);
+    expect(codes({ gridAutoFlow: "dense column" })).toEqual([]);
+    expect(codes({ gridAutoFlow: "row dense" })).toEqual([]);
+  });
+
+  it("accepts alignment resolved against the parent's direction", () => {
+    expect(codes({ textAlign: "match-parent" })).toEqual([]);
+  });
+
+  it("still refuses a value in none of those vocabularies", () => {
+    expect(codes({ display: "nope" })).toEqual(["invalid-style-value"]);
+    expect(codes({ gridAutoFlow: "dense dense" })).toEqual([
+      "invalid-style-value",
+    ]);
+  });
+});
