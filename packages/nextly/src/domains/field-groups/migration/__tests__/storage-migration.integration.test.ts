@@ -772,6 +772,35 @@ for (const entry of DIALECTS) {
       });
     });
 
+    /**
+     * 🔴 The other way a verifier reports residue, and the reason both are asked.
+     *
+     * The ledger walks THROW when they find an unrewritten row; the schema-event
+     * scan RETURNS FALSE. A settlement loop that only lets throws through accepts
+     * every surface whose verifier reports by returning — so this plants a stale
+     * scope on the returning one, where the previous case plants a row on a
+     * throwing one.
+     */
+    it("sees a stale schema-event scope left behind", async () => {
+      await migrate("up");
+      await expect(settlementResidue()).resolves.toBeUndefined();
+
+      await insertRow(adapter, "nextly_schema_events", {
+        id: randomUUID(),
+        eventType: "core_apply",
+        source: "cli-migrate",
+        scopeKind: STORAGE_FORMAT.schemaEventScope,
+        status: "applied",
+      });
+
+      await expect(settlementResidue()).rejects.toMatchObject({
+        logContext: {
+          reason: "settlement verification reported an unrewritten surface",
+          steps: "data:schema-event-scope",
+        },
+      });
+    });
+
     it("reports a second run as already migrated", async () => {
       await migrate("up");
       const again = await migrate("up");

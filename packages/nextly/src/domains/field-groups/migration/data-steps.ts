@@ -171,7 +171,14 @@ const CONTENT_TARGETS: readonly RowRewriteTarget[] = [
  * cursor. No scan closes that one; it needs a quiet ledger, which is the run's
  * operational precondition rather than something a check can enforce.
  *
- * @throws the step's own refusal, naming the surface and the row.
+ * 🔴 Both ways a verifier reports residue are honoured, because the two shapes
+ * are not interchangeable: the ledger walks THROW, naming the offending row,
+ * while the schema-event scan RETURNS FALSE. `MigrationStep.verify` is declared
+ * to answer a boolean, so the answer is what decides — a loop that only lets
+ * throws through accepts every surface whose verifier reports by returning.
+ *
+ * @throws a step's own refusal where it raises one, and otherwise a refusal
+ * naming the steps that answered false.
  */
 export async function assertLedgersSettled(args: {
   session: MigrationSession;
@@ -187,7 +194,21 @@ export async function assertLedgersSettled(args: {
       contentStep({ meta, migrationId, target, from, to })
     ),
   ];
-  for (const step of steps) await step.verify(args.session);
+  const unsettled: string[] = [];
+  for (const step of steps) {
+    if (!(await step.verify(args.session))) unsettled.push(step.id);
+  }
+  if (unsettled.length > 0) {
+    throw NextlyError.serviceUnavailable({
+      logMessage:
+        "field-group migration left stored vocabulary unrewritten: " +
+        unsettled.join(", "),
+      logContext: {
+        reason: "settlement verification reported an unrewritten surface",
+        steps: unsettled.join(", "),
+      },
+    });
+  }
 }
 
 /**
