@@ -284,8 +284,24 @@ export function buildDesiredTableFromComponentFields(
   tableName: string,
   fields: MinimalFieldDef[],
   dialect: SupportedDialect,
-  options: { localized?: boolean } = {}
+  options: {
+    localized?: boolean;
+    /**
+     * The discriminator this table actually carries.
+     *
+     * 🔴 A system column, so its name is never a preference: the only two
+     * spellings are the two storage generations, and which one a table has is a
+     * fact about that table. Naming the other turns the diff into an add paired
+     * with a destructive drop, which the classifier refuses — so the operation
+     * never applies and never goes away.
+     *
+     * Defaults to the spelling this release's DDL writes, which is right for a
+     * table about to be created and for every database that has not migrated.
+     */
+    typeColumn?: string;
+  } = {}
 ): TableSpec {
+  const typeColumn = options.typeColumn ?? STORAGE_FORMAT.columns.type;
   const columns: ColumnSpec[] = [];
 
   // i18n: when the component is localized, its translatable fields live in the
@@ -331,7 +347,7 @@ export function buildDesiredTableFromComponentFields(
       default: undefined,
     });
     columns.push({
-      name: STORAGE_FORMAT.columns.type,
+      name: typeColumn,
       type: "varchar",
       nullable: true,
       default: undefined,
@@ -371,7 +387,7 @@ export function buildDesiredTableFromComponentFields(
       default: undefined,
     });
     columns.push({
-      name: STORAGE_FORMAT.columns.type,
+      name: typeColumn,
       type: "varchar(255)",
       nullable: true,
       default: undefined,
@@ -412,7 +428,7 @@ export function buildDesiredTableFromComponentFields(
       default: undefined,
     });
     columns.push({
-      name: STORAGE_FORMAT.columns.type,
+      name: typeColumn,
       type: "text",
       nullable: true,
       default: undefined,

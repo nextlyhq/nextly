@@ -474,17 +474,24 @@ export function getSystemColumnDescriptors(
         primaryKey: false,
       });
     }
+    // The runtime generator builds these as mysqlTimestamp(...).defaultNow(), so the physical
+    // column carries DEFAULT CURRENT_TIMESTAMP. Reporting no default here described the diff's
+    // desired state as something neither creation path produces — the drift this module exists to
+    // prevent, in the very pair its header promises to keep in lockstep. The PostgreSQL branch
+    // already carries its `now()`; this is the same fact, spelled the way MySQL spells it.
     cols.push({
       name: "created_at",
       dialectType: "timestamp",
       nullable: true,
       primaryKey: false,
+      default: "CURRENT_TIMESTAMP",
     });
     cols.push({
       name: "updated_at",
       dialectType: "timestamp",
       nullable: true,
       primaryKey: false,
+      default: "CURRENT_TIMESTAMP",
     });
     // Owner of the row (creating user's id, NOT the row id). Collections only
     // (never singles). Sized to match the MySQL users.id column (varchar(191),

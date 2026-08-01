@@ -36,6 +36,7 @@ import { resolve } from "node:path";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
+import { resolveRegistryNameFromCatalog } from "../../domains/field-groups/storage/resolve-storage-names";
 import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
 import { getSchemaEventsDdl } from "../../domains/schema/events/schema-events-ddl";
 import {
@@ -54,9 +55,8 @@ import {
   forceUnlock,
   withMigrateLock,
 } from "../../domains/schema/pipeline/locks";
-import { isCompanionTable } from "../../domains/schema/pipeline/managed-tables";
+import { isSnapshotComparableTable } from "../../domains/schema/pipeline/managed-tables";
 import { NextlyError, describeError } from "../../errors";
-import { CORE_TABLE_PREFIXES } from "../../schemas";
 import { createContext, type CommandContext } from "../program";
 import {
   createAdapter,
@@ -417,9 +417,18 @@ export async function migrateCore(
     deps.dialect,
     async () => {
       deps.logger.info("Phase 1: reconciling core schema...");
+      // Resolved here, where a failure can still fail the command cleanly. The
+      // core schema is a desired shape, so naming a registry the database does
+      // not have is an instruction to create it — and an empty legacy registry
+      // beside a populated migrated one is preferred by every reader.
+      const fieldGroupRegistryTable = await resolveRegistryNameFromCatalog({
+        dialect: deps.dialect,
+        getDrizzle: <T>() => deps.db as T,
+      });
       const r = await reconcile({
         db: deps.db,
         dialect: deps.dialect,
+        fieldGroupRegistryTable,
         logger: {
           info: m => deps.logger.debug(m),
           warn: m => deps.logger.warn(m),
@@ -634,14 +643,10 @@ export async function runFileMigrations(args: {
     // Capturing it once before the loop left it empty on a fresh DB, so the
     // 2nd+ migration saw its tables as "absent" and aborted with false drift.
     const liveTables = await safeListTables(adapter);
-    const managed = liveTables.filter(
-      t =>
-        CORE_TABLE_PREFIXES.some(p => t.startsWith(p)) &&
-        // Localized companion tables are migration-owned (Option B) and never
-        // appear in a migrate:create snapshot; excluding them here prevents a
-        // false "extraneous table" drift on snapshot-paired migrations.
-        !isCompanionTable(t)
-    );
+    // Managed main tables only, for the same reason `migrate:resolve` uses
+    // this predicate: a localized companion never appears in the snapshot this
+    // is diffed against, so including one reports drift that is not there.
+    const managed = liveTables.filter(isSnapshotComparableTable);
     const live = await introspectLiveSnapshot(db, dialect, managed);
     await reconcileFile({
       file: { filename, sql: m.upSql, path: m.filePath, sha256: m.checksum },
