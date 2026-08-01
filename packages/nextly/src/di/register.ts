@@ -91,6 +91,7 @@ import { registerSingleHooks } from "../hooks/register-single-hooks";
 import { createSanitizationHook } from "../hooks/sanitization-hooks";
 import type { PluginPermission, PluginRole } from "../plugins/contributions";
 import { getCoreVersion } from "../plugins/core-version";
+import { setInitializedPlugins } from "../plugins/initialized-plugins";
 import { collectCustomPermissions } from "../plugins/permissions/collect-permissions";
 import type {
   PluginContext,
@@ -2580,6 +2581,11 @@ async function initializePlugins(
     }
     logger.info?.(`Registered ${collectedRoutes.length} plugin route(s)`);
   }
+
+  // Recorded so a config reload can tell "enabled in the config" from "started
+  // in this process": it cannot run `init`, so a plugin switched on mid-session
+  // has no services and no subscriptions until a restart.
+  setInitializedPlugins(teardown.map(entry => entry.plugin.name));
 
   return teardown;
 }

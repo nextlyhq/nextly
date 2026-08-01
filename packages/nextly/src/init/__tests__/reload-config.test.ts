@@ -22,6 +22,7 @@ import {
   getHookRegistry,
   setActiveHookRegistry,
 } from "../../hooks/hook-registry";
+import { setInitializedPlugins } from "../../plugins/initialized-plugins";
 import { createPluginContext } from "../../plugins/plugin-context";
 
 import type { NextlySchemaSnapshot } from "../../domains/schema/pipeline/diff/types";
@@ -127,6 +128,8 @@ describe("reloadNextlyConfig", () => {
     }>;
     /** Force the metadata-only collection sync to reject, so its scope is unsynced. */
     failCollectionMetaSync?: boolean;
+    /** Force the component field-tree sync to reject, so its scope is unsynced. */
+    failComponentSync?: boolean;
     /** Seed a `nextly_meta` migration marker the storage guard will read. */
     migrationMarker?: unknown;
   }) {
@@ -135,7 +138,9 @@ describe("reloadNextlyConfig", () => {
       lockTableExists: false,
       marker: opts?.migrationMarker,
     });
-    const syncCodeFirstComponentsSpy = vi.fn().mockResolvedValue({});
+    const syncCodeFirstComponentsSpy = opts?.failComponentSync
+      ? vi.fn().mockRejectedValue(new Error("component sync failed"))
+      : vi.fn().mockResolvedValue({});
     const registerDynamicSchemaSpy = vi.fn();
     const updateCollectionMigrationStatusSpy = vi
       .fn()
@@ -1312,6 +1317,12 @@ describe("reloadNextlyConfig", () => {
       // Suspension is registry-wide, so it leaks between tests exactly as the
       // handler maps would.
       registry.setSuspendedOwners([]);
+      // Boot state the reload reads; each test sets what it needs.
+      setInitializedPlugins([
+        "form-builder",
+        "toggling-plugin",
+        "enabled-plugin",
+      ]);
       settleIntrospect();
     });
 
@@ -1843,6 +1854,57 @@ describe("reloadNextlyConfig", () => {
       expect(edited).not.toHaveBeenCalled();
     });
 
+    it("does not half-enable a plugin that never initialized", async () => {
+      // `init` does not re-run on a config reload, so flipping `enabled: false`
+      // to true produces a plugin the config calls enabled and the process
+      // never started -- no services, no subscriptions. Installing the hooks
+      // its collections declare would put handlers live that depend on both.
+      const registry = getHookRegistry();
+      const fromPlugin = vi.fn(() => undefined);
+      setInitializedPlugins([]);
+      const { reloadNextlyConfig } = await import("../reload-config");
+
+      loadConfigSpy.mockResolvedValue({
+        config: {
+          plugins: [
+            {
+              name: "late-plugin",
+              enabled: true,
+              contributes: { collections: [{ slug: SLUG }] },
+            },
+          ],
+          collections: [settledCollection({ afterRead: [fromPlugin] })],
+        },
+      });
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      expect(registry.getHookCount("afterRead", SLUG)).toBe(0);
+    });
+
+    it("registers a plugin's entities once it HAS initialized", async () => {
+      // The mirror. Without it, a filter that excluded every plugin-contributed
+      // entity would look correct.
+      const registry = getHookRegistry();
+      setInitializedPlugins(["late-plugin"]);
+      const { reloadNextlyConfig } = await import("../reload-config");
+
+      loadConfigSpy.mockResolvedValue({
+        config: {
+          plugins: [
+            {
+              name: "late-plugin",
+              enabled: true,
+              contributes: { collections: [{ slug: SLUG }] },
+            },
+          ],
+          collections: [settledCollection({ afterRead: [() => undefined] })],
+        },
+      });
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      expect(registry.getHookCount("afterRead", SLUG)).toBe(1);
+    });
+
     it("has exactly the landing points its paths need", () => {
       // A count rather than a proof. The scan this replaces looked for a
       // resolution in the lines before each early return, and passed while the
@@ -1855,11 +1917,12 @@ describe("reloadNextlyConfig", () => {
         "utf8"
       );
       const commits = source.match(/^\s*commitReload\(/gm) ?? [];
-      // Empty targets, the no-DDL branch, and after a successful apply. The
-      // post-apply localization branch deliberately publishes nothing: it
-      // returns before the runtime-schema refresh, so anything committed there
-      // would not be backed by the runtime it describes.
-      expect(commits).toHaveLength(3);
+      // Empty targets, the no-DDL branch, the no-DDL deferred branch, and
+      // after a successful apply. The post-apply localization branch
+      // deliberately publishes nothing: it returns before the runtime-schema
+      // refresh, so anything committed there would not be backed by the runtime
+      // it describes.
+      expect(commits).toHaveLength(4);
     });
 
     it("keeps a late app hook behind the config's, across a reload", async () => {
