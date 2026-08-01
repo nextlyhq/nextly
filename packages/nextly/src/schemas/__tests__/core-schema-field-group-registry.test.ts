@@ -68,3 +68,32 @@ describe("the core schema names the registry the database actually holds", () =>
     expect(migrated).not.toContain(STORAGE_FORMAT.registryTable);
   });
 });
+
+/**
+ * 🔴 The push bundle is what drizzle-kit CREATES from, and on MySQL and SQLite
+ * the whole bundle is handed over on every apply — scope reduction is
+ * PostgreSQL-only. So a caller that cannot establish which registry a database
+ * holds must be able to declare NEITHER: naming the wrong one creates it, and a
+ * CREATE is additive so no safety net stops it, while an omission at worst lets
+ * drizzle-kit propose a DROP that `filterUnsafeStatements` blocks and reports.
+ */
+describe("the push bundle when the registry cannot be established", () => {
+  describe.each(DIALECTS)("%s", dialect => {
+    it("declares the legacy registry by default", () => {
+      expect(getDialectTablesForPush(dialect).dynamicFieldGroups).toBeDefined();
+    });
+
+    it("declares neither registry when given null", () => {
+      const bundle = getDialectTablesForPush(dialect, {
+        fieldGroupRegistryTable: null,
+      });
+
+      expect("dynamicFieldGroups" in bundle).toBe(false);
+      // Every other system table is still declared — omitting the registry must
+      // not cost drizzle-kit its view of the rest, or it pairs them with new
+      // tables for rename detection and prompts on a non-TTY boot.
+      expect(bundle.dynamicCollections).toBeDefined();
+      expect(bundle.dynamicSingles).toBeDefined();
+    });
+  });
+});

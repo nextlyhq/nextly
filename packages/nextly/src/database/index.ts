@@ -9,6 +9,18 @@ import * as schemasSl from "../schemas/_dialect-bundles/sqlite";
 import { STORAGE_FORMAT } from "../schemas/storage-format";
 
 /**
+ * Which registry the push bundle declares.
+ *
+ * Widens {@link CoreSchemaOptions} with `null`, which the desired-shape snapshot
+ * has no use for but the push does: the push CREATES from its bundle, so a
+ * caller that cannot establish which registry exists must be able to say
+ * "declare neither" rather than being forced to name one.
+ */
+interface PushBundleOptions {
+  fieldGroupRegistryTable?: CoreSchemaOptions["fieldGroupRegistryTable"] | null;
+}
+
+/**
  * Backwards-compatible `schema.postgres` / `schema.mysql` / `schema.sqlite`
  * namespaces. Replaces the old `database/schema/<dialect>.ts` stubs deleted
  * in Plan A Task 17. Each namespace is a flat re-export of every Drizzle
@@ -80,12 +92,22 @@ export function getDialectTables(dialect?: string) {
  */
 export function getDialectTablesForPush(
   dialect: SupportedDialect,
-  options?: CoreSchemaOptions
+  options?: PushBundleOptions
 ): Record<string, unknown> {
   const bundle: Record<string, unknown> = getDialectTables(dialect);
   const name = options?.fieldGroupRegistryTable;
   if (name === undefined || name === STORAGE_FORMAT.registryTable) {
     return bundle;
+  }
+  if (name === null) {
+    // 🔴 Declared as NEITHER, because the caller could not establish which of
+    // the two this database holds. Naming the wrong one creates it, and a
+    // CREATE is additive so no safety net stops it; omitting it lets
+    // drizzle-kit propose a DROP instead, which `filterUnsafeStatements` blocks
+    // and reports. Between a silent wrong create and a blocked loud drop, only
+    // one loses data's reachability.
+    const { dynamicFieldGroups: _omitted, ...rest } = bundle;
+    return rest;
   }
   return {
     ...bundle,

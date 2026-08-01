@@ -24,7 +24,7 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { dequal } from "dequal";
 
-import { getDialectTables } from "../../../database/index";
+import { getDialectTablesForPush } from "../../../database/index";
 import {
   getCachedSnapshot,
   getLiveSnapshot,
@@ -34,7 +34,10 @@ import { buildNotificationEvent } from "../../../runtime/notifications/build-eve
 import type { MigrationScope } from "../../../runtime/notifications/types";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { FieldGroupSchemaService } from "../../field-groups/services/field-group-schema-service";
-import { chooseTypeColumns } from "../../field-groups/storage/resolve-storage-names";
+import {
+  chooseTypeColumns,
+  resolveRegistryNameFromCatalog,
+} from "../../field-groups/storage/resolve-storage-names";
 import { generateRuntimeSchema } from "../services/runtime-schema-generator";
 import { identifierCaseRules } from "../utils/resolve-catalog-name";
 
@@ -610,6 +613,20 @@ export class PushSchemaPipeline {
       // the database. A second read could disagree with the first, and a diff
       // computed across two disagreeing observations is the one thing this
       // function must never produce.
+      // 🔴 Contained, and its failure means "declare NEITHER registry".
+      //
+      // The desired schema is what drizzle-kit creates from, so naming the
+      // wrong registry creates an empty one — and on MySQL and SQLite the full
+      // schema is always handed over, because scope reduction below is
+      // PostgreSQL-only. Guessing is therefore the one thing this must not do.
+      // Omitting it instead leaves drizzle-kit free to propose a DROP, which
+      // `filterUnsafeStatements` blocks and reports; a wrong CREATE is additive
+      // and nothing stops it.
+      const fieldGroupRegistryTable = await resolveRegistryNameFromCatalog({
+        dialect,
+        getDrizzle: <T>() => db as T,
+      }).catch(() => undefined);
+
       const fieldGroupTypeColumns = chooseTypeColumns(
         liveSnapshot.tables.map(table => ({
           table: table.name,
@@ -762,7 +779,8 @@ export class PushSchemaPipeline {
         : this.buildDrizzleSchema(
             patchedDesired,
             dialect,
-            fieldGroupTypeColumns
+            fieldGroupTypeColumns,
+            fieldGroupRegistryTable
           );
 
       // Scope drizzleSchema down to the table(s) actually touched by
@@ -1201,7 +1219,8 @@ export class PushSchemaPipeline {
   private buildDrizzleSchema(
     desired: DesiredSchema,
     dialect: SupportedDialect,
-    typeColumns: Map<string, string>
+    typeColumns: Map<string, string>,
+    fieldGroupRegistryTable: string | undefined
   ): Record<string, unknown> {
     const out: Record<string, unknown> = {};
 
@@ -1223,7 +1242,11 @@ export class PushSchemaPipeline {
     // when disk matches the schema definition. Phase C's strict
     // filterUnsafeStatements is the safety net.
     for (const [exportKey, value] of Object.entries(
-      getDialectTables(dialect)
+      // `null` where the catalog could not say which registry exists, which the
+      // bundle reads as "declare neither".
+      getDialectTablesForPush(dialect, {
+        fieldGroupRegistryTable: fieldGroupRegistryTable ?? null,
+      })
     )) {
       if (isDrizzleTable(value)) {
         const sqlName = getDrizzleTableName(value, exportKey);
