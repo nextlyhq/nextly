@@ -877,11 +877,18 @@ export async function registerServices(
   // ----------------------------------------
   // Stash the resolved plugins + their contexts so shutdownServices can run
   // destroy() in reverse order (D4).
+  // Recorded at the call site rather than inside `initializePlugins`, which
+  // returns early when the config declares no plugins -- a record written after
+  // that return is skipped exactly when the answer is "none", leaving the
+  // previous registration's names in place for a reload to believe.
   globalForReg.__nextly_pluginTeardown = await initializePlugins(
     transformedConfig,
     adapterDrizzleDb,
     resolvedLogger,
     hookRegistry
+  );
+  setInitializedPlugins(
+    globalForReg.__nextly_pluginTeardown.map(entry => entry.plugin.name)
   );
 
   // ----------------------------------------
@@ -2582,11 +2589,6 @@ async function initializePlugins(
     logger.info?.(`Registered ${collectedRoutes.length} plugin route(s)`);
   }
 
-  // Recorded so a config reload can tell "enabled in the config" from "started
-  // in this process": it cannot run `init`, so a plugin switched on mid-session
-  // has no services and no subscriptions until a restart.
-  setInitializedPlugins(teardown.map(entry => entry.plugin.name));
-
   return teardown;
 }
 
@@ -2626,6 +2628,9 @@ export function isServicesRegistered(): boolean {
 function clearActiveHookRegistry(): void {
   getActiveHookRegistry().clear();
   setActiveHookRegistry(undefined);
+  // Nothing is initialized in a process whose services have been cleared, and a
+  // stale list would let the next reload treat a plugin as started.
+  setInitializedPlugins([]);
 }
 
 export async function shutdownServices(): Promise<void> {
