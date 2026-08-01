@@ -11,9 +11,24 @@ function escapePointer(token: string): string {
   return token.replace(/~/g, "~0").replace(/\//g, "~1");
 }
 
+/**
+ * Longest reference token embedded in a pointer. A token is a key read from the
+ * document, so it is untrusted and unbounded: a malformed style map can hold a
+ * megabyte-long property name, and every issue naming it would otherwise carry
+ * its own copy. A pointer that long locates nothing a reader can act on, and
+ * the ellipsis marks it as shortened rather than wrong. Tokens the code
+ * supplies itself — array indices, `props`, `nodes` — are far below this.
+ */
+const MAX_POINTER_TOKEN_LENGTH = 120;
+
 /** Join a parent pointer with a child token. */
 export function pointer(parent: string, token: string | number): string {
-  return `${parent}/${escapePointer(String(token))}`;
+  const text = String(token);
+  const bounded =
+    text.length > MAX_POINTER_TOKEN_LENGTH
+      ? `${text.slice(0, MAX_POINTER_TOKEN_LENGTH)}…`
+      : text;
+  return `${parent}/${escapePointer(bounded)}`;
 }
 
 /** Longest untrusted string echoed into an issue message. */

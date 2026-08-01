@@ -48,10 +48,12 @@ vertical writing modes, which the catalog can add later without a migration.
 - **color** — a colour: a hex literal, one of the CSS named colours, a keyword
   such as `currentColor` or `transparent`, or a colour function including
   `oklch()`, `color-mix()` and `light-dark()`. Values that are valid CSS but not
-  colours, such as `"16px"`, are refused.
+  colours, such as `"16px"`, are refused, as is a colour carrying a stray
+  operator such as `"red,"`, which the browser discards whole.
 - **css value** — a free-form CSS value, checked for syntax and safety but not
   against a property grammar (see below).
-- **url** — a URL emitted inside `url()`, with its scheme checked.
+- **url** — a URL emitted inside `url()`, with its scheme checked and the same
+  length cap every other value is held to.
 - **composite** — an object whose named parts each have their own shape, such as
   logical box sides, logical corners, or a structured `border`.
 - **union** — a value accepted in more than one shape, such as a corner radius

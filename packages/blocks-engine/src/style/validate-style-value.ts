@@ -290,7 +290,7 @@ function partIssues(
       issues.push(
         invalid(
           pointer(path, key),
-          `"${key}" is not a known ${partLabel}.`,
+          `"${describeValue(key)}" is not a known ${partLabel}.`,
           `Use one of: ${Object.keys(parts).join(", ")}.`
         )
       );
@@ -374,7 +374,7 @@ export function validateStyleValues(
         path,
         code: "unknown-style-property",
         severity: mode === "strict" ? "error" : "warning",
-        message: `"${property}" is not a style property.`,
+        message: `"${describeValue(property)}" is not a style property.`,
       });
       if (budget !== undefined) budget.remaining -= issues.length - before;
       continue;

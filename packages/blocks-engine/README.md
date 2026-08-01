@@ -13,6 +13,11 @@ and the pure operations over it.
   forest: `walkNodes`, `findNode`, `locateNode`, `insertNode`, `removeNode`,
   `moveNode`, `duplicateNode`, `updateNode`, `reidSubtree`.
 - **Limits** — depth, node-count, and byte caps with a warning threshold.
+- **The style-property catalog** — the closed set of style properties a
+  document may carry, each declaring the shape of its stored value, the CSS
+  property it emits, and the design-token kinds it accepts. Validating a
+  document checks its style values against it, so an unknown property or an
+  unsafe value is caught by the same gate as any other document defect.
 
 ## What deliberately does NOT live here
 
@@ -21,9 +26,13 @@ and the pure operations over it.
   external agents alike.
 - No storage access: breakpoint definitions and other site-level data are
   passed in as context by callers, never read from a database here.
-- Style **property** validation and CSS emission (the style compiler), block
-  rendering, and the editor are separate packages; this package only owns the
-  stored shapes they share.
+- CSS **emission** (the style compiler), block rendering, and the editor are
+  separate packages. The catalog above says what a value must look like to be
+  stored; turning it into a stylesheet happens elsewhere, reading the same
+  catalog so the two cannot disagree.
+- Checks that need site-level context: whether a `$token` reference names a
+  token that exists, or a class id resolves. Validation here is what a document
+  can be judged on by itself.
 
 ## Stability
 

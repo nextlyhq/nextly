@@ -75,6 +75,16 @@ const URL_SCHEME = /^\s*([a-z][a-z0-9+.-]*):/i;
 const UNSAFE_URL_CHARS = /["'()\\<>]/;
 
 /**
+ * The same characters minus the parentheses, for a URL the parser has already
+ * delimited. Inside `url("…")` or a quoted image-set argument the boundary is
+ * the quote, so a parenthesis there is an ordinary path character that cannot
+ * close the function: refusing it would reject `photo(1).png`, which is a real
+ * filename shape. Quotes and backslashes stay refused, because those are what
+ * the boundary is made of.
+ */
+const UNSAFE_QUOTED_URL_CHARS = /["'\\<>]/;
+
+/**
  * True when a URL contains a control character. A URL parser strips these
  * before reading the scheme, so `java\tscript:` becomes `javascript:` in the
  * browser while looking like a scheme-less path to a check that does not.
@@ -186,30 +196,39 @@ const DIMENSION_FUNCTIONS: ReadonlySet<string> = new Set([
   "anchor-size",
 ]);
 
+/**
+ * The subset whose arguments are an arithmetic expression, where operands and
+ * operators alternate. Only these get their argument structure checked: the
+ * rest produce a length by their name alone and carry their own grammars,
+ * which move faster than anything knowable here. `anchor-size(--hero width)`
+ * names an anchor and then an axis, so an arithmetic reading of it refuses a
+ * value the browser honours.
+ */
+const MATH_FUNCTIONS: ReadonlySet<string> = new Set([
+  "calc",
+  "min",
+  "max",
+  "clamp",
+  "round",
+  "mod",
+  "rem",
+  "abs",
+]);
+
 /** True when a value is one of the keywords legal on every CSS property. */
 export function isCssWideKeyword(value: string): boolean {
   return CSS_WIDE_KEYWORDS.has(value.toLowerCase());
 }
 
 /**
- * Identifiers that belong to a specific function's grammar. `round(up, …)` and
- * `anchor-size(width)` are lengths, and their keyword is an argument rather than
- * a property value, which is why they are listed per function instead of being
- * allowed everywhere or nowhere.
+ * Identifiers that belong to a specific math function's grammar. In
+ * `round(up, …)` the keyword is an argument rather than a property value, which
+ * is why it is listed per function instead of being allowed everywhere or
+ * nowhere. Only the math functions have their arguments read, so only they need
+ * an entry here.
  */
 const FUNCTION_IDENTIFIERS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ["round", new Set(["up", "down", "to-zero", "nearest"])],
-  [
-    "anchor-size",
-    new Set([
-      "width",
-      "height",
-      "block",
-      "inline",
-      "self-block",
-      "self-inline",
-    ]),
-  ],
 ]);
 
 /** Parse a CSS value, or `null` when it is not one. */
@@ -245,7 +264,7 @@ function nestedUrlRejection(ast: CssNode): CssValueRejection | null {
   walk(ast, {
     enter(node: CssNode) {
       if (node.type === "Url") {
-        rejection ??= checkUrlValue(node.value);
+        rejection ??= checkUrlValue(node.value, "quoted");
         return;
       }
       if (
@@ -256,7 +275,7 @@ function nestedUrlRejection(ast: CssNode): CssValueRejection | null {
       }
       for (const child of node.children) {
         if (child.type !== "String") continue;
-        rejection ??= checkUrlValue(child.value);
+        rejection ??= checkUrlValue(child.value, "quoted");
       }
     },
   });
@@ -352,6 +371,7 @@ export function checkDimensionValue(
   if (ast === null || ast.type !== "Value") return "not-a-length";
   const allowed = new Set(keywords.map(keyword => keyword.toLowerCase()));
   let parts = 0;
+  let cssWideKeyword = false;
   for (const child of ast.children) {
     // No length property takes an operator at the top level. Corner radii are
     // expressed per corner instead, which is also the only form that flips with
@@ -362,11 +382,18 @@ export function checkDimensionValue(
       allowPercentage,
     });
     if (childRejection !== null) return childRejection;
+    if (child.type === "Identifier" && isCssWideKeyword(child.name)) {
+      cssWideKeyword = true;
+    }
     parts += 1;
     // A shorthand may carry several measurements; a scalar property may not,
     // and a browser discards the whole declaration when it does.
     if (parts > maxParts) return "not-a-length";
   }
+  // A CSS-wide keyword is a complete declaration by itself. Beside anything
+  // else it is not one half of a valid value, it voids the whole declaration,
+  // so `inherit 1px` and `1px unset` paint nothing at all.
+  if (cssWideKeyword && parts !== 1) return "not-a-length";
   return parts > 0 ? null : "not-a-length";
 }
 
@@ -414,15 +441,18 @@ function measurementRejection(
     case "Function": {
       const name = node.name.toLowerCase();
       if (!DIMENSION_FUNCTIONS.has(name)) return "not-a-length";
-      // What a custom property or an environment variable resolves to is not
-      // knowable here, and their arguments include an arbitrary fallback, so
-      // their contents are not inspected.
-      if (name === "var" || name === "env") return null;
+      // Outside the math functions the name is the whole signal. What `var()`
+      // and `env()` resolve to is not knowable here and their arguments carry
+      // an arbitrary fallback; `anchor-size()` and `fit-content()` have
+      // argument grammars of their own. Reading any of them arithmetically
+      // refuses valid values, and the characters that would make an argument
+      // dangerous were already refused for the value as a whole.
+      if (!MATH_FUNCTIONS.has(name)) return null;
       const ownIdentifiers = FUNCTION_IDENTIFIERS.get(name) ?? NO_KEYWORDS;
       // Operands and operators must alternate, starting and ending on an
       // operand. css-tree will happily build a tree for `calc(1px,)`,
       // `calc(/ 1px)`, `calc(1px 2px)` and `calc()`; a browser discards them
-      // all. A lone argument such as `anchor-size(width)` is valid alternation.
+      // all. A lone argument such as `abs(1px)` is valid alternation.
       const terms = [...node.children];
       for (let index = 0; index < terms.length; index += 1) {
         const expectingOperator = index % 2 === 1;
@@ -553,7 +583,12 @@ export function checkColorValue(value: string): CssValueRejection | null {
   if (rejection !== null) return rejection;
   const ast = parseValue(value);
   if (ast === null || ast.type !== "Value") return "not-a-color";
-  const parts = [...ast.children].filter(node => node.type !== "Operator");
+  // A colour is exactly one term. No colour syntax takes an operator at this
+  // level — the commas and slashes inside `rgb()` and `color-mix()` sit within
+  // the function — so an operator here means the browser discards the whole
+  // declaration, as it does for `red,` and `/ red`. Counting every child rather
+  // than filtering the operators out is what makes that refusal happen.
+  const parts = [...ast.children];
   const node = parts[0];
   if (parts.length !== 1 || node === undefined) return "not-a-color";
   switch (node.type) {
@@ -577,10 +612,24 @@ export function checkColorValue(value: string): CssValueRejection | null {
 }
 
 /**
+ * Where a URL was read from, which decides what can still break out of it.
+ * `raw` is a stored value that will be wrapped in `url(...)` on the way out;
+ * `quoted` is one the parser has already delimited for us.
+ */
+type UrlContext = "raw" | "quoted";
+
+/**
  * Check a URL destined for `url()`. Returns `null` when it is safe to emit.
  */
-export function checkUrlValue(value: string): CssValueRejection | null {
+export function checkUrlValue(
+  value: string,
+  context: UrlContext = "raw"
+): CssValueRejection | null {
   if (value.trim() === "") return "unsafe-url-scheme";
+  // A dedicated URL property does not pass through the free-form value check,
+  // so without this its own cap is the document byte limit: one stored value
+  // could otherwise emit a megabyte-long declaration and request.
+  if (value.length > MAX_VALUE_LENGTH) return "too-long";
   // Control characters come first: they are what would let a scheme hide from
   // the check below while a browser still reads it.
   if (hasControlCharacter(value)) return "unsafe-url-characters";
@@ -598,6 +647,8 @@ export function checkUrlValue(value: string): CssValueRejection | null {
   // emitted is the one stored, not the trimmed one. No scheme at all is a
   // relative, absolute, or protocol-relative path, which resolves against the
   // page's own origin and needs no allowlisting.
-  if (UNSAFE_URL_CHARS.test(value)) return "unsafe-url-characters";
+  const unsafe =
+    context === "quoted" ? UNSAFE_QUOTED_URL_CHARS : UNSAFE_URL_CHARS;
+  if (unsafe.test(value)) return "unsafe-url-characters";
   return null;
 }

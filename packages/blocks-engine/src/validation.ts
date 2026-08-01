@@ -803,6 +803,7 @@ function validateStyleEnvelope(
         severity: "error",
         message: `Style state "${describeValue(stateKey)}" must map breakpoint ids to values.`,
       });
+      state.styleBudget.remaining -= 1;
       continue;
     }
     for (const [breakpointId, values] of Object.entries(byBreakpoint)) {
@@ -827,6 +828,7 @@ function validateStyleEnvelope(
           severity: "error",
           message: `Style values at "${describeValue(breakpointId)}" must be an object.`,
         });
+        state.styleBudget.remaining -= 1;
         continue;
       }
       // The envelope's shape is only half of what makes a style block valid:

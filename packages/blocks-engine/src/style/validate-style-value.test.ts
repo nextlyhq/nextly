@@ -883,3 +883,110 @@ describe("issue codes", () => {
     }
   });
 });
+
+describe("a CSS-wide keyword is the whole value", () => {
+  it("is accepted on its own where the property takes several measurements", () => {
+    expect(codes({ gap: "inherit" })).toEqual([]);
+    expect(codes({ gap: "1px 2px" })).toEqual([]);
+  });
+
+  it("is refused beside another measurement, which paints nothing at all", () => {
+    for (const value of [
+      "inherit 1px",
+      "1px unset",
+      "revert 2px",
+      "1px initial",
+    ]) {
+      expect(codes({ gap: value }), value).toEqual(["invalid-style-value"]);
+    }
+  });
+});
+
+describe("operators around a color", () => {
+  it("are refused, since no color syntax takes one at the top level", () => {
+    for (const value of ["red,", "/ red", "red +", "#fff,", "red blue"]) {
+      expect(codes({ color: value }), value).toEqual(["invalid-style-value"]);
+    }
+  });
+
+  it("does not refuse the operators inside a color function", () => {
+    expect(codes({ color: "rgb(1, 2, 3)" })).toEqual([]);
+    expect(codes({ color: "rgb(1 2 3 / 50%)" })).toEqual([]);
+    expect(codes({ color: "color-mix(in srgb, red 50%, blue)" })).toEqual([]);
+  });
+});
+
+describe("functions that produce a length without arithmetic", () => {
+  it("accepts the argument grammars they define, rather than reading them as maths", () => {
+    expect(codes({ width: "anchor-size(--hero width)" })).toEqual([]);
+    expect(codes({ width: "anchor-size(--hero width, 10px)" })).toEqual([]);
+    expect(codes({ width: "fit-content(20%)" })).toEqual([]);
+  });
+
+  it("still refuses a function that never produces a length", () => {
+    expect(codes({ width: "rotate(2deg)" })).toEqual(["invalid-style-value"]);
+    expect(codes({ width: "sign(1px)" })).toEqual(["invalid-style-value"]);
+  });
+});
+
+describe("the size cap applies to a dedicated url too", () => {
+  it("refuses a url past the per-value limit", () => {
+    const long = `https://example.com/${"a".repeat(9000)}`;
+    expect(checkUrlValue(long)).toBe("too-long");
+    expect(codes({ background: { url: long } })).toEqual([
+      "invalid-style-value",
+    ]);
+  });
+
+  it("accepts one comfortably inside it", () => {
+    const ok = `https://example.com/${"a".repeat(100)}`;
+    expect(codes({ background: { url: ok } })).toEqual([]);
+  });
+});
+
+describe("parentheses inside a url the parser has already delimited", () => {
+  it("are accepted, being ordinary characters in a quoted path", () => {
+    expect(checkCssValue('url("https://example.com/photo(1).png")')).toBeNull();
+    expect(checkCssValue('image-set("photo(1).png" 1x)')).toBeNull();
+    expect(codes({ backgroundGradient: 'url("a/photo(1).png")' })).toEqual([]);
+  });
+
+  it("are still refused in a raw url, where they would close the function", () => {
+    expect(checkUrlValue("a(b).png")).toBe("unsafe-url-characters");
+    expect(codes({ background: { url: "a(b).png" } })).toEqual([
+      "invalid-style-value",
+    ]);
+  });
+
+  it("does not relax the quote, backslash or scheme rules for a quoted url", () => {
+    expect(checkUrlValue('a"b', "quoted")).toBe("unsafe-url-characters");
+    expect(checkUrlValue("a\\b", "quoted")).toBe("unsafe-url-characters");
+    expect(checkUrlValue("javascript:alert(1)", "quoted")).toBe(
+      "unsafe-url-scheme"
+    );
+    expect(checkCssValue('url("\\6a avascript:alert(1)")')).toBe(
+      "unsafe-url-scheme"
+    );
+  });
+});
+
+describe("an unbounded key from the document", () => {
+  it("is bounded in both the pointer and the message", () => {
+    const key = "z".repeat(5000);
+    const issues = check({ [key]: "1px" });
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.path.length).toBeLessThan(200);
+    expect(issues[0]?.message.length).toBeLessThan(200);
+  });
+
+  it("is bounded when it names a part of a composite too", () => {
+    const key = "z".repeat(5000);
+    const issues = check({ background: { [key]: "1px" } });
+    expect(issues[0]?.path.length).toBeLessThan(200);
+    expect(issues[0]?.message.length).toBeLessThan(200);
+  });
+
+  it("leaves a key short enough to resolve untouched", () => {
+    expect(check({ nope: "1px" })[0]?.path).toBe("/styles/nope");
+  });
+});

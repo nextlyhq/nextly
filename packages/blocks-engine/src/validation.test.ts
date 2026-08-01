@@ -912,3 +912,36 @@ describe("limits", () => {
     expect(issues.some(i => i.code === "node-count-exceeded")).toBe(true);
   });
 });
+
+describe("a malformed style envelope charges the budget like anything else", () => {
+  it("bounds a document whose breakpoints each hold a non-object", () => {
+    // A cap is only as tight as the fraction of issue kinds that remember to
+    // pay it: an uncharged push lets the walk run past the limit by however
+    // many of those it emits.
+    const byBreakpoint: Record<string, unknown> = {};
+    for (let index = 0; index < 5000; index += 1) {
+      byBreakpoint[`bp${index}`] = "not an object";
+    }
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/box",
+          version: 1,
+          props: {},
+          styles: { base: byBreakpoint },
+        },
+      ],
+    });
+    const issues = validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+    });
+    expect(issues.length).toBeLessThan(300);
+    expect(issues.some(issue => issue.code === "style-issues-truncated")).toBe(
+      true
+    );
+  });
+});
