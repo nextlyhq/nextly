@@ -350,6 +350,36 @@ describe("a target's field hooks apply to rows reached through a relationship", 
       service.applyNestedFieldHooks(doc, POSTS, { enforceFieldAccess: true })
     ).resolves.toBeUndefined();
   });
+
+  it("fails the read closed when a target's schema lookup genuinely fails", async () => {
+    // A NOT_FOUND means the slug is not a registered collection and is safe to
+    // skip. Any OTHER lookup failure is a real error reading a schema that
+    // exists: continuing with an empty field list would skip the target's
+    // deferred `access.read` (assembled-stage reads defer field access to this
+    // walk) and could return a denied field, so the walk rethrows rather than
+    // masking the failure and half-authorizing the row.
+    const t = await boot();
+    const service = t.getService("relationshipService") as unknown as {
+      applyNestedFieldHooks: (
+        entry: Record<string, unknown>,
+        collection: string,
+        access: Record<string, unknown>
+      ) => Promise<void>;
+      collectionService: { getCollection: (name: string) => Promise<unknown> };
+    };
+    vi.spyOn(service.collectionService, "getCollection").mockRejectedValue(
+      new Error("transient schema failure")
+    );
+
+    await expect(
+      service.applyNestedFieldHooks({ title: "x" }, POSTS, {
+        enforceFieldAccess: true,
+      })
+    ).rejects.toThrow("transient schema failure");
+
+    vi.restoreAllMocks();
+  });
+
   it("does not look up or log an upload's built-in target", async () => {
     // `media` is not a registered collection, so resolving it costs a metadata
     // query per row only to fail, and logs the failure -- on reads that are

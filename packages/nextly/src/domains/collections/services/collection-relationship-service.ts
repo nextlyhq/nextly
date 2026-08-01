@@ -6,6 +6,7 @@ import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { getDialectTables } from "../../../database";
 import { container } from "../../../di/container";
+import { NextlyError } from "../../../errors";
 import {
   convertTimestampsToCamelCase,
   keysToCamelCase,
@@ -3022,16 +3023,19 @@ export class CollectionRelationshipService extends BaseService {
   /**
    * The collection's fields, read once per collection per read.
    *
-   * A target whose schema will not load runs no hooks, and the read continues.
+   * A target the registry does not track — a relationship pointing at a built-in
+   * entity, or a slug that is not a registered collection — answers NOT_FOUND. It
+   * has no dynamic field hooks or access rules, so an empty list is correct and
+   * the read continues.
    *
-   * That is weaker than a read protection deserves, and it is the only answer
-   * the registry supports: it reports "this is not a registered collection" and
-   * "the lookup failed" the same way, so a relationship pointing at a built-in
-   * entity is indistinguishable from a real failure. Refusing on it would deny
-   * ordinary reads. The failure is logged rather than swallowed.
-   *
-   * Refusing becomes correct once the registry can answer whether a slug IS a
-   * collection separately from what its fields are.
+   * Any OTHER lookup failure is a real error reading a schema that DOES exist.
+   * Continuing with an empty list would walk the target's already-expanded
+   * descendants without their field hooks and, worse, without their
+   * `access.read`: the list and detail reads defer field access to this walk via
+   * `fieldAccessStage: "assembled"`, so a skipped descendant returns unmasked and
+   * a denied field can reach the response. A transient failure therefore fails
+   * closed by rethrowing, which the read pipeline surfaces as an error rather
+   * than a partially-authorized document.
    */
   private async fieldsForNestedWalk(
     collectionName: string,
@@ -3059,13 +3063,17 @@ export class CollectionRelationshipService extends BaseService {
         )?.fields ?? (collection as Record<string, unknown>).fields;
       fields = Array.isArray(raw) ? (raw as FieldDefinition[]) : [];
     } catch (error: unknown) {
-      // A relationship can point at something that is not a registered
-      // collection -- `users` behind an author field -- and the lookup reports
-      // that as an untyped "not found", the same shape a genuine failure takes.
-      // Since the two cannot be told apart here, refusing would deny ordinary
-      // reads, so this logs and leaves the target's hooks unrun.
+      // Only a NOT_FOUND means the slug is not a registered collection (the
+      // registry throws NextlyError.notFound for a missing record); it has no
+      // dynamic hooks or access rules, so an empty list is correct and the read
+      // continues. Any other error is a genuine failure to read a schema that
+      // exists — failing open here would skip the target's deferred access.read
+      // (see this method's doc), so it fails closed by rethrowing.
+      if (!NextlyError.isNotFound(error)) {
+        throw error;
+      }
       console.error(
-        `Nested field hooks skipped for "${collectionName}": its schema could not be read.`,
+        `Nested field hooks skipped for "${collectionName}": not a registered collection.`,
         error
       );
     }
