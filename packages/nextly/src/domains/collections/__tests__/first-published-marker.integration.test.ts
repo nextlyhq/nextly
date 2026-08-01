@@ -15,8 +15,6 @@ import {
   createTestNextly,
   type TestNextly,
 } from "../../../plugins/test-nextly";
-import type { CollectionsHandler } from "../../../services/collections-handler";
-import type { SingleEntryService } from "../../singles/services/single-entry-service";
 
 let current: TestNextly | undefined;
 
@@ -32,8 +30,10 @@ const posts = () =>
     fields: [text({ name: "title" })],
   });
 
+// `getService` is keyed by service NAME — `ServiceMap` already maps "collectionsHandler" to its
+// type, so passing the type as the generic makes it `unknown` instead of narrowing it.
 function handler(t: TestNextly) {
-  return t.getService<CollectionsHandler>("collectionsHandler");
+  return t.getService("collectionsHandler");
 }
 
 /** Rows read straight from the physical table, so the assertion sees the column itself rather
@@ -199,8 +199,7 @@ describe("first_published_at", () => {
         }),
       ],
     });
-    const singles =
-      current.getService<SingleEntryService>("singleEntryService");
+    const singles = current.getService("singleEntryService");
 
     // Reads and writes both work, which is the thing the column would have broken.
     await singles.update(
