@@ -16,6 +16,7 @@
 
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import { getService } from "../../di";
+import { errorFromServiceEnvelope } from "../../errors/from-service-envelope";
 import type { UserContext } from "../singles/types";
 
 export interface DiscardWorkingDraftArgs {
@@ -60,5 +61,21 @@ export async function discardWorkingDraft(
     authenticatedScope: args.authenticatedScope,
     status: "all",
   });
+
+  // The sidecar removal succeeded, but the re-read can still fail — the live row
+  // may have been deleted concurrently, or an after-read hook or database call
+  // may throw. Returning the failure envelope's null `data` as-is would answer
+  // HTTP 200 and reset the editor from an empty item; rebuild the error the
+  // envelope carries so the caller gets the real status and code instead.
+  if (!result.success) {
+    throw errorFromServiceEnvelope({
+      statusCode: result.statusCode,
+      code: result.code,
+      message: result.message,
+      messageKey: result.messageKey,
+      publicData: result.publicData,
+      errors: result.errors,
+    });
+  }
   return result.data;
 }
