@@ -22,10 +22,18 @@
 "@nextlyhq/tsconfig": patch
 ---
 
-Keep a plugin's hooks when the app's config is reloaded
+Apply hook edits without restarting the dev server
 
-The hook registry now records who registered each handler, and a config reload
-replaces only the app's own. A plugin can register directly into a collection's
-namespace — the form builder does this on `forms` — and reloading previously
-cleared the namespace wholesale, deleting contributions the reload knew nothing
-about and could not restore.
+Editing a hook in `nextly.config.ts` had no effect until the process restarted,
+and deleting one left it firing. A config reload re-read the file but the
+registry kept the function objects registered at boot, so the hook that ran was
+always the one from startup.
+
+Collection and single hooks are now rebuilt from the reloaded config. Clearing
+them is safe because the registry records who registered each handler: a
+reload replaces only what it can rebuild, and leaves alone both a plugin's hooks
+(the form builder registers directly on `forms`, and plugins do not re-run on a
+config reload) and any registered imperatively through `registerHook()` (nothing
+re-runs those at all). Unregistering is likewise scoped to the caller's own
+registrations, so a plugin removing a handler it shares with the config no
+longer removes the config's instead.

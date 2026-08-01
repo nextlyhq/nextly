@@ -96,6 +96,25 @@ export type HookType = (typeof HOOK_TYPES)[number];
 export type HookContextPhase = Exclude<HookType, "beforeOperation">;
 
 /**
+ * Who registered a handler, which is really the question "what will put this
+ * back if it is removed?".
+ *
+ * - `"code"` -- a declaration in the config. `registerCollectionHooks` and
+ *   `registerSingleHooks` rebuild these from the config on boot AND on every
+ *   config reload, so a reload may remove them freely.
+ * - `"app"` -- an imperative `registerHook()` call somewhere in the app.
+ *   Nothing re-runs it: the module holding it is evaluated once, and a config
+ *   reload never revisits it, so removing one is permanent.
+ * - `"plugin:<name>"` -- registered through `ctx.hooks.on` during a plugin's
+ *   `init`, which re-runs only on a full service registration and not on a
+ *   config reload.
+ *
+ * `"code"` and `"plugin:<name>"` follow the vocabulary the webhook recording
+ * provenance already uses, so one concept does not get two spellings.
+ */
+export type HookOwner = "code" | "app" | `plugin:${string}`;
+
+/**
  * Context object passed to hook handlers containing operation metadata.
  *
  * The context provides all information needed for hooks to make decisions:

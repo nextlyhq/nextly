@@ -21,13 +21,25 @@
  * ```
  */
 
-import type {
-  CollectionConfig,
-  CollectionHooks,
-} from "../collections/config/define-collection";
+import type { CollectionHooks } from "../collections/config/define-collection";
 
 import { getHookRegistry, type HookRegistry } from "./hook-registry";
 import type { HookContextPhase } from "./types";
+
+/**
+ * The part of a collection this module reads.
+ *
+ * Deliberately narrower than `CollectionConfig`: registration needs a slug and
+ * a hooks block and nothing else, and demanding the whole config shuts out a
+ * caller that legitimately holds only these two -- the config reload works from
+ * the sanitized config the loader returns, not from `defineCollection()`
+ * objects. Every `CollectionConfig` still satisfies this, so existing callers
+ * are unaffected.
+ */
+export interface HookedCollection {
+  slug: string;
+  hooks?: CollectionHooks;
+}
 
 /**
  * Result of registering collection hooks
@@ -139,7 +151,7 @@ type DataPhaseKey = Exclude<keyof CollectionHooks, "beforeOperation">;
  * ```
  */
 export function registerCollectionHooks(
-  collections: CollectionConfig[],
+  collections: HookedCollection[],
   registry: HookRegistry = getHookRegistry()
 ): RegisterCollectionHooksResult {
   const result: RegisterCollectionHooksResult = {
@@ -244,7 +256,7 @@ export function clearCollectionHooks(
  * @returns Result object with registration statistics
  */
 export function reregisterCollectionHooks(
-  collections: CollectionConfig[],
+  collections: HookedCollection[],
   registry: HookRegistry = getHookRegistry()
 ): RegisterCollectionHooksResult {
   // Only the config's own handlers are replaced. A plugin can register directly

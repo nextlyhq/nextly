@@ -9,10 +9,28 @@
 
 import { describe, expect, it, vi } from "vitest";
 
-import { HookRegistry } from "../hook-registry";
+import { registerHook, unregisterHook } from "../../hooks";
+import { createPluginContext } from "../../plugins/plugin-context";
+import { HookRegistry, getHookRegistry } from "../hook-registry";
 import type { BeforeOperationHandler, HookHandler } from "../types";
 
 const SLUG = "provenance_posts";
+
+/**
+ * The services a context resolves. None are reached by the hook methods, but
+ * `createPluginContext` resolves them eagerly, so a double that omits one fails
+ * at construction rather than at the assertion.
+ */
+const stubServices = ((name: string) => {
+  switch (name) {
+    case "logger":
+      return { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+    case "config":
+      return { plugins: [] };
+    default:
+      return {};
+  }
+}) as unknown as Parameters<typeof createPluginContext>[0];
 
 describe("hook provenance", () => {
   it("keeps a plugin's handler when the config's are replaced", () => {
@@ -103,6 +121,106 @@ describe("hook provenance", () => {
 
     registry.clearCollectionOwnedBy(SLUG, "code");
 
+    expect(registry.getHookCount("beforeCreate", SLUG)).toBe(0);
+  });
+});
+
+// The registry is only half of it: what a handler ends up owned by is decided
+// by the seam its registrant went through. These go through the seams
+// production goes through -- a plugin's `ctx.hooks.on`, and the exported
+// `registerHook` -- rather than calling `register` with an owner directly,
+// because passing the owner by hand is precisely the step that was missing.
+describe("hook provenance through the registering seam", () => {
+  const pluginDefinition = {
+    name: "form-builder",
+    version: "1.0.0",
+    // Boot-checked core-compatibility range; required on every definition.
+    nextly: "*",
+  };
+
+  it("attributes ctx.hooks.on to the plugin, not to the config", () => {
+    const registry = new HookRegistry();
+    const ctx = createPluginContext(stubServices, registry, pluginDefinition);
+    const handler: HookHandler = c => c.data;
+
+    ctx.hooks.on("afterRead", SLUG, handler);
+    // The control: it registered at all, so "one left" below cannot be a
+    // registration that never happened.
+    expect(registry.getHookCount("afterRead", SLUG)).toBe(1);
+
+    registry.clearCollectionOwnedBy(SLUG, "code");
+
+    expect(registry.getHookCount("afterRead", SLUG)).toBe(1);
+  });
+
+  it("attributes ctx.hooks.onBeforeOperation to the plugin as well", () => {
+    // Stored apart from every other phase, so it can be missed on its own.
+    const registry = new HookRegistry();
+    const ctx = createPluginContext(stubServices, registry, pluginDefinition);
+    const handler: BeforeOperationHandler = c => c.args;
+
+    ctx.hooks.onBeforeOperation(SLUG, handler);
+    expect(registry.getHookCount("beforeOperation", SLUG)).toBe(1);
+
+    registry.clearCollectionOwnedBy(SLUG, "code");
+
+    expect(registry.getHookCount("beforeOperation", SLUG)).toBe(1);
+  });
+
+  it("still clears a context that belongs to no plugin", () => {
+    // The counter-test. Without it, the two above would pass just as well if
+    // a clear had stopped removing anything at all.
+    const registry = new HookRegistry();
+    const ctx = createPluginContext(stubServices, registry);
+
+    ctx.hooks.on("afterRead", SLUG, c => c.data);
+    expect(registry.getHookCount("afterRead", SLUG)).toBe(1);
+
+    registry.clearCollectionOwnedBy(SLUG, "code");
+
+    expect(registry.getHookCount("afterRead", SLUG)).toBe(0);
+  });
+
+  it("keeps a handler registered through the public registerHook", () => {
+    // An imperative registration is not in the config, so re-registration
+    // cannot rebuild it: the module holding the call is evaluated once and a
+    // reload never revisits it. Clearing it would end the hook permanently,
+    // which is the same failure as deleting a plugin's, one owner over.
+    const registry = getHookRegistry();
+    registry.clearCollection(SLUG);
+    const handler: HookHandler = c => c.data;
+
+    registerHook("beforeCreate", SLUG, handler);
+    expect(registry.getHookCount("beforeCreate", SLUG)).toBe(1);
+
+    registry.clearCollectionOwnedBy(SLUG, "code");
+
+    expect(registry.getHookCount("beforeCreate", SLUG)).toBe(1);
+
+    unregisterHook("beforeCreate", SLUG, handler);
+    expect(registry.getHookCount("beforeCreate", SLUG)).toBe(0);
+  });
+
+  it("unregisters within the caller's own ownership", () => {
+    // The same function can be registered by the config and by a plugin -- a
+    // plugin's exported handler the app also lists. Removing the first identity
+    // match takes the config's entry, so the plugin's `off` leaves its own
+    // handler running and a later selective clear preserves the very
+    // registration the plugin asked to remove.
+    const registry = new HookRegistry();
+    const shared: HookHandler = c => c.data;
+    const ctx = createPluginContext(stubServices, registry, pluginDefinition);
+
+    registry.register("beforeCreate", SLUG, shared);
+    ctx.hooks.on("beforeCreate", SLUG, shared);
+    expect(registry.getHookCount("beforeCreate", SLUG)).toBe(2);
+
+    ctx.hooks.off("beforeCreate", SLUG, shared);
+
+    // One left, and it is the config's: clearing config-owned handlers empties
+    // the key, which it could not do if the plugin's entry were the survivor.
+    expect(registry.getHookCount("beforeCreate", SLUG)).toBe(1);
+    registry.clearCollectionOwnedBy(SLUG, "code");
     expect(registry.getHookCount("beforeCreate", SLUG)).toBe(0);
   });
 });

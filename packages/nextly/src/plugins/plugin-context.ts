@@ -20,6 +20,7 @@ import type {
   BeforeOperationHandler,
   HookContextPhase,
   HookHandler,
+  HookOwner,
 } from "../hooks/types";
 import type { CollectionService } from "../services/collections/collection-service";
 import type { EmailService } from "../services/email/email-service";
@@ -760,20 +761,24 @@ export function createPluginContext(
     register: (
       hookType: HookContextPhase,
       collection: string,
-      handler: HookHandler
+      handler: HookHandler,
+      owner?: HookOwner
     ) => void;
     unregister: (
       hookType: HookContextPhase,
       collection: string,
-      handler: HookHandler
+      handler: HookHandler,
+      owner?: HookOwner
     ) => void;
     registerBeforeOperation: (
       collection: string,
-      handler: BeforeOperationHandler
+      handler: BeforeOperationHandler,
+      owner?: HookOwner
     ) => void;
     unregisterBeforeOperation: (
       collection: string,
-      handler: BeforeOperationHandler
+      handler: BeforeOperationHandler,
+      owner?: HookOwner
     ) => void;
   },
   /**
@@ -786,29 +791,53 @@ export function createPluginContext(
   // so the runtime can clear them before the plugin re-initializes on HMR (B2).
   const pluginName = plugin?.name;
 
+  // Everything registered through this context is attributed to the plugin, so
+  // a config reload can rebuild the config's own handlers without deleting a
+  // plugin's -- the form builder registers its `afterRead` straight into the
+  // `forms` namespace, and nothing would put that back. A context built without
+  // a plugin has no identity to attribute to and keeps the registry's default.
+  const hookOwner: HookOwner | undefined = pluginName
+    ? `plugin:${pluginName}`
+    : undefined;
+
   // Create simplified hook registry for plugins
   const pluginHooks: PluginHookRegistry = {
     on: (hookType, collection, handler) => {
-      hookRegistry.register(hookType, collection, handler as HookHandler);
+      hookRegistry.register(
+        hookType,
+        collection,
+        handler as HookHandler,
+        hookOwner
+      );
       if (pluginName) {
         recordPluginSubscription(pluginName, () =>
-          hookRegistry.unregister(hookType, collection, handler as HookHandler)
+          hookRegistry.unregister(
+            hookType,
+            collection,
+            handler as HookHandler,
+            hookOwner
+          )
         );
       }
     },
     off: (hookType, collection, handler) => {
-      hookRegistry.unregister(hookType, collection, handler as HookHandler);
+      hookRegistry.unregister(
+        hookType,
+        collection,
+        handler as HookHandler,
+        hookOwner
+      );
     },
     onBeforeOperation: (collection, handler) => {
-      hookRegistry.registerBeforeOperation(collection, handler);
+      hookRegistry.registerBeforeOperation(collection, handler, hookOwner);
       if (pluginName) {
         recordPluginSubscription(pluginName, () =>
-          hookRegistry.unregisterBeforeOperation(collection, handler)
+          hookRegistry.unregisterBeforeOperation(collection, handler, hookOwner)
         );
       }
     },
     offBeforeOperation: (collection, handler) => {
-      hookRegistry.unregisterBeforeOperation(collection, handler);
+      hookRegistry.unregisterBeforeOperation(collection, handler, hookOwner);
     },
   };
 

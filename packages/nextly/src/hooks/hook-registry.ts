@@ -19,8 +19,11 @@ import type {
   HookContext,
   HookContextPhase,
   HookHandler,
+  HookOwner,
   HookType,
 } from "./types";
+
+export type { HookOwner };
 
 /**
  * The phases whose handlers exist for their effects, not to reshape data.
@@ -41,15 +44,6 @@ import type {
  * it, so failing the operation would tell a caller its write did not happen and
  * invite a retry that writes it twice.
  */
-/**
- * Who registered a handler.
- *
- * `"code"` is the app's own config; `"plugin:<name>"` is a plugin registering
- * directly. The same vocabulary the webhook recording provenance already uses,
- * so one concept does not get two spellings.
- */
-export type HookOwner = "code" | `plugin:${string}`;
-
 /**
  * A registered handler and who owns it.
  *
@@ -183,14 +177,22 @@ export class HookRegistry {
   private removeHandler<H>(
     store: Map<string, RegisteredHook<H>[]>,
     key: string,
-    handler: H
+    handler: H,
+    owner: HookOwner
   ) {
     const handlers = store.get(key);
     if (!handlers) return;
 
-    // Matched on the handler, not the entry: a caller unregisters the function
-    // it registered and does not know which entry wraps it.
-    const index = handlers.findIndex(e => e.handler === handler);
+    // Matched on the handler AND its owner: a caller unregisters the function
+    // it registered and does not know which entry wraps it, but the same
+    // function can be registered by more than one owner -- a plugin's exported
+    // handler that the app also lists in its config. Matching on identity alone
+    // takes the first entry, so a plugin's `off` would remove the config's
+    // registration and leave its own running, and a later config reload would
+    // then preserve the very handler the plugin asked to remove.
+    const index = handlers.findIndex(
+      e => e.handler === handler && e.owner === owner
+    );
     if (index > -1) {
       handlers.splice(index, 1);
     }
@@ -310,14 +312,22 @@ export class HookRegistry {
   unregister(
     hookType: HookContextPhase,
     collection: string,
-    handler: HookHandler
+    handler: HookHandler,
+    // Removal is scoped to the caller's own registrations, so unregistering
+    // reaches only what that owner registered.
+    owner: HookOwner = "code"
   ): void {
     this.rejectBeforeOperation(
       hookType,
       "unregister",
       "unregisterBeforeOperation"
     );
-    this.removeHandler(this.hooks, this.makeKey(hookType, collection), handler);
+    this.removeHandler(
+      this.hooks,
+      this.makeKey(hookType, collection),
+      handler,
+      owner
+    );
   }
 
   /**
@@ -329,12 +339,14 @@ export class HookRegistry {
    */
   unregisterBeforeOperation<T = unknown>(
     collection: string,
-    handler: BeforeOperationHandler<T>
+    handler: BeforeOperationHandler<T>,
+    owner: HookOwner = "code"
   ): void {
     this.removeHandler(
       this.beforeOperationHooks,
       this.makeKey("beforeOperation", collection),
-      handler
+      handler as BeforeOperationHandler,
+      owner
     );
   }
 
