@@ -1971,3 +1971,59 @@ describe("the contain size keyword", () => {
     expect(codes({ gap: "contain" })).toEqual(["invalid-style-value"]);
   });
 });
+
+describe("the whole shape of an attribute reference", () => {
+  it("refuses a name that is not one, or arguments that are not there", () => {
+    for (const value of [
+      "attr(1 px)",
+      "attr(data-width px,)",
+      "attr(data-width px, 1px, 2px)",
+      "attr(data-width px extra)",
+      "attr(, 1px)",
+    ]) {
+      expect(codes({ width: value }), value).toEqual(["invalid-style-value"]);
+    }
+  });
+
+  it("accepts the forms the grammar really has", () => {
+    expect(codes({ width: "attr(data-width px)" })).toEqual([]);
+    expect(codes({ width: "attr(data-width px, 0px)" })).toEqual([]);
+  });
+});
+
+describe("two operands of one function are the same kind of quantity", () => {
+  it("refuses a pair that measures different things", () => {
+    for (const value of [
+      "calc(sin(atan2(1px, 1s)) * 10px)",
+      "calc(sin(atan2(1px, 50%)) * 10px)",
+      "calc(sin(atan2(1px, 1)) * 10px)",
+      "calc(sin(atan2(1deg, 1px)) * 10px)",
+    ]) {
+      expect(codes({ width: value }), value).toEqual(["invalid-style-value"]);
+    }
+  });
+
+  it("accepts a pair that measures the same thing in different units", () => {
+    expect(codes({ width: "calc(sin(atan2(1px, 1em)) * 10px)" })).toEqual([]);
+    expect(codes({ width: "calc(sin(atan2(1s, 1ms)) * 10px)" })).toEqual([]);
+    expect(codes({ width: "calc(sin(atan2(1, 1)) * 10px)" })).toEqual([]);
+  });
+
+  it("asks nothing when either side is not a literal", () => {
+    // A custom property or an expression is not knowable here, so the
+    // comparison abstains rather than guessing at what it resolves to.
+    expect(codes({ width: "calc(sin(atan2(var(--x), 1px)) * 10px)" })).toEqual(
+      []
+    );
+    expect(
+      codes({ width: "calc(sin(atan2(1px, calc(1px + 1px))) * 10px)" })
+    ).toEqual([]);
+  });
+
+  it("asks nothing about a unit it does not recognise", () => {
+    // Comparing unit STRINGS would call `1s` and `1ms` incompatible, so the
+    // comparison is by category; a unit in no category abstains rather than
+    // being treated as its own.
+    expect(codes({ width: "calc(sin(atan2(1px, 1zz)) * 10px)" })).toEqual([]);
+  });
+});

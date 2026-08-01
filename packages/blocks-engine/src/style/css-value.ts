@@ -251,8 +251,16 @@ const MATH_FUNCTIONS: ReadonlySet<string> = new Set(MATH_FUNCTION_ARITY.keys());
  */
 function attrProducesDimension(node: CssNode): boolean {
   if (node.type !== "Function") return false;
-  const [first] = splitArguments(node.children);
-  const declared = first?.[1];
+  const args = splitArguments(node.children);
+  // An attribute name and an optional fallback, so one argument or two, and
+  // neither may be empty — `attr(x px,)` names a fallback it does not give.
+  if (args.length > 2) return false;
+  if (args.some(arg => arg.length === 0)) return false;
+  const first = args[0];
+  // The name is an identifier; `attr(1 px)` names no attribute at all.
+  if (first?.[0]?.type !== "Identifier") return false;
+  if (first.length > 2) return false;
+  const declared = first[1];
   if (declared === undefined) return false;
   // `type(<syntax>)` names a syntax this module does not model; abstaining is
   // the same answer it gives everywhere else it cannot read a grammar.
@@ -396,6 +404,48 @@ const NUMBER_FUNCTION_DOMAIN: ReadonlyMap<string, NumericDomain> = new Map([
   ["tan", "angleOrNumber"],
   ["sign", "any"],
 ]);
+
+/**
+ * What a unit measures, for the one question this module asks about two
+ * operands together: whether they are the same KIND of quantity. Comparing
+ * unit strings would call `1s` and `1ms` incompatible; a unit in no listed
+ * category is answered with `null`, which abstains rather than guesses.
+ */
+function unitCategory(unit: string): string | null {
+  const folded = asciiLower(unit);
+  if (LENGTH_UNITS.has(folded)) return "length";
+  if (ANGLE_UNITS.has(folded)) return "angle";
+  if (TIME_UNITS.has(folded)) return "time";
+  if (FREQUENCY_UNITS.has(folded)) return "frequency";
+  if (RESOLUTION_UNITS.has(folded)) return "resolution";
+  if (folded === "fr") return "flex";
+  return null;
+}
+
+/** Units outside the length and angle sets, named so operands can be compared. */
+const TIME_UNITS: ReadonlySet<string> = new Set(["s", "ms"]);
+const FREQUENCY_UNITS: ReadonlySet<string> = new Set(["hz", "khz"]);
+const RESOLUTION_UNITS: ReadonlySet<string> = new Set([
+  "dpi",
+  "dpcm",
+  "dppx",
+  "x",
+]);
+
+/**
+ * The kind of quantity one argument is, when that is knowable from a literal
+ * alone. `null` means it is not — a `var()`, an expression, anything computed
+ * — and two arguments are only ever compared when both are known.
+ */
+function literalCategory(terms: readonly CssNode[]): string | null {
+  if (terms.length !== 1) return null;
+  const term = terms[0];
+  if (term === undefined) return null;
+  if (term.type === "Number") return "number";
+  if (term.type === "Percentage") return "percentage";
+  if (term.type === "Dimension") return unitCategory(term.unit);
+  return null;
+}
 
 /** Units that measure an angle. */
 const ANGLE_UNITS: ReadonlySet<string> = new Set([
@@ -846,6 +896,17 @@ function measurementRejection(
             domain: angleDomain,
           });
           if (rejection !== null) return rejection;
+        }
+        // Two operands of one function have to be the same kind of quantity,
+        // which is a question about the arguments rather than about what the
+        // expression resolves to. Asked only when both are literals, so
+        // anything computed abstains instead of guessing.
+        if (angleArgs.length === 2) {
+          const first = literalCategory(angleArgs[0] ?? []);
+          const second = literalCategory(angleArgs[1] ?? []);
+          if (first !== null && second !== null && first !== second) {
+            return "not-a-length";
+          }
         }
         return null;
       }
