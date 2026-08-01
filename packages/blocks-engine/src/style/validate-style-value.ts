@@ -34,6 +34,26 @@ const REJECTION_MESSAGES = {
   "too-deeply-nested": "is nested too deeply",
 } as const;
 
+/**
+ * A shared allowance for how many style issues one validation run may report.
+ * Held by the caller so the limit spans a whole document rather than resetting
+ * at every node.
+ */
+export interface StyleIssueBudget {
+  remaining: number;
+  truncated: boolean;
+}
+
+/** The default number of style issues one document validation reports. */
+export const MAX_STYLE_ISSUES = 200;
+
+/** A fresh budget for one validation run. */
+export function newStyleIssueBudget(
+  remaining: number = MAX_STYLE_ISSUES
+): StyleIssueBudget {
+  return { remaining, truncated: false };
+}
+
 /** True when a token of the given kind may be stored at this leaf. */
 export function tokenKindAllowedAt(leaf: StyleLeaf, kind: TokenKind): boolean {
   return leaf.tokenKinds.includes(kind);
@@ -160,7 +180,7 @@ function leafIssues(
           ),
         ];
       }
-      const rejection = checkDimensionValue(value);
+      const rejection = checkDimensionValue(value, leaf.keywords);
       return rejection === null ? [] : rejected(path, value, rejection);
     }
     case "color": {
@@ -268,10 +288,29 @@ function shapeIssues(
 export function validateStyleValues(
   values: Readonly<Record<string, unknown>>,
   basePath: string,
-  mode: ValidationMode
+  mode: ValidationMode,
+  budget?: StyleIssueBudget
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   for (const [property, value] of Object.entries(values)) {
+    // A style map has no size limit of its own, so a document well inside the
+    // byte cap can hold a hundred thousand keys. Stopping at a budget keeps the
+    // work and the returned array proportional to what a reader can use, and
+    // says so rather than going quiet.
+    if (budget !== undefined && budget.remaining <= 0) {
+      if (!budget.truncated) {
+        budget.truncated = true;
+        issues.push({
+          path: basePath,
+          code: "style-issues-truncated",
+          severity: "warning",
+          message:
+            "There are more style problems than are reported here; fix these and validate again.",
+        });
+      }
+      break;
+    }
+    const before = issues.length;
     const path = pointer(basePath, property);
     const entry = getStyleProperty(property);
     if (entry === undefined) {
@@ -281,9 +320,11 @@ export function validateStyleValues(
         severity: mode === "strict" ? "error" : "warning",
         message: `"${property}" is not a style property.`,
       });
+      if (budget !== undefined) budget.remaining -= issues.length - before;
       continue;
     }
     issues.push(...shapeIssues(entry.shape, value, path));
+    if (budget !== undefined) budget.remaining -= issues.length - before;
   }
   return issues;
 }

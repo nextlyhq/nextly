@@ -36,9 +36,11 @@ vertical writing modes, which the catalog can add later without a migration.
 - **dimension** — a measurement: a length or percentage string (`"16px"`,
   `"2rem"`, `"50%"`) in any CSS length unit, a function that resolves to one
   (`"clamp(1rem, 5vw, 3rem)"`, `"var(--site-space-4)"`), a sizing keyword such as
-  `auto` or `max-content`, or the number `0`. Values that are valid CSS but
-  measure nothing are refused, including `"10"`, `"red"`, and units that measure
-  something else such as `"20deg"` or `"2s"` — they would emit a
+  `auto` or `max-content` **where that property accepts one**, or the number `0`.
+  Keywords are per property, because they are not interchangeable: `margin: auto`
+  centres a box while `padding: auto` means nothing. Values that are valid CSS
+  but measure nothing are refused, including `"10"`, `"red"`, and units that
+  measure something else such as `"20deg"` or `"2s"` — they would emit a
   declaration the browser discards. Shorthands carrying more than one
   measurement, such as `"4px 8px"` for a corner radius, are accepted.
 - **number** — a unitless number, bounded where the property has natural limits.

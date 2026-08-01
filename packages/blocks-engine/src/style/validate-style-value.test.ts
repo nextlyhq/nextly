@@ -3,7 +3,11 @@ import { describe, expect, it } from "vitest";
 import type { StyleValues } from "../document";
 import { ISSUE_CODES } from "../validation";
 import { checkColorValue, checkCssValue, checkUrlValue } from "./css-value";
-import { validateStyleValues } from "./validate-style-value";
+import {
+  MAX_STYLE_ISSUES,
+  newStyleIssueBudget,
+  validateStyleValues,
+} from "./validate-style-value";
 
 /** Validate one style-values record at the document root, strictly. */
 function check(values: StyleValues) {
@@ -539,6 +543,74 @@ describe("square-bracket nesting", () => {
     expect(
       codes({ gridTemplateColumns: "[full-start] 1fr [full-end]" })
     ).toEqual([]);
+  });
+});
+
+describe("urls written as strings in image()", () => {
+  it("are checked, since an image source may be a string", () => {
+    expect(checkCssValue('image("javascript:alert1")')).toBe(
+      "unsafe-url-scheme"
+    );
+    expect(checkCssValue('image("data:text/html,x")')).toBe(
+      "unsafe-url-scheme"
+    );
+  });
+
+  it("leaves an ordinary image() alone", () => {
+    expect(checkCssValue('image("/media/a.png")')).toBeNull();
+  });
+});
+
+describe("keywords belong to the property, not to lengths in general", () => {
+  it("refuses a keyword the property does not take", () => {
+    // `padding: auto` and `font-size: none` are discarded by the browser.
+    expect(codes({ padding: { blockStart: "auto" } })).toEqual([
+      "invalid-style-value",
+    ]);
+    expect(codes({ fontSize: "none" })).toEqual(["invalid-style-value"]);
+    expect(codes({ borderRadius: "auto" })).toEqual(["invalid-style-value"]);
+  });
+
+  it("accepts the keyword each property actually takes", () => {
+    expect(codes({ margin: { blockStart: "auto" } })).toEqual([]);
+    expect(codes({ width: "auto" })).toEqual([]);
+    expect(codes({ width: "max-content" })).toEqual([]);
+    expect(codes({ maxWidth: "none" })).toEqual([]);
+    expect(codes({ gap: "normal" })).toEqual([]);
+    expect(codes({ letterSpacing: "normal" })).toEqual([]);
+    expect(codes({ fontSize: "larger" })).toEqual([]);
+    expect(codes({ border: { width: { blockStart: "thin" } } })).toEqual([]);
+    expect(codes({ position: { inset: { blockStart: "auto" } } })).toEqual([]);
+  });
+
+  it("accepts the CSS-wide keywords everywhere", () => {
+    for (const value of ["inherit", "initial", "unset", "revert"]) {
+      expect(codes({ padding: { blockStart: value } }), value).toEqual([]);
+    }
+  });
+});
+
+describe("issue volume", () => {
+  it("is bounded, so a large malformed map cannot amplify the response", () => {
+    const many: Record<string, unknown> = {};
+    for (let index = 0; index < 5000; index += 1) many[`k${index}`] = "1px";
+    const budget = newStyleIssueBudget();
+    const issues = validateStyleValues(many, "/styles", "strict", budget);
+    expect(issues.length).toBeLessThanOrEqual(MAX_STYLE_ISSUES + 1);
+    expect(issues.at(-1)?.code).toBe("style-issues-truncated");
+  });
+
+  it("reports everything when the map fits inside the budget", () => {
+    const issues = validateStyleValues(
+      { nope: "1px", alsoNope: "1px" },
+      "/styles",
+      "strict",
+      newStyleIssueBudget()
+    );
+    expect(issues.map(issue => issue.code)).toEqual([
+      "unknown-style-property",
+      "unknown-style-property",
+    ]);
   });
 });
 

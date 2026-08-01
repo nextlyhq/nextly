@@ -34,10 +34,39 @@ import type {
 
 function dimension(
   cssProperty: string,
+  keywords: readonly string[] = [],
   tokenKinds: readonly TokenKind[] = ["dimension"]
 ): DimensionLeaf {
-  return { kind: "dimension", cssProperty, tokenKinds };
+  return { kind: "dimension", cssProperty, tokenKinds, keywords };
 }
+
+/** Keyword sets shared by several length-valued properties. */
+const SIZING_KEYWORDS = [
+  "auto",
+  "min-content",
+  "max-content",
+  "fit-content",
+  "stretch",
+];
+const MAX_SIZING_KEYWORDS = [
+  "none",
+  "min-content",
+  "max-content",
+  "fit-content",
+  "stretch",
+];
+const FONT_SIZE_KEYWORDS = [
+  "xx-small",
+  "x-small",
+  "small",
+  "medium",
+  "large",
+  "x-large",
+  "xx-large",
+  "xxx-large",
+  "smaller",
+  "larger",
+];
 
 function keyword(cssProperty: string, values: readonly string[]): KeywordLeaf {
   return { kind: "keyword", cssProperty, tokenKinds: [], values };
@@ -71,16 +100,20 @@ function url(cssProperty: string): UrlLeaf {
  * `margin-block-start` … `margin-inline-end`, and `("border", "width")` yields
  * `border-block-start-width` … `border-inline-end-width`.
  */
-function logicalSides(prefix: string, suffix?: string): LogicalSidesShape {
+function logicalSides(
+  prefix: string,
+  suffix?: string,
+  keywords: readonly string[] = []
+): LogicalSidesShape {
   const name = (side: string): string =>
     suffix ? `${prefix}-${side}-${suffix}` : `${prefix}-${side}`;
   return {
     kind: "logicalSides",
     sides: {
-      blockStart: dimension(name("block-start")),
-      blockEnd: dimension(name("block-end")),
-      inlineStart: dimension(name("inline-start")),
-      inlineEnd: dimension(name("inline-end")),
+      blockStart: dimension(name("block-start"), keywords),
+      blockEnd: dimension(name("block-end"), keywords),
+      inlineStart: dimension(name("inline-start"), keywords),
+      inlineEnd: dimension(name("inline-end"), keywords),
     },
   };
 }
@@ -113,7 +146,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
     property: "margin",
     group: "spacing",
     flag: "margin",
-    shape: logicalSides("margin"),
+    shape: logicalSides("margin", undefined, ["auto"]),
     summary: "Space outside the element, per logical side.",
   },
   {
@@ -202,19 +235,19 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "gap",
     group: "layout",
-    shape: dimension("gap"),
+    shape: dimension("gap", ["normal"]),
     summary: "Space between rows and columns.",
   },
   {
     property: "rowGap",
     group: "layout",
-    shape: dimension("row-gap"),
+    shape: dimension("row-gap", ["normal"]),
     summary: "Space between rows.",
   },
   {
     property: "columnGap",
     group: "layout",
-    shape: dimension("column-gap"),
+    shape: dimension("column-gap", ["normal"]),
     summary: "Space between columns.",
   },
   {
@@ -246,37 +279,37 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "width",
     group: "dimensions",
-    shape: dimension("width"),
+    shape: dimension("width", SIZING_KEYWORDS),
     summary: "Element width.",
   },
   {
     property: "height",
     group: "dimensions",
-    shape: dimension("height"),
+    shape: dimension("height", SIZING_KEYWORDS),
     summary: "Element height.",
   },
   {
     property: "minWidth",
     group: "dimensions",
-    shape: dimension("min-width"),
+    shape: dimension("min-width", SIZING_KEYWORDS),
     summary: "Lower bound on width.",
   },
   {
     property: "minHeight",
     group: "dimensions",
-    shape: dimension("min-height"),
+    shape: dimension("min-height", SIZING_KEYWORDS),
     summary: "Lower bound on height.",
   },
   {
     property: "maxWidth",
     group: "dimensions",
-    shape: dimension("max-width"),
+    shape: dimension("max-width", MAX_SIZING_KEYWORDS),
     summary: "Upper bound on width.",
   },
   {
     property: "maxHeight",
     group: "dimensions",
-    shape: dimension("max-height"),
+    shape: dimension("max-height", MAX_SIZING_KEYWORDS),
     summary: "Upper bound on height.",
   },
   {
@@ -314,7 +347,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "fontSize",
     group: "typography",
-    shape: dimension("font-size"),
+    shape: dimension("font-size", FONT_SIZE_KEYWORDS),
     summary: "Text size.",
   },
   {
@@ -337,20 +370,23 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
     group: "typography",
     shape: {
       kind: "union",
-      of: [numberValue("line-height", { min: 0 }), dimension("line-height")],
+      of: [
+        numberValue("line-height", { min: 0 }),
+        dimension("line-height", ["normal"]),
+      ],
     },
     summary: "Line box height, unitless (preferred) or as a length.",
   },
   {
     property: "letterSpacing",
     group: "typography",
-    shape: dimension("letter-spacing"),
+    shape: dimension("letter-spacing", ["normal"]),
     summary: "Space between characters.",
   },
   {
     property: "wordSpacing",
     group: "typography",
-    shape: dimension("word-spacing"),
+    shape: dimension("word-spacing", ["normal"]),
     summary: "Space between words.",
   },
   {
@@ -463,7 +499,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
     shape: {
       kind: "object",
       fields: {
-        width: logicalSides("border", "width"),
+        width: logicalSides("border", "width", ["thin", "medium", "thick"]),
         style: keyword("border-style", [
           "none",
           "solid",
@@ -562,7 +598,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
           "fixed",
           "sticky",
         ]),
-        inset: logicalSides("inset"),
+        inset: logicalSides("inset", undefined, ["auto"]),
         zIndex: numberValue("z-index", { integer: true }),
       },
     },

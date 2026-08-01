@@ -110,6 +110,14 @@ export interface KeywordLeaf extends StyleLeafBase {
 /** A length, percentage, or other CSS dimension, stored as a string (or `0`). */
 export interface DimensionLeaf extends StyleLeafBase {
   kind: "dimension";
+  /**
+   * Keywords this property accepts in place of a measurement. Declared per
+   * property because they are not interchangeable: `margin: auto` centres a
+   * box, `padding: auto` is discarded, and `max-width: none` has no meaning on
+   * `min-width`. The CSS-wide keywords are accepted everywhere and are not
+   * listed here.
+   */
+  keywords?: readonly string[];
 }
 
 /** A unitless number, optionally bounded. */

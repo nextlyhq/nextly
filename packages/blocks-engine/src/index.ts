@@ -149,9 +149,12 @@ export {
 export type { CssValueRejection } from "./style/css-value";
 export {
   validateStyleValues,
+  newStyleIssueBudget,
+  MAX_STYLE_ISSUES,
   tokenKindAllowedAt,
   tokenKindsForProperty,
 } from "./style/validate-style-value";
+export type { StyleIssueBudget } from "./style/validate-style-value";
 export {
   styleSupportDefinitions,
   stylePropertiesForSupports,

@@ -81,18 +81,13 @@ function hasControlCharacter(value: string): boolean {
 }
 
 /**
- * Keywords a length-valued property may legitimately carry instead of a
- * measurement. Bounded on purpose: an identifier outside this set is far more
- * likely to be a mistake such as `"red"` than a length the catalog forgot.
+ * Keywords every property accepts, whatever its value type.
+ * Property-specific keywords (`auto` on a margin, `thin` on a border width)
+ * are declared by the catalog entry, because a keyword one property accepts is
+ * discarded by the browser on another: `margin: auto` is meaningful and
+ * `padding: auto` is not.
  */
-const DIMENSION_KEYWORDS: ReadonlySet<string> = new Set([
-  "auto",
-  "none",
-  "normal",
-  "min-content",
-  "max-content",
-  "fit-content",
-  "stretch",
+const CSS_WIDE_KEYWORDS: ReadonlySet<string> = new Set([
   "inherit",
   "initial",
   "unset",
@@ -195,10 +190,12 @@ function parseValue(value: string): CssNode | null {
 
 /**
  * Functions that take a URL as a plain string rather than inside `url()`.
- * `image-set("a.png" 1x)` loads that string as an image, so it needs the same
- * scheme allowlist even though the parser gives it no `Url` node.
+ * An image source is `<url> | <string>`, so `image("a.png")` and
+ * `image-set("a.png" 1x)` both load that string as an image and need the same
+ * scheme allowlist, even though the parser gives them no `Url` node.
  */
 const URL_STRING_FUNCTIONS: ReadonlySet<string> = new Set([
+  "image",
   "image-set",
   "-webkit-image-set",
   "src",
@@ -281,15 +278,19 @@ export function checkCssValue(value: string): CssValueRejection | null {
  * Multi-part values are accepted, since shorthands such as a corner radius
  * legitimately carry more than one length.
  */
-export function checkDimensionValue(value: string): CssValueRejection | null {
+export function checkDimensionValue(
+  value: string,
+  keywords: readonly string[] = []
+): CssValueRejection | null {
   const rejection = checkCssValue(value);
   if (rejection !== null) return rejection;
   const ast = parseValue(value);
   if (ast === null || ast.type !== "Value") return "not-a-length";
+  const allowed = new Set(keywords.map(keyword => keyword.toLowerCase()));
   let sawMeasurement = false;
   for (const child of ast.children) {
     if (child.type === "Operator") continue;
-    const childRejection = measurementRejection(child, false);
+    const childRejection = measurementRejection(child, false, allowed);
     if (childRejection !== null) return childRejection;
     sawMeasurement = true;
   }
@@ -303,7 +304,8 @@ export function checkDimensionValue(value: string): CssValueRejection | null {
  */
 function measurementRejection(
   node: CssNode,
-  insideFunction: boolean
+  insideFunction: boolean,
+  keywords: ReadonlySet<string>
 ): CssValueRejection | null {
   switch (node.type) {
     case "Dimension":
@@ -312,10 +314,12 @@ function measurementRejection(
       return null;
     case "Number":
       return insideFunction || Number(node.value) === 0 ? null : "not-a-length";
-    case "Identifier":
-      return DIMENSION_KEYWORDS.has(node.name.toLowerCase())
+    case "Identifier": {
+      const name = node.name.toLowerCase();
+      return CSS_WIDE_KEYWORDS.has(name) || keywords.has(name)
         ? null
         : "not-a-length";
+    }
     case "Operator":
       return null;
     case "Function": {
@@ -326,7 +330,7 @@ function measurementRejection(
       // their contents are not inspected.
       if (name === "var" || name === "env") return null;
       for (const child of node.children) {
-        const childRejection = measurementRejection(child, true);
+        const childRejection = measurementRejection(child, true, keywords);
         if (childRejection !== null) return childRejection;
       }
       return null;

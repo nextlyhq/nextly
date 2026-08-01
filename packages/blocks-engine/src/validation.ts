@@ -19,7 +19,11 @@ import {
 import { describeValue, pointer } from "./issue-text";
 import { DEFAULT_LIMITS, LIMIT_WARNING_RATIO } from "./limits";
 import type { DocumentLimits } from "./limits";
-import { validateStyleValues } from "./style/validate-style-value";
+import {
+  newStyleIssueBudget,
+  validateStyleValues,
+} from "./style/validate-style-value";
+import type { StyleIssueBudget } from "./style/validate-style-value";
 
 /** Severity of a validation issue. `error` blocks a strict publish. */
 export type IssueSeverity = "error" | "warning";
@@ -109,6 +113,8 @@ export const ISSUE_CODES = {
     "A style value does not match the shape its property declares.",
   "token-not-allowed":
     "A design-token reference is used where only literal values are accepted.",
+  "style-issues-truncated":
+    "More style problems were found than the validation reports.",
 } as const;
 
 /** A stable validation issue code. */
@@ -207,6 +213,7 @@ export function validate(
     unknownSeverity,
     seenIds: new Map<string, string>(),
     seenDomIds: new Map<string, string>(),
+    styleBudget: newStyleIssueBudget(),
   };
 
   // Document-level styles use the same envelope as node styles but have no
@@ -482,6 +489,8 @@ interface NodeCheckState {
   seenIds: Map<string, string>;
   /** Non-empty DOM ids seen so far (from `cssId` or `attributes.id`) → pointer. */
   seenDomIds: Map<string, string>;
+  /** Shared across the whole document, so the limit is not per node. */
+  styleBudget: StyleIssueBudget;
 }
 
 function validateNode(
