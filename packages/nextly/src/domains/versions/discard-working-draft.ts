@@ -40,13 +40,17 @@ export interface DiscardWorkingDraftArgs {
 export async function discardWorkingDraft(
   args: DiscardWorkingDraftArgs
 ): Promise<unknown> {
-  // Remove the sidecar. The split stores the working draft under the null
-  // locale key (it applies only to non-localized collections), so that is the
-  // one to clear. Deleting when none exists is a no-op, not an error.
-  await getService("versionsService").deleteWorkingDraft(
-    { scopeKind: "collection", scopeSlug: args.slug, entryId: args.entryId },
-    null
-  );
+  // Remove the sidecar through the collections handler, which deletes it under
+  // the same parent-row lock a draft save takes: a save committing between this
+  // request's authorization checks and the delete would otherwise have its
+  // brand-new draft removed with both requests reporting success. The split
+  // stores the working draft under the null locale key (it applies only to
+  // non-localized collections). Deleting when none exists is a no-op, not an
+  // error.
+  await getService("collectionsHandler").discardWorkingDraft({
+    collectionName: args.slug,
+    entryId: args.entryId,
+  });
 
   // Re-read the now-authoritative published row through the full read pipeline
   // (hooks, redaction, field-level access), without the working-draft overlay,

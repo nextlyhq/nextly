@@ -417,27 +417,24 @@ export class CollectionsHandler {
       // actually fetches through, and it derives the flag from the SAME predicate
       // the mutation service gates on, so the editor can never present a
       // status-less save as a pending draft while the server writes the live row.
-      // Best-effort: a component-registry failure leaves the split off rather than
-      // failing the schema read.
-      try {
-        data.draftsEnabled = await schemaDraftsEnabled({
-          status: data.status as boolean | undefined,
-          versions: data.versions as
-            | { drafts?: { enabled?: boolean } }
-            | null
-            | undefined,
-          localized: data.localized as boolean | undefined,
-          fields: originalFields,
-        });
-      } catch (eligibilityError) {
-        console.error(
-          "[CollectionsHandler.getCollection] Failed to resolve draftsEnabled:",
-          eligibilityError instanceof Error
-            ? eligibilityError.message
-            : String(eligibilityError)
-        );
-        data.draftsEnabled = false;
-      }
+      //
+      // A failure to resolve component eligibility is propagated, not defaulted
+      // to false: the only path that throws is a drafts-configured collection
+      // whose components could not be resolved (a transient registry/database
+      // error), and false is the DESTRUCTIVE answer there — the admin would send
+      // an explicit published save that overwrites the live row instead of the
+      // status-less save that stores a working draft. Failing the read keeps the
+      // editor from acting on an unknown verdict; it is retryable, and mirrors
+      // resolveComponentSchemas, which is fail-closed for the same reason.
+      data.draftsEnabled = await schemaDraftsEnabled({
+        status: data.status as boolean | undefined,
+        versions: data.versions as
+          | { drafts?: { enabled?: boolean } }
+          | null
+          | undefined,
+        localized: data.localized as boolean | undefined,
+        fields: originalFields,
+      });
     }
 
     return result;
@@ -660,6 +657,19 @@ export class CollectionsHandler {
     authenticatedScope?: AuthenticatedScope;
   }) {
     return this.entryService.getEntry(params);
+  }
+
+  /**
+   * Remove a document's pending working-draft sidecar under the same parent-row
+   * lock a draft save takes. Serializing the discard with concurrent draft saves
+   * keeps it from deleting a draft another editor committed after this request's
+   * authorization checks. The discard handler authorizes read and update first.
+   */
+  async discardWorkingDraft(params: {
+    collectionName: string;
+    entryId: string;
+  }): Promise<void> {
+    return this.entryService.discardWorkingDraft(params);
   }
 
   /**

@@ -516,6 +516,45 @@ describe("draft/published split — discard working draft (integration)", () => 
     // The pending draft survives a refused discard.
     expect(await workingDraftCount(id)).toBe(1);
   });
+
+  it("removes the sidecar through the handler's locked discard, leaving the live row untouched", async () => {
+    // The handler-level method the discard endpoint calls once it has authorized
+    // read and update: it deletes the sidecar under the parent-row lock (a no-op
+    // lock on SQLite, which serializes writers) and takes no user of its own.
+    handle = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: COLLECTION,
+          status: true,
+          versions: { drafts: true },
+          access: { read: () => true, update: () => true },
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const handler = handle.getService("collectionsHandler");
+    const entries = handler.getEntryService() as CollectionEntryService;
+    const trusted = { collectionName: COLLECTION, overrideAccess: true };
+
+    await entries.createEntry(trusted, { title: "live", status: "published" });
+    const [row] = await handle.adapter.select<LiveRow>(TABLE);
+    const id = row.id;
+    await entries.updateEntry(
+      { ...trusted, entryId: id },
+      { title: "edited-in-draft" }
+    );
+    expect(await workingDraftCount(id)).toBe(1);
+
+    await handler.discardWorkingDraft({
+      collectionName: COLLECTION,
+      entryId: id,
+    });
+
+    expect(await workingDraftCount(id)).toBe(0);
+    const [liveAfter] = await handle.adapter.select<LiveRow>(TABLE);
+    expect(liveAfter.title).toBe("live");
+    expect(liveAfter.status).toBe("published");
+  });
 });
 
 // Publishing a document that has a pending working draft must apply the draft's

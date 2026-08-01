@@ -1458,6 +1458,46 @@ export class CollectionMutationService extends BaseService {
     });
   }
 
+  /**
+   * Remove a document's pending working-draft sidecar under the same parent-row
+   * lock a draft save takes.
+   *
+   * A status-less save upserts the working draft while holding the parent row's
+   * lock (see the working-draft branch of updateEntry). Discarding has to take
+   * the same lock: without it, a save that commits between a discard's
+   * authorization checks and its delete would have its brand-new draft removed,
+   * and both requests would report success, silently losing that edit. Running
+   * the delete inside a transaction that locks the parent row serializes it with
+   * those saves. The lock is a no-op where row locking is unavailable (SQLite,
+   * which already serializes writers).
+   *
+   * Authorization is the caller's concern: the discard handler establishes read
+   * and update on the document before this runs. Deleting when no working draft
+   * exists is a no-op, not an error.
+   */
+  async discardWorkingDraft(params: {
+    collectionName: string;
+    entryId: string;
+  }): Promise<void> {
+    const collection = await this.collectionService.getCollection(
+      params.collectionName
+    );
+    const tableName = this.resolveTableName(collection, params.collectionName);
+    await this.adapter.transaction(async tx => {
+      // Serialize with concurrent draft-save upserts, which lock this same parent
+      // row before writing the sidecar.
+      await tx.lockRow(tableName, params.entryId);
+      await new VersionsRepository(tx).deleteWorkingDraft(
+        {
+          scopeKind: "collection",
+          scopeSlug: params.collectionName,
+          entryId: params.entryId,
+        },
+        null
+      );
+    });
+  }
+
   private async readCompanionSlugsAllLocales(
     db: CompanionReadDb,
     collectionName: string,
