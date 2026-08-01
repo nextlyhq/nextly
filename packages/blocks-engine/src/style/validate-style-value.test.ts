@@ -310,6 +310,53 @@ describe("untrusted text in messages", () => {
   });
 });
 
+describe("composite keys that exist on every object", () => {
+  it("are reported as unknown fields rather than resolved from the prototype", () => {
+    // `toString` and friends are ordinary JSON keys. Looking them up on a plain
+    // object answers from the prototype, which would hand a function to the
+    // shape walker; validation must report them, never throw.
+    for (const key of [
+      "toString",
+      "constructor",
+      "__proto__",
+      "hasOwnProperty",
+      "valueOf",
+    ]) {
+      const issues = check({ padding: { [key]: "1px" } });
+      expect(
+        issues.map(issue => issue.code),
+        key
+      ).toEqual(["invalid-style-value"]);
+    }
+  });
+
+  it("does not throw for a top-level property named like a prototype member", () => {
+    expect(() => check({ toString: "1px" })).not.toThrow();
+    expect(codes({ toString: "1px" })).toEqual(["unknown-style-property"]);
+  });
+});
+
+describe("functions in a length", () => {
+  it("accepts the ones that can produce a length", () => {
+    for (const value of [
+      "calc(1px + 1em)",
+      "clamp(1rem, 5vw, 3rem)",
+      "min(10px, 2em)",
+      "max(10px, 2em)",
+      "var(--site-space-4)",
+      "env(safe-area-inset-block-start)",
+    ]) {
+      expect(codes({ width: value }), value).toEqual([]);
+    }
+  });
+
+  it("refuses the ones that cannot", () => {
+    for (const value of ["rgb(1 2 3)", "rotate(20deg)", "foo()", "blur(3px)"]) {
+      expect(codes({ width: value }), value).toEqual(["invalid-style-value"]);
+    }
+  });
+});
+
 describe("issue codes", () => {
   it("are all declared in the shared code table", () => {
     const emitted = [

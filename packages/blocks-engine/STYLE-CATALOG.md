@@ -181,9 +181,9 @@ asked for one.
 
 ### position
 
-| Property   | Flag | Value                                                | Tokens    | Emits                                        |
-| ---------- | ---- | ---------------------------------------------------- | --------- | -------------------------------------------- |
-| `position` |      | composite: `type`, `inset` (logical sides), `zIndex` | dimension | `position`, `inset-block-start` …, `z-index` |
+| Property   | Flag | Value                                                | Tokens            | Emits                                        |
+| ---------- | ---- | ---------------------------------------------------- | ----------------- | -------------------------------------------- |
+| `position` |      | composite: `type`, `inset` (logical sides), `zIndex` | dimension, number | `position`, `inset-block-start` …, `z-index` |
 
 ### container
 

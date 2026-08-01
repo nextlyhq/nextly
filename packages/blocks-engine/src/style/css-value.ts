@@ -83,14 +83,32 @@ const DIMENSION_KEYWORDS: ReadonlySet<string> = new Set([
   "revert-layer",
 ]);
 
-/** Node types that carry a measurement. */
+/** Node types that carry a measurement on their own. */
 const SIZE_NODE_TYPES: ReadonlySet<string> = new Set([
   "Dimension",
   "Percentage",
-  // calc(), clamp(), min(), max(), var(), env() and anything else resolving to
-  // a length at used-value time; which function it is cannot be decided here
-  // without the grammar data this module deliberately does not consult.
-  "Function",
+]);
+
+/**
+ * Functions that can produce a length. Bounded on purpose: treating every
+ * function as a measurement would accept `rotate(20deg)` or `rgb(1 2 3)` as a
+ * width. `var()` and `env()` are included because what they resolve to is not
+ * knowable here, and refusing them would break token references.
+ */
+const DIMENSION_FUNCTIONS: ReadonlySet<string> = new Set([
+  "calc",
+  "min",
+  "max",
+  "clamp",
+  "round",
+  "mod",
+  "rem",
+  "abs",
+  "sign",
+  "var",
+  "env",
+  "fit-content",
+  "anchor-size",
 ]);
 
 /** Parse a CSS value, or `null` when it is not one. */
@@ -155,6 +173,13 @@ export function checkDimensionValue(value: string): CssValueRejection | null {
   for (const child of ast.children) {
     if (child.type === "Operator") continue;
     if (SIZE_NODE_TYPES.has(child.type)) {
+      sawMeasurement = true;
+      continue;
+    }
+    if (child.type === "Function") {
+      if (!DIMENSION_FUNCTIONS.has(child.name.toLowerCase())) {
+        return "not-a-length";
+      }
       sawMeasurement = true;
       continue;
     }

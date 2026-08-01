@@ -246,4 +246,37 @@ describe("the reference doc and the catalog agree", () => {
       ).toBeDefined();
     }
   });
+
+  it("documents each property's group, flag, and token kinds", () => {
+    // Names alone drifting is the obvious failure; a row quietly describing the
+    // wrong tokens or the wrong flag is the one that misleads without looking
+    // wrong, so the cells are checked too.
+    let group: string | undefined;
+    for (const line of doc.split("\n")) {
+      const heading = /^###\s+(\S+)/.exec(line);
+      if (heading !== null) {
+        group = heading[1];
+        continue;
+      }
+      const row = /^\|\s*`([a-zA-Z]+)`\s*\|([^|]*)\|[^|]*\|([^|]*)\|/.exec(
+        line
+      );
+      if (row === null) continue;
+      const [, property, flagCell, tokenCell] = row;
+      const entry = getStyleProperty(property as string);
+      expect(entry, `documented property "${property}"`).toBeDefined();
+      expect(entry?.group, `group of "${property}"`).toBe(group);
+      expect(entry?.flag ?? "", `flag of "${property}"`).toBe(
+        (flagCell ?? "").replaceAll("`", "").trim()
+      );
+      const documentedKinds = (tokenCell ?? "")
+        .split(",")
+        .map(kind => kind.trim())
+        .filter(kind => kind !== "");
+      expect(
+        [...documentedKinds].sort(),
+        `token kinds of "${property}"`
+      ).toEqual([...tokenKindsForProperty(property as string)].sort());
+    }
+  });
 });

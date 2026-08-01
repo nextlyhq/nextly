@@ -192,7 +192,11 @@ function partIssues(
   }
   const issues: ValidationIssue[] = [];
   for (const [key, partValue] of Object.entries(value)) {
-    const partShape = parts[key];
+    // Ownership is checked rather than trusting the lookup: a document may
+    // legally contain a key such as `toString` or `constructor`, and a plain
+    // object would answer those from its prototype, handing a function to the
+    // shape walker instead of reporting an unknown field.
+    const partShape = Object.hasOwn(parts, key) ? parts[key] : undefined;
     if (partShape === undefined) {
       issues.push(
         invalid(
