@@ -836,6 +836,13 @@ function validateStyleEnvelope(
         });
         state.styleBudget.remaining -= 1;
       }
+      // Rechecked between the two: an unknown breakpoint and a malformed value
+      // are independently chargeable, so the first can spend the last slot and
+      // the second would otherwise push past the cap without saying it stopped.
+      if (state.styleBudget.remaining <= 0) {
+        state.issues.push(...styleBudgetExhausted(state, bpPath));
+        return;
+      }
       if (!isPlainObject(values)) {
         state.issues.push({
           path: bpPath,

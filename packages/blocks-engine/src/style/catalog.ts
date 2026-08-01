@@ -509,6 +509,9 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
       "uppercase",
       "lowercase",
       "capitalize",
+      // The transformations CJK text needs; nothing else expresses them.
+      "full-width",
+      "full-size-kana",
     ]),
     summary: "Letter-case transformation.",
   },
@@ -622,6 +625,9 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
         }),
         style: keyword("border-style", [
           "none",
+          // Distinct from `none` where borders compete: under collapsed-table
+          // conflict resolution `hidden` suppresses the neighbouring border.
+          "hidden",
           "solid",
           "dashed",
           "dotted",

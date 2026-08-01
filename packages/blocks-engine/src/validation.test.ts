@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { DOCUMENT_KINDS } from "./document";
 import type { BlockDocument, BreakpointSet } from "./document";
 import { documentBytes } from "./limits";
+import { MAX_STYLE_ISSUES } from "./style/validate-style-value";
 import {
   FIXTURE_BREAKPOINTS,
   VALIDATION_FIXTURES,
@@ -1071,6 +1072,43 @@ describe("a malformed styles field is charged to the budget", () => {
       }
     );
     expect(issues.length).toBeLessThan(300);
+    expect(issues.some(issue => issue.code === "style-issues-truncated")).toBe(
+      true
+    );
+  });
+});
+
+describe("two chargeable findings on one breakpoint", () => {
+  it("does not let the second push past the cap", () => {
+    // Every breakpoint here is both unknown AND holds a non-object, so each
+    // iteration charges twice. The unknown state ahead of them is what makes
+    // the remaining budget ODD: charging two at a time from an even cap lands
+    // exactly on zero at an iteration boundary and never overruns, so without
+    // it this would pass whether the check between them exists or not.
+    const byBreakpoint: Record<string, unknown> = {};
+    for (let index = 0; index < 400; index += 1) {
+      byBreakpoint[`bp${index}`] = "not an object";
+    }
+    const issues = validate(
+      invalidDoc({
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: "n1",
+            type: "core/box",
+            version: 1,
+            props: {},
+            styles: { nope: { base: {} }, base: byBreakpoint },
+          },
+        ],
+      }),
+      { breakpoints: FIXTURE_BREAKPOINTS, mode: "strict" }
+    );
+    const styleIssues = issues.filter(
+      issue => issue.code !== "style-issues-truncated"
+    );
+    expect(styleIssues.length).toBeLessThanOrEqual(MAX_STYLE_ISSUES);
     expect(issues.some(issue => issue.code === "style-issues-truncated")).toBe(
       true
     );

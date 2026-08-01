@@ -1427,3 +1427,23 @@ describe("alignment keywords that resolve against the flex direction", () => {
     }
   });
 });
+
+describe("vocabularies that were missing a standard member", () => {
+  it("accepts the case transforms CJK text needs", () => {
+    expect(codes({ textTransform: "full-width" })).toEqual([]);
+    expect(codes({ textTransform: "full-size-kana" })).toEqual([]);
+    expect(codes({ textTransform: "uppercase" })).toEqual([]);
+  });
+
+  it("accepts a hidden border, which is not the same as none", () => {
+    expect(codes({ border: { style: "hidden" } })).toEqual([]);
+    expect(codes({ border: { style: "none" } })).toEqual([]);
+  });
+
+  it("still refuses a value in neither vocabulary", () => {
+    expect(codes({ textTransform: "nope" })).toEqual(["invalid-style-value"]);
+    expect(codes({ border: { style: "nope" } })).toEqual([
+      "invalid-style-value",
+    ]);
+  });
+});
