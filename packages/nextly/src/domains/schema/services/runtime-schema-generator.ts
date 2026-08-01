@@ -13,6 +13,7 @@
  * @module services/schema/runtime-schema-generator
  */
 
+import { sql } from "drizzle-orm";
 import {
   mysqlTable,
   text as mysqlText,
@@ -305,7 +306,12 @@ function buildDrizzleColumnRecord(
  * created_at / updated_at) into the appropriate Drizzle column
  * builder for the given dialect. Mirrors the legacy hardcoded
  * builders byte-for-byte: id is primaryKey, title/slug are
- * notNull, timestamps default to defaultNow on PG/MySQL.
+ * notNull, timestamps carry a database-side default on every dialect.
+ *
+ * The timestamps stay nullable, but a row reaching the database without them does not: the
+ * default supplies a value for any insert that omits the column, which is what an insert
+ * bypassing the write path does. Nullable and defaulted are independent choices, and only
+ * the default can be added to a table a user already has without rewriting its rows.
  */
 function buildSystemDrizzleColumn(
   sys: ReturnType<typeof getSystemColumnDescriptors>[number],
@@ -351,10 +357,14 @@ function buildSystemDrizzleColumn(
   // sqlite
   if (sys.name === "id") return sqliteText("id").primaryKey();
   if (sys.name === "created_at") {
-    return sqliteInteger("created_at", { mode: "timestamp" });
+    return sqliteInteger("created_at", { mode: "timestamp" }).default(
+      sql`(strftime('%s', 'now'))`
+    );
   }
   if (sys.name === "updated_at") {
-    return sqliteInteger("updated_at", { mode: "timestamp" });
+    return sqliteInteger("updated_at", { mode: "timestamp" }).default(
+      sql`(strftime('%s', 'now'))`
+    );
   }
   if (sys.name === "status") {
     // SQLite has no varchar — text with default 'draft' is the equivalent.
