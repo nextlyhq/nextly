@@ -65,6 +65,7 @@ import type {
 import { DrizzleStatementExecutor } from "../domains/schema/services/drizzle-statement-executor";
 import { generateRuntimeSchema } from "../domains/schema/services/runtime-schema-generator";
 import { readIdentifierCaseRules } from "../domains/schema/utils/read-identifier-case";
+import type { IdentifierCaseRules } from "../domains/schema/utils/resolve-catalog-name";
 import {
   resolveCollectionTableName,
   resolveComponentTableName,
@@ -1444,8 +1445,23 @@ async function applyReload(opts?: {
   // (collections + singles). If the call fails, abort the reload entirely —
   // it's a connection-level failure, not a per-table problem.
   let liveSnapshot: NextlySchemaSnapshot;
+  // 🔴 Both probes run HERE, before the apply, and both abort it on failure.
+  //
+  // The identifier rules are read alongside the snapshot rather than where they
+  // are used, because where they are used is *after* the DDL has committed —
+  // inside a block whose catch is documented "non-fatal" and skips every runtime
+  // schema refresh. A transient failure there would leave the registry metadata
+  // synchronized and this process still holding the pre-change Drizzle
+  // descriptors, so component reads and writes would address columns that no
+  // longer exist until another reload or a restart. Failing before anything
+  // commits is the only version of that failure a reload can recover from.
+  //
+  // Free on Postgres and SQLite, where the rules follow from the dialect alone;
+  // only MySQL issues a query, and only MySQL can fail here.
+  let identifierCase: IdentifierCaseRules;
   try {
     liveSnapshot = await introspectLiveSnapshot(db, dialect, managedTableNames);
+    identifierCase = await readIdentifierCaseRules(adapter);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger?.error(
@@ -2134,10 +2150,8 @@ async function applyReload(opts?: {
           columns: table.columns.map(column => column.name),
         })),
         Object.values(desiredComponents).map(comp => comp.tableName),
-        // Asked of the server, never assumed: MySQL's table-name folding is
-        // `lower_case_table_names`, which is server configuration, and a static
-        // guess is wrong in one direction or the other on every server.
-        await readIdentifierCaseRules(adapter)
+        // Read before the apply, not here: see the probe block above.
+        identifierCase
       );
       for (const comp of Object.values(desiredComponents)) {
         // i18n: a localized component omits its translatable columns from the main
