@@ -124,6 +124,12 @@ export interface DimensionLeaf extends StyleLeafBase {
    * a slash, `gap` takes a row and a column.
    */
   maxParts?: number;
+  /** Whether a negative measurement means anything here, as on a margin. */
+  allowNegative?: boolean;
+  /** Whether a percentage resolves against anything for this property. */
+  allowPercentage?: boolean;
+  /** Whether a `/` separates two groups, as in a corner radius. */
+  allowSlash?: boolean;
 }
 
 /** A unitless number, optionally bounded. */

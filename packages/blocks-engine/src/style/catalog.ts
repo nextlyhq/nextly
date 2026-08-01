@@ -32,13 +32,28 @@ import type {
 // property it emits, so emission is data the compiler walks rather than
 // branches the compiler holds.
 
+interface DimensionOptions {
+  keywords?: readonly string[];
+  maxParts?: number;
+  allowNegative?: boolean;
+  allowPercentage?: boolean;
+  allowSlash?: boolean;
+}
+
 function dimension(
   cssProperty: string,
-  keywords: readonly string[] = [],
-  maxParts = 1,
-  tokenKinds: readonly TokenKind[] = ["dimension"]
+  options: DimensionOptions = {}
 ): DimensionLeaf {
-  return { kind: "dimension", cssProperty, tokenKinds, keywords, maxParts };
+  return {
+    kind: "dimension",
+    cssProperty,
+    tokenKinds: ["dimension"],
+    keywords: options.keywords ?? [],
+    maxParts: options.maxParts ?? 1,
+    allowNegative: options.allowNegative ?? false,
+    allowPercentage: options.allowPercentage ?? false,
+    allowSlash: options.allowSlash ?? false,
+  };
 }
 
 /** Keyword sets shared by several length-valued properties. */
@@ -103,18 +118,18 @@ function url(cssProperty: string): UrlLeaf {
  */
 function logicalSides(
   prefix: string,
-  suffix?: string,
-  keywords: readonly string[] = []
+  suffix: string | undefined,
+  options: DimensionOptions = {}
 ): LogicalSidesShape {
   const name = (side: string): string =>
     suffix ? `${prefix}-${side}-${suffix}` : `${prefix}-${side}`;
   return {
     kind: "logicalSides",
     sides: {
-      blockStart: dimension(name("block-start"), keywords),
-      blockEnd: dimension(name("block-end"), keywords),
-      inlineStart: dimension(name("inline-start"), keywords),
-      inlineEnd: dimension(name("inline-end"), keywords),
+      blockStart: dimension(name("block-start"), options),
+      blockEnd: dimension(name("block-end"), options),
+      inlineStart: dimension(name("inline-start"), options),
+      inlineEnd: dimension(name("inline-end"), options),
     },
   };
 }
@@ -124,10 +139,18 @@ function logicalCorners(): LogicalCornersShape {
   return {
     kind: "logicalCorners",
     corners: {
-      startStart: dimension("border-start-start-radius"),
-      startEnd: dimension("border-start-end-radius"),
-      endStart: dimension("border-end-start-radius"),
-      endEnd: dimension("border-end-end-radius"),
+      startStart: dimension("border-start-start-radius", {
+        allowPercentage: true,
+      }),
+      startEnd: dimension("border-start-end-radius", {
+        allowPercentage: true,
+      }),
+      endStart: dimension("border-end-start-radius", {
+        allowPercentage: true,
+      }),
+      endEnd: dimension("border-end-end-radius", {
+        allowPercentage: true,
+      }),
     },
   };
 }
@@ -147,14 +170,18 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
     property: "margin",
     group: "spacing",
     flag: "margin",
-    shape: logicalSides("margin", undefined, ["auto"]),
+    shape: logicalSides("margin", undefined, {
+      keywords: ["auto"],
+      allowNegative: true,
+      allowPercentage: true,
+    }),
     summary: "Space outside the element, per logical side.",
   },
   {
     property: "padding",
     group: "spacing",
     flag: "padding",
-    shape: logicalSides("padding"),
+    shape: logicalSides("padding", undefined, { allowPercentage: true }),
     summary: "Space inside the element, per logical side.",
   },
 
@@ -236,19 +263,29 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "gap",
     group: "layout",
-    shape: dimension("gap", ["normal"], 2),
+    shape: dimension("gap", {
+      keywords: ["normal"],
+      maxParts: 2,
+      allowPercentage: true,
+    }),
     summary: "Space between rows and columns.",
   },
   {
     property: "rowGap",
     group: "layout",
-    shape: dimension("row-gap", ["normal"]),
+    shape: dimension("row-gap", {
+      keywords: ["normal"],
+      allowPercentage: true,
+    }),
     summary: "Space between rows.",
   },
   {
     property: "columnGap",
     group: "layout",
-    shape: dimension("column-gap", ["normal"]),
+    shape: dimension("column-gap", {
+      keywords: ["normal"],
+      allowPercentage: true,
+    }),
     summary: "Space between columns.",
   },
   {
@@ -280,37 +317,55 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "width",
     group: "dimensions",
-    shape: dimension("width", SIZING_KEYWORDS),
+    shape: dimension("width", {
+      keywords: SIZING_KEYWORDS,
+      allowPercentage: true,
+    }),
     summary: "Element width.",
   },
   {
     property: "height",
     group: "dimensions",
-    shape: dimension("height", SIZING_KEYWORDS),
+    shape: dimension("height", {
+      keywords: SIZING_KEYWORDS,
+      allowPercentage: true,
+    }),
     summary: "Element height.",
   },
   {
     property: "minWidth",
     group: "dimensions",
-    shape: dimension("min-width", SIZING_KEYWORDS),
+    shape: dimension("min-width", {
+      keywords: SIZING_KEYWORDS,
+      allowPercentage: true,
+    }),
     summary: "Lower bound on width.",
   },
   {
     property: "minHeight",
     group: "dimensions",
-    shape: dimension("min-height", SIZING_KEYWORDS),
+    shape: dimension("min-height", {
+      keywords: SIZING_KEYWORDS,
+      allowPercentage: true,
+    }),
     summary: "Lower bound on height.",
   },
   {
     property: "maxWidth",
     group: "dimensions",
-    shape: dimension("max-width", MAX_SIZING_KEYWORDS),
+    shape: dimension("max-width", {
+      keywords: MAX_SIZING_KEYWORDS,
+      allowPercentage: true,
+    }),
     summary: "Upper bound on width.",
   },
   {
     property: "maxHeight",
     group: "dimensions",
-    shape: dimension("max-height", MAX_SIZING_KEYWORDS),
+    shape: dimension("max-height", {
+      keywords: MAX_SIZING_KEYWORDS,
+      allowPercentage: true,
+    }),
     summary: "Upper bound on height.",
   },
   {
@@ -348,7 +403,10 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "fontSize",
     group: "typography",
-    shape: dimension("font-size", FONT_SIZE_KEYWORDS),
+    shape: dimension("font-size", {
+      keywords: FONT_SIZE_KEYWORDS,
+      allowPercentage: true,
+    }),
     summary: "Text size.",
   },
   {
@@ -358,7 +416,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
       kind: "union",
       of: [
         keyword("font-weight", ["normal", "bold", "lighter", "bolder"]),
-        numberValue("font-weight", { min: 1, max: 1000, integer: true }, [
+        numberValue("font-weight", { min: 1, max: 1000 }, [
           "fontWeight",
           "number",
         ]),
@@ -373,7 +431,10 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
       kind: "union",
       of: [
         numberValue("line-height", { min: 0 }),
-        dimension("line-height", ["normal"]),
+        dimension("line-height", {
+          keywords: ["normal"],
+          allowPercentage: true,
+        }),
       ],
     },
     summary: "Line box height, unitless (preferred) or as a length.",
@@ -381,13 +442,19 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "letterSpacing",
     group: "typography",
-    shape: dimension("letter-spacing", ["normal"]),
+    shape: dimension("letter-spacing", {
+      keywords: ["normal"],
+      allowNegative: true,
+    }),
     summary: "Space between characters.",
   },
   {
     property: "wordSpacing",
     group: "typography",
-    shape: dimension("word-spacing", ["normal"]),
+    shape: dimension("word-spacing", {
+      keywords: ["normal"],
+      allowNegative: true,
+    }),
     summary: "Space between words.",
   },
   {
@@ -500,7 +567,9 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
     shape: {
       kind: "object",
       fields: {
-        width: logicalSides("border", "width", ["thin", "medium", "thick"]),
+        width: logicalSides("border", "width", {
+          keywords: ["thin", "medium", "thick"],
+        }),
         style: keyword("border-style", [
           "none",
           "solid",
@@ -523,7 +592,14 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
     flag: "radius",
     shape: {
       kind: "union",
-      of: [dimension("border-radius", [], 8), logicalCorners()],
+      of: [
+        dimension("border-radius", {
+          maxParts: 8,
+          allowPercentage: true,
+          allowSlash: true,
+        }),
+        logicalCorners(),
+      ],
     },
     summary: "Corner rounding, uniform or per logical corner.",
   },
@@ -599,8 +675,18 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
           "fixed",
           "sticky",
         ]),
-        inset: logicalSides("inset", undefined, ["auto"]),
-        zIndex: numberValue("z-index", { integer: true }),
+        inset: logicalSides("inset", undefined, {
+          keywords: ["auto"],
+          allowNegative: true,
+          allowPercentage: true,
+        }),
+        zIndex: {
+          kind: "union",
+          of: [
+            numberValue("z-index", { integer: true }),
+            keyword("z-index", ["auto"]),
+          ],
+        },
       },
     },
     summary: "Positioning scheme, logical offsets, and stacking order.",

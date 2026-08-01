@@ -34,6 +34,7 @@ export type CssValueRejection =
   | "unsafe-url-scheme"
   | "unsafe-url-characters"
   | "too-deeply-nested"
+  | "too-long"
   | "not-a-length"
   | "not-a-color";
 
@@ -44,6 +45,14 @@ export type CssValueRejection =
  * and a quoted CSS string keeps both intact through parsing.
  */
 const UNSAFE_VALUE_CHARS = /[{};<>]/;
+
+/**
+ * Comment delimiters, which the parser treats as trivia and therefore accepts.
+ * An unterminated comment opener emitted into a declaration swallows whatever
+ * follows it, and a lone closer ends a comment the emitter opened around
+ * something else. Neither belongs in a stored value.
+ */
+const COMMENT_DELIMITERS = /\/\*|\*\//;
 
 /**
  * URL schemes allowed inside `url()`. An allowlist rather than a blocklist:
@@ -100,11 +109,6 @@ const CSS_WIDE_KEYWORDS: ReadonlySet<string> = new Set([
  * duration, a resolution or a grid fraction reaches a length property looking
  * structurally identical to `16px`; only these are measurements of distance.
  */
-/** True when a value is one of the keywords legal on every CSS property. */
-export function isCssWideKeyword(value: string): boolean {
-  return CSS_WIDE_KEYWORDS.has(value.toLowerCase());
-}
-
 const LENGTH_UNITS: ReadonlySet<string> = new Set([
   "px",
   "cm",
@@ -179,6 +183,11 @@ const DIMENSION_FUNCTIONS: ReadonlySet<string> = new Set([
   "anchor-size",
 ]);
 
+/** True when a value is one of the keywords legal on every CSS property. */
+export function isCssWideKeyword(value: string): boolean {
+  return CSS_WIDE_KEYWORDS.has(value.toLowerCase());
+}
+
 /** Parse a CSS value, or `null` when it is not one. */
 function parseValue(value: string): CssNode | null {
   try {
@@ -238,6 +247,13 @@ function nestedUrlRejection(ast: CssNode): CssValueRejection | null {
  */
 const MAX_VALUE_NESTING = 32;
 
+/**
+ * Longest value that will be parsed. Nesting is not the only way to make an
+ * expensive parse: a flat value of a few hundred thousand tokens builds an AST
+ * node for each. No real declaration approaches this.
+ */
+const MAX_VALUE_LENGTH = 8192;
+
 /** Deepest bracket nesting in a value. */
 function nestingDepth(value: string): number {
   let depth = 0;
@@ -249,7 +265,9 @@ function nestingDepth(value: string): number {
       depth += 1;
       if (depth > deepest) deepest = depth;
     } else if (character === ")" || character === "]") {
-      depth -= 1;
+      // Floor at zero: an unbalanced leading closer would otherwise buy the
+      // rest of the value that much extra depth before the cap notices.
+      if (depth > 0) depth -= 1;
     }
   }
   return deepest;
@@ -261,7 +279,9 @@ function nestingDepth(value: string): number {
  */
 export function checkCssValue(value: string): CssValueRejection | null {
   if (value.trim() === "") return "unparsable";
+  if (value.length > MAX_VALUE_LENGTH) return "too-long";
   if (UNSAFE_VALUE_CHARS.test(value)) return "unsafe-characters";
+  if (COMMENT_DELIMITERS.test(value)) return "unsafe-characters";
   if (nestingDepth(value) > MAX_VALUE_NESTING) return "too-deeply-nested";
   const ast = parseValue(value);
   if (ast === null) return "unparsable";
@@ -283,11 +303,28 @@ export function checkCssValue(value: string): CssValueRejection | null {
  * `maxParts` is how many measurements the property accepts: one for a scalar
  * such as `width`, more for a shorthand such as a corner radius.
  */
+export interface DimensionRules {
+  keywords?: readonly string[];
+  maxParts?: number;
+  /** Whether a negative measurement is meaningful, as it is on a margin. */
+  allowNegative?: boolean;
+  /** Whether a percentage resolves against anything for this property. */
+  allowPercentage?: boolean;
+  /** Whether a `/` separates two groups, as in a corner radius. */
+  allowSlash?: boolean;
+}
+
 export function checkDimensionValue(
   value: string,
-  keywords: readonly string[] = [],
-  maxParts = 1
+  rules: DimensionRules = {}
 ): CssValueRejection | null {
+  const {
+    keywords = [],
+    maxParts = 1,
+    allowNegative = false,
+    allowPercentage = false,
+    allowSlash = false,
+  } = rules;
   const rejection = checkCssValue(value);
   if (rejection !== null) return rejection;
   const ast = parseValue(value);
@@ -295,8 +332,17 @@ export function checkDimensionValue(
   const allowed = new Set(keywords.map(keyword => keyword.toLowerCase()));
   let parts = 0;
   for (const child of ast.children) {
-    if (child.type === "Operator") continue;
-    const childRejection = measurementRejection(child, false, allowed);
+    if (child.type === "Operator") {
+      // No length property takes a comma, and only a shorthand with two groups
+      // takes a slash; anything else here is a stray token the browser drops.
+      const operator = String(child.value).trim();
+      if (operator === "/" && allowSlash) continue;
+      return "not-a-length";
+    }
+    const childRejection = measurementRejection(child, false, allowed, {
+      allowNegative,
+      allowPercentage,
+    });
     if (childRejection !== null) return childRejection;
     parts += 1;
     // A shorthand may carry several measurements; a scalar property may not,
@@ -314,13 +360,23 @@ export function checkDimensionValue(
 function measurementRejection(
   node: CssNode,
   insideFunction: boolean,
-  keywords: ReadonlySet<string>
+  keywords: ReadonlySet<string>,
+  limits: { allowNegative: boolean; allowPercentage: boolean } = {
+    allowNegative: true,
+    allowPercentage: true,
+  }
 ): CssValueRejection | null {
   switch (node.type) {
     case "Dimension":
-      return LENGTH_UNITS.has(node.unit.toLowerCase()) ? null : "not-a-length";
+      if (!LENGTH_UNITS.has(node.unit.toLowerCase())) return "not-a-length";
+      return limits.allowNegative || !String(node.value).startsWith("-")
+        ? null
+        : "not-a-length";
     case "Percentage":
-      return null;
+      if (!limits.allowPercentage) return "not-a-length";
+      return limits.allowNegative || !String(node.value).startsWith("-")
+        ? null
+        : "not-a-length";
     case "Number":
       return insideFunction || Number(node.value) === 0 ? null : "not-a-length";
     case "Identifier": {
@@ -339,7 +395,12 @@ function measurementRejection(
       // their contents are not inspected.
       if (name === "var" || name === "env") return null;
       for (const child of node.children) {
-        const childRejection = measurementRejection(child, true, keywords);
+        // Inside a math function the sign of any one term says nothing about
+        // the sign of the result, so the non-negative rule does not apply.
+        const childRejection = measurementRejection(child, true, keywords, {
+          allowNegative: true,
+          allowPercentage: limits.allowPercentage,
+        });
         if (childRejection !== null) return childRejection;
       }
       return null;

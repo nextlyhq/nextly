@@ -33,6 +33,7 @@ const REJECTION_MESSAGES = {
   "not-a-length": "is not a length",
   "not-a-color": "is not a color",
   "too-deeply-nested": "is nested too deeply",
+  "too-long": "is longer than a style value may be",
 } as const;
 
 /**
@@ -117,6 +118,32 @@ function rejected(
   ];
 }
 
+/**
+ * The marker saying validation stopped early, emitted once per run.
+ *
+ * It is an ERROR, not a warning: a caller that keeps only errors — as the
+ * page-builder write path does — would otherwise see a clean result for a
+ * document whose remaining values were never inspected, and an unsafe value
+ * sitting past the budget would reach the page. Stopping early means the
+ * document is not known to be valid, so it fails closed.
+ */
+function truncationNotice(
+  budget: StyleIssueBudget,
+  path: string
+): ValidationIssue[] {
+  if (budget.truncated) return [];
+  budget.truncated = true;
+  return [
+    {
+      path,
+      code: "style-issues-truncated",
+      severity: "error",
+      message:
+        "There are more style problems than are reported here, so the rest of this document was not checked.",
+    },
+  ];
+}
+
 /** Validate a value against one leaf descriptor. */
 function leafIssues(
   leaf: StyleLeaf,
@@ -145,11 +172,16 @@ function leafIssues(
     case "keyword": {
       // The CSS-wide keywords are legal wherever a value is, so a keyword leaf
       // accepts them alongside its own vocabulary, as lengths and colors do.
-      if (
-        typeof value === "string" &&
-        (leaf.values.includes(value) || isCssWideKeyword(value))
-      ) {
-        return [];
+      // CSS keywords are ASCII case-insensitive, so a document storing
+      // "Start" is valid and must not fail where "start" passes.
+      if (typeof value === "string") {
+        const written = value.toLowerCase();
+        if (
+          leaf.values.some(allowed => allowed.toLowerCase() === written) ||
+          isCssWideKeyword(value)
+        ) {
+          return [];
+        }
       }
       return [
         invalid(
@@ -188,11 +220,13 @@ function leafIssues(
           ),
         ];
       }
-      const rejection = checkDimensionValue(
-        value,
-        leaf.keywords,
-        leaf.maxParts
-      );
+      const rejection = checkDimensionValue(value, {
+        keywords: leaf.keywords,
+        maxParts: leaf.maxParts,
+        allowNegative: leaf.allowNegative,
+        allowPercentage: leaf.allowPercentage,
+        allowSlash: leaf.allowSlash,
+      });
       return rejection === null ? [] : rejected(path, value, rejection);
     }
     case "color": {
@@ -241,7 +275,10 @@ function partIssues(
     // One composite can hold as many keys as a whole style map, so the budget
     // has to stop this loop as well; checking it only between properties would
     // let a single object allocate without limit.
-    if (budget !== undefined && issues.length >= budget.remaining) break;
+    if (budget !== undefined && issues.length >= budget.remaining) {
+      issues.push(...truncationNotice(budget, path));
+      break;
+    }
     // Ownership is checked rather than trusting the lookup: a document may
     // legally contain a key such as `toString` or `constructor`, and a plain
     // object would answer those from its prototype, handing a function to the
@@ -284,13 +321,19 @@ function shapeIssues(
       // order and the first clean one wins; when none accepts, the first
       // variant's issues are reported, because it is the shape the catalog
       // lists first and therefore the one an author most likely intended.
-      let firstIssues: ValidationIssue[] | undefined;
+      let best: ValidationIssue[] | undefined;
       for (const variant of shape.of) {
         const issues = shapeIssues(variant, value, path, budget);
         if (issues.length === 0) return [];
-        firstIssues ??= issues;
+        // Prefer whichever variant the value structurally resembles: its issues
+        // point at the offending leaf, while a mismatched variant only reports
+        // that the whole value has the wrong shape.
+        const deeper =
+          best === undefined ||
+          (issues[0]?.path.length ?? 0) > (best[0]?.path.length ?? 0);
+        if (deeper) best = issues;
       }
-      return firstIssues ?? [];
+      return best ?? [];
     }
   }
 }
@@ -318,16 +361,7 @@ export function validateStyleValues(
     // work and the returned array proportional to what a reader can use, and
     // says so rather than going quiet.
     if (budget !== undefined && budget.remaining <= 0) {
-      if (!budget.truncated) {
-        budget.truncated = true;
-        issues.push({
-          path: basePath,
-          code: "style-issues-truncated",
-          severity: "warning",
-          message:
-            "There are more style problems than are reported here; fix these and validate again.",
-        });
-      }
+      issues.push(...truncationNotice(budget, basePath));
       break;
     }
     const before = issues.length;

@@ -670,7 +670,101 @@ describe("the issue budget reaches composites too", () => {
       "strict",
       budget
     );
-    expect(issues.length).toBeLessThanOrEqual(MAX_STYLE_ISSUES);
+    expect(issues.length).toBeLessThanOrEqual(MAX_STYLE_ISSUES + 1);
+    // A composite that stops early must say so, not return a short list that
+    // reads as complete.
+    expect(issues.at(-1)?.code).toBe("style-issues-truncated");
+  });
+});
+
+describe("stopping early fails closed", () => {
+  it("reports truncation as an error, so a caller keeping only errors still refuses the write", () => {
+    // A write path that filters warnings would otherwise see a clean result for
+    // a document whose remaining values were never inspected.
+    const values: Record<string, unknown> = {};
+    for (let index = 0; index < MAX_STYLE_ISSUES; index += 1) {
+      values[`k${index}`] = "1px";
+    }
+    values.backgroundGradient = 'url("javascript:alert1")';
+    const issues = validateStyleValues(
+      values,
+      "/styles",
+      "forgiving",
+      newStyleIssueBudget()
+    );
+    expect(issues.some(issue => issue.severity === "error")).toBe(true);
+    expect(issues.some(issue => issue.code === "style-issues-truncated")).toBe(
+      true
+    );
+  });
+});
+
+describe("comment delimiters", () => {
+  it("are refused, since the parser treats them as trivia", () => {
+    expect(checkCssValue("red /*")).toBe("unsafe-characters");
+    expect(checkCssValue("red */")).toBe("unsafe-characters");
+    expect(codes({ color: "red /*" })).toEqual(["invalid-style-value"]);
+  });
+});
+
+describe("value size", () => {
+  it("is bounded, since a broad value is as costly to parse as a deep one", () => {
+    const wide = Array.from({ length: 4000 }, () => "1px").join(" ");
+    expect(checkCssValue(wide)).toBe("too-long");
+  });
+});
+
+describe("keyword case", () => {
+  it("is ignored, as CSS ignores it", () => {
+    expect(codes({ textAlign: "START" })).toEqual([]);
+    expect(codes({ display: "BLOCK" })).toEqual([]);
+    expect(codes({ containerType: "INLINE-SIZE" })).toEqual([]);
+    expect(codes({ textAlign: "Start" })).toEqual([]);
+  });
+});
+
+describe("negative and percentage measurements", () => {
+  it("are refused where the property does not take them", () => {
+    expect(codes({ padding: { blockStart: "-1px" } })).toEqual([
+      "invalid-style-value",
+    ]);
+    expect(codes({ gap: "-1px" })).toEqual(["invalid-style-value"]);
+    expect(codes({ letterSpacing: "10%" })).toEqual(["invalid-style-value"]);
+    expect(codes({ border: { width: { blockStart: "50%" } } })).toEqual([
+      "invalid-style-value",
+    ]);
+  });
+
+  it("are accepted where they are meaningful", () => {
+    expect(codes({ margin: { blockStart: "-1px" } })).toEqual([]);
+    expect(codes({ letterSpacing: "-0.02em" })).toEqual([]);
+    expect(codes({ width: "50%" })).toEqual([]);
+    expect(codes({ padding: { blockStart: "5%" } })).toEqual([]);
+    // The sign of one term says nothing about a math result.
+    expect(codes({ padding: { blockStart: "calc(100% - 10px)" } })).toEqual([]);
+  });
+});
+
+describe("stray operators in a length", () => {
+  it("are refused", () => {
+    expect(codes({ width: "1px," })).toEqual(["invalid-style-value"]);
+    expect(codes({ width: "1px /" })).toEqual(["invalid-style-value"]);
+    expect(codes({ gap: "1px / 2px" })).toEqual(["invalid-style-value"]);
+  });
+
+  it("except the slash a corner radius uses", () => {
+    expect(codes({ borderRadius: "4px / 8px" })).toEqual([]);
+  });
+});
+
+describe("values a stricter model used to refuse", () => {
+  it("accepts a fractional variable-font weight", () => {
+    expect(codes({ fontWeight: 450.5 })).toEqual([]);
+  });
+
+  it("accepts auto to reset the stacking order", () => {
+    expect(codes({ position: { zIndex: "auto" } })).toEqual([]);
+    expect(codes({ position: { zIndex: 3 } })).toEqual([]);
   });
 });
 
