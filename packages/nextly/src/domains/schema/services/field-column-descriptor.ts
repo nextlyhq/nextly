@@ -385,12 +385,11 @@ export interface SystemColumnSet {
  * Gated on `hasStatus`: a collection with no draft lifecycle has no transition to record, and its
  * rows are public from the moment they are saved.
  *
- * Gated on `!isSingle` as well, and that one is a deliberate limitation rather than a semantic
- * claim — a Single's publication date is just as meaningful. A Single's physical table does not
- * receive this column through the same path the runtime schema does, so injecting it produced a
- * runtime schema selecting a column that is not there, which fails EVERY read of a status-enabled
- * Single rather than merely leaving the marker unset. Aligning the Single DDL path is its own
- * piece of work; until then the column is collections-only.
+ * Singles get it too. They could not at first: a Single's physical table was created by a DDL
+ * generator that restated the system columns by hand, so a column added here reached the runtime
+ * schema and not the table, and the resulting SELECT named a column that does not exist — failing
+ * EVERY read of a status-enabled Single rather than merely leaving the marker unset. That
+ * generator now renders from this list, so a Single's table receives whatever is declared here.
  */
 const FIRST_PUBLISHED_AT = {
   postgresql: {
@@ -497,7 +496,7 @@ export function getSystemColumnDescriptors(
         primaryKey: false,
         default: "'draft'",
       });
-      if (!opts.isSingle) cols.push(FIRST_PUBLISHED_AT.postgresql);
+      cols.push(FIRST_PUBLISHED_AT.postgresql);
     }
   } else if (dialect === "mysql") {
     cols.push({
@@ -567,7 +566,7 @@ export function getSystemColumnDescriptors(
         primaryKey: false,
         default: "'draft'",
       });
-      if (!opts.isSingle) cols.push(FIRST_PUBLISHED_AT.mysql);
+      cols.push(FIRST_PUBLISHED_AT.mysql);
     }
   } else {
     // sqlite
@@ -630,7 +629,7 @@ export function getSystemColumnDescriptors(
         primaryKey: false,
         default: "'draft'",
       });
-      if (!opts.isSingle) cols.push(FIRST_PUBLISHED_AT.sqlite);
+      cols.push(FIRST_PUBLISHED_AT.sqlite);
     }
   }
   return cols;

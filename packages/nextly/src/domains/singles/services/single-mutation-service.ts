@@ -1207,6 +1207,33 @@ export class SingleMutationService extends BaseService {
             const preRowMainStatus =
               typeof preRow?.status === "string" ? preRow.status : undefined;
 
+            // The first time this single becomes public, recorded on the row that is about to be
+            // written so it commits with the status it describes.
+            //
+            // Only when the marker is still absent, which is what makes it the FIRST publication
+            // rather than the latest: a republish after an unpublish must not move it.
+            //
+            // A non-default-locale write has already had `status` removed from `mainPayload`
+            // above, so it stamps nothing here — that language's publish state lives on the
+            // companion, and stamping the main row from it would date the entry's first
+            // publication from a translation.
+            //
+            // `singleHasStatus` further down this block answers a wider question (main row OR
+            // companion) and is declared after this point, so it cannot be read here; the main
+            // row's own flag is what governs a main-row column.
+            const mainStatusWritten = (mainPayload as Record<string, unknown>)
+              .status;
+            if (
+              (singleMeta as { status?: boolean }).status === true &&
+              mainStatusWritten === "published" &&
+              preRowMainStatus !== "published" &&
+              (preRow as { first_published_at?: unknown } | undefined)
+                ?.first_published_at == null
+            ) {
+              (mainPayload as Record<string, unknown>).first_published_at =
+                new Date();
+            }
+
             const rows = await tx.update<SingleDocument>(
               singleMeta.tableName,
               mainPayload,

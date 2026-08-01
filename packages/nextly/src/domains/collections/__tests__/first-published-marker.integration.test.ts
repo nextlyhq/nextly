@@ -184,12 +184,13 @@ describe("first_published_at", () => {
     expect(Object.keys(row)).not.toContain("first_published_at");
   });
 
-  it("is not added to a Single, whose physical table would not receive it", async () => {
-    // Not a claim that a Single's publication date is meaningless — it is exactly as meaningful.
-    // A Single's table does not get this column through the same path the runtime schema does, so
-    // injecting it made the schema select a column that is not there, failing EVERY read of a
-    // status-enabled Single rather than just leaving the marker unset. Pinned here so the day the
-    // Single DDL path is aligned, this test is what says so.
+  it("records a Single's first publication, and reads still work", async () => {
+    // This test used to assert the OPPOSITE. A Single's physical table was built by a generator
+    // that restated the system columns by hand, so this column reached the runtime schema and not
+    // the table, and the resulting SELECT named a column that is not there — failing EVERY read of
+    // a status-enabled Single rather than merely leaving the marker unset. That generator now
+    // renders from the descriptor, so the column arrives on its own. The read assertion is kept
+    // because it is what would catch that regression returning.
     current = await createTestNextly({
       singles: [
         defineSingle({
@@ -201,7 +202,15 @@ describe("first_published_at", () => {
     });
     const singles = current.getService("singleEntryService");
 
-    // Reads and writes both work, which is the thing the column would have broken.
+    await singles.update(
+      "banner",
+      { title: "hi", status: "draft" },
+      { overrideAccess: true }
+    );
+    expect(
+      (await tableRows(current, "single_banner"))[0]?.first_published_at
+    ).toBeFalsy();
+
     await singles.update(
       "banner",
       { title: "hi", status: "published" },
@@ -210,6 +219,65 @@ describe("first_published_at", () => {
 
     const row = (await tableRows(current, "single_banner"))[0] ?? {};
     expect(row.status).toBe("published");
-    expect(Object.keys(row)).not.toContain("first_published_at");
+    expect(row.first_published_at).toBeTruthy();
+    // The read path is the thing the missing column broke, so exercise it rather than only
+    // inspecting the table.
+    const read = await singles.get("banner", { overrideAccess: true });
+    expect(read).toBeTruthy();
+  });
+
+  it("keeps a Single's marker across an unpublish and a republish", async () => {
+    // Same set-once guarantee collections get. Backdated first, because both publications
+    // otherwise land inside the same second and these columns store no finer resolution — the
+    // assertion would then hold whether or not the guard exists.
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "banner",
+          status: true,
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const singles = current.getService("singleEntryService");
+
+    await singles.update(
+      "banner",
+      { title: "hi", status: "published" },
+      { overrideAccess: true }
+    );
+    const singleId = (await tableRows(current, "single_banner"))[0]?.id;
+    // Narrowed rather than asserted: the row is read back as `Record<string, unknown>`, and a
+    // missing id would otherwise reach the adapter as an undefined bind parameter and update
+    // every row, which is not the thing this test means to set up.
+    if (typeof singleId !== "string") {
+      throw new Error("single_banner row has no id");
+    }
+    await current.adapter.update(
+      "single_banner",
+      { first_published_at: new Date("2020-01-01T00:00:00.000Z") },
+      { and: [{ column: "id", op: "=", value: singleId }] }
+    );
+    const before = (await tableRows(current, "single_banner"))[0]
+      ?.first_published_at;
+    expect(before).toBeTruthy();
+
+    await singles.update(
+      "banner",
+      { status: "draft" },
+      { overrideAccess: true }
+    );
+    const unpublished = (await tableRows(current, "single_banner"))[0] ?? {};
+    expect(unpublished.status).toBe("draft");
+    expect(unpublished.first_published_at).toBeTruthy();
+
+    await singles.update(
+      "banner",
+      { status: "published" },
+      { overrideAccess: true }
+    );
+    expect(
+      String((await tableRows(current, "single_banner"))[0]?.first_published_at)
+    ).toBe(String(before));
   });
 });
