@@ -415,7 +415,24 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
               dialect,
               tableName,
               b.fields,
-              await resolveComponentTypeColumn(diAdapter, tableName),
+              // 🔴 The constant, NOT a probe — and this is the one path where
+              // that inference is sound, so the reason is worth stating.
+              //
+              // This is the CREATE path for a new slug, and the statement
+              // executed above is the DDL generator's own, which writes
+              // `STORAGE_FORMAT.columns.type`. The storage migration cannot
+              // have moved a table that did not exist a moment ago, and a
+              // migrated table would carry the migrated PREFIX, so it could not
+              // be addressed by this name at all.
+              //
+              // Probing here can only hurt: a transient introspection failure
+              // is caught below, records the registry row as `failed`, and
+              // still returns 201 — leaving a created table with no runtime
+              // schema and its CRUD unavailable until a restart. Contrast the
+              // code-first sync path, where `CREATE TABLE IF NOT EXISTS` may
+              // no-op over a table that is years old; there the probe is
+              // required, and assuming the constant was a real defect.
+              STORAGE_FORMAT.columns.type,
               // i18n: main runtime table omits translatable columns for a localized component.
               isLocalized
             );
