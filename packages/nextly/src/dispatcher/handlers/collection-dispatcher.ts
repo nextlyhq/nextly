@@ -115,6 +115,7 @@ import type { MethodHandler, Params } from "../types";
 // all three entity kinds, so a stale UI save is rejected before any DDL runs.
 import { assertSchemaVersionMatch } from "./schema-version-guard";
 import {
+  discardWorkingDraftForDocument,
   getVersionDiffForDocument,
   getVersionForDocument,
   restoreVersionForDocument,
@@ -214,6 +215,18 @@ export const COLLECTION_VERSION_METHODS: Record<
         params: p,
       });
       return respondAction("Version restored.", result);
+    },
+  },
+  discardWorkingDraft: {
+    execute: async (_svc, p) => {
+      const item = await discardWorkingDraftForDocument({
+        scopeKind: "collection",
+        slug: String(p.collectionName ?? ""),
+        entryId: String(p.entryId ?? ""),
+        user: userFromParams(p),
+        params: p,
+      });
+      return respondMutation("Working draft discarded.", item);
     },
   },
   getEntryVersion: {
