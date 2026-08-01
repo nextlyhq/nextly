@@ -31,7 +31,10 @@ import {
   resolveCatalogName,
   type IdentifierCaseRules,
 } from "../../schema/utils/resolve-catalog-name";
-import { forgetFieldGroupStorageNames } from "../storage/resolve-storage-names";
+import {
+  forgetFieldGroupStorageNames,
+  resolveRegistryNameFromCatalog,
+} from "../storage/resolve-storage-names";
 
 import { resolveStorageVerdict } from "./guard";
 import {
@@ -296,8 +299,14 @@ export async function runFieldGroupMigration(
         meta,
         migrationId,
         ownedDataTables: owned,
+        // Deliberately the un-memoized resolver. Its memoized sibling would
+        // answer with a name read before this run moved storage, which is the
+        // one answer a check running after the renames must not be given.
+        resolveRegistryTable: () => resolveRegistryNameFromCatalog(adapter),
       });
 
+      // The settlement checks are gates rather than recorded work, so a marker
+      // never points past them and a resume re-enters them on its own.
       const fromStep = state.status === "migrating" ? state.step + 1 : 1;
       // 🔴 Invalidated whenever the steps may have RUN, not only when the run
       // reports success. A rename can commit and `assertStorageComplete` or
@@ -315,20 +324,11 @@ export async function runFieldGroupMigration(
           fromStep,
         });
 
-        // 🔴 The vocabulary half of the same question. A step's postcondition
-        // speaks for the moment it finished; a write committing afterwards puts
-        // the old spelling back into a surface no later step revisits, and the
-        // run would settle over storage that is not fully migrated — invisible
-        // until the contract release removes the arm that still reads it.
-        //
-        // Only the surfaces the renames leave alone are asked here. The registry
-        // definitions are addressed through typed CRUD under the legacy name and
-        // so are only expressible before the renames; asking them now would name
-        // a table that no longer exists.
-        // Asked of the database rather than inferred from the steps having run.
-        // A step reports its own postcondition; this asks whether the storage as
-        // a whole is now what the generation claims, which is the question a
-        // settled marker will be believed on afterwards.
+        // The structural half of the question the settle steps ask about
+        // vocabulary. Asked of the database rather than inferred from the steps
+        // having run: a step reports its own postcondition, while this asks
+        // whether the storage as a whole is now what the generation claims,
+        // which is the question a settled marker will be believed on afterwards.
         await assertStorageComplete({
           adapter,
           dialect,

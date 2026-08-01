@@ -34,6 +34,7 @@ import type {
 import { NextlyError } from "../../../errors/nextly-error";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { MetaService } from "../../meta/services/meta-service";
+import { isFieldGroupRegistry } from "../storage/resolve-storage-names";
 
 import { MIGRATION_TARGET } from "./manifest";
 import { rewriteConfigPath } from "./rewrite-config-path";
@@ -102,19 +103,33 @@ export const FIELD_GROUP_STORAGE_VOCABULARY: FieldGroupStorageVocabulary = {
 };
 
 /**
- * Registry tables holding stored field definitions.
+ * Registry tables holding stored field definitions, for one registry spelling.
  *
  * Spelled here rather than taken from `STORAGE_FORMAT`, because only one of them
  * names the field-group concept. The other two are collection and single
  * storage, and they hold field-group *references* inside their own definitions —
  * which is exactly why they have to be rewritten too, and why they do not move
  * when the concept is renamed.
+ *
+ * The field-group registry arrives as an argument because this rewrite is asked
+ * twice per run, against two different physical tables: as a data step while the
+ * legacy name is live, and again at settlement, by which point going up the
+ * migrated name is the one that exists.
  */
-const DEFINITION_TABLES = [
-  "dynamic_collections",
-  "dynamic_singles",
-  STORAGE_FORMAT.registryTable,
-] as const;
+function definitionTables(registryTable: string): readonly string[] {
+  return ["dynamic_collections", "dynamic_singles", registryTable];
+}
+
+/**
+ * How the settlement check learns which registry table to address.
+ *
+ * A function rather than a name because the plan is assembled before any rename
+ * executes and this check runs after them: a name captured at build time going
+ * up would be the one the run just moved away from. Supplied by the caller for
+ * the same reason `StorageObserver` is — the plan describes work, and the caller
+ * owns the database handle that answers questions about it.
+ */
+export type RegistryTableResolver = () => Promise<string>;
 
 /** The columns one registry row needs written back. */
 type Patch = Record<string, unknown>;
@@ -210,6 +225,10 @@ export function settleLedgersStep(args: {
   const ledgers = ledgerSteps(args);
   return {
     id: "data:settle-ledgers",
+    // A gate: re-entered by every invocation rather than recorded. A recorded
+    // position is what lets a later run step over something, and this must be
+    // true at the moment the marker settles.
+    recordsProgress: false,
     async run(session) {
       for (const step of ledgers) await step.run(session);
     },
@@ -218,6 +237,54 @@ export function settleLedgersStep(args: {
         if (!(await step.verify(session))) return false;
       }
       return true;
+    },
+  };
+}
+
+/**
+ * The other last step of a plan: re-rewrite the registries, then re-check them.
+ *
+ * The companion to {@link settleLedgersStep}, kept separate rather than folded
+ * into it. The runner retries a step that does not verify, so one combined step
+ * would re-walk both ledgers every time a single registry row needed rewriting —
+ * redoing the expensive half to fix the cheap one. A refusal also names the step
+ * it came from, and two ids say which surface is unsettled where one would not.
+ *
+ * 🔴 The registry it addresses is resolved from the **catalog** rather than
+ * fixed when the plan was built. Going up this runs after the renames, so the
+ * name the plan started with is the one storage has just moved away from; going
+ * down it runs after the data steps have restored it. Reading the catalog is
+ * what makes one step correct in both directions, and it is the same rule the
+ * read path follows — resolve against what is observably there, never against
+ * what a marker claims.
+ *
+ * The read itself stays inside the ORM. Both spellings of the registry are
+ * registered as schema objects, so a resolved name is all typed CRUD needs, and
+ * the JSON column's three dialect encodings stay the ORM's problem rather than
+ * becoming this module's.
+ */
+export function settleRegistryDefinitionsStep(args: {
+  from: FieldGroupStorageVocabulary;
+  to: FieldGroupStorageVocabulary;
+  resolveRegistryTable: RegistryTableResolver;
+}): MigrationStep {
+  const { from, to, resolveRegistryTable } = args;
+  // Resolved on every call rather than once per step object. Caching across
+  // `run` and `verify` is correct only while no rename separates them, which is
+  // a property of today's plan and not of the contract; one catalog read on an
+  // operation that runs once per database is not worth pinning that to.
+  const against = async (): Promise<MigrationStep> =>
+    registryDefinitionsStep(from, to, await resolveRegistryTable());
+
+  return {
+    id: "data:settle-registry-definitions",
+    // A gate, for the same reason as its ledger counterpart.
+    recordsProgress: false,
+    async run(session) {
+      await (await against()).run(session);
+    },
+    async verify(session) {
+      return (await against()).verify(session);
     },
   };
 }
@@ -254,7 +321,11 @@ export function buildDataMigrationSteps(args: {
   const { meta, migrationId, from, to } = args;
 
   return [
-    registryDefinitionsStep(from, to),
+    // The legacy name, unconditionally. These steps execute only while it is
+    // the live one: before the renames going up, and after they are undone
+    // going down. Resolving here would be asking a question whose answer is
+    // already fixed by where the step sits.
+    registryDefinitionsStep(from, to, STORAGE_FORMAT.registryTable),
     schemaEventScopeStep(from, to),
     ...CONTENT_TARGETS.map(target =>
       contentStep({ meta, migrationId, target, from, to })
@@ -278,8 +349,10 @@ export function buildDataMigrationSteps(args: {
  */
 function registryDefinitionsStep(
   from: FieldGroupStorageVocabulary,
-  to: FieldGroupStorageVocabulary
+  to: FieldGroupStorageVocabulary,
+  registryTable: string
 ): MigrationStep {
+  const tables = definitionTables(registryTable);
   return {
     id: "data:registry-definitions",
     async run(session) {
@@ -290,7 +363,7 @@ function registryDefinitionsStep(
         // that from committing the rows already rewritten and leaving exactly
         // the mixed-vocabulary registry set this step exists to prevent.
         const staged: { table: string; id: string; patch: Patch }[] = [];
-        for (const table of DEFINITION_TABLES) {
+        for (const table of tables) {
           for (const row of await readRegistryRows(ctx, table)) {
             const patch = registryPatch(row, table, from, to);
             if (!patch.ok) return patch;
@@ -309,7 +382,7 @@ function registryDefinitionsStep(
     },
     async verify(session) {
       const outcome = await session.inTransaction(async ctx => {
-        for (const table of DEFINITION_TABLES) {
+        for (const table of tables) {
           for (const row of await readRegistryRows(ctx, table)) {
             const patch = registryPatch(row, table, from, to);
             if (!patch.ok) return patch;
@@ -377,7 +450,13 @@ function registryPatch(
   // Only the field-group registry records a path under the renamed directory.
   // A collection's `config_path` names `collections/`, and rewriting it would be
   // renaming a directory this migration has nothing to do with.
-  if (table === STORAGE_FORMAT.registryTable) {
+  //
+  // Asked under BOTH spellings rather than compared against the legacy one. The
+  // settlement check addresses this registry by whichever name the catalog
+  // holds, so a comparison against a single name would quietly stop examining
+  // `config_path` the moment the rename had happened — the one moment the check
+  // exists for.
+  if (isFieldGroupRegistry(table)) {
     const configPath = readProperty(row, {
       table,
       property: CONFIG_PATH_PROPERTY,

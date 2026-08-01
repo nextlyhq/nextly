@@ -33,6 +33,22 @@ export interface MigrationStep {
   readonly id: string;
   run(session: MigrationSession): Promise<void>;
   verify(session: MigrationSession): Promise<boolean>;
+  /**
+   * Whether finishing this step is progress the marker should remember.
+   *
+   * 🔴 `false` makes a step a GATE rather than work: every invocation re-enters
+   * it, because a recorded position is what lets a later run step over
+   * something. A check that must be true at the moment the marker settles has
+   * to be one of these — recorded, it would be skipped by the very resume it
+   * exists to protect, and the run would settle on whatever the database looked
+   * like before the interruption.
+   *
+   * Only the TRAILING steps of a plan may decline. A recorded position counts
+   * positions in the plan, so a gate in the middle would leave a gap that the
+   * next recording step cannot advance across; {@link runMigrationSteps}
+   * refuses such a plan rather than discovering it one crash later.
+   */
+  readonly recordsProgress?: boolean;
 }
 
 /**
@@ -75,6 +91,27 @@ export async function runMigrationSteps(args: {
     });
   }
 
+  // A gate records nothing, so every step after one would have to advance the
+  // marker across the position it skipped — and `advanceStep` accepts only
+  // exactly one more than it holds. A plan shaped that way cannot record its own
+  // progress, and the failure would surface as an unrecoverable marker on the
+  // first interruption rather than here.
+  const firstGate = steps.findIndex(step => step.recordsProgress === false);
+  if (firstGate !== -1) {
+    const recordingAfterGate = steps
+      .slice(firstGate + 1)
+      .find(step => step.recordsProgress !== false);
+    if (recordingAfterGate !== undefined) {
+      throw NextlyError.internal({
+        logContext: {
+          reason: "a migration plan records progress after a gate",
+          gate: steps[firstGate]?.id ?? "",
+          step: recordingAfterGate.id,
+        },
+      });
+    }
+  }
+
   for (let position = fromStep; position <= steps.length; position += 1) {
     const step = steps[position - 1];
     if (!step) {
@@ -100,6 +137,10 @@ export async function runMigrationSteps(args: {
         },
       });
     }
+
+    // A gate is re-entered by every invocation, so its position is deliberately
+    // never written. Recording it would let the next run step over the check.
+    if (step.recordsProgress === false) continue;
 
     await advanceStep(meta, { migrationId, step: position });
   }
