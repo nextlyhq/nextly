@@ -291,6 +291,17 @@ describe("where a resume re-enters the plan", () => {
     expect(resumePosition({ recorded: 7, ...TEN })).toBe(8);
   });
 
+  // 🔴 A marker recording more steps than the plan holds cannot be trusted: it
+  // is what a restore or a hand repair leaves behind. Clamping it would turn it
+  // into one that looks ordinary, so the runner's past-the-end refusal would
+  // never see it and a run would enter the settlement checks having skipped
+  // every rename - rewriting vocabulary on storage whose tables never moved.
+  // `runner.test.ts` covers the refusal itself; this is what still reaches it.
+  it("passes an out-of-range position through for the runner to refuse", () => {
+    expect(resumePosition({ recorded: 100, ...TEN })).toBe(101);
+    expect(resumePosition({ recorded: 11, ...TEN })).toBe(12);
+  });
+
   // A plan shorter than the checks it ends with cannot exist, but the floor is
   // stated rather than assumed: `runMigrationSteps` refuses a position below one
   // outright, so an arithmetic edge would surface as a refusal to run at all.

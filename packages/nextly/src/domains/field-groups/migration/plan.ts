@@ -261,11 +261,21 @@ export const SETTLE_STEP_COUNT = 2;
  * Only the resume position is clamped. The recorded position itself is left
  * alone, because reconciliation reads it to decide which renames a previous run
  * completed, and a clamped value would describe work that did not happen.
+ *
+ * 🔴 A position past the end of the plan is passed through untouched rather than
+ * clamped. Such a marker cannot be trusted — it is what a restore or a hand
+ * repair leaves — and clamping would turn it into one that looks ordinary: the
+ * runner's own past-the-end refusal would never see it, and a run would enter
+ * the settlement checks having skipped every rename, rewriting vocabulary on
+ * storage whose tables were never moved. The refusal is left to the runner
+ * rather than raised here so there is one place that decides what an
+ * irreconcilable marker means.
  */
 export function resumePosition(args: {
   recorded: number;
   planLength: number;
 }): number {
+  if (args.recorded > args.planLength) return args.recorded + 1;
   const firstSettleStep = Math.max(args.planLength - SETTLE_STEP_COUNT + 1, 1);
   return Math.min(args.recorded + 1, firstSettleStep);
 }
