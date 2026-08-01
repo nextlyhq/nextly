@@ -95,6 +95,44 @@ export function isDatabaseError(error: unknown): error is DatabaseError {
 }
 
 /**
+ * The brand every Nextly application error carries.
+ *
+ * Read through the global symbol registry rather than imported, because the
+ * adapters must not depend on the package that defines the error: `Symbol.for`
+ * resolves to the same symbol in every module instance, which is why the brand
+ * exists in that form to begin with.
+ *
+ * @internal
+ */
+const APPLICATION_ERROR_BRAND: unique symbol = Symbol.for("nextly/NextlyError");
+
+/**
+ * Whether an error is the application's verdict rather than the database's
+ * failure.
+ *
+ * Work running inside a transaction may throw to roll the write back — a
+ * refused value, a permission denial — and such an error is not something the
+ * driver produced. Classifying it as a database error replaces its code and its
+ * payload with a generic one, so a caller that asked for a refusal is handed an
+ * unexplained failure instead, and per-field validation detail is lost on the
+ * way out.
+ *
+ * @param error - Error to check
+ * @returns True if the error was raised by application code
+ *
+ * @public
+ */
+export function isApplicationError(error: unknown): boolean {
+  if (
+    error === null ||
+    (typeof error !== "object" && typeof error !== "function")
+  ) {
+    return false;
+  }
+  return (error as Record<symbol, unknown>)[APPLICATION_ERROR_BRAND] === true;
+}
+
+/**
  * Database error constructor options.
  *
  * @public
