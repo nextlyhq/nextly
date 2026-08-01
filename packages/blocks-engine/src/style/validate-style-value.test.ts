@@ -989,6 +989,17 @@ describe("an unbounded key from the document", () => {
   it("leaves a key short enough to resolve untouched", () => {
     expect(check({ nope: "1px" })[0]?.path).toBe("/styles/nope");
   });
+
+  it("gives a path that still resolves, by naming the container", () => {
+    // A path is a promise that it locates something. A shortened token keeps
+    // the string small and points at a key the document does not contain, so
+    // an over-long one is dropped and the pointer addresses the object holding
+    // it; which key it was travels in the message.
+    const key = "z".repeat(200);
+    const issues = check({ [key]: "1px" });
+    expect(issues[0]?.path).toBe("/styles");
+    expect(issues[0]?.message.length).toBeLessThan(200);
+  });
 });
 
 describe("escaped and quoted brackets in the nesting count", () => {
@@ -2025,5 +2036,56 @@ describe("two operands of one function are the same kind of quantity", () => {
     // comparison is by category; a unit in no category abstains rather than
     // being treated as its own.
     expect(codes({ width: "calc(sin(atan2(1px, 1zz)) * 10px)" })).toEqual([]);
+  });
+});
+
+describe("an escape terminated by a line ending", () => {
+  it("refuses a scheme hidden behind a CRLF terminator", () => {
+    // CSS collapses CRLF to one newline before tokenising, so the browser
+    // consumes both as the escape terminator and reads `url`; consuming only
+    // the carriage return leaves the name unrecognised and the URL unchecked.
+    expect(checkCssValue('u\\72\r\nl("javascript:alert(1)")')).toBe(
+      "unsafe-url-scheme"
+    );
+    expect(checkCssValue('u\\72\rl("javascript:x")')).toBe("unsafe-url-scheme");
+    expect(checkCssValue('u\\72\nl("javascript:x")')).toBe("unsafe-url-scheme");
+  });
+
+  it("still lets the same spelling through with an allowed scheme", () => {
+    expect(checkCssValue('u\\72\r\nl("https://x/a.png")')).toBeNull();
+  });
+});
+
+describe("what an attribute falls back to", () => {
+  it("has to be a value the property could take", () => {
+    // The fallback is what the browser substitutes when the attribute is
+    // missing, so a time or a colour there is discarded exactly as it would be
+    // written out directly.
+    expect(codes({ width: "attr(data-width px, 2s)" })).toEqual([
+      "invalid-style-value",
+    ]);
+    expect(codes({ width: "attr(data-width px, red)" })).toEqual([
+      "invalid-style-value",
+    ]);
+  });
+
+  it("accepts one the property could take", () => {
+    expect(codes({ width: "attr(data-width px, 0px)" })).toEqual([]);
+    expect(codes({ width: "attr(data-width px, 50%)" })).toEqual([]);
+    expect(codes({ width: "attr(data-width px)" })).toEqual([]);
+  });
+});
+
+describe("a keyword spelled with escapes", () => {
+  it("is the keyword CSS reads, not the characters stored", () => {
+    expect(codes({ display: "bl\\6f ck" })).toEqual([]);
+    expect(codes({ display: "\\62 lock" })).toEqual([]);
+    expect(codes({ display: "BL\\4f CK" })).toEqual([]);
+  });
+
+  it("does not let an escape smuggle in a second value", () => {
+    expect(codes({ display: "bl\\6f ck extra" })).toEqual([
+      "invalid-style-value",
+    ]);
   });
 });

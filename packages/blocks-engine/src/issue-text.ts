@@ -15,20 +15,26 @@ function escapePointer(token: string): string {
  * Longest reference token embedded in a pointer. A token is a key read from the
  * document, so it is untrusted and unbounded: a malformed style map can hold a
  * megabyte-long property name, and every issue naming it would otherwise carry
- * its own copy. A pointer that long locates nothing a reader can act on, and
- * the ellipsis marks it as shortened rather than wrong. Tokens the code
- * supplies itself — array indices, `props`, `nodes` — are far below this.
+ * its own copy. Tokens the code supplies itself — array indices, `props`,
+ * `nodes` — are far below this.
  */
 const MAX_POINTER_TOKEN_LENGTH = 120;
 
-/** Join a parent pointer with a child token. */
+/**
+ * Join a parent pointer with a child token.
+ *
+ * A path is a promise that it RESOLVES: tooling follows it to reach the value
+ * an issue is about. A shortened token keeps the string small and breaks that
+ * promise, pointing at a key the document does not contain. So an over-long
+ * token is dropped rather than shortened, and the pointer addresses the object
+ * that CONTAINS the offending key — still a location that resolves, one level
+ * out. Which key it was travels in the message, bounded there by
+ * `describeValue`.
+ */
 export function pointer(parent: string, token: string | number): string {
   const text = String(token);
-  const bounded =
-    text.length > MAX_POINTER_TOKEN_LENGTH
-      ? `${text.slice(0, MAX_POINTER_TOKEN_LENGTH)}…`
-      : text;
-  return `${parent}/${escapePointer(bounded)}`;
+  if (text.length > MAX_POINTER_TOKEN_LENGTH) return parent;
+  return `${parent}/${escapePointer(text)}`;
 }
 
 /** Longest untrusted string echoed into an issue message. */

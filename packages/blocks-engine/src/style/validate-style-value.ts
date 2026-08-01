@@ -20,6 +20,7 @@ import {
   checkDimensionValue,
   checkUrlValue,
   asciiLower,
+  decodeIdentifier,
   isCssWideKeyword,
   isOverlongValue,
   splitCssWhitespace,
@@ -188,7 +189,9 @@ function leafIssues(
         // string match a short keyword, and every copy made along the way is
         // work bought with a value that should never have been read.
         if (isOverlongValue(value)) return rejected(path, value, "too-long");
-        const parts = splitCssWhitespace(asciiLower(value));
+        // Decoded first: an escape is how a stored value spells a character,
+        // and `bl\6f ck` is the identifier `block` to everything downstream.
+        const parts = splitCssWhitespace(asciiLower(decodeIdentifier(value)));
         // Collapsed rather than compared raw, so that a vocabulary entry
         // written as two words — `grid-auto-flow: row dense` is one value, not
         // two — still matches however the stored string was spaced.

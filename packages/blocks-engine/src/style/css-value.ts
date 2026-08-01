@@ -260,6 +260,17 @@ function attrProducesDimension(node: CssNode): boolean {
   // The name is an identifier; `attr(1 px)` names no attribute at all.
   if (first?.[0]?.type !== "Identifier") return false;
   if (first.length > 2) return false;
+  // The fallback is what the browser substitutes when the attribute is absent
+  // or unreadable, so a time or a colour there emits a declaration it discards
+  // exactly as the same value would written out.
+  const fallback = args[1];
+  if (fallback !== undefined) {
+    const rejection = alternationRejection(fallback, NO_KEYWORDS, {
+      allowNegative: true,
+      allowPercentage: true,
+    });
+    if (rejection !== null) return false;
+  }
   const declared = first[1];
   if (declared === undefined) return false;
   // `type(<syntax>)` names a syntax this module does not model; abstaining is
@@ -506,10 +517,10 @@ const URL_STRING_FUNCTIONS: ReadonlySet<string> = new Set([
  * A code point outside the Unicode range becomes the replacement character, as
  * the CSS syntax specification requires, rather than throwing.
  */
-function decodeIdentifier(name: string): string {
+export function decodeIdentifier(name: string): string {
   if (!name.includes("\\")) return name;
   return name.replace(
-    /\\(?:([0-9a-fA-F]{1,6})[ \t\r\n\f]?|([\s\S]))/g,
+    /\\(?:([0-9a-fA-F]{1,6})(?:\r\n|[ \t\r\n\f])?|([\s\S]))/g,
     (_match: string, hex?: string, literal?: string) => {
       if (hex === undefined) return literal ?? "";
       const point = Number.parseInt(hex, 16);
