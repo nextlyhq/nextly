@@ -246,3 +246,33 @@ describe("hook provenance through the registering seam", () => {
     expect(registry.getHookCount("beforeCreate", SLUG)).toBe(0);
   });
 });
+
+describe("owner suspension", () => {
+  it("does not outlive the handlers it describes", () => {
+    // A registry is cleared at shutdown and registered into again in the same
+    // process. Suspension left behind would filter out the fresh handlers of a
+    // plugin that is enabled this time round, leaving it inert until some later
+    // reload happened to recompute the set.
+    const registry = new HookRegistry();
+    const handler = vi.fn(() => undefined);
+
+    registry.register("afterRead", SLUG, handler, "plugin:form-builder");
+    registry.setSuspendedOwners(["plugin:form-builder"]);
+    expect(registry.getSuspendedOwners()).toEqual(["plugin:form-builder"]);
+
+    registry.clear();
+    registry.register("afterRead", SLUG, handler, "plugin:form-builder");
+
+    expect(registry.getSuspendedOwners()).toEqual([]);
+    return registry
+      .execute("afterRead", {
+        collection: SLUG,
+        operation: "read",
+        data: {},
+        context: {},
+      })
+      .then(() => {
+        expect(handler).toHaveBeenCalledTimes(1);
+      });
+  });
+});

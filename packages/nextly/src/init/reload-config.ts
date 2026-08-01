@@ -642,17 +642,35 @@ function stageConfigHooks(newConfig: {
       !!single.slug && !disabledSingles.has(single.slug)
   );
 
-  // A disabled plugin must stop running EVERYTHING it contributed, and its
-  // declarations are handled by leaving them out of the rebuild below. Its
-  // `ctx.hooks.on` registrations cannot be: `init` does not re-run on a config
-  // reload, so removing them would leave re-enabling the plugin in the same
-  // session short of its handlers until a restart. They are suspended instead,
-  // and recomputed from the config every time, so re-enabling resumes them by
-  // simply no longer naming them.
-  const suspended = disabledPlugins
-    .map(plugin => (plugin as { name?: string }).name)
-    .filter((name): name is string => !!name)
-    .map((name): HookOwner => `plugin:${name}`);
+  // A plugin that is no longer running must stop running EVERYTHING it
+  // contributed. Its declarations are handled by leaving them out of the
+  // rebuild below. Its `ctx.hooks.on` registrations cannot be: `init` does not
+  // re-run on a config reload, so removing them would leave re-enabling the
+  // plugin in the same session short of its handlers until a restart. They are
+  // suspended instead, so both directions work without one.
+  //
+  // Which plugins are still running is decided by the new config; WHICH OWNERS
+  // EXIST is not, and cannot be. A plugin deleted from the config outright is
+  // absent from it entirely, so a set derived from the config alone could never
+  // name it and it would keep running -- and, worse, deleting a plugin that was
+  // previously disabled would actively resume it. So the candidates come from
+  // the registry and the config only says which of them survive.
+  // Only reconciled when the config actually carries a plugin list. An absent
+  // key is no information, and treating it as "every plugin is gone" would
+  // suspend the lot -- a far worse failure than the one being fixed. An EMPTY
+  // list is information, and does mean they are all gone.
+  const declaredPlugins = Array.isArray(newConfig.plugins)
+    ? newConfig.plugins
+    : undefined;
+  const stillRunning = declaredPlugins
+    ? new Set(
+        declaredPlugins
+          .filter(plugin => (plugin as { enabled?: boolean }).enabled !== false)
+          .map(plugin => (plugin as { name?: string }).name)
+          .filter((name): name is string => !!name)
+          .map((name): HookOwner => `plugin:${name}`)
+      )
+    : undefined;
 
   return () => {
     // The registry service registration actually bound its handlers to, which
@@ -687,7 +705,19 @@ function stageConfigHooks(newConfig: {
 
     reregisterCollectionHooks(collections, registry);
     reregisterSingleHooks(singles, registry);
-    registry.setSuspendedOwners(suspended);
+
+    // Recomputed whole rather than mutated, so an owner that is running again
+    // resumes by simply not appearing -- nothing has to remember what a
+    // previous reload suspended, and the set cannot drift.
+    if (stillRunning) {
+      registry.setSuspendedOwners(
+        registry
+          .registeredOwners()
+          .filter(
+            owner => owner.startsWith("plugin:") && !stillRunning.has(owner)
+          )
+      );
+    }
   };
 }
 
@@ -1765,6 +1795,13 @@ async function applyReload(opts?: {
         collections: synced.collections && synced.components,
         singles: synced.singles && synced.components,
       });
+
+      // A landing, and the one a hook-only edit takes: nothing about the tables
+      // changed, so the new config IS the live one and there is no DDL for the
+      // handlers to wait on. Without this the central case -- edit a hook, save
+      // -- would stage the replacement and never apply it, which is the state
+      // this whole change exists to end.
+      commitReload();
     } else {
       // A real schema change was deferred (unsafe / needs review) or a diff
       // threw, so the field metadata must NOT be synced — the physical table

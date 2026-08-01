@@ -511,6 +511,25 @@ export class HookRegistry {
   }
 
   /**
+   * Every owner that currently holds at least one registration.
+   *
+   * A caller reconciling owners against a config needs to know who is REGISTERED,
+   * not only who the config still mentions: a plugin deleted outright is absent
+   * from the new config entirely, so a set derived from that config alone can
+   * never name it, and it would go on running.
+   */
+  registeredOwners(): HookOwner[] {
+    const owners = new Set<HookOwner>();
+    for (const entries of this.hooks.values()) {
+      for (const entry of entries) owners.add(entry.owner);
+    }
+    for (const entries of this.beforeOperationHooks.values()) {
+      for (const entry of entries) owners.add(entry.owner);
+    }
+    return [...owners];
+  }
+
+  /**
    * Every collection namespace holding at least one handler for `owner`.
    *
    * Lets a caller that rebuilds an owner's registrations find the namespaces it
@@ -572,6 +591,11 @@ export class HookRegistry {
   clear(): void {
     this.hooks.clear();
     this.beforeOperationHooks.clear();
+    // Suspension describes handlers, so it cannot outlive them. A registry
+    // cleared at shutdown and registered into again would otherwise filter out
+    // the fresh handlers of a plugin that is now enabled, leaving it inert
+    // until some later reload happened to recompute the set.
+    this.suspendedOwners.clear();
   }
 
   /**
