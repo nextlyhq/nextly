@@ -9,6 +9,7 @@
  * failure these cases exist to prevent, on the command an operator runs after
  * an upgrade.
  */
+import { getTableName } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 
 import { MIGRATION_TARGET } from "../../domains/field-groups/migration/manifest";
@@ -17,6 +18,10 @@ import { getCoreSchema, getCoreTableNames } from "../index";
 import { STORAGE_FORMAT } from "../storage-format";
 
 const DIALECTS = ["postgresql", "mysql", "sqlite"] as const;
+
+/** The physical name a Drizzle table object carries, which is what the kit emits. */
+const sqlNameOf = (table: unknown): string =>
+  getTableName(table as Parameters<typeof getTableName>[0]);
 
 describe("the core schema names the registry the database actually holds", () => {
   describe.each(DIALECTS)("%s", dialect => {
@@ -42,16 +47,26 @@ describe("the core schema names the registry the database actually holds", () =>
     // The bundle the push CREATES from, which must move in step with the
     // desired shape above: a diff computed against one and applied from the
     // other creates the table the diff said was already there.
+    //
+    // Asserted on the Drizzle object's own SQL name, because that is the name
+    // drizzle-kit emits. Checking only that the entry exists would pass with
+    // the legacy object still in place, which is the whole failure.
     it("pushes the migrated registry under its own name", () => {
-      const table = getDialectTablesForPush(dialect, {
+      const bundle = getDialectTablesForPush(dialect, {
         fieldGroupRegistryTable: MIGRATION_TARGET.registryTable,
-      }).dynamicFieldGroups;
+      });
 
-      expect(table).toBeDefined();
-      const pushed = getCoreSchema(dialect, {
-        fieldGroupRegistryTable: MIGRATION_TARGET.registryTable,
-      }).tables.map(t => t.name);
-      expect(pushed).toContain(MIGRATION_TARGET.registryTable);
+      expect(sqlNameOf(bundle.dynamicFieldGroups)).toBe(
+        MIGRATION_TARGET.registryTable
+      );
+    });
+
+    it("pushes the legacy registry by default", () => {
+      const bundle = getDialectTablesForPush(dialect);
+
+      expect(sqlNameOf(bundle.dynamicFieldGroups)).toBe(
+        STORAGE_FORMAT.registryTable
+      );
     });
   });
 
