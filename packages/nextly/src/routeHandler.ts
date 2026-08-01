@@ -522,6 +522,10 @@ const COLLECTION_ENTRY_METHODS = new Set([
   // Naming a version writes history rather than the document, but it is still
   // a write and resolves to the same permission.
   "setEntryVersionLabel",
+  // Discarding the working draft reverts the document to its live row; the
+  // route parser marks it an `update` operation, so it resolves to the
+  // `update-{slug}` permission rather than a definition mutation's manage-settings.
+  "discardWorkingDraft",
 ]);
 
 /** Single document methods (read/update content, not schema definitions). */

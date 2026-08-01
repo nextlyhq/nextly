@@ -42,6 +42,7 @@ import { getHandlerConfig } from "../route-handler/auth-handler";
 import type { CollectionRegistryService } from "../services/collections/collection-registry-service";
 import type { FieldGroupRegistryService } from "../services/field-groups/field-group-registry-service";
 import { requireBuilderEnabled } from "../shared/builder-access";
+import { hasPasswordField } from "../shared/lib/password-fields";
 import { simplePluralize } from "../shared/lib/pluralization";
 
 import { assertValidFieldsPayload } from "./fields-payload";
@@ -117,15 +118,26 @@ export const GET = withErrorHandler(
       config?.plugins ?? []
     );
 
-    // Derived flag: whether the draft/published working-draft split is enabled
-    // (drafts on a versioned collection). The full versions config is passed
-    // through above, but the admin editor reads this simple boolean to decide
-    // whether a "Save" stores a working draft instead of writing the live row.
-    // Builder collections always resolve drafts off; only code-first ones enable
-    // it, so this is derived from the resolved config rather than assumed.
+    // Derived flag: whether the draft/published working-draft split will actually
+    // run for this collection. The admin editor reads it to decide whether a
+    // "Save" stores a working draft or writes the live row, so it MUST match the
+    // server's own `splitEnabled` gate (collection-mutation-service): a mismatch
+    // makes the editor present a status-less save as a pending draft while the
+    // server writes it live. The split needs the status + drafts lifecycle and is
+    // off for a localized document and for a reachable password field (top-level,
+    // in a group, or in a component), which cannot ride safely in a draft
+    // snapshot. Builder collections always resolve drafts off, so this is derived
+    // from the resolved config, never assumed. (An ineligible component — one that
+    // is localized or fails to resolve — also disables the split server-side; that
+    // resolution-state parity is a follow-up needing a shared eligibility helper.)
     const draftsEnabled =
+      (collection as { status?: boolean }).status === true &&
       (collection.versions as { drafts?: { enabled?: boolean } } | null)?.drafts
-        ?.enabled === true;
+        ?.enabled === true &&
+      (collection as { localized?: boolean }).localized !== true &&
+      !hasPasswordField(
+        enrichedFields as unknown as Parameters<typeof hasPasswordField>[0]
+      );
 
     return respondDoc({
       ...(collectionWithViews as unknown as typeof collection),
