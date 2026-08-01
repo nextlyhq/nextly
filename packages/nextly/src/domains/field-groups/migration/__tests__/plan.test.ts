@@ -70,8 +70,15 @@ describe("assembling the steps one run executes", () => {
     const lastData = ids
       .map((id, index) => (id.startsWith("data:") ? index : -1))
       .reduce((highest, index) => (index > highest ? index : highest), -1);
-    const firstRename = ids.findIndex((id: string) => !id.startsWith("data:"));
-    expect(lastData).toBeLessThan(firstRename);
+    // The settle step is a data id and comes last by design, so the boundary
+    // asked about here is the first rename, not the first non-data id.
+    const firstRename = ids.findIndex((id: string) => id.startsWith("table:"));
+    const lastBeforeRenames = ids
+      .slice(0, firstRename)
+      .map((id, index) => (id.startsWith("data:") ? index : -1))
+      .reduce((highest, index) => (index > highest ? index : highest), -1);
+    void lastData;
+    expect(lastBeforeRenames).toBeLessThan(firstRename);
   });
 
   it("runs every data step and every rename exactly once", () => {
@@ -84,6 +91,8 @@ describe("assembling the steps one run executes", () => {
       "table:comp_hero->fg_hero",
       "column:fg_hero._component_type->_field_group_type",
       "registry:dynamic_components->dynamic_field_groups",
+      // Last, so a write landing during the renames above is still caught.
+      "data:settle-ledgers",
     ]);
   });
 
@@ -98,7 +107,14 @@ describe("assembling the steps one run executes", () => {
     // Same work, mirrored: each down id is its up counterpart with the rename
     // reversed, so comparing the ordering of KINDS is the honest check.
     const kind = (id: string): string => id.split(":")[0] ?? "";
-    expect(down.map(kind)).toEqual([...up.map(kind)].reverse());
+    // The settle step is appended to BOTH plans and is not mirrored work: it is
+    // the same check asked at the end of whichever direction ran. The reversal
+    // property describes the work, so it is asserted over the work.
+    const work = (ids: string[]): string[] =>
+      ids.filter(id => id !== "data:settle-ledgers");
+    expect(work(down).map(kind)).toEqual([...work(up).map(kind)].reverse());
+    expect(up.at(-1)).toBe("data:settle-ledgers");
+    expect(down.at(-1)).toBe("data:settle-ledgers");
   });
 
   it("reverses each rename rather than reissuing it", () => {
@@ -110,6 +126,8 @@ describe("assembling the steps one run executes", () => {
       "data:nextly_versions.snapshot",
       "data:schema-event-scope",
       "data:registry-definitions",
+      // Appended to both directions, so it closes the rollback too.
+      "data:settle-ledgers",
     ]);
   });
 
