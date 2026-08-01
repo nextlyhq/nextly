@@ -58,19 +58,6 @@ interface RegisteredHook<H> {
 }
 
 /**
- * The order boot registers owners in: plugins during `initializePlugins`, then
- * the config, then whatever an app registers imperatively once its own modules
- * evaluate.
- *
- * Used only to place an owner that has no existing entry to sit next to, so a
- * reload and a restart agree about where a newly declared handler goes.
- */
-function ownerRank(owner: HookOwner): number {
-  if (owner.startsWith("plugin:")) return 0;
-  return owner === "code" ? 1 : 2;
-}
-
-/**
  * The handlers one owner contributes to one collection.
  *
  * `beforeOperation` is held apart from the rest because its handlers take the
@@ -416,23 +403,6 @@ export class HookRegistry {
   }
 
   /**
-   * Unregister all hooks for a specific collection
-   *
-   * Removes all hooks associated with a collection.
-   * Useful when a collection is deleted or during testing cleanup.
-   *
-   * @param collection - Collection name or '*' for global hooks
-   *
-   * @example
-   * ```typescript
-   * // Remove all hooks for 'posts' collection
-   * registry.clearCollection('posts');
-   *
-   * // Remove all global hooks
-   * registry.clearCollection('*');
-   * ```
-   */
-  /**
    * Remove only the handlers a given owner registered for a collection.
    *
    * A config reload has to replace the app's own handlers while leaving a
@@ -514,25 +484,52 @@ export class HookRegistry {
     // however many of them preceded it.
     //
     // With no previous entry there is no position to preserve, and appending
-    // would put a newly declared config hook behind an app hook registered
-    // after boot -- so the same edit would order differently depending on
-    // whether the process restarted. The boot sequence is the answer: it
-    // registers plugins, then the config, and an app's own call lands whenever
-    // its module is evaluated. Slotting the owner ahead of the first later-
-    // ranked entry reproduces that.
-    const rank = ownerRank(owner);
-    const boundary = kept.findIndex(e => ownerRank(e.owner) > rank);
+    // would order the same edit differently depending on whether the process
+    // restarted. The one thing boot fixes is that the config registers
+    // immediately after the plugins -- `initializePlugins` then
+    // `registerCollectionHooks`, in `registerServices` -- so that is where a
+    // first-time config handler goes.
+    //
+    // Deliberately NOT a rank over all three owners. An app's call lands
+    // whenever its module is evaluated, which can be before `getNextly()` as
+    // easily as after, so "app comes last" is an assumption rather than an
+    // invariant; anchoring to the plugins reproduces boot in both cases and
+    // assumes nothing about the app. Any other owner appends: a plugin
+    // registering after `init` really is late, and so is an app.
+    const afterPlugins =
+      kept.reduce(
+        (index, entry, at) =>
+          entry.owner.startsWith("plugin:") ? at + 1 : index,
+        0
+      ) ?? 0;
     const insertAt =
       firstOwned === -1
-        ? boundary === -1
-          ? kept.length
-          : boundary
+        ? owner === "code"
+          ? afterPlugins
+          : kept.length
         : existing.slice(0, firstOwned).filter(e => e.owner !== owner).length;
 
     kept.splice(insertAt, 0, ...handlers.map(handler => ({ handler, owner })));
 
     if (kept.length === 0) store.delete(key);
     else store.set(key, kept);
+  }
+
+  /**
+   * The owners under one key, in the order their handlers run.
+   *
+   * Ordering between owners is a real part of the contract -- transforming
+   * handlers feed each other -- and neither a count nor the handler snapshot
+   * can express it, so it is observable rather than inferred from internals.
+   *
+   * @internal
+   */
+  describeOwners(hookType: HookType, collection: string): HookOwner[] {
+    const key = this.makeKey(hookType, collection);
+    if (hookType === "beforeOperation") {
+      return (this.beforeOperationHooks.get(key) ?? []).map(e => e.owner);
+    }
+    return (this.hooks.get(key) ?? []).map(e => e.owner);
   }
 
   /**
@@ -582,6 +579,23 @@ export class HookRegistry {
     return [...found];
   }
 
+  /**
+   * Unregister all hooks for a specific collection
+   *
+   * Removes all hooks associated with a collection.
+   * Useful when a collection is deleted or during testing cleanup.
+   *
+   * @param collection - Collection name or '*' for global hooks
+   *
+   * @example
+   * ```typescript
+   * // Remove all hooks for 'posts' collection
+   * registry.clearCollection('posts');
+   *
+   * // Remove all global hooks
+   * registry.clearCollection('*');
+   * ```
+   */
   clearCollection(collection: string): void {
     // Iterated from the list the HookType union is built from. A local array
     // annotated `HookType[]` type-checks while missing a phase, so a phase
@@ -874,8 +888,28 @@ export class HookRegistry {
    */
   hasHooks(hookType: HookType, collection: string): boolean {
     return (
-      this.countAt(hookType, collection) > 0 || this.countAt(hookType, "*") > 0
+      this.runnableCountAt(hookType, collection) > 0 ||
+      this.runnableCountAt(hookType, "*") > 0
     );
+  }
+
+  /**
+   * How many handlers under one key would actually run.
+   *
+   * A suspended owner's entries stay registered but never execute, so a
+   * presence check that counted them would tell a caller to run a phase that
+   * does nothing -- and `hasHooks` exists precisely so a caller can skip that
+   * work. Registration counts stay raw in {@link getHookCount}, which is
+   * introspection rather than a decision.
+   */
+  private runnableCountAt(hookType: HookType, collection: string): number {
+    const key = this.makeKey(hookType, collection);
+    // Split per store rather than unioning the two entry types: their handlers
+    // take different contexts, and merging them is what a cast would paper over.
+    if (hookType === "beforeOperation") {
+      return this.runnable(this.beforeOperationHooks.get(key) ?? []).length;
+    }
+    return this.runnable(this.hooks.get(key) ?? []).length;
   }
 
   /**
