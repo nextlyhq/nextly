@@ -696,6 +696,48 @@ describe("field-group migration marker", () => {
     ).toBeUndefined();
   });
 
+  // 🔴 Version 3 recorded the settlement position as work; this build treats
+  // settlement as gates and appends a second one, so position N in a version 3
+  // marker addresses different steps here. A resume computed from it would begin
+  // AFTER the ledger check and never re-enter it, letting a legacy write
+  // committed during the interruption settle unseen. Pinned to the literal 3
+  // rather than to an offset, because the offset moves with the constant and
+  // would keep passing if the bump were reverted.
+  it("refuses an in-flight marker from the build that recorded settlement as work", async () => {
+    const { meta } = createMeta({
+      version: 3,
+      status: "migrating",
+      direction: "up",
+      migrationId: "r",
+      step: 9,
+      registryHash: "s",
+      manifestHash: "h",
+    });
+
+    const error = await readMigrationState(meta).catch((e: unknown) => e);
+    expect(NextlyError.is(error)).toBe(true);
+    if (NextlyError.is(error)) {
+      expect(error.logContext?.reason).toBe(
+        "migration marker version is not this build's"
+      );
+      expect(error.logContext?.recordedVersion).toBe(3);
+    }
+  });
+
+  // A settled version 3 marker is still accepted: version 4 adds a check over
+  // the storage a version 3 run produced rather than more rewriting, so refusing
+  // it would strand a complete installation with no way forward.
+  it("still accepts a settled marker from that build", async () => {
+    const { meta } = createMeta({
+      version: 3,
+      status: "settled",
+      generation: "field-groups-v2",
+    });
+
+    const state = await readMigrationState(meta);
+    expect(state.status).toBe("settled");
+  });
+
   it("refuses a marker written by a different version of Nextly", async () => {
     const { meta } = createMeta({
       version: MIGRATION_MARKER_VERSION - 1,
