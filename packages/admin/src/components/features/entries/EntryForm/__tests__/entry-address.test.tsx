@@ -66,7 +66,7 @@ describe("effectiveEntryStatus", () => {
 
 describe("anyLocalePublished", () => {
   it("is true when a language other than the one in view is live", () => {
-    expect(anyLocalePublished(entry(EN_LIVE_DE_DRAFT))).toBe(true);
+    expect(anyLocalePublished(entry(EN_LIVE_DE_DRAFT), true)).toBe(true);
   });
 
   it("is false when every language is still a draft", () => {
@@ -78,13 +78,24 @@ describe("anyLocalePublished", () => {
             en: { translated: true, status: "draft" },
             de: { translated: false },
           },
-        })
+        }),
+        true
       )
     ).toBe(false);
   });
 
   it("falls back to the row status with no translation map", () => {
-    expect(anyLocalePublished(entry({ status: "published" }))).toBe(true);
+    expect(anyLocalePublished(entry({ status: "published" }), false)).toBe(
+      true
+    );
+  });
+
+  it("assumes public when a LOCALIZED entry arrives without the overview", () => {
+    // The map's absence is a property of the caller's query, not of the entry — quick-edit from a
+    // relationship field does not ask for it. The row status describes the default language alone,
+    // so trusting it would call an entry unpublished while another language is live and hand its
+    // shared slug back to the generator. Losing auto-slug convenience is the cheaper mistake.
+    expect(anyLocalePublished(entry({ status: "draft" }), true)).toBe(true);
   });
 });
 
@@ -101,6 +112,10 @@ describe("useHasPublicAddress", () => {
     entry: entry(),
     locale: undefined,
     slugLocalized: false,
+    // Most collections are not localized; the cases that turn this on say so.
+    collectionLocalized: false,
+    defaultLocale: "en",
+    mutationPending: false,
     ...over,
   });
 
@@ -213,6 +228,64 @@ describe("useHasPublicAddress", () => {
     rerender(shared({ entry: entry({ id: "draft-two", status: "draft" }) }));
 
     expect(result.current).toBe(false);
+  });
+
+  it("treats the default language the same whether it is implicit or named", () => {
+    // The editor represents the default language as `undefined` until the switcher is touched and
+    // as its explicit code afterwards. They are one address, so a latch written under one must be
+    // found under the other — otherwise leaving the default language and returning unfreezes a
+    // slug that was public.
+    const draftEverywhere = entry({
+      status: "draft",
+      _translations: {
+        en: { translated: true, status: "draft" },
+        de: { translated: true, status: "draft" },
+      },
+    });
+    const { result, rerender } = render(
+      perLocale({ entry: entry(EN_LIVE_DE_DRAFT), locale: undefined })
+    );
+    expect(result.current).toBe(true);
+
+    // Unpublished, then the author visits German and comes back — this time picking "en" from the
+    // switcher, which reports the explicit code rather than undefined.
+    rerender(perLocale({ entry: draftEverywhere, locale: undefined }));
+    rerender(perLocale({ entry: draftEverywhere, locale: "de" }));
+    rerender(perLocale({ entry: draftEverywhere, locale: "en" }));
+
+    expect(result.current).toBe(true);
+  });
+
+  it("does not remember a publish that is still in flight", () => {
+    // The update hook writes the pending status into the query cache optimistically and restores
+    // the previous entry if the request fails. A latch cannot roll back with it, so recording an
+    // unconfirmed publish would freeze a draft's slug permanently — and make its editor warn about
+    // a public URL that does not exist — until the editor is remounted.
+    const { result, rerender } = render(
+      shared({
+        entry: entry({ status: "published" }),
+        mutationPending: true,
+      })
+    );
+    // Frozen while the write is in flight, which is right if it succeeds.
+    expect(result.current).toBe(true);
+
+    // The server refuses it and the cache rolls back to the draft.
+    rerender(shared({ entry: entry({ status: "draft" }) }));
+
+    expect(result.current).toBe(false);
+  });
+
+  it("remembers a publish once the write has settled", () => {
+    // The mirror, so the guard above cannot be satisfied by never latching at all.
+    const { result, rerender } = render(
+      shared({ entry: entry({ status: "published" }), mutationPending: false })
+    );
+    expect(result.current).toBe(true);
+
+    rerender(shared({ entry: entry({ status: "draft" }) }));
+
+    expect(result.current).toBe(true);
   });
 
   it("does not carry a localized slug's history to another language", () => {

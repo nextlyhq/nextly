@@ -309,6 +309,9 @@ export function EntryForm({
     entry,
     locale,
     slugLocalized: isSlugPerLocale(slugField, collection.localized === true),
+    collectionLocalized: collection.localized === true,
+    defaultLocale,
+    mutationPending: isSubmitting,
   });
 
   useAutoSlug({

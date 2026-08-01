@@ -90,15 +90,24 @@ export function effectiveEntryStatus(
  * for it — the row's own status is the only lifecycle there is.
  */
 export function anyLocalePublished(
-  entry: EntryData | null | undefined
+  entry: EntryData | null | undefined,
+  collectionLocalized: boolean
 ): boolean {
   const translations = entry?._translations;
-  if (!isRecord(translations)) {
-    return entry?.status === "published";
+  if (isRecord(translations)) {
+    return Object.values(translations).some(
+      meta => isRecord(meta) && meta.status === "published"
+    );
   }
-  return Object.values(translations).some(
-    meta => isRecord(meta) && meta.status === "published"
-  );
+  // A localized entry whose overview was not requested cannot answer this. The row's own status
+  // describes the default language alone, so believing it would call an entry unpublished while
+  // another language is live and hand its shared slug back to the generator. The map's absence is
+  // a property of the CALLER's query, not of the entry, so the safe reading is the conservative
+  // one: assume the address may be public. Callers that need the precise answer ask for the
+  // overview — but one that forgets loses auto-slug convenience rather than someone's live URL.
+  if (collectionLocalized) return true;
+  // Not localized: one lifecycle, and it lives on the row.
+  return entry?.status === "published";
 }
 
 export interface PublicAddressArgs {
@@ -118,6 +127,29 @@ export interface PublicAddressArgs {
    * A slug the author opted into localizing is genuinely per-language and follows that language.
    */
   slugLocalized: boolean;
+  /** Whether the collection itself is localized, which decides what the ABSENCE of a translation
+   *  overview means — unavailable, or genuinely not applicable. See {@link anyLocalePublished}. */
+  collectionLocalized: boolean;
+  /**
+   * The app's configured default language.
+   *
+   * The editor represents the default language as `undefined` until the switcher is touched, and
+   * as its explicit code afterwards. Those are one address, so the latch key normalises through
+   * this — otherwise leaving the default language and returning to it looks up a key that was
+   * never written, and a formerly public slug quietly unfreezes.
+   */
+  defaultLocale: string | undefined;
+  /**
+   * Whether a write for this entry is currently in flight.
+   *
+   * The update hook writes the pending status into the query cache optimistically and restores the
+   * previous entry if the request fails. A latch is monotonic and cannot roll back with it, so
+   * latching mid-flight would make a publish that never happened permanent: the draft's slug would
+   * stop following its title, and its slug editor would warn about a public URL that does not
+   * exist, until the editor is remounted. The pending state is still allowed to FREEZE — it is
+   * only recording it forever that has to wait for the server to agree.
+   */
+  mutationPending: boolean;
 }
 
 /**
@@ -151,9 +183,15 @@ export function useHasPublicAddress({
   entry,
   locale,
   slugLocalized,
+  collectionLocalized,
+  defaultLocale,
+  mutationPending,
 }: PublicAddressArgs): boolean {
-  // A shared slug is one address for every language, so its key must not carry the locale.
-  const addressKey = `${entry?.id ?? ""}${slugLocalized ? `:${locale ?? ""}` : ""}`;
+  // A shared slug is one address for every language, so its key must not carry the locale at all.
+  // A localized one does, normalised so the default language cannot occupy two keys.
+  const addressKey = `${entry?.id ?? ""}${
+    slugLocalized ? `:${locale ?? defaultLocale ?? ""}` : ""
+  }`;
   const seenRef = useRef<Set<string> | null>(null);
   seenRef.current ??= new Set<string>();
 
@@ -162,7 +200,9 @@ export function useHasPublicAddress({
 
   const liveNow = slugLocalized
     ? effectiveEntryStatus(entry, locale) === "published"
-    : anyLocalePublished(entry);
-  if (liveNow) seenRef.current.add(addressKey);
-  return seenRef.current.has(addressKey);
+    : anyLocalePublished(entry, collectionLocalized);
+  // Freeze on the pending state, but only REMEMBER it once the write has settled — the cache may
+  // still be holding an optimistic publish that is about to be rolled back.
+  if (liveNow && !mutationPending) seenRef.current.add(addressKey);
+  return liveNow || seenRef.current.has(addressKey);
 }
