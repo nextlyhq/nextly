@@ -22,6 +22,7 @@ interface DriverOptions {
   titleFieldName: string;
   slugFieldName: string;
   enabled?: boolean;
+  frozen?: boolean;
 }
 
 function useDriver({
@@ -29,9 +30,10 @@ function useDriver({
   titleFieldName,
   slugFieldName,
   enabled,
+  frozen,
 }: DriverOptions) {
   const form = useForm<FormShape>({ defaultValues });
-  useAutoSlug({ form, titleFieldName, slugFieldName, enabled });
+  useAutoSlug({ form, titleFieldName, slugFieldName, enabled, frozen });
   return form;
 }
 
@@ -185,5 +187,73 @@ describe("useAutoSlug", () => {
 
     // No write happened — slug stays empty.
     expect(result.current.getValues("slug")).toBe("");
+  });
+
+  it("leaves a frozen slug alone when the title changes", () => {
+    // A published entry's slug is a public address. Re-deriving it from an edited title retires a
+    // URL the author never chose to change, and every inbound link to it 404s.
+    const { result } = renderHook(() =>
+      useDriver({
+        defaultValues: {
+          title: "How to build a blog with Nextly",
+          slug: "how-to-build-a-blog-with-nextly",
+        },
+        titleFieldName: "title",
+        slugFieldName: "slug",
+        frozen: true,
+      })
+    );
+
+    act(() => {
+      result.current.setValue(
+        "title",
+        "How to build a blog with Nextly ISR check"
+      );
+    });
+
+    expect(result.current.getValues("slug")).toBe(
+      "how-to-build-a-blog-with-nextly"
+    );
+  });
+
+  it("still lets a frozen slug be edited directly", () => {
+    // Freezing stops the automatic rewrite, not the author. Changing the URL stays available; it
+    // just becomes something done on purpose rather than as a side effect of retitling.
+    const { result } = renderHook(() =>
+      useDriver({
+        defaultValues: { title: "Original title", slug: "original-title" },
+        titleFieldName: "title",
+        slugFieldName: "slug",
+        frozen: true,
+      })
+    );
+
+    act(() => {
+      result.current.setValue("slug", "a-deliberate-url");
+    });
+    act(() => {
+      result.current.setValue("title", "Retitled again");
+    });
+
+    expect(result.current.getValues("slug")).toBe("a-deliberate-url");
+  });
+
+  it("keeps following the title while the entry is not frozen", () => {
+    // The draft case, which must not regress: an author refining a title before publishing expects
+    // the URL to keep up.
+    const { result } = renderHook(() =>
+      useDriver({
+        defaultValues: { title: "First draft", slug: "first-draft" },
+        titleFieldName: "title",
+        slugFieldName: "slug",
+        frozen: false,
+      })
+    );
+
+    act(() => {
+      result.current.setValue("title", "Second draft");
+    });
+
+    expect(result.current.getValues("slug")).toBe("second-draft");
   });
 });

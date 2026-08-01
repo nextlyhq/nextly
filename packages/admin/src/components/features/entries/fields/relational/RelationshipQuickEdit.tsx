@@ -29,6 +29,7 @@ import { AlertCircle, Loader2, ExternalLink } from "@admin/components/icons";
 import { buildRoute, ROUTES } from "@admin/constants/routes";
 import { useCollection } from "@admin/hooks/queries/useCollections";
 import { useEntry } from "@admin/hooks/queries/useEntry";
+import { useLocalization } from "@admin/hooks/useLocalization";
 import { entryKeys } from "@admin/services/entryApi";
 
 import { EntryForm } from "../../EntryForm/EntryForm";
@@ -114,6 +115,13 @@ function ModalContent({
     error: collectionError,
   } = useCollection(collectionSlug);
 
+  // The per-locale translation overview, on a localized app only. Quick-edit renders the same
+  // editable slug the full editor does, and whether that slug is already a public address depends
+  // on whether ANY language is published — a question only this map can answer. Without it the
+  // form has to assume the address may be live, which costs auto-slug convenience on entries that
+  // are still drafts.
+  const { enabled: localizationEnabled } = useLocalization();
+
   const {
     data: entry,
     isLoading: isLoadingEntry,
@@ -122,6 +130,7 @@ function ModalContent({
     collectionSlug,
     entryId,
     enabled: !!collectionSlug && !!entryId,
+    translationStatus: localizationEnabled,
   });
 
   const isLoading = isLoadingCollection || isLoadingEntry;

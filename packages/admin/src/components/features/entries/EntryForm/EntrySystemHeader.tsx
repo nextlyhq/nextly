@@ -27,11 +27,13 @@ import {
   Trash2,
 } from "@admin/components/icons";
 import { useCan } from "@admin/hooks/useCan";
+import { useLocalization } from "@admin/hooks/useLocalization";
 import { cn } from "@admin/lib/utils";
 
 import { useEntryLocale } from "../EntryLocaleContext";
 import { LanguageSwitcher } from "../LanguageSwitcher";
 
+import { effectiveEntryStatus } from "./entry-address";
 import { ShowJSONDialog } from "./ShowJSONDialog";
 import { UnpublishConfirmDialog } from "./UnpublishConfirmDialog";
 import type { EntryData, EntryFormMode } from "./useEntryForm";
@@ -183,6 +185,9 @@ export function EntrySystemHeader({
 }: EntrySystemHeaderProps) {
   const form = useFormContext();
   const entryLocale = useEntryLocale();
+  // The default language is edited with `locale === undefined`, and its status
+  // can live on the companion, so resolve it to read the right lifecycle.
+  const { defaultLocale } = useLocalization();
   const inputRef = useRef<HTMLInputElement>(null);
   const [unpublishOpen, setUnpublishOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -248,22 +253,9 @@ export function EntrySystemHeader({
   // - !hasStatus → single Save button (collections without drafts).
   // On a localized draft collection each language has its own lifecycle, so the
   // active locale's status — not the main/default row's — decides which submit
-  // affordances to show. A non-default locale with no companion status is not
-  // yet published; only fall back to the row status when there is no per-locale
-  // map (non-localized entries), so it never inherits the default's published state.
-  const localeStatus =
-    locale !== undefined
-      ? (
-          entry?._translations as
-            | Record<string, { status?: string }>
-            | undefined
-        )?.[locale]?.status
-      : undefined;
-  const hasTranslations =
-    locale !== undefined && entry?._translations !== undefined;
-  const effectiveStatus = hasTranslations
-    ? localeStatus
-    : (entry?.status as string | undefined);
+  // affordances to show. Shared with the slug freeze and the public-URL notice,
+  // which ask the same question and must not answer it differently.
+  const effectiveStatus = effectiveEntryStatus(entry, locale, defaultLocale);
   const isPublishedEdit = mode === "edit" && effectiveStatus === "published";
   const entryLabel =
     typeof entry?.title === "string" && entry.title.trim().length > 0
