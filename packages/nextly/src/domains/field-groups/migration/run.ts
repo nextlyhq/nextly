@@ -33,6 +33,11 @@ import {
 } from "../../schema/utils/resolve-catalog-name";
 import { forgetFieldGroupStorageNames } from "../storage/resolve-storage-names";
 
+import {
+  FIELD_GROUP_STORAGE_VOCABULARY,
+  LEGACY_STORAGE_VOCABULARY,
+  assertLedgersSettled,
+} from "./data-steps";
 import { resolveStorageVerdict } from "./guard";
 import {
   buildMigrationManifest,
@@ -313,6 +318,30 @@ export async function runFieldGroupMigration(
           migrationId,
           steps,
           fromStep,
+        });
+
+        // 🔴 The vocabulary half of the same question. A step's postcondition
+        // speaks for the moment it finished; a write committing afterwards puts
+        // the old spelling back into a surface no later step revisits, and the
+        // run would settle over storage that is not fully migrated — invisible
+        // until the contract release removes the arm that still reads it.
+        //
+        // Only the surfaces the renames leave alone are asked here. The registry
+        // definitions are addressed through typed CRUD under the legacy name and
+        // so are only expressible before the renames; asking them now would name
+        // a table that no longer exists.
+        await assertLedgersSettled({
+          session,
+          meta,
+          migrationId,
+          from:
+            direction === "up"
+              ? LEGACY_STORAGE_VOCABULARY
+              : FIELD_GROUP_STORAGE_VOCABULARY,
+          to:
+            direction === "up"
+              ? FIELD_GROUP_STORAGE_VOCABULARY
+              : LEGACY_STORAGE_VOCABULARY,
         });
 
         // Asked of the database rather than inferred from the steps having run.

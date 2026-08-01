@@ -59,13 +59,23 @@ import { introspectLiveSnapshot } from "../../../schema/pipeline/diff/introspect
 import { splitStatements } from "../../../schema/pipeline/sql-statement-utils";
 import { DynamicCollectionSchemaService } from "../../../dynamic-collections/services/dynamic-collection-schema-service";
 import { FieldGroupSchemaService } from "../../services/field-group-schema-service";
+import { MetaService } from "../../../meta/services/meta-service";
+import {
+  FIELD_GROUP_STORAGE_VOCABULARY,
+  LEGACY_STORAGE_VOCABULARY,
+  assertLedgersSettled,
+} from "../data-steps";
 import { MIGRATION_TARGET } from "../manifest";
 import { runFieldGroupMigration } from "../run";
 import {
   resolveRegistryNameFromCatalog,
   resolveTypeColumns,
 } from "../../storage/resolve-storage-names";
-import { MIGRATION_LOCK_TABLE } from "../session";
+import {
+  MIGRATION_LOCK_TABLE,
+  withMigrationSession,
+  type MigrationDialect,
+} from "../session";
 
 interface TestAdapter {
   dialect: SupportedDialect;
@@ -156,6 +166,26 @@ function systemTablesFor(dialect: SupportedDialect): Record<string, unknown> {
  */
 function drizzleOf(adapter: unknown): unknown {
   return (adapter as { getDrizzle(): unknown }).getDrizzle();
+}
+
+/**
+ * Insert through the adapter's typed CRUD.
+ *
+ * `TestAdapter` is the narrow surface these cases drive and does not name
+ * `insert`; the object behind it is a real adapter. Narrowed once here so each
+ * dialect's own JSON and boolean handling is used rather than three
+ * hand-written spellings of one statement.
+ */
+function insertRow(
+  adapter: unknown,
+  table: string,
+  values: Record<string, unknown>
+): Promise<unknown> {
+  return (
+    adapter as {
+      insert(t: string, v: Record<string, unknown>): Promise<unknown>;
+    }
+  ).insert(table, values);
 }
 
 /** The kinds of core operation that name a given table, for an exact assertion. */
@@ -406,6 +436,30 @@ for (const entry of DIALECTS) {
         snapshot.tables
           .find(spec => spec.name === table)
           ?.columns.map(column => column.name) ?? []
+      );
+    }
+
+    /**
+     * What settlement would still call unrewritten, asked of the live database.
+     *
+     * Runs the production predicate rather than a second scanner, so this
+     * observes exactly what the settlement check observes.
+     */
+    async function settlementResidue(): Promise<void> {
+      return withMigrationSession(
+        {
+          adapter: adapter as never,
+          dialect: entry.dialect as MigrationDialect,
+          label: "settlement-residue-probe",
+        },
+        session =>
+          assertLedgersSettled({
+            session,
+            meta: new MetaService(adapter as never, logger as never),
+            migrationId: "settlement-residue-probe",
+            from: LEGACY_STORAGE_VOCABULARY,
+            to: FIELD_GROUP_STORAGE_VOCABULARY,
+          })
       );
     }
 
@@ -673,6 +727,49 @@ for (const entry of DIALECTS) {
       expect(namesRegistry(ops, STORAGE_FORMAT.registryTable)).toContain(
         "add_table"
       );
+    });
+
+    /**
+     * 🔴 A write that lands after its step verified must stop the run settling.
+     *
+     * Each data step checks its surface the moment it finishes, so a row
+     * committed afterwards sits in a surface nothing revisits and the run would
+     * report success over storage that is not fully migrated. That row stays
+     * readable while both spellings are served, so the failure only appears once
+     * the contract release removes the legacy arm — with nothing left connecting
+     * it to the migration that caused it.
+     *
+     * Planted after the run rather than raced against it: the outcome is what is
+     * under test, and a row carrying the legacy wire key in an already-passed
+     * surface is exactly the state a concurrent write leaves behind.
+     */
+    it("sees a legacy row left in a rewritten ledger", async () => {
+      await migrate("up");
+      // The control, and it is not optional: the assertion below passes against
+      // a probe that reports everything as unsettled. This is what says the
+      // probe can tell a clean run from a dirty one.
+      await expect(settlementResidue()).resolves.toBeUndefined();
+
+      await insertRow(adapter, "nextly_versions", {
+        id: randomUUID(),
+        scopeKind: "collection",
+        scopeSlug: "articles",
+        entryId: randomUUID(),
+        status: "published",
+        isAutosave: false,
+        snapshot: { [STORAGE_FORMAT.wireTypeKey]: "hero" },
+      });
+
+      // The refusal is the step's own, so it names the surface and the row.
+      // Asserted on `logContext.reason` rather than the message, which is the
+      // operator-facing text and free to change.
+      await expect(settlementResidue()).rejects.toMatchObject({
+        logContext: {
+          reason: "row rewrite did not reach every row",
+          table: "nextly_versions",
+          property: "snapshot",
+        },
+      });
     });
 
     it("reports a second run as already migrated", async () => {

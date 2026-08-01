@@ -53,6 +53,7 @@ import {
   type RowRewriteTarget,
 } from "./rewrite-rows";
 import type { MigrationStep } from "./runner";
+import type { MigrationSession } from "./session";
 
 /**
  * Every spelling of the field-group concept that is stored inside a row.
@@ -140,6 +141,54 @@ const CONTENT_TARGETS: readonly RowRewriteTarget[] = [
   { table: "nextly_versions", documentProperty: "snapshot" },
   { table: "nextly_events", documentProperty: "payload" },
 ];
+
+/**
+ * Re-ask the surfaces that survive the renames whether they are still rewritten.
+ *
+ * 🔴 A step's own `verify` speaks for the moment that step finished. A writer
+ * committing afterwards puts the old spelling back into a surface nothing
+ * revisits, and the run settles reporting success over storage that is not
+ * fully migrated. The rows stay readable while both spellings are served, so
+ * that failure only surfaces once the contract release removes the legacy arm,
+ * with nothing left connecting it to the migration that caused it.
+ *
+ * Re-asking the SAME verifiers is what closes it: `findUnrewrittenRow` walks its
+ * ledger from the beginning regardless of where any cursor stopped, so a row
+ * that landed behind an earlier step's cursor is plainly visible now. Reusing
+ * the steps' own predicates rather than writing a second scanner is deliberate —
+ * a separate implementation of "is this migrated?" is one that can disagree with
+ * the rewrite it is checking. Their refusal is reused for the same reason: it
+ * already names the table, the property and the offending row.
+ *
+ * 🔴 The registry-definitions step is deliberately NOT among these. It reaches
+ * its tables through typed CRUD and the registry is declared under its *legacy*
+ * name, so — as `plan.ts` states — it is only expressible before the renames
+ * going up. Re-asking it afterwards addresses a table that no longer exists.
+ * These three surfaces are never renamed, which is what makes them safe to ask
+ * again at any point in the run.
+ *
+ * The residual window is a row committed during this pass itself, behind its
+ * cursor. No scan closes that one; it needs a quiet ledger, which is the run's
+ * operational precondition rather than something a check can enforce.
+ *
+ * @throws the step's own refusal, naming the surface and the row.
+ */
+export async function assertLedgersSettled(args: {
+  session: MigrationSession;
+  meta: MetaService;
+  migrationId: string;
+  from: FieldGroupStorageVocabulary;
+  to: FieldGroupStorageVocabulary;
+}): Promise<void> {
+  const { meta, migrationId, from, to } = args;
+  const steps = [
+    schemaEventScopeStep(from, to),
+    ...CONTENT_TARGETS.map(target =>
+      contentStep({ meta, migrationId, target, from, to })
+    ),
+  ];
+  for (const step of steps) await step.verify(args.session);
+}
 
 /**
  * Build the steps that rewrite stored vocabulary, in canonical order.
