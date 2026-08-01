@@ -16,6 +16,7 @@ import { getStyleProperty } from "./catalog";
 import { isStyleLeaf, shapeLeaves } from "./catalog-types";
 import type { StyleLeaf, StyleShape, TokenKind } from "./catalog-types";
 import { checkCssValue, checkUrlValue } from "./css-value";
+import type { CssValueRejection } from "./css-value";
 
 /** Human-readable reasons a value was refused, keyed by the safety check's verdict. */
 const REJECTION_MESSAGES = {
@@ -65,6 +66,27 @@ function invalid(
     message,
     ...(suggestion === undefined ? {} : { suggestion }),
   };
+}
+
+/**
+ * The issue for a value the safety checks refused. A refused URL scheme carries
+ * the same guidance wherever it was found, including inside a free-form value
+ * where the URL is only part of what was written.
+ */
+function rejected(
+  path: string,
+  value: string,
+  rejection: CssValueRejection
+): ValidationIssue[] {
+  return [
+    invalid(
+      path,
+      `${describeValue(value)} ${REJECTION_MESSAGES[rejection]}.`,
+      rejection === "unsafe-url-scheme"
+        ? "Use an http(s) URL or a path relative to the site."
+        : undefined
+    ),
+  ];
 }
 
 /** Validate a value against one leaf descriptor. */
@@ -132,15 +154,7 @@ function leafIssues(
         ];
       }
       const rejection = checkCssValue(value);
-      if (rejection !== null) {
-        return [
-          invalid(
-            path,
-            `${describeValue(value)} ${REJECTION_MESSAGES[rejection]}.`
-          ),
-        ];
-      }
-      return [];
+      return rejection === null ? [] : rejected(path, value, rejection);
     }
     case "color":
     case "cssValue": {
@@ -148,33 +162,14 @@ function leafIssues(
         return [invalid(path, `${describeValue(value)} is not a string.`)];
       }
       const rejection = checkCssValue(value);
-      if (rejection !== null) {
-        return [
-          invalid(
-            path,
-            `${describeValue(value)} ${REJECTION_MESSAGES[rejection]}.`
-          ),
-        ];
-      }
-      return [];
+      return rejection === null ? [] : rejected(path, value, rejection);
     }
     case "url": {
       if (typeof value !== "string") {
         return [invalid(path, `${describeValue(value)} is not a string.`)];
       }
       const rejection = checkUrlValue(value);
-      if (rejection !== null) {
-        return [
-          invalid(
-            path,
-            `${describeValue(value)} ${REJECTION_MESSAGES[rejection]}.`,
-            rejection === "unsafe-url-scheme"
-              ? "Use an http(s) URL or a path relative to the site."
-              : undefined
-          ),
-        ];
-      }
-      return [];
+      return rejection === null ? [] : rejected(path, value, rejection);
     }
   }
 }

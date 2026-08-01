@@ -202,6 +202,47 @@ describe("url safety", () => {
     expect(checkUrlValue("a\\22 .png")).toBe("unsafe-url-characters");
   });
 
+  it("applies the same allowlist to a url nested in a free-form value", () => {
+    // Several properties reach the same CSS property by either route:
+    // `backgroundGradient` and `background.url` both emit `background-image`,
+    // so a scheme refused on one must be refused on the other.
+    expect(checkCssValue('url("javascript:alert(1)")')).toBe(
+      "unsafe-url-scheme"
+    );
+    expect(checkCssValue("url(data:text/html,x)")).toBe("unsafe-url-scheme");
+    expect(
+      checkCssValue('linear-gradient(red, blue), url("data:text/html,x")')
+    ).toBe("unsafe-url-scheme");
+    expect(checkCssValue('image-set(url("javascript:alert(1)") 1x)')).toBe(
+      "unsafe-url-scheme"
+    );
+  });
+
+  it("sees through CSS escapes, which the parser decodes", () => {
+    // Written raw these read as `\6a avascript:` and `java\73 cript:`; checking
+    // the original text would miss both, checking the parsed value does not.
+    expect(checkCssValue('url("\\6a avascript:alert(1)")')).toBe(
+      "unsafe-url-scheme"
+    );
+    expect(checkCssValue("url('java\\73 cript:alert(1)')")).toBe(
+      "unsafe-url-scheme"
+    );
+  });
+
+  it("still accepts the urls a page legitimately needs", () => {
+    expect(checkCssValue('url("https://cdn.example.com/a.png")')).toBeNull();
+    // An SVG filter reference carries no scheme and must keep working.
+    expect(checkCssValue("url(#svg-blur)")).toBeNull();
+    expect(checkCssValue('url("/media/a.png")')).toBeNull();
+  });
+
+  it("surfaces a nested unsafe url through validation of a gradient", () => {
+    const issues = check({ backgroundGradient: 'url("javascript:alert(1)")' });
+    expect(issues[0]?.code).toBe("invalid-style-value");
+    expect(issues[0]?.path).toBe("/styles/backgroundGradient");
+    expect(issues[0]?.suggestion).toContain("http");
+  });
+
   it("surfaces an unsafe url through validation, with a usable suggestion", () => {
     const issues = check({ background: { url: "javascript:alert(1)" } });
     expect(issues[0]?.code).toBe("invalid-style-value");

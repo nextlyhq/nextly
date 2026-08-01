@@ -59,8 +59,9 @@ const UNSAFE_URL_CHARS = /["'()\\\n\r]/;
 export function checkCssValue(value: string): CssValueRejection | null {
   if (value.trim() === "") return "unparsable";
   if (UNSAFE_VALUE_CHARS.test(value)) return "unsafe-characters";
+  let ast: csstree.CssNode;
   try {
-    csstree.parse(value, {
+    ast = csstree.parse(value, {
       context: "value",
       onParseError: error => {
         throw error;
@@ -69,7 +70,20 @@ export function checkCssValue(value: string): CssValueRejection | null {
   } catch {
     return "unparsable";
   }
-  return null;
+  // A URL nested in a free-form value reaches the stylesheet exactly as a
+  // dedicated URL property's does, and several properties emit the same CSS
+  // property by either route, so both get the same allowlist. The check runs on
+  // the PARSED node rather than the raw text because the parser decodes CSS
+  // escapes: `url("\6a avascript:...")` arrives here as `javascript:...`, which
+  // a scan of the original string would not recognise.
+  let rejection: CssValueRejection | null = null;
+  csstree.walk(ast, {
+    enter(node: csstree.CssNode) {
+      if (node.type !== "Url") return;
+      rejection ??= checkUrlValue(node.value);
+    },
+  });
+  return rejection;
 }
 
 /**
