@@ -1067,16 +1067,19 @@ export class CollectionQueryService extends BaseService {
       // Build component field EXISTS conditions
       const componentTables =
         await this.resolveComponentTableNames(componentFilters);
+      // Kept so the count over these same filters can reuse them instead of
+      // repeating the registry lookup and the catalog introspection.
+      const componentTypeColumns = await this.resolveComponentTypeColumns(
+        componentFilters,
+        componentTables.values()
+      );
       const componentCondition = this.buildComponentFieldConditions(
         componentFilters,
         tableName,
         schema.id,
         dialect,
         componentTables,
-        await this.resolveComponentTypeColumns(
-          componentFilters,
-          componentTables.values()
-        )
+        componentTypeColumns
       );
 
       // Apply component field conditions to query
@@ -1269,6 +1272,9 @@ export class CollectionQueryService extends BaseService {
             collectionName: params.collectionName,
             user: params.user,
             search: params.search,
+            // Resolved once for this request; see the parameter's own note.
+            resolvedComponentTables: componentTables,
+            resolvedComponentTypeColumns: componentTypeColumns,
             // Geo operators removed (the count cannot apply them), but component
             // predicates kept: `cleanedWhere` has BOTH stripped, and the count
             // builds its own EXISTS conditions from the ones it is given. Sending
@@ -1749,6 +1755,18 @@ export class CollectionQueryService extends BaseService {
      * would over-count.
      */
     translationFilter?: TranslationStatusFilter;
+    /**
+     * Component table names and discriminator columns, already resolved by the
+     * caller (listEntries) for this same request.
+     *
+     * The list path resolves both to build its page, then asks for a total over
+     * the same filters, so without this the count repeats a registry lookup per
+     * component slug and a catalog introspection per table: column and index
+     * reads on Postgres and MySQL, a PRAGMA each on SQLite. A standalone count
+     * omits them and resolves its own.
+     */
+    resolvedComponentTables?: Map<string, string>;
+    resolvedComponentTypeColumns?: Map<string, string>;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
   }): Promise<CollectionServiceResult<{ totalDocs: number }>> {
@@ -1958,17 +1976,19 @@ export class CollectionQueryService extends BaseService {
 
         // Build component field EXISTS conditions
         const componentTables =
-          await this.resolveComponentTableNames(componentFilters);
+          params.resolvedComponentTables ??
+          (await this.resolveComponentTableNames(componentFilters));
         const componentCondition = this.buildComponentFieldConditions(
           componentFilters,
           tableName,
           schema.id,
           dialect,
           componentTables,
-          await this.resolveComponentTypeColumns(
-            componentFilters,
-            componentTables.values()
-          )
+          params.resolvedComponentTypeColumns ??
+            (await this.resolveComponentTypeColumns(
+              componentFilters,
+              componentTables.values()
+            ))
         );
 
         if (componentCondition) {
