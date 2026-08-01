@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { STORAGE_FORMAT } from "../../../../schemas/storage-format";
 import {
   buildDataMigrationSteps,
+  settleRegistryDefinitionsStep,
   FIELD_GROUP_STORAGE_VOCABULARY,
   LEGACY_STORAGE_VOCABULARY,
 } from "../data-steps";
@@ -247,6 +248,111 @@ describe("rewriting the vocabulary stored in registry rows", () => {
     await expect(
       stepNamed(renamed, "data:registry-definitions").run(renamed.session)
     ).rejects.toThrow(/not found in schema registry/);
+  });
+});
+
+describe("re-checking the registries once the renames have run", () => {
+  /** A world as it stands after an upward run has renamed the registry. */
+  function migrated() {
+    return createTableWorld({
+      dynamic_collections: registry([
+        { id: "c1", fields: storedFields(), configPath: "collections/post.ts" },
+      ]),
+      dynamic_singles: registry([
+        { id: "s1", fields: storedFields(), configPath: "singles/home.ts" },
+      ]),
+      [MIGRATION_TARGET.registryTable]: registry([
+        { id: "f1", fields: storedFields(), configPath: "components/hero.ts" },
+      ]),
+    });
+  }
+
+  function settleStep(registryTable: string): MigrationStep {
+    return settleRegistryDefinitionsStep({
+      from: LEGACY_STORAGE_VOCABULARY,
+      to: FIELD_GROUP_STORAGE_VOCABULARY,
+      resolveRegistryTable: async () => registryTable,
+    });
+  }
+
+  // 🔴 The whole point of the step. Going up it runs AFTER the registry rename,
+  // so the name the plan was assembled with is gone. The data step refuses in
+  // this exact world — the test directly above proves it — and this one must
+  // not, which is what makes the resolver load-bearing rather than decorative.
+  it("rewrites a registry that exists only under its migrated name", async () => {
+    const target = migrated();
+    const step = settleStep(MIGRATION_TARGET.registryTable);
+
+    await expect(step.verify(target.session)).resolves.toBe(false);
+    await step.run(target.session);
+    await expect(step.verify(target.session)).resolves.toBe(true);
+
+    expect(target.rows(MIGRATION_TARGET.registryTable)[0]?.fields).toEqual([
+      { name: "blocks", type: "fieldGroup", fieldGroups: ["hero", "cta"] },
+      { name: "seo", type: "fieldGroup", fieldGroup: "seo" },
+      { name: "title", type: "text" },
+    ]);
+  });
+
+  // 🔴 `config_path` is rewritten only for the field-group registry, and that
+  // gate is a comparison against a table name. Under the migrated spelling a
+  // comparison against the legacy name alone is false, so the path would stop
+  // being rewritten at precisely the moment this check exists to cover. Nothing
+  // else in this suite reads the path under the migrated name.
+  it("rewrites the config path under the migrated name too", async () => {
+    const target = migrated();
+    await settleStep(MIGRATION_TARGET.registryTable).run(target.session);
+    expect(target.rows(MIGRATION_TARGET.registryTable)[0]?.configPath).toBe(
+      "field-groups/hero.ts"
+    );
+  });
+
+  // The collection and single registries are never renamed and their services
+  // keep writing while a run is in flight, so a definition landing after the
+  // data step verified sits in a surface no later step revisits.
+  it("sees a legacy definition written into an un-renamed registry", async () => {
+    const target = migrated();
+    const step = settleStep(MIGRATION_TARGET.registryTable);
+    await step.run(target.session);
+    await expect(step.verify(target.session)).resolves.toBe(true);
+
+    target.insert("dynamic_collections", {
+      id: "c2",
+      fields: storedFields(),
+      configPath: "collections/late.ts",
+    });
+
+    await expect(step.verify(target.session)).resolves.toBe(false);
+  });
+
+  // Resolved per call rather than once, so a retry after storage moved again
+  // addresses what is there now instead of what was there when it was built.
+  it("asks which registry to address on every call", async () => {
+    const target = migrated();
+    let asked = 0;
+    const step = settleRegistryDefinitionsStep({
+      from: LEGACY_STORAGE_VOCABULARY,
+      to: FIELD_GROUP_STORAGE_VOCABULARY,
+      resolveRegistryTable: async () => {
+        asked += 1;
+        return MIGRATION_TARGET.registryTable;
+      },
+    });
+
+    await step.run(target.session);
+    await step.verify(target.session);
+    expect(asked).toBe(2);
+  });
+
+  // The control. A run whose registries are already right settles rather than
+  // refusing, without which every assertion above passes for a step that simply
+  // always reports work outstanding.
+  it("settles a run whose registries are already rewritten", async () => {
+    const target = migrated();
+    const step = settleStep(MIGRATION_TARGET.registryTable);
+    await step.run(target.session);
+    await step.run(target.session);
+    await expect(step.verify(target.session)).resolves.toBe(true);
   });
 });
 

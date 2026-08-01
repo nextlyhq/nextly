@@ -55,6 +55,7 @@ function plan(direction: "up" | "down"): string[] {
     observer,
     meta,
     migrationId: "run-1",
+    resolveRegistryTable: async () => "dynamic_field_groups",
   }).map(step => step.id);
 }
 
@@ -93,6 +94,7 @@ describe("assembling the steps one run executes", () => {
       "registry:dynamic_components->dynamic_field_groups",
       // Last, so a write landing during the renames above is still caught.
       "data:settle-ledgers",
+      "data:settle-registry-definitions",
     ]);
   });
 
@@ -107,14 +109,16 @@ describe("assembling the steps one run executes", () => {
     // Same work, mirrored: each down id is its up counterpart with the rename
     // reversed, so comparing the ordering of KINDS is the honest check.
     const kind = (id: string): string => id.split(":")[0] ?? "";
-    // The settle step is appended to BOTH plans and is not mirrored work: it is
-    // the same check asked at the end of whichever direction ran. The reversal
-    // property describes the work, so it is asserted over the work.
+    // The settle steps are appended to BOTH plans and are not mirrored work:
+    // they are the same checks asked at the end of whichever direction ran. The
+    // reversal property describes the work, so it is asserted over the work.
+    const SETTLE = ["data:settle-ledgers", "data:settle-registry-definitions"];
     const work = (ids: string[]): string[] =>
-      ids.filter(id => id !== "data:settle-ledgers");
+      ids.filter(id => !SETTLE.includes(id));
     expect(work(down).map(kind)).toEqual([...work(up).map(kind)].reverse());
-    expect(up.at(-1)).toBe("data:settle-ledgers");
-    expect(down.at(-1)).toBe("data:settle-ledgers");
+    // In the same order at the end of both, rather than mirrored with the work.
+    expect(up.slice(-SETTLE.length)).toEqual(SETTLE);
+    expect(down.slice(-SETTLE.length)).toEqual(SETTLE);
   });
 
   it("reverses each rename rather than reissuing it", () => {
@@ -126,8 +130,9 @@ describe("assembling the steps one run executes", () => {
       "data:nextly_versions.snapshot",
       "data:schema-event-scope",
       "data:registry-definitions",
-      // Appended to both directions, so it closes the rollback too.
+      // Appended to both directions, so they close the rollback too.
       "data:settle-ledgers",
+      "data:settle-registry-definitions",
     ]);
   });
 
