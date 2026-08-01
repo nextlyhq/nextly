@@ -23,7 +23,11 @@
 
 import type { CollectionHooks } from "../collections/config/define-collection";
 
-import { getHookRegistry, type HookRegistry } from "./hook-registry";
+import {
+  getHookRegistry,
+  type HookRegistry,
+  type OwnedHookSet,
+} from "./hook-registry";
 import type { HookContextPhase } from "./types";
 
 /**
@@ -263,14 +267,79 @@ export function reregisterCollectionHooks(
   collections: HookedCollection[],
   registry: HookRegistry = getHookRegistry()
 ): RegisterCollectionHooksResult {
-  // Only the config's own handlers are replaced. A plugin can register directly
-  // into a collection's namespace, and those registrations are not in the
-  // config being reloaded -- clearing the whole namespace would delete them
-  // with nothing able to put them back.
+  const result: RegisterCollectionHooksResult = {
+    collections: [],
+    totalHooks: 0,
+    details: [],
+  };
+
   for (const collection of collections) {
-    registry.clearCollectionOwnedBy(collection.slug, "code");
+    const { set, count, details } = collectionHookSet(collection);
+
+    // Replaced rather than cleared-and-re-added, so the config's handlers stay
+    // at the position they held. Only the config's own are touched: a plugin
+    // registers directly into a collection's namespace and an imperative
+    // `registerHook` call is not in the config, so neither can be rebuilt here
+    // and clearing the namespace would delete them for good.
+    registry.replaceCollectionOwnedBy(collection.slug, "code", set);
+
+    if (count > 0) {
+      result.collections.push(collection.slug);
+      result.totalHooks += count;
+      result.details.push({ collection: collection.slug, hooks: details });
+    }
   }
 
-  // Register new hooks
-  return registerCollectionHooks(collections, registry);
+  return result;
+}
+
+/**
+ * Map one collection's declarations onto the phases the registry stores them
+ * under, without touching the registry.
+ *
+ * Shared by the appending registration and the replacing one so the two cannot
+ * disagree about which declaration becomes which phase.
+ */
+function collectionHookSet(collection: HookedCollection): {
+  set: OwnedHookSet;
+  count: number;
+  details: { type: string; count: number }[];
+} {
+  const set: OwnedHookSet = { byPhase: [], beforeOperation: [] };
+  const details: { type: string; count: number }[] = [];
+  let count = 0;
+
+  if (!collection.hooks) return { set, count, details };
+
+  // `beforeOperation` first, and kept apart: its handlers take the operation's
+  // args rather than a document, so they are not interchangeable with the rest.
+  const beforeOperationHandlers = collection.hooks.beforeOperation;
+  if (beforeOperationHandlers?.length) {
+    set.beforeOperation.push(...beforeOperationHandlers);
+    count += beforeOperationHandlers.length;
+    details.push({
+      type: "beforeOperation",
+      count: beforeOperationHandlers.length,
+    });
+  }
+
+  // Driven by the mapping's own order, not the config object's, for the reason
+  // given on HOOK_TYPE_MAPPINGS: two declarations can map onto one queue, so
+  // the order they are added in IS their runtime order.
+  for (const hookKey of Object.keys(HOOK_TYPE_MAPPINGS) as DataPhaseKey[]) {
+    const handlers = collection.hooks[hookKey];
+    if (!handlers || !Array.isArray(handlers) || handlers.length === 0)
+      continue;
+
+    for (const hookType of HOOK_TYPE_MAPPINGS[hookKey]) {
+      const existing = set.byPhase.find(entry => entry.hookType === hookType);
+      if (existing) existing.handlers.push(...handlers);
+      else set.byPhase.push({ hookType, handlers: [...handlers] });
+      count += handlers.length;
+    }
+
+    details.push({ type: hookKey, count: handlers.length });
+  }
+
+  return { set, count, details };
 }

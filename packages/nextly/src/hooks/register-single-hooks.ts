@@ -17,7 +17,11 @@
 
 import type { SingleHooks } from "../singles/config/types";
 
-import { getHookRegistry, type HookRegistry } from "./hook-registry";
+import {
+  getHookRegistry,
+  type HookRegistry,
+  type OwnedHookSet,
+} from "./hook-registry";
 import type { HookContextPhase, HookHandler } from "./types";
 
 /**
@@ -171,15 +175,52 @@ export function reregisterSingleHooks(
   singles: HookedSingle[],
   registry: HookRegistry = getHookRegistry()
 ): RegisterSingleHooksResult {
-  // Only the config's own handlers are replaced. A plugin can register into a
-  // single's namespace the same way it can a collection's, and those
-  // registrations are not part of the config being reloaded -- clearing the
-  // namespace wholesale would delete them with nothing able to put them back.
-  // This is the hazard `registerSingleHooks`'s caller avoids by never clearing
-  // at all, which trades a wipe for a leak; owning the handlers lets a reload
-  // do neither.
+  const result: RegisterSingleHooksResult = {
+    singles: [],
+    totalHooks: 0,
+    details: [],
+  };
+
   for (const single of singles) {
-    registry.clearCollectionOwnedBy(singleHookNamespace(single.slug), "code");
+    const set: OwnedHookSet = { byPhase: [], beforeOperation: [] };
+    const details: { type: string; count: number }[] = [];
+    let count = 0;
+
+    for (const [hookKey, handlers] of Object.entries(single.hooks ?? {})) {
+      if (!handlers || !Array.isArray(handlers) || handlers.length === 0) {
+        continue;
+      }
+      const hookTypes = HOOK_TYPE_MAPPINGS[hookKey as keyof SingleHooks];
+      if (!hookTypes) continue;
+
+      for (const hookType of hookTypes) {
+        const existing = set.byPhase.find(entry => entry.hookType === hookType);
+        const mapped = handlers as HookHandler[];
+        if (existing) existing.handlers.push(...mapped);
+        else set.byPhase.push({ hookType, handlers: [...mapped] });
+        count += handlers.length;
+      }
+
+      details.push({ type: hookKey, count: handlers.length });
+    }
+
+    // Replaced rather than cleared-and-re-added, the twin of the collection
+    // path: only the config's own handlers move, and they keep the position
+    // they held so a reload cannot reorder a chain it is not changing. A plugin
+    // registers into a single's namespace exactly as it can a collection's, and
+    // a wholesale clear would delete that with nothing able to put it back.
+    registry.replaceCollectionOwnedBy(
+      singleHookNamespace(single.slug),
+      "code",
+      set
+    );
+
+    if (count > 0) {
+      result.singles.push(single.slug);
+      result.totalHooks += count;
+      result.details.push({ single: single.slug, hooks: details });
+    }
   }
-  return registerSingleHooks(singles, registry);
+
+  return result;
 }

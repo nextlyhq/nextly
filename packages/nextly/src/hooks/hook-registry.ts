@@ -58,15 +58,13 @@ interface RegisteredHook<H> {
 }
 
 /**
- * One owner's registrations for one collection, taken so they can be restored.
+ * The handlers one owner contributes to one collection.
  *
  * `beforeOperation` is held apart from the rest because its handlers take the
  * operation's args rather than a document, and the two signatures are not
  * interchangeable.
  */
-export interface OwnedHookCapture {
-  collection: string;
-  owner: HookOwner;
+export interface OwnedHookSet {
   byPhase: Array<{ hookType: HookContextPhase; handlers: HookHandler[] }>;
   beforeOperation: BeforeOperationHandler[];
 }
@@ -171,6 +169,43 @@ export class HookRegistry {
     string,
     RegisteredHook<BeforeOperationHandler>[]
   > = new Map();
+
+  /**
+   * Owners whose handlers stay registered but do not run.
+   *
+   * Disabling a plugin has to stop everything it contributed, and its
+   * declarations are rebuilt from the config so removing those is safe. Its
+   * `ctx.hooks.on` registrations are not: they were made during `init`, which a
+   * config reload does not re-run, so deleting them would leave re-enabling the
+   * plugin in the same session silently short of its handlers until a restart.
+   * Suspending is what makes the switch work in both directions.
+   */
+  private suspendedOwners: Set<HookOwner> = new Set();
+
+  /**
+   * Replace the set of suspended owners.
+   *
+   * Whole-set rather than incremental so it can be recomputed from the config
+   * on each reload: an owner absent from the new set resumes by construction,
+   * which is what re-enabling a plugin needs, and nothing has to remember what
+   * a previous reload suspended.
+   */
+  setSuspendedOwners(owners: Iterable<HookOwner>): void {
+    this.suspendedOwners = new Set(owners);
+  }
+
+  /** The currently suspended owners, for a caller that has to restore them. */
+  getSuspendedOwners(): HookOwner[] {
+    return [...this.suspendedOwners];
+  }
+
+  /** Drop the entries whose owner is suspended, cheaply when none is. */
+  private runnable<H>(entries: RegisteredHook<H>[]): H[] {
+    if (this.suspendedOwners.size === 0) return entries.map(e => e.handler);
+    return entries
+      .filter(e => !this.suspendedOwners.has(e.owner))
+      .map(e => e.handler);
+  }
 
   /** Append to a handler list, creating it on first use. */
   // (helpers below operate on RegisteredHook entries)
@@ -398,81 +433,81 @@ export class HookRegistry {
    * clear would leave one phase of a reloaded collection stale.
    */
   clearCollectionOwnedBy(collection: string, owner: HookOwner): void {
-    for (const hookType of HOOK_TYPES) {
-      const key = this.makeKey(hookType, collection);
-      const store: Map<string, RegisteredHook<unknown>[]> =
-        hookType === "beforeOperation"
-          ? (this.beforeOperationHooks as Map<
-              string,
-              RegisteredHook<unknown>[]
-            >)
-          : (this.hooks as Map<string, RegisteredHook<unknown>[]>);
-
-      const entries = store.get(key);
-      if (!entries) continue;
-
-      const kept = entries.filter(e => e.owner !== owner);
-      if (kept.length === 0) store.delete(key);
-      else store.set(key, kept);
-    }
+    this.replaceCollectionOwnedBy(collection, owner, {
+      byPhase: [],
+      beforeOperation: [],
+    });
   }
 
   /**
-   * Take a copy of everything one owner has registered for a collection.
+   * Swap one owner's handlers for a collection, leaving them WHERE THEY WERE.
    *
-   * For a caller that is about to replace those registrations and may have to
-   * put the originals back -- a config reload applies the new config's handlers
-   * before it knows whether the reload will land, and an abandoned reload must
-   * leave the process running exactly the handlers it was running before.
-   *
-   * Only that owner's registrations travel in the copy, so restoring cannot
-   * disturb anything registered by anyone else in the meantime.
+   * Execution is in registration order, and owners interleave: a plugin
+   * registers during its `init`, the config right after, and an app whenever the
+   * module holding its `registerHook` call is evaluated -- which can be later
+   * than both. Removing an owner's entries and appending the replacements would
+   * move that owner behind everyone registered after it, so an unrelated config
+   * save would silently reorder a transforming chain and change the data it
+   * produces. The replacements go in at the index the first old one held, so a
+   * reload perturbs nothing it is not replacing.
    */
-  captureCollectionOwnedBy(
+  replaceCollectionOwnedBy(
     collection: string,
-    owner: HookOwner
-  ): OwnedHookCapture {
-    const byPhase: OwnedHookCapture["byPhase"] = [];
+    owner: HookOwner,
+    replacement: OwnedHookSet
+  ): void {
+    const byPhase = new Map(
+      replacement.byPhase.map(entry => [entry.hookType, entry.handlers])
+    );
+
     for (const hookType of HOOK_TYPES) {
       if (hookType === "beforeOperation") continue;
-      const entries = this.hooks.get(this.makeKey(hookType, collection));
-      if (!entries) continue;
-      const handlers = entries
-        .filter(e => e.owner === owner)
-        .map(e => e.handler);
-      if (handlers.length > 0) byPhase.push({ hookType, handlers });
+      const key = this.makeKey(hookType, collection);
+      const handlers = byPhase.get(hookType) ?? [];
+      // Nothing to add and nothing there to remove.
+      if (handlers.length === 0 && !this.hooks.has(key)) continue;
+      this.spliceOwned(this.hooks, key, owner, handlers);
     }
 
-    const beforeOperation = (
-      this.beforeOperationHooks.get(
-        this.makeKey("beforeOperation", collection)
-      ) ?? []
-    )
-      .filter(e => e.owner === owner)
-      .map(e => e.handler);
-
-    return { collection, owner, byPhase, beforeOperation };
+    const beforeOperationKey = this.makeKey("beforeOperation", collection);
+    if (
+      replacement.beforeOperation.length > 0 ||
+      this.beforeOperationHooks.has(beforeOperationKey)
+    ) {
+      this.spliceOwned(
+        this.beforeOperationHooks,
+        beforeOperationKey,
+        owner,
+        replacement.beforeOperation
+      );
+    }
   }
 
   /**
-   * Put a {@link captureCollectionOwnedBy} copy back, discarding whatever that
-   * owner has registered since.
-   *
-   * Re-registering rather than splicing the old entries back in place, so the
-   * restored handlers sit where a fresh registration would put them -- which is
-   * where they sat originally, since that is how they got there.
+   * Drop one owner's entries under a key and put `handlers` back at the index
+   * the first of them held, appending only when the owner had none there.
    */
-  restoreCollectionOwnedBy(capture: OwnedHookCapture): void {
-    this.clearCollectionOwnedBy(capture.collection, capture.owner);
+  private spliceOwned<H>(
+    store: Map<string, RegisteredHook<H>[]>,
+    key: string,
+    owner: HookOwner,
+    handlers: H[]
+  ): void {
+    const existing = store.get(key) ?? [];
+    const firstOwned = existing.findIndex(e => e.owner === owner);
+    const kept = existing.filter(e => e.owner !== owner);
+    // Counted against the entries that REMAIN: the owner's own entries are gone
+    // by now, so an index into the original array would land too far right by
+    // however many of them preceded it.
+    const insertAt =
+      firstOwned === -1
+        ? kept.length
+        : existing.slice(0, firstOwned).filter(e => e.owner !== owner).length;
 
-    for (const { hookType, handlers } of capture.byPhase) {
-      for (const handler of handlers) {
-        this.register(hookType, capture.collection, handler, capture.owner);
-      }
-    }
-    for (const handler of capture.beforeOperation) {
-      this.registerBeforeOperation(capture.collection, handler, capture.owner);
-    }
+    kept.splice(insertAt, 0, ...handlers.map(handler => ({ handler, owner })));
+
+    if (kept.length === 0) store.delete(key);
+    else store.set(key, kept);
   }
 
   /**
@@ -607,12 +642,8 @@ export class HookRegistry {
     const specificKey = this.makeKey(hookType, context.collection);
     const globalKey = this.makeKey(hookType, "*");
 
-    const globalHandlers = (this.hooks.get(globalKey) ?? []).map(
-      e => e.handler
-    );
-    const specificHandlers = (this.hooks.get(specificKey) ?? []).map(
-      e => e.handler
-    );
+    const globalHandlers = this.runnable(this.hooks.get(globalKey) ?? []);
+    const specificHandlers = this.runnable(this.hooks.get(specificKey) ?? []);
 
     // Global hooks run first, then collection-specific hooks
     const allHandlers = [...globalHandlers, ...specificHandlers];
@@ -736,12 +767,12 @@ export class HookRegistry {
     const specificKey = this.makeKey("beforeOperation", context.collection);
     const globalKey = this.makeKey("beforeOperation", "*");
 
-    const globalHandlers = (this.beforeOperationHooks.get(globalKey) ?? []).map(
-      e => e.handler as BeforeOperationHandler<T>
+    const globalHandlers: BeforeOperationHandler<T>[] = this.runnable(
+      this.beforeOperationHooks.get(globalKey) ?? []
     );
-    const specificHandlers = (
+    const specificHandlers: BeforeOperationHandler<T>[] = this.runnable(
       this.beforeOperationHooks.get(specificKey) ?? []
-    ).map(e => e.handler as BeforeOperationHandler<T>);
+    );
 
     // Global hooks run first, then collection-specific hooks
     const allHandlers: BeforeOperationHandler<T>[] = [
