@@ -207,6 +207,39 @@ export class HookRegistry {
       .map(e => e.handler);
   }
 
+  /**
+   * How many handlers each key held at the moment the config last registered.
+   *
+   * Recorded rather than inferred. Where the config's handlers belong is decided
+   * by boot -- `registerServices` runs `initializePlugins`, then
+   * `registerCollectionHooks` -- but the entries that precede that point are not
+   * all plugins: an app's `registerHook` runs when its module is evaluated,
+   * which may be before the first `getNextly()` or long after. Two rounds of
+   * deriving the position from the entries present (rank the owners; anchor to
+   * the plugins) each reproduced boot for some arrangements and inverted it for
+   * others, because the ordering is a fact about WHEN something registered and
+   * the entries do not carry it.
+   */
+  private configBoundaries: Map<string, number> = new Map();
+
+  /**
+   * Note where the config's handlers start, immediately before boot registers
+   * them.
+   *
+   * Everything already present belongs ahead of the config, whoever owns it, so
+   * a handler the config declares for the first time during a reload lands where
+   * a restart would put it.
+   */
+  markConfigRegistrationPoint(): void {
+    this.configBoundaries.clear();
+    for (const [key, entries] of this.hooks) {
+      this.configBoundaries.set(key, entries.length);
+    }
+    for (const [key, entries] of this.beforeOperationHooks) {
+      this.configBoundaries.set(key, entries.length);
+    }
+  }
+
   /** Append to a handler list, creating it on first use. */
   // (helpers below operate on RegisteredHook entries)
   private pushHandler<H>(
@@ -483,30 +516,22 @@ export class HookRegistry {
     // by now, so an index into the original array would land too far right by
     // however many of them preceded it.
     //
-    // With no previous entry there is no position to preserve, and appending
-    // would order the same edit differently depending on whether the process
-    // restarted. The one thing boot fixes is that the config registers
-    // immediately after the plugins -- `initializePlugins` then
-    // `registerCollectionHooks`, in `registerServices` -- so that is where a
-    // first-time config handler goes.
-    //
-    // Deliberately NOT a rank over all three owners. An app's call lands
-    // whenever its module is evaluated, which can be before `getNextly()` as
-    // easily as after, so "app comes last" is an assumption rather than an
-    // invariant; anchoring to the plugins reproduces boot in both cases and
-    // assumes nothing about the app. Any other owner appends: a plugin
-    // registering after `init` really is late, and so is an app.
-    const afterPlugins =
-      kept.reduce(
-        (index, entry, at) =>
-          entry.owner.startsWith("plugin:") ? at + 1 : index,
-        0
-      ) ?? 0;
+    // With no previous entry there is no position to preserve. For the config
+    // that is the recorded boundary: everything present when boot registered it
+    // belongs ahead of it, whoever owns those entries, and anything appended
+    // since is genuinely later. Every other owner appends -- nothing fixes when
+    // an app or a late plugin registration should run, so inventing a position
+    // for it would impose an order boot never produced.
+    // No record for a key means it held nothing when boot registered the
+    // config -- so the config would have created it, and its handlers belong
+    // first. Clamped because entries present at boot can have been removed
+    // since.
+    const boundary = this.configBoundaries.get(key) ?? 0;
+    const firstTimeAt =
+      owner === "code" ? Math.min(boundary, kept.length) : kept.length;
     const insertAt =
       firstOwned === -1
-        ? owner === "code"
-          ? afterPlugins
-          : kept.length
+        ? firstTimeAt
         : existing.slice(0, firstOwned).filter(e => e.owner !== owner).length;
 
     kept.splice(insertAt, 0, ...handlers.map(handler => ({ handler, owner })));
@@ -635,6 +660,7 @@ export class HookRegistry {
     // the fresh handlers of a plugin that is now enabled, leaving it inert
     // until some later reload happened to recompute the set.
     this.suspendedOwners.clear();
+    this.configBoundaries.clear();
   }
 
   /**
