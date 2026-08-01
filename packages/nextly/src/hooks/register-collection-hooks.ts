@@ -247,9 +247,12 @@ export function reregisterCollectionHooks(
   collections: CollectionConfig[],
   registry: HookRegistry = getHookRegistry()
 ): RegisterCollectionHooksResult {
-  // Clear existing hooks for these collections
+  // Only the config's own handlers are replaced. A plugin can register directly
+  // into a collection's namespace, and those registrations are not in the
+  // config being reloaded -- clearing the whole namespace would delete them
+  // with nothing able to put them back.
   for (const collection of collections) {
-    registry.clearCollection(collection.slug);
+    registry.clearCollectionOwnedBy(collection.slug, "code");
   }
 
   // Register new hooks
