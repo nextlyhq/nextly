@@ -41,6 +41,28 @@ import type {
  * it, so failing the operation would tell a caller its write did not happen and
  * invite a retry that writes it twice.
  */
+/**
+ * Who registered a handler.
+ *
+ * `"code"` is the app's own config; `"plugin:<name>"` is a plugin registering
+ * directly. The same vocabulary the webhook recording provenance already uses,
+ * so one concept does not get two spellings.
+ */
+export type HookOwner = "code" | `plugin:${string}`;
+
+/**
+ * A registered handler and who owns it.
+ *
+ * Provenance is stored per REGISTRATION rather than per function, because the
+ * same function can legitimately be registered more than once -- listed twice
+ * in one array, or shared between two phases -- and those registrations can
+ * have different owners.
+ */
+interface RegisteredHook<H> {
+  handler: H;
+  owner: HookOwner;
+}
+
 export interface SideEffectHookFailure {
   /** The phase whose handler threw. */
   phase: HookType;
@@ -126,7 +148,7 @@ export class HookRegistry {
    *
    * Wildcard key "*" matches all collections.
    */
-  private hooks: Map<string, HookHandler[]> = new Map();
+  private hooks: Map<string, RegisteredHook<HookHandler>[]> = new Map();
 
   /**
    * `beforeOperation` handlers, kept apart from the rest.
@@ -137,11 +159,18 @@ export class HookRegistry {
    * recovering the real one with a cast on the way out -- and a cast is exactly
    * what let a handler be declared against the wrong context in the first place.
    */
-  private beforeOperationHooks: Map<string, BeforeOperationHandler[]> =
-    new Map();
+  private beforeOperationHooks: Map<
+    string,
+    RegisteredHook<BeforeOperationHandler>[]
+  > = new Map();
 
   /** Append to a handler list, creating it on first use. */
-  private pushHandler<H>(store: Map<string, H[]>, key: string, handler: H) {
+  // (helpers below operate on RegisteredHook entries)
+  private pushHandler<H>(
+    store: Map<string, RegisteredHook<H>[]>,
+    key: string,
+    handler: RegisteredHook<H>
+  ) {
     const existing = store.get(key);
     if (existing) {
       existing.push(handler);
@@ -151,11 +180,17 @@ export class HookRegistry {
   }
 
   /** Remove one handler by identity, dropping the list once it is empty. */
-  private removeHandler<H>(store: Map<string, H[]>, key: string, handler: H) {
+  private removeHandler<H>(
+    store: Map<string, RegisteredHook<H>[]>,
+    key: string,
+    handler: H
+  ) {
     const handlers = store.get(key);
     if (!handlers) return;
 
-    const index = handlers.indexOf(handler);
+    // Matched on the handler, not the entry: a caller unregisters the function
+    // it registered and does not know which entry wraps it.
+    const index = handlers.findIndex(e => e.handler === handler);
     if (index > -1) {
       handlers.splice(index, 1);
     }
@@ -195,14 +230,21 @@ export class HookRegistry {
   register(
     hookType: HookContextPhase,
     collection: string,
-    handler: HookHandler
+    handler: HookHandler,
+    // Defaults to the app's own config, which is what an unannotated caller is.
+    // A plugin passes its own name so a config reload can replace config-owned
+    // handlers without deleting the plugin's.
+    owner: HookOwner = "code"
   ): void {
     // The type already excludes `beforeOperation`, but JavaScript callers and
     // untypechecked code do not see that. Storing it here would put the handler
     // where `executeBeforeOperation` never looks, so it would simply never run
     // -- a silent no-op is worse than a loud refusal.
     this.rejectBeforeOperation(hookType, "register", "registerBeforeOperation");
-    this.pushHandler(this.hooks, this.makeKey(hookType, collection), handler);
+    this.pushHandler(this.hooks, this.makeKey(hookType, collection), {
+      handler,
+      owner,
+    });
   }
 
   /**
@@ -236,12 +278,13 @@ export class HookRegistry {
    */
   registerBeforeOperation<T = unknown>(
     collection: string,
-    handler: BeforeOperationHandler<T>
+    handler: BeforeOperationHandler<T>,
+    owner: HookOwner = "code"
   ): void {
     this.pushHandler(
       this.beforeOperationHooks,
       this.makeKey("beforeOperation", collection),
-      handler
+      { handler: handler as BeforeOperationHandler, owner }
     );
   }
 
@@ -312,6 +355,39 @@ export class HookRegistry {
    * registry.clearCollection('*');
    * ```
    */
+  /**
+   * Remove only the handlers a given owner registered for a collection.
+   *
+   * A config reload has to replace the app's own handlers while leaving a
+   * plugin's alone: a plugin can register directly into a collection's
+   * namespace -- the form builder does exactly that on `forms` -- so clearing
+   * the namespace wholesale deletes contributions the reload knows nothing
+   * about and cannot put back. Singles registration documents the same hazard
+   * and avoids it by never clearing at all, which trades a wipe for a leak.
+   *
+   * Reaches both stores, because `beforeOperation` lives apart and a partial
+   * clear would leave one phase of a reloaded collection stale.
+   */
+  clearCollectionOwnedBy(collection: string, owner: HookOwner): void {
+    for (const hookType of HOOK_TYPES) {
+      const key = this.makeKey(hookType, collection);
+      const store: Map<string, RegisteredHook<unknown>[]> =
+        hookType === "beforeOperation"
+          ? (this.beforeOperationHooks as Map<
+              string,
+              RegisteredHook<unknown>[]
+            >)
+          : (this.hooks as Map<string, RegisteredHook<unknown>[]>);
+
+      const entries = store.get(key);
+      if (!entries) continue;
+
+      const kept = entries.filter(e => e.owner !== owner);
+      if (kept.length === 0) store.delete(key);
+      else store.set(key, kept);
+    }
+  }
+
   clearCollection(collection: string): void {
     // Iterated from the list the HookType union is built from. A local array
     // annotated `HookType[]` type-checks while missing a phase, so a phase
@@ -416,8 +492,12 @@ export class HookRegistry {
     const specificKey = this.makeKey(hookType, context.collection);
     const globalKey = this.makeKey(hookType, "*");
 
-    const globalHandlers = this.hooks.get(globalKey) || [];
-    const specificHandlers = this.hooks.get(specificKey) || [];
+    const globalHandlers = (this.hooks.get(globalKey) ?? []).map(
+      e => e.handler
+    );
+    const specificHandlers = (this.hooks.get(specificKey) ?? []).map(
+      e => e.handler
+    );
 
     // Global hooks run first, then collection-specific hooks
     const allHandlers = [...globalHandlers, ...specificHandlers];
@@ -541,8 +621,12 @@ export class HookRegistry {
     const specificKey = this.makeKey("beforeOperation", context.collection);
     const globalKey = this.makeKey("beforeOperation", "*");
 
-    const globalHandlers = this.beforeOperationHooks.get(globalKey) || [];
-    const specificHandlers = this.beforeOperationHooks.get(specificKey) || [];
+    const globalHandlers = (this.beforeOperationHooks.get(globalKey) ?? []).map(
+      e => e.handler as BeforeOperationHandler<T>
+    );
+    const specificHandlers = (
+      this.beforeOperationHooks.get(specificKey) ?? []
+    ).map(e => e.handler as BeforeOperationHandler<T>);
 
     // Global hooks run first, then collection-specific hooks
     const allHandlers: BeforeOperationHandler<T>[] = [
@@ -646,8 +730,14 @@ export class HookRegistry {
    * @internal
    */
   getAll(): Map<string, HookHandler[]> {
-    // Return a copy to prevent external mutation
-    return new Map(this.hooks);
+    // Copied, and unwrapped to bare handlers: provenance is a registry concern
+    // and this snapshot is for debugging what will run.
+    return new Map(
+      [...this.hooks].map(([key, entries]) => [
+        key,
+        entries.map(e => e.handler),
+      ])
+    );
   }
 
   /**
@@ -658,7 +748,12 @@ export class HookRegistry {
    * @internal
    */
   getAllBeforeOperation(): Map<string, BeforeOperationHandler[]> {
-    return new Map(this.beforeOperationHooks);
+    return new Map(
+      [...this.beforeOperationHooks].map(([key, entries]) => [
+        key,
+        entries.map(e => e.handler),
+      ])
+    );
   }
 
   /**
