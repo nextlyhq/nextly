@@ -1392,9 +1392,17 @@ async function applyReload(opts?: {
   // live against a schema this reload chose not to touch. The empty-target
   // branch is for a config that genuinely declares nothing; a config whose
   // entities were all SKIPPED is a different state and must unwind.
-  if (skippedComponentSlugs.size > 0 && componentTargets.length === 0) {
+  if (
+    skippedComponentSlugs.size > 0 &&
+    componentTargets.length === 0 &&
+    targets.length === 0 &&
+    singleTargets.length === 0
+  ) {
+    // Only when NOTHING survives. A field-group deferral is not a reason to
+    // strand a collection or single whose storage this reload can address
+    // perfectly well — the registry read that failed says nothing about them.
     logger?.warn(
-      "[Nextly HMR] Every field group was deferred; abandoning this reload."
+      "[Nextly HMR] Every target was deferred; abandoning this reload."
     );
     abandonReload();
     return;

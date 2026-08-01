@@ -139,30 +139,45 @@ async function executeMigrationStatements(
 
 // Refresh the cached Drizzle table so the next entry query joining this
 // component uses the new column layout without a server restart.
-async function registerComponentRuntimeSchema(
+/**
+ * The discriminator a component table carries, resolved BEFORE its DDL runs.
+ *
+ * 🔴 Deliberately not inside `registerComponentRuntimeSchema`. That function's
+ * `catch` is a cache-refresh failsafe — it suppresses so a refresh problem does
+ * not fail a request whose schema change already committed — and a catalog
+ * probe inside it inherits that policy, letting a handler report success while
+ * leaving the runtime table unregistered or holding obsolete columns.
+ *
+ * Resolving first is equivalent and safer: the schema change only ever alters
+ * user columns, so the discriminator is the same before and after, and a probe
+ * that cannot answer now fails the request before anything is committed.
+ */
+async function resolveComponentTypeColumn(
+  adapter: DrizzleAdapter,
+  tableName: string
+): Promise<string> {
+  const typeColumns = await resolveTypeColumns(adapter, [tableName]);
+  return typeColumns.get(tableName) ?? STORAGE_FORMAT.columns.type;
+}
+
+function registerComponentRuntimeSchema(
   adapter: DrizzleAdapter,
   dialect: string,
   tableName: string,
   fields: FieldConfig[],
+  typeColumn: string,
   // i18n: when localized, the main comp_ runtime table omits translatable columns and the
   // companion comp_<slug>_locales runtime table is registered for per-language reads/writes.
   localized = false
-): Promise<void> {
+): void {
   try {
     const fieldGroupSchemaService = new FieldGroupSchemaService(
       dialect as ConstructorParameters<typeof FieldGroupSchemaService>[0]
     );
-    // Asked of the catalog rather than assumed from the DDL just applied: the
-    // alter above changes user columns only, so the discriminator is whichever
-    // one the table already carried.
-    const typeColumns = await resolveTypeColumns(adapter, [tableName]);
     const runtimeTable = fieldGroupSchemaService.generateRuntimeSchema(
       tableName,
       fields,
-      {
-        localized,
-        typeColumn: typeColumns.get(tableName) ?? STORAGE_FORMAT.columns.type,
-      }
+      { localized, typeColumn }
     );
     const companion = localized
       ? buildCompanionRuntimeTable({
@@ -395,11 +410,12 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
           const tableExists = await diAdapter.tableExists(tableName);
           if (tableExists) {
             migrationStatus = "applied";
-            await registerComponentRuntimeSchema(
+            registerComponentRuntimeSchema(
               diAdapter,
               dialect,
               tableName,
               b.fields,
+              await resolveComponentTypeColumn(diAdapter, tableName),
               // i18n: main runtime table omits translatable columns for a localized component.
               isLocalized
             );
@@ -548,11 +564,12 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         if (container.has("adapter")) {
           const adapter = container.get<DrizzleAdapter>("adapter");
           const newFields = b?.fields ?? existing.fields;
-          await registerComponentRuntimeSchema(
+          registerComponentRuntimeSchema(
             adapter,
             adapter.getCapabilities().dialect,
             existing.tableName,
             newFields,
+            await resolveComponentTypeColumn(adapter, existing.tableName),
             // i18n: main runtime table omits translatable columns when localized.
             isLocalized
           );
@@ -722,6 +739,17 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
 
       const adapter = getAdapterFromDI();
       if (!adapter) throw new Error("Database adapter not initialized");
+      // 🔴 Resolved BEFORE the apply. The runtime refresh at the end of this
+      // handler suppresses its own failures by design, so a probe placed there
+      // could let the handler report success over an unregistered or stale
+      // table. The apply only alters user columns, so this answer is the same
+      // either side of it — and asking now means a probe that cannot answer
+      // fails the request before anything commits.
+      const componentTypeColumn = await resolveComponentTypeColumn(
+        adapter,
+        tableName
+      );
+
       const dialect = adapter.dialect;
       const db = adapter.getDrizzle();
       const databaseName =
@@ -843,11 +871,12 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
       // so the registered table includes component system columns
       // (_parent_id, _parent_table, _parent_field, _order, _component_type)
       // instead of collection columns (title, slug).
-      await registerComponentRuntimeSchema(
+      registerComponentRuntimeSchema(
         adapter,
         dialect,
         tableName,
         fields as FieldConfig[],
+        componentTypeColumn,
         isLocalized
       );
 
