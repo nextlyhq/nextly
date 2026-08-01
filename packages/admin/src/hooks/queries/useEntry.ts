@@ -177,6 +177,12 @@ export function useEntry<T = Entry>({
             locale: locale ?? null,
             fallbackLocale: fallbackLocale ?? null,
             translationStatus: translationStatus ?? false,
+            // Part of the cache identity: the editor learns `draftsEnabled` only
+            // after the schema loads, flipping `draft` false -> true on a cold
+            // load. Without it in the key the stale-time would keep serving the
+            // live row, hiding an existing working draft (and the Changed /
+            // Publish / Discard affordances) until a manual refetch.
+            draft: draft ?? false,
           },
         ]
       : entryKeys.detailsByCollection(collectionSlug),
