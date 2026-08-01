@@ -1714,3 +1714,111 @@ describe("a font size that scales with script level", () => {
     expect(codes({ fontSize: "16px" })).toEqual([]);
   });
 });
+
+describe("url schemes cannot be reached by a different spelling", () => {
+  it("refuses an escaped function name, which CSS reads as url", () => {
+    expect(checkCssValue('u\\72l("javascript:alert(1)")')).toBe(
+      "unsafe-url-scheme"
+    );
+    expect(checkCssValue('u\\72l("data:image/png,AAAA")')).toBe(
+      "unsafe-url-scheme"
+    );
+    expect(checkCssValue('\\69mage("javascript:x")')).toBe("unsafe-url-scheme");
+    expect(checkCssValue('U\\52L("javascript:x")')).toBe("unsafe-url-scheme");
+  });
+
+  it("refuses one hidden in a custom property's fallback", () => {
+    // The fallback is stored unparsed, so nothing inside it was ever walked,
+    // and it is what the browser uses whenever the property is absent.
+    expect(checkCssValue('var(--m, url("javascript:alert(1)"))')).toBe(
+      "unsafe-url-scheme"
+    );
+    expect(checkCssValue('var(--m, image("javascript:x"))')).toBe(
+      "unsafe-url-scheme"
+    );
+    expect(checkCssValue('var(--a, var(--b, url("javascript:x")))')).toBe(
+      "unsafe-url-scheme"
+    );
+  });
+
+  it("leaves the allowed spellings and schemes alone", () => {
+    expect(checkCssValue('u\\72l("https://x/a.png")')).toBeNull();
+    expect(checkCssValue('var(--ok, url("https://x/a.png"))')).toBeNull();
+    expect(checkCssValue("var(--x, 1px)")).toBeNull();
+  });
+});
+
+describe("a rounding strategy is the leading argument", () => {
+  it("is refused anywhere else", () => {
+    expect(codes({ width: "round(1px, up)" })).toEqual(["invalid-style-value"]);
+    expect(codes({ width: "round(up + 1px, 1px)" })).toEqual([
+      "invalid-style-value",
+    ]);
+  });
+
+  it("still works where it belongs", () => {
+    expect(codes({ width: "round(up, 10px, 1px)" })).toEqual([]);
+    expect(codes({ width: "round(nearest, 10px, 1px)" })).toEqual([]);
+    expect(codes({ width: "round(10px, 1px)" })).toEqual([]);
+  });
+});
+
+describe("functions whose result is an angle", () => {
+  it("are operands where an angle is wanted", () => {
+    expect(codes({ width: "calc(sin(asin(0.5)) * 10px)" })).toEqual([]);
+    expect(codes({ width: "calc(tan(atan2(1, 1)) * 10px)" })).toEqual([]);
+    expect(codes({ width: "calc(cos(acos(0.5)) * 1px)" })).toEqual([]);
+  });
+
+  it("are not values, nor operands where a number is wanted", () => {
+    expect(codes({ width: "asin(0.5)" })).toEqual(["invalid-style-value"]);
+    expect(codes({ width: "calc(asin(0.5) * 1px)" })).toEqual([
+      "invalid-style-value",
+    ]);
+    expect(codes({ width: "calc(sqrt(asin(0.5)) * 1px)" })).toEqual([
+      "invalid-style-value",
+    ]);
+  });
+
+  it("are held to their arity", () => {
+    expect(codes({ width: "calc(sin(atan2(1)) * 1px)" })).toEqual([
+      "invalid-style-value",
+    ]);
+  });
+});
+
+describe("the issue budget spans nested composites", () => {
+  it("counts what a walk produced above a level, not only at it", () => {
+    // A composite nested inside a composite was handed the whole allowance
+    // again, so a value one level deeper reported past the cap.
+    const outer: Record<string, unknown> = {};
+    for (let index = 0; index < 199; index += 1) outer[`f${index}`] = "1px";
+    const inset: Record<string, unknown> = {};
+    for (let index = 0; index < 300; index += 1) inset[`s${index}`] = "1px";
+    outer.inset = inset;
+    const budget = newStyleIssueBudget();
+    const issues = validateStyleValues(
+      { position: outer } as never,
+      "/styles",
+      "strict",
+      budget
+    );
+    expect(issues.length).toBeLessThanOrEqual(MAX_STYLE_ISSUES + 1);
+    expect(issues.some(issue => issue.code === "style-issues-truncated")).toBe(
+      true
+    );
+  });
+
+  it("leaves a well-formed composite untouched", () => {
+    const budget = newStyleIssueBudget();
+    expect(
+      validateStyleValues(
+        { padding: { blockStart: "1rem" } } as never,
+        "/styles",
+        "strict",
+        budget
+      )
+    ).toEqual([]);
+    expect(budget.remaining).toBe(MAX_STYLE_ISSUES);
+  });
+});

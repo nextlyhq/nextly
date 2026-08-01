@@ -307,7 +307,8 @@ function partIssues(
   value: unknown,
   path: string,
   partLabel: string,
-  budget?: StyleIssueBudget
+  budget?: StyleIssueBudget,
+  spent = 0
 ): ValidationIssue[] {
   if (!isPlainObject(value)) {
     return [
@@ -327,7 +328,10 @@ function partIssues(
     // One composite can hold as many keys as a whole style map, so the budget
     // has to stop this loop as well; checking it only between properties would
     // let a single object allocate without limit.
-    if (budget !== undefined && issues.length >= budget.remaining) {
+    // Counts what this walk has produced ABOVE this level as well as at it:
+    // comparing only the local total hands every nested composite the whole
+    // allowance again, so a value one level deeper reported past the cap.
+    if (budget !== undefined && spent + issues.length >= budget.remaining) {
       issues.push(...truncationNotice(budget, path));
       break;
     }
@@ -348,7 +352,13 @@ function partIssues(
       continue;
     }
     issues.push(
-      ...shapeIssues(partShape, partValue, pointer(path, key), budget)
+      ...shapeIssues(
+        partShape,
+        partValue,
+        pointer(path, key),
+        budget,
+        spent + issues.length
+      )
     );
   }
   return issues;
@@ -359,16 +369,17 @@ function shapeIssues(
   shape: StyleShape,
   value: unknown,
   path: string,
-  budget?: StyleIssueBudget
+  budget?: StyleIssueBudget,
+  spent = 0
 ): ValidationIssue[] {
   if (isStyleLeaf(shape)) return leafIssues(shape, value, path);
   switch (shape.kind) {
     case "logicalSides":
-      return partIssues(shape.sides, value, path, "side", budget);
+      return partIssues(shape.sides, value, path, "side", budget, spent);
     case "logicalCorners":
-      return partIssues(shape.corners, value, path, "corner", budget);
+      return partIssues(shape.corners, value, path, "corner", budget, spent);
     case "object":
-      return partIssues(shape.fields, value, path, "field", budget);
+      return partIssues(shape.fields, value, path, "field", budget, spent);
     case "union": {
       // A union accepts the value if any variant does. Variants are tried in
       // order and the first clean one wins; when none accepts, the first
@@ -376,7 +387,7 @@ function shapeIssues(
       // lists first and therefore the one an author most likely intended.
       let best: ValidationIssue[] | undefined;
       for (const variant of shape.of) {
-        const issues = shapeIssues(variant, value, path, budget);
+        const issues = shapeIssues(variant, value, path, budget, spent);
         if (issues.length === 0) return [];
         // Prefer whichever variant the value structurally resembles: its issues
         // point at the offending leaf, while a mismatched variant only reports

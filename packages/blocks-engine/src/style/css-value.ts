@@ -366,6 +366,18 @@ const NUMBER_FUNCTIONS: ReadonlySet<string> = new Set(
  */
 type NumericDomain = "number" | "angleOrNumber" | "any";
 
+/**
+ * Functions whose result is an angle. They satisfy no leaf here on their own,
+ * but an angle is exactly what the trigonometric functions take, so
+ * `sin(asin(0.5))` is a number while `asin(0.5)` alone is not a width.
+ */
+const ANGLE_FUNCTION_ARITY: ReadonlyMap<string, readonly number[]> = new Map([
+  ["asin", [1]],
+  ["acos", [1]],
+  ["atan", [1]],
+  ["atan2", [2]],
+]);
+
 const NUMBER_FUNCTION_DOMAIN: ReadonlyMap<string, NumericDomain> = new Map([
   ["sqrt", "number"],
   ["exp", "number"],
@@ -414,11 +426,46 @@ function parseValue(value: string): CssNode | null {
  * scheme allowlist, even though the parser gives them no `Url` node.
  */
 const URL_STRING_FUNCTIONS: ReadonlySet<string> = new Set([
+  // An escaped spelling never becomes a `Url` node — css-tree only recognises
+  // the literal one — so `u\72l("…")` arrives as an ordinary function and
+  // needs the same treatment its unescaped twin gets for free.
+  "url",
   "image",
   "image-set",
   "-webkit-image-set",
   "src",
 ]);
+
+/**
+ * A CSS identifier with its escapes resolved.
+ *
+ * css-tree leaves escapes in a function's NAME even though it decodes them in a
+ * url's value, so `u\72l(...)` arrives here spelled that way while the browser
+ * reads it as `url(...)`. Classifying on the raw spelling therefore skips every
+ * check that depends on knowing which function this is, including the scheme
+ * allowlist.
+ *
+ * A code point outside the Unicode range becomes the replacement character, as
+ * the CSS syntax specification requires, rather than throwing.
+ */
+function decodeIdentifier(name: string): string {
+  if (!name.includes("\\")) return name;
+  return name.replace(
+    /\\(?:([0-9a-fA-F]{1,6})[ \t\r\n\f]?|([\s\S]))/g,
+    (_match: string, hex?: string, literal?: string) => {
+      if (hex === undefined) return literal ?? "";
+      const point = Number.parseInt(hex, 16);
+      const usable =
+        point > 0 && point <= 0x10ffff && !(point >= 0xd800 && point <= 0xdfff);
+      return usable ? String.fromCodePoint(point) : "\uFFFD";
+    }
+  );
+}
+
+/** A function's name as CSS reads it, folded for comparison. */
+function functionName(node: { name: string }): string {
+  return asciiLower(decodeIdentifier(node.name));
+}
 
 /**
  * The first refused URL anywhere in a parsed value, or `null`.
@@ -437,17 +484,28 @@ function nestedUrlRejection(ast: CssNode): CssValueRejection | null {
   }
 }
 
-function walkForUrlRejection(ast: CssNode): CssValueRejection | null {
+function walkForUrlRejection(
+  ast: CssNode,
+  depth = 0
+): CssValueRejection | null {
   let rejection: CssValueRejection | null = null;
+  const raws: string[] = [];
   walk(ast, {
     enter(node: CssNode) {
       if (node.type === "Url") {
         rejection ??= checkUrlValue(node.value, "quoted");
         return;
       }
+      // A custom property's fallback is kept unparsed, so nothing inside it is
+      // walked: `var(--x, url("javascript:…"))` reaches the page whenever the
+      // property is absent, and would otherwise never meet the scheme check.
+      if (node.type === "Raw") {
+        raws.push(node.value);
+        return;
+      }
       if (
         node.type !== "Function" ||
-        !URL_STRING_FUNCTIONS.has(asciiLower(node.name))
+        !URL_STRING_FUNCTIONS.has(functionName(node))
       ) {
         return;
       }
@@ -457,7 +515,17 @@ function walkForUrlRejection(ast: CssNode): CssValueRejection | null {
       }
     },
   });
-  return rejection;
+  if (rejection !== null) return rejection;
+  // Bounded by the same depth cap the bracket count enforces, so a fallback
+  // nested inside a fallback cannot recurse without end.
+  if (depth >= MAX_VALUE_NESTING) return null;
+  for (const raw of raws) {
+    const parsed = parseValue(raw);
+    if (parsed === null) continue;
+    const nested = walkForUrlRejection(parsed, depth + 1);
+    if (nested !== null) return nested;
+  }
+  return null;
 }
 
 /**
@@ -666,12 +734,12 @@ function measurementRejection(
       // a property keyword is a complete value, so `calc(auto)` and
       // `calc(inherit)` are discarded while `round(up, 10px, 1px)` is not.
       if (insideFunction) {
-        const inner = asciiLower(node.name);
+        const inner = functionName(node);
         return CALC_CONSTANTS.has(inner) || keywords.has(inner)
           ? null
           : "not-a-length";
       }
-      const name = asciiLower(node.name);
+      const name = functionName(node);
       return CSS_WIDE_KEYWORDS.has(name) || keywords.has(name)
         ? null
         : "not-a-length";
@@ -679,11 +747,12 @@ function measurementRejection(
     case "Operator":
       return null;
     case "Function": {
-      const name = asciiLower(node.name);
+      const name = functionName(node);
       if (
         !DIMENSION_FUNCTIONS.has(name) &&
         limits.functions?.has(name) !== true &&
-        !(insideFunction && NUMBER_FUNCTIONS.has(name))
+        !(insideFunction && NUMBER_FUNCTIONS.has(name)) &&
+        !(insideFunction && ANGLE_FUNCTION_ARITY.has(name))
       ) {
         return "not-a-length";
       }
@@ -696,6 +765,25 @@ function measurementRejection(
       // argument grammars of their own. Reading any of them arithmetically
       // refuses valid values, and the characters that would make an argument
       // dangerous were already refused for the value as a whole.
+      // An angle-producing function is a value only where an angle is wanted.
+      if (ANGLE_FUNCTION_ARITY.has(name)) {
+        if (limits.domain !== "angleOrNumber" && limits.domain !== "any") {
+          return "not-a-length";
+        }
+        const angleArgs = splitArguments(node.children);
+        const angleArity = ANGLE_FUNCTION_ARITY.get(name) ?? [1];
+        if (!angleArity.includes(angleArgs.length)) return "not-a-length";
+        for (const arg of angleArgs) {
+          const rejection = alternationRejection(arg, NO_KEYWORDS, {
+            allowNegative: true,
+            allowPercentage: false,
+            functions: limits.functions,
+            domain: "number",
+          });
+          if (rejection !== null) return rejection;
+        }
+        return null;
+      }
       if (NUMBER_FUNCTIONS.has(name)) {
         // Allowlisted by name is not the same as unchecked: these have settled
         // arities, and all but `sign()` take a bare number, so a measurement
@@ -717,17 +805,27 @@ function measurementRejection(
       if (!MATH_FUNCTIONS.has(name)) return null;
       const ownIdentifiers = FUNCTION_IDENTIFIERS.get(name) ?? NO_KEYWORDS;
       const args = splitArguments(node.children);
+      // A rounding strategy is a leading argument of its own, not something
+      // that may appear among the operands: `round(1px, up)` is discarded.
+      const leading = args[0];
+      const strategy =
+        args.length > 1 &&
+        leading !== undefined &&
+        leading.length === 1 &&
+        leading[0]?.type === "Identifier" &&
+        ownIdentifiers.has(functionName(leading[0]));
+      const operands = strategy ? args.slice(1) : args;
       // Present for every math function, since the set is the map's own keys.
       const arity = MATH_FUNCTION_ARITY.get(name) ?? null;
       if (arity !== null && !arity.includes(args.length)) {
         return "not-a-length";
       }
-      for (const arg of args) {
+      for (const arg of operands) {
         // Inside a math function the sign of any one term says nothing about
         // the sign of the result, so the non-negative rule does not apply. The
         // property's keywords are dropped: `auto` is a whole value, not an
         // operand, and `calc(auto)` is discarded by the browser.
-        const rejection = alternationRejection(arg, ownIdentifiers, {
+        const rejection = alternationRejection(arg, NO_KEYWORDS, {
           allowNegative: true,
           allowPercentage: limits.allowPercentage,
           functions: limits.functions,
@@ -877,13 +975,13 @@ export function checkColorValue(value: string): CssValueRejection | null {
     case "Hash":
       return HEX_COLOR.test(node.value) ? null : "not-a-color";
     case "Identifier": {
-      const name = asciiLower(node.name);
+      const name = functionName(node);
       return COLOR_KEYWORDS.has(name) || SYSTEM_COLORS.has(name)
         ? null
         : "not-a-color";
     }
     case "Function":
-      return COLOR_FUNCTIONS.has(asciiLower(node.name)) ? null : "not-a-color";
+      return COLOR_FUNCTIONS.has(functionName(node)) ? null : "not-a-color";
     default:
       return "not-a-color";
   }
