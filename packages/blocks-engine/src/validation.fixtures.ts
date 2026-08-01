@@ -7,6 +7,7 @@
  * Not a test file itself; consumed by validation.test.ts. Kept as reusable
  * data rather than inline test cases so other suites can share the corpus.
  */
+import { DOCUMENT_KINDS } from "./document";
 import type { BlockDocument, BlockNode, BreakpointSet } from "./document";
 
 /**
@@ -817,12 +818,13 @@ const WRITING_SYSTEM_FIXTURES: ValidationFixture[] = [
 ];
 
 // --- Every document kind ---------------------------------------------------
-// The kind vocabulary is frozen, so each member is pinned individually: a kind
-// dropped from the enum would otherwise only surface as a runtime rejection.
+// Derived from the vocabulary rather than listed beside it, so a kind ADDED to
+// the enum arrives with coverage instead of quietly having none. What the list
+// alone cannot see is a kind REMOVED — the fixture would vanish with it and
+// every test would still pass — so the vocabulary itself is pinned by a test,
+// which is where a change detector belongs.
 
-const KIND_FIXTURES: ValidationFixture[] = (
-  ["page", "pattern", "component", "region", "template"] as const
-).map(kind => ({
+const KIND_FIXTURES: ValidationFixture[] = DOCUMENT_KINDS.map(kind => ({
   name: `a ${kind} document validates`,
   mode: "strict" as const,
   doc: {

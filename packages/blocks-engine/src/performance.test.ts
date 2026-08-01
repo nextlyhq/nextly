@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import { migrateDocument } from "./migration";
-import type { MigrationSource } from "./migration";
 import {
   SCALE_BREAKPOINTS,
   fiveThousandNodePage,
   scaleDocument,
+  staleMigrationSource,
   staleVersionPage,
   thousandNodePage,
 } from "./scale.fixtures";
@@ -195,24 +195,19 @@ describe("validation scales linearly with document size", () => {
 });
 
 describe("migration scales linearly with document size", () => {
-  /**
-   * Every generated block type is at version 2 with a step from 1, so each of
-   * the thousand nodes has real migration work rather than short-circuiting on
-   * an already-current version.
-   */
-  /**
-   * One shared definition, as a real registry returns. Building a fresh object and
-   * closure per node would put thousands of allocations inside the measured region
-   * that migration itself never performs.
-   */
-  const SCALE_BLOCK_INFO = {
-    version: 2,
-    migrate: { 1: (props: Record<string, unknown>) => props },
-  };
+  // Every generated block type is one version ahead of the document, so each
+  // node has real migration work rather than short-circuiting.
+  const source = staleMigrationSource();
 
-  const source: MigrationSource = {
-    get: type => (type.startsWith("core/") ? SCALE_BLOCK_INFO : undefined),
-  };
+  it("actually migrates, so the measurement below is of real work", () => {
+    // A source that resolves nothing still makes migration walk the tree, so
+    // the scaling assertion alone would stay green if the step stopped running.
+    const doc = staleVersionPage(10, 1);
+    expect(doc.nodes[0]?.version).toBe(1);
+    const migrated = migrateDocument(doc, source);
+    expect(migrated.failures).toEqual([]);
+    expect(migrated.doc.nodes[0]?.version).toBe(2);
+  });
 
   it(
     "does not slow super-linearly when the document grows four times",

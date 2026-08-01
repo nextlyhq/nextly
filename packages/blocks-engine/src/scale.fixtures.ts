@@ -17,6 +17,7 @@ import type {
   BreakpointSet,
   DocumentKind,
 } from "./document";
+import type { MigrationSource } from "./migration";
 
 /** Breakpoints the generated documents reference. */
 export const SCALE_BREAKPOINTS: BreakpointSet = {
@@ -132,4 +133,22 @@ export function staleVersionPage(
   };
   stamp(doc.nodes);
   return doc;
+}
+
+/**
+ * A registry that reports every `core/` block one version ahead of the document,
+ * with a step that does no work.
+ *
+ * One shared definition, as a real registry returns, rather than one built per
+ * node: thousands of object and closure allocations inside the measured region
+ * would be measuring the fixture rather than the migration. Shared between the
+ * gate and the benchmark for the same reason the documents are — two suites
+ * quoting different numbers for the same operation is worse than no numbers.
+ */
+export function staleMigrationSource(): MigrationSource {
+  const info = {
+    version: 2,
+    migrate: { 1: (props: Record<string, unknown>) => props },
+  };
+  return { get: type => (type.startsWith("core/") ? info : undefined) };
 }

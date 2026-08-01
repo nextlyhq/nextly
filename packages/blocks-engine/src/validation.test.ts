@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { DOCUMENT_KINDS } from "./document";
 import type { BlockDocument, BreakpointSet } from "./document";
 import { documentBytes } from "./limits";
 import {
@@ -824,5 +825,32 @@ describe("limits", () => {
       }
     );
     expect(issues.some(i => i.code === "node-count-exceeded")).toBe(true);
+  });
+});
+
+describe("the document-kind vocabulary", () => {
+  it("is the frozen set the corpus is built from", () => {
+    // The kind fixtures are derived from this list, so an addition arrives with
+    // coverage. A removal would take its fixture with it and leave every test
+    // passing, which is what this pins: changing the vocabulary has to be
+    // deliberate enough to change it here too.
+    expect([...DOCUMENT_KINDS]).toEqual([
+      "page",
+      "pattern",
+      "component",
+      "region",
+      "template",
+    ]);
+  });
+
+  it("has a corpus fixture for every kind in it", () => {
+    for (const kind of DOCUMENT_KINDS) {
+      expect(
+        VALIDATION_FIXTURES.some(
+          f => f.doc.kind === kind && f.mode === "strict"
+        ),
+        `no fixture validates a ${kind} document`
+      ).toBe(true);
+    }
   });
 });
