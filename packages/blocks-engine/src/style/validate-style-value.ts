@@ -228,7 +228,9 @@ function leafIssues(
       if (typeof value === "string") {
         // Bounded before normalising, for the same reason the keyword leaf is.
         if (isOverlongValue(value)) return rejected(path, value, "too-long");
-        if (isCssWideKeyword(trimCssWhitespace(value))) return [];
+        if (isCssWideKeyword(decodeIdentifier(trimCssWhitespace(value)))) {
+          return [];
+        }
       }
       if (typeof value !== "number" || !Number.isFinite(value)) {
         return [invalid(path, `${describeValue(value)} is not a number.`)];

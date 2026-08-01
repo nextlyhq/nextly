@@ -12,29 +12,25 @@ function escapePointer(token: string): string {
 }
 
 /**
- * Longest reference token embedded in a pointer. A token is a key read from the
- * document, so it is untrusted and unbounded: a malformed style map can hold a
- * megabyte-long property name, and every issue naming it would otherwise carry
- * its own copy. Tokens the code supplies itself — array indices, `props`,
- * `nodes` — are far below this.
- */
-const MAX_POINTER_TOKEN_LENGTH = 120;
-
-/**
  * Join a parent pointer with a child token.
  *
- * A path is a promise that it RESOLVES: tooling follows it to reach the value
- * an issue is about. A shortened token keeps the string small and breaks that
- * promise, pointing at a key the document does not contain. So an over-long
- * token is dropped rather than shortened, and the pointer addresses the object
- * that CONTAINS the offending key — still a location that resolves, one level
- * out. Which key it was travels in the message, bounded there by
- * `describeValue`.
+ * The token is carried whole, however long the key is.
+ *
+ * Two narrower designs were tried and both were worse. Shortening the token
+ * keeps the string small and points at a key the document does not contain, so
+ * the path resolves to nothing. Dropping it instead makes the path resolve to
+ * the WRONG value, because every descendant is then appended to the
+ * grandparent: a `width` inside an over-long breakpoint id reported as a
+ * sibling of that breakpoint, which is a location tooling could act on and be
+ * wrong. Pointing somewhere incorrect is worse than pointing somewhere large.
+ *
+ * What bounds this in practice is the document byte cap, which bounds every key
+ * in a document that passes it; a document over that cap is reported as
+ * oversized and rejected on its own account. Untrusted text echoed into
+ * MESSAGES is still bounded, by `describeValue`.
  */
 export function pointer(parent: string, token: string | number): string {
-  const text = String(token);
-  if (text.length > MAX_POINTER_TOKEN_LENGTH) return parent;
-  return `${parent}/${escapePointer(text)}`;
+  return `${parent}/${escapePointer(String(token))}`;
 }
 
 /** Longest untrusted string echoed into an issue message. */

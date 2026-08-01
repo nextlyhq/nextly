@@ -971,18 +971,21 @@ describe("parentheses inside a url the parser has already delimited", () => {
 });
 
 describe("an unbounded key from the document", () => {
-  it("is bounded in both the pointer and the message", () => {
+  it("is bounded in the message, and located exactly by the path", () => {
+    // Only the MESSAGE bounds an untrusted key. A path is a location, and one
+    // that has been shortened or had a segment dropped either resolves to
+    // nothing or to the wrong value.
     const key = "z".repeat(5000);
     const issues = check({ [key]: "1px" });
     expect(issues).toHaveLength(1);
-    expect(issues[0]?.path.length).toBeLessThan(200);
+    expect(issues[0]?.path).toBe(`/styles/${key}`);
     expect(issues[0]?.message.length).toBeLessThan(200);
   });
 
-  it("is bounded when it names a part of a composite too", () => {
+  it("does the same when the key names a part of a composite", () => {
     const key = "z".repeat(5000);
     const issues = check({ background: { [key]: "1px" } });
-    expect(issues[0]?.path.length).toBeLessThan(200);
+    expect(issues[0]?.path).toBe(`/styles/background/${key}`);
     expect(issues[0]?.message.length).toBeLessThan(200);
   });
 
@@ -990,14 +993,14 @@ describe("an unbounded key from the document", () => {
     expect(check({ nope: "1px" })[0]?.path).toBe("/styles/nope");
   });
 
-  it("gives a path that still resolves, by naming the container", () => {
-    // A path is a promise that it locates something. A shortened token keeps
-    // the string small and points at a key the document does not contain, so
-    // an over-long one is dropped and the pointer addresses the object holding
-    // it; which key it was travels in the message.
+  it("carries the key whole, so the path locates it exactly", () => {
+    // Shortening the token makes the path resolve to nothing; dropping it
+    // makes descendants resolve to the WRONG value, one level up. Pointing
+    // somewhere incorrect is worse than pointing somewhere large, so the key
+    // is carried; the MESSAGE is what stays bounded.
     const key = "z".repeat(200);
     const issues = check({ [key]: "1px" });
-    expect(issues[0]?.path).toBe("/styles");
+    expect(issues[0]?.path).toBe(`/styles/${key}`);
     expect(issues[0]?.message.length).toBeLessThan(200);
   });
 });
@@ -2087,5 +2090,68 @@ describe("a keyword spelled with escapes", () => {
     expect(codes({ display: "bl\\6f ck extra" })).toEqual([
       "invalid-style-value",
     ]);
+  });
+});
+
+describe("a fallback is held to the property it stands in for", () => {
+  it("refuses one the property itself would refuse", () => {
+    expect(codes({ width: "attr(data-width px, -1px)" })).toEqual([
+      "invalid-style-value",
+    ]);
+    expect(
+      codes({ border: { width: { blockStart: "attr(x px, 10%)" } } })
+    ).toEqual(["invalid-style-value"]);
+  });
+
+  it("accepts one the property allows, on a property that allows it", () => {
+    expect(codes({ width: "attr(data-width px, 1px)" })).toEqual([]);
+    expect(codes({ margin: { blockStart: "attr(x px, -1px)" } })).toEqual([]);
+  });
+});
+
+describe("multiplying two measurements", () => {
+  it("is refused, since an area satisfies no property", () => {
+    expect(codes({ width: "calc(1px * 1px)" })).toEqual([
+      "invalid-style-value",
+    ]);
+    expect(codes({ width: "calc(1em * 1rem)" })).toEqual([
+      "invalid-style-value",
+    ]);
+    expect(codes({ width: "calc(1px * 1s)" })).toEqual(["invalid-style-value"]);
+  });
+
+  it("leaves a measurement scaled by a number alone", () => {
+    expect(codes({ width: "calc(1px * 2)" })).toEqual([]);
+    expect(codes({ width: "calc(2 * 1px)" })).toEqual([]);
+    expect(codes({ width: "calc(1px / 2)" })).toEqual([]);
+  });
+
+  it("asks nothing when either side is not a literal", () => {
+    expect(codes({ width: "calc(1px * var(--x))" })).toEqual([]);
+  });
+});
+
+describe("a CSS-wide keyword spelled with escapes on a numeric property", () => {
+  it("is the keyword CSS reads", () => {
+    expect(codes({ opacity: "in\\68 erit" })).toEqual([]);
+    expect(codes({ opacity: "inherit" })).toEqual([]);
+  });
+});
+
+describe("values only these vocabularies can express", () => {
+  it("accepts alignment to an anchor's centre", () => {
+    expect(codes({ alignItems: "anchor-center" })).toEqual([]);
+    expect(codes({ alignItems: "safe anchor-center" })).toEqual([]);
+  });
+
+  it("accepts an inline list item, which the legacy keyword cannot reach", () => {
+    expect(codes({ display: "inline list-item" })).toEqual([]);
+    expect(codes({ display: "inline flow-root list-item" })).toEqual([]);
+    expect(codes({ display: "list-item" })).toEqual([]);
+  });
+
+  it("accepts justification that includes the last line", () => {
+    expect(codes({ textAlign: "justify-all" })).toEqual([]);
+    expect(codes({ textAlign: "justify" })).toEqual([]);
   });
 });

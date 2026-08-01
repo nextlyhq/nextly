@@ -249,7 +249,10 @@ const MATH_FUNCTIONS: ReadonlySet<string> = new Set(MATH_FUNCTION_ARITY.keys());
  * length belongs. The token after the attribute name is what decides it, and
  * no token at all means a string whatever the attribute holds.
  */
-function attrProducesDimension(node: CssNode): boolean {
+function attrProducesDimension(
+  node: CssNode,
+  limits: MeasurementLimits
+): boolean {
   if (node.type !== "Function") return false;
   const args = splitArguments(node.children);
   // An attribute name and an optional fallback, so one argument or two, and
@@ -265,10 +268,7 @@ function attrProducesDimension(node: CssNode): boolean {
   // exactly as the same value would written out.
   const fallback = args[1];
   if (fallback !== undefined) {
-    const rejection = alternationRejection(fallback, NO_KEYWORDS, {
-      allowNegative: true,
-      allowPercentage: true,
-    });
+    const rejection = alternationRejection(fallback, NO_KEYWORDS, limits);
     if (rejection !== null) return false;
   }
   const declared = first[1];
@@ -879,7 +879,7 @@ function measurementRejection(
       ) {
         return "not-a-length";
       }
-      if (name === "attr" && !attrProducesDimension(node)) {
+      if (name === "attr" && !attrProducesDimension(node, limits)) {
         return "not-a-length";
       }
       // Outside the math functions the name is the whole signal. What `var()`
@@ -1031,6 +1031,19 @@ function alternationRejection(
       if (term.type !== "Operator") return "not-a-length";
       const bad = operatorRejection(term.value);
       if (bad !== null) return bad;
+      // Multiplying two measurements yields an area, which satisfies no
+      // property at all, so this is decidable from the operands without
+      // modelling what the whole expression resolves to. Asked only of
+      // literals on both sides; anything computed abstains.
+      if (term.value.trim() === "*") {
+        const before = terms[index - 1];
+        const after = terms[index + 1];
+        const left = before === undefined ? null : literalCategory([before]);
+        const right = after === undefined ? null : literalCategory([after]);
+        const measured = (category: string | null): boolean =>
+          category !== null && category !== "number";
+        if (measured(left) && measured(right)) return "not-a-length";
+      }
       continue;
     }
     const rejection = measurementRejection(term, true, keywords, limits);

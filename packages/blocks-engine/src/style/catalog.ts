@@ -72,6 +72,9 @@ function dimension(
  * test holds the whole catalog to it.
  */
 const SELF_POSITIONS = [
+  // Aligns to the centre of the element's anchor, which no other position
+  // reproduces; the catalog already exposes anchor() on the insets.
+  "anchor-center",
   "center",
   "start",
   "end",
@@ -312,7 +315,13 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
       "none",
       // A marker box, and the table modes: native table layout has no other
       // expression, and `display` has no free-form variant to fall back on.
-      "list-item",
+      // The multi-keyword forms generate a different OUTER display type, so an
+      // inline list item is not reachable through the legacy keyword.
+      ...unorderedCombinations([
+        ["inline", "block"],
+        ["flow", "flow-root"],
+        ["list-item"],
+      ]).filter(entry => entry.includes("list-item")),
       "table",
       "inline-table",
       "table-row-group",
@@ -602,6 +611,9 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
       // Resolves against the PARENT's direction, which neither `start` nor
       // `inherit` reproduces when parent and child directions differ.
       "match-parent",
+      // Justifies the last line too, which `justify` leaves alone and no other
+      // property here can reach.
+      "justify-all",
       "start",
       "center",
       "end",
