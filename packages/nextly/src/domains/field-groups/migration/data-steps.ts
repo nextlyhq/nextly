@@ -120,6 +120,17 @@ function definitionTables(registryTable: string): readonly string[] {
   return ["dynamic_collections", "dynamic_singles", registryTable];
 }
 
+/**
+ * How the settlement check learns which registry table to address.
+ *
+ * A function rather than a name because the plan is assembled before any rename
+ * executes and this check runs after them: a name captured at build time going
+ * up would be the one the run just moved away from. Supplied by the caller for
+ * the same reason `StorageObserver` is — the plan describes work, and the caller
+ * owns the database handle that answers questions about it.
+ */
+export type RegistryTableResolver = () => Promise<string>;
+
 /** The columns one registry row needs written back. */
 type Patch = Record<string, unknown>;
 
@@ -222,6 +233,52 @@ export function settleLedgersStep(args: {
         if (!(await step.verify(session))) return false;
       }
       return true;
+    },
+  };
+}
+
+/**
+ * The other last step of a plan: re-rewrite the registries, then re-check them.
+ *
+ * The companion to {@link settleLedgersStep}, kept separate rather than folded
+ * into it. The runner retries a step that does not verify, so one combined step
+ * would re-walk both ledgers every time a single registry row needed rewriting —
+ * redoing the expensive half to fix the cheap one. A refusal also names the step
+ * it came from, and two ids say which surface is unsettled where one would not.
+ *
+ * 🔴 The registry it addresses is resolved from the **catalog** rather than
+ * fixed when the plan was built. Going up this runs after the renames, so the
+ * name the plan started with is the one storage has just moved away from; going
+ * down it runs after the data steps have restored it. Reading the catalog is
+ * what makes one step correct in both directions, and it is the same rule the
+ * read path follows — resolve against what is observably there, never against
+ * what a marker claims.
+ *
+ * The read itself stays inside the ORM. Both spellings of the registry are
+ * registered as schema objects, so a resolved name is all typed CRUD needs, and
+ * the JSON column's three dialect encodings stay the ORM's problem rather than
+ * becoming this module's.
+ */
+export function settleRegistryDefinitionsStep(args: {
+  from: FieldGroupStorageVocabulary;
+  to: FieldGroupStorageVocabulary;
+  resolveRegistryTable: RegistryTableResolver;
+}): MigrationStep {
+  const { from, to, resolveRegistryTable } = args;
+  // Resolved on every call rather than once per step object. Caching across
+  // `run` and `verify` is correct only while no rename separates them, which is
+  // a property of today's plan and not of the contract; one catalog read on an
+  // operation that runs once per database is not worth pinning that to.
+  const against = async (): Promise<MigrationStep> =>
+    registryDefinitionsStep(from, to, await resolveRegistryTable());
+
+  return {
+    id: "data:settle-registry-definitions",
+    async run(session) {
+      await (await against()).run(session);
+    },
+    async verify(session) {
+      return (await against()).verify(session);
     },
   };
 }
