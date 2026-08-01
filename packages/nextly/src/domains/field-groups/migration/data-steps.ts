@@ -53,6 +53,7 @@ import {
   type RowRewriteTarget,
 } from "./rewrite-rows";
 import type { MigrationStep } from "./runner";
+import type { MigrationSession } from "./session";
 
 /**
  * Every spelling of the field-group concept that is stored inside a row.
@@ -140,6 +141,102 @@ const CONTENT_TARGETS: readonly RowRewriteTarget[] = [
   { table: "nextly_versions", documentProperty: "snapshot" },
   { table: "nextly_events", documentProperty: "payload" },
 ];
+
+/**
+ * Ask the ledger surfaces whether they are still rewritten, and refuse if not.
+ *
+ * The body of {@link settleLedgersStep}'s verify, exposed so a caller can ask
+ * the same question without running a migration. Both ways a verifier reports
+ * residue are honoured, because the two shapes are not interchangeable: the
+ * ledger walks THROW, naming the offending row, while the schema-event scan
+ * RETURNS FALSE. `MigrationStep.verify` is declared to answer a boolean, so the
+ * answer is what decides — a loop that only lets throws through accepts every
+ * surface whose verifier reports by returning.
+ *
+ * @throws a step's own refusal where it raises one, and otherwise a refusal
+ * naming the steps that answered false.
+ */
+export async function assertLedgersSettled(args: {
+  session: MigrationSession;
+  meta: MetaService;
+  migrationId: string;
+  from: FieldGroupStorageVocabulary;
+  to: FieldGroupStorageVocabulary;
+}): Promise<void> {
+  const unsettled: string[] = [];
+  for (const step of ledgerSteps(args)) {
+    if (!(await step.verify(args.session))) unsettled.push(step.id);
+  }
+  if (unsettled.length > 0) {
+    throw NextlyError.serviceUnavailable({
+      logMessage:
+        "field-group migration left stored vocabulary unrewritten: " +
+        unsettled.join(", "),
+      logContext: {
+        reason: "settlement verification reported an unrewritten surface",
+        steps: unsettled.join(", "),
+      },
+    });
+  }
+}
+
+/**
+ * The last step of an upward plan: re-rewrite the ledgers, then re-check them.
+ *
+ * 🔴 A plan STEP rather than a post-hoc assertion, and the difference is the
+ * whole recovery story. `runMigrationSteps` runs a step, verifies it, and
+ * records it only when it verifies — so a step that cannot reach its state is
+ * retried by the next invocation. An assertion placed after the loop has no such
+ * property: it throws with every step already recorded, the next run resumes
+ * past them all, reaches the same assertion and refuses again. **A refusal that
+ * a retry cannot clear is not a safety net, it is a trap.**
+ *
+ * Its `run` re-runs the ledger rewrites, which is what makes the common case
+ * self-healing: a straggler row committed after its original step is simply
+ * rewritten here. Its `verify` refuses only when the surface is still dirty
+ * afterwards — which means a writer is active, and the answer to that is to
+ * quiesce and re-run, exactly what the runner's retry offers.
+ *
+ * Up only. Going down the data steps come last, so their own verify is already
+ * the final word; going up the renames follow them, and a write landing during
+ * those renames is behind every ledger check the plan has left.
+ */
+export function settleLedgersStep(args: {
+  meta: MetaService;
+  migrationId: string;
+  from: FieldGroupStorageVocabulary;
+  to: FieldGroupStorageVocabulary;
+}): MigrationStep {
+  const ledgers = ledgerSteps(args);
+  return {
+    id: "data:settle-ledgers",
+    async run(session) {
+      for (const step of ledgers) await step.run(session);
+    },
+    async verify(session) {
+      for (const step of ledgers) {
+        if (!(await step.verify(session))) return false;
+      }
+      return true;
+    },
+  };
+}
+
+/** The steps whose surfaces the renames never touch. */
+function ledgerSteps(args: {
+  meta: MetaService;
+  migrationId: string;
+  from: FieldGroupStorageVocabulary;
+  to: FieldGroupStorageVocabulary;
+}): MigrationStep[] {
+  const { meta, migrationId, from, to } = args;
+  return [
+    schemaEventScopeStep(from, to),
+    ...CONTENT_TARGETS.map(target =>
+      contentStep({ meta, migrationId, target, from, to })
+    ),
+  ];
+}
 
 /**
  * Build the steps that rewrite stored vocabulary, in canonical order.

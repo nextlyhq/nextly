@@ -25,6 +25,7 @@ import type { IdentifierCaseRules } from "../../schema/utils/resolve-catalog-nam
 
 import {
   buildDataMigrationSteps,
+  settleLedgersStep,
   FIELD_GROUP_STORAGE_VOCABULARY,
   LEGACY_STORAGE_VOCABULARY,
 } from "./data-steps";
@@ -162,6 +163,24 @@ export function buildMigrationPlan(args: BuildPlanArgs): MigrationStep[] {
       ownedDataTables,
     });
 
+  // 🔴 Appended to BOTH directions, and last in each.
+  //
+  // A write landing after a ledger step has verified is behind every check the
+  // plan has left, so the answer has to come after all the work — which is the
+  // end of the list whichever way the run is going. It is a STEP rather than an
+  // assertion after the runner's loop because the runner retries a step that
+  // does not verify, while an assertion throws with every step already recorded
+  // and refuses identically on every later attempt.
+  //
+  // Symmetric rather than up-only so the reversal property this module rests on
+  // still describes the work: the two plans mirror, each with the same check
+  // appended. A rollback earns the same protection, and nothing has to reason
+  // about a plan whose shape depends on its direction.
+  const settle = (
+    from: typeof LEGACY_STORAGE_VOCABULARY,
+    to: typeof LEGACY_STORAGE_VOCABULARY
+  ): MigrationStep => settleLedgersStep({ meta, migrationId, from, to });
+
   const dataSteps = (
     from: typeof LEGACY_STORAGE_VOCABULARY,
     to: typeof LEGACY_STORAGE_VOCABULARY
@@ -172,6 +191,7 @@ export function buildMigrationPlan(args: BuildPlanArgs): MigrationStep[] {
     return [
       ...dataSteps(LEGACY_STORAGE_VOCABULARY, FIELD_GROUP_STORAGE_VOCABULARY),
       ...renameSteps(entries),
+      settle(LEGACY_STORAGE_VOCABULARY, FIELD_GROUP_STORAGE_VOCABULARY),
     ];
   }
 
@@ -184,6 +204,7 @@ export function buildMigrationPlan(args: BuildPlanArgs): MigrationStep[] {
       FIELD_GROUP_STORAGE_VOCABULARY,
       LEGACY_STORAGE_VOCABULARY
     ).reverse(),
+    settle(FIELD_GROUP_STORAGE_VOCABULARY, LEGACY_STORAGE_VOCABULARY),
   ];
 }
 
