@@ -78,9 +78,12 @@ import { collectPluginContributedSlugs } from "../domains/webhooks/recording-pro
 import { resolveWebhookRecording } from "../domains/webhooks/resolve-recording-config";
 import { describeError } from "../errors/index";
 import { NextlyError } from "../errors/nextly-error";
+import { getHookRegistry } from "../hooks/hook-registry";
 import { reregisterCollectionHooks } from "../hooks/register-collection-hooks";
-import { reregisterSingleHooks } from "../hooks/register-single-hooks";
-import type { PluginFieldType } from "../plugins/contributions";
+import {
+  reregisterSingleHooks,
+  singleHookNamespace,
+} from "../hooks/register-single-hooks";
 import type { RevalidateConfig } from "../revalidation/types";
 import { getProductionNotifier } from "../runtime/notifications/index";
 import { STORAGE_FORMAT } from "../schemas/storage-format";
@@ -619,7 +622,8 @@ function reregisterConfigHooks(newConfig: {
   collections?: CollectionDef[];
   singles?: SingleDef[];
   plugins?: unknown[];
-}): void {
+}): () => void {
+  const registry = getHookRegistry();
   const disabledPlugins = (newConfig.plugins ?? []).filter(
     plugin => (plugin as { enabled?: boolean }).enabled === false
   );
@@ -630,23 +634,63 @@ function reregisterConfigHooks(newConfig: {
     disabledPlugins,
     "collections"
   );
-  reregisterCollectionHooks(
-    (newConfig.collections ?? []).filter(
-      (collection): collection is CollectionDef & { slug: string } =>
-        !!collection.slug && !disabledCollections.has(collection.slug)
-    )
+  const collections = (newConfig.collections ?? []).filter(
+    (collection): collection is CollectionDef & { slug: string } =>
+      !!collection.slug
   );
 
   const disabledSingles = collectPluginContributedSlugs(
     disabledPlugins,
     "singles"
   );
-  reregisterSingleHooks(
-    (newConfig.singles ?? []).filter(
-      (single): single is SingleDef & { slug: string } =>
-        !!single.slug && !disabledSingles.has(single.slug)
-    )
+  const singles = (newConfig.singles ?? []).filter(
+    (single): single is SingleDef & { slug: string } => !!single.slug
   );
+
+  // Captured before anything is replaced, and returned as an undo. This runs
+  // ahead of the schema work, so at this point it is not yet known whether the
+  // reload will land -- and where it does not, the previous config stays in
+  // effect and its handlers have to stay with it, or a hook written against a
+  // renamed field would run against the schema that still has the old one.
+  //
+  // Covers the disabled slugs as well as the declared ones. A disabled plugin's
+  // slug is cleared below and may not appear in the new config at all, so
+  // capturing only what the config declares would leave that clear with no undo.
+  const namespaces = new Set<string>([
+    ...collections.map(collection => collection.slug),
+    ...disabledCollections,
+    ...singles.map(single => singleHookNamespace(single.slug)),
+    ...[...disabledSingles].map(singleHookNamespace),
+  ]);
+  const captured = [...namespaces].map(namespace =>
+    registry.captureCollectionOwnedBy(namespace, "code")
+  );
+
+  // A plugin switched to `enabled: false` while the dev server is up still has
+  // the handlers its declarations registered at boot, under the config's own
+  // ownership. Leaving its slug out of the re-registration below would leave
+  // those in place -- the filter stops new ones being added and removes nothing
+  // -- so the plugin would go on running after being disabled. Cleared here
+  // instead, which also covers a slug the new config no longer declares at all.
+  for (const slug of disabledCollections) {
+    registry.clearCollectionOwnedBy(slug, "code");
+  }
+  for (const slug of disabledSingles) {
+    registry.clearCollectionOwnedBy(singleHookNamespace(slug), "code");
+  }
+
+  reregisterCollectionHooks(
+    collections.filter(collection => !disabledCollections.has(collection.slug))
+  );
+  reregisterSingleHooks(
+    singles.filter(single => !disabledSingles.has(single.slug))
+  );
+
+  return () => {
+    for (const capture of captured) {
+      registry.restoreCollectionOwnedBy(capture);
+    }
+  };
 }
 
 /**
@@ -1105,10 +1149,14 @@ async function applyReload(opts?: {
         plugins?: unknown[];
       }
     | undefined;
-  let previousFieldTypes: PluginFieldType[] | undefined;
-  let restoreFieldTypes: (() => void) | undefined;
   /**
-   * Put the field-type registry back when a reload does not take effect.
+   * Undo steps for work a reload applies before it knows whether it will land,
+   * registered as that work happens and run together on abandonment.
+   */
+  const reloadUndo: Array<() => void> = [];
+  /**
+   * Put the field-type registry and the config's hooks back when a reload does
+   * not take effect.
    *
    * `loadConfig` swaps the process-global registry as it reads the new config,
    * but a reload can still be abandoned after that — DI not ready, the live
@@ -1117,11 +1165,18 @@ async function applyReload(opts?: {
    * the abandoned reload's `validate`, storage mapping and `validateOptions`
    * against a schema that never changed.
    *
+   * The config's hooks are applied on the same optimistic terms and come back
+   * the same way. A save can carry a hook edit AND a schema change, and when the
+   * schema change is refused the previous schema is what the database still has:
+   * a handler written against a field that was renamed or added in the refused
+   * edit would read something that is not there. Restoring them together is what
+   * keeps the two from ever disagreeing about which config is in effect.
+   *
    * Not called on the paths that simply had nothing to do: there the new config
-   * IS the live one, and its types belong in the registry.
+   * IS the live one, and its types and handlers belong in place.
    */
   const abandonReload = (): void => {
-    restoreFieldTypes?.();
+    for (const undo of reloadUndo) undo();
   };
   try {
     const { loadConfig, clearConfigCache } = await import(
@@ -1135,13 +1190,13 @@ async function applyReload(opts?: {
     // definitions installed under the retained config — writes would run the
     // refused reload's `validate` and storage mapping until the next good one.
     // The previous set is captured here and put back if anything below fails.
-    previousFieldTypes = allFieldTypes();
-    restoreFieldTypes = () => {
+    const previousFieldTypes = allFieldTypes();
+    reloadUndo.push(() => {
       clearFieldTypes();
-      for (const fieldType of previousFieldTypes ?? []) {
+      for (const fieldType of previousFieldTypes) {
         registerFieldType(fieldType);
       }
-    };
+    });
     clearConfigCache();
     const result = await loadConfig();
     newConfig = (
@@ -1227,7 +1282,7 @@ async function applyReload(opts?: {
   // re-registration on a successful DDL apply would mean the edit that most
   // needs it is exactly the edit that never lands. It reads no field tree and
   // touches no table, so it is safe this early.
-  reregisterConfigHooks(newConfig);
+  reloadUndo.push(reregisterConfigHooks(newConfig));
 
   // databaseAdapter doubles as our DI-readiness probe. We don't need any
   // other service from DI in this path — the new gate gets prior-state

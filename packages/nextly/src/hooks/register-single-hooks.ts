@@ -51,7 +51,7 @@ export interface RegisterSingleHooksResult {
  * hooks up under this same `single:<slug>` namespace. Inlined here rather than
  * imported to keep the hooks module free of a dependency on the singles domain.
  */
-function singleHookNamespace(slug: string): string {
+export function singleHookNamespace(slug: string): string {
   return `single:${slug}`;
 }
 

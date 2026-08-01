@@ -13,6 +13,8 @@ import { getColumns } from "drizzle-orm";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { createLockingAdapter } from "../../domains/field-groups/migration/__tests__/helpers/locking-adapter";
+import { getHookRegistry } from "../../hooks/hook-registry";
+import { createPluginContext } from "../../plugins/plugin-context";
 
 import type { NextlySchemaSnapshot } from "../../domains/schema/pipeline/diff/types";
 import type { PromptDispatcher } from "../../domains/schema/pipeline/pushschema-pipeline-interfaces";
@@ -1237,4 +1239,302 @@ describe("reloadNextlyConfig", () => {
    * component as new, and create an empty one beside it — silently, and looking
    * exactly like content loss.
    */
+
+  // A config reload has to refresh the hooks the config declares. The registry
+  // holds the function objects registered at boot, so without this an edited
+  // hook keeps its old body and a deleted one keeps firing until restart.
+  describe("declared hooks", () => {
+    const SLUG = "hookposts";
+    const TABLE = "dc_hookposts";
+    const SINGLE_SLUG = "hooksettings";
+    const SINGLE_KEY = `single:${SINGLE_SLUG}`;
+
+    /**
+     * The services a plugin context resolves at construction. None are reached
+     * by the hook methods, but they are resolved eagerly.
+     */
+    const stubServices = ((name: string) => {
+      switch (name) {
+        case "logger":
+          return {
+            info: vi.fn(),
+            warn: vi.fn(),
+            error: vi.fn(),
+            debug: vi.fn(),
+          };
+        case "config":
+          return { plugins: [] };
+        default:
+          return {};
+      }
+    }) as unknown as Parameters<typeof createPluginContext>[0];
+
+    const PLUGIN = {
+      name: "form-builder",
+      version: "1.0.0",
+      // Boot-checked core-compatibility range; required on every definition.
+      nextly: "*",
+    };
+
+    /** A collection whose live table already matches, so the reload lands. */
+    function settledCollection(hooks?: unknown) {
+      return {
+        slug: SLUG,
+        tableName: TABLE,
+        fields: [{ name: "body", type: "text" }],
+        ...(hooks ? { hooks } : {}),
+      };
+    }
+
+    function settleIntrospect() {
+      introspectSpy.mockResolvedValue(
+        liveSnapshot(TABLE, [
+          ...SQLITE_RESERVED,
+          { name: "body", type: "text", nullable: true },
+        ])
+      );
+    }
+
+    beforeEach(() => {
+      const registry = getHookRegistry();
+      registry.clearCollection(SLUG);
+      registry.clearCollection(SINGLE_KEY);
+      settleIntrospect();
+    });
+
+    it("replaces a collection hook the config changed", async () => {
+      const registry = getHookRegistry();
+      const original = vi.fn(() => undefined);
+      const edited = vi.fn(() => undefined);
+      const { reloadNextlyConfig } = await import("../reload-config");
+
+      loadConfigSpy.mockResolvedValue({
+        config: { collections: [settledCollection({ afterRead: [original] })] },
+      });
+      await reloadNextlyConfig({ resolver: buildResolver() });
+      // The control: the first reload registered, so what follows is about
+      // replacement rather than about nothing ever arriving.
+      expect(registry.getHookCount("afterRead", SLUG)).toBe(1);
+
+      loadConfigSpy.mockResolvedValue({
+        config: { collections: [settledCollection({ afterRead: [edited] })] },
+      });
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      // One, not two: appending would leave the previous handler in place,
+      // which is the shape of the bug -- the edited hook appears to work while
+      // the handler the author deleted goes on running ahead of it.
+      expect(registry.getHookCount("afterRead", SLUG)).toBe(1);
+      await registry.execute("afterRead", {
+        collection: SLUG,
+        operation: "read",
+        data: {},
+        context: {},
+      });
+      expect(edited).toHaveBeenCalledTimes(1);
+      expect(original).not.toHaveBeenCalled();
+    });
+
+    it("stops running a hook the config removed", async () => {
+      const registry = getHookRegistry();
+      const removed = vi.fn(() => undefined);
+      const { reloadNextlyConfig } = await import("../reload-config");
+
+      loadConfigSpy.mockResolvedValue({
+        config: { collections: [settledCollection({ afterRead: [removed] })] },
+      });
+      await reloadNextlyConfig({ resolver: buildResolver() });
+      expect(registry.getHookCount("afterRead", SLUG)).toBe(1);
+
+      loadConfigSpy.mockResolvedValue({
+        config: { collections: [settledCollection()] },
+      });
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      expect(registry.getHookCount("afterRead", SLUG)).toBe(0);
+    });
+
+    it("keeps a plugin's handler on the same collection", async () => {
+      // The hazard the selective clear exists for: the form builder registers
+      // straight into a collection's namespace, its `init` belongs to service
+      // registration rather than to the reload, and nothing else knows how to
+      // put the handler back.
+      const registry = getHookRegistry();
+      const ctx = createPluginContext(stubServices, registry, PLUGIN);
+      const fromPlugin = vi.fn(() => undefined);
+      ctx.hooks.on("afterRead", SLUG, fromPlugin);
+
+      loadConfigSpy.mockResolvedValue({
+        config: {
+          collections: [settledCollection({ afterRead: [() => undefined] })],
+        },
+      });
+      const { reloadNextlyConfig } = await import("../reload-config");
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      expect(registry.getHookCount("afterRead", SLUG)).toBe(2);
+      await registry.execute("afterRead", {
+        collection: SLUG,
+        operation: "read",
+        data: {},
+        context: {},
+      });
+      expect(fromPlugin).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps a plugin's handler on a single too", async () => {
+      // Two call sites: making the collection clear selective and leaving the
+      // single one wholesale reads as done and still wipes.
+      const registry = getHookRegistry();
+      const ctx = createPluginContext(stubServices, registry, PLUGIN);
+      const fromPlugin = vi.fn(() => undefined);
+      ctx.hooks.on("afterRead", SINGLE_KEY, fromPlugin);
+
+      loadConfigSpy.mockResolvedValue({
+        config: {
+          singles: [
+            {
+              slug: SINGLE_SLUG,
+              fields: [{ name: "site_name", type: "text" }],
+              hooks: { afterRead: [() => undefined] },
+            },
+          ],
+        },
+      });
+      const { reloadNextlyConfig } = await import("../reload-config");
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      expect(registry.getHookCount("afterRead", SINGLE_KEY)).toBe(2);
+      await registry.execute("afterRead", {
+        collection: SINGLE_KEY,
+        operation: "read",
+        data: {},
+        context: {},
+      });
+      expect(fromPlugin).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not register hooks for a disabled plugin's entities", async () => {
+      // A disabled plugin's entities stay in the config so the schema stays
+      // deterministic, but its runtime behaviour must not run.
+      const registry = getHookRegistry();
+      loadConfigSpy.mockResolvedValue({
+        config: {
+          plugins: [
+            {
+              name: "disabled-plugin",
+              enabled: false,
+              contributes: { collections: [{ slug: SLUG }] },
+            },
+          ],
+          collections: [settledCollection({ afterRead: [() => undefined] })],
+        },
+      });
+      const { reloadNextlyConfig } = await import("../reload-config");
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      expect(registry.getHookCount("afterRead", SLUG)).toBe(0);
+    });
+
+    it("still registers an ENABLED plugin's entities", async () => {
+      // The mirror. Without it, a filter that excluded every plugin-contributed
+      // entity would look correct, and so would registering nothing at all.
+      const registry = getHookRegistry();
+      loadConfigSpy.mockResolvedValue({
+        config: {
+          plugins: [
+            {
+              name: "enabled-plugin",
+              enabled: true,
+              contributes: { collections: [{ slug: SLUG }] },
+            },
+          ],
+          collections: [settledCollection({ afterRead: [() => undefined] })],
+        },
+      });
+      const { reloadNextlyConfig } = await import("../reload-config");
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      expect(registry.getHookCount("afterRead", SLUG)).toBe(1);
+    });
+
+    it("clears the hooks of a plugin that has just been disabled", async () => {
+      // The transition, which the steady state above does not cover: the
+      // plugin's declarations registered under the config's own ownership while
+      // it was enabled, so leaving its slug out of the re-registration would
+      // stop new handlers being added and remove nothing -- the plugin would go
+      // on running after being switched off.
+      const registry = getHookRegistry();
+      const whileEnabled = vi.fn(() => undefined);
+      const { reloadNextlyConfig } = await import("../reload-config");
+
+      loadConfigSpy.mockResolvedValue({
+        config: {
+          plugins: [
+            {
+              name: "toggling-plugin",
+              enabled: true,
+              contributes: { collections: [{ slug: SLUG }] },
+            },
+          ],
+          collections: [settledCollection({ afterRead: [whileEnabled] })],
+        },
+      });
+      await reloadNextlyConfig({ resolver: buildResolver() });
+      expect(registry.getHookCount("afterRead", SLUG)).toBe(1);
+
+      loadConfigSpy.mockResolvedValue({
+        config: {
+          plugins: [
+            {
+              name: "toggling-plugin",
+              enabled: false,
+              contributes: { collections: [{ slug: SLUG }] },
+            },
+          ],
+          collections: [settledCollection({ afterRead: [whileEnabled] })],
+        },
+      });
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      expect(registry.getHookCount("afterRead", SLUG)).toBe(0);
+    });
+
+    it("puts the previous hooks back when the reload is abandoned", async () => {
+      // Hooks are applied before the schema work, so a save carrying BOTH a
+      // hook edit and a schema change that is then refused would otherwise
+      // leave the new handlers running against the old database. Here DI hands
+      // back no adapter, which is one of the abandonment paths.
+      const registry = getHookRegistry();
+      const landed = vi.fn(() => undefined);
+      const abandoned = vi.fn(() => undefined);
+      const { reloadNextlyConfig } = await import("../reload-config");
+
+      loadConfigSpy.mockResolvedValue({
+        config: { collections: [settledCollection({ afterRead: [landed] })] },
+      });
+      await reloadNextlyConfig({ resolver: buildResolver() });
+      expect(registry.getHookCount("afterRead", SLUG)).toBe(1);
+
+      loadConfigSpy.mockResolvedValue({
+        config: {
+          collections: [settledCollection({ afterRead: [abandoned] })],
+        },
+      });
+      await reloadNextlyConfig({
+        resolver: buildResolver({ withAdapter: false }),
+      });
+
+      // Still one, and still the one from the reload that landed.
+      expect(registry.getHookCount("afterRead", SLUG)).toBe(1);
+      await registry.execute("afterRead", {
+        collection: SLUG,
+        operation: "read",
+        data: {},
+        context: {},
+      });
+      expect(landed).toHaveBeenCalledTimes(1);
+      expect(abandoned).not.toHaveBeenCalled();
+    });
+  });
 });

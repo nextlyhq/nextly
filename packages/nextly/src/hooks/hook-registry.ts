@@ -57,6 +57,20 @@ interface RegisteredHook<H> {
   owner: HookOwner;
 }
 
+/**
+ * One owner's registrations for one collection, taken so they can be restored.
+ *
+ * `beforeOperation` is held apart from the rest because its handlers take the
+ * operation's args rather than a document, and the two signatures are not
+ * interchangeable.
+ */
+export interface OwnedHookCapture {
+  collection: string;
+  owner: HookOwner;
+  byPhase: Array<{ hookType: HookContextPhase; handlers: HookHandler[] }>;
+  beforeOperation: BeforeOperationHandler[];
+}
+
 export interface SideEffectHookFailure {
   /** The phase whose handler threw. */
   phase: HookType;
@@ -397,6 +411,64 @@ export class HookRegistry {
       const kept = entries.filter(e => e.owner !== owner);
       if (kept.length === 0) store.delete(key);
       else store.set(key, kept);
+    }
+  }
+
+  /**
+   * Take a copy of everything one owner has registered for a collection.
+   *
+   * For a caller that is about to replace those registrations and may have to
+   * put the originals back -- a config reload applies the new config's handlers
+   * before it knows whether the reload will land, and an abandoned reload must
+   * leave the process running exactly the handlers it was running before.
+   *
+   * Only that owner's registrations travel in the copy, so restoring cannot
+   * disturb anything registered by anyone else in the meantime.
+   */
+  captureCollectionOwnedBy(
+    collection: string,
+    owner: HookOwner
+  ): OwnedHookCapture {
+    const byPhase: OwnedHookCapture["byPhase"] = [];
+    for (const hookType of HOOK_TYPES) {
+      if (hookType === "beforeOperation") continue;
+      const entries = this.hooks.get(this.makeKey(hookType, collection));
+      if (!entries) continue;
+      const handlers = entries
+        .filter(e => e.owner === owner)
+        .map(e => e.handler);
+      if (handlers.length > 0) byPhase.push({ hookType, handlers });
+    }
+
+    const beforeOperation = (
+      this.beforeOperationHooks.get(
+        this.makeKey("beforeOperation", collection)
+      ) ?? []
+    )
+      .filter(e => e.owner === owner)
+      .map(e => e.handler);
+
+    return { collection, owner, byPhase, beforeOperation };
+  }
+
+  /**
+   * Put a {@link captureCollectionOwnedBy} copy back, discarding whatever that
+   * owner has registered since.
+   *
+   * Re-registering rather than splicing the old entries back in place, so the
+   * restored handlers sit where a fresh registration would put them -- which is
+   * where they sat originally, since that is how they got there.
+   */
+  restoreCollectionOwnedBy(capture: OwnedHookCapture): void {
+    this.clearCollectionOwnedBy(capture.collection, capture.owner);
+
+    for (const { hookType, handlers } of capture.byPhase) {
+      for (const handler of handlers) {
+        this.register(hookType, capture.collection, handler, capture.owner);
+      }
+    }
+    for (const handler of capture.beforeOperation) {
+      this.registerBeforeOperation(capture.collection, handler, capture.owner);
     }
   }
 
