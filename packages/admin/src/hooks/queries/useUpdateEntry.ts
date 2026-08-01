@@ -90,6 +90,12 @@ export interface UseUpdateEntryOptions<
   locale?: string;
   /** Fallback locale when a translation is missing. */
   fallbackLocale?: string;
+  /**
+   * Whether the editor reads in draft (working-draft overlay) mode. Part of the
+   * cache identity: it must match the useEntry read key so the optimistic write,
+   * rollback, and query cancellation target the query the editor is showing.
+   */
+  draft?: boolean;
 }
 
 /**
@@ -218,25 +224,23 @@ export function useUpdateEntry<
   setError,
   locale,
   fallbackLocale,
+  draft,
 }: UseUpdateEntryOptions<T, TFieldValues>) {
   const queryClient = useQueryClient();
   const { enabled: localizationEnabled } = useLocalization();
 
-  // the optimistic cache is keyed by locale so the update touches the
-  // currently-viewed language's cached entry — not the default-language one. The key MUST
-  // match useEntry's exactly (React Query hashes the object), so it mirrors the same
-  // `translationStatus` and `fallbackLocale` dimensions the entry editor passes to useEntry:
-  // a localized editor requests `translationStatus` and `fallbackLocale: "none"`. Omitting
-  // them (as before) meant the key never matched and the optimistic write / rollback silently
-  // no-oped.
-  const localeKey = [
-    ...entryKeys.detail(collectionSlug, entryId),
-    {
-      locale: locale ?? null,
-      fallbackLocale: localizationEnabled ? "none" : (fallbackLocale ?? null),
-      translationStatus: localizationEnabled,
-    },
-  ] as const;
+  // The optimistic cache is keyed by the same per-view dimensions useEntry reads
+  // with, built through the shared `detailScoped` helper so the two can never
+  // drift (React Query hashes the object; any mismatch silently no-ops the
+  // optimistic write, rollback, and cancellation). A localized editor reads with
+  // `translationStatus` on and `fallbackLocale: "none"`, and draft mode follows
+  // the collection's working-draft split.
+  const localeKey = entryKeys.detailScoped(collectionSlug, entryId, {
+    locale,
+    fallbackLocale: localizationEnabled ? "none" : fallbackLocale,
+    translationStatus: localizationEnabled,
+    draft,
+  });
 
   return useMutation<T, Error, UpdateEntryPayload, UpdateContext<T>>({
     mutationFn: async (data: UpdateEntryPayload) => {

@@ -50,9 +50,9 @@ import { PublicUrlChangeNotice } from "./PublicUrlChangeNotice";
 import {
   useEntryForm,
   getCollectionFields,
+  resolveDefaultSaveIntent,
   type EntryFormCollection,
   type EntryData,
-  type EntryFormIntent,
   type EntryFormMode,
 } from "./useEntryForm";
 import { useRailCollapsed } from "./useRailCollapsed";
@@ -334,14 +334,14 @@ export function EntryForm({
   // (status-less), on a non-drafts collection it re-asserts published, and any
   // other editing state saves a draft. Create mode and non-status collections
   // keep the intent-less single-Save behavior.
-  const keyboardSaveIntent: EntryFormIntent | undefined =
-    mode === "edit" && hasStatus
-      ? (entry?.status as string | undefined) === "published"
-        ? collection.draftsEnabled === true
-          ? "save-working-draft"
-          : "save-changes"
-        : "save-draft"
-      : undefined;
+  const keyboardSaveIntent = resolveDefaultSaveIntent({
+    mode,
+    hasStatus,
+    // The ACTIVE locale's status, not the main row's — the same effective status
+    // the header's submit buttons use, so a keyboard save and a button save agree.
+    effectiveStatus: effectiveEntryStatus(entry, locale, defaultLocale),
+    draftsEnabled: collection.draftsEnabled === true,
+  });
 
   // Only enable shortcuts in standalone mode (not embedded modals)
   useEntryFormShortcuts({
@@ -479,7 +479,8 @@ export function EntryForm({
                   // affordances. Reading the main row instead would show "Published" beside a
                   // Publish button whenever a translation lags its default language.
                   status={
-                    effectiveEntryStatus(entry, locale, defaultLocale) ?? "draft"
+                    effectiveEntryStatus(entry, locale, defaultLocale) ??
+                    "draft"
                   }
                   hasWorkingDraft={
                     (entry as { _isWorkingDraft?: boolean } | null | undefined)

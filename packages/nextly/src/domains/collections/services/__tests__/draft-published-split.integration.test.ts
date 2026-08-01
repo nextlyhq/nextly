@@ -2173,3 +2173,71 @@ describe("draft/published split — schema and component eligibility (integratio
     expect(await workingDraftCount(id)).toBe(0);
   });
 });
+
+// The admin editor fetches a collection's schema through the dispatcher path
+// (CollectionsHandler.getCollection). It must carry `draftsEnabled` derived from
+// the SAME eligibility the mutation service gates on, or the editor would present
+// a status-less save as a pending draft while the server writes the live row.
+describe("draft/published split — schema draftsEnabled flag (integration)", () => {
+  async function draftsEnabledFor(
+    collection: ReturnType<typeof defineCollection>
+  ): Promise<boolean | undefined> {
+    handle = await createTestNextly({ collections: [collection] });
+    const res = await handle
+      .getService("collectionsHandler")
+      .getCollection({ collectionName: COLLECTION });
+    return (res.data as { draftsEnabled?: boolean } | null)?.draftsEnabled;
+  }
+
+  it("is true for an eligible drafts collection", async () => {
+    expect(
+      await draftsEnabledFor(
+        defineCollection({
+          slug: COLLECTION,
+          status: true,
+          versions: { drafts: true },
+          fields: [text({ name: "title" }), text({ name: "body" })],
+        })
+      )
+    ).toBe(true);
+  });
+
+  it("is false without the drafts lifecycle", async () => {
+    expect(
+      await draftsEnabledFor(
+        defineCollection({
+          slug: COLLECTION,
+          status: true,
+          fields: [text({ name: "title" })],
+        })
+      )
+    ).toBe(false);
+  });
+
+  it("is false for a localized collection", async () => {
+    expect(
+      await draftsEnabledFor(
+        defineCollection({
+          slug: COLLECTION,
+          status: true,
+          localized: true,
+          versions: { drafts: true },
+          fields: [text({ name: "title" })],
+        })
+      )
+    ).toBe(false);
+  });
+
+  it("is false for a collection with a reachable password field", async () => {
+    expect(
+      await draftsEnabledFor(
+        defineCollection({
+          slug: COLLECTION,
+          status: true,
+          versions: { drafts: true },
+          fields: [text({ name: "title" }), password({ name: "secret" })],
+        })
+      )
+    ).toBe(false);
+  });
+});
