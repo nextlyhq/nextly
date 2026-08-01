@@ -298,7 +298,11 @@ function partIssues(
     ];
   }
   const issues: ValidationIssue[] = [];
-  for (const [key, partValue] of Object.entries(value)) {
+  // Enumerated lazily rather than through `Object.entries`, which would build a
+  // pair for every key before the budget below sees the first one — the budget
+  // is meant to bound the work, not only the issues it reports.
+  for (const key in value) {
+    if (!Object.hasOwn(value, key)) continue;
     // One composite can hold as many keys as a whole style map, so the budget
     // has to stop this loop as well; checking it only between properties would
     // let a single object allocate without limit.
@@ -310,6 +314,7 @@ function partIssues(
     // legally contain a key such as `toString` or `constructor`, and a plain
     // object would answer those from its prototype, handing a function to the
     // shape walker instead of reporting an unknown field.
+    const partValue = value[key];
     const partShape = Object.hasOwn(parts, key) ? parts[key] : undefined;
     if (partShape === undefined) {
       issues.push(
@@ -382,7 +387,11 @@ export function validateStyleValues(
   budget?: StyleIssueBudget
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
-  for (const [property, value] of Object.entries(values)) {
+  // Lazily enumerated for the same reason the composite walk is: a style map
+  // with a hundred thousand keys would otherwise be materialised in full before
+  // the budget below stops anything.
+  for (const property in values) {
+    if (!Object.hasOwn(values, property)) continue;
     // A style map has no size limit of its own, so a document well inside the
     // byte cap can hold a hundred thousand keys. Stopping at a budget keeps the
     // work and the returned array proportional to what a reader can use, and
@@ -392,6 +401,7 @@ export function validateStyleValues(
       break;
     }
     const before = issues.length;
+    const value = values[property];
     const path = pointer(basePath, property);
     const entry = getStyleProperty(property);
     if (entry === undefined) {

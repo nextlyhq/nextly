@@ -407,8 +407,11 @@ function nestingDepth(value: string): number {
  * the value is safe to emit.
  */
 export function checkCssValue(value: string): CssValueRejection | null {
-  if (value.trim() === "") return "unparsable";
+  // The size cap goes first because it is the only constant-time check here:
+  // trimming an oversized string scans and copies all of it before anything
+  // decides the value was never going to be read.
   if (value.length > MAX_VALUE_LENGTH) return "too-long";
+  if (value.trim() === "") return "unparsable";
   if (UNSAFE_VALUE_CHARS.test(value)) return "unsafe-characters";
   if (COMMENT_DELIMITERS.test(value)) return "unsafe-characters";
   if (nestingDepth(value) > MAX_VALUE_NESTING) return "too-deeply-nested";
@@ -742,11 +745,12 @@ export function checkUrlValue(
   value: string,
   context: UrlContext = "raw"
 ): CssValueRejection | null {
-  if (value.trim() === "") return "unsafe-url-scheme";
   // A dedicated URL property does not pass through the free-form value check,
   // so without this its own cap is the document byte limit: one stored value
-  // could otherwise emit a megabyte-long declaration and request.
+  // could otherwise emit a megabyte-long declaration and request. Checked
+  // first, before anything scans the string.
   if (value.length > MAX_VALUE_LENGTH) return "too-long";
+  if (value.trim() === "") return "unsafe-url-scheme";
   // Control characters come first: they are what would let a scheme hide from
   // the check below while a browser still reads it.
   if (hasControlCharacter(value)) return "unsafe-url-characters";

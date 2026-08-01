@@ -776,7 +776,12 @@ function validateStyleEnvelope(
     });
     return;
   }
-  for (const [stateKey, byBreakpoint] of Object.entries(styles)) {
+  // Enumerated lazily: `Object.entries` would build a pair for every state name
+  // before the budget below sees the first one, which is the allocation the
+  // budget exists to bound.
+  for (const stateKey in styles) {
+    if (!Object.hasOwn(styles, stateKey)) continue;
+    const byBreakpoint = styles[stateKey];
     // The envelope's own keys are as unbounded as the values inside it: a
     // document can carry a hundred thousand unknown state names. The budget
     // therefore governs the whole style walk, not only the property level.
@@ -806,7 +811,9 @@ function validateStyleEnvelope(
       state.styleBudget.remaining -= 1;
       continue;
     }
-    for (const [breakpointId, values] of Object.entries(byBreakpoint)) {
+    for (const breakpointId in byBreakpoint) {
+      if (!Object.hasOwn(byBreakpoint, breakpointId)) continue;
+      const values = byBreakpoint[breakpointId];
       if (state.styleBudget.remaining <= 0) {
         state.issues.push(...styleBudgetExhausted(state, statePath));
         return;

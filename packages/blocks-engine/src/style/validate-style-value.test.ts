@@ -1227,3 +1227,43 @@ describe("colors chosen by a function", () => {
     expect(codes({ color: "contrast-color(red)" })).toEqual([]);
   });
 });
+
+describe("a background repeat per axis", () => {
+  it("accepts the two-keyword form the property really has", () => {
+    for (const value of ["repeat no-repeat", "space round", "repeat repeat"]) {
+      expect(codes({ background: { repeat: value } }), value).toEqual([]);
+    }
+  });
+
+  it("still accepts a single keyword and refuses an unknown one", () => {
+    expect(codes({ background: { repeat: "no-repeat" } })).toEqual([]);
+    expect(codes({ background: { repeat: "repeat nope" } })).toEqual([
+      "invalid-style-value",
+    ]);
+    expect(codes({ background: { repeat: "repeat no-repeat space" } })).toEqual(
+      ["invalid-style-value"]
+    );
+  });
+});
+
+describe("keys a document did not put there", () => {
+  it("are not read from the prototype by the style walk", () => {
+    // A lazily enumerated object walks inherited enumerable keys too, so a
+    // crafted prototype would otherwise be validated as if it were content.
+    const crafted = Object.create({ inheritedKey: "1px" }) as Record<
+      string,
+      unknown
+    >;
+    crafted.display = "block";
+    expect(codes(crafted as never)).toEqual([]);
+  });
+
+  it("are not read from the prototype inside a composite", () => {
+    const parts = Object.create({ inheritedSide: "1px" }) as Record<
+      string,
+      unknown
+    >;
+    parts.blockStart = "1rem";
+    expect(codes({ padding: parts } as never)).toEqual([]);
+  });
+});

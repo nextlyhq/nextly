@@ -1009,3 +1009,44 @@ describe("a malformed style envelope charges the budget like anything else", () 
     );
   });
 });
+
+describe("style keys inherited from a prototype", () => {
+  function docWithRawStyles(styles: unknown): BlockDocument {
+    return invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "n1", type: "core/box", version: 1, props: {}, styles }],
+    });
+  }
+
+  it("are not walked as if the document declared them", () => {
+    // The envelope is enumerated lazily, which reaches inherited enumerable
+    // keys as well; a crafted prototype would otherwise be validated, and
+    // reported against, as though it were stored content.
+    const styles = Object.create({
+      hover: { base: { nope: "1px" } },
+    }) as Record<string, unknown>;
+    styles.base = { base: { display: "block" } };
+    expect(
+      validate(docWithRawStyles(styles), {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        mode: "strict",
+      })
+    ).toEqual([]);
+  });
+
+  it("are not walked at the breakpoint level either", () => {
+    // The inherited key has to differ from the own one, or it is shadowed and
+    // never enumerated separately, which would prove nothing.
+    const byBreakpoint = Object.create({
+      tablet: { nope: "1px" },
+    }) as Record<string, unknown>;
+    byBreakpoint.base = { display: "block" };
+    expect(
+      validate(docWithRawStyles({ base: byBreakpoint }), {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        mode: "strict",
+      })
+    ).toEqual([]);
+  });
+});

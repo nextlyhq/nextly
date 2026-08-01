@@ -556,14 +556,11 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
         url: url("background-image"),
         position: cssValue("background-position"),
         size: cssValue("background-size"),
-        repeat: keyword("background-repeat", [
-          "repeat",
-          "repeat-x",
-          "repeat-y",
-          "no-repeat",
-          "space",
-          "round",
-        ]),
+        repeat: keyword(
+          "background-repeat",
+          ["repeat", "repeat-x", "repeat-y", "no-repeat", "space", "round"],
+          2
+        ),
         attachment: keyword("background-attachment", [
           "scroll",
           "fixed",
