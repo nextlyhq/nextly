@@ -29,7 +29,11 @@ import {
   storageTypeToken,
 } from "../../../shared/lib/plugin-storage";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
-import { getColumnDescriptor } from "../../schema/services/field-column-descriptor";
+import {
+  getColumnDescriptor,
+  getSystemColumnDescriptors,
+  renderSystemColumnSql,
+} from "../../schema/services/field-column-descriptor";
 import { quoteJsonSqlDefault } from "../../schema/utils/sql-literal";
 
 import { DynamicCollectionValidationService } from "./dynamic-collection-validation-service";
@@ -252,70 +256,41 @@ export class DynamicCollectionSchemaService {
     // comma before the timestamp section, producing invalid SQL.
     const allColumnDefs: string[] = [];
 
-    // id
-    if (this.dialect === "mysql") {
-      allColumnDefs.push(
-        `  ${this.quoteIdentifier("id")} varchar(36) PRIMARY KEY NOT NULL`
-      );
-    } else {
-      allColumnDefs.push(
-        `  ${this.quoteIdentifier("id")} text PRIMARY KEY NOT NULL`
-      );
-    }
-
-    // title (only if not user-defined). A component named "title" produces no
-    // column, so it must not suppress the system title column.
+    // System columns, rendered from the one list that defines them rather than restated here.
+    // Restating them is how a newly added system column reached the runtime schema and missed the
+    // physical table: the generated SELECT then names a column that does not exist and every read
+    // of the entity fails. Iterating the list — rather than sourcing each column in place — is
+    // what makes that impossible, since a new entry needs no edit here to be created.
+    //
+    // A component named "title" produces no column, so it must not suppress the system title
+    // column; the same holds for "slug".
     const hasTitleField = fields.some(
       f => f.name === "title" && f.type !== STORAGE_FORMAT.fieldType
     );
-    if (!hasTitleField) {
-      if (this.dialect === "mysql") {
-        allColumnDefs.push(
-          `  ${this.quoteIdentifier("title")} varchar(255) NOT NULL`
-        );
-      } else {
-        allColumnDefs.push(`  ${this.quoteIdentifier("title")} text NOT NULL`);
-      }
-    }
-
-    // slug (only if not user-defined). Same column-less exclusion as title.
     const hasSlugField = fields.some(
       f => f.name === "slug" && f.type !== STORAGE_FORMAT.fieldType
     );
-    if (!hasSlugField) {
-      if (this.dialect === "mysql") {
-        allColumnDefs.push(
-          `  ${this.quoteIdentifier("slug")} varchar(255) NOT NULL`
-        );
-      } else {
-        allColumnDefs.push(`  ${this.quoteIdentifier("slug")} text NOT NULL`);
-      }
+    // A single is one global row, so owner-only ownership is meaningless and it gets no
+    // `created_by`. Prefer the explicit flag, but fall back to the `single_` table prefix so this
+    // stays in lockstep with the runtime schema and the diff, which derive it from the name, even
+    // when a caller omits the option.
+    const isSingleTable =
+      _options?.isSingle === true || tableName.startsWith("single_");
+
+    for (const systemColumn of getSystemColumnDescriptors(this.dialect, {
+      hasTitleField,
+      hasSlugField,
+      hasStatus: _options?.hasStatus === true,
+      isSingle: isSingleTable,
+    })) {
+      allColumnDefs.push(
+        `  ${renderSystemColumnSql(systemColumn, name => this.quoteIdentifier(name))}`
+      );
     }
 
     // user-defined columns (may be multi-line, already comma-separated internally)
     if (columns.length > 0) {
       allColumnDefs.push(columns);
-    }
-
-    // Status system column: only emitted when the collection / single opts
-    // into the Draft/Published lifecycle. Default 'draft' is critical —
-    // every existing row gets it on enable so writes don't violate NOT NULL.
-    if (_options?.hasStatus) {
-      if (this.dialect === "sqlite") {
-        // SQLite has no varchar; text + default is the equivalent.
-        allColumnDefs.push(
-          `  ${this.quoteIdentifier("status")} text DEFAULT 'draft' NOT NULL`
-        );
-      } else if (this.dialect === "mysql") {
-        // varchar(20) leaves headroom over "published" (9 chars).
-        allColumnDefs.push(
-          `  ${this.quoteIdentifier("status")} varchar(20) DEFAULT 'draft' NOT NULL`
-        );
-      } else {
-        allColumnDefs.push(
-          `  ${this.quoteIdentifier("status")} varchar(20) DEFAULT 'draft' NOT NULL`
-        );
-      }
     }
 
     // CHECK constraints
@@ -328,47 +303,6 @@ export class DynamicCollectionSchemaService {
     // FK constraints (each already indented)
     for (const c of constraints) {
       allColumnDefs.push(c);
-    }
-
-    // timestamp columns
-    if (this.dialect === "sqlite") {
-      allColumnDefs.push(
-        `  ${this.quoteIdentifier("created_at")} integer DEFAULT (strftime('%s', 'now')) NOT NULL`
-      );
-      allColumnDefs.push(
-        `  ${this.quoteIdentifier("updated_at")} integer DEFAULT (strftime('%s', 'now')) NOT NULL`
-      );
-    } else if (this.dialect === "mysql") {
-      allColumnDefs.push(
-        `  ${this.quoteIdentifier("created_at")} timestamp DEFAULT CURRENT_TIMESTAMP NOT NULL`
-      );
-      allColumnDefs.push(
-        `  ${this.quoteIdentifier("updated_at")} timestamp DEFAULT CURRENT_TIMESTAMP NOT NULL`
-      );
-    } else {
-      allColumnDefs.push(
-        `  ${this.quoteIdentifier("created_at")} timestamp DEFAULT now() NOT NULL`
-      );
-      allColumnDefs.push(
-        `  ${this.quoteIdentifier("updated_at")} timestamp DEFAULT now() NOT NULL`
-      );
-    }
-
-    // Owner column — COLLECTIONS ONLY. A single is one global row, so
-    // owner-only ownership is meaningless; singles never stamp or query it.
-    // Nullable with no default (matches getSystemColumnDescriptors) so existing
-    // rows and system creates stay null; sized to the users.id column on MySQL
-    // since it holds a user id, not the row id.
-    // Prefer the explicit flag, but also fall back to the `single_` table
-    // prefix so this stays in lockstep with the runtime schema / diff (which
-    // derive it from the name) even if a caller omits the option.
-    const isSingleTable =
-      _options?.isSingle === true || tableName.startsWith("single_");
-    if (!isSingleTable) {
-      const ownerType = this.dialect === "mysql" ? "varchar(191)" : "text";
-      allColumnDefs.push(
-        `  ${this.quoteIdentifier("created_by")} ${ownerType}`
-      );
     }
 
     let sql = `-- Create dynamic collection: ${tableName}
