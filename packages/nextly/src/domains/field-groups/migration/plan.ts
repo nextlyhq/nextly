@@ -26,8 +26,10 @@ import type { IdentifierCaseRules } from "../../schema/utils/resolve-catalog-nam
 import {
   buildDataMigrationSteps,
   settleLedgersStep,
+  settleRegistryDefinitionsStep,
   FIELD_GROUP_STORAGE_VOCABULARY,
   LEGACY_STORAGE_VOCABULARY,
+  type RegistryTableResolver,
 } from "./data-steps";
 import { invertManifest, type ManifestEntry } from "./manifest";
 import type { MigrationStep } from "./runner";
@@ -135,6 +137,16 @@ export interface BuildPlanArgs {
    * the entries alone cannot name every table that holds instances.
    */
   ownedDataTables: readonly string[];
+  /**
+   * Which registry table the settlement check should address, asked when it
+   * runs rather than now.
+   *
+   * The plan is assembled before any rename executes, so a name decided here
+   * would be the one an upward run is about to move away from. Supplied
+   * alongside the observer because both are questions only the caller's
+   * database handle can answer.
+   */
+  resolveRegistryTable: RegistryTableResolver;
 }
 
 /**
@@ -153,6 +165,7 @@ export function buildMigrationPlan(args: BuildPlanArgs): MigrationStep[] {
     meta,
     migrationId,
     ownedDataTables,
+    resolveRegistryTable,
   } = args;
 
   const renameSteps = (plan: readonly ManifestEntry[]): MigrationStep[] =>
@@ -165,21 +178,27 @@ export function buildMigrationPlan(args: BuildPlanArgs): MigrationStep[] {
 
   // 🔴 Appended to BOTH directions, and last in each.
   //
-  // A write landing after a ledger step has verified is behind every check the
+  // A write landing after a data step has verified is behind every check the
   // plan has left, so the answer has to come after all the work — which is the
-  // end of the list whichever way the run is going. It is a STEP rather than an
-  // assertion after the runner's loop because the runner retries a step that
+  // end of the list whichever way the run is going. They are STEPS rather than
+  // an assertion after the runner's loop because the runner retries a step that
   // does not verify, while an assertion throws with every step already recorded
   // and refuses identically on every later attempt.
   //
   // Symmetric rather than up-only so the reversal property this module rests on
-  // still describes the work: the two plans mirror, each with the same check
+  // still describes the work: the two plans mirror, each with the same checks
   // appended. A rollback earns the same protection, and nothing has to reason
   // about a plan whose shape depends on its direction.
+  //
+  // Two steps rather than one because the runner retries per step: a registry
+  // row needing a second attempt would otherwise re-walk both ledgers with it.
   const settle = (
     from: typeof LEGACY_STORAGE_VOCABULARY,
     to: typeof LEGACY_STORAGE_VOCABULARY
-  ): MigrationStep => settleLedgersStep({ meta, migrationId, from, to });
+  ): MigrationStep[] => [
+    settleLedgersStep({ meta, migrationId, from, to }),
+    settleRegistryDefinitionsStep({ from, to, resolveRegistryTable }),
+  ];
 
   const dataSteps = (
     from: typeof LEGACY_STORAGE_VOCABULARY,
@@ -191,7 +210,7 @@ export function buildMigrationPlan(args: BuildPlanArgs): MigrationStep[] {
     return [
       ...dataSteps(LEGACY_STORAGE_VOCABULARY, FIELD_GROUP_STORAGE_VOCABULARY),
       ...renameSteps(entries),
-      settle(LEGACY_STORAGE_VOCABULARY, FIELD_GROUP_STORAGE_VOCABULARY),
+      ...settle(LEGACY_STORAGE_VOCABULARY, FIELD_GROUP_STORAGE_VOCABULARY),
     ];
   }
 
@@ -204,7 +223,7 @@ export function buildMigrationPlan(args: BuildPlanArgs): MigrationStep[] {
       FIELD_GROUP_STORAGE_VOCABULARY,
       LEGACY_STORAGE_VOCABULARY
     ).reverse(),
-    settle(FIELD_GROUP_STORAGE_VOCABULARY, LEGACY_STORAGE_VOCABULARY),
+    ...settle(FIELD_GROUP_STORAGE_VOCABULARY, LEGACY_STORAGE_VOCABULARY),
   ];
 }
 
