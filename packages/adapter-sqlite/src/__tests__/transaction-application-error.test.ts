@@ -131,9 +131,12 @@ describe("SqliteAdapter — a refusal thrown inside transaction()", () => {
     expect(statements).not.toContain("COMMIT");
   });
 
-  it("still classifies an error that did come from the driver", async () => {
-    // The other half of the contract. Letting a driver error through unchanged
-    // would put raw driver text on the wire in place of a mapped kind.
+  it("classifies a callback error that carries no application brand", async () => {
+    // The other half of the contract, and the reason the brand is the test
+    // rather than the throw site: this error is raised from inside the callback
+    // exactly like a refusal, and is still classified. Passing it through
+    // unchanged would put raw driver text on the wire under a shape callers
+    // read as their own deliberate refusal.
     const adapter = await makeAdapter();
 
     const caught: unknown = await adapter
