@@ -225,6 +225,10 @@ export function settleLedgersStep(args: {
   const ledgers = ledgerSteps(args);
   return {
     id: "data:settle-ledgers",
+    // A gate: re-entered by every invocation rather than recorded. A recorded
+    // position is what lets a later run step over something, and this must be
+    // true at the moment the marker settles.
+    recordsProgress: false,
     async run(session) {
       for (const step of ledgers) await step.run(session);
     },
@@ -274,6 +278,8 @@ export function settleRegistryDefinitionsStep(args: {
 
   return {
     id: "data:settle-registry-definitions",
+    // A gate, for the same reason as its ledger counterpart.
+    recordsProgress: false,
     async run(session) {
       await (await against()).run(session);
     },
