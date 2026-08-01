@@ -56,6 +56,7 @@ import {
   directedRenameEntries,
   renamePositionOffset,
   renameRunRecord,
+  resumePosition,
 } from "./plan";
 import { probeStorage, reconcilePlan, type TableColumns } from "./reconcile";
 import { runMigrationSteps } from "./runner";
@@ -305,7 +306,10 @@ export async function runFieldGroupMigration(
         resolveRegistryTable: () => resolveRegistryNameFromCatalog(adapter),
       });
 
-      const fromStep = state.status === "migrating" ? state.step + 1 : 1;
+      const fromStep = resumePosition({
+        recorded: state.status === "migrating" ? state.step : 0,
+        planLength: steps.length,
+      });
       // 🔴 Invalidated whenever the steps may have RUN, not only when the run
       // reports success. A rename can commit and `assertStorageComplete` or
       // `settleMigration` can then throw — at which point the memoized registry
