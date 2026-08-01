@@ -11,7 +11,6 @@
  */
 
 import { isFieldLocalized } from "nextly/config";
-import { useRef } from "react";
 
 import type { EntryData } from "./useEntryForm";
 
@@ -108,6 +107,11 @@ export function anyLocalePublished(
 ): boolean {
   const translations = entry?._translations;
   if (isRecord(translations)) {
+    // A published main row is itself publicly readable (the public status filter
+    // applies to the main table), and a shared, non-localized slug lives there,
+    // so it counts as a live address even when reconciliation has left no
+    // companion locale published.
+    if (entry?.status === "published") return true;
     return Object.values(translations).some(
       meta => isRecord(meta) && meta.status === "published"
     );
@@ -166,6 +170,23 @@ export interface PublicAddressArgs {
 }
 
 /**
+ * Addresses observed as public during this browser session, keyed by entry id (and locale for a
+ * localized slug). It lives at module scope, not in a component ref, so it survives the editor
+ * unmounting: the loading skeleton shown while an uncached locale loads tears down EntryForm, and a
+ * per-instance latch would lose the history and let a formerly public slug follow its title again on
+ * return. Keys carry the entry id, so one document never inherits another's history.
+ */
+const sessionPublicAddresses = new Set<string>();
+
+/**
+ * Clear the session address latch. For tests, which assert a fresh latch per case; the app never
+ * clears it (its lifetime is intentionally the page session).
+ */
+export function resetPublicAddressLatch(): void {
+  sessionPublicAddresses.clear();
+}
+
+/**
  * Whether this entry's slug is already a public address.
  *
  * Three things make it one, and each covers a case the others miss:
@@ -182,13 +203,14 @@ export interface PublicAddressArgs {
  *
  * The latch is a set of addresses rather than a single slot, and is never cleared. Keys carry the
  * entry id, so one document cannot inherit another's history; keeping every key means switching
- * language, or navigating away and back, does not discard what was already observed. A single slot
+ * language, or navigating away and back — including through the loading skeleton that unmounts this
+ * editor while an uncached locale loads — does not discard what was already observed. A single slot
  * loses the first address the moment a second one is looked at.
  *
- * The latch is still bounded by the editing session, because nothing durable records that an entry
- * was once published: there is no first-published timestamp on the row. An entry unpublished,
- * reloaded, and then retitled still tracks. Closing that needs a persisted marker in core rather
- * than a longer-lived ref here.
+ * The set is bounded by the page session (see {@link sessionPublicAddresses}), because nothing
+ * durable records that an entry was once published: there is no first-published timestamp on the
+ * row. An entry unpublished, reloaded in a fresh session, and then retitled tracks again. Closing
+ * that needs a persisted marker in core rather than a session-lived set here.
  */
 export function useHasPublicAddress({
   mode,
@@ -205,17 +227,15 @@ export function useHasPublicAddress({
   const addressKey = `${entry?.id ?? ""}${
     slugLocalized ? `:${locale ?? defaultLocale ?? ""}` : ""
   }`;
-  const seenRef = useRef<Set<string> | null>(null);
-  seenRef.current ??= new Set<string>();
 
   if (mode !== "edit" || !entry) return false;
   if (!hasStatus) return true;
 
   const liveNow = slugLocalized
-    ? effectiveEntryStatus(entry, locale) === "published"
+    ? effectiveEntryStatus(entry, locale, defaultLocale) === "published"
     : anyLocalePublished(entry, collectionLocalized);
   // Freeze on the pending state, but only REMEMBER it once the write has settled — the cache may
   // still be holding an optimistic publish that is about to be rolled back.
-  if (liveNow && !mutationPending) seenRef.current.add(addressKey);
-  return liveNow || seenRef.current.has(addressKey);
+  if (liveNow && !mutationPending) sessionPublicAddresses.add(addressKey);
+  return liveNow || sessionPublicAddresses.has(addressKey);
 }

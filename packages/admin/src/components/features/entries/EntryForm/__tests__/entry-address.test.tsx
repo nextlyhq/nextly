@@ -3,15 +3,22 @@
 // break quietly — a URL moves and nothing says so — so the predicate is exercised directly.
 
 import { renderHook } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import {
   anyLocalePublished,
   effectiveEntryStatus,
+  resetPublicAddressLatch,
   useHasPublicAddress,
   type PublicAddressArgs,
 } from "../entry-address";
 import type { EntryData } from "../useEntryForm";
+
+// The public-address latch lives at module scope so it survives the editor
+// unmounting; clear it between cases so each starts from a fresh session.
+beforeEach(() => {
+  resetPublicAddressLatch();
+});
 
 const entry = (over: Partial<EntryData> = {}): EntryData => ({
   id: "e1",
@@ -130,6 +137,24 @@ describe("anyLocalePublished", () => {
     ).toBe(false);
   });
 
+  it("counts a published main row even when no companion locale is published", () => {
+    // Reconciliation can leave the main row published while the default
+    // companion is absent or still draft. The main row is publicly readable and
+    // carries the shared slug, so it counts as a live address either way.
+    expect(
+      anyLocalePublished(
+        entry({
+          status: "published",
+          _translations: {
+            en: { translated: true, status: "draft" },
+            de: { translated: false },
+          },
+        }),
+        true
+      )
+    ).toBe(true);
+  });
+
   it("falls back to the row status with no translation map", () => {
     expect(anyLocalePublished(entry({ status: "published" }), false)).toBe(
       true
@@ -235,6 +260,18 @@ describe("useHasPublicAddress", () => {
     rerender(shared({ entry: entry({ status: "draft" }) }));
 
     expect(result.current).toBe(true);
+  });
+
+  it("keeps a shared slug frozen after the editor unmounts and remounts", () => {
+    // Switching to an uncached locale shows a loading skeleton that unmounts EntryForm. A
+    // per-instance latch would be destroyed, so a fresh mount for the now-draft entry would let its
+    // formerly public slug follow the title again. The module-scoped latch survives the gap.
+    const first = render(shared({ entry: entry({ status: "published" }) }));
+    expect(first.result.current).toBe(true);
+    first.unmount();
+
+    const second = render(shared({ entry: entry({ status: "draft" }) }));
+    expect(second.result.current).toBe(true);
   });
 
   it("keeps the latch for a language it left and came back to", () => {
