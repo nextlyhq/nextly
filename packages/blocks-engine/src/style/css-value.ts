@@ -258,7 +258,7 @@ function attrProducesDimension(node: CssNode): boolean {
   if (declared.type === "Function") return true;
   return (
     declared.type === "Identifier" &&
-    LENGTH_UNITS.has(declared.name.toLowerCase())
+    LENGTH_UNITS.has(asciiLower(declared.name))
   );
 }
 
@@ -299,9 +299,22 @@ export function splitCssWhitespace(value: string): string[] {
   return trimmed === "" ? [] : trimmed.split(CSS_WHITESPACE);
 }
 
+/**
+ * Lowercase the ASCII letters and nothing else.
+ *
+ * CSS folds identifier case for A–Z only, while JavaScript's `toLowerCase` is
+ * Unicode-aware and maps U+212A KELVIN SIGN to `k`. Folding with it would match
+ * `blocK` against `block` here while the browser keeps them distinct
+ * identifiers and discards the declaration, so every identifier comparison in
+ * this module and the validator uses this instead.
+ */
+export function asciiLower(value: string): string {
+  return value.replace(/[A-Z]/g, letter => letter.toLowerCase());
+}
+
 /** True when a value is one of the keywords legal on every CSS property. */
 export function isCssWideKeyword(value: string): boolean {
-  return CSS_WIDE_KEYWORDS.has(value.toLowerCase());
+  return CSS_WIDE_KEYWORDS.has(asciiLower(value));
 }
 
 /**
@@ -399,7 +412,7 @@ function walkForUrlRejection(ast: CssNode): CssValueRejection | null {
       }
       if (
         node.type !== "Function" ||
-        !URL_STRING_FUNCTIONS.has(node.name.toLowerCase())
+        !URL_STRING_FUNCTIONS.has(asciiLower(node.name))
       ) {
         return;
       }
@@ -535,10 +548,8 @@ export function checkDimensionValue(
   if (rejection !== null) return rejection;
   const ast = parseValue(value);
   if (ast === null || ast.type !== "Value") return "not-a-length";
-  const allowed = new Set(keywords.map(keyword => keyword.toLowerCase()));
-  const allowedFunctions = new Set(
-    functions.map(fnName => fnName.toLowerCase())
-  );
+  const allowed = new Set(keywords.map(keyword => asciiLower(keyword)));
+  const allowedFunctions = new Set(functions.map(fnName => asciiLower(fnName)));
   let parts = 0;
   let cssWideKeyword = false;
   for (const child of ast.children) {
@@ -590,7 +601,7 @@ function measurementRejection(
 ): CssValueRejection | null {
   switch (node.type) {
     case "Dimension":
-      if (!LENGTH_UNITS.has(node.unit.toLowerCase())) return "not-a-length";
+      if (!LENGTH_UNITS.has(asciiLower(node.unit))) return "not-a-length";
       return limits.allowNegative || !String(node.value).startsWith("-")
         ? null
         : "not-a-length";
@@ -606,12 +617,12 @@ function measurementRejection(
       // a property keyword is a complete value, so `calc(auto)` and
       // `calc(inherit)` are discarded while `round(up, 10px, 1px)` is not.
       if (insideFunction) {
-        const inner = node.name.toLowerCase();
+        const inner = asciiLower(node.name);
         return CALC_CONSTANTS.has(inner) || keywords.has(inner)
           ? null
           : "not-a-length";
       }
-      const name = node.name.toLowerCase();
+      const name = asciiLower(node.name);
       return CSS_WIDE_KEYWORDS.has(name) || keywords.has(name)
         ? null
         : "not-a-length";
@@ -619,7 +630,7 @@ function measurementRejection(
     case "Operator":
       return null;
     case "Function": {
-      const name = node.name.toLowerCase();
+      const name = asciiLower(node.name);
       if (
         !DIMENSION_FUNCTIONS.has(name) &&
         limits.functions?.has(name) !== true &&
@@ -798,15 +809,13 @@ export function checkColorValue(value: string): CssValueRejection | null {
     case "Hash":
       return HEX_COLOR.test(node.value) ? null : "not-a-color";
     case "Identifier": {
-      const name = node.name.toLowerCase();
+      const name = asciiLower(node.name);
       return COLOR_KEYWORDS.has(name) || SYSTEM_COLORS.has(name)
         ? null
         : "not-a-color";
     }
     case "Function":
-      return COLOR_FUNCTIONS.has(node.name.toLowerCase())
-        ? null
-        : "not-a-color";
+      return COLOR_FUNCTIONS.has(asciiLower(node.name)) ? null : "not-a-color";
     default:
       return "not-a-color";
   }
@@ -839,7 +848,8 @@ export function checkUrlValue(
   // thing to tell an author, and a hostile URL usually trips both guards.
   const scheme = URL_SCHEME.exec(value);
   if (scheme !== null) {
-    const name = scheme[1]?.toLowerCase();
+    const matched = scheme[1];
+    const name = matched === undefined ? undefined : asciiLower(matched);
     if (name === undefined || !ALLOWED_URL_SCHEMES.includes(name)) {
       return "unsafe-url-scheme";
     }

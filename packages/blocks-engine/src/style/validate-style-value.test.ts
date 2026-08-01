@@ -1575,3 +1575,38 @@ describe("ruby formatting roles", () => {
     }
   });
 });
+
+describe("case folding follows CSS, not JavaScript", () => {
+  it("refuses a keyword whose case differs outside ASCII", () => {
+    // U+212A KELVIN SIGN lowercases to `k` in JavaScript and stays a distinct
+    // identifier in CSS, so the browser discards the declaration.
+    expect(codes({ display: "blocK" })).toEqual(["invalid-style-value"]);
+    expect(codes({ textAlign: "Keep" })).toEqual(["invalid-style-value"]);
+  });
+
+  it("still folds ASCII case, which CSS does", () => {
+    expect(codes({ display: "BLOCK" })).toEqual([]);
+    expect(codes({ display: "BlOcK" })).toEqual([]);
+    expect(codes({ width: "10PX" })).toEqual([]);
+    expect(codes({ color: "RED" })).toEqual([]);
+    expect(codes({ background: { url: "NONE" } })).toEqual([]);
+  });
+
+  it("does not fold a unit outside ASCII into a real one", () => {
+    expect(codes({ width: "10pK" })).toEqual(["invalid-style-value"]);
+  });
+});
+
+describe("an elliptical logical corner", () => {
+  it("takes a horizontal and a vertical radius", () => {
+    expect(codes({ borderRadius: { startStart: "10px 20px" } })).toEqual([]);
+    expect(codes({ borderRadius: { endEnd: "10% 20%" } })).toEqual([]);
+  });
+
+  it("still takes one value, and still refuses three", () => {
+    expect(codes({ borderRadius: { startStart: "10px" } })).toEqual([]);
+    expect(codes({ borderRadius: { startStart: "1px 2px 3px" } })).toEqual([
+      "invalid-style-value",
+    ]);
+  });
+});

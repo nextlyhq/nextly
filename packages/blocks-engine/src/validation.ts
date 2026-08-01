@@ -745,6 +745,20 @@ function validateStyles(
  * the budget's flag with the property walk, so a document that stops early says
  * so exactly once, wherever it stopped.
  */
+/**
+ * Whether an object carries any key of its own.
+ *
+ * `Object.keys` would build an array of every key merely to ask, which is the
+ * unbounded work the issue budget exists to prevent — and this is asked at the
+ * moment the budget has just run out.
+ */
+function hasOwnKey(value: Record<string, unknown>): boolean {
+  for (const key in value) {
+    if (Object.hasOwn(value, key)) return true;
+  }
+  return false;
+}
+
 function styleBudgetExhausted(
   state: NodeCheckState,
   path: string
@@ -842,8 +856,7 @@ function validateStyleEnvelope(
       // Nothing is skipped when this breakpoint holds no values, though, and
       // the marker is an error — claiming a document went unchecked when it did
       // not would reject it for having been fully read.
-      const nothingLeftHere =
-        isPlainObject(values) && Object.keys(values).length === 0;
+      const nothingLeftHere = isPlainObject(values) && !hasOwnKey(values);
       if (state.styleBudget.remaining <= 0 && !nothingLeftHere) {
         state.issues.push(...styleBudgetExhausted(state, bpPath));
         return;

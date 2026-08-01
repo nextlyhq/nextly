@@ -1156,4 +1156,17 @@ describe("the truncation marker means work was actually skipped", () => {
       true
     );
   });
+
+  it("is emitted when the last slot goes on the LAST breakpoint, if it holds values", () => {
+    // Exactly one breakpoint per slot, so the budget runs out on the final
+    // entry and there is no next iteration to notice. Its values go unread, so
+    // the marker is owed even though nothing follows.
+    const issues = validate(
+      docWithBreakpoints(MAX_STYLE_ISSUES, { color: "#fff" }),
+      { breakpoints: FIXTURE_BREAKPOINTS, mode: "forgiving" }
+    );
+    expect(issues.some(issue => issue.code === "style-issues-truncated")).toBe(
+      true
+    );
+  });
 });

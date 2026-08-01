@@ -239,21 +239,17 @@ function logicalSides(
 
 /** The four logical corners of `border-radius`. */
 function logicalCorners(): LogicalCornersShape {
+  // Each corner property takes a horizontal and a vertical radius, which is how
+  // an elliptical corner is written; one value makes them equal.
+  const corner = (cssProperty: string) =>
+    dimension(cssProperty, { allowPercentage: true, maxParts: 2 });
   return {
     kind: "logicalCorners",
     corners: {
-      startStart: dimension("border-start-start-radius", {
-        allowPercentage: true,
-      }),
-      startEnd: dimension("border-start-end-radius", {
-        allowPercentage: true,
-      }),
-      endStart: dimension("border-end-start-radius", {
-        allowPercentage: true,
-      }),
-      endEnd: dimension("border-end-end-radius", {
-        allowPercentage: true,
-      }),
+      startStart: corner("border-start-start-radius"),
+      startEnd: corner("border-start-end-radius"),
+      endStart: corner("border-end-start-radius"),
+      endEnd: corner("border-end-end-radius"),
     },
   };
 }

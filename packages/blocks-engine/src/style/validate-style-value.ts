@@ -19,6 +19,7 @@ import {
   checkCssValue,
   checkDimensionValue,
   checkUrlValue,
+  asciiLower,
   isCssWideKeyword,
   isOverlongValue,
   splitCssWhitespace,
@@ -187,13 +188,13 @@ function leafIssues(
         // string match a short keyword, and every copy made along the way is
         // work bought with a value that should never have been read.
         if (isOverlongValue(value)) return rejected(path, value, "too-long");
-        const parts = splitCssWhitespace(value.toLowerCase());
+        const parts = splitCssWhitespace(asciiLower(value));
         // Collapsed rather than compared raw, so that a vocabulary entry
         // written as two words — `grid-auto-flow: row dense` is one value, not
         // two — still matches however the stored string was spaced.
         const written = parts.join(" ");
         const allowed = (part: string): boolean =>
-          leaf.values.some(entry => entry.toLowerCase() === part);
+          leaf.values.some(entry => asciiLower(entry) === part);
         if (parts.length === 0) return rejected(path, value, "unparsable");
         if (isCssWideKeyword(written) || allowed(written)) return [];
         // Only a property declared as a shorthand reads its value as several
@@ -203,7 +204,7 @@ function leafIssues(
         // keyword, so it may not appear as one part of a shorthand.
         const solo = leaf.soloValues ?? [];
         const pairable = (part: string): boolean =>
-          allowed(part) && !solo.some(entry => entry.toLowerCase() === part);
+          allowed(part) && !solo.some(entry => asciiLower(entry) === part);
         if (parts.length <= (leaf.maxParts ?? 1) && parts.every(pairable)) {
           return [];
         }
@@ -286,11 +287,11 @@ function leafIssues(
       // A keyword stands in for the whole URL, so it is matched before the URL
       // rules rather than beside them: a value the property accepts as a
       // keyword is not a path and must not be judged as one.
-      const written = trimCssWhitespace(value).toLowerCase();
+      const written = asciiLower(trimCssWhitespace(value));
       const keywords = leaf.keywords ?? [];
       if (
         isCssWideKeyword(written) ||
-        keywords.some(entry => entry.toLowerCase() === written)
+        keywords.some(entry => asciiLower(entry) === written)
       ) {
         return [];
       }
