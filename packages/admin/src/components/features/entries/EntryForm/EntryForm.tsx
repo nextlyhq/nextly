@@ -456,7 +456,10 @@ export function EntryForm({
                   // The pill reports the language being edited, matching the header's submit
                   // affordances. Reading the main row instead would show "Published" beside a
                   // Publish button whenever a translation lags its default language.
-                  status={effectiveEntryStatus(entry, locale) ?? "draft"}
+                  status={
+                    effectiveEntryStatus(entry, locale, defaultLocale) ??
+                    "draft"
+                  }
                   isRailCollapsed={railCollapsed}
                   hasPublicAddress={hasPublicAddress}
                 />

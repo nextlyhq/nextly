@@ -62,6 +62,52 @@ describe("effectiveEntryStatus", () => {
       effectiveEntryStatus(entry({ status: "published" }), undefined)
     ).toBe("published");
   });
+
+  it("reads the default locale's companion status when editing it implicitly", () => {
+    // The editor shows the default language as `locale === undefined`. After a
+    // reconcile the default locale's `_status` can live on the companion and be
+    // published while the main row is a draft; reading the row would call the
+    // live default a draft and let its already-live slug be rewritten.
+    const result = effectiveEntryStatus(
+      entry({
+        status: "draft",
+        _translations: { en: { status: "published" } },
+      }),
+      undefined,
+      "en"
+    );
+
+    expect(result).toBe("published");
+  });
+
+  it("prefers the default companion status over the row in both directions", () => {
+    // The mirror: a drafted default over a published-shaped row reports draft.
+    const result = effectiveEntryStatus(
+      entry({
+        status: "published",
+        _translations: { en: { status: "draft" } },
+      }),
+      undefined,
+      "en"
+    );
+
+    expect(result).toBe("draft");
+  });
+
+  it("falls back to the row status for the default locale with no companion row", () => {
+    // The default language's own content lives on the main row, so when the map
+    // carries only other languages the row status still governs it.
+    const result = effectiveEntryStatus(
+      entry({
+        status: "published",
+        _translations: { de: { status: "draft" } },
+      }),
+      undefined,
+      "en"
+    );
+
+    expect(result).toBe("published");
+  });
 });
 
 describe("anyLocalePublished", () => {

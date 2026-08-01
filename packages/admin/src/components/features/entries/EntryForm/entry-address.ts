@@ -63,21 +63,34 @@ export function isSlugPerLocale(
  * a published translation of a draft row looks unpublished, and a draft translation of a published
  * row looks live.
  *
- * The fallback to `entry.status` is deliberately conditioned on the absence of a `_translations`
- * map rather than on the absence of an entry for this locale. A localized entry with no companion
- * row for the active language is not published in that language, and must not inherit the default
- * language's state by falling through.
+ * The editor represents the default language implicitly as `locale === undefined`, so the caller
+ * passes `defaultLocale` to resolve it. After a reconcile the default locale's `_status` can land on
+ * the companion and diverge from the main row (a published default over a draft-shaped row); reading
+ * the row alone would call it a draft and let a title edit move its already-live slug.
+ *
+ * When the resolved language has no companion row, the fallback differs by which language it is. A
+ * non-default language with no companion is simply not published in it, so it reports no status
+ * rather than inheriting the default's. The default language's own content lives on the main row, so
+ * it falls back to the row status — as does any language when there is no `_translations` map at all
+ * (a non-localized entry, or a request that did not ask for the overview).
  */
 export function effectiveEntryStatus(
   entry: EntryData | null | undefined,
-  locale: string | undefined
+  locale: string | undefined,
+  defaultLocale?: string
 ): string | undefined {
   const translations = entry?._translations;
-  if (locale !== undefined && isRecord(translations)) {
-    const forLocale = translations[locale];
-    return isRecord(forLocale) && typeof forLocale.status === "string"
-      ? forLocale.status
-      : undefined;
+  // The editor shows the default language as `locale === undefined`; resolve it so the default
+  // locale's own companion `_status` is read rather than the main row's, which can diverge from it.
+  const activeLocale = locale ?? defaultLocale;
+  if (activeLocale !== undefined && isRecord(translations)) {
+    const forLocale = translations[activeLocale];
+    if (isRecord(forLocale) && typeof forLocale.status === "string") {
+      return forLocale.status;
+    }
+    // No companion row for this language. A non-default language is not published in it; the
+    // default language's content lives on the main row, so let it fall through to the row status.
+    if (activeLocale !== defaultLocale) return undefined;
   }
   return typeof entry?.status === "string" ? entry.status : undefined;
 }

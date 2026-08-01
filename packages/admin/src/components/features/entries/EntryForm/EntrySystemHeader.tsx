@@ -27,6 +27,7 @@ import {
   Trash2,
 } from "@admin/components/icons";
 import { useCan } from "@admin/hooks/useCan";
+import { useLocalization } from "@admin/hooks/useLocalization";
 import { cn } from "@admin/lib/utils";
 
 import { useEntryLocale } from "../EntryLocaleContext";
@@ -184,6 +185,9 @@ export function EntrySystemHeader({
 }: EntrySystemHeaderProps) {
   const form = useFormContext();
   const entryLocale = useEntryLocale();
+  // The default language is edited with `locale === undefined`, and its status
+  // can live on the companion, so resolve it to read the right lifecycle.
+  const { defaultLocale } = useLocalization();
   const inputRef = useRef<HTMLInputElement>(null);
   const [unpublishOpen, setUnpublishOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -251,7 +255,7 @@ export function EntrySystemHeader({
   // active locale's status — not the main/default row's — decides which submit
   // affordances to show. Shared with the slug freeze and the public-URL notice,
   // which ask the same question and must not answer it differently.
-  const effectiveStatus = effectiveEntryStatus(entry, locale);
+  const effectiveStatus = effectiveEntryStatus(entry, locale, defaultLocale);
   const isPublishedEdit = mode === "edit" && effectiveStatus === "published";
   const entryLabel =
     typeof entry?.title === "string" && entry.title.trim().length > 0
