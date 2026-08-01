@@ -617,7 +617,7 @@ function stageConfigHooks(newConfig: {
   collections?: CollectionDef[];
   singles?: SingleDef[];
   plugins?: unknown[];
-}): () => void {
+}): (deferredEntities: ReadonlySet<string>) => void {
   const disabledPlugins = (newConfig.plugins ?? []).filter(
     plugin => (plugin as { enabled?: boolean }).enabled === false
   );
@@ -672,7 +672,23 @@ function stageConfigHooks(newConfig: {
       )
     : undefined;
 
-  return () => {
+  return (deferredEntities: ReadonlySet<string>) => {
+    // An entity whose schema change was deferred still has its PREVIOUS table,
+    // so its edited handler would run against columns the save has not added or
+    // renamed yet. A batch can succeed for one entity while another defers, so
+    // this cannot be decided for the reload as a whole -- those entities keep
+    // the handlers that match the schema they still have, and a later clean
+    // reload picks them up.
+    const landed = <T extends { slug: string }>(
+      entities: T[],
+      kind: "collection" | "single"
+    ): T[] =>
+      entities.filter(
+        entity => !deferredEntities.has(`${kind}:${entity.slug}`)
+      );
+    const landedCollections = landed(collections, "collection");
+    const landedSingles = landed(singles, "single");
+
     // The registry service registration actually bound its handlers to, which
     // is not always the process-global singleton: a caller may supply its own,
     // and replacing handlers anywhere else would leave the live registry
@@ -682,6 +698,8 @@ function stageConfigHooks(newConfig: {
     const registry = getActiveHookRegistry();
 
     // What the re-registration below is going to rebuild.
+    // A deferred entity is NOT rebuilt, and must not be swept either: its
+    // handlers are the ones that match its table.
     const rebuilt = new Set<string>([
       ...collections.map(collection => collection.slug),
       ...singles.map(single => singleHookNamespace(single.slug)),
@@ -703,8 +721,8 @@ function stageConfigHooks(newConfig: {
       }
     }
 
-    reregisterCollectionHooks(collections, registry);
-    reregisterSingleHooks(singles, registry);
+    reregisterCollectionHooks(landedCollections, registry);
+    reregisterSingleHooks(landedSingles, registry);
 
     // Recomputed whole rather than mutated, so an owner that is running again
     // resumes by simply not appearing -- nothing has to remember what a
@@ -1307,10 +1325,12 @@ async function applyReload(opts?: {
   // paths as well as after a successful apply, not on the apply alone.
   const commitConfigHooks = stageConfigHooks(newConfig);
   let committed = false;
-  const commitReload = (): void => {
+  const commitReload = (
+    deferredEntities: ReadonlySet<string> = new Set()
+  ): void => {
     if (committed) return;
     committed = true;
-    commitConfigHooks();
+    commitConfigHooks(deferredEntities);
   };
 
   // databaseAdapter doubles as our DI-readiness probe. We don't need any
@@ -2337,7 +2357,11 @@ async function applyReload(opts?: {
     // so the handlers written against them can go in. Also the path a save that
     // changes only a hook takes: its diff is empty, the apply has nothing to do
     // and reports success, and the commit still happens.
-    commitReload();
+    //
+    // A batch can succeed while individual entities were held back, so the
+    // deferred set travels with it: those keep the handlers matching the table
+    // they still have.
+    commitReload(deferredEntities);
   }
 
   if (!applyResult.success) {
