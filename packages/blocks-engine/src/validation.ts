@@ -807,12 +807,21 @@ function validateStyleEnvelope(
     // The envelope's own keys are as unbounded as the values inside it: a
     // document can carry a hundred thousand unknown state names. The budget
     // therefore governs the whole style walk, not only the property level.
-    if (state.styleBudget.remaining <= 0) {
+    //
+    // Bailing here is right only for a state that produces an issue of its
+    // own. A known state holding a map may hold nothing at all, and the marker
+    // is an error, so deciding its fate before looking inside would reject a
+    // document that was read in full. The breakpoint loop judges each entry.
+    const stateIsKnown = STYLE_STATES.includes(
+      stateKey as (typeof STYLE_STATES)[number]
+    );
+    const stateHasOwnIssue = !stateIsKnown || !isPlainObject(byBreakpoint);
+    if (state.styleBudget.remaining <= 0 && stateHasOwnIssue) {
       state.issues.push(...styleBudgetExhausted(state, stylesPath));
       return;
     }
     const statePath = pointer(stylesPath, stateKey);
-    if (!STYLE_STATES.includes(stateKey as (typeof STYLE_STATES)[number])) {
+    if (!stateIsKnown) {
       state.issues.push({
         path: statePath,
         code: "invalid-style-state",
@@ -836,10 +845,15 @@ function validateStyleEnvelope(
     for (const breakpointId in byBreakpoint) {
       if (!Object.hasOwn(byBreakpoint, breakpointId)) continue;
       const values = byBreakpoint[breakpointId];
-      // An entry holding no values leaves nothing unchecked, so skipping it
-      // costs nothing and the marker would be claiming otherwise. The same
-      // exemption applies at the recheck below, for the same reason.
-      const nothingLeftHere = isPlainObject(values) && !hasOwnKey(values);
+      // Two different questions, so two different tests. Stopping the WHOLE
+      // walk here is only free if this entry would say nothing at all, and an
+      // unknown breakpoint still reports that it is unknown — exempting it
+      // would let the walk run past the cap while emitting. Skipping just this
+      // entry's VALUES, at the recheck below, is free whenever there are none,
+      // whatever the breakpoint id turned out to be.
+      const noValuesHere = isPlainObject(values) && !hasOwnKey(values);
+      const nothingLeftHere =
+        noValuesHere && state.knownBreakpoints.has(breakpointId);
       if (state.styleBudget.remaining <= 0 && !nothingLeftHere) {
         state.issues.push(...styleBudgetExhausted(state, statePath));
         return;
@@ -860,7 +874,7 @@ function validateStyleEnvelope(
       // Nothing is skipped when this breakpoint holds no values, though, and
       // the marker is an error — claiming a document went unchecked when it did
       // not would reject it for having been fully read.
-      if (state.styleBudget.remaining <= 0 && !nothingLeftHere) {
+      if (state.styleBudget.remaining <= 0 && !noValuesHere) {
         state.issues.push(...styleBudgetExhausted(state, bpPath));
         return;
       }

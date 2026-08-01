@@ -1180,7 +1180,7 @@ describe("an empty breakpoint reached after the budget ran out", () => {
     for (let index = 0; index < MAX_STYLE_ISSUES; index += 1) {
       byBreakpoint[`bp${index}`] = {};
     }
-    byBreakpoint.trailing = {};
+    byBreakpoint.base = {};
     const issues = validate(
       invalidDoc({
         formatVersion: 1,
@@ -1198,5 +1198,44 @@ describe("an empty breakpoint reached after the budget ran out", () => {
       { breakpoints: FIXTURE_BREAKPOINTS, mode: "forgiving" }
     );
     expect(issues.filter(issue => issue.severity === "error")).toEqual([]);
+  });
+});
+
+describe("what the budget stops, and what it lets through", () => {
+  function docWithStyles(styles: unknown): BlockDocument {
+    return invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "n1", type: "core/box", version: 1, props: {}, styles }],
+    });
+  }
+
+  it("does not truncate a later state whose breakpoints hold nothing", () => {
+    const byBreakpoint: Record<string, unknown> = {};
+    for (let index = 0; index < MAX_STYLE_ISSUES; index += 1) {
+      byBreakpoint[`x${index}`] = {};
+    }
+    const issues = validate(
+      docWithStyles({ base: byBreakpoint, hover: { base: {} } }),
+      { breakpoints: FIXTURE_BREAKPOINTS, mode: "forgiving" }
+    );
+    expect(issues.filter(issue => issue.severity === "error")).toEqual([]);
+  });
+
+  it("still caps unknown breakpoints, whose warning is itself an issue", () => {
+    // An empty map means no VALUES to check, but an unknown id still reports
+    // itself, so exempting these would let the walk emit past the cap.
+    const byBreakpoint: Record<string, unknown> = {};
+    for (let index = 0; index < 500; index += 1) {
+      byBreakpoint[`y${index}`] = {};
+    }
+    const issues = validate(docWithStyles({ base: byBreakpoint }), {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "forgiving",
+    });
+    expect(issues.length).toBeLessThan(300);
+    expect(issues.some(issue => issue.code === "style-issues-truncated")).toBe(
+      true
+    );
   });
 });

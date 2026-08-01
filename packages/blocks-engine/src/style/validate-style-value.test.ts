@@ -1657,3 +1657,60 @@ describe("a transform that combines with nothing", () => {
     ]);
   });
 });
+
+describe("what each number-producing function will take", () => {
+  it("accepts an angle where the function is defined over one", () => {
+    expect(codes({ width: "calc(sin(45deg) * 1px)" })).toEqual([]);
+    expect(codes({ width: "calc(tan(1turn) * 1px)" })).toEqual([]);
+    expect(codes({ width: "calc(cos(0.5) * 1px)" })).toEqual([]);
+  });
+
+  it("accepts any numeric for the one that only reports a sign", () => {
+    expect(codes({ width: "calc(sign(50%) * 1px)" })).toEqual([]);
+    expect(codes({ width: "calc(sign(1em) * 1px)" })).toEqual([]);
+  });
+
+  it("refuses a measurement where the function takes a bare number", () => {
+    expect(codes({ width: "calc(sqrt(1px) * 1px)" })).toEqual([
+      "invalid-style-value",
+    ]);
+    expect(codes({ width: "calc(sqrt(45deg) * 1px)" })).toEqual([
+      "invalid-style-value",
+    ]);
+  });
+
+  it("refuses a length where the function takes an angle or a number", () => {
+    expect(codes({ width: "calc(sin(1px) * 1px)" })).toEqual([
+      "invalid-style-value",
+    ]);
+  });
+});
+
+describe("baseline alignment written either way round", () => {
+  it("accepts both serialisations of the unordered grammar", () => {
+    for (const value of [
+      "baseline",
+      "first baseline",
+      "last baseline",
+      "baseline first",
+      "baseline last",
+    ]) {
+      expect(codes({ alignItems: value }), value).toEqual([]);
+      expect(codes({ alignContent: value }), value).toEqual([]);
+    }
+  });
+
+  it("does not accept the preference on its own or doubled", () => {
+    expect(codes({ alignItems: "first" })).toEqual(["invalid-style-value"]);
+    expect(codes({ alignItems: "first last" })).toEqual([
+      "invalid-style-value",
+    ]);
+  });
+});
+
+describe("a font size that scales with script level", () => {
+  it("is storable, having no equivalent among the sizes", () => {
+    expect(codes({ fontSize: "math" })).toEqual([]);
+    expect(codes({ fontSize: "16px" })).toEqual([]);
+  });
+});

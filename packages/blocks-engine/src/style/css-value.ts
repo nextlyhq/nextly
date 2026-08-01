@@ -356,11 +356,34 @@ const NUMBER_FUNCTIONS: ReadonlySet<string> = new Set(
 );
 
 /**
- * The one number function that takes a measurement: `sign()` reports which side
- * of zero its argument falls, whatever the argument is made of, so
- * `sign(1px)` is a number while `sqrt(1px)` is not a value at all.
+ * What each number-producing function will take.
+ *
+ * `sqrt()` and friends are defined over bare numbers; the trigonometric ones
+ * take an angle or a number, which is why `sin(45deg)` is a value and
+ * `sin(1px)` is not; and `sign()` reports which side of zero its argument
+ * falls whatever the argument is made of. One rule for all of them refused two
+ * of the three.
  */
-const NUMBER_FUNCTIONS_TAKING_ANY: ReadonlySet<string> = new Set(["sign"]);
+type NumericDomain = "number" | "angleOrNumber" | "any";
+
+const NUMBER_FUNCTION_DOMAIN: ReadonlyMap<string, NumericDomain> = new Map([
+  ["sqrt", "number"],
+  ["exp", "number"],
+  ["pow", "number"],
+  ["log", "number"],
+  ["sin", "angleOrNumber"],
+  ["cos", "angleOrNumber"],
+  ["tan", "angleOrNumber"],
+  ["sign", "any"],
+]);
+
+/** Units that measure an angle. */
+const ANGLE_UNITS: ReadonlySet<string> = new Set([
+  "deg",
+  "grad",
+  "rad",
+  "turn",
+]);
 
 const CALC_CONSTANTS: ReadonlySet<string> = new Set([
   "pi",
@@ -601,10 +624,10 @@ interface MeasurementLimits {
   /** Functions the property accepts beyond the universally legal ones. */
   functions?: ReadonlySet<string>;
   /**
-   * Set while reading the arguments of a function that takes bare numbers, so
-   * a measurement there is refused: `sqrt(1px)` is not a value in any context.
+   * Set while reading the arguments of a number-producing function, naming what
+   * that function will take. Absent means an ordinary length context.
    */
-  dimensionless?: boolean;
+  domain?: NumericDomain;
 }
 
 function measurementRejection(
@@ -617,14 +640,21 @@ function measurementRejection(
   }
 ): CssValueRejection | null {
   switch (node.type) {
-    case "Dimension":
-      if (limits.dimensionless === true) return "not-a-length";
-      if (!LENGTH_UNITS.has(asciiLower(node.unit))) return "not-a-length";
+    case "Dimension": {
+      const unit = asciiLower(node.unit);
+      if (limits.domain === "number") return "not-a-length";
+      if (limits.domain === "angleOrNumber") {
+        return ANGLE_UNITS.has(unit) ? null : "not-a-length";
+      }
+      if (limits.domain === "any") return null;
+      if (!LENGTH_UNITS.has(unit)) return "not-a-length";
       return limits.allowNegative || !String(node.value).startsWith("-")
         ? null
         : "not-a-length";
+    }
     case "Percentage":
-      if (limits.dimensionless === true) return "not-a-length";
+      if (limits.domain === "any") return null;
+      if (limits.domain !== undefined) return "not-a-length";
       if (!limits.allowPercentage) return "not-a-length";
       return limits.allowNegative || !String(node.value).startsWith("-")
         ? null
@@ -678,7 +708,7 @@ function measurementRejection(
             allowNegative: true,
             allowPercentage: false,
             functions: limits.functions,
-            dimensionless: !NUMBER_FUNCTIONS_TAKING_ANY.has(name),
+            domain: NUMBER_FUNCTION_DOMAIN.get(name) ?? "number",
           });
           if (rejection !== null) return rejection;
         }
@@ -701,7 +731,7 @@ function measurementRejection(
           allowNegative: true,
           allowPercentage: limits.allowPercentage,
           functions: limits.functions,
-          dimensionless: limits.dimensionless,
+          domain: limits.domain,
         });
         if (rejection !== null) return rejection;
       }

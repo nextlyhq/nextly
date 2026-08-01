@@ -130,7 +130,12 @@ function orderings(parts: readonly string[]): string[] {
 }
 
 /** Where a baseline may be taken from. */
-const BASELINE_POSITIONS = ["baseline", "first baseline", "last baseline"];
+const BASELINE_POSITIONS = [
+  "baseline",
+  ...unorderedCombinations([["first", "last"], ["baseline"]]).filter(entry =>
+    entry.includes(" ")
+  ),
+];
 
 /** How leftover space is spread between items. */
 const CONTENT_DISTRIBUTION = [
@@ -163,6 +168,8 @@ const MAX_SIZING_KEYWORDS = [
   "stretch",
 ];
 const FONT_SIZE_KEYWORDS = [
+  // Scales with MathML script level; no absolute or relative size reproduces it.
+  "math",
   "xx-small",
   "x-small",
   "small",
