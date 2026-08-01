@@ -65,6 +65,10 @@ import type {
 import { DrizzleStatementExecutor } from "../domains/schema/services/drizzle-statement-executor";
 import { generateRuntimeSchema } from "../domains/schema/services/runtime-schema-generator";
 import { readIdentifierCaseRules } from "../domains/schema/utils/read-identifier-case";
+import {
+  indexCatalog,
+  resolveCatalogName,
+} from "../domains/schema/utils/resolve-catalog-name";
 import type { IdentifierCaseRules } from "../domains/schema/utils/resolve-catalog-name";
 import {
   resolveCollectionTableName,
@@ -1089,11 +1093,18 @@ async function registryIsAbsent(
   adapter: AdapterLike
 ): Promise<boolean | undefined> {
   try {
-    const tables = await adapter.listTables();
-    return !tables.some(
-      table =>
-        table === STORAGE_FORMAT.registryTable ||
-        table === MIGRATION_TARGET.registryTable
+    // Matched under the server's own rules, not by exact spelling — the same
+    // way `chooseRegistryTable` matches. A folding server can report the
+    // registry as `DYNAMIC_FIELD_GROUPS`, and an exact comparison would call a
+    // present registry absent: the caller would then treat derived `comp_*`
+    // names as usable and let the reload build them beside the populated
+    // migrated tables, which is precisely the outcome this probe exists to
+    // prevent.
+    const rules = await readIdentifierCaseRules(adapter);
+    const catalog = indexCatalog(await adapter.listTables(), rules.tables);
+    return (
+      resolveCatalogName(catalog, STORAGE_FORMAT.registryTable) === undefined &&
+      resolveCatalogName(catalog, MIGRATION_TARGET.registryTable) === undefined
     );
   } catch {
     return undefined;

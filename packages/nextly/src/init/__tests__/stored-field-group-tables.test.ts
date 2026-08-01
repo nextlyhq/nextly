@@ -163,6 +163,23 @@ describe("readStoredFieldGroupTables", () => {
     expect(stored.reason).toContain("registry read failed");
   });
 
+  // A folding server reports the registry under a spelling the code never
+  // wrote. `chooseRegistryTable` matches under the server's rules, so the
+  // absence probe has to match the same way: an exact comparison calls a
+  // present registry absent, the derived names are then declared usable, and
+  // the reload builds legacy tables beside the populated migrated ones.
+  it("is NOT usable when a folding server reports the registry under another case", async () => {
+    forgetFieldGroupStorageNames();
+    const adapter = adapterDouble({
+      catalog: [MIGRATION_TARGET.registryTable.toUpperCase()],
+      readFails: true,
+    });
+
+    const stored = await readStoredFieldGroupTables(adapter as never);
+
+    expect(stored.usable).toBe(false);
+  });
+
   // Not even the catalog could answer, so absence was never established. The
   // unsafe direction must not be the default.
   it("is NOT usable when the catalog itself cannot be read", async () => {
