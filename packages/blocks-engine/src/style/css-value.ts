@@ -240,6 +240,28 @@ const MATH_FUNCTION_ARITY: ReadonlyMap<string, readonly number[] | null> =
  */
 const MATH_FUNCTIONS: ReadonlySet<string> = new Set(MATH_FUNCTION_ARITY.keys());
 
+/**
+ * Whether an `attr()` can produce a measurement.
+ *
+ * Its name says nothing on its own: `attr(title)` yields a string and
+ * `attr(data-angle deg)` an angle, both of which a browser discards where a
+ * length belongs. The token after the attribute name is what decides it, and
+ * no token at all means a string whatever the attribute holds.
+ */
+function attrProducesDimension(node: CssNode): boolean {
+  if (node.type !== "Function") return false;
+  const [first] = splitArguments(node.children);
+  const declared = first?.[1];
+  if (declared === undefined) return false;
+  // `type(<syntax>)` names a syntax this module does not model; abstaining is
+  // the same answer it gives everywhere else it cannot read a grammar.
+  if (declared.type === "Function") return true;
+  return (
+    declared.type === "Identifier" &&
+    LENGTH_UNITS.has(declared.name.toLowerCase())
+  );
+}
+
 /** Split a function's children on its top-level commas. */
 function splitArguments(children: Iterable<CssNode>): CssNode[][] {
   const args: CssNode[][] = [[]];
@@ -298,6 +320,23 @@ const FUNCTION_IDENTIFIERS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
  * rather than property values, so they are legal inside any math function and
  * nowhere else: `calc(pi * 1px)` is a length, while a bare `pi` is not.
  */
+/**
+ * Math functions whose result is a number rather than a length. Legal only as
+ * an operand inside arithmetic that goes on to produce one — `sqrt(4) * 1px` is
+ * a length while `sqrt(4)` alone is not a width. The angle-returning inverses
+ * are absent: they satisfy no leaf this module validates.
+ */
+const NUMBER_FUNCTIONS: ReadonlySet<string> = new Set([
+  "sqrt",
+  "pow",
+  "log",
+  "exp",
+  "sign",
+  "sin",
+  "cos",
+  "tan",
+]);
+
 const CALC_CONSTANTS: ReadonlySet<string> = new Set([
   "pi",
   "e",
@@ -583,8 +622,12 @@ function measurementRejection(
       const name = node.name.toLowerCase();
       if (
         !DIMENSION_FUNCTIONS.has(name) &&
-        limits.functions?.has(name) !== true
+        limits.functions?.has(name) !== true &&
+        !(insideFunction && NUMBER_FUNCTIONS.has(name))
       ) {
+        return "not-a-length";
+      }
+      if (name === "attr" && !attrProducesDimension(node)) {
         return "not-a-length";
       }
       // Outside the math functions the name is the whole signal. What `var()`

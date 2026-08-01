@@ -1114,3 +1114,46 @@ describe("two chargeable findings on one breakpoint", () => {
     );
   });
 });
+
+describe("the truncation marker means work was actually skipped", () => {
+  function docWithBreakpoints(count: number, values: unknown): BlockDocument {
+    const byBreakpoint: Record<string, unknown> = {};
+    for (let index = 0; index < count; index += 1) {
+      byBreakpoint[`bp${index}`] = values;
+    }
+    return invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/box",
+          version: 1,
+          props: {},
+          styles: { base: byBreakpoint },
+        },
+      ],
+    });
+  }
+
+  it("is absent when the last slot went on a breakpoint holding nothing", () => {
+    // The marker is an ERROR, so claiming a document went unchecked when every
+    // value was read rejects it for having been fully validated.
+    const issues = validate(docWithBreakpoints(MAX_STYLE_ISSUES, {}), {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "forgiving",
+    });
+    expect(issues).toHaveLength(MAX_STYLE_ISSUES);
+    expect(issues.filter(issue => issue.severity === "error")).toEqual([]);
+  });
+
+  it("is still emitted when values really do remain unread", () => {
+    const issues = validate(docWithBreakpoints(400, { color: "#fff" }), {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "forgiving",
+    });
+    expect(issues.some(issue => issue.code === "style-issues-truncated")).toBe(
+      true
+    );
+  });
+});

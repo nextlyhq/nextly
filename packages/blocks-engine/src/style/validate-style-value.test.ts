@@ -1510,3 +1510,68 @@ describe("values a closed vocabulary had simply missed", () => {
     ]);
   });
 });
+
+describe("an attribute value has to declare a usable type", () => {
+  it("refuses the forms that cannot produce a measurement", () => {
+    // No type at all is a string, and a declared angle is not a length;
+    // browsers discard both where a width belongs.
+    expect(codes({ width: "attr(title)" })).toEqual(["invalid-style-value"]);
+    expect(codes({ width: "attr(data-angle deg)" })).toEqual([
+      "invalid-style-value",
+    ]);
+  });
+
+  it("keeps the forms that do", () => {
+    expect(codes({ width: "attr(data-width px, 0px)" })).toEqual([]);
+    expect(codes({ width: "attr(data-width px)" })).toEqual([]);
+  });
+});
+
+describe("math functions whose result is a number", () => {
+  it("are legal operands in arithmetic that produces a length", () => {
+    expect(codes({ width: "calc(sqrt(4) * 1px)" })).toEqual([]);
+    expect(codes({ width: "calc(sign(1px) * 10px)" })).toEqual([]);
+    expect(codes({ width: "calc(pow(2,3) * 1px)" })).toEqual([]);
+  });
+
+  it("are still not lengths on their own", () => {
+    expect(codes({ width: "sqrt(4)" })).toEqual(["invalid-style-value"]);
+    expect(codes({ width: "sign(1px)" })).toEqual(["invalid-style-value"]);
+  });
+});
+
+describe("transformations that compose", () => {
+  it("accepts them together, in either order", () => {
+    for (const value of [
+      "uppercase full-width",
+      "full-width uppercase",
+      "full-width full-size-kana",
+      "uppercase full-width full-size-kana",
+    ]) {
+      expect(codes({ textTransform: value }), value).toEqual([]);
+    }
+  });
+
+  it("still refuses two that exclude each other, or one repeated", () => {
+    expect(codes({ textTransform: "uppercase lowercase" })).toEqual([
+      "invalid-style-value",
+    ]);
+    expect(codes({ textTransform: "full-width full-width" })).toEqual([
+      "invalid-style-value",
+    ]);
+  });
+
+  it("keeps the single keywords working", () => {
+    for (const value of ["none", "uppercase", "full-width"]) {
+      expect(codes({ textTransform: value }), value).toEqual([]);
+    }
+  });
+});
+
+describe("ruby formatting roles", () => {
+  it("are storable, having no equivalent among the other display modes", () => {
+    for (const value of ["ruby", "ruby-base", "ruby-text"]) {
+      expect(codes({ display: value }), value).toEqual([]);
+    }
+  });
+});

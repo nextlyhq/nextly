@@ -92,6 +92,43 @@ function withOverflowSafety(positions: readonly string[]): string[] {
   ];
 }
 
+/**
+ * Every legal ordering of a set of optional, unordered components.
+ *
+ * A grammar written with `||` accepts its parts in any order and any
+ * non-empty combination, which is more values than are sensible to write out:
+ * `text-transform` alone has thirty-seven. Generating them keeps the list
+ * exhaustive and keeps a component from being addable without its
+ * combinations.
+ */
+function unorderedCombinations(
+  groups: readonly (readonly string[])[]
+): string[] {
+  const results: string[] = [];
+  const build = (chosen: readonly string[], index: number): void => {
+    if (index === groups.length) {
+      if (chosen.length > 0) results.push(...orderings(chosen));
+      return;
+    }
+    build(chosen, index + 1);
+    for (const option of groups[index] ?? [])
+      build([...chosen, option], index + 1);
+  };
+  build([], 0);
+  return [...new Set(results)];
+}
+
+/** Every ordering of the chosen parts. */
+function orderings(parts: readonly string[]): string[] {
+  if (parts.length <= 1) return [parts.join(" ")];
+  const out: string[] = [];
+  for (let index = 0; index < parts.length; index += 1) {
+    const rest = [...parts.slice(0, index), ...parts.slice(index + 1)];
+    for (const tail of orderings(rest)) out.push(`${parts[index]} ${tail}`);
+  }
+  return out;
+}
+
 /** Where a baseline may be taken from. */
 const BASELINE_POSITIONS = ["baseline", "first baseline", "last baseline"];
 
@@ -279,6 +316,12 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
       "table-column-group",
       "table-column",
       "table-caption",
+      // Ruby annotation roles, which no other display mode reproduces.
+      "ruby",
+      "ruby-base",
+      "ruby-text",
+      "ruby-base-container",
+      "ruby-text-container",
     ]),
     summary: "How the element generates boxes for its children.",
   },
@@ -562,14 +605,16 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "textTransform",
     group: "typography",
+    // A case transform, a full-width transform and a kana transform compose in
+    // any order; only the case transforms are mutually exclusive, which falls
+    // out of each combination taking at most one of them.
     shape: keyword("text-transform", [
       "none",
-      "uppercase",
-      "lowercase",
-      "capitalize",
-      // The transformations CJK text needs; nothing else expresses them.
-      "full-width",
-      "full-size-kana",
+      ...unorderedCombinations([
+        ["uppercase", "lowercase", "capitalize"],
+        ["full-width"],
+        ["full-size-kana"],
+      ]),
     ]),
     summary: "Letter-case transformation.",
   },

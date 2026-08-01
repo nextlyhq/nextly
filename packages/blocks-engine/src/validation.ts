@@ -839,7 +839,12 @@ function validateStyleEnvelope(
       // Rechecked between the two: an unknown breakpoint and a malformed value
       // are independently chargeable, so the first can spend the last slot and
       // the second would otherwise push past the cap without saying it stopped.
-      if (state.styleBudget.remaining <= 0) {
+      // Nothing is skipped when this breakpoint holds no values, though, and
+      // the marker is an error — claiming a document went unchecked when it did
+      // not would reject it for having been fully read.
+      const nothingLeftHere =
+        isPlainObject(values) && Object.keys(values).length === 0;
+      if (state.styleBudget.remaining <= 0 && !nothingLeftHere) {
         state.issues.push(...styleBudgetExhausted(state, bpPath));
         return;
       }
