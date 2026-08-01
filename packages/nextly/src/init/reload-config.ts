@@ -613,6 +613,17 @@ async function ensureLocalizedCompanionsForReload(
     fieldGroups?: unknown[];
     localization?: { defaultLocale?: string };
   },
+  /**
+   * Stored physical table name per field-group slug.
+   *
+   * 🔴 A companion is named after the table it belongs to, so deriving the main
+   * table's name here derives the companion's too — and after the storage
+   * migration that names `comp_<slug>_locales` beside a live `fg_<slug>`,
+   * provisioning an empty companion the entity's reads never consult while the
+   * real one is left to drift. The reload already resolved these once; this is
+   * that answer, not a second guess at it.
+   */
+  fieldGroupTables: ReadonlyMap<string, string>,
   // `<kind>:<slug>` for every entity whose schema change was classified unsafe (or whose diff
   // threw) this cycle, so it was NOT applied. Those must be skipped: creating a companion for
   // a transition that has not happened is worse than leaving it absent. The Schema Builder
@@ -704,7 +715,7 @@ async function ensureLocalizedCompanionsForReload(
     [
       "fieldGroup",
       (config.fieldGroups ?? []) as Localizable[],
-      e => resolveComponentTableName(e.slug!),
+      e => fieldGroupTables.get(e.slug!) ?? resolveComponentTableName(e.slug!),
     ],
   ];
 
@@ -1252,6 +1263,10 @@ async function applyReload(opts?: {
   componentTargets.push(...fieldGroupPlan.targets);
   /** Field groups left out of this reload because their storage is unknown. */
   const skippedComponentSlugs = fieldGroupPlan.skipped;
+  /** The same resolution, keyed for the companion provisioning below. */
+  const fieldGroupTables = new Map(
+    fieldGroupPlan.targets.map(target => [target.slug, target.tableName])
+  );
   if (!fieldGroupPlan.usable) {
     logger?.warn(
       "[Nextly HMR] Could not read stored field-group table names" +
@@ -1570,6 +1585,7 @@ async function applyReload(opts?: {
     const noDdlProvisioning = await ensureLocalizedCompanionsForReload(
       adapter,
       newConfig,
+      fieldGroupTables,
       deferredEntities
     );
 
@@ -1765,6 +1781,7 @@ async function applyReload(opts?: {
   const preservation = await ensureLocalizedCompanionsForReload(
     adapter,
     newConfig,
+    fieldGroupTables,
     deferredEntities,
     "beforeApply"
   );
@@ -1807,6 +1824,7 @@ async function applyReload(opts?: {
     const postApply = await ensureLocalizedCompanionsForReload(
       adapter,
       newConfig,
+      fieldGroupTables,
       deferredEntities
     );
 
