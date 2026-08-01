@@ -15,10 +15,22 @@
  * @module hooks/register-single-hooks
  */
 
-import type { SingleConfig, SingleHooks } from "../singles/config/types";
+import type { SingleHooks } from "../singles/config/types";
 
 import { getHookRegistry, type HookRegistry } from "./hook-registry";
 import type { HookContextPhase, HookHandler } from "./types";
+
+/**
+ * The part of a single this module reads, the twin of `HookedCollection`.
+ *
+ * Narrower than `SingleConfig` for the same reason: registration needs a slug
+ * and a hooks block, and the config reload holds the loader's sanitized config
+ * rather than `defineSingle()` objects. Every `SingleConfig` still satisfies it.
+ */
+export interface HookedSingle {
+  slug: string;
+  hooks?: SingleHooks;
+}
 
 /** Result of registering single hooks. */
 export interface RegisterSingleHooksResult {
@@ -72,7 +84,7 @@ const HOOK_TYPE_MAPPINGS: Record<keyof SingleHooks, HookContextPhase[]> = {
  * @returns Registration statistics
  */
 export function registerSingleHooks(
-  singles: SingleConfig[],
+  singles: HookedSingle[],
   registry: HookRegistry = getHookRegistry()
 ): RegisterSingleHooksResult {
   const result: RegisterSingleHooksResult = {
@@ -152,11 +164,18 @@ export function clearSingleHooks(
  * @returns Registration statistics
  */
 export function reregisterSingleHooks(
-  singles: SingleConfig[],
+  singles: HookedSingle[],
   registry: HookRegistry = getHookRegistry()
 ): RegisterSingleHooksResult {
+  // Only the config's own handlers are replaced. A plugin can register into a
+  // single's namespace the same way it can a collection's, and those
+  // registrations are not part of the config being reloaded -- clearing the
+  // namespace wholesale would delete them with nothing able to put them back.
+  // This is the hazard `registerSingleHooks`'s caller avoids by never clearing
+  // at all, which trades a wipe for a leak; owning the handlers lets a reload
+  // do neither.
   for (const single of singles) {
-    registry.clearCollection(singleHookNamespace(single.slug));
+    registry.clearCollectionOwnedBy(singleHookNamespace(single.slug), "code");
   }
   return registerSingleHooks(singles, registry);
 }

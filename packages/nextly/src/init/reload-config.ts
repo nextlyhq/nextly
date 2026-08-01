@@ -25,6 +25,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { type SQL } from "drizzle-orm";
 
+import type { CollectionHooks } from "../collections/config/define-collection";
 import { withMigrationExcluded } from "../domains/field-groups/migration/sync-guard";
 import { chooseTypeColumns } from "../domains/field-groups/storage/resolve-storage-names";
 import type { I18nTransitionKind } from "../domains/i18n/migration/transition-state";
@@ -77,12 +78,15 @@ import { collectPluginContributedSlugs } from "../domains/webhooks/recording-pro
 import { resolveWebhookRecording } from "../domains/webhooks/resolve-recording-config";
 import { describeError } from "../errors/index";
 import { NextlyError } from "../errors/nextly-error";
+import { reregisterCollectionHooks } from "../hooks/register-collection-hooks";
+import { reregisterSingleHooks } from "../hooks/register-single-hooks";
 import type { PluginFieldType } from "../plugins/contributions";
 import type { RevalidateConfig } from "../revalidation/types";
 import { getProductionNotifier } from "../runtime/notifications/index";
 import { STORAGE_FORMAT } from "../schemas/storage-format";
 import type { VersionsConfig } from "../schemas/versions/types";
 import { FieldGroupSchemaService } from "../services/field-groups/field-group-schema-service";
+import type { SingleHooks } from "../singles/config/types";
 
 import { planFieldGroupReload } from "./field-group-reload-plan";
 import { clearLiveSnapshots, setLiveSnapshot } from "./schema-snapshot-cache";
@@ -124,6 +128,8 @@ type CollectionDef = {
   slug?: string;
   tableName?: string;
   fields?: unknown[];
+  /** Declared lifecycle hooks; re-registered from the reloaded config. */
+  hooks?: CollectionHooks;
   labels?: { singular?: string; plural?: string };
   description?: string;
   timestamps?: boolean;
@@ -143,6 +149,8 @@ type CollectionDef = {
 type SingleDef = {
   slug?: string;
   fields?: unknown[];
+  /** Declared lifecycle hooks; re-registered from the reloaded config. */
+  hooks?: SingleHooks;
   label?: { singular?: string } | string;
   description?: string;
   admin?: unknown;
@@ -584,6 +592,60 @@ function republishRecordingPolicies(
     newConfig.singles ?? [],
     pluginSingles,
     scopes.singles
+  );
+}
+
+/**
+ * Rebuild the config-declared collection and single hooks from a reloaded config.
+ *
+ * Without this, editing a hook in `nextly.config.ts` does nothing until the
+ * process restarts: the reload re-reads the file but the registry still holds
+ * the function objects the first boot registered, so an edited hook keeps its
+ * old body and a deleted one keeps firing.
+ *
+ * Only `"code"`-owned handlers are replaced, which is what makes clearing safe
+ * at all. A plugin registers straight into a collection's namespace -- the form
+ * builder does exactly that on `forms` -- and its `init` belongs to service
+ * registration, which a config reload does not re-run; an imperative
+ * `registerHook()` call has no re-entry point either. Clearing the namespace
+ * wholesale would delete both with nothing able to put them back.
+ *
+ * Mirrors the boot registration's disabled-plugin filter. A disabled plugin's
+ * entities stay in the config so the schema stays deterministic, but the plugin
+ * lifecycle's behavior-skip contract means its runtime hooks must not run, and a
+ * reload that registered them would switch a disabled plugin back on.
+ */
+function reregisterConfigHooks(newConfig: {
+  collections?: CollectionDef[];
+  singles?: SingleDef[];
+  plugins?: unknown[];
+}): void {
+  const disabledPlugins = (newConfig.plugins ?? []).filter(
+    plugin => (plugin as { enabled?: boolean }).enabled === false
+  );
+
+  // A slug is what the registry keys on, so an entity without one cannot have
+  // had hooks registered for it and has nothing to replace.
+  const disabledCollections = collectPluginContributedSlugs(
+    disabledPlugins,
+    "collections"
+  );
+  reregisterCollectionHooks(
+    (newConfig.collections ?? []).filter(
+      (collection): collection is CollectionDef & { slug: string } =>
+        !!collection.slug && !disabledCollections.has(collection.slug)
+    )
+  );
+
+  const disabledSingles = collectPluginContributedSlugs(
+    disabledPlugins,
+    "singles"
+  );
+  reregisterSingleHooks(
+    (newConfig.singles ?? []).filter(
+      (single): single is SingleDef & { slug: string } =>
+        !!single.slug && !disabledSingles.has(single.slug)
+    )
   );
 }
 
@@ -1035,6 +1097,12 @@ async function applyReload(opts?: {
         fieldGroups?: ComponentDef[];
         webhookAuditEnabled?: boolean;
         localization?: { defaultLocale?: string };
+        /**
+         * The resolved plugin list. Needed to tell a plugin's contribution
+         * apart from the app's own, since the loader folds contributed
+         * collections and singles into the lists above.
+         */
+        plugins?: unknown[];
       }
     | undefined;
   let previousFieldTypes: PluginFieldType[] | undefined;
@@ -1083,6 +1151,7 @@ async function applyReload(opts?: {
           singles?: SingleDef[];
           fieldGroups?: ComponentDef[];
           webhookAuditEnabled?: boolean;
+          plugins?: unknown[];
         };
       }
     ).config;
@@ -1148,6 +1217,17 @@ async function applyReload(opts?: {
   // process-global flag that reads no field tree, so — like a recording opt-out
   // — it is safe to apply immediately, before the schema diff is synced.
   setWebhookAuditEnabled(newConfig.webhookAuditEnabled ?? false);
+
+  // Re-register the config's own hooks, so editing a hook body takes effect and
+  // deleting one stops it firing without a restart.
+  //
+  // Applied here, alongside the audit seam and ahead of all the schema work, for
+  // the same reason that one is: a hook edit changes no table. The reload finds
+  // no diff, and every path below returns before doing anything -- so gating the
+  // re-registration on a successful DDL apply would mean the edit that most
+  // needs it is exactly the edit that never lands. It reads no field tree and
+  // touches no table, so it is safe this early.
+  reregisterConfigHooks(newConfig);
 
   // databaseAdapter doubles as our DI-readiness probe. We don't need any
   // other service from DI in this path — the new gate gets prior-state

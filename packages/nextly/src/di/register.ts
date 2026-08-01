@@ -2458,39 +2458,6 @@ async function initializePlugins(
     }
   };
 
-  const hookBridge = {
-    register: (
-      hookType: Parameters<typeof pluginHookRegistry.register>[0],
-      collection: string,
-      handler: Parameters<typeof pluginHookRegistry.register>[2]
-    ) => {
-      pluginHookRegistry.register(hookType, collection, handler);
-    },
-    unregister: (
-      hookType: Parameters<typeof pluginHookRegistry.unregister>[0],
-      collection: string,
-      handler: Parameters<typeof pluginHookRegistry.unregister>[2]
-    ) => {
-      pluginHookRegistry.unregister(hookType, collection, handler);
-    },
-    // `beforeOperation` handlers take the operation's args rather than a
-    // document, so they bridge through their own pair rather than the one above.
-    registerBeforeOperation: (
-      collection: string,
-      handler: Parameters<typeof pluginHookRegistry.registerBeforeOperation>[1]
-    ) => {
-      pluginHookRegistry.registerBeforeOperation(collection, handler);
-    },
-    unregisterBeforeOperation: (
-      collection: string,
-      handler: Parameters<
-        typeof pluginHookRegistry.unregisterBeforeOperation
-      >[1]
-    ) => {
-      pluginHookRegistry.unregisterBeforeOperation(collection, handler);
-    },
-  };
-
   // HMR/re-registration safety (B2): drop every plugin's prior event/hook
   // subscriptions before plugins re-subscribe in init(), so the globalThis
   // EventBus + HookRegistry never accumulate duplicates across module
@@ -2522,9 +2489,16 @@ async function initializePlugins(
     // Build a per-plugin context so `ctx.self` resolves to this plugin's own
     // entities (D54). Built for every enabled plugin (even without `init`) so
     // `destroy` has a context at shutdown.
+    // The registry goes in directly, as it does everywhere else a context is
+    // built. A hand-written pass-through wrapper used to sit here, and because
+    // it re-declared each signature it silently dropped the `owner` argument the
+    // context supplies -- recording every plugin's handler as the config's own.
+    // `createPluginContext` still constrains what a context may reach: its
+    // parameter names the four methods, so passing the whole registry widens
+    // nothing.
     const pluginContext = createPluginContext(
       getServiceForPlugin as Parameters<typeof createPluginContext>[0],
-      hookBridge,
+      pluginHookRegistry,
       plugin
     );
     teardown.push({ plugin, context: pluginContext });

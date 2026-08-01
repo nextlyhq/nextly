@@ -85,7 +85,11 @@ export function registerHook<T = any>(
   handler: HookHandler<T>
 ): void {
   const registry = getHookRegistry();
-  registry.register(hookType, collection, handler);
+  // Owned by the app rather than by its config: this call site is reached once,
+  // when the module holding it is evaluated, and nothing re-runs it. A config
+  // reload rebuilds the config's own handlers and would have no way to put this
+  // one back, so it must be left alone rather than cleared with them.
+  registry.register(hookType, collection, handler, "app");
 }
 
 /**
@@ -113,7 +117,7 @@ export function registerBeforeOperationHook<T = unknown>(
   handler: BeforeOperationHandler<T>
 ): void {
   const registry = getHookRegistry();
-  registry.registerBeforeOperation(collection, handler);
+  registry.registerBeforeOperation(collection, handler, "app");
 }
 
 /**
@@ -144,7 +148,10 @@ export function unregisterHook(
   handler: HookHandler
 ): void {
   const registry = getHookRegistry();
-  registry.unregister(hookType, collection, handler);
+  // Scoped to what `registerHook` registered. Passing the same owner is what
+  // makes the pair symmetric: without it, unregistering a function a plugin
+  // also registered could take the plugin's entry instead of the app's.
+  registry.unregister(hookType, collection, handler, "app");
 }
 
 /**
@@ -159,7 +166,7 @@ export function unregisterBeforeOperationHook<T = unknown>(
   handler: BeforeOperationHandler<T>
 ): void {
   const registry = getHookRegistry();
-  registry.unregisterBeforeOperation(collection, handler);
+  registry.unregisterBeforeOperation(collection, handler, "app");
 }
 
 /**
