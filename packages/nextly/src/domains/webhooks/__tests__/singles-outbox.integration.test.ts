@@ -760,6 +760,12 @@ describe("webhook outbox capture — singles (integration)", () => {
     // The single trace the failure leaves, given the operation reports success.
     expect(logged).toHaveBeenCalled();
     expect(String(logged.mock.calls[0][0])).toContain("afterUpdate");
+    // The exception, not only the phase line. This hook throws a typed error
+    // carrying its reason, and that reason is what an operator has to go on.
+    const loggedError = logged.mock.calls[0][1] as {
+      logContext?: Record<string, unknown>;
+    };
+    expect(loggedError?.logContext?.reason).toBe("afterUpdate-observer-failed");
 
     const rows = (await events(current)).filter(
       r => r.type === "single.updated"
