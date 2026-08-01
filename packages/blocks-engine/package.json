@@ -34,6 +34,7 @@
     "lint:fix": "eslint . --fix",
     "test": "vitest run",
     "test:watch": "vitest",
+    "bench": "vitest bench --run",
     "clean": "rimraf dist"
   },
   "engines": {

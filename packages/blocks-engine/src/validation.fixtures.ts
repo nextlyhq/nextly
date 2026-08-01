@@ -7,7 +7,7 @@
  * Not a test file itself; consumed by validation.test.ts. Kept as reusable
  * data rather than inline test cases so other suites can share the corpus.
  */
-import type { BlockDocument, BreakpointSet } from "./document";
+import type { BlockDocument, BlockNode, BreakpointSet } from "./document";
 
 /**
  * Coerce a deliberately-malformed shape to `BlockDocument` at the boundary.
@@ -648,3 +648,194 @@ export const VALIDATION_FIXTURES: ValidationFixture[] = [
     expected: [{ path: "/nodes/0/type", code: "unknown-node-type" }],
   },
 ];
+
+// --- Scale and limit boundaries -------------------------------------------
+// Each cap is exercised on both sides: at the limit a document is legal, one
+// past it is not. A corpus that only tested the rejection would not notice a
+// limit that had quietly become one too strict.
+
+/** A chain `depth` levels deep, each level holding the next in its slot. */
+function nestedChain(depth: number): BlockDocument {
+  const root: BlockNode = { id: "d1", type: "core/box", version: 1, props: {} };
+  let tip = root;
+  for (let level = 2; level <= depth; level += 1) {
+    const child: BlockNode = {
+      id: `d${level}`,
+      type: "core/box",
+      version: 1,
+      props: {},
+    };
+    tip.slots = { children: [child] };
+    tip = child;
+  }
+  return { formatVersion: 1, kind: "page", nodes: [root] };
+}
+
+/** `count` sibling nodes at the top level. */
+function flatSiblings(count: number): BlockDocument {
+  return {
+    formatVersion: 1,
+    kind: "page",
+    nodes: Array.from({ length: count }, (_unused, index) => ({
+      id: `s${index}`,
+      type: "core/box",
+      version: 1,
+      props: {},
+    })),
+  };
+}
+
+const LIMIT_FIXTURES: ValidationFixture[] = [
+  {
+    name: "a document nested to the depth limit is legal",
+    mode: "strict",
+    doc: nestedChain(12),
+    expected: [],
+  },
+  {
+    name: "one level past the depth limit is rejected",
+    mode: "strict",
+    doc: nestedChain(13),
+    expected: [{ path: "/nodes", code: "depth-exceeded" }],
+  },
+  {
+    name: "a document at the node ceiling is legal",
+    mode: "strict",
+    doc: flatSiblings(5000),
+    expected: [],
+  },
+  {
+    name: "one node past the ceiling is rejected",
+    mode: "strict",
+    doc: flatSiblings(5001),
+    expected: [{ path: "/nodes", code: "node-count-exceeded" }],
+  },
+];
+
+// --- Hostile content in props ---------------------------------------------
+// Props are opaque to the engine: a block decides what its own props mean, and
+// the renderer is what must escape them. These fixtures pin that the engine
+// does not crash, mangle, or silently drop such content while walking it.
+
+const HOSTILE_PROP_FIXTURES: ValidationFixture[] = [
+  {
+    name: "script-like and url-like prop values pass through validation",
+    mode: "strict",
+    doc: {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/paragraph",
+          version: 1,
+          props: {
+            text: "</style><script>alert(1)</script>",
+            href: "javascript:alert(1)",
+            data: "}; body { display: none }",
+          },
+        },
+      ],
+    },
+    expected: [],
+  },
+  {
+    name: "an inline event handler in attributes is still rejected",
+    mode: "strict",
+    doc: invalid({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/box",
+          version: 1,
+          props: {},
+          attributes: { onclick: "alert(1)" },
+        },
+      ],
+    }),
+    expected: [
+      { path: "/nodes/0/attributes/onclick", code: "invalid-attributes" },
+    ],
+  },
+];
+
+// --- Writing systems -------------------------------------------------------
+// Content is opaque bytes to the engine, and it has to stay that way: the
+// logical style keys exist so one document serves both directions, which only
+// holds if the document model itself is direction-agnostic.
+
+const WRITING_SYSTEM_FIXTURES: ValidationFixture[] = [
+  {
+    name: "right-to-left content validates unchanged",
+    mode: "strict",
+    doc: {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/heading",
+          version: 1,
+          props: { text: "مرحبا بالعالم", level: 1 },
+        },
+      ],
+    },
+    expected: [],
+  },
+  {
+    name: "CJK content validates unchanged",
+    mode: "strict",
+    doc: {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/heading",
+          version: 1,
+          props: { text: "ページビルダー", level: 2 },
+        },
+      ],
+    },
+    expected: [],
+  },
+  {
+    name: "an id built from non-ASCII characters is accepted and deduplicated",
+    mode: "strict",
+    doc: {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        { id: "ノード", type: "core/box", version: 1, props: {} },
+        { id: "ノード", type: "core/box", version: 1, props: {} },
+      ],
+    },
+    expected: [{ path: "/nodes/1/id", code: "duplicate-node-id" }],
+  },
+];
+
+// --- Every document kind ---------------------------------------------------
+// The kind vocabulary is frozen, so each member is pinned individually: a kind
+// dropped from the enum would otherwise only surface as a runtime rejection.
+
+const KIND_FIXTURES: ValidationFixture[] = (
+  ["page", "pattern", "component", "region", "template"] as const
+).map(kind => ({
+  name: `a ${kind} document validates`,
+  mode: "strict" as const,
+  doc: {
+    formatVersion: 1,
+    kind,
+    nodes: [{ id: "n1", type: "core/box", version: 1, props: {} }],
+  },
+  expected: [],
+}));
+
+VALIDATION_FIXTURES.push(
+  ...LIMIT_FIXTURES,
+  ...HOSTILE_PROP_FIXTURES,
+  ...WRITING_SYSTEM_FIXTURES,
+  ...KIND_FIXTURES
+);
