@@ -148,6 +148,47 @@ describe("the manifest schema", () => {
     ).toBe(false);
   });
 
+  it("refuses a name the engine reserves, not merely a misshapen one", () => {
+    // The reserved name satisfies the slug shape, so a pattern alone lets it
+    // through. It has to be refused by the SCHEMA and not only by the
+    // declaration pass: an externally produced or hand-edited manifest is
+    // judged by the published contract, and would otherwise be accepted while
+    // describing a block that can never register.
+    const result = blockManifestSchema.safeParse({
+      manifestVersion: BLOCK_MANIFEST_VERSION,
+      blocks: [
+        {
+          name: "nextly/component-instance",
+          version: 1,
+          description: "A block.",
+          source: "@acme/x",
+          example: { props: {} },
+        },
+      ],
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("still accepts an ordinary name in the same namespace", () => {
+    // The exclusion is one name, not the namespace: over-reaching would refuse
+    // manifests the engine registers without complaint.
+    expect(
+      blockManifestSchema.safeParse({
+        manifestVersion: BLOCK_MANIFEST_VERSION,
+        blocks: [
+          {
+            name: "nextly/component-instances",
+            version: 1,
+            description: "A block.",
+            source: "@acme/x",
+            example: { props: {} },
+          },
+        ],
+      }).success
+    ).toBe(true);
+  });
+
   it("refuses a version of the document this schema was not written for", () => {
     // The field exists so a reader can tell whether it understands the file.
     // Accepting a version this schema does not describe answers that question
@@ -351,7 +392,7 @@ describe("the published JSON Schema", () => {
                   "type": "object",
                 },
                 "name": {
-                  "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*\\/[a-z0-9]+(?:-[a-z0-9]+)*$",
+                  "pattern": "^(?!(?:nextly\\/component-instance)$)[a-z0-9]+(?:-[a-z0-9]+)*\\/[a-z0-9]+(?:-[a-z0-9]+)*$",
                   "type": "string",
                 },
                 "props": {

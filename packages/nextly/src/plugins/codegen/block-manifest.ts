@@ -61,19 +61,6 @@ export const BLOCK_MANIFEST_VERSION = 1;
 export const MAX_DECLARED_BLOCK_VERSION = 1001;
 
 /**
- * The shape of a block name: two slug segments joined by a slash, the second
- * naming the block and the first the namespace that owns it.
- *
- * Namespacing is what keeps names collision-free across plugins nobody
- * coordinates, which is also why the registry treats them as global.
- *
- * Restated from the engine for the reason {@link MAX_DECLARED_BLOCK_VERSION}
- * is, and held to its behaviour by the same parity test.
- */
-export const BLOCK_NAME_PATTERN =
-  /^[a-z0-9]+(?:-[a-z0-9]+)*\/[a-z0-9]+(?:-[a-z0-9]+)*$/;
-
-/**
  * Names the engine keeps for itself. A document node of this type is a
  * component instance rather than a block, so a block answering to it would
  * shadow the one type the renderer resolves without the registry.
@@ -81,6 +68,43 @@ export const BLOCK_NAME_PATTERN =
 export const RESERVED_BLOCK_NAMES: readonly string[] = [
   "nextly/component-instance",
 ];
+
+/** Two slug segments joined by a slash: the namespace, then the block. */
+const BLOCK_NAME_BODY = "[a-z0-9]+(?:-[a-z0-9]+)*\\/[a-z0-9]+(?:-[a-z0-9]+)*";
+
+/**
+ * The shape of a block name, the second segment naming the block and the first
+ * the namespace that owns it.
+ *
+ * Namespacing is what keeps names collision-free across plugins nobody
+ * coordinates, which is also why the registry treats them as global.
+ *
+ * Restated from the engine for the reason {@link MAX_DECLARED_BLOCK_VERSION}
+ * is, and held to its behaviour by the same parity test.
+ */
+export const BLOCK_NAME_PATTERN = new RegExp(`^${BLOCK_NAME_BODY}$`);
+
+/**
+ * The same shape with the reserved names excluded, which is what the manifest
+ * schema carries.
+ *
+ * Expressed as a pattern rather than as a `refine`, because a refinement is an
+ * arbitrary function and `z.toJSONSchema` silently drops it: the zod schema
+ * would refuse a reserved name while the JSON Schema published beside it
+ * accepted one. A lookahead survives the translation, so both sides say the
+ * same thing — the property `.strict()` exists to preserve on the object.
+ *
+ * Built from the list above rather than written out, so adding a reserved name
+ * cannot leave the pattern behind.
+ */
+const DECLARABLE_BLOCK_NAME_PATTERN = new RegExp(
+  `^(?!(?:${RESERVED_BLOCK_NAMES.map(escapeForPattern).join("|")})$)${BLOCK_NAME_BODY}$`
+);
+
+/** Render a literal harmless inside a pattern built by concatenation. */
+function escapeForPattern(literal: string): string {
+  return literal.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+}
 
 /**
  * One block, as the manifest states it.
@@ -111,11 +135,11 @@ export const RESERVED_BLOCK_NAMES: readonly string[] = [
 export const blockManifestEntrySchema = z
   .object({
     /**
-     * Carries the namespaced-slug pattern so the published JSON Schema states
-     * it too, rather than leaving an outside reader to discover the rule by
-     * having a name rejected somewhere else.
+     * Carries the whole naming rule — shape and reserved names — so the
+     * published JSON Schema states it too, rather than leaving an outside
+     * reader to discover it by having a manifest rejected somewhere else.
      */
-    name: z.string().regex(BLOCK_NAME_PATTERN),
+    name: z.string().regex(DECLARABLE_BLOCK_NAME_PATTERN),
     /**
      * The block's own schema version, stamped onto every node of its type.
      *
