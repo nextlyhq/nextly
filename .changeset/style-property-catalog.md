@@ -22,4 +22,6 @@
 "@nextlyhq/tsconfig": patch
 ---
 
-Add the style-property catalog to the blocks engine: the set of style properties a block may set, each with its value shape, the CSS it emits, and the design tokens it accepts. Storage keys are logical, so one page renders correctly in both left-to-right and right-to-left languages without a separate copy. Style values are checked for safety before they reach a stylesheet.
+Add the style-property catalog to the blocks engine: the set of style properties a block may set, each with its value shape, the CSS it emits, and the design tokens it accepts. Storage keys are logical, so one page renders correctly in both left-to-right and right-to-left languages without a separate copy. Style values are checked for safety and for being the kind of value their property takes, before they reach a stylesheet.
+
+The built-in block `supports` sub-flags now match the catalog. A block declaring `spacing.blockGap`, `color.background`, or `border.width`/`style`/`color` will fail to register and must use the group's current flags instead; the error names them.
