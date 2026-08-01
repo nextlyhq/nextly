@@ -7,6 +7,8 @@ import {
   directedRenameEntries,
   renamePositionOffset,
   renameRunRecord,
+  resumePosition,
+  SETTLE_STEP_COUNT,
 } from "../plan";
 import type { ManifestEntry } from "../manifest";
 import type { MigrationSession } from "../session";
@@ -113,6 +115,10 @@ describe("assembling the steps one run executes", () => {
     // they are the same checks asked at the end of whichever direction ran. The
     // reversal property describes the work, so it is asserted over the work.
     const SETTLE = ["data:settle-ledgers", "data:settle-registry-definitions"];
+    // The clamp that keeps a resume from stepping over these counts them, so a
+    // check added without updating that count fails here rather than letting a
+    // resume settle without asking.
+    expect(SETTLE).toHaveLength(SETTLE_STEP_COUNT);
     const work = (ids: string[]): string[] =>
       ids.filter(id => !SETTLE.includes(id));
     expect(work(down).map(kind)).toEqual([...work(up).map(kind)].reverse());
@@ -248,5 +254,49 @@ describe("assembling the steps one run executes", () => {
         offset: 4,
       })
     ).toEqual({ recorded: false });
+  });
+});
+
+describe("where a resume re-enters the plan", () => {
+  // A plan of ten steps ends with the two settlement checks at positions 9 and
+  // 10, so nine is the earliest position a resume may ever start from.
+  const TEN = { planLength: 10 };
+
+  it("resumes at the step after the one recorded", () => {
+    expect(resumePosition({ recorded: 3, ...TEN })).toBe(4);
+  });
+
+  it("starts at the beginning when nothing was recorded", () => {
+    expect(resumePosition({ recorded: 0, ...TEN })).toBe(1);
+  });
+
+  // 🔴 The case the clamp exists for. The runner records a step once it has
+  // verified, so a crash between the final record and the marker write would
+  // otherwise resume at position 11, execute nothing at all, and settle on
+  // structural evidence alone - leaving the entire crash-to-restart interval,
+  // during which writers are active and the migration is not, unexamined.
+  it("re-enters the settlement checks even when every step was recorded", () => {
+    expect(resumePosition({ recorded: 10, ...TEN })).toBe(9);
+  });
+
+  it("re-enters them when only the last check is outstanding", () => {
+    expect(resumePosition({ recorded: 9, ...TEN })).toBe(9);
+  });
+
+  // The control: a recorded position before the checks is honoured as it is, so
+  // the clamp cannot be satisfied by a function that always returns the same
+  // step. Without this every assertion above passes for `() => 9`.
+  it("does not drag a resume forward to the checks", () => {
+    expect(resumePosition({ recorded: 1, ...TEN })).toBe(2);
+    expect(resumePosition({ recorded: 7, ...TEN })).toBe(8);
+  });
+
+  // A plan shorter than the checks it ends with cannot exist, but the floor is
+  // stated rather than assumed: `runMigrationSteps` refuses a position below one
+  // outright, so an arithmetic edge would surface as a refusal to run at all.
+  it("never returns a position below the first step", () => {
+    expect(
+      resumePosition({ recorded: 0, planLength: SETTLE_STEP_COUNT - 1 })
+    ).toBe(1);
   });
 });
