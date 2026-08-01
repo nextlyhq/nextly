@@ -31,14 +31,18 @@ const fourThousand = scaleDocument({ nodes: 4000 });
 const fiveThousand = fiveThousandNodePage();
 const plain = scaleDocument({ nodes: 1000, styled: false });
 
+/**
+ * One shared definition, as a real registry returns. Building a fresh object and
+ * closure per node would put thousands of allocations inside the measured region
+ * that migration itself never performs.
+ */
+const SCALE_BLOCK_INFO = {
+  version: 2,
+  migrate: { 1: (props: Record<string, unknown>) => props },
+};
+
 const source: MigrationSource = {
-  get: type =>
-    type.startsWith("core/")
-      ? {
-          version: 2,
-          migrate: { 1: (props: Record<string, unknown>) => props },
-        }
-      : undefined,
+  get: type => (type.startsWith("core/") ? SCALE_BLOCK_INFO : undefined),
 };
 const staleThousand = staleVersionPage(1000, 1);
 const staleFourThousand = staleVersionPage(4000, 1);

@@ -66,6 +66,9 @@ function scaleNode(index: number, styled: boolean): BlockNode {
       },
       tablet: { padding: { blockStart: "8px" } },
       mobile: { fontSize: "0.875rem" },
+      // The container axis carries real work too, and a fixture that only used
+      // viewport ids would quietly under-report every budget quoted against it.
+      "card-base": { padding: { inlineStart: "0.5rem" } },
     },
     hover: { base: { color: "#445566" } },
   };

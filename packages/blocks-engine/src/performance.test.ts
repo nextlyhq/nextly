@@ -74,49 +74,72 @@ const MAX_GROWTH_FACTOR = 8;
  */
 const CATASTROPHE_CEILING_MS = 2000;
 
+/**
+ * Time allowed for one measurement test.
+ *
+ * A measurement runs the operation many times on purpose, so it is slow by
+ * design: around 1.6 s locally. Vitest's default 5 s would then fail on a
+ * worker three times slower than a laptop — reintroducing the runner-dependent
+ * failure this whole file is arranged to avoid. The budget is generous because
+ * it is not the thing being asserted.
+ */
+const MEASUREMENT_TIMEOUT_MS = 120_000;
+
 describe("validation scales linearly with document size", () => {
-  it("does not slow super-linearly when the document grows four times", () => {
-    const ctx = { breakpoints: SCALE_BREAKPOINTS, mode: "strict" as const };
-    const small = scaleDocument({ nodes: SMALL_NODES });
-    const large = scaleDocument({ nodes: LARGE_NODES });
-    // Warm up so the first measurement is not paying for lazy compilation.
-    validate(small, ctx);
-    validate(large, ctx);
+  it(
+    "does not slow super-linearly when the document grows four times",
+    () => {
+      const ctx = { breakpoints: SCALE_BREAKPOINTS, mode: "strict" as const };
+      const small = scaleDocument({ nodes: SMALL_NODES });
+      const large = scaleDocument({ nodes: LARGE_NODES });
+      // Warm up so the first measurement is not paying for lazy compilation.
+      validate(small, ctx);
+      validate(large, ctx);
 
-    const smallTime = fastest(5, () => void validate(small, ctx));
-    const largeTime = fastest(5, () => void validate(large, ctx));
-    const growth = largeTime / Math.max(smallTime, 0.001);
+      const smallTime = fastest(5, () => void validate(small, ctx));
+      const largeTime = fastest(5, () => void validate(large, ctx));
+      const growth = largeTime / Math.max(smallTime, 0.001);
 
-    expect(
-      growth,
-      `validating ${LARGE_NODES} nodes took ${growth.toFixed(2)}x the time of ${SMALL_NODES} (${smallTime.toFixed(1)}ms then ${largeTime.toFixed(1)}ms); linear work costs about 4x`
-    ).toBeLessThan(MAX_GROWTH_FACTOR);
-  });
+      expect(
+        growth,
+        `validating ${LARGE_NODES} nodes took ${growth.toFixed(2)}x the time of ${SMALL_NODES} (${smallTime.toFixed(1)}ms then ${largeTime.toFixed(1)}ms); linear work costs about 4x`
+      ).toBeLessThan(MAX_GROWTH_FACTOR);
+    },
+    MEASUREMENT_TIMEOUT_MS
+  );
 
-  it("stays far inside the ceiling on the thousand-node page", () => {
-    const doc = thousandNodePage();
-    const perRound = fastest(
-      3,
-      () =>
-        void validate(doc, { breakpoints: SCALE_BREAKPOINTS, mode: "strict" })
-    );
-    expect(perRound / ITERATIONS_PER_ROUND).toBeLessThan(
-      CATASTROPHE_CEILING_MS
-    );
-  });
+  it(
+    "stays far inside the ceiling on the thousand-node page",
+    () => {
+      const doc = thousandNodePage();
+      const perRound = fastest(
+        3,
+        () =>
+          void validate(doc, { breakpoints: SCALE_BREAKPOINTS, mode: "strict" })
+      );
+      expect(perRound / ITERATIONS_PER_ROUND).toBeLessThan(
+        CATASTROPHE_CEILING_MS
+      );
+    },
+    MEASUREMENT_TIMEOUT_MS
+  );
 
-  it("handles a document at the node ceiling", () => {
-    const doc = fiveThousandNodePage();
-    const issues = validate(doc, {
-      breakpoints: SCALE_BREAKPOINTS,
-      mode: "strict",
-    });
-    // At exactly the cap the document is legal, so the size itself is not an
-    // issue; this asserts the engine completes rather than that it is silent.
-    expect(
-      issues.filter(issue => issue.code === "node-count-exceeded")
-    ).toEqual([]);
-  });
+  it(
+    "handles a document at the node ceiling",
+    () => {
+      const doc = fiveThousandNodePage();
+      const issues = validate(doc, {
+        breakpoints: SCALE_BREAKPOINTS,
+        mode: "strict",
+      });
+      // At exactly the cap the document is legal, so the size itself is not an
+      // issue; this asserts the engine completes rather than that it is silent.
+      expect(
+        issues.filter(issue => issue.code === "node-count-exceeded")
+      ).toEqual([]);
+    },
+    MEASUREMENT_TIMEOUT_MS
+  );
 });
 
 describe("migration scales linearly with document size", () => {
@@ -125,29 +148,37 @@ describe("migration scales linearly with document size", () => {
    * the thousand nodes has real migration work rather than short-circuiting on
    * an already-current version.
    */
-  const source: MigrationSource = {
-    get: type =>
-      type.startsWith("core/")
-        ? {
-            version: 2,
-            migrate: { 1: (props: Record<string, unknown>) => props },
-          }
-        : undefined,
+  /**
+   * One shared definition, as a real registry returns. Building a fresh object and
+   * closure per node would put thousands of allocations inside the measured region
+   * that migration itself never performs.
+   */
+  const SCALE_BLOCK_INFO = {
+    version: 2,
+    migrate: { 1: (props: Record<string, unknown>) => props },
   };
 
-  it("does not slow super-linearly when the document grows four times", () => {
-    const small = staleVersionPage(SMALL_NODES, 1);
-    const large = staleVersionPage(LARGE_NODES, 1);
-    migrateDocument(small, source);
-    migrateDocument(large, source);
+  const source: MigrationSource = {
+    get: type => (type.startsWith("core/") ? SCALE_BLOCK_INFO : undefined),
+  };
 
-    const smallTime = fastest(5, () => void migrateDocument(small, source));
-    const largeTime = fastest(5, () => void migrateDocument(large, source));
-    const growth = largeTime / Math.max(smallTime, 0.001);
+  it(
+    "does not slow super-linearly when the document grows four times",
+    () => {
+      const small = staleVersionPage(SMALL_NODES, 1);
+      const large = staleVersionPage(LARGE_NODES, 1);
+      migrateDocument(small, source);
+      migrateDocument(large, source);
 
-    expect(
-      growth,
-      `migrating ${LARGE_NODES} nodes took ${growth.toFixed(2)}x the time of ${SMALL_NODES} (${smallTime.toFixed(1)}ms then ${largeTime.toFixed(1)}ms); linear work costs about 4x`
-    ).toBeLessThan(MAX_GROWTH_FACTOR);
-  });
+      const smallTime = fastest(5, () => void migrateDocument(small, source));
+      const largeTime = fastest(5, () => void migrateDocument(large, source));
+      const growth = largeTime / Math.max(smallTime, 0.001);
+
+      expect(
+        growth,
+        `migrating ${LARGE_NODES} nodes took ${growth.toFixed(2)}x the time of ${SMALL_NODES} (${smallTime.toFixed(1)}ms then ${largeTime.toFixed(1)}ms); linear work costs about 4x`
+      ).toBeLessThan(MAX_GROWTH_FACTOR);
+    },
+    MEASUREMENT_TIMEOUT_MS
+  );
 });
