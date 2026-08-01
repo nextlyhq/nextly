@@ -58,6 +58,19 @@ interface RegisteredHook<H> {
 }
 
 /**
+ * The order boot registers owners in: plugins during `initializePlugins`, then
+ * the config, then whatever an app registers imperatively once its own modules
+ * evaluate.
+ *
+ * Used only to place an owner that has no existing entry to sit next to, so a
+ * reload and a restart agree about where a newly declared handler goes.
+ */
+function ownerRank(owner: HookOwner): number {
+  if (owner.startsWith("plugin:")) return 0;
+  return owner === "code" ? 1 : 2;
+}
+
+/**
  * The handlers one owner contributes to one collection.
  *
  * `beforeOperation` is held apart from the rest because its handlers take the
@@ -499,9 +512,21 @@ export class HookRegistry {
     // Counted against the entries that REMAIN: the owner's own entries are gone
     // by now, so an index into the original array would land too far right by
     // however many of them preceded it.
+    //
+    // With no previous entry there is no position to preserve, and appending
+    // would put a newly declared config hook behind an app hook registered
+    // after boot -- so the same edit would order differently depending on
+    // whether the process restarted. The boot sequence is the answer: it
+    // registers plugins, then the config, and an app's own call lands whenever
+    // its module is evaluated. Slotting the owner ahead of the first later-
+    // ranked entry reproduces that.
+    const rank = ownerRank(owner);
+    const boundary = kept.findIndex(e => ownerRank(e.owner) > rank);
     const insertAt =
       firstOwned === -1
-        ? kept.length
+        ? boundary === -1
+          ? kept.length
+          : boundary
         : existing.slice(0, firstOwned).filter(e => e.owner !== owner).length;
 
     kept.splice(insertAt, 0, ...handlers.map(handler => ({ handler, owner })));

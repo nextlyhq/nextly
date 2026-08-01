@@ -1308,6 +1308,7 @@ describe("reloadNextlyConfig", () => {
       registry.clearCollection(SLUG);
       registry.clearCollection(SINGLE_KEY);
       registry.clearCollection("posts");
+      registry.clearCollection("notes");
       // Suspension is registry-wide, so it leaks between tests exactly as the
       // handler maps would.
       registry.setSuspendedOwners([]);
@@ -1720,6 +1721,43 @@ describe("reloadNextlyConfig", () => {
       expect(fromPlugin).toHaveBeenCalledTimes(1);
     });
 
+    it("puts a newly declared config hook ahead of a late app hook", async () => {
+      // With no previous config entry there is no position to preserve, and
+      // appending would order the same edit differently depending on whether
+      // the process restarted: a restart registers the config during
+      // registerServices, before an app module evaluates.
+      const registry = getHookRegistry();
+      const order: string[] = [];
+      const { reloadNextlyConfig } = await import("../reload-config");
+
+      // No config hook for this phase yet, then an app registers one.
+      loadConfigSpy.mockResolvedValue({
+        config: { collections: [settledCollection()] },
+      });
+      await reloadNextlyConfig({ resolver: buildResolver() });
+      registry.register("afterRead", SLUG, () => void order.push("app"));
+      expect(registry.getHookCount("afterRead", SLUG)).toBe(1);
+
+      // The config declares one for the first time.
+      loadConfigSpy.mockResolvedValue({
+        config: {
+          collections: [
+            settledCollection({ afterRead: [() => void order.push("config")] }),
+          ],
+        },
+      });
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      order.length = 0;
+      await registry.execute("afterRead", {
+        collection: SLUG,
+        operation: "read",
+        data: {},
+        context: {},
+      });
+      expect(order).toEqual(["config", "app"]);
+    });
+
     it("has exactly the landing points its paths need", () => {
       // A count rather than a proof. The scan this replaces looked for a
       // resolution in the lines before each early return, and passed while the
@@ -1731,7 +1769,7 @@ describe("reloadNextlyConfig", () => {
         new URL("../reload-config.ts", import.meta.url),
         "utf8"
       );
-      const commits = source.match(/^\s*commitReload\(\);$/gm) ?? [];
+      const commits = source.match(/^\s*commitReload\(.*\);$/gm) ?? [];
       // Empty targets, the no-DDL branch, and after a successful apply.
       expect(commits).toHaveLength(3);
     });
