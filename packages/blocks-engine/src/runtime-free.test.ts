@@ -96,6 +96,32 @@ describe("the engine is runtime-free", () => {
     }
   });
 
+  it("reaches css-tree only through its parser and walker entries", () => {
+    // css-tree's root entry loads its MDN reference data, which calls
+    // `createRequire` from `node:module`. The published build keeps
+    // dependencies external, so that import would survive into a browser or
+    // edge bundle and break the promise above. The parser and walker entries
+    // carry none of it. Type-only imports of the root are fine: they erase.
+    const allowed = new Set(["css-tree/parser", "css-tree/walker"]);
+    for (const file of sourceFiles()) {
+      const source = readFileSync(file, "utf8");
+      const specifiers = [
+        ...source.matchAll(
+          /^\s*(?:import|export)\s+(?!type\s)[^;]*?\sfrom\s+["']([^"']+)["']/gm
+        ),
+      ].map(match => match[1]);
+      for (const specifier of specifiers) {
+        if (specifier === undefined || packageOf(specifier) !== "css-tree") {
+          continue;
+        }
+        expect(
+          allowed,
+          `${file} imports "${specifier}" at runtime — use css-tree/parser or css-tree/walker, whose module graphs do not reach node:module`
+        ).toContain(specifier);
+      }
+    }
+  });
+
   it("declares only allowlisted runtime dependencies in package.json", () => {
     const pkg = JSON.parse(
       readFileSync(join(SRC_DIR, "..", "package.json"), "utf8")

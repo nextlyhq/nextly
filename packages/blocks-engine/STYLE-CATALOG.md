@@ -33,9 +33,13 @@ vertical writing modes, which the catalog can add later without a migration.
 
 - **keyword** — one of a closed set the catalog lists. The set is ours, so it
   stays current with the CSS we intend to support.
-- **dimension** — a CSS length or percentage as a string (`"16px"`, `"2rem"`,
-  `"50%"`, `"clamp(1rem, 5vw, 3rem)"`), or the number `0`. Other bare numbers are
-  refused: they would emit a unitless value the browser discards.
+- **dimension** — a measurement: a length or percentage string (`"16px"`,
+  `"2rem"`, `"50%"`), a function that resolves to one
+  (`"clamp(1rem, 5vw, 3rem)"`, `"var(--site-space-4)"`), a sizing keyword such as
+  `auto` or `max-content`, or the number `0`. Values that are valid CSS but
+  measure nothing are refused, including `"10"` and `"red"` — they would emit a
+  declaration the browser discards. Shorthands carrying more than one
+  measurement, such as `"4px 8px"` for a corner radius, are accepted.
 - **number** — a unitless number, bounded where the property has natural limits.
 - **color** — a CSS color string. Any color syntax the browser understands works,
   including `oklch()` and `color-mix()`.

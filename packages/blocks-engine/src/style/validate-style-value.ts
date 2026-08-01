@@ -8,14 +8,13 @@
  * composite.
  */
 import { isTokenRef } from "../document";
-import type { StyleValue, StyleValues } from "../document";
+import { describeValue, pointer } from "../issue-text";
 import type { ValidationIssue, ValidationMode } from "../validation";
-import { describeValue, pointer } from "../validation";
 
 import { getStyleProperty } from "./catalog";
 import { isStyleLeaf, shapeLeaves } from "./catalog-types";
 import type { StyleLeaf, StyleShape, TokenKind } from "./catalog-types";
-import { checkCssValue, checkUrlValue } from "./css-value";
+import { checkCssValue, checkDimensionValue, checkUrlValue } from "./css-value";
 import type { CssValueRejection } from "./css-value";
 
 /** Human-readable reasons a value was refused, keyed by the safety check's verdict. */
@@ -25,6 +24,7 @@ const REJECTION_MESSAGES = {
     "contains characters that are not allowed in a style value",
   "unsafe-url-scheme": "uses a URL scheme that is not allowed",
   "unsafe-url-characters": "contains characters that are not allowed in a URL",
+  "not-a-length": "is not a length",
 } as const;
 
 /** True when a token of the given kind may be stored at this leaf. */
@@ -92,7 +92,7 @@ function rejected(
 /** Validate a value against one leaf descriptor. */
 function leafIssues(
   leaf: StyleLeaf,
-  value: StyleValue,
+  value: unknown,
   path: string
 ): ValidationIssue[] {
   // A token reference substitutes for the whole leaf value, so it is checked
@@ -106,7 +106,7 @@ function leafIssues(
           path,
           code: "token-not-allowed",
           severity: "error",
-          message: `This value accepts only literals, not the design token "${value.$token}".`,
+          message: `This value accepts only literals, not the design token "${describeValue(value.$token)}".`,
         },
       ];
     }
@@ -153,7 +153,7 @@ function leafIssues(
           ),
         ];
       }
-      const rejection = checkCssValue(value);
+      const rejection = checkDimensionValue(value);
       return rejection === null ? [] : rejected(path, value, rejection);
     }
     case "color":
@@ -177,7 +177,7 @@ function leafIssues(
 /** Validate a value against one named part of a composite shape. */
 function partIssues(
   parts: Readonly<Record<string, StyleShape>>,
-  value: StyleValue,
+  value: unknown,
   path: string,
   partLabel: string
 ): ValidationIssue[] {
@@ -211,7 +211,7 @@ function partIssues(
 /** Validate a value against any shape, leaf or composite. */
 function shapeIssues(
   shape: StyleShape,
-  value: StyleValue,
+  value: unknown,
   path: string
 ): ValidationIssue[] {
   if (isStyleLeaf(shape)) return leafIssues(shape, value, path);
@@ -249,7 +249,7 @@ function shapeIssues(
  * yet.
  */
 export function validateStyleValues(
-  values: StyleValues,
+  values: Readonly<Record<string, unknown>>,
   basePath: string,
   mode: ValidationMode
 ): ValidationIssue[] {

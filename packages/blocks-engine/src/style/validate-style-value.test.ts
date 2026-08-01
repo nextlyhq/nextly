@@ -251,6 +251,65 @@ describe("url safety", () => {
   });
 });
 
+describe("style-tag delimiters in a dedicated url", () => {
+  it("are refused even when nothing else about the url looks hostile", () => {
+    // The HTML parser closes a style element at `</style>` whatever the CSS
+    // quoting says, so the tag-breakout guard has to cover urls too and not
+    // only the free-form values that already screen for it.
+    expect(checkUrlValue("x</style><script src=y>")).toBe(
+      "unsafe-url-characters"
+    );
+    expect(checkUrlValue("a.png</style>")).toBe("unsafe-url-characters");
+  });
+
+  it("surfaces through validation of a url property", () => {
+    const issues = check({ background: { url: "a.png</style>" } });
+    expect(issues[0]?.code).toBe("invalid-style-value");
+    expect(issues[0]?.path).toBe("/styles/background/url");
+  });
+});
+
+describe("dimension strings are lengths, not merely valid CSS", () => {
+  it("refuses values that parse but measure nothing", () => {
+    // "10" is the same mistake as the bare number 10, written as a string;
+    // both emit a declaration the browser discards.
+    expect(codes({ width: "10" })).toEqual(["invalid-style-value"]);
+    expect(codes({ width: "red" })).toEqual(["invalid-style-value"]);
+    expect(codes({ padding: { blockStart: "bogus" } })).toEqual([
+      "invalid-style-value",
+    ]);
+  });
+
+  it("accepts measurements, functions, and the sizing keywords", () => {
+    for (const value of [
+      "2rem",
+      "50%",
+      "0",
+      "calc(1px + 1em)",
+      "clamp(1rem, 5vw, 3rem)",
+      "var(--site-space-4)",
+      "auto",
+      "max-content",
+      "4px 8px",
+    ]) {
+      expect(codes({ width: value }), value).toEqual([]);
+    }
+  });
+
+  it("accepts a multi-part corner radius", () => {
+    expect(codes({ borderRadius: "4px 8px" })).toEqual([]);
+    expect(codes({ borderRadius: "4px / 8px" })).toEqual([]);
+  });
+});
+
+describe("untrusted text in messages", () => {
+  it("bounds a token name the way every other branch bounds a value", () => {
+    const issues = check({ display: { $token: "x".repeat(500) } });
+    expect(issues[0]?.code).toBe("token-not-allowed");
+    expect(issues[0]?.message.length).toBeLessThan(250);
+  });
+});
+
 describe("issue codes", () => {
   it("are all declared in the shared code table", () => {
     const emitted = [

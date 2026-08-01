@@ -36,6 +36,71 @@ function resolvePointer(root: unknown, path: string): unknown {
   return current;
 }
 
+describe("style values reach the catalog through validate()", () => {
+  function docWithStyles(styles: unknown): BlockDocument {
+    return invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/box",
+          version: 1,
+          props: {},
+          styles: { base: { base: styles } },
+        },
+      ],
+    });
+  }
+
+  it("reports an unknown style property", () => {
+    const issues = validate(docWithStyles({ nope: "1px" }), {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+    });
+    const issue = issues.find(i => i.code === "unknown-style-property");
+    expect(issue?.path).toBe("/nodes/0/styles/base/base/nope");
+  });
+
+  it("reports a value that does not match its property's shape", () => {
+    const issues = validate(docWithStyles({ textAlign: "left" }), {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+    });
+    expect(issues.map(i => i.code)).toContain("invalid-style-value");
+  });
+
+  it("reports an unsafe value before it could reach a stylesheet", () => {
+    const issues = validate(
+      docWithStyles({ backgroundGradient: 'url("javascript:alert(1)")' }),
+      { breakpoints: FIXTURE_BREAKPOINTS, mode: "strict" }
+    );
+    const issue = issues.find(i => i.code === "invalid-style-value");
+    expect(issue?.path).toBe("/nodes/0/styles/base/base/backgroundGradient");
+  });
+
+  it("accepts a well-formed style block", () => {
+    const issues = validate(
+      docWithStyles({
+        padding: { blockStart: "2rem" },
+        color: { $token: "color.primary" },
+        textAlign: "start",
+      }),
+      { breakpoints: FIXTURE_BREAKPOINTS, mode: "strict" }
+    );
+    expect(issues).toEqual([]);
+  });
+
+  it("downgrades an unknown property to a warning when forgiving", () => {
+    const issues = validate(docWithStyles({ nope: "1px" }), {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "forgiving",
+    });
+    const issue = issues.find(i => i.code === "unknown-style-property");
+    expect(issue?.severity).toBe("warning");
+  });
+});
+
 describe("validation fixture corpus", () => {
   for (const fixture of VALIDATION_FIXTURES) {
     it(fixture.name, () => {

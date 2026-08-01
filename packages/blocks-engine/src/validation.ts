@@ -16,8 +16,10 @@ import {
   DOCUMENT_KINDS,
   STYLE_STATES,
 } from "./document";
+import { describeValue, pointer } from "./issue-text";
 import { DEFAULT_LIMITS, LIMIT_WARNING_RATIO } from "./limits";
 import type { DocumentLimits } from "./limits";
+import { validateStyleValues } from "./style/validate-style-value";
 
 /** Severity of a validation issue. `error` blocks a strict publish. */
 export type IssueSeverity = "error" | "warning";
@@ -112,20 +114,6 @@ export const ISSUE_CODES = {
 /** A stable validation issue code. */
 export type IssueCode = keyof typeof ISSUE_CODES;
 
-/** Escape a JSON-Pointer reference token (RFC 6901: `~` → `~0`, `/` → `~1`). */
-function escapePointer(token: string): string {
-  return token.replace(/~/g, "~0").replace(/\//g, "~1");
-}
-
-/**
- * Join a parent pointer with a child token. Exported for the style validator,
- * which builds pointers into the same documents and must escape them the same
- * way; it is not part of the package's public surface.
- */
-export function pointer(parent: string, token: string | number): string {
-  return `${parent}/${escapePointer(String(token))}`;
-}
-
 /** A node type is a namespaced slug, e.g. "core/heading". */
 const NODE_TYPE_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*\/[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
@@ -138,35 +126,6 @@ const ENGINE_NODE_TYPES = new Set<string>([COMPONENT_INSTANCE_TYPE]);
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-/** Longest untrusted string echoed into an issue message. */
-const MAX_MESSAGE_VALUE_LENGTH = 120;
-
-/**
- * A safe, bounded string form of an untrusted value for issue messages.
- * Validation inspects data that may not match the declared types, so values are
- * widened to `unknown` at the point of reading and rendered here without: (a)
- * calling a possibly-throwing `toString` (objects/arrays become a short label,
- * never serialized — a deep value would overflow JSON.stringify anyway), or (b)
- * embedding an unbounded string, which an oversized malformed field could use
- * to force huge allocations. Long strings are truncated.
- */
-export function describeValue(value: unknown): string {
-  if (typeof value === "string") {
-    return value.length > MAX_MESSAGE_VALUE_LENGTH
-      ? `${value.slice(0, MAX_MESSAGE_VALUE_LENGTH)}…`
-      : value;
-  }
-  if (
-    typeof value === "number" ||
-    typeof value === "boolean" ||
-    value === null ||
-    value === undefined
-  ) {
-    return String(value);
-  }
-  return Array.isArray(value) ? "[array]" : "[object]";
 }
 
 /**
@@ -824,7 +783,13 @@ function validateStyleEnvelope(
           severity: "error",
           message: `Style values at "${describeValue(breakpointId)}" must be an object.`,
         });
+        continue;
       }
+      // The envelope's shape is only half of what makes a style block valid:
+      // the properties inside it have to be ones the catalog defines, holding
+      // values of the shape it declares. Checking them here is what puts unsafe
+      // values in front of the same gate every other document defect passes.
+      state.issues.push(...validateStyleValues(values, bpPath, state.ctx.mode));
     }
   }
 }
