@@ -541,17 +541,23 @@ export function getSystemColumnDescriptors(
         primaryKey: false,
       });
     }
+    // SQLite was the one dialect whose timestamps had no default, so an insert that omitted
+    // them stored NULL where PostgreSQL and MySQL stored a time. The Schema Builder has always
+    // emitted this exact expression for SQLite; the runtime side was the half that lacked it,
+    // which is also why the two disagreed about the same table.
     cols.push({
       name: "created_at",
       dialectType: "integer",
       nullable: true,
       primaryKey: false,
+      default: "(strftime('%s', 'now'))",
     });
     cols.push({
       name: "updated_at",
       dialectType: "integer",
       nullable: true,
       primaryKey: false,
+      default: "(strftime('%s', 'now'))",
     });
     // Owner of the row (creating user's id). Collections only (never singles).
     // Nullable; mirrors runtime-schema-generator's sqliteText("created_by")
