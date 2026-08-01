@@ -19,6 +19,7 @@ import {
   createTestNextly,
   type TestNextly,
 } from "../../../../plugins/test-nextly";
+import { discardWorkingDraftForDocument } from "../../../../dispatcher/handlers/versions-methods";
 import type { CollectionsHandler } from "../../../../services/collections-handler";
 import type { CollectionEntryService } from "../../../../services/collections/collection-entry-service";
 
@@ -407,6 +408,113 @@ describe("draft/published split — updateEntry (integration)", () => {
     });
     expect(readerRead.success).toBe(true);
     expect((readerRead.data as { title?: string }).title).toBe("live");
+  });
+});
+
+// Discarding a pending working draft throws away the unpublished edits and
+// reverts the editor to the live published row. It is authorized as an update
+// of the document — a caller who may not update it may not discard its pending
+// edits — and it never touches the durable history.
+describe("draft/published split — discard working draft (integration)", () => {
+  it("removes the sidecar and returns the live published row for an editor who may update", async () => {
+    handle = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: COLLECTION,
+          status: true,
+          versions: { drafts: true },
+          access: { read: () => true, update: () => true },
+          fields: [text({ name: "title" }), text({ name: "body" })],
+        }),
+      ],
+    });
+    const entries = handle
+      .getService("collectionsHandler")
+      .getEntryService() as CollectionEntryService;
+    const trusted = { collectionName: COLLECTION, overrideAccess: true };
+
+    await entries.createEntry(trusted, { title: "live", status: "published" });
+    const [row] = await handle.adapter.select<LiveRow>(TABLE);
+    const id = row.id;
+    // A status-less edit stores a working draft over the published row.
+    await entries.updateEntry(
+      { ...trusted, entryId: id },
+      { title: "edited-in-draft" }
+    );
+    expect(await workingDraftCount(id)).toBe(1);
+
+    const discarded = await discardWorkingDraftForDocument({
+      scopeKind: "collection",
+      slug: COLLECTION,
+      entryId: id,
+      user: { id: "editor-1" },
+      params: {
+        collectionName: COLLECTION,
+        entryId: id,
+        _authenticatedUserId: "editor-1",
+      },
+    });
+
+    // The sidecar is gone...
+    expect(await workingDraftCount(id)).toBe(0);
+    // ...and the response is the live published row, not the discarded edit.
+    expect((discarded as { title?: string }).title).toBe("live");
+    expect((discarded as { status?: string }).status).toBe("published");
+    // The live row itself was never touched.
+    const [liveAfter] = await handle.adapter.select<LiveRow>(TABLE);
+    expect(liveAfter.title).toBe("live");
+    expect(liveAfter.status).toBe("published");
+  });
+
+  it("refuses to discard for a caller who may not read the document, leaving the sidecar", async () => {
+    // Reads are denied for this caller. Discard is authorized as an update, but
+    // it re-establishes read first and refuses as not-found so the response does
+    // not confirm the document exists — and the pending draft is left intact.
+    // (The update-gate refusal, a 403 for a reader who may see but not edit the
+    // document, is pinned at the handler in discard-working-draft-access.test.)
+    handle = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: COLLECTION,
+          status: true,
+          versions: { drafts: true },
+          access: { read: () => false },
+          fields: [text({ name: "title" }), text({ name: "body" })],
+        }),
+      ],
+    });
+    const entries = handle
+      .getService("collectionsHandler")
+      .getEntryService() as CollectionEntryService;
+
+    await entries.createEntry(
+      { collectionName: COLLECTION, overrideAccess: true },
+      { title: "live", status: "published" }
+    );
+    const [row] = await handle.adapter.select<LiveRow>(TABLE);
+    const id = row.id;
+    await entries.updateEntry(
+      { collectionName: COLLECTION, entryId: id, overrideAccess: true },
+      { title: "edited-in-draft" }
+    );
+    expect(await workingDraftCount(id)).toBe(1);
+
+    await expect(
+      discardWorkingDraftForDocument({
+        scopeKind: "collection",
+        slug: COLLECTION,
+        entryId: id,
+        user: { id: "reader-1" },
+        params: {
+          collectionName: COLLECTION,
+          entryId: id,
+          _authenticatedUserId: "reader-1",
+        },
+      })
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+
+    // The pending draft survives a refused discard.
+    expect(await workingDraftCount(id)).toBe(1);
   });
 });
 

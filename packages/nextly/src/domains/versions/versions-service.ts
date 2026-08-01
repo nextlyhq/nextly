@@ -89,4 +89,20 @@ export class VersionsService {
     }
     return row;
   }
+
+  /**
+   * Discard a document's pending working draft in one locale, returning the
+   * number of rows removed (0 when none exists).
+   *
+   * The working draft is the status-less sidecar the draft/published split
+   * writes for edits to a published document. Removing it reverts the editor to
+   * the live published row; history is untouched, which is why this discards
+   * unpublished edits rather than rewriting a version.
+   */
+  async deleteWorkingDraft(
+    ref: VersionRef,
+    locale: string | null
+  ): Promise<number> {
+    return this.repo.deleteWorkingDraft(ref, locale);
+  }
 }
