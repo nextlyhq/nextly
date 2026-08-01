@@ -220,7 +220,7 @@ export class HookRegistry {
    * others, because the ordering is a fact about WHEN something registered and
    * the entries do not carry it.
    */
-  private configBoundaries: Map<string, number> = new Map();
+  private configBoundaries: Map<string, WeakSet<object>> = new Map();
 
   /**
    * Note where the config's handlers start, immediately before boot registers
@@ -232,11 +232,16 @@ export class HookRegistry {
    */
   markConfigRegistrationPoint(): void {
     this.configBoundaries.clear();
+    // The entries themselves, not how many there were. A count goes wrong the
+    // moment one of them is unregistered: it still claims that many handlers
+    // precede the config, so a first-time config handler lands behind whatever
+    // replaced them. Identities stay correct because a removed entry simply is
+    // not there to be found.
     for (const [key, entries] of this.hooks) {
-      this.configBoundaries.set(key, entries.length);
+      this.configBoundaries.set(key, new WeakSet<object>(entries));
     }
     for (const [key, entries] of this.beforeOperationHooks) {
-      this.configBoundaries.set(key, entries.length);
+      this.configBoundaries.set(key, new WeakSet<object>(entries));
     }
   }
 
@@ -522,13 +527,17 @@ export class HookRegistry {
     // since is genuinely later. Every other owner appends -- nothing fixes when
     // an app or a late plugin registration should run, so inventing a position
     // for it would impose an order boot never produced.
-    // No record for a key means it held nothing when boot registered the
-    // config -- so the config would have created it, and its handlers belong
-    // first. Clamped because entries present at boot can have been removed
-    // since.
-    const boundary = this.configBoundaries.get(key) ?? 0;
-    const firstTimeAt =
-      owner === "code" ? Math.min(boundary, kept.length) : kept.length;
+    // Immediately after the last surviving entry that was already there when
+    // boot registered the config. No record for a key means it held nothing
+    // then, so the config would have created it and its handlers belong first.
+    const atBoot = this.configBoundaries.get(key);
+    const lastPreConfig = atBoot
+      ? kept.reduce(
+          (index, entry, at) => (atBoot.has(entry) ? at + 1 : index),
+          0
+        )
+      : 0;
+    const firstTimeAt = owner === "code" ? lastPreConfig : kept.length;
     const insertAt =
       firstOwned === -1
         ? firstTimeAt

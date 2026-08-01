@@ -1905,6 +1905,43 @@ describe("reloadNextlyConfig", () => {
       expect(registry.getHookCount("afterRead", SLUG)).toBe(1);
     });
 
+    it("suspends a disabled plugin that has not registered anything yet", async () => {
+      // A plugin can register lazily -- from a route, an event handler, a timer
+      // -- so at reconciliation time it may hold no registrations at all. A
+      // suspension set built only from what the registry currently holds cannot
+      // name it, and its later handler would run despite `enabled: false`.
+      const registry = getHookRegistry();
+      setInitializedPlugins(["lazy-plugin"]);
+      const { reloadNextlyConfig } = await import("../reload-config");
+
+      loadConfigSpy.mockResolvedValue({
+        config: {
+          plugins: [{ name: "lazy-plugin", enabled: false }],
+          collections: [settledCollection()],
+        },
+      });
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      // Registered only AFTER the reload decided who was suspended.
+      const late = vi.fn(() => undefined);
+      const ctx = createPluginContext(stubServices, registry, {
+        name: "lazy-plugin",
+        version: "1.0.0",
+        nextly: "*",
+      });
+      ctx.hooks.on("afterRead", SLUG, late);
+
+      await registry.execute("afterRead", {
+        collection: SLUG,
+        operation: "read",
+        data: {},
+        context: {},
+      });
+      expect(late).not.toHaveBeenCalled();
+      // Registered, not deleted -- re-enabling brings it back.
+      expect(registry.getHookCount("afterRead", SLUG)).toBe(1);
+    });
+
     it("has exactly the landing points its paths need", () => {
       // A count rather than a proof. The scan this replaces looked for a
       // resolution in the lines before each early return, and passed while the

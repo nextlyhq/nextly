@@ -760,12 +760,21 @@ function stageConfigHooks(newConfig: {
     // resumes by simply not appearing -- nothing has to remember what a
     // previous reload suspended, and the set cannot drift.
     if (stillRunning) {
-      registry.setSuspendedOwners(
-        registry
+      // Two sources, because neither alone is complete. The registry names
+      // owners that hold registrations, which is what catches a plugin deleted
+      // from the config entirely. The initialized list names plugins that ran
+      // `init`, which is what catches one whose FIRST `ctx.hooks.on` call has
+      // not happened yet -- a plugin registering lazily from a route or a timer
+      // would otherwise be absent here and its later handler would run despite
+      // being switched off.
+      const candidates = new Set<HookOwner>([
+        ...registry
           .registeredOwners()
-          .filter(
-            owner => owner.startsWith("plugin:") && !stillRunning.has(owner)
-          )
+          .filter((owner): owner is HookOwner => owner.startsWith("plugin:")),
+        ...[...(initialized ?? [])].map((name): HookOwner => `plugin:${name}`),
+      ]);
+      registry.setSuspendedOwners(
+        [...candidates].filter(owner => !stillRunning.has(owner))
       );
     }
   };
