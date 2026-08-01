@@ -19,6 +19,7 @@ import {
   checkCssValue,
   checkDimensionValue,
   checkUrlValue,
+  isCssWideKeyword,
 } from "./css-value";
 import type { CssValueRejection } from "./css-value";
 
@@ -142,7 +143,14 @@ function leafIssues(
 
   switch (leaf.kind) {
     case "keyword": {
-      if (typeof value === "string" && leaf.values.includes(value)) return [];
+      // The CSS-wide keywords are legal wherever a value is, so a keyword leaf
+      // accepts them alongside its own vocabulary, as lengths and colors do.
+      if (
+        typeof value === "string" &&
+        (leaf.values.includes(value) || isCssWideKeyword(value))
+      ) {
+        return [];
+      }
       return [
         invalid(
           path,
@@ -180,7 +188,11 @@ function leafIssues(
           ),
         ];
       }
-      const rejection = checkDimensionValue(value, leaf.keywords);
+      const rejection = checkDimensionValue(
+        value,
+        leaf.keywords,
+        leaf.maxParts
+      );
       return rejection === null ? [] : rejected(path, value, rejection);
     }
     case "color": {
@@ -212,7 +224,8 @@ function partIssues(
   parts: Readonly<Record<string, StyleShape>>,
   value: unknown,
   path: string,
-  partLabel: string
+  partLabel: string,
+  budget?: StyleIssueBudget
 ): ValidationIssue[] {
   if (!isPlainObject(value)) {
     return [
@@ -225,6 +238,10 @@ function partIssues(
   }
   const issues: ValidationIssue[] = [];
   for (const [key, partValue] of Object.entries(value)) {
+    // One composite can hold as many keys as a whole style map, so the budget
+    // has to stop this loop as well; checking it only between properties would
+    // let a single object allocate without limit.
+    if (budget !== undefined && issues.length >= budget.remaining) break;
     // Ownership is checked rather than trusting the lookup: a document may
     // legally contain a key such as `toString` or `constructor`, and a plain
     // object would answer those from its prototype, handing a function to the
@@ -240,7 +257,9 @@ function partIssues(
       );
       continue;
     }
-    issues.push(...shapeIssues(partShape, partValue, pointer(path, key)));
+    issues.push(
+      ...shapeIssues(partShape, partValue, pointer(path, key), budget)
+    );
   }
   return issues;
 }
@@ -249,16 +268,17 @@ function partIssues(
 function shapeIssues(
   shape: StyleShape,
   value: unknown,
-  path: string
+  path: string,
+  budget?: StyleIssueBudget
 ): ValidationIssue[] {
   if (isStyleLeaf(shape)) return leafIssues(shape, value, path);
   switch (shape.kind) {
     case "logicalSides":
-      return partIssues(shape.sides, value, path, "side");
+      return partIssues(shape.sides, value, path, "side", budget);
     case "logicalCorners":
-      return partIssues(shape.corners, value, path, "corner");
+      return partIssues(shape.corners, value, path, "corner", budget);
     case "object":
-      return partIssues(shape.fields, value, path, "field");
+      return partIssues(shape.fields, value, path, "field", budget);
     case "union": {
       // A union accepts the value if any variant does. Variants are tried in
       // order and the first clean one wins; when none accepts, the first
@@ -266,7 +286,7 @@ function shapeIssues(
       // lists first and therefore the one an author most likely intended.
       let firstIssues: ValidationIssue[] | undefined;
       for (const variant of shape.of) {
-        const issues = shapeIssues(variant, value, path);
+        const issues = shapeIssues(variant, value, path, budget);
         if (issues.length === 0) return [];
         firstIssues ??= issues;
       }
@@ -323,7 +343,7 @@ export function validateStyleValues(
       if (budget !== undefined) budget.remaining -= issues.length - before;
       continue;
     }
-    issues.push(...shapeIssues(entry.shape, value, path));
+    issues.push(...shapeIssues(entry.shape, value, path, budget));
     if (budget !== undefined) budget.remaining -= issues.length - before;
   }
   return issues;

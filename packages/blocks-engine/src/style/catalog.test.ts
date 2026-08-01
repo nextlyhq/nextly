@@ -216,6 +216,16 @@ describe("supports map onto catalog groups", () => {
     );
   });
 
+  it("declares a flags array even when a group has none", () => {
+    // Registration only checks nested keys when a support declares flags, so a
+    // group that omitted the array would let `{ typography: { fontSize: true } }`
+    // register and then enable nothing at all.
+    for (const support of styleSupportDefinitions()) {
+      expect(support.flags, `support "${support.key}"`).toBeDefined();
+    }
+    expect(getSupport("typography")?.flags).toEqual([]);
+  });
+
   it("enables nothing for an undeclared or disabled group", () => {
     expect(stylePropertiesForSupports(undefined)).toEqual([]);
     expect(stylePropertiesForSupports({ spacing: false })).toEqual([]);

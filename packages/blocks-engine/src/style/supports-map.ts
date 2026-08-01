@@ -19,11 +19,14 @@ import type { StyleGroup, StyleProperty } from "./catalog-types";
  */
 export function styleSupportDefinitions(): SupportDefinition[] {
   return STYLE_GROUP_DEFS.map(group => {
-    const flags = styleFlagsInGroup(group.key);
+    // The flags array is always present, empty included: registration only
+    // checks nested keys when a support declares flags, so omitting it would
+    // let `{ typography: { fontSize: true } }` register and then enable
+    // nothing. Declared empty, that same object form is refused outright.
     return {
       key: group.key,
       label: group.label,
-      ...(flags.length === 0 ? {} : { flags: [...flags] }),
+      flags: [...styleFlagsInGroup(group.key)],
     };
   });
 }

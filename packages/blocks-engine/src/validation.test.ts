@@ -101,6 +101,37 @@ describe("style values reach the catalog through validate()", () => {
   });
 });
 
+describe("style validation through validate() is bounded", () => {
+  it("stops at the budget instead of building an issue for every key", () => {
+    // The budget only helps if `validate()` actually passes it: exercised here
+    // through the real document path rather than by calling the style
+    // validator directly.
+    const styles: Record<string, string> = {};
+    for (let index = 0; index < 5000; index += 1) styles[`k${index}`] = "1px";
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/box",
+          version: 1,
+          props: {},
+          styles: { base: { base: styles } },
+        },
+      ],
+    });
+    const issues = validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+    });
+    expect(issues.length).toBeLessThan(500);
+    expect(issues.some(issue => issue.code === "style-issues-truncated")).toBe(
+      true
+    );
+  });
+});
+
 describe("validation fixture corpus", () => {
   for (const fixture of VALIDATION_FIXTURES) {
     it(fixture.name, () => {

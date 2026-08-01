@@ -35,9 +35,10 @@ import type {
 function dimension(
   cssProperty: string,
   keywords: readonly string[] = [],
+  maxParts = 1,
   tokenKinds: readonly TokenKind[] = ["dimension"]
 ): DimensionLeaf {
-  return { kind: "dimension", cssProperty, tokenKinds, keywords };
+  return { kind: "dimension", cssProperty, tokenKinds, keywords, maxParts };
 }
 
 /** Keyword sets shared by several length-valued properties. */
@@ -235,7 +236,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "gap",
     group: "layout",
-    shape: dimension("gap", ["normal"]),
+    shape: dimension("gap", ["normal"], 2),
     summary: "Space between rows and columns.",
   },
   {
@@ -522,7 +523,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
     flag: "radius",
     shape: {
       kind: "union",
-      of: [dimension("border-radius"), logicalCorners()],
+      of: [dimension("border-radius", [], 8), logicalCorners()],
     },
     summary: "Corner rounding, uniform or per logical corner.",
   },

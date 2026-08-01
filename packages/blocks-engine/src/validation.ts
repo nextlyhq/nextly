@@ -798,7 +798,14 @@ function validateStyleEnvelope(
       // the properties inside it have to be ones the catalog defines, holding
       // values of the shape it declares. Checking them here is what puts unsafe
       // values in front of the same gate every other document defect passes.
-      state.issues.push(...validateStyleValues(values, bpPath, state.ctx.mode));
+      state.issues.push(
+        ...validateStyleValues(
+          values,
+          bpPath,
+          state.ctx.mode,
+          state.styleBudget
+        )
+      );
     }
   }
 }

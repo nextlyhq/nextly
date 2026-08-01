@@ -100,6 +100,11 @@ const CSS_WIDE_KEYWORDS: ReadonlySet<string> = new Set([
  * duration, a resolution or a grid fraction reaches a length property looking
  * structurally identical to `16px`; only these are measurements of distance.
  */
+/** True when a value is one of the keywords legal on every CSS property. */
+export function isCssWideKeyword(value: string): boolean {
+  return CSS_WIDE_KEYWORDS.has(value.toLowerCase());
+}
+
 const LENGTH_UNITS: ReadonlySet<string> = new Set([
   "px",
   "cm",
@@ -155,8 +160,9 @@ const LENGTH_UNITS: ReadonlySet<string> = new Set([
 /**
  * Functions that can produce a length. Bounded on purpose: treating every
  * function as a measurement would accept `rotate(20deg)` or `rgb(1 2 3)` as a
- * width. `var()` and `env()` are included because what they resolve to is not
- * knowable here, and refusing them would break token references.
+ * width. `sign()` is deliberately absent — it always yields a number, whatever
+ * it is given. `var()` and `env()` are included because what they resolve to is
+ * not knowable here, and refusing them would break token references.
  */
 const DIMENSION_FUNCTIONS: ReadonlySet<string> = new Set([
   "calc",
@@ -167,7 +173,6 @@ const DIMENSION_FUNCTIONS: ReadonlySet<string> = new Set([
   "mod",
   "rem",
   "abs",
-  "sign",
   "var",
   "env",
   "fit-content",
@@ -275,26 +280,30 @@ export function checkCssValue(value: string): CssValueRejection | null {
  * `"10"` and `"red"` parse as CSS values but emit declarations the browser
  * discards, so they are refused here where the author can still see why.
  *
- * Multi-part values are accepted, since shorthands such as a corner radius
- * legitimately carry more than one length.
+ * `maxParts` is how many measurements the property accepts: one for a scalar
+ * such as `width`, more for a shorthand such as a corner radius.
  */
 export function checkDimensionValue(
   value: string,
-  keywords: readonly string[] = []
+  keywords: readonly string[] = [],
+  maxParts = 1
 ): CssValueRejection | null {
   const rejection = checkCssValue(value);
   if (rejection !== null) return rejection;
   const ast = parseValue(value);
   if (ast === null || ast.type !== "Value") return "not-a-length";
   const allowed = new Set(keywords.map(keyword => keyword.toLowerCase()));
-  let sawMeasurement = false;
+  let parts = 0;
   for (const child of ast.children) {
     if (child.type === "Operator") continue;
     const childRejection = measurementRejection(child, false, allowed);
     if (childRejection !== null) return childRejection;
-    sawMeasurement = true;
+    parts += 1;
+    // A shorthand may carry several measurements; a scalar property may not,
+    // and a browser discards the whole declaration when it does.
+    if (parts > maxParts) return "not-a-length";
   }
-  return sawMeasurement ? null : "not-a-length";
+  return parts > 0 ? null : "not-a-length";
 }
 
 /**

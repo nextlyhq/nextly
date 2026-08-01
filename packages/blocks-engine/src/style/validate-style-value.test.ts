@@ -294,7 +294,6 @@ describe("dimension strings are lengths, not merely valid CSS", () => {
       "var(--site-space-4)",
       "auto",
       "max-content",
-      "4px 8px",
     ]) {
       expect(codes({ width: value }), value).toEqual([]);
     }
@@ -611,6 +610,67 @@ describe("issue volume", () => {
       "unknown-style-property",
       "unknown-style-property",
     ]);
+  });
+});
+
+describe("how many measurements a property takes", () => {
+  it("refuses a second measurement on a scalar property", () => {
+    // `width: 4px 8px` is discarded whole by the browser.
+    expect(codes({ width: "4px 8px" })).toEqual(["invalid-style-value"]);
+    expect(codes({ fontSize: "4px 8px" })).toEqual(["invalid-style-value"]);
+    expect(codes({ padding: { blockStart: "4px 8px" } })).toEqual([
+      "invalid-style-value",
+    ]);
+  });
+
+  it("accepts the shorthands that legitimately carry more", () => {
+    expect(codes({ gap: "4px 8px" })).toEqual([]);
+    expect(codes({ borderRadius: "4px 8px" })).toEqual([]);
+    expect(codes({ borderRadius: "4px 8px 12px 16px" })).toEqual([]);
+    expect(codes({ borderRadius: "4px / 8px" })).toEqual([]);
+  });
+
+  it("refuses a third value on a two-part shorthand", () => {
+    expect(codes({ gap: "4px 8px 12px" })).toEqual(["invalid-style-value"]);
+  });
+});
+
+describe("functions whose result is never a length", () => {
+  it("are refused even though their arguments are lengths", () => {
+    expect(codes({ width: "sign(1px)" })).toEqual(["invalid-style-value"]);
+  });
+
+  it("leaves the ones that preserve their argument type", () => {
+    expect(codes({ width: "abs(-1px)" })).toEqual([]);
+    expect(codes({ width: "round(1.5px, 1px)" })).toEqual([]);
+  });
+});
+
+describe("CSS-wide keywords on keyword properties", () => {
+  it("are accepted, as they are on lengths and colors", () => {
+    expect(codes({ display: "inherit" })).toEqual([]);
+    expect(codes({ textAlign: "initial" })).toEqual([]);
+    expect(codes({ position: { type: "unset" } })).toEqual([]);
+    expect(codes({ objectFit: "revert" })).toEqual([]);
+  });
+
+  it("still refuses a keyword that is neither", () => {
+    expect(codes({ display: "sideways" })).toEqual(["invalid-style-value"]);
+  });
+});
+
+describe("the issue budget reaches composites too", () => {
+  it("bounds a single object holding very many keys", () => {
+    const sides: Record<string, unknown> = {};
+    for (let index = 0; index < 5000; index += 1) sides[`s${index}`] = "1px";
+    const budget = newStyleIssueBudget();
+    const issues = validateStyleValues(
+      { padding: sides },
+      "/styles",
+      "strict",
+      budget
+    );
+    expect(issues.length).toBeLessThanOrEqual(MAX_STYLE_ISSUES);
   });
 });
 

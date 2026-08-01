@@ -118,6 +118,12 @@ export interface DimensionLeaf extends StyleLeafBase {
    * listed here.
    */
   keywords?: readonly string[];
+  /**
+   * How many measurements the property accepts. One unless it is a shorthand:
+   * `border-radius` takes up to four corners and an optional second set after
+   * a slash, `gap` takes a row and a column.
+   */
+  maxParts?: number;
 }
 
 /** A unitless number, optionally bounded. */
