@@ -76,6 +76,26 @@ describe("DiscardDraftConfirmDialog", () => {
     expect(onConfirm).toHaveBeenCalledOnce();
   });
 
+  it("does not auto-close on confirm, so the caller controls when it closes", async () => {
+    // Radix AlertDialogAction closes the dialog on click by default; the action
+    // prevents that so the caller can keep it open (spinner visible) until the
+    // discard settles. `onOpenChange` firing here would be that auto-close.
+    const onOpenChange = vi.fn();
+    const onConfirm = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <DiscardDraftConfirmDialog
+        open
+        onOpenChange={onOpenChange}
+        entryLabel="Live post"
+        onConfirm={onConfirm}
+      />
+    );
+    await user.click(screen.getByRole("button", { name: /^Discard draft$/ }));
+    expect(onConfirm).toHaveBeenCalledOnce();
+    expect(onOpenChange).not.toHaveBeenCalled();
+  });
+
   it("disables both buttons while loading and renders the loading label", () => {
     render(
       <DiscardDraftConfirmDialog

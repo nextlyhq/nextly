@@ -105,7 +105,7 @@ export interface EntrySystemHeaderProps {
   /** Discard-working-draft handler (draft/published split). Throws away the
    *  pending working draft and reverts the editor to the live published row.
    *  Shown as a confirmed menu action for a Changed document. */
-  onDiscardWorkingDraft?: () => void;
+  onDiscardWorkingDraft?: () => void | Promise<void>;
   /** Discard / Cancel handler. */
   onCancel?: () => void;
   /** Delete handler (edit mode only). */
@@ -283,11 +283,15 @@ export function EntrySystemHeader({
     draftsEnabled &&
     (entry as { _isWorkingDraft?: boolean } | null | undefined)
       ?._isWorkingDraft === true;
-  // The "Discard draft" revert is offered only for a Changed document (a pending
-  // working draft over a published row) and only to a caller who may update it —
-  // the server gates the discard on update access.
-  const showDiscardDraft =
-    hasWorkingDraft && !!onDiscardWorkingDraft && canUpdateDocument;
+  // The "Discard draft" revert is offered for a Changed document (a pending
+  // working draft over a published row). The server authorizes it as an update,
+  // and the working-draft split is code-first only, so update can be granted by a
+  // collection `access.update` rule that the flat `update-{slug}` permission does
+  // not list. Gating on that permission here would hide Discard from an editor who
+  // can create and keep saving the very draft this reverts, so it is not gated on
+  // it — the sibling Save affordances are not either, and the endpoint refuses if
+  // the caller truly may not update.
+  const showDiscardDraft = hasWorkingDraft && !!onDiscardWorkingDraft;
   const entryLabel =
     typeof entry?.title === "string" && entry.title.trim().length > 0
       ? entry.title
@@ -581,9 +585,13 @@ export function EntrySystemHeader({
         open={discardDraftOpen}
         onOpenChange={setDiscardDraftOpen}
         entryLabel={entryLabel}
-        onConfirm={() => {
+        onConfirm={async () => {
+          // Keep the dialog open (and its in-flight spinner visible) while the
+          // discard runs, then close once it settles. Closing first — as this
+          // did — hid the progress state and dropped the retry context on a slow
+          // or failed request.
+          await onDiscardWorkingDraft?.();
           setDiscardDraftOpen(false);
-          onDiscardWorkingDraft?.();
         }}
         isLoading={isSubmitting}
       />

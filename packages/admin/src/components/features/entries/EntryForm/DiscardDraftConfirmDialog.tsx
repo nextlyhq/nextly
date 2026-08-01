@@ -32,8 +32,9 @@ export interface DiscardDraftConfirmDialogProps {
   /** Display name for the entry. Falls back to "this entry" when empty. */
   entryLabel?: string | null;
   /** Confirm callback. The dialog does not close itself on confirm — the caller
-   *  closes it on success/error so the loading state stays visible meanwhile. */
-  onConfirm: () => void;
+   *  closes it once the discard settles so the loading state stays visible
+   *  meanwhile. May be async; its promise is awaited by the caller. */
+  onConfirm: () => void | Promise<void>;
   /** Whether the discard mutation is in flight. */
   isLoading?: boolean;
 }
@@ -60,7 +61,13 @@ export function DiscardDraftConfirmDialog({
         <AlertDialogFooter>
           <AlertDialogCancel disabled={isLoading}>Cancel</AlertDialogCancel>
           <AlertDialogAction
-            onClick={onConfirm}
+            // Prevent Radix from auto-closing on click: the caller keeps the
+            // dialog open until the discard settles so this button's in-flight
+            // spinner and the disabled controls are actually visible meanwhile.
+            onClick={event => {
+              event.preventDefault();
+              void onConfirm();
+            }}
             disabled={isLoading}
             className="bg-destructive-solid text-destructive-foreground hover:bg-destructive-700"
           >

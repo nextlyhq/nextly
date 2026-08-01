@@ -78,6 +78,13 @@ export interface EntryFormProps {
   onCancel?: () => void;
   /** Active content locale (i18n M7) — saves target this language. */
   locale?: string;
+  /**
+   * Whether the parent read this entry with the working-draft overlay (`draft`).
+   * Forwarded to the update so its optimistic cache key matches the query on
+   * screen. Omit for the full-page editor (it reads the overlay for a drafts
+   * collection); an embedded editor reading the live row passes `false`.
+   */
+  readDraft?: boolean;
   /** Called when the user switches the active content language (i18n M7). */
   onLocaleChange?: (locale: string) => void;
   /**
@@ -183,6 +190,7 @@ export function EntryForm({
   onDelete,
   onCancel,
   locale,
+  readDraft,
   onLocaleChange,
   sourceValues,
   embedded = false,
@@ -201,6 +209,7 @@ export function EntryForm({
     entry,
     mode,
     locale,
+    readDraft,
     onSuccess: data => {
       onSuccess?.(data);
     },

@@ -142,6 +142,16 @@ export interface UseEntryFormOptions {
   onCancel?: () => void;
   /** Active content locale (i18n M7) — the update targets this language's values. */
   locale?: string;
+  /**
+   * Whether the entry was READ with the working-draft overlay (`draft`), so the
+   * update's optimistic cache key matches the query the form is showing. The
+   * full-page editor reads the overlay for a drafts collection; an embedded
+   * editor (relationship quick-edit) reads the live row, so it must say so here
+   * or its optimistic update, rollback, and `cancelQueries` would target a
+   * different `detailScoped` key than the one on screen. Defaults to the
+   * collection's split when unset — the full-page editor's read mode.
+   */
+  readDraft?: boolean;
 }
 
 /**
@@ -295,8 +305,10 @@ export interface UseEntryFormReturn {
   /** Handle entry deletion (edit mode only) */
   handleDelete: () => void;
   /** Discard the pending working draft (draft/published split), reverting the
-   *  editor to the live published row. No-op outside edit mode. */
-  handleDiscardWorkingDraft: () => void;
+   *  editor to the live published row. No-op outside edit mode. Resolves when the
+   *  discard settles, so the confirm dialog can stay open (showing its progress)
+   *  until then. */
+  handleDiscardWorkingDraft: () => Promise<void>;
   /** Handle form cancellation */
   handleCancel: () => void;
   /** Whether form is currently submitting */
@@ -578,6 +590,7 @@ export function useEntryForm({
   onDelete,
   onCancel,
   locale,
+  readDraft,
 }: UseEntryFormOptions): UseEntryFormReturn {
   // Get fields from collection (supports both old and new API formats)
   const fields = getCollectionFields(collection);
@@ -646,10 +659,11 @@ export function useEntryForm({
     setError: form.setError,
     // i18n M7: route the save to the active content language.
     locale,
-    // Match the editor's read mode so the optimistic update keys onto the same
-    // cached document the form is showing (the entry page reads with this same
-    // `draft` flag when the working-draft split is enabled).
-    draft: collection.draftsEnabled === true,
+    // Match the editor's read mode so the optimistic update, rollback, and
+    // cancelQueries key onto the same cached document the form is showing. The
+    // caller passes how it read the entry; absent that, assume the full-page
+    // editor's mode (the working-draft overlay for a drafts collection).
+    draft: readDraft ?? collection.draftsEnabled === true,
   });
 
   // Password fields submit "" to mean "keep the stored hash", so they are
@@ -770,9 +784,9 @@ export function useEntryForm({
     handleDelete: () => {
       void handleDelete();
     },
-    handleDiscardWorkingDraft: () => {
-      void handleDiscardWorkingDraft();
-    },
+    // Returned as a promise (not fire-and-forget) so the confirm dialog can
+    // await the discard and keep its loading state visible until it settles.
+    handleDiscardWorkingDraft: () => handleDiscardWorkingDraft(),
     handleCancel,
     isSubmitting:
       createMutation.isPending ||
