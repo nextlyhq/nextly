@@ -489,6 +489,24 @@ function declaredBlocks(value: unknown, source: string): DeclaredBlock[] {
         `Block "${definition.name}" from "${source}" has no example. Every block needs a worked instance, for previews and for generating content.`
       );
     }
+    // The last two the engine requires that the manifest never carries: a
+    // node's props are a key/value map, so defaults shaped otherwise could not
+    // seed one, and a block with nothing to draw with cannot render a page.
+    // Both are judged from the declaration or not at all — one is a function,
+    // and the other is dropped along with everything else JSON cannot hold.
+    if (
+      definition.defaultProps !== undefined &&
+      !isRecord(definition.defaultProps)
+    ) {
+      throw invalidDeclaration(
+        `Block "${definition.name}" from "${source}" declares defaultProps that are not a plain object.`
+      );
+    }
+    if (typeof definition.render !== "function") {
+      throw invalidDeclaration(
+        `Block "${definition.name}" from "${source}" declares no render function.`
+      );
+    }
     // Rebuilt with the name spelled out so the checked type carries what was
     // just proved about it; returning `definition` would hand the caller a
     // record whose `name` is `unknown` again, and it sorts and dedupes on it.

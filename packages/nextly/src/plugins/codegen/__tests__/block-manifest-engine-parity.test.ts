@@ -135,6 +135,26 @@ const CASES: { label: string; definition: Record<string, unknown> }[] = [
     definition: valid({ example: { props: [] } }),
   },
   { label: "an example with no props", definition: valid({ example: {} }) },
+  // The two the engine requires that never reach the manifest. A table whose
+  // every row carries a render function cannot notice a missing render check,
+  // which is how these went unmirrored in the first place.
+  { label: "no render function", definition: valid({ render: undefined }) },
+  {
+    label: "a render that is not a function",
+    definition: valid({ render: "./hero.js" }),
+  },
+  {
+    label: "defaultProps that are a plain record",
+    definition: valid({ defaultProps: { heading: "Hi" } }),
+  },
+  {
+    label: "defaultProps that are an array",
+    definition: valid({ defaultProps: [] }),
+  },
+  {
+    label: "defaultProps that are a primitive",
+    definition: valid({ defaultProps: "none" }),
+  },
 ];
 
 /**
