@@ -7,7 +7,7 @@
  * the status transitions — independent of whether versioning is enabled, and
  * with secret fields never reaching the payload.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   fieldGroup,
@@ -30,6 +30,10 @@ let current: TestNextly | undefined;
 afterEach(async () => {
   await current?.destroy();
   current = undefined;
+  // The post-commit-hook case silences `console.error` to assert against it.
+  // This config does not restore mocks between tests, so without this every
+  // later test in the file would run with errors muted.
+  vi.restoreAllMocks();
 });
 
 /** A `nextly_events` row as read back (Drizzle camelCases the columns). */
@@ -721,6 +725,7 @@ describe("webhook outbox capture — singles (integration)", () => {
   });
 
   it("reports eventRecorded when the write commits but a post-commit hook throws", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     current = await createTestNextly({
       singles: [
         defineSingle({
@@ -729,8 +734,10 @@ describe("webhook outbox capture — singles (integration)", () => {
         }),
       ],
     });
-    // afterUpdate runs after the write transaction commits, so a throw here
-    // leaves the entry + outbox event durable while the result reports failure.
+    // afterUpdate runs after the write transaction commits, so a throw here can
+    // undo neither the entry nor the outbox event. The write reports success and
+    // the hook failure is reported separately; `eventRecorded` is what the drain
+    // keys off and is unaffected either way.
     current.hooks.register(
       "afterUpdate",
       getSingleHookCollection("preferences"),
@@ -747,8 +754,13 @@ describe("webhook outbox capture — singles (integration)", () => {
       { overrideAccess: true }
     );
 
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
     expect(result.eventRecorded).toBe(true);
+
+    // The single trace the failure leaves, given the operation reports success.
+    expect(logged).toHaveBeenCalled();
+    expect(String(logged.mock.calls[0][0])).toContain("afterUpdate");
+
     const rows = (await events(current)).filter(
       r => r.type === "single.updated"
     );
