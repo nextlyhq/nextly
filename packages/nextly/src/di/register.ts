@@ -904,6 +904,11 @@ export async function registerServices(
     // registration returns -- registering earlier would hand a hook an API that
     // is not there yet. The consequence is that a plugin's `init` writing
     // through the managed services does so before these hooks exist.
+    // Noted before the config's own handlers go in, so a handler it declares
+    // for the first time during a later reload lands where this boot would have
+    // put it rather than wherever appending happens to leave it.
+    hookRegistry.markConfigRegistrationPoint();
+
     if (
       transformedConfig.collections &&
       transformedConfig.collections.length > 0

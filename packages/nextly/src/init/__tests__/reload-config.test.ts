@@ -1758,6 +1758,41 @@ describe("reloadNextlyConfig", () => {
       expect(order).toEqual(["config", "app"]);
     });
 
+    it("holds hooks back when the metadata sync fails after the DDL", async () => {
+      // The DDL lands but the field-tree metadata does not, and the surrounding
+      // code deliberately leaves the mutation services reading their previous
+      // serialized fields. A handler published against the new config would
+      // then supply a field that serialization still ignores.
+      const registry = getHookRegistry();
+      const original = vi.fn(() => undefined);
+      const edited = vi.fn(() => undefined);
+      const { reloadNextlyConfig } = await import("../reload-config");
+
+      loadConfigSpy.mockResolvedValue({
+        config: { collections: [settledCollection({ afterRead: [original] })] },
+      });
+      await reloadNextlyConfig({ resolver: buildResolver() });
+      // The control: a healthy reload installs it, so the assertion below is
+      // about the sync failure rather than about nothing ever arriving.
+      expect(registry.getHookCount("afterRead", SLUG)).toBe(1);
+
+      loadConfigSpy.mockResolvedValue({
+        config: { collections: [settledCollection({ afterRead: [edited] })] },
+      });
+      await reloadNextlyConfig({
+        resolver: buildResolver({ failCollectionMetaSync: true }),
+      });
+
+      await registry.execute("afterRead", {
+        collection: SLUG,
+        operation: "read",
+        data: {},
+        context: {},
+      });
+      expect(original).toHaveBeenCalledTimes(1);
+      expect(edited).not.toHaveBeenCalled();
+    });
+
     it("has exactly the landing points its paths need", () => {
       // A count rather than a proof. The scan this replaces looked for a
       // resolution in the lines before each early return, and passed while the
@@ -1769,9 +1804,10 @@ describe("reloadNextlyConfig", () => {
         new URL("../reload-config.ts", import.meta.url),
         "utf8"
       );
-      const commits = source.match(/^\s*commitReload\(.*\);$/gm) ?? [];
-      // Empty targets, the no-DDL branch, and after a successful apply.
-      expect(commits).toHaveLength(3);
+      const commits = source.match(/^\s*commitReload\(/gm) ?? [];
+      // Empty targets, the no-DDL branch, the post-apply localization holdback,
+      // and after a successful apply.
+      expect(commits).toHaveLength(4);
     });
 
     it("keeps a late app hook behind the config's, across a reload", async () => {

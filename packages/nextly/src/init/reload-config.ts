@@ -2041,9 +2041,27 @@ async function applyReload(opts?: {
           `could not be copied back out of the translations table. Fix the error above and save ` +
           `again — the content is intact where it is.`
       );
-      // Same as the pre-apply failure above: nothing landed, so nothing that
-      // was applied optimistically may stay.
-      abandonReload();
+      // NOT the same as the pre-apply failure: that one runs before the apply,
+      // this one after it succeeded. The tables have already changed, so the
+      // previous field types no longer describe them and putting them back
+      // would misdescribe live schema -- and holding every handler back would
+      // leave an entity whose columns were just renamed running the hook
+      // written for the old ones. Only the entities whose copy-back failed keep
+      // their previous handlers; the rest get the config that was reloaded.
+      //
+      // The slugs arrive without their kind, so both namespaces are excluded.
+      // Over-excluding costs one entity its refreshed handlers until the next
+      // save; under-excluding runs a handler against content that is not where
+      // it expects.
+      commitReload(
+        new Set([
+          ...deferredEntities,
+          ...postApply.restoreFailed.flatMap(slug => [
+            `collection:${slug}`,
+            `single:${slug}`,
+          ]),
+        ])
+      );
       return;
     }
 
@@ -2055,6 +2073,9 @@ async function applyReload(opts?: {
     // singles fail) does not block the committed scope's decisions.
     let collectionSynced = true;
     let singleSynced = true;
+    // The singles sync reports per-slug failures rather than rejecting, and
+    // those entities keep serialising against their previous field tree.
+    let failedSingleMetadata = new Set<string>();
     let componentSynced = true;
     // Sync dynamic_collections metadata so the fields JSON reflects the
     // new config. The pipeline above only applies DDL to dc_<slug>; without
@@ -2106,6 +2127,7 @@ async function applyReload(opts?: {
         failedSlugs = failedSingleSlugs(
           await singleReg.syncCodeFirstSingles(codeFirstSingleConfigs)
         );
+        failedSingleMetadata = failedSlugs;
 
         // registerSingle defaults migration_status to 'pending'. The
         // pipeline above just created any missing physical tables, so
@@ -2361,7 +2383,31 @@ async function applyReload(opts?: {
     // A batch can succeed while individual entities were held back, so the
     // deferred set travels with it: those keep the handlers matching the table
     // they still have.
-    commitReload(deferredEntities);
+    //
+    // A failed metadata sync is the same problem one layer up: the DDL landed,
+    // but the mutation services still read the previous serialized fields, so a
+    // handler supplying a newly added field would have it ignored. Those
+    // entities keep their previous handlers too, until a later reload repairs
+    // the sync. A collection sync THROWS rather than reporting per slug, so a
+    // failure there holds every collection back.
+    commitReload(
+      new Set([
+        ...deferredEntities,
+        ...(collectionSynced
+          ? []
+          : (newConfig.collections ?? [])
+              .map(collection => collection.slug)
+              .filter((slug): slug is string => !!slug)
+              .map(slug => `collection:${slug}`)),
+        ...(singleSynced
+          ? []
+          : (newConfig.singles ?? [])
+              .map(single => single.slug)
+              .filter((slug): slug is string => !!slug)
+              .map(slug => `single:${slug}`)),
+        ...[...failedSingleMetadata].map(slug => `single:${slug}`),
+      ])
+    );
   }
 
   if (!applyResult.success) {

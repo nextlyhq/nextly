@@ -296,11 +296,38 @@ describe("where a first-time config hook goes", () => {
   it("goes after a plugin and before an app hook registered later", () => {
     const registry = new HookRegistry();
     registry.register("afterRead", SLUG, c => c.data, "plugin:seo");
+    registry.markConfigRegistrationPoint();
     registry.register("afterRead", SLUG, c => c.data, "app");
 
     registry.replaceCollectionOwnedBy(SLUG, "code", config());
 
     expect(ownersOf(registry)).toEqual(["plugin:seo", "code", "app"]);
+  });
+
+  it("stays behind an early app hook when there are no plugins at all", () => {
+    // With nothing to anchor to, deriving the position from the entries present
+    // has no signal left: every rule invented one. The boundary is recorded at
+    // boot instead, so this holds whether or not any plugin exists.
+    const registry = new HookRegistry();
+    registry.register("afterRead", SLUG, c => c.data, "app");
+    registry.markConfigRegistrationPoint();
+
+    registry.replaceCollectionOwnedBy(SLUG, "code", config());
+
+    expect(ownersOf(registry)).toEqual(["app", "code"]);
+  });
+
+  it("goes ahead of an app hook registered after boot", () => {
+    // The mirror: the app's call lands after the boundary was taken, so the
+    // config keeps its place in front of it. Without this the test above would
+    // pass just as well if the config always went last.
+    const registry = new HookRegistry();
+    registry.markConfigRegistrationPoint();
+    registry.register("afterRead", SLUG, c => c.data, "app");
+
+    registry.replaceCollectionOwnedBy(SLUG, "code", config());
+
+    expect(ownersOf(registry)).toEqual(["code", "app"]);
   });
 
   it("stays behind an app hook registered before the plugins", () => {
@@ -312,6 +339,7 @@ describe("where a first-time config hook goes", () => {
     const registry = new HookRegistry();
     registry.register("afterRead", SLUG, c => c.data, "app");
     registry.register("afterRead", SLUG, c => c.data, "plugin:seo");
+    registry.markConfigRegistrationPoint();
 
     registry.replaceCollectionOwnedBy(SLUG, "code", config());
 
