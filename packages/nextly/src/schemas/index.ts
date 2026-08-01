@@ -21,6 +21,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { buildFieldGroupRegistryTable } from "../domains/field-groups/storage/registry-schemas";
 import type { NextlySchemaSnapshot } from "../domains/schema/pipeline/diff/types";
 import { MANAGED_TABLE_PREFIXES } from "../domains/schema/pipeline/managed-tables";
+import { NextlyError } from "../errors/nextly-error";
 
 import { drizzleTableToTableSpec } from "./_internal/drizzle-to-tablespec";
 import { apiKeyTables } from "./api-keys";
@@ -106,7 +107,12 @@ function fieldGroupRegistryFor(
         return dynamicFieldGroupsSqlite;
       default: {
         const exhaustive: never = dialect;
-        throw new Error(`Unsupported dialect: ${String(exhaustive)}`);
+        throw NextlyError.internal({
+          logContext: {
+            reason: "cannot build the field-group registry for this dialect",
+            dialect: String(exhaustive),
+          },
+        });
       }
     }
   }
@@ -209,7 +215,12 @@ export function getCoreSchema(
       break;
     default: {
       const _exhaustive: never = dialect;
-      throw new Error(`Unsupported dialect: ${String(_exhaustive)}`);
+      throw NextlyError.internal({
+        logContext: {
+          reason: "cannot build the core schema for this dialect",
+          dialect: String(_exhaustive),
+        },
+      });
     }
   }
 
