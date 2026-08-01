@@ -38,13 +38,16 @@ re-runs those at all). Unregistering is likewise scoped to the caller's own
 registrations, so a plugin removing a handler it shares with the config no
 longer removes the config's instead.
 
-A save that changes a hook and a schema at once is handled as one unit: when the
-schema change is refused, the previous hooks come back with the previous schema,
-so a handler written against a field the refused edit added is never left running
-against a database that does not have it. Switching a plugin to `enabled: false`
-now also stops the hooks its collections and singles declared, instead of leaving
-them running until the next restart, and so does deleting or renaming a
-collection: a removed entity's table is kept until `nextly prune`, so it stayed
+A save that changes a hook and a schema at once is handled as one unit: the new
+handlers are published only once the schema they were written against has landed,
+so a request served while the reload is still running never sees a hook reaching
+for a column that is not there yet, and a refused schema change leaves the
+previous handlers in place. Replacing them also keeps their position, so a config
+save no longer reorders a chain it is not changing. Switching a plugin to `enabled: false`
+now stops everything it contributed -- the hooks its collections and singles
+declared, and the ones it registered itself, which are suspended rather than
+dropped so re-enabling it in the same session brings them straight back. Deleting
+or renaming a collection stops its hooks too: a removed entity's table is kept until `nextly prune`, so it stayed
 addressable and went on running hooks its config no longer declared.
 
 Registering straight into the registry that `getHookRegistry()` hands out now

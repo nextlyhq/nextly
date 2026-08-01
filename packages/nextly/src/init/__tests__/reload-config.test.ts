@@ -1583,22 +1583,21 @@ describe("reloadNextlyConfig", () => {
     });
 
     it("abandons on every early return that is not a deliberate landing", () => {
-      // The hooks and the field-type registry are both applied optimistically,
-      // before the reload knows whether it will land, and each early return
-      // after that point either lands or has to undo them. Two i18n aborts were
-      // returning without undoing anything, which is how a rejected save left
-      // the new handlers running against the retained schema.
+      // Past this point a reload has two ways out: land, and commit the staged
+      // hook work, or abandon, and put the field-type registry back. An early
+      // return doing neither leaves the process in whichever half-state it had
+      // reached -- which is how two i18n aborts came to leave a rejected save's
+      // field types installed under the retained config.
       //
       // Checked against the source because those branches need a failed content
       // copy mid-migration to reach, and the regression is not one abort but
-      // the next one somebody adds. A new early return here should either
-      // abandon or be a considered addition to the count below.
+      // the next one somebody adds.
       const source = readFileSync(
         new URL("../reload-config.ts", import.meta.url),
         "utf8"
       ).split("\n");
       const start = source.findIndex(line =>
-        line.includes("reloadUndo.push(reregisterConfigHooks(newConfig))")
+        line.includes("stageConfigHooks(newConfig)")
       );
       const end = source.findIndex(line =>
         line.startsWith("// Decides whether a collection")
@@ -1610,22 +1609,169 @@ describe("reloadNextlyConfig", () => {
       for (let i = start; i < end; i++) {
         if (!/^\s+return;\s*$/.test(source[i] ?? "")) continue;
         const preceding = source.slice(Math.max(start, i - 8), i).join("\n");
-        if (!preceding.includes("abandonReload()")) unguarded.push(i + 1);
+        const resolves =
+          preceding.includes("abandonReload()") ||
+          preceding.includes("commitReload()");
+        if (!resolves) unguarded.push(i + 1);
       }
 
-      // Exactly one: the empty-target path, where nothing was managed and the
-      // new config IS the live one, so its handlers belong in place.
-      expect(unguarded).toHaveLength(1);
-      expect(
-        source.slice(Math.max(0, unguarded[0] - 12), unguarded[0]).join("\n")
-      ).toContain("republishRecordingPolicies");
+      // Every one of them resolves. The single commit-not-abandon case is the
+      // empty-target path, where nothing was managed and the new config IS the
+      // live one, so its handlers belong in place with no schema to wait for.
+      expect(unguarded).toEqual([]);
+      const commits = [];
+      for (let i = start; i < end; i++) {
+        if (!/^\s+return;\s*$/.test(source[i] ?? "")) continue;
+        const preceding = source.slice(Math.max(start, i - 8), i).join("\n");
+        if (preceding.includes("commitReload()")) commits.push(i + 1);
+      }
+      expect(commits).toHaveLength(1);
+    });
+
+    it("keeps a late app hook behind the config's, across a reload", async () => {
+      // Registration order is FIFO and the owners interleave: plugins during
+      // init, the config right after, and an app whenever the module holding
+      // its `registerHook` call is evaluated -- which can be later than both.
+      // Clearing the config's entries and appending the replacements would put
+      // the app's handler in front of them, so an unrelated config save would
+      // silently reorder a transforming chain.
+      const registry = getHookRegistry();
+      const order: string[] = [];
+      const { reloadNextlyConfig } = await import("../reload-config");
+
+      loadConfigSpy.mockResolvedValue({
+        config: {
+          collections: [
+            settledCollection({ afterRead: [() => void order.push("config")] }),
+          ],
+        },
+      });
+      await reloadNextlyConfig({ resolver: buildResolver() });
+      registry.register("afterRead", SLUG, () => void order.push("app"));
+      expect(registry.getHookCount("afterRead", SLUG)).toBe(2);
+
+      // A second save, editing the config hook but not the app one.
+      loadConfigSpy.mockResolvedValue({
+        config: {
+          collections: [
+            settledCollection({
+              afterRead: [() => void order.push("config2")],
+            }),
+          ],
+        },
+      });
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      order.length = 0;
+      await registry.execute("afterRead", {
+        collection: SLUG,
+        operation: "read",
+        data: {},
+        context: {},
+      });
+      expect(order).toEqual(["config2", "app"]);
+    });
+
+    it("stops a disabled plugin's own registrations, and resumes them", async () => {
+      // Its declarations are handled by leaving them out of the rebuild, but a
+      // `ctx.hooks.on` registration cannot be: `init` does not re-run on a
+      // config reload, so removing it would leave re-enabling the plugin short
+      // of its handler until a restart. Suspended instead, and resumed by a
+      // later config that no longer disables it.
+      const registry = getHookRegistry();
+      const fromPlugin = vi.fn(() => undefined);
+      const ctx = createPluginContext(stubServices, registry, PLUGIN);
+      ctx.hooks.on("afterRead", SLUG, fromPlugin);
+      const { reloadNextlyConfig } = await import("../reload-config");
+
+      const configWith = (enabled: boolean) => ({
+        plugins: [{ name: PLUGIN.name, enabled, contributes: {} }],
+        collections: [settledCollection()],
+      });
+      const read = async () =>
+        registry.execute("afterRead", {
+          collection: SLUG,
+          operation: "read",
+          data: {},
+          context: {},
+        });
+
+      loadConfigSpy.mockResolvedValue({ config: configWith(true) });
+      await reloadNextlyConfig({ resolver: buildResolver() });
+      await read();
+      // The control: it runs while the plugin is enabled, so "not called"
+      // below cannot be a handler that never worked.
+      expect(fromPlugin).toHaveBeenCalledTimes(1);
+
+      loadConfigSpy.mockResolvedValue({ config: configWith(false) });
+      await reloadNextlyConfig({ resolver: buildResolver() });
+      fromPlugin.mockClear();
+      await read();
+      expect(fromPlugin).not.toHaveBeenCalled();
+      // Still registered, not deleted -- which is what makes the next step
+      // possible without a restart.
+      expect(registry.getHookCount("afterRead", SLUG)).toBe(1);
+
+      loadConfigSpy.mockResolvedValue({ config: configWith(true) });
+      await reloadNextlyConfig({ resolver: buildResolver() });
+      await read();
+      expect(fromPlugin).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not publish the new hook before the schema lands", async () => {
+      // Peer requests keep being served from the cached instance while a reload
+      // is in flight, so a handler published ahead of the DDL can run against
+      // the old table. The staged work is committed only once the apply has
+      // reported success, so anything observing the registry mid-reload sees
+      // the previous handler.
+      const registry = getHookRegistry();
+      const { reloadNextlyConfig } = await import("../reload-config");
+
+      loadConfigSpy.mockResolvedValue({
+        config: {
+          collections: [settledCollection({ afterRead: [() => undefined] })],
+        },
+      });
+      await reloadNextlyConfig({ resolver: buildResolver() });
+      expect(registry.getHookCount("afterRead", SLUG)).toBe(1);
+
+      // Observed from inside the apply, which is the window a peer request
+      // would be served in.
+      let duringApply = -1;
+      pipelineApplySpy.mockImplementation(() => {
+        duringApply = registry.getHookCount("afterRead", SLUG);
+        return Promise.resolve({
+          success: true,
+          statementsExecuted: 1,
+          renamesApplied: 0,
+        });
+      });
+      introspectSpy.mockResolvedValue(
+        liveSnapshot(TABLE, [...SQLITE_RESERVED])
+      );
+      loadConfigSpy.mockResolvedValue({
+        config: {
+          collections: [
+            settledCollection({
+              afterRead: [() => undefined, () => undefined],
+            }),
+          ],
+        },
+      });
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      // One during the apply -- still the previous config's -- and two after.
+      expect(duringApply).toBe(1);
+      expect(registry.getHookCount("afterRead", SLUG)).toBe(2);
     });
 
     it("puts the previous hooks back when the reload is abandoned", async () => {
-      // Hooks are applied before the schema work, so a save carrying BOTH a
-      // hook edit and a schema change that is then refused would otherwise
-      // leave the new handlers running against the old database. Here DI hands
-      // back no adapter, which is one of the abandonment paths.
+      // A save carrying BOTH a hook edit and a schema change that is then
+      // refused must leave the previous handlers in place: the database still
+      // has the previous schema, and a handler written against a field the
+      // refused edit renamed would read something that is not there. The work
+      // is staged rather than applied up front, so an abandoned reload simply
+      // never commits it. Here DI hands back no adapter, one of those paths.
       const registry = getHookRegistry();
       const landed = vi.fn(() => undefined);
       const abandoned = vi.fn(() => undefined);

@@ -84,6 +84,7 @@ import {
   reregisterSingleHooks,
   singleHookNamespace,
 } from "../hooks/register-single-hooks";
+import type { HookOwner } from "../hooks/types";
 import type { RevalidateConfig } from "../revalidation/types";
 import { getProductionNotifier } from "../runtime/notifications/index";
 import { STORAGE_FORMAT } from "../schemas/storage-format";
@@ -599,36 +600,24 @@ function republishRecordingPolicies(
 }
 
 /**
- * Rebuild the config-declared collection and single hooks from a reloaded config.
+ * Build the hook work a reloaded config implies, WITHOUT applying any of it.
  *
- * Without this, editing a hook in `nextly.config.ts` does nothing until the
- * process restarts: the reload re-reads the file but the registry still holds
- * the function objects the first boot registered, so an edited hook keeps its
- * old body and a deleted one keeps firing.
+ * Returned as a thunk the caller runs only once the reload has landed. Applying
+ * it up front would publish a handler before the schema it was written against
+ * exists: peer requests keep being served from the cached instance while a
+ * reload is in flight, so one of them can run the new hook against the old
+ * table -- reading a field the save has only just added, say -- and no later
+ * rollback can undo a request that has already been answered. Deferring shrinks
+ * that window to the gap between the DDL landing and this thunk running.
  *
- * Only `"code"`-owned handlers are replaced, which is what makes clearing safe
- * at all. A plugin registers straight into a collection's namespace -- the form
- * builder does exactly that on `forms` -- and its `init` belongs to service
- * registration, which a config reload does not re-run; an imperative
- * `registerHook()` call has no re-entry point either. Clearing the namespace
- * wholesale would delete both with nothing able to put them back.
- *
- * Mirrors the boot registration's disabled-plugin filter. A disabled plugin's
- * entities stay in the config so the schema stays deterministic, but the plugin
- * lifecycle's behavior-skip contract means its runtime hooks must not run, and a
- * reload that registered them would switch a disabled plugin back on.
+ * Nothing here is optimistic, so an abandoned reload needs no undo: it simply
+ * never calls the thunk.
  */
-function reregisterConfigHooks(newConfig: {
+function stageConfigHooks(newConfig: {
   collections?: CollectionDef[];
   singles?: SingleDef[];
   plugins?: unknown[];
 }): () => void {
-  // The registry service registration actually bound its handlers to, which is
-  // not always the process-global singleton: a caller may supply its own, and
-  // replacing handlers anywhere else would leave the live registry running the
-  // ones it was supposed to lose while the edited ones sit where nothing reads
-  // them.
-  const registry = getActiveHookRegistry();
   const disabledPlugins = (newConfig.plugins ?? []).filter(
     plugin => (plugin as { enabled?: boolean }).enabled === false
   );
@@ -653,46 +642,52 @@ function reregisterConfigHooks(newConfig: {
       !!single.slug && !disabledSingles.has(single.slug)
   );
 
-  // What the re-registration below is going to rebuild.
-  const rebuilt = new Set<string>([
-    ...collections.map(collection => collection.slug),
-    ...singles.map(single => singleHookNamespace(single.slug)),
-  ]);
-
-  // Everything else the config currently owns handlers for, which the
-  // re-registration will NOT put back and so has to remove.
-  //
-  // Two ways a namespace lands here. An entity deleted or renamed in the config
-  // keeps its handlers, and its table is deliberately retained rather than
-  // dropped -- `nextly prune` is what removes an orphan -- so it stays
-  // addressable and would go on running hooks the config no longer declares. A
-  // plugin switched to `enabled: false` is the same shape: its declarations
-  // registered under the config's ownership while it was enabled, and merely
-  // leaving it out of the rebuild removes nothing.
-  const removed = registry
-    .collectionsOwnedBy("code")
-    .filter(namespace => !rebuilt.has(namespace));
-
-  // Captured before anything is replaced, and returned as an undo. This runs
-  // ahead of the schema work, so at this point it is not yet known whether the
-  // reload will land -- and where it does not, the previous config stays in
-  // effect and its handlers have to stay with it, or a hook written against a
-  // renamed field would run against the schema that still has the old one.
-  const captured = [...rebuilt, ...removed].map(namespace =>
-    registry.captureCollectionOwnedBy(namespace, "code")
-  );
-
-  for (const namespace of removed) {
-    registry.clearCollectionOwnedBy(namespace, "code");
-  }
-
-  reregisterCollectionHooks(collections, registry);
-  reregisterSingleHooks(singles, registry);
+  // A disabled plugin must stop running EVERYTHING it contributed, and its
+  // declarations are handled by leaving them out of the rebuild below. Its
+  // `ctx.hooks.on` registrations cannot be: `init` does not re-run on a config
+  // reload, so removing them would leave re-enabling the plugin in the same
+  // session short of its handlers until a restart. They are suspended instead,
+  // and recomputed from the config every time, so re-enabling resumes them by
+  // simply no longer naming them.
+  const suspended = disabledPlugins
+    .map(plugin => (plugin as { name?: string }).name)
+    .filter((name): name is string => !!name)
+    .map((name): HookOwner => `plugin:${name}`);
 
   return () => {
-    for (const capture of captured) {
-      registry.restoreCollectionOwnedBy(capture);
+    // The registry service registration actually bound its handlers to, which
+    // is not always the process-global singleton: a caller may supply its own,
+    // and replacing handlers anywhere else would leave the live registry
+    // running the ones it was supposed to lose while the edited ones sit where
+    // nothing reads them. Resolved at commit time, so a registration that
+    // happened during the reload is still the one that gets written to.
+    const registry = getActiveHookRegistry();
+
+    // What the re-registration below is going to rebuild.
+    const rebuilt = new Set<string>([
+      ...collections.map(collection => collection.slug),
+      ...singles.map(single => singleHookNamespace(single.slug)),
+    ]);
+
+    // Everything else the config currently owns handlers for, which the
+    // re-registration will NOT put back and so has to remove.
+    //
+    // Two ways a namespace lands here. An entity deleted or renamed in the
+    // config keeps its handlers, and its table is deliberately retained rather
+    // than dropped -- `nextly prune` is what removes an orphan -- so it stays
+    // addressable and would go on running hooks the config no longer declares.
+    // A plugin switched to `enabled: false` is the same shape: its declarations
+    // registered under the config's ownership while it was enabled, and merely
+    // leaving it out of the rebuild removes nothing.
+    for (const namespace of registry.collectionsOwnedBy("code")) {
+      if (!rebuilt.has(namespace)) {
+        registry.clearCollectionOwnedBy(namespace, "code");
+      }
     }
+
+    reregisterCollectionHooks(collections, registry);
+    reregisterSingleHooks(singles, registry);
+    registry.setSuspendedOwners(suspended);
   };
 }
 
@@ -1276,16 +1271,17 @@ async function applyReload(opts?: {
   // — it is safe to apply immediately, before the schema diff is synced.
   setWebhookAuditEnabled(newConfig.webhookAuditEnabled ?? false);
 
-  // Re-register the config's own hooks, so editing a hook body takes effect and
-  // deleting one stops it firing without a restart.
-  //
-  // Applied here, alongside the audit seam and ahead of all the schema work, for
-  // the same reason that one is: a hook edit changes no table. The reload finds
-  // no diff, and every path below returns before doing anything -- so gating the
-  // re-registration on a successful DDL apply would mean the edit that most
-  // needs it is exactly the edit that never lands. It reads no field tree and
-  // touches no table, so it is safe this early.
-  reloadUndo.push(reregisterConfigHooks(newConfig));
+  // Worked out here and applied only where the reload lands, by `commitReload`.
+  // A hook edit changes no table, so the reload it triggers often finds no diff
+  // and returns early -- which is why the commit has to sit on the no-change
+  // paths as well as after a successful apply, not on the apply alone.
+  const commitConfigHooks = stageConfigHooks(newConfig);
+  let committed = false;
+  const commitReload = (): void => {
+    if (committed) return;
+    committed = true;
+    commitConfigHooks();
+  };
 
   // databaseAdapter doubles as our DI-readiness probe. We don't need any
   // other service from DI in this path — the new gate gets prior-state
@@ -1451,6 +1447,11 @@ async function applyReload(opts?: {
     republishRecordingPolicies(newConfig, { collections: true, singles: true });
     // The live default snapshot was already pruned to the (now empty) present
     // set above, so a removed single's stale defaults are gone by here.
+    //
+    // Nothing was managed, so there is no schema change to wait for and the new
+    // config IS the live one -- this is a landing, and its hooks belong in
+    // place.
+    commitReload();
     return;
   }
 
@@ -2294,6 +2295,12 @@ async function applyReload(opts?: {
     } catch {
       // Non-fatal.
     }
+
+    // The schema, the metadata and the runtime schema are all in step by here,
+    // so the handlers written against them can go in. Also the path a save that
+    // changes only a hook takes: its diff is empty, the apply has nothing to do
+    // and reports success, and the commit still happens.
+    commitReload();
   }
 
   if (!applyResult.success) {
