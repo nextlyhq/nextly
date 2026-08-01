@@ -99,13 +99,21 @@ export const MIN_READABLE_MANIFEST_VERSION = 2;
  * marker version moved. A build that only reorders or renumbers steps leaves
  * what a settled marker claims untouched.
  *
- * Deliberately left at 3 by version 4, which adds a settlement CHECK rather
- * than additional rewriting: the storage a version 3 run produces is the storage
- * a version 4 run produces, and the new check re-examines it rather than
- * changing it. Raising it would refuse every version 3 installation on upgrade
- * with no path forward, which is the wrong answer for storage that is complete.
+ * Version 4 qualifies. A version 3 run settled without ever re-examining the
+ * registries, so a definition saved while that run was in flight could land
+ * behind the rewrite that had already passed and be recorded as complete. The
+ * `already-migrated` path checks structure and parent pointers, neither of which
+ * can see stored vocabulary, so accepting such a marker would report success
+ * over legacy field definitions nothing would revisit. What a version 3 marker
+ * claims is therefore weaker than what this build means by settled, which is the
+ * one thing this constant exists to say.
+ *
+ * Refusing costs nothing an operator can feel: the migration has no caller, so
+ * no database holds a marker of any version, and the refusal names the remedy.
+ * A repair path for a state that cannot exist would be dead code carrying a
+ * maintenance cost for the life of the project.
  */
-export const MIN_COMPLETE_MARKER_VERSION = 3;
+export const MIN_COMPLETE_MARKER_VERSION = 4;
 
 /**
  * Whether a marker's recorded plan is in a format this build can execute.
