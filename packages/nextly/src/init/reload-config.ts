@@ -2055,8 +2055,17 @@ async function applyReload(opts?: {
       const compReg = (await resolve(
         "fieldGroupRegistryService"
       )) as ComponentRegistrySurface;
+      // 🔴 Deferred groups are excluded here too, not only from the DDL.
+      //
+      // Skipping a group's schema change and then persisting its new `fields`
+      // is the worst of both: the registry would describe columns the table
+      // does not have, and the next restart would build a runtime schema from
+      // that description and fail every read and write for it. The metadata and
+      // the storage it describes move together or not at all.
       const codeFirstComponentConfigs = buildComponentSyncPayload(
-        newConfig.fieldGroups ?? []
+        (newConfig.fieldGroups ?? []).filter(
+          group => !skippedComponentSlugs.has(group.slug ?? "")
+        )
       );
       if (codeFirstComponentConfigs.length > 0) {
         await compReg.syncCodeFirstComponents(codeFirstComponentConfigs);
