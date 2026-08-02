@@ -15,7 +15,7 @@ export const section = defineBlock<ContainerProps>({
   name: "core/section",
   version: 1,
   description:
-    "A page region. Renders a landmark element and holds its content to the site's content width.",
+    "A page region. Renders a landmark element, and opts into the site's content width once the site stylesheet defines it.",
   props: {
     as: { type: "select", options: ["section", "header", "footer", "main"] },
     contained: { type: "checkbox" },

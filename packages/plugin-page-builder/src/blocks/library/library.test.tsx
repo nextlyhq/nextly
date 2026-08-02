@@ -24,6 +24,11 @@ import { section } from "./section";
 
 const NODE: BlockNode = { id: "n1", type: "core/box", version: 1, props: {} };
 
+/** Coerce deliberately-malformed stored props, the way a document can hold them. */
+function storedProps(props: unknown): ContainerProps {
+  return props as ContainerProps;
+}
+
 /**
  * Render arguments whose slot draws what it is asked to draw.
  *
@@ -258,5 +263,17 @@ describe("the gate blocks are registrable definitions", () => {
     } finally {
       clearBlocks();
     }
+  });
+});
+
+describe("a container does not trust what is stored", () => {
+  it("falls back to a safe tag when the stored one is not a container tag", () => {
+    // Validation only asks that props be an object, so `as` arrives as data.
+    // A stored void element handed children throws inside React and takes the
+    // page down with it.
+    const html = renderToStaticMarkup(
+      renderContainer(args<ContainerProps>(storedProps({ as: "img" })))
+    );
+    expect(html.startsWith("<div ")).toBe(true);
   });
 });

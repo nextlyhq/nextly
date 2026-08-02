@@ -47,6 +47,9 @@ export const CONTAINER_TAGS = [
   "main",
 ] as const;
 
+/** One of the tags a container may render. */
+export type ContainerTag = (typeof CONTAINER_TAGS)[number];
+
 /**
  * The class that opts an element into the site's content width.
  *
@@ -54,8 +57,19 @@ export const CONTAINER_TAGS = [
  * can change. Gutenberg has the right idea in `theme.json`'s `contentSize`;
  * what it lacks is per-breakpoint control, which the style catalog supplies
  * separately.
+ *
+ * **The rule behind this class does not exist yet.** It belongs to the site
+ * stylesheet, which is where the `content.width` token it reads will live, so
+ * until that ships a contained container carries the class and renders full
+ * width. The class is the seam; naming it now is what lets the rule arrive
+ * later without touching a single stored document.
  */
 export const CONTENT_WIDTH_CLASS = "nx-pb-contained";
+
+/** Whether a stored value is a tag a container may render. */
+function isContainerTag(value: unknown): value is ContainerTag {
+  return CONTAINER_TAGS.some(tag => tag === value);
+}
 
 /**
  * Render a container preset.
@@ -70,7 +84,12 @@ export function renderContainer({
   renderSlot,
   className,
 }: BlockRenderArgs<ContainerProps>): ReactElement {
-  const Tag = props.as ?? "div";
+  // Checked rather than trusted. The type says what an author may write; the
+  // document says what is actually stored, and validation only asks that props
+  // be an object. A stored `as: "img"` would reach React as a void element
+  // handed children and throw, taking the page with it, so an unknown tag falls
+  // back to the one every container can safely be.
+  const Tag = isContainerTag(props.as) ? props.as : "div";
   const classes =
     props.contained === true
       ? `${className} ${CONTENT_WIDTH_CLASS}`

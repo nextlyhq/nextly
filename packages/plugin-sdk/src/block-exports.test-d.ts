@@ -40,16 +40,10 @@ expectTypeOf(goodSupports).toMatchTypeOf<BlockSupports>();
 const typo: BlockSupports = { spaceing: true };
 void typo;
 
-// A plugin adds its own key by augmenting the interface in the package it
-// installed. Doing it here proves the target is reachable from a consumer's own
-// source, which is the only thing that makes the documented workflow real.
-declare module "@nextlyhq/plugin-sdk/blocks" {
-  interface BlockSupportKeys {
-    testOnlyAnimation: true;
-  }
-}
-const augmented: BlockSupports = { testOnlyAnimation: true };
-void augmented;
+// Augmenting the interface is proved from a package that CONSUMES this one, in
+// `plugin-page-builder`. Doing it here would widen the type for this package's
+// own exhaustiveness guard, which is the thing that keeps the vocabulary from
+// drifting away from the registry.
 
 // The context a block renders against is the renderer's to name, and a block
 // that declares one gets it typed rather than as `unknown`.
