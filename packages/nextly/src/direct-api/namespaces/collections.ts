@@ -349,16 +349,21 @@ export async function deleteEntry<
   }
 
   if (args.where) {
-    const bulkResult = await ctx.collectionsHandler.bulkDeleteByQuery(
-      {
-        collectionName: args.collection,
-        where: args.where,
-        overrideAccess: config.overrideAccess,
-        user: config.user,
-        context: config.context,
-        disableRevalidate: config.disableRevalidate,
-      },
-      { limit: 1000 }
+    // Captured before the closure: the id/where branch narrows `where`, and
+    // that narrowing does not reach inside a callback.
+    const where = args.where;
+    const { result: bulkResult, warnings } = await collectingWarnings(() =>
+      ctx.collectionsHandler.bulkDeleteByQuery(
+        {
+          collectionName: args.collection,
+          where,
+          overrideAccess: config.overrideAccess,
+          user: config.user,
+          context: config.context,
+          disableRevalidate: config.disableRevalidate,
+        },
+        { limit: 1000 }
+      )
     );
 
     // The by-where path keeps the legacy `DeleteResult` shape because a
@@ -371,6 +376,7 @@ export async function deleteEntry<
     return {
       deleted: true,
       ids: bulkResult.successes.map(s => s.id),
+      ...(warnings ? { warnings } : {}),
     };
   }
 

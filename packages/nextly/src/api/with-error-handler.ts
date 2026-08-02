@@ -20,6 +20,7 @@ import { createRequire } from "node:module";
 
 import { isDbError } from "../database/errors";
 import { NextlyError } from "../errors/nextly-error";
+import { withSideEffectWarnings } from "../hooks/side-effect-warnings";
 import { getNextlyLogger } from "../observability/logger";
 import { getGlobalOnError, type OnErrorHook } from "../observability/on-error";
 
@@ -87,7 +88,17 @@ export function withErrorHandler<TArgs extends unknown[]>(
     let response: Response;
 
     try {
-      response = await handler(...args);
+      // Opens the post-commit warning scope for the standalone handlers this
+      // package exports for direct re-export (`nextly/api/singles-detail` and
+      // friends). Those never pass through `createDynamicHandlers`, so without
+      // this a hook that failed after their write committed would be logged
+      // and dropped while the equivalent dynamic route reported it.
+      //
+      // Scopes nest, so a handler reached through the dynamic router is inside
+      // that request's scope as well and the failure still reaches both.
+      ({ result: response } = await withSideEffectWarnings(() =>
+        handler(...args)
+      ));
     } catch (err) {
       // (1) Re-throw Next.js sentinels FIRST. Without this, `redirect()` /
       // `notFound()` inside a handler get silently converted to 500s.

@@ -138,3 +138,47 @@ describe("a single reports its post-commit failures the same way", () => {
     expect(JSON.stringify(updated.warnings)).not.toContain("single-secret");
   });
 });
+
+describe("every mutation shape reports its failures, not just the single-item ones", () => {
+  it("reports a where-based delete's failures on DeleteResult", async () => {
+    // The `where` branch is a different service call from the id branch, and
+    // it runs the same afterDelete hooks. Wrapping only the id branch meant a
+    // caller deleting by query was told nothing while the equivalent delete by
+    // id reported it -- the same operation, two contracts.
+    //
+    // `afterChange` maps to the create/update phases; a delete fires
+    // `afterDelete`. Registering the wrong phase is how a test like this ends
+    // up asserting against a hook that never ran.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "notes",
+          fields: [text({ name: "body" })],
+          hooks: {
+            afterDelete: [
+              () => {
+                throw NextlyError.internal({
+                  logContext: { detail: "delete-secret" },
+                });
+              },
+            ],
+          },
+        }),
+      ],
+    });
+
+    const created = await current.nextly.create({
+      collection: "notes",
+      data: { title: "doomed", body: "doomed" },
+    });
+
+    const deleted = await current.nextly.delete({
+      collection: "notes",
+      where: { id: { equals: (created.item as { id: string }).id } },
+    });
+
+    expect("ids" in deleted && deleted.ids).toHaveLength(1);
+    expect("warnings" in deleted && deleted.warnings).toHaveLength(1);
+    expect(JSON.stringify(deleted)).not.toContain("delete-secret");
+  });
+});

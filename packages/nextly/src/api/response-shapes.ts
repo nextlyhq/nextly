@@ -12,8 +12,8 @@
  *   respondAction       to { message, ...result }            (non-CRUD mutation)
  *   respondData         to T (bare object)                   (non-CRUD read)
  *   respondCount        to { total }                         (count)
- *   respondBulk         to { message, items, errors }        (bulk by id)
- *   respondBulkUpload   to { message, items, errors }        (bulk upload)
+ *   respondBulk         to { message, items, errors, warnings? } (bulk by id)
+ *   respondBulkUpload   to { message, items, errors, warnings? } (bulk upload)
  *
  * Errors do NOT use these helpers. Errors flow through `withErrorHandler`
  * (REST API) or the routeHandler error path (dispatcher API), both of
@@ -179,7 +179,17 @@ export function respondBulk<T>(
   errors: PerItemError[],
   init?: ResponseInit
 ): Response {
-  return jsonResponse({ message, items, errors }, init);
+  // Same rule as `respondMutation`: a hook that failed after the write
+  // committed is reported beside the result rather than turned into an error.
+  // `errors` is per-ITEM and means that item did not happen; `warnings` is
+  // per-OPERATION and means every item happened and a side effect did not.
+  const warnings = currentSideEffectWarnings();
+  return jsonResponse(
+    warnings.length > 0
+      ? { message, items, errors, warnings }
+      : { message, items, errors },
+    init
+  );
 }
 
 /**
@@ -195,5 +205,15 @@ export function respondBulkUpload<T>(
   errors: BulkUploadError[],
   init?: ResponseInit
 ): Response {
-  return jsonResponse({ message, items, errors }, init);
+  // Same rule as `respondMutation`: a hook that failed after the write
+  // committed is reported beside the result rather than turned into an error.
+  // `errors` is per-ITEM and means that item did not happen; `warnings` is
+  // per-OPERATION and means every item happened and a side effect did not.
+  const warnings = currentSideEffectWarnings();
+  return jsonResponse(
+    warnings.length > 0
+      ? { message, items, errors, warnings }
+      : { message, items, errors },
+    init
+  );
 }
