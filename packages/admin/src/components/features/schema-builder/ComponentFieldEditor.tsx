@@ -468,8 +468,8 @@ export function ComponentFieldEditor({
       {/* PR H feedback 2.2: subtle EditorAlert replaces the
           bg-primary/5 Tip box. */}
       <EditorAlert>
-        Components are reusable field groups. Each instance stores its own data
-        in a separate table.
+        Field groups are reusable sets of fields. Each instance stores its own
+        data in a separate table.
       </EditorAlert>
     </div>
   );
