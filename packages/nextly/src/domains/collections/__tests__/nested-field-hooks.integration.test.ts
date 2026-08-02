@@ -84,10 +84,10 @@ async function boot(): Promise<TestNextly> {
             access: { read: () => false },
           }),
           // Allowed ONLY while `classification` is present as evidence. Its rule
-          // reads the row as `data`, so evaluating it a second time against the
-          // already-stripped row (where classification is gone) would wrongly
-          // deny it — which is why the finalize step replays decisions instead of
-          // re-evaluating.
+          // reads the row as `data`, so a later pass judging it against the
+          // already-stripped row (where classification is gone) would wrongly deny
+          // it — which is why each pass first RESTORES the values a prior pass
+          // removed as evidence, then re-runs the rule against that restored row.
           text({
             name: "region",
             access: {
@@ -743,12 +743,13 @@ describe("a target's field hooks apply to rows reached through a relationship", 
     if (org) expect(org.classification).toBeUndefined();
   });
 
-  it("keeps a field whose access depended on a denied sibling, judged once", async () => {
+  it("keeps a field whose access depended on a denied sibling, evidence restored", async () => {
     // `region` is allowed only while `classification` is present; `classification`
     // is denied. The first pass judges `region` against the complete row (keeps
-    // it) and removes `classification`. The finalize step must REPLAY that
-    // decision, not re-judge `region` against the now-stripped row — re-judging
-    // would wrongly deny it, unlike a direct read which evaluates it once.
+    // it) and removes `classification`. Every later pass must RESTORE the removed
+    // `classification` as evidence and re-run the rule against the restored row,
+    // not re-judge `region` against the stripped row — that would wrongly deny it,
+    // unlike a direct read where the sibling is still present.
     const t = await boot();
     await t.nextly.create({
       collection: ORGS,
@@ -775,7 +776,7 @@ describe("a target's field hooks apply to rows reached through a relationship", 
     const author = expanded.data!.author as Record<string, unknown>;
     const org = author.organization as Record<string, unknown> | undefined;
     expect(org).toBeTruthy();
-    // Kept: judged once, while its evidence was still present.
+    // Kept: every pass re-ran the rule with its evidence restored.
     expect(org!.region).toBe("emea");
     // The denied sibling is still withheld.
     expect(org!.classification).toBeUndefined();
@@ -824,8 +825,9 @@ describe("a target's field hooks apply to rows reached through a relationship", 
   it("judges a repeater row a parent hook appends after the first pass", async () => {
     // The first pass strips the denied `code` from the existing division. A
     // parent hook then appends a NEW division carrying its own `code`. That row
-    // has no recorded verdict, so the pass after the hooks must judge it fresh
-    // and strip its `code` — an index-keyed replay would skip the appended row.
+    // has no removed-evidence recorded against it, so the pass after the hooks
+    // judges it against its own content and strips its `code` — nothing about the
+    // existing rows lets the appended one inherit an "allowed" outcome.
     const t = await boot();
     await t.nextly.create({
       collection: ORGS,
