@@ -10,7 +10,11 @@
 import { isTokenRef } from "../document";
 import { describeValue, pointer } from "../issue-text";
 import { isPlainRecord } from "../plain-record";
-import type { ValidationIssue, ValidationMode } from "../validation";
+import type {
+  TokenLookup,
+  ValidationIssue,
+  ValidationMode,
+} from "../validation";
 
 import { getStyleProperty } from "./catalog";
 import { isStyleLeaf, shapeLeaves } from "./catalog-types";
@@ -183,7 +187,8 @@ function truncationNotice(
 function leafIssues(
   leaf: StyleLeaf,
   value: unknown,
-  path: string
+  path: string,
+  tokens?: TokenLookup
 ): ValidationIssue[] {
   // A token reference substitutes for the whole leaf value, so it is checked
   // against the leaf's declared token kinds rather than its literal shape.
@@ -210,6 +215,43 @@ function leafIssues(
           code: "token-not-allowed",
           severity: "error",
           message: `This value accepts only literals, not the design token "${describeValue(value.$token)}".`,
+        },
+      ];
+    }
+    // Whether the NAME resolves is a question about the site, not about the
+    // document, so it is asked only when the caller supplied something that can
+    // answer for every token the site defines.
+    //
+    // Both answers are WARNINGS in either mode, and deliberately so. A document
+    // is data; a token table is configuration. An unresolved reference emits a
+    // custom property that resolves to nothing, so the browser drops one
+    // declaration and the element renders with what it inherits — a visual
+    // fault, not a structural one. Reporting it as an error would mean renaming
+    // a token makes every document that used it unpublishable, and would arm
+    // the trap where defining a site's FIRST token invalidates every other
+    // reference in storage.
+    if (tokens === undefined) return [];
+    const name = value.$token;
+    const kind = tokens.kindOf(name);
+    if (kind === undefined) {
+      return [
+        {
+          path,
+          code: "unknown-token",
+          severity: "warning",
+          message: `This site defines no design token named "${describeValue(name)}".`,
+          suggestion: "Create the token, or store a literal value instead.",
+        },
+      ];
+    }
+    if (!leaf.tokenKinds.includes(kind)) {
+      return [
+        {
+          path,
+          code: "token-kind-mismatch",
+          severity: "warning",
+          message: `The design token "${describeValue(name)}" is a ${kind}, and this value takes ${leaf.tokenKinds.join(" or ")}.`,
+          suggestion: `Use a token of kind ${leaf.tokenKinds.join(" or ")}.`,
         },
       ];
     }
@@ -359,7 +401,8 @@ function partIssues(
   path: string,
   partLabel: string,
   budget?: StyleIssueBudget,
-  spent = 0
+  spent = 0,
+  tokens?: TokenLookup
 ): ValidationIssue[] {
   if (!isPlainRecord(value)) {
     return [
@@ -411,7 +454,8 @@ function partIssues(
         partValue,
         pointer(path, key),
         budget,
-        spent + issues.length
+        spent + issues.length,
+        tokens
       )
     );
   }
@@ -424,16 +468,41 @@ function shapeIssues(
   value: unknown,
   path: string,
   budget?: StyleIssueBudget,
-  spent = 0
+  spent = 0,
+  tokens?: TokenLookup
 ): ValidationIssue[] {
-  if (isStyleLeaf(shape)) return leafIssues(shape, value, path);
+  if (isStyleLeaf(shape)) return leafIssues(shape, value, path, tokens);
   switch (shape.kind) {
     case "logicalSides":
-      return partIssues(shape.sides, value, path, "side", budget, spent);
+      return partIssues(
+        shape.sides,
+        value,
+        path,
+        "side",
+        budget,
+        spent,
+        tokens
+      );
     case "logicalCorners":
-      return partIssues(shape.corners, value, path, "corner", budget, spent);
+      return partIssues(
+        shape.corners,
+        value,
+        path,
+        "corner",
+        budget,
+        spent,
+        tokens
+      );
     case "object":
-      return partIssues(shape.fields, value, path, "field", budget, spent);
+      return partIssues(
+        shape.fields,
+        value,
+        path,
+        "field",
+        budget,
+        spent,
+        tokens
+      );
     case "union": {
       // A union accepts the value if any variant does. Variants are tried in
       // order and the first clean one wins; when none accepts, the first
@@ -441,7 +510,7 @@ function shapeIssues(
       // lists first and therefore the one an author most likely intended.
       let best: ValidationIssue[] | undefined;
       for (const variant of shape.of) {
-        const issues = shapeIssues(variant, value, path, budget, spent);
+        const issues = shapeIssues(variant, value, path, budget, spent, tokens);
         if (issues.length === 0) return [];
         // Prefer whichever variant the value structurally resembles: its issues
         // point at the offending leaf, while a mismatched variant only reports
@@ -471,7 +540,8 @@ export function validateStyleValues(
   basePath: string,
   mode: ValidationMode,
   budget?: StyleIssueBudget,
-  skipValueParsing = false
+  skipValueParsing = false,
+  tokens?: TokenLookup
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   // Lazily enumerated for the same reason the composite walk is: a style map
@@ -505,7 +575,7 @@ export function validateStyleValues(
     // values say, and parsing each one builds an AST apiece. The property is
     // still recognised, which is cheap; reading its value is not.
     if (!skipValueParsing) {
-      issues.push(...shapeIssues(entry.shape, value, path, budget));
+      issues.push(...shapeIssues(entry.shape, value, path, budget, 0, tokens));
     }
     chargeBudget(budget, issues.slice(before));
   }

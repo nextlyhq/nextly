@@ -612,6 +612,89 @@ describe("validation never throws on adversarial input", () => {
     ).toBe(true);
   });
 
+  it("checks class ids only against a site that was supplied", () => {
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/text",
+          version: 1,
+          props: {},
+          classes: ["c_known", "c_missing"],
+        },
+      ],
+    });
+    const base = { breakpoints: FIXTURE_BREAKPOINTS, mode: "strict" as const };
+
+    // Without a class library there is nothing to be wrong about. This is the
+    // anti-D3 property: defining a site's first class must not invalidate
+    // every document that already lists one.
+    expect(validate(doc, base).filter(i => i.code === "unknown-class")).toEqual(
+      []
+    );
+
+    const withSite = validate(doc, {
+      ...base,
+      classes: { has: (id: string) => id === "c_known" },
+    }).filter(i => i.code === "unknown-class");
+    expect(withSite).toHaveLength(1);
+    expect(withSite[0]?.path).toBe("/nodes/0/classes/1");
+    // Warning even in strict mode: a class the site dropped costs the element
+    // that styling, and must not make the document unpublishable.
+    expect(withSite[0]?.severity).toBe("warning");
+  });
+
+  it("reports a realistic document the same way with and without a site", () => {
+    // End-to-end rather than per-check: one node carrying a good token, a
+    // missing token, a token of the wrong kind, a known class and a dropped
+    // one. What matters is that supplying the site ADDS warnings and changes
+    // nothing else — no error appears, and no issue disappears.
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/box",
+          version: 1,
+          props: {},
+          classes: ["c_card", "c_gone"],
+          styles: {
+            base: {
+              base: {
+                color: { $token: "color.primary" },
+                backgroundColor: { $token: "color.missing" },
+                gap: { $token: "color.primary" },
+                width: "50%",
+              },
+            },
+          },
+        },
+      ],
+    });
+    const base = { breakpoints: FIXTURE_BREAKPOINTS, mode: "strict" as const };
+    const site = {
+      ...base,
+      tokens: {
+        kindOf: (name: string) =>
+          name === "color.primary" ? ("color" as const) : undefined,
+      },
+      classes: { has: (id: string) => id === "c_card" },
+    };
+
+    expect(validate(doc, base)).toEqual([]);
+
+    const issues = validate(doc, site);
+    expect(issues.every(issue => issue.severity === "warning")).toBe(true);
+    expect(issues.map(issue => `${issue.code} ${issue.path}`).sort()).toEqual([
+      "token-kind-mismatch /nodes/0/styles/base/base/gap",
+      "unknown-class /nodes/0/classes/1",
+      "unknown-token /nodes/0/styles/base/base/backgroundColor",
+    ]);
+  });
+
   it("rejects an oversized string prop by byte size without materializing it", () => {
     // A single node well under the node/depth caps but carrying a ~50MB string:
     // the bounded byte counter must reject it quickly, not allocate a full copy.

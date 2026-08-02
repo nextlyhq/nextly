@@ -18,6 +18,69 @@ function codes(values: StyleValues): string[] {
   return check(values).map(issue => issue.code);
 }
 
+describe("a design token reference is checked against the site", () => {
+  const tokens = {
+    kindOf: (name: string) =>
+      name === "color.primary"
+        ? ("color" as const)
+        : name === "space.4"
+          ? ("dimension" as const)
+          : undefined,
+  };
+  const strict = (values: StyleValues, ctx?: typeof tokens) =>
+    validateStyleValues(values, "/styles", "strict", undefined, false, ctx);
+
+  it("says nothing at all when no site context was supplied", () => {
+    // The property the whole decision rests on. A check that fires only once a
+    // lookup appears would mean defining a site's FIRST token invalidates every
+    // other reference already in storage, which is the trap Plan 01 D3 was
+    // overturned for. Not being given the data means not answering.
+    expect(strict({ color: { $token: "nope.nothing" } })).toEqual([]);
+    expect(strict({ color: { $token: "color.primary" } })).toEqual([]);
+  });
+
+  it("accepts a token the site defines with the kind the value takes", () => {
+    expect(strict({ color: { $token: "color.primary" } }, tokens)).toEqual([]);
+    expect(strict({ gap: { $token: "space.4" } }, tokens)).toEqual([]);
+  });
+
+  it("warns, and never errors, when the site defines no such token", () => {
+    const issues = strict({ color: { $token: "color.nope" } }, tokens);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.code).toBe("unknown-token");
+    // Asserted in STRICT mode on purpose: an unresolved token costs one
+    // declaration, so renaming a token must never make stored documents
+    // unpublishable. A later change that escalates this fails here.
+    expect(issues[0]?.severity).toBe("warning");
+    expect(issues[0]?.path).toBe("/styles/color");
+  });
+
+  it("warns when the token exists but is the wrong kind", () => {
+    const issues = strict({ gap: { $token: "color.primary" } }, tokens);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.code).toBe("token-kind-mismatch");
+    expect(issues[0]?.severity).toBe("warning");
+    expect(issues[0]?.message).toContain("color");
+  });
+
+  it("keeps refusing a token where the value takes only literals", () => {
+    // Decidable from the catalog alone, so it stays an error and needs no
+    // site context: no configuration makes this leaf accept a token.
+    const issues = strict({ display: { $token: "color.primary" } }, tokens);
+    expect(issues[0]?.code).toBe("token-not-allowed");
+    expect(issues[0]?.severity).toBe("error");
+  });
+
+  it("reaches a token nested inside a composite", () => {
+    const issues = strict(
+      { padding: { blockStart: { $token: "space.nope" } } },
+      tokens
+    );
+    expect(issues[0]?.code).toBe("unknown-token");
+    expect(issues[0]?.path).toBe("/styles/padding/blockStart");
+  });
+});
+
 describe("unknown properties", () => {
   it("is an error under strict validation", () => {
     const issues = validateStyleValues({ nope: "1px" }, "/styles", "strict");

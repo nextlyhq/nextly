@@ -20,6 +20,7 @@ import { describeValue, pointer } from "./issue-text";
 import { DEFAULT_LIMITS, LIMIT_WARNING_RATIO } from "./limits";
 import type { DocumentLimits } from "./limits";
 import { isPlainRecord } from "./plain-record";
+import type { TokenKind } from "./style/catalog-types";
 import {
   newStyleIssueBudget,
   validateStyleValues,
@@ -55,6 +56,29 @@ export interface BlockTypeLookup {
 }
 
 /**
+ * The site's design tokens, for checking the NAMES a document references.
+ *
+ * Supplying this states that the caller can answer for EVERY token the site
+ * defines. A lookup that knows only some of them reports the rest as unknown,
+ * which is survivable only because an unknown name is a warning and never an
+ * error — see `unknown-token` in the issue table.
+ *
+ * `kindOf` answers with the kind rather than a boolean so one call settles both
+ * questions a reference raises: whether the token exists, and whether it is the
+ * kind this leaf accepts. Two methods would let a caller check existence and
+ * forget the kind.
+ */
+export interface TokenLookup {
+  /** The kind of the named token, or undefined when the site defines none. */
+  kindOf(name: string): TokenKind | undefined;
+}
+
+/** The site's named classes, for checking the ids a node lists. */
+export interface ClassLookup {
+  has(id: string): boolean;
+}
+
+/**
  * Everything validation needs beyond the document itself. The engine never
  * reads storage: the caller supplies the site breakpoints and mode, and
  * optionally a block-type lookup and non-default limits.
@@ -64,6 +88,13 @@ export interface ValidationContext {
   mode: ValidationMode;
   registry?: BlockTypeLookup;
   limits?: DocumentLimits;
+  /**
+   * The site's tokens and classes. Both are optional, and absent means the
+   * corresponding names are not checked at all — a document is validated
+   * against what it was given, never against what it might have been.
+   */
+  tokens?: TokenLookup;
+  classes?: ClassLookup;
 }
 
 /**
@@ -110,6 +141,11 @@ export const ISSUE_CODES = {
     "A component-instance node does not reference a component.",
   "unknown-style-property":
     "A style values key is not a property in the style catalog.",
+  "unknown-token":
+    "A design token reference names a token the site does not define.",
+  "token-kind-mismatch":
+    "A design token is not the kind of value its property accepts.",
+  "unknown-class": "A node lists a class id the site does not define.",
   "invalid-style-value":
     "A style value does not match the shape its property declares.",
   "token-not-allowed":
@@ -590,7 +626,7 @@ function validateNode(
   }
 
   validateSlots(node, path, state);
-  validateClasses(node, path, issues);
+  validateClasses(node, path, issues, state.ctx);
   validateAttributes(node, path, issues);
   validateStyles(node, path, state);
   validateVisibility(node, path, state);
@@ -678,7 +714,8 @@ function validateSlots(
 function validateClasses(
   node: BlockNode,
   path: string,
-  issues: ValidationIssue[]
+  issues: ValidationIssue[],
+  ctx: ValidationContext
 ): void {
   if (node.classes === undefined) return;
   // Index-based, not `.every` (which skips array holes), so a sparse classes
@@ -698,6 +735,24 @@ function validateClasses(
       code: "invalid-classes",
       severity: "error",
       message: "A node classes field must be an array of class-id strings.",
+    });
+    return;
+  }
+  const lookup = ctx.classes;
+  if (lookup === undefined) return;
+  // A WARNING in both modes, never an error. A class the site no longer defines
+  // costs the element that class's styling and nothing else, and a document is
+  // data while a class library is site configuration: deleting a class must not
+  // make every document that used it unpublishable.
+  for (let index = 0; index < node.classes.length; index += 1) {
+    const id = node.classes[index];
+    if (typeof id !== "string" || lookup.has(id)) continue;
+    issues.push({
+      path: pointer(pointer(path, "classes"), index),
+      code: "unknown-class",
+      severity: "warning",
+      message: `The class "${describeValue(id)}" is not defined by this site.`,
+      suggestion: "Create the class, or remove it from this node.",
     });
   }
 }
@@ -910,7 +965,8 @@ function validateStyleEnvelope(
           bpPath,
           state.ctx.mode,
           state.styleBudget,
-          state.skipValueParsing
+          state.skipValueParsing,
+          state.ctx.tokens
         )
       );
     }
