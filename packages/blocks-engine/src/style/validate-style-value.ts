@@ -50,16 +50,49 @@ const REJECTION_MESSAGES = {
 export interface StyleIssueBudget {
   remaining: number;
   truncated: boolean;
+  /**
+   * How many more bytes of JSON-Pointer path this run may return.
+   *
+   * Counting issues alone does not bound what is returned. A pointer repeats
+   * every key above it, so one very long key — a breakpoint id, a property
+   * name — is copied into every issue beneath it, and a document well inside
+   * the byte cap can produce output hundreds of times its own size. Charging
+   * the paths bounds the ANSWER, the way the byte cap bounds the question.
+   */
+  pathBytes: number;
 }
 
 /** The default number of style issues one document validation reports. */
 export const MAX_STYLE_ISSUES = 200;
 
+/**
+ * The default path allowance for one run. Generous against real documents —
+ * 200 issues at 250 bytes of pointer each — and small enough that no key can
+ * multiply itself across the whole report.
+ */
+export const MAX_STYLE_ISSUE_PATH_BYTES = 50_000;
+
 /** A fresh budget for one validation run. */
 export function newStyleIssueBudget(
-  remaining: number = MAX_STYLE_ISSUES
+  remaining: number = MAX_STYLE_ISSUES,
+  pathBytes: number = MAX_STYLE_ISSUE_PATH_BYTES
 ): StyleIssueBudget {
-  return { remaining, truncated: false };
+  return { remaining, truncated: false, pathBytes };
+}
+
+/** Charge a run for the issues just produced: their count and their paths. */
+function chargeBudget(
+  budget: StyleIssueBudget | undefined,
+  produced: readonly ValidationIssue[]
+): void {
+  if (budget === undefined) return;
+  budget.remaining -= produced.length;
+  for (const issue of produced) budget.pathBytes -= issue.path.length;
+}
+
+/** Whether a run has spent either allowance and must stop. */
+function budgetSpent(budget: StyleIssueBudget): boolean {
+  return budget.remaining <= 0 || budget.pathBytes <= 0;
 }
 
 /** True when a token of the given kind may be stored at this leaf. */
@@ -349,7 +382,10 @@ function partIssues(
     // Counts what this walk has produced ABOVE this level as well as at it:
     // comparing only the local total hands every nested composite the whole
     // allowance again, so a value one level deeper reported past the cap.
-    if (budget !== undefined && spent + issues.length >= budget.remaining) {
+    if (
+      budget !== undefined &&
+      (budgetSpent(budget) || spent + issues.length >= budget.remaining)
+    ) {
       issues.push(...truncationNotice(budget, path));
       break;
     }
@@ -447,7 +483,7 @@ export function validateStyleValues(
     // byte cap can hold a hundred thousand keys. Stopping at a budget keeps the
     // work and the returned array proportional to what a reader can use, and
     // says so rather than going quiet.
-    if (budget !== undefined && budget.remaining <= 0) {
+    if (budget !== undefined && budgetSpent(budget)) {
       issues.push(...truncationNotice(budget, basePath));
       break;
     }
@@ -462,7 +498,7 @@ export function validateStyleValues(
         severity: mode === "strict" ? "error" : "warning",
         message: `"${describeValue(property)}" is not a style property.`,
       });
-      if (budget !== undefined) budget.remaining -= issues.length - before;
+      chargeBudget(budget, issues.slice(before));
       continue;
     }
     // A document that already failed the byte cap is rejected whatever its
@@ -471,7 +507,7 @@ export function validateStyleValues(
     if (!skipValueParsing) {
       issues.push(...shapeIssues(entry.shape, value, path, budget));
     }
-    if (budget !== undefined) budget.remaining -= issues.length - before;
+    chargeBudget(budget, issues.slice(before));
   }
   return issues;
 }

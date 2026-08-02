@@ -129,6 +129,18 @@ describe("composite shapes", () => {
     expect(codes({ position: /x/ })).toEqual(["invalid-style-value"]);
   });
 
+  it("refuses a token reference that is not a plain record", () => {
+    // An array or a Date decorated with `$token` reads as a reference and then
+    // serializes to `[]` or a string, losing the token on the way to storage.
+    const decorated = Object.assign([], { $token: "color.primary" });
+    expect(codes({ color: decorated as never })).toEqual([
+      "invalid-style-value",
+    ]);
+    const dated = Object.assign(new Date(), { $token: "color.primary" });
+    expect(codes({ color: dated as never })).toEqual(["invalid-style-value"]);
+    expect(codes({ color: { $token: "color.primary" } })).toEqual([]);
+  });
+
   it("accepts a record with no prototype, which JSON leaves alone", () => {
     const sides = Object.create(null) as Record<string, unknown>;
     sides.inlineStart = "2rem";
@@ -720,6 +732,30 @@ describe("the issue budget reaches composites too", () => {
     expect(issues.length).toBeLessThanOrEqual(MAX_STYLE_ISSUES + 1);
     // A composite that stops early must say so, not return a short list that
     // reads as complete.
+    expect(issues.at(-1)?.code).toBe("style-issues-truncated");
+  });
+
+  it("bounds the total path text, not only the number of issues", () => {
+    // A pointer repeats every key above it. One very long key is therefore
+    // copied into every issue beneath it, so a document inside the byte cap
+    // can produce output hundreds of times its own size: counting issues
+    // alone bounds the question and not the answer.
+    const longKey = "b".repeat(200_000);
+    const values: Record<string, unknown> = {};
+    for (let index = 0; index < 199; index += 1) values[`nope${index}`] = "1px";
+    const budget = newStyleIssueBudget();
+    const issues = validateStyleValues(
+      values,
+      `/nodes/0/styles/base/${longKey}`,
+      "strict",
+      budget
+    );
+    const totalPathBytes = issues.reduce(
+      (sum, issue) => sum + issue.path.length,
+      0
+    );
+    // Without a path allowance this is 199 x 200 kB of pointer text.
+    expect(totalPathBytes).toBeLessThan(2_000_000);
     expect(issues.at(-1)?.code).toBe("style-issues-truncated");
   });
 });
@@ -2459,6 +2495,10 @@ describe("a deferred value still needs its name", () => {
     expect(codes({ color: "env(initial)" })).toEqual(["invalid-style-value"]);
     expect(codes({ width: "env(default)" })).toEqual(["invalid-style-value"]);
     expect(codes({ width: "env(titlebar-area-x 1)" })).toEqual([]);
+    // An explicit `+` is integer syntax, so refusing it refuses a reference
+    // the browser resolves.
+    expect(codes({ width: "env(viewport-segment-width +1 0)" })).toEqual([]);
+    expect(codes({ width: "env(foo 1.5)" })).toEqual(["invalid-style-value"]);
     expect(codes({ width: "env(foo 0, 1px)" })).toEqual([]);
   });
 
@@ -2573,6 +2613,23 @@ describe("an expression of bare numbers is a number", () => {
     expect(codes({ width: "clamp(10%, 1, 20%)" })).toEqual([
       "invalid-style-value",
     ]);
+  });
+
+  it("judges what it can read when part of the expression it cannot", () => {
+    // No value of `--x` makes an area or a length-plus-number valid, so the
+    // unreadable operand must not excuse the readable mistake beside it.
+    expect(codes({ width: "calc(1px * 1px + var(--x))" })).toEqual([
+      "invalid-style-value",
+    ]);
+    expect(codes({ width: "calc(1px + 1 + var(--x))" })).toEqual([
+      "invalid-style-value",
+    ]);
+    // Order does not matter: the summands still have to agree with each other.
+    expect(codes({ width: "calc(var(--x) + 1px + 1)" })).toEqual([
+      "invalid-style-value",
+    ]);
+    // The result itself stays unknown, so a sound expression still stores.
+    expect(codes({ width: "calc(1px * 2 + var(--x))" })).toEqual([]);
   });
 
   it("reads the argument of a function whose result is fixed", () => {

@@ -624,52 +624,74 @@ function numericType(
   percentBase: string
 ): TypeResult {
   if (terms.length === 0 || terms.length % 2 === 0) return "unknown";
-  const operands: TypeResult[] = [];
+  // Narrowed as it is built: an operand that is already invalid decides the
+  // whole expression, so nothing past it needs a type at all.
+  const operands: (NumericType | "unknown")[] = [];
   const symbols: string[] = [];
   for (let index = 0; index < terms.length; index += 1) {
     const term = terms[index];
     if (term === undefined) return "unknown";
     if (index % 2 === 0) {
-      operands.push(termType(term, percentBase));
+      const type = termType(term, percentBase);
+      if (type === "invalid") return "invalid";
+      operands.push(type);
       continue;
     }
     if (term.type !== "Operator") return "unknown";
     symbols.push(term.value.trim());
   }
-  if (operands.some(type => type === "invalid")) return "invalid";
-  if (operands.some(type => type === "unknown")) return "unknown";
-  const known = operands as NumericType[];
-  const first = known[0];
+  // An unreadable operand makes the RESULT unreadable, but it does not make the
+  // rest of the expression unreadable. `calc(1px * 1px + var(--x))` multiplies
+  // two lengths whatever `--x` turns out to be, so the parts that can be judged
+  // still are, and the unknown is carried alongside them.
+  const first = operands[0];
   if (first === undefined) return "unknown";
-  const summands: NumericType[] = [first];
+  const summands: (NumericType | "unknown")[] = [first];
   for (let index = 0; index < symbols.length; index += 1) {
     const symbol = symbols[index];
-    const right = known[index + 1];
+    const right = operands[index + 1];
     const left = summands[summands.length - 1];
     if (right === undefined || left === undefined) return "unknown";
     if (symbol === "*" || symbol === "/") {
+      const known = left !== "unknown" && right !== "unknown";
       // Scaling a quantity is multiplying it by a number: `1px * 1px` is an
       // area and CSS has nowhere to put one. Asked of each product as it
       // forms, because a later division can cancel the area back down to a
       // length and the final type alone would not show it ever existed.
       // Division is not symmetric with it — `1px / 1px` is a plain ratio.
-      if (symbol === "*" && left.size > 0 && right.size > 0) return "invalid";
-      summands[summands.length - 1] = timesType(left, right, symbol === "/");
+      if (symbol === "*" && known && left.size > 0 && right.size > 0) {
+        return "invalid";
+      }
+      summands[summands.length - 1] = known
+        ? timesType(left, right, symbol === "/")
+        : "unknown";
       continue;
     }
     if (symbol !== "+" && symbol !== "-") return "unknown";
     summands.push(right);
   }
-  let total = summands[0];
-  if (total === undefined) return "unknown";
-  for (let index = 1; index < summands.length; index += 1) {
-    const summand = summands[index];
-    if (summand === undefined) return "unknown";
-    const combined = addedType(total, summand);
-    if (combined === "invalid" || combined === "unknown") return combined;
-    total = combined;
+  // Every summand describes one quantity, so any two that are readable have to
+  // agree with each other even when a third is not readable at all.
+  let agreed: NumericType | undefined;
+  let anyUnknown = false;
+  for (const summand of summands) {
+    if (summand === "unknown") {
+      anyUnknown = true;
+      continue;
+    }
+    if (agreed === undefined) {
+      agreed = summand;
+      continue;
+    }
+    const combined = addedType(agreed, summand);
+    if (combined === "invalid") return "invalid";
+    if (combined === "unknown") {
+      anyUnknown = true;
+      continue;
+    }
+    agreed = combined;
   }
-  return total;
+  return anyUnknown || agreed === undefined ? "unknown" : agreed;
 }
 
 /**
@@ -836,7 +858,10 @@ function isCustomIdentifier(name: string): boolean {
 
 /** Whether a node is a non-negative integer, which is what indexes a value. */
 function isIndex(node: CssNode): boolean {
-  return node.type === "Number" && /^\d+$/.test(node.value);
+  // An explicit `+` is valid integer syntax, so the spelling is not the test:
+  // `env(viewport-segment-width +1 0)` is a reference the browser resolves. A
+  // decimal point is not an integer, which is why this is not a numeric parse.
+  return node.type === "Number" && /^\+?\d+$/.test(node.value);
 }
 
 /**
