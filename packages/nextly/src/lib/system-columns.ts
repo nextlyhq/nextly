@@ -403,6 +403,38 @@ export function systemColumnNames(
   return SYSTEM_COLUMNS.filter(predicate).flatMap(bothSpellings);
 }
 
+/**
+ * The physical column a field name becomes.
+ *
+ * Must match how the generator for that entity spells it, or a reservation checked against the
+ * result protects the wrong name. The component generator applies exactly this rule, including
+ * dropping the underscore its own substitution introduces before a leading capital — which is why
+ * `CreatedAt` and `createdAt` reach the same column and both have to be refused.
+ */
+export function toPhysicalColumnName(fieldName: string): string {
+  return fieldName
+    .replace(/([A-Z])/g, "_$1")
+    .toLowerCase()
+    .replace(/^_/, "");
+}
+
+/**
+ * Whether a physical column name is one this surface reserves.
+ *
+ * Takes the column rather than the field name, so a caller normalizes with the rule its own
+ * generator uses and no spelling can slip past by being cased differently. Matching literal
+ * spellings can only ever cover the ones somebody thought of.
+ */
+export function isReservedSystemColumn(
+  physicalName: string,
+  surface: ReservationSurface
+): boolean {
+  return SYSTEM_COLUMNS.some(
+    column =>
+      column.name === physicalName && column.reservedIn.includes(surface)
+  );
+}
+
 /** The names a validator on `surface` refuses for an author's own field. */
 export function reservedSystemFieldNames(
   surface: ReservationSurface

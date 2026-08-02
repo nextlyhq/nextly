@@ -26,9 +26,18 @@
  */
 
 import { RESERVED_SLUGS } from "../../collections/config/validate-config";
+import {
+  isDataField,
+  isFieldGroupField,
+} from "../../collections/fields/guards";
+import type { FieldConfig } from "../../collections/fields/types";
 import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
+import { isPluginDataField } from "../../domains/schema/services/plugin-codegen";
 import { NextlyError } from "../../errors";
-import { reservedSystemFieldNames } from "../../lib/system-columns";
+import {
+  isReservedSystemColumn,
+  toPhysicalColumnName,
+} from "../../lib/system-columns";
 import {
   type BaseValidationError,
   DEFAULT_SQL_KEYWORDS_SET,
@@ -315,22 +324,31 @@ function validateFields(
     return;
   }
 
-  // Block the injected system columns at the top level, before per-field validation. A field group
-  // keeps its values in a table of its own carrying these three, and a name that snake-cases onto
-  // one is emitted alongside the injected column: the CREATE TABLE then declares it twice and the
-  // database refuses the statement, so the group could never have been created. Refusing the name
-  // reports that where it is chosen rather than as a migration failure. Nested fields live inside
-  // JSON and are exempt, as they are for collections.
+  // Block names that collide with a column this group's table already carries. Such a field is
+  // emitted alongside the injected column, so the CREATE TABLE declares it twice and the database
+  // refuses the statement — the group could never have been created, and refusing the name reports
+  // that where it is chosen rather than as a migration failure.
+  //
+  // Compared as the PHYSICAL column rather than as a spelling, because a field name reaches the
+  // column through the generator's own conversion: `createdAt` and `CreatedAt` both arrive at
+  // `created_at`, and a set of literal spellings can only ever hold the ones somebody listed.
+  //
+  // Only fields that actually emit a column are checked. A field group referencing another group
+  // keeps its data in the referenced table and the generator emits nothing for it, so its name
+  // never reaches a column and refusing it would reject a configuration that works.
   fields.forEach((field, index) => {
     if (!field || typeof field !== "object") return;
+    const candidate = field as FieldConfig;
+    if (!isDataField(candidate) && !isPluginDataField(candidate)) return;
+    if (isFieldGroupField(candidate)) return;
+
     const name = (field as Record<string, unknown>).name;
-    if (
-      typeof name === "string" &&
-      FIELD_GROUP_RESERVED_FIELD_NAMES.has(name)
-    ) {
+    if (typeof name !== "string") return;
+    const column = toPhysicalColumnName(name);
+    if (isReservedSystemColumn(column, "fieldGroupConfig")) {
       errors.push({
         path: `${path}[${index}].name`,
-        message: `Field name '${name}' is reserved for a system column`,
+        message: `Field name '${name}' is reserved: it becomes the system column '${column}'`,
         code: "FIELD_NAME_RESERVED",
       });
     }
@@ -342,10 +360,6 @@ function validateFields(
   // a usable table and an author can scaffold first and add fields later.
   validateFieldsArray(fields, path, errors);
 }
-
-const FIELD_GROUP_RESERVED_FIELD_NAMES: ReadonlySet<string> = new Set(
-  reservedSystemFieldNames("fieldGroupConfig")
-);
 
 // ============================================================
 // Main Validation Function

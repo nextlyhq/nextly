@@ -27,11 +27,13 @@ import {
   IMMUTABLE_SYSTEM_FIELDS_ANY_ENTITY,
 } from "../immutable-system-fields";
 import {
+  isReservedSystemColumn,
   reservedSystemFieldNames,
   SYSTEM_COLUMNS,
   systemColumnDefaultSql,
   systemColumnDialectType,
   systemColumnNames,
+  toPhysicalColumnName,
   type ReservationSurface,
   type SystemColumnDialect,
   type SystemColumnKind,
@@ -148,11 +150,42 @@ describe("reservation projections", () => {
     );
   });
 
-  it("refuses both spellings of the universal columns in a code-first field group", () => {
-    // A field group's table carries exactly these three, so these are the names that collide.
-    expect(sorted(reservedSystemFieldNames("fieldGroupConfig"))).toEqual(
-      sorted(["id", "created_at", "createdAt", "updated_at", "updatedAt"])
-    );
+  it("reserves exactly the columns a field group's table carries", () => {
+    // Matched as physical columns, because a field name reaches one through the generator's own
+    // conversion and any number of spellings arrive at the same column.
+    for (const column of ["id", "created_at", "updated_at"]) {
+      expect({
+        [column]: isReservedSystemColumn(column, "fieldGroupConfig"),
+      }).toEqual({ [column]: true });
+    }
+    for (const column of [
+      "status",
+      "first_published_at",
+      "created_by",
+      "slug",
+    ]) {
+      expect({
+        [column]: isReservedSystemColumn(column, "fieldGroupConfig"),
+      }).toEqual({ [column]: false });
+    }
+  });
+
+  it("normalizes a field name to the column the generator would emit", () => {
+    // The conversion the check depends on. `CreatedAt` is the case a literal set of spellings
+    // missed: the substitution introduces a leading underscore that the generator then drops.
+    expect({
+      createdAt: toPhysicalColumnName("createdAt"),
+      CreatedAt: toPhysicalColumnName("CreatedAt"),
+      created_at: toPhysicalColumnName("created_at"),
+      Id: toPhysicalColumnName("Id"),
+      headline: toPhysicalColumnName("headline"),
+    }).toEqual({
+      createdAt: "created_at",
+      CreatedAt: "created_at",
+      created_at: "created_at",
+      Id: "id",
+      headline: "headline",
+    });
   });
 
   it("refuses both spellings of the universal columns in the UI field-payload schema", () => {
@@ -295,16 +328,75 @@ describe("the validators actually refuse what the projection lists", () => {
     ).toBe(true);
   });
 
-  it("refuses every projected name in a code-first field group", () => {
-    // The path a TypeScript author uses. The visual path and this one build the same table, so a
-    // name refused in one and accepted in the other leaves the supported path producing DDL the
-    // database rejects.
-    for (const name of reservedSystemFieldNames("fieldGroupConfig")) {
+  it("agrees with the generator about which names collide", () => {
+    // The property that matters, asserted against the generator rather than against a list: for
+    // each candidate, the validator refuses it exactly when the emitted CREATE TABLE would declare
+    // a column twice. A spelling nobody thought of cannot pass one and fail the other.
+    const candidates = [
+      "createdAt",
+      "CreatedAt",
+      "created_at",
+      "updatedAt",
+      "UpdatedAt",
+      "Id",
+      "id",
+      "headline",
+      "parentId",
+      "bodyText",
+    ];
+
+    for (const name of candidates) {
+      const body = new FieldGroupSchemaService("postgresql")
+        .generateMigrationSQL("comp_probe", [
+          { name, type: "text" } as FieldConfig,
+        ])
+        .split("--> statement-breakpoint")[0];
+      const columns = [...body.matchAll(/^\s*"([a-z_]+)"/gm)].map(m => m[1]);
+      const generatorCollides = columns.some(
+        (c, i) => columns.indexOf(c) !== i
+      );
+
+      const refused = (
+        validateFieldGroupConfig({
+          slug: "probe",
+          fields: [{ name, type: "text" }],
+        } as unknown as FieldGroupConfig).errors ?? []
+      ).some(e => e.code === "FIELD_NAME_RESERVED");
+
+      expect({ [name]: refused }).toEqual({ [name]: generatorCollides });
+    }
+  });
+
+  it("allows a field group reference to take any name", () => {
+    // A reference keeps its data in the table it points at and the generator emits no column for
+    // it, so its name never reaches one. Refusing it would reject a configuration that works and,
+    // because this runs at boot, could stop an application starting after an upgrade.
+    //
+    // The type token is `component`, which IS a data field — so the guard that skips non-column
+    // fields does not cover it and the reference check is doing real work here. Written with the
+    // wrong token this assertion passes for the wrong reason, because no branch is reached at all.
+    for (const name of ["id", "createdAt", "CreatedAt", "updatedAt"]) {
+      const field = { name, type: "component", component: "child" };
       const result = validateFieldGroupConfig({
         slug: "probe",
-        fields: [{ name, type: "text" }],
+        fields: [field],
       } as unknown as FieldGroupConfig);
-      expect({ [name]: result.valid }).toEqual({ [name]: false });
+      const reserved = (result.errors ?? []).filter(
+        e => e.code === "FIELD_NAME_RESERVED"
+      );
+
+      // And the generator agrees: no column is emitted for it, so nothing can collide.
+      const body = new FieldGroupSchemaService("postgresql")
+        .generateMigrationSQL("comp_probe", [field as unknown as FieldConfig])
+        .split("--> statement-breakpoint")[0];
+      const columns = [...body.matchAll(/^\s*"([a-z_]+)"/gm)].map(m => m[1]);
+
+      expect({
+        [`${name}.refused`]: reserved.length,
+        [`${name}.duplicated`]: columns.filter(
+          (c, i) => columns.indexOf(c) !== i
+        ),
+      }).toEqual({ [`${name}.refused`]: 0, [`${name}.duplicated`]: [] });
     }
   });
 
