@@ -61,6 +61,33 @@ const TOKEN_NAME_RE = /^[a-z0-9]+(?:[-.][a-z0-9]+)*$/;
 /** The default custom-property prefix for site tokens. */
 export const DEFAULT_TOKEN_PREFIX = "--site-";
 
+/**
+ * The shape a custom-property prefix may take.
+ *
+ * The prefix comes from a caller and lands inside `var()` unquoted, so one
+ * carrying CSS syntax would close the function and open declarations of its
+ * own. A prefix that merely forgets the leading `--` is a quieter failure with
+ * the same shape: every token reference it builds is nonsense the browser drops.
+ */
+const TOKEN_PREFIX_RE = /^--[a-z0-9-]*$/;
+
+/**
+ * The prefix to write tokens under, or the default when the supplied one cannot
+ * be used. Reports rather than throwing, in keeping with everything else here:
+ * one bad setting should cost the tokens, not the page.
+ */
+export function safeTokenPrefix(prefix: string | undefined): {
+  prefix: string;
+  warning?: string;
+} {
+  if (prefix === undefined) return { prefix: DEFAULT_TOKEN_PREFIX };
+  if (TOKEN_PREFIX_RE.test(prefix)) return { prefix };
+  return {
+    prefix: DEFAULT_TOKEN_PREFIX,
+    warning: `"${describeValue(prefix)}" is not a custom-property prefix, so design tokens were written under "${DEFAULT_TOKEN_PREFIX}" instead.`,
+  };
+}
+
 function warning(path: string, message: string): ValidationIssue {
   return { path, code: "invalid-style-value", severity: "warning", message };
 }
@@ -176,6 +203,7 @@ function shapeDeclarations(
       // one scalar and the same property written as four corners are different
       // arms of the same entry. The first arm that writes something wins, which
       // is the order the catalog lists them in.
+      let refused: Walk | undefined;
       for (const variant of shape.of) {
         const attempt: Walk = { placed: [], warnings: [], prefix: walk.prefix };
         shapeDeclarations(variant, value, path, attempt);
@@ -184,7 +212,13 @@ function shapeDeclarations(
           walk.warnings.push(...attempt.warnings);
           return;
         }
+        refused ??= attempt;
       }
+      // No arm wrote anything. Whatever the first one objected to is why, and
+      // dropping it would leave a value missing from the stylesheet with
+      // nothing anywhere saying so — which is the one thing these warnings
+      // exist to prevent.
+      if (refused !== undefined) walk.warnings.push(...refused.warnings);
       return;
     }
   }
@@ -229,7 +263,7 @@ function refusedAt(path: string, refused: readonly string[]): boolean {
 export function compileStyleValues(
   values: Readonly<Record<string, unknown>>,
   basePath: string,
-  tokenPrefix: string = DEFAULT_TOKEN_PREFIX
+  tokenPrefix?: string
 ): CompiledDeclarations {
   // Strict, because this decides what reaches a page: a property this engine
   // does not know is preserved in the document and left out of the stylesheet,
@@ -239,7 +273,11 @@ export function compileStyleValues(
     .filter(issue => issue.severity === "error")
     .map(issue => issue.path);
 
-  const walk: Walk = { placed: [], warnings: [], prefix: tokenPrefix };
+  const safe = safeTokenPrefix(tokenPrefix);
+  const walk: Walk = { placed: [], warnings: [], prefix: safe.prefix };
+  if (safe.warning !== undefined) {
+    walk.warnings.push(warning(basePath, safe.warning));
+  }
   const properties = Object.keys(values)
     .filter(key => Object.hasOwn(values, key))
     .sort();

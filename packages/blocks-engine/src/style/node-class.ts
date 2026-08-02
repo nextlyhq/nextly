@@ -120,10 +120,13 @@ export function nodeClassName(id: string): string {
 /**
  * The shared class carrying a block type's base styles.
  *
- * A block type is a namespaced slug (`core/section`), and `/` is not a class
- * character, so the separator becomes `-`. Type names are validated as
- * `[a-z0-9-]+/[a-z0-9-]+`, which leaves nothing here to escape.
+ * A block type is a namespaced slug (`core/section`) and `/` is not a class
+ * character, so the separator becomes a DOUBLE dash. A single one would not be
+ * reversible: a segment is `[a-z0-9]+(-[a-z0-9]+)*`, so `foo-bar/baz` and
+ * `foo/bar-baz` would both become `foo-bar-baz`, and two block types would
+ * share one selector with the later one's defaults silently applying to both.
+ * A doubled dash cannot occur inside a segment, so it is free to mean this.
  */
 export function blockTypeClassName(type: string): string {
-  return BLOCK_TYPE_CLASS_PREFIX + type.replace(/\//g, "-");
+  return BLOCK_TYPE_CLASS_PREFIX + type.replace(/\//g, "--");
 }

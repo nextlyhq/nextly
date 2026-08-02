@@ -236,7 +236,7 @@ describe("cascade tiers", () => {
     expect(out).toBe(
       [
         `.nx-pb-page { color: #111 }`,
-        `.nx-pb-page .nx-bt-core-box { color: #222 }`,
+        `.nx-pb-page .nx-bt-core--box { color: #222 }`,
         `.nx-pb-page .${nodeClassName("n1")} { color: #333 }`,
       ].join("\n")
     );
@@ -268,7 +268,7 @@ describe("cascade tiers", () => {
       ...CTX,
       blockBases: { "core/box": { base: { base: { color: "#111" } } } },
     });
-    expect(out.match(/nx-bt-core-box/g)).toHaveLength(1);
+    expect(out.match(/nx-bt-core--box/g)).toHaveLength(1);
   });
 });
 
@@ -305,6 +305,155 @@ describe("visibility", () => {
         `}`,
       ].join("\n")
     );
+  });
+});
+
+describe("visibility", () => {
+  it("keeps a node hidden at every width below the one that hid it", () => {
+    const out = css(
+      doc([
+        node("n1", undefined, { visibility: { devices: { tablet: false } } }),
+      ])
+    );
+    // No lower bound: hiding inherits downward like every other value in a
+    // desktop-first model.
+    expect(out).toContain("@media (max-width: 1024px) {");
+    expect(out).not.toContain("min-width");
+  });
+
+  it("stops hiding where a narrower breakpoint says to show it again", () => {
+    // The wider rule still matches at the narrower width, so an explicit `true`
+    // below it does nothing unless the wider rule is bounded.
+    const out = css(
+      doc([
+        node("n1", undefined, {
+          visibility: { devices: { tablet: false, mobile: true } },
+        }),
+      ])
+    );
+    expect(out).toBe(
+      [
+        `@media (max-width: 1024px) and (min-width: 641px) {`,
+        `  .nx-pb-page .${nodeClassName("n1")} { display: none }`,
+        `}`,
+      ].join("\n")
+    );
+  });
+
+  it("treats the two axes separately", () => {
+    // A container breakpoint neither inherits from nor cancels a viewport one:
+    // they ask about different boxes.
+    const out = css(
+      doc([
+        node("n1", undefined, {
+          visibility: { devices: { tablet: false, "card-narrow": true } },
+        }),
+      ])
+    );
+    expect(out).toContain("@media (max-width: 1024px) {");
+    expect(out).not.toContain("min-width");
+  });
+});
+
+describe("breakpoints the site no longer defines", () => {
+  it("says so rather than dropping the values in silence", () => {
+    const result = compilePageCss(
+      doc([node("n1", { base: { retired: { color: "#fff" } } })]),
+      CTX
+    );
+    expect(result.css).toBe("");
+    const issue = result.warnings.find(w => w.code === "unknown-breakpoint");
+    expect(issue?.path).toBe("/nodes/0/styles/base/retired");
+  });
+});
+
+describe("the container axis stays inside its container", () => {
+  it("wraps a container breakpoint with no max width in a query too", () => {
+    // Emitted unconditionally, a container's own base values would apply to a
+    // node with no query container above it, and outrank every viewport rule
+    // while doing it.
+    const out = css(
+      doc([node("n1", { base: { "card-base": { color: "#fff" } } })])
+    );
+    expect(out).toContain("@container (min-width: 0) {");
+  });
+});
+
+describe("block type classes", () => {
+  it("encodes the namespace separator so two types cannot collide", () => {
+    // `foo-bar/baz` and `foo/bar-baz` are different block types; a single dash
+    // would give them one selector and one set of defaults.
+    const out = css(
+      doc([
+        { ...node("a"), type: "foo-bar/baz" } as BlockNode,
+        { ...node("b"), type: "foo/bar-baz" } as BlockNode,
+      ]),
+      {
+        ...CTX,
+        blockBases: {
+          "foo-bar/baz": { base: { base: { color: "#111" } } },
+          "foo/bar-baz": { base: { base: { color: "#222" } } },
+        },
+      }
+    );
+    expect(out).toContain(".nx-bt-foo-bar--baz {");
+    expect(out).toContain(".nx-bt-foo--bar-baz {");
+  });
+
+  it("escapes the type in a warning pointer", () => {
+    // Every block type contains a slash, which a JSON Pointer writes as ~1.
+    const result = compilePageCss(doc([node("n1")]), {
+      ...CTX,
+      blockBases: { "core/box": { base: { base: { color: "nope" } } } },
+    });
+    expect(result.warnings.map(w => w.path)).toContain(
+      "/blockBases/core~1box/base/base/color"
+    );
+  });
+});
+
+describe("a value no union arm accepts", () => {
+  it("still explains why it is missing", () => {
+    // A union tries each arm and keeps the first that writes something. When
+    // none does, the objections were being thrown away with the attempts, so a
+    // refused value produced neither CSS nor the explanation this promises.
+    const result = compilePageCss(
+      doc([
+        node("n1", {
+          base: { base: { fontWeight: { $token: "not a token name!" } } },
+        }),
+      ]),
+      CTX
+    );
+    expect(result.css).toBe("");
+    expect(result.warnings.map(w => w.path)).toContain(
+      "/nodes/0/styles/base/base/fontWeight"
+    );
+  });
+});
+
+describe("the token prefix comes from a caller", () => {
+  it("refuses one that would write declarations of its own", () => {
+    const result = compilePageCss(
+      doc([
+        node("n1", { base: { base: { color: { $token: "color.primary" } } } }),
+      ]),
+      { ...CTX, tokenPrefix: "--x); color: red; --" }
+    );
+    expect(result.css).not.toContain("color: red");
+    expect(result.css).toContain("var(--site-color-primary)");
+    expect(result.warnings.length).toBeGreaterThan(0);
+  });
+
+  it("refuses one that is not a custom property at all", () => {
+    const result = compilePageCss(
+      doc([
+        node("n1", { base: { base: { color: { $token: "color.primary" } } } }),
+      ]),
+      { ...CTX, tokenPrefix: "site-" }
+    );
+    expect(result.css).toContain("var(--site-color-primary)");
+    expect(result.warnings.length).toBeGreaterThan(0);
   });
 });
 

@@ -26,7 +26,7 @@ import type {
   StyleState,
 } from "../document";
 import { STYLE_STATES } from "../document";
-import { pointer } from "../issue-text";
+import { describeValue, pointer } from "../issue-text";
 import { isPlainRecord } from "../plain-record";
 import type { ValidationIssue } from "../validation";
 
@@ -92,6 +92,10 @@ const STATE_SELECTORS: Readonly<Record<StyleState, string>> = {
 interface BreakpointContext {
   id: string;
   atRule?: string;
+  /** Which axis this belongs to; visibility bands are computed per axis. */
+  axis?: "viewport" | "container";
+  /** The upper bound, for narrowing a hiding rule that a narrower id undoes. */
+  maxWidth?: number;
 }
 
 /**
@@ -105,13 +109,17 @@ interface BreakpointContext {
  * its own box wins over the same value keyed to the window.
  */
 function breakpointContexts(set: BreakpointSet): BreakpointContext[] {
-  const contexts: BreakpointContext[] = [{ id: BASE_BREAKPOINT }];
+  const contexts: BreakpointContext[] = [
+    { id: BASE_BREAKPOINT, axis: "viewport" },
+  ];
   const widthDescending = (a: BreakpointDef, b: BreakpointDef): number =>
     (b.maxWidth ?? Infinity) - (a.maxWidth ?? Infinity);
   for (const def of [...set.viewport].sort(widthDescending)) {
     if (def.id === BASE_BREAKPOINT) continue;
     contexts.push({
       id: def.id,
+      axis: "viewport",
+      maxWidth: def.maxWidth,
       ...(def.maxWidth === undefined
         ? {}
         : { atRule: `@media (max-width: ${def.maxWidth}px)` }),
@@ -121,9 +129,16 @@ function breakpointContexts(set: BreakpointSet): BreakpointContext[] {
     if (def.id === BASE_BREAKPOINT) continue;
     contexts.push({
       id: def.id,
-      ...(def.maxWidth === undefined
-        ? {}
-        : { atRule: `@container (max-width: ${def.maxWidth}px)` }),
+      // A container axis always emits a container query, the widest one
+      // included. Left unconditional, the container's own base values would
+      // apply to a node with no query-container ancestor at all, and would
+      // outrank every viewport rule while doing it. `min-width: 0` matches
+      // inside any container and nowhere else, which is exactly the scope.
+      atRule:
+        def.maxWidth === undefined
+          ? `@container (min-width: 0)`
+          : `@container (max-width: ${def.maxWidth}px)`,
+      axis: "container",
     });
   }
   return contexts;
@@ -131,6 +146,38 @@ function breakpointContexts(set: BreakpointSet): BreakpointContext[] {
 
 /** The breakpoint id meaning "no media query" in a stored style envelope. */
 export const BASE_BREAKPOINT = "base";
+
+/**
+ * Warn for style values keyed to a breakpoint the site does not define.
+ *
+ * A breakpoint id is just a string, so a document can outlive the breakpoint it
+ * was written against: renaming or removing one leaves values keyed to an id
+ * nothing resolves. Compiling only the ids the context knows would drop those
+ * values without a word, and this result promises that anything missing from
+ * the stylesheet is explained.
+ */
+function unknownBreakpointWarnings(
+  styles: NodeStyles,
+  basePath: string,
+  contexts: readonly BreakpointContext[]
+): ValidationIssue[] {
+  const known = new Set(contexts.map(context => context.id));
+  const issues: ValidationIssue[] = [];
+  for (const state of STYLE_STATES) {
+    const byBreakpoint = styles[state];
+    if (!isPlainRecord(byBreakpoint)) continue;
+    for (const id of Object.keys(byBreakpoint).sort()) {
+      if (known.has(id)) continue;
+      issues.push({
+        path: pointer(pointer(basePath, state), id),
+        code: "unknown-breakpoint",
+        severity: "warning",
+        message: `Breakpoint "${describeValue(id)}" is not defined for this site, so these values were not written.`,
+      });
+    }
+  }
+  return issues;
+}
 
 /** Compile one styles envelope into rules under one selector. */
 function envelopeRules(
@@ -142,6 +189,7 @@ function envelopeRules(
   warnings: ValidationIssue[]
 ): CssRule[] {
   if (!isPlainRecord(styles)) return [];
+  warnings.push(...unknownBreakpointWarnings(styles, basePath, contexts));
   const rules: CssRule[] = [];
   for (const context of contexts) {
     for (const state of STYLE_STATES) {
@@ -195,6 +243,13 @@ function groupByDescendant(
  * its style envelope, and a value of `false` means "not shown here" rather than
  * naming a CSS property. Compiling it here keeps the one place that turns a
  * document into CSS in one file.
+ *
+ * Hiding INHERITS downward, the way every other value in a desktop-first model
+ * does: marked hidden at tablet and unmarked below, a node stays hidden on a
+ * phone. Marking it visible again at a narrower breakpoint has to stop that,
+ * which a plain `max-width` rule cannot do, because the wider rule still
+ * matches at the narrower width. Such a rule is bounded below instead, so it
+ * covers its own band and stops where the author said to stop.
  */
 function visibilityRules(
   node: BlockNode,
@@ -204,15 +259,63 @@ function visibilityRules(
   const devices = node.visibility?.devices;
   if (!isPlainRecord(devices)) return [];
   const rules: CssRule[] = [];
-  for (const context of contexts) {
-    if (devices[context.id] !== false) continue;
-    rules.push({
-      ...(context.atRule === undefined ? {} : { atRule: context.atRule }),
-      selector,
-      declarations: [{ property: "display", value: "none" }],
-    });
+  // Per axis: a container breakpoint neither inherits from nor cancels a
+  // viewport one, because the two ask about different boxes.
+  for (const axis of ["viewport", "container"] as const) {
+    const axisContexts = contexts.filter(context => context.axis === axis);
+    let hidden = false;
+    let hidingFrom: BreakpointContext | undefined;
+    const flush = (lowerBound: number | undefined): void => {
+      if (hidingFrom === undefined) return;
+      rules.push({
+        ...(hidingFrom.atRule === undefined
+          ? {}
+          : { atRule: boundedAtRule(hidingFrom, lowerBound) }),
+        selector,
+        declarations: [{ property: "display", value: "none" }],
+      });
+      hidingFrom = undefined;
+    };
+    for (const context of axisContexts) {
+      const declared = devices[context.id];
+      if (declared === false && !hidden) {
+        hidden = true;
+        hidingFrom = context;
+        continue;
+      }
+      if (declared === true && hidden) {
+        hidden = false;
+        // The band ends where this breakpoint begins: one pixel above its own
+        // upper bound is the widest width it does not cover.
+        flush(
+          context.maxWidth === undefined ? undefined : context.maxWidth + 1
+        );
+      }
+    }
+    // Still hidden at the narrowest breakpoint, so the rule runs all the way
+    // down and needs no lower bound.
+    flush(undefined);
   }
   return rules;
+}
+
+/**
+ * An at-rule narrowed to stop at a lower bound.
+ *
+ * Only ever used for a hiding rule that a narrower breakpoint undoes; every
+ * other rule inherits downward and wants no floor.
+ */
+function boundedAtRule(
+  context: BreakpointContext,
+  lowerBound: number | undefined
+): string {
+  if (lowerBound === undefined) return context.atRule ?? "";
+  const feature = context.axis === "container" ? "@container" : "@media";
+  const upper =
+    context.maxWidth === undefined
+      ? ""
+      : `(max-width: ${context.maxWidth}px) and `;
+  return `${feature} ${upper}(min-width: ${lowerBound}px)`;
 }
 
 /** One node and the pointer that resolves to it inside the document. */
@@ -301,7 +404,7 @@ export function compilePageCss(
       ...envelopeRules(
         bases[type],
         `.${PAGE_ROOT_CLASS} .${blockTypeClassName(type)}`,
-        `/blockBases/${type}`,
+        pointer("/blockBases", type),
         contexts,
         tokenPrefix,
         warnings
