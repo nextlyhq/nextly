@@ -22,4 +22,4 @@
 "@nextlyhq/tsconfig": patch
 ---
 
-`nextly migrate` no longer fails on a localized project whose companion table already exists, which is the normal state of any project that ran the dev server or `db:sync` before adopting migrations. The companion migration can now be re-run after an interruption without colliding or duplicating rows.
+`nextly migrate` no longer fails outright when a localized project's companion table already exists but holds no rows yet, which is what a dev-server boot leaves behind. A project whose companion was already filled by `db:sync` still needs the follow-up fix to `migrate:create`.
