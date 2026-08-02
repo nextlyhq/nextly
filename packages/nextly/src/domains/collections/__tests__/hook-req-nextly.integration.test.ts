@@ -7,10 +7,12 @@
  * so the handle the collections guide's own example reads was absent on exactly
  * the paths hooks run on most.
  *
- * Asserted against a production-shaped boot rather than the `createTestNextly`
- * harness. That harness calls `getNextly()` while building its return value, so
- * the binding always exists under it and a test written there cannot fail no
- * matter what the code does.
+ * Asserted against a production-shaped boot, and — since the harness stopped
+ * resolving the Direct API while building its return value — through the
+ * ordinary `createTestNextly` harness as well. The harness case is the one that
+ * matters for everything written afterwards: while it called `getNextly()`
+ * eagerly, the binding existed under it whatever the code did, so a test
+ * written there could not fail.
  */
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -27,6 +29,10 @@ import {
   clearLiveSnapshots,
 } from "../../../init/schema-snapshot-cache";
 import { resetPluginRouteRegistry } from "../../../plugins/routes/route-registry";
+import {
+  createTestNextly,
+  type TestNextly,
+} from "../../../plugins/test-nextly";
 import { getImageProcessor } from "../../../storage/image-processor";
 
 function resetAll(): void {
@@ -85,5 +91,33 @@ describe("the Direct API is bound for hook contexts at boot", () => {
 
     expect(resolved).toBeDefined();
     expect(typeof resolved?.create).toBe("function");
+  });
+});
+
+describe("the ordinary test harness leaves the binding to service registration", () => {
+  let current: TestNextly | undefined;
+
+  afterEach(async () => {
+    await current?.destroy();
+    current = undefined;
+    resetAll();
+  });
+
+  it("has nextlyDirectAPI bound after createTestNextly, without reading t.nextly", async () => {
+    await shutdownServices();
+    resetAll();
+
+    // The control: nothing in this process has resolved the Direct API, so a
+    // binding found below was made by the boot rather than left behind.
+    expect(container.has("nextlyDirectAPI")).toBe(false);
+
+    current = await createTestNextly({ dialect: "sqlite" });
+
+    // Deliberately does NOT touch `current.nextly`. That property resolves the
+    // Direct API on access, and resolving it registers the binding as a side
+    // effect -- so reading it here would satisfy the assertion by itself and
+    // certify nothing. What is under test is that service registration bound
+    // it, which is what gives a hook its `req.nextly`.
+    expect(container.has("nextlyDirectAPI")).toBe(true);
   });
 });
