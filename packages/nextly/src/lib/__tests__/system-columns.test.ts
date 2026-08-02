@@ -7,6 +7,7 @@
 import { describe, expect, it } from "vitest";
 
 import { fieldNameSchema } from "../../domains/dynamic-collections/services/dynamic-collection-validation-service";
+import { SYSTEM_SCHEMA_VERSION } from "../../domains/schema/services/schema-hash";
 
 import {
   immutableSystemFieldsFor,
@@ -232,5 +233,62 @@ describe("the declaration set itself", () => {
         [column.name]: false,
       });
     }
+  });
+});
+
+describe("the physical shape is pinned to the schema version", () => {
+  /**
+   * One line per column, carrying only what decides a physical table: the name, when the column is
+   * present, which entities carry it, and its shape per dialect. Policies that never reach a
+   * `CREATE TABLE` — who may write it, who publishes it, who reserves the name — are deliberately
+   * absent, so changing one of those does not demand a schema-version bump.
+   */
+  const physicalShape = (): string[] =>
+    SYSTEM_COLUMNS.map(column => {
+      const shapes = (["postgresql", "mysql", "sqlite"] as const)
+        .map(dialect => {
+          const s = column.shape[dialect];
+          return [
+            dialect.slice(0, 2),
+            s.dialectType,
+            s.length ?? "-",
+            s.nullable ? "null" : "notnull",
+            s.primaryKey ? "pk" : "-",
+            s.default ?? "-",
+          ].join(":");
+        })
+        .join(" ");
+      return `${column.name} | ${column.presence} | ${[...column.appliesTo].sort().join(",")} | ${shapes}`;
+    });
+
+  it("has not changed without SYSTEM_SCHEMA_VERSION being bumped", () => {
+    // `SYSTEM_SCHEMA_VERSION` is mixed into every collection's stored schema hash, and a table is
+    // only rebuilt when that hash changes. Add or reshape a column without bumping it and existing
+    // installs are never told: the runtime schema selects a column their table does not have, and
+    // the failure is silent until a read runs. That is the worst of the ways this can go wrong,
+    // because it hits upgrades rather than new installs.
+    //
+    // It is pinned rather than derived on purpose. Deriving would change the value now, for every
+    // install at once, and every stored hash would read as "schema changed" — a migration for
+    // everyone, to record a refactor. So the fingerprint is checked and the bump stays a decision.
+    //
+    // If this fails: confirm the diff is the column change you meant, bump SYSTEM_SCHEMA_VERSION,
+    // add its line to the history in schema-hash.ts, and update both values here.
+    expect({
+      version: SYSTEM_SCHEMA_VERSION,
+      shape: physicalShape(),
+    }).toEqual({
+      version: 3,
+      shape: [
+        "id | always | collection,single | po:text:-:notnull:pk:- my:varchar(36):36:notnull:pk:- sq:text:-:notnull:pk:-",
+        "title | unlessAuthorDeclaredTitle | collection,single | po:text:-:notnull:-:- my:varchar(255):255:notnull:-:- sq:text:-:notnull:-:-",
+        "slug | unlessAuthorDeclaredSlug | collection,single | po:text:-:notnull:-:- my:varchar(255):255:notnull:-:- sq:text:-:notnull:-:-",
+        "created_at | always | collection,single | po:timestamp:-:null:-:now() my:timestamp:-:null:-:CURRENT_TIMESTAMP sq:integer:-:null:-:(strftime('%s', 'now'))",
+        "updated_at | always | collection,single | po:timestamp:-:null:-:now() my:timestamp:-:null:-:CURRENT_TIMESTAMP sq:integer:-:null:-:(strftime('%s', 'now'))",
+        "created_by | always | collection | po:text:-:null:-:- my:varchar(191):191:null:-:- sq:text:-:null:-:-",
+        "status | withStatusLifecycle | collection,single | po:varchar:20:notnull:-:'draft' my:varchar(20):20:notnull:-:'draft' sq:text:-:notnull:-:'draft'",
+        "first_published_at | withStatusLifecycle | collection,single | po:timestamp:-:null:-:- my:timestamp:-:null:-:- sq:integer:-:null:-:-",
+      ],
+    });
   });
 });
