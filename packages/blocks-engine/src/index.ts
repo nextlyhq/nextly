@@ -87,6 +87,7 @@ export type {
   BlockRenderArgs,
   BlockRenderResult,
   BlockSupports,
+  BlockSupportValue,
   BlockVariation,
   ComponentPath,
   InferBlockProps,
