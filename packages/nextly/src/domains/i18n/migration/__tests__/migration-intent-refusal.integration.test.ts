@@ -18,7 +18,9 @@ import { join } from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runFileMigrations } from "../../../../cli/commands/migrate";
+import { DynamicCollectionSchemaService } from "../../../dynamic-collections/services/dynamic-collection-schema-service";
 import { getSchemaEventsDdl } from "../../../schema/events/schema-events-ddl";
+import { splitStatements } from "../../../schema/pipeline/sql-statement-utils";
 import { LOCALIZATION_INTENT_HEADER } from "../migration-intent";
 
 interface TestAdapter {
@@ -40,11 +42,24 @@ describe("a migration whose declared intent cannot be read", () => {
   let adapter: TestAdapter;
   let migrationsDir: string;
 
-  /** A plain migration that leaves a mark, so "was it applied?" is answerable from the database. */
+  /**
+   * A plain migration that leaves a mark, so "was it applied?" is answerable from the database.
+   *
+   * Its DDL comes from the production collection generator rather than a hand-written CREATE: a
+   * copied definition drifts from the shape Nextly actually creates, and this file would then prove
+   * something about a table layout no real database has.
+   */
   async function writeMarkerMigration(name: string, table: string) {
+    const schemaService = new DynamicCollectionSchemaService(
+      undefined,
+      "sqlite"
+    );
+    const up = splitStatements([
+      schemaService.generateMigrationSQL(table, [] as never),
+    ]).join("\n");
     await writeFile(
       join(migrationsDir, `${name}.sql`),
-      `-- Migration: ${name}\n\n-- UP\nCREATE TABLE "${table}" (id TEXT);\n\n-- DOWN\nDROP TABLE "${table}";\n`,
+      `-- Migration: ${name}\n\n-- UP\n${up}\n\n-- DOWN\nDROP TABLE "${table}";\n`,
       "utf8"
     );
   }

@@ -23,6 +23,18 @@ export const LOCALIZATION_INTENT_HEADER = "-- Localization:";
 export const LOCALIZATION_INTENT_VERSION = 1;
 
 /**
+ * Every payload version this build has a parser for.
+ *
+ * A set rather than a ceiling: the question is whether this build can INTERPRET the payload, and a
+ * version it has never defined is uninterpretable whether it is above the current one or below it.
+ * When version 2 arrives and 1 is still readable, both belong here; when 1 stops being readable, it
+ * comes out and its files start refusing instead of being silently misread.
+ */
+const SUPPORTED_INTENT_VERSIONS: ReadonlySet<number> = new Set([
+  LOCALIZATION_INTENT_VERSION,
+]);
+
+/**
  * What a companion migration file declares it is FOR, as opposed to the statements it happens to
  * contain.
  *
@@ -104,16 +116,24 @@ export function isUpSectionMarker(line: string): boolean {
 }
 
 /**
- * The lines before the first `-- UP`, which is the only region a header field may occupy.
+ * The leading comment block, which is the only region a header field may occupy.
  *
- * Scanning the whole file would let any SQL comment that happens to begin with the header's prefix
- * be read as intent — a descriptive comment inside a hand-written migration would then be rejected
- * as a corrupt header and take the whole file out of the run.
+ * Bounded two ways, because either can come first. A `-- UP` marker ends it — but a file may have
+ * none at all, which `parseSqlSections` explicitly supports, and in that case the boundary is the
+ * first line that is not a comment or blank. Without the second bound, a raw migration's comment
+ * beginning with this prefix is read as intent, and prose behind the prefix would then abort the
+ * whole run rather than merely being ignored.
  */
 function headerLines(content: string): string[] {
-  const lines = content.split("\n");
-  const end = lines.findIndex(isUpSectionMarker);
-  return end === -1 ? lines : lines.slice(0, end);
+  const out: string[] = [];
+  for (const line of content.split("\n")) {
+    if (isUpSectionMarker(line)) break;
+    const t = line.trim();
+    // Statements end the preamble; blank lines and comments do not.
+    if (t !== "" && !t.startsWith("--")) break;
+    out.push(line);
+  }
+  return out;
 }
 
 /** Reasons this module refuses a header, named so callers can tell them from a parse failure. */
@@ -263,13 +283,16 @@ export function parseLocalizationIntent(
     typeof parsed === "object" && parsed !== null
       ? (parsed as Record<string, unknown>).version
       : undefined;
-  if (typeof version === "number" && version > LOCALIZATION_INTENT_VERSION) {
+  // Membership, not a comparison. A `>` gate lets 0, a negative and a fraction through as
+  // "not newer", and this build has a parser for exactly one version — so anything it cannot name
+  // is something it cannot interpret, whichever side of the current number it falls on.
+  if (typeof version === "number" && !SUPPORTED_INTENT_VERSIONS.has(version)) {
     throw NextlyError.internal({
       logContext: {
         reason: "localization_intent_version_unsupported",
         filename,
         found: version,
-        supported: LOCALIZATION_INTENT_VERSION,
+        supported: [...SUPPORTED_INTENT_VERSIONS],
       },
     });
   }

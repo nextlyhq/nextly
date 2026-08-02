@@ -370,3 +370,80 @@ describe("column dimensions are validated, not merely carried", () => {
     });
   }
 });
+
+// `parseSqlSections` supports a migration with no `-- UP` marker at all, so the preamble cannot be
+// bounded by that marker alone. Without a second bound, a raw migration's own comment is read as a
+// header — and prose behind the prefix aborts the entire run rather than being ignored.
+describe("the preamble ends at the first statement, not only at UP", () => {
+  it("ignores a lookalike comment in a file that has no UP marker", () => {
+    const raw =
+      `-- Migration: 20260101_000001_raw\n` +
+      `CREATE TABLE "t" (id TEXT);\n` +
+      `${LOCALIZATION_INTENT_HEADER} this is prose, not a payload\n`;
+    expect(parseLocalizationIntent(raw, "raw.sql")).toBeNull();
+  });
+
+  it("still reads a real header that precedes the first statement", () => {
+    const line = formatLocalizationIntent({
+      kind: "create-only",
+      entity: "collection",
+      spec: spec(),
+    });
+    const raw = `-- Migration: m\n${line}\nCREATE TABLE "t" (id TEXT);\n`;
+    expect(parseLocalizationIntent(raw, "raw.sql")?.kind).toBe("create-only");
+  });
+
+  it("treats blank lines inside the preamble as part of it", () => {
+    const line = formatLocalizationIntent({
+      kind: "enable",
+      entity: "single",
+      spec: spec(),
+    });
+    const raw = `-- Migration: m\n\n${line}\n\nSELECT 1;\n`;
+    expect(parseLocalizationIntent(raw, "raw.sql")?.entity).toBe("single");
+  });
+});
+
+// A `>` ceiling admits 0, a negative and a fraction as "not newer". This build has a parser for
+// exactly one version, so anything it cannot name is something it cannot interpret.
+describe("only versions this build can parse are accepted", () => {
+  const withVersion = (version: unknown): string =>
+    fileWith(
+      `${LOCALIZATION_INTENT_HEADER} ${JSON.stringify({
+        version,
+        kind: "enable",
+        entity: "collection",
+        spec: {
+          dialect: "sqlite",
+          collection: "p",
+          mainTable: "a",
+          companionTable: "b",
+          defaultLocale: "en",
+          parentIdType: "TEXT",
+          columns: [],
+        },
+      })}`
+    );
+
+  it("accepts the version it declares", () => {
+    expect(
+      parseLocalizationIntent(
+        withVersion(LOCALIZATION_INTENT_VERSION),
+        "ok.sql"
+      )
+    ).not.toBeNull();
+  });
+
+  for (const version of [0, -1, 0.5, 1.5]) {
+    it(`refuses version ${version}`, () => {
+      try {
+        parseLocalizationIntent(withVersion(version), "v.sql");
+        expect.unreachable("expected a refusal");
+      } catch (error) {
+        expect(
+          NextlyError.is(error) ? error.logContext?.reason : undefined
+        ).toBe("localization_intent_version_unsupported");
+      }
+    });
+  }
+});
