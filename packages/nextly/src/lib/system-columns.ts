@@ -3,15 +3,13 @@
  *
  * A system column is not one fact but several: which tables carry it, what shape it has per
  * dialect, whether a client may write it, what name it is published under, whether a user may take
- * that name for a field of their own. Those answers were spread across nine modules, each holding a
- * hand-written list of the columns it happened to know about when it was written. Nothing connected
- * them, so adding a column had no definition of done — it was finished when a reviewer stopped
- * finding lists that had not been edited, and roughly a third of the review findings on the two
- * pull requests that added `first_published_at` were exactly that.
+ * that name for a field of their own. Each of those questions used to be answered by a separate
+ * hand-written list, and a list only ever knows the columns that existed when it was written, so a
+ * column could reach the physical table while some other surface went on as if it did not exist.
  *
- * Every one of those lists is now a projection of this one. A column added here reaches all of them
- * at once, and the disagreements between them became visible instead of accidental: see
- * `reservedIn`, where the four validators genuinely do not agree and now say so.
+ * Every one of those lists is a projection of this one, so a column declared here reaches all of
+ * them at once. Where they genuinely differ, the difference is declared rather than implied: see
+ * `reservedIn`, where the four validators do not agree and now say so.
  *
  * This module deliberately has no imports. Its consumers span the config layer, the shared response
  * helpers and the schema pipeline, and a leaf cannot create a cycle with any of them.
@@ -78,15 +76,76 @@ const RESERVATION_SPELLINGS: Readonly<
   uiSchema: "columnOnly",
 };
 
+/**
+ * The column family a shape belongs to.
+ *
+ * Semantic rather than spelled per dialect, because three consumers need three different renderings
+ * of the same fact: the introspection token the diff compares, the `CREATE TABLE` text, and the
+ * Drizzle builder the runtime schema is made of. Spelling any of them out separately is how they
+ * drift — a runtime schema built as text against a table created as a timestamp is exactly the
+ * disagreement this module exists to prevent.
+ */
+export type SystemColumnKind = "text" | "varchar" | "timestamp";
+
+/**
+ * What a column defaults to, if anything.
+ *
+ * `now` is a database-side clock, spelled differently by every dialect. `literal` is a value, which
+ * the DDL quotes and the Drizzle builder does not.
+ */
+export type SystemColumnDefault =
+  | { kind: "now" }
+  | { kind: "literal"; value: string };
+
 /** The physical column, for one dialect. */
 export interface SystemColumnShape {
-  dialectType: string;
-  /** Declared size, where the dialect carries one separately from `dialectType`. */
+  kind: SystemColumnKind;
+  /** Declared size, for the dialects whose type carries one. */
   length?: number;
   nullable: boolean;
   primaryKey?: boolean;
-  /** Raw DDL default expression, exactly as it must appear (`now()`, `'draft'`). */
-  default?: string;
+  default?: SystemColumnDefault;
+}
+
+/**
+ * The type token introspection reports for a shape: PostgreSQL `udt_name`, MySQL `COLUMN_TYPE`,
+ * SQLite's declared PRAGMA type. The diff compares desired against live using this exact string.
+ *
+ * PostgreSQL reports `varchar` without its length while MySQL reports the full declared type, which
+ * is why the two differ for the same column.
+ */
+export function systemColumnDialectType(
+  shape: SystemColumnShape,
+  dialect: SystemColumnDialect
+): string {
+  if (dialect === "postgresql") {
+    return shape.kind === "timestamp" ? "timestamp" : shape.kind;
+  }
+  if (dialect === "mysql") {
+    if (shape.kind === "timestamp") return "timestamp";
+    if (shape.kind === "varchar") return `varchar(${shape.length ?? 255})`;
+    return "text";
+  }
+  // SQLite stores a timestamp as an epoch integer and has no distinct varchar.
+  return shape.kind === "timestamp" ? "integer" : "text";
+}
+
+/**
+ * The default as it must appear in `CREATE TABLE`, or undefined when there is none.
+ *
+ * Must match what the runtime Drizzle builder emits for the same shape, or the diff reads a
+ * phantom default change on every apply.
+ */
+export function systemColumnDefaultSql(
+  shape: SystemColumnShape,
+  dialect: SystemColumnDialect
+): string | undefined {
+  const value = shape.default;
+  if (!value) return undefined;
+  if (value.kind === "literal") return `'${value.value}'`;
+  if (dialect === "postgresql") return "now()";
+  if (dialect === "mysql") return "CURRENT_TIMESTAMP";
+  return "(strftime('%s', 'now'))";
 }
 
 export interface SystemColumnDeclaration {
@@ -137,14 +196,14 @@ export const SYSTEM_COLUMNS: readonly SystemColumnDeclaration[] = [
     strippedFromResponses: false,
     reservedIn: ["builder", "uiSchema"],
     shape: {
-      postgresql: { dialectType: "text", nullable: false, primaryKey: true },
+      postgresql: { kind: "text", nullable: false, primaryKey: true },
       mysql: {
-        dialectType: "varchar(36)",
+        kind: "varchar",
         length: 36,
         nullable: false,
         primaryKey: true,
       },
-      sqlite: { dialectType: "text", nullable: false, primaryKey: true },
+      sqlite: { kind: "text", nullable: false, primaryKey: true },
     },
   },
   {
@@ -157,9 +216,9 @@ export const SYSTEM_COLUMNS: readonly SystemColumnDeclaration[] = [
     strippedFromResponses: false,
     reservedIn: ["builder"],
     shape: {
-      postgresql: { dialectType: "text", nullable: false },
-      mysql: { dialectType: "varchar(255)", length: 255, nullable: false },
-      sqlite: { dialectType: "text", nullable: false },
+      postgresql: { kind: "text", nullable: false },
+      mysql: { kind: "varchar", length: 255, nullable: false },
+      sqlite: { kind: "text", nullable: false },
     },
   },
   {
@@ -172,9 +231,9 @@ export const SYSTEM_COLUMNS: readonly SystemColumnDeclaration[] = [
     strippedFromResponses: false,
     reservedIn: ["builder"],
     shape: {
-      postgresql: { dialectType: "text", nullable: false },
-      mysql: { dialectType: "varchar(255)", length: 255, nullable: false },
-      sqlite: { dialectType: "text", nullable: false },
+      postgresql: { kind: "text", nullable: false },
+      mysql: { kind: "varchar", length: 255, nullable: false },
+      sqlite: { kind: "text", nullable: false },
     },
   },
   {
@@ -193,20 +252,12 @@ export const SYSTEM_COLUMNS: readonly SystemColumnDeclaration[] = [
     reservedIn: ["builder", "uiSchema"],
     shape: {
       postgresql: {
-        dialectType: "timestamp",
+        kind: "timestamp",
         nullable: true,
-        default: "now()",
+        default: { kind: "now" },
       },
-      mysql: {
-        dialectType: "timestamp",
-        nullable: true,
-        default: "CURRENT_TIMESTAMP",
-      },
-      sqlite: {
-        dialectType: "integer",
-        nullable: true,
-        default: "(strftime('%s', 'now'))",
-      },
+      mysql: { kind: "timestamp", nullable: true, default: { kind: "now" } },
+      sqlite: { kind: "timestamp", nullable: true, default: { kind: "now" } },
     },
   },
   {
@@ -220,20 +271,12 @@ export const SYSTEM_COLUMNS: readonly SystemColumnDeclaration[] = [
     reservedIn: ["builder", "uiSchema"],
     shape: {
       postgresql: {
-        dialectType: "timestamp",
+        kind: "timestamp",
         nullable: true,
-        default: "now()",
+        default: { kind: "now" },
       },
-      mysql: {
-        dialectType: "timestamp",
-        nullable: true,
-        default: "CURRENT_TIMESTAMP",
-      },
-      sqlite: {
-        dialectType: "integer",
-        nullable: true,
-        default: "(strftime('%s', 'now'))",
-      },
+      mysql: { kind: "timestamp", nullable: true, default: { kind: "now" } },
+      sqlite: { kind: "timestamp", nullable: true, default: { kind: "now" } },
     },
   },
   {
@@ -257,9 +300,9 @@ export const SYSTEM_COLUMNS: readonly SystemColumnDeclaration[] = [
     strippedFromResponses: true,
     reservedIn: ["builder", "collectionConfig"],
     shape: {
-      postgresql: { dialectType: "text", nullable: true },
-      mysql: { dialectType: "varchar(191)", length: 191, nullable: true },
-      sqlite: { dialectType: "text", nullable: true },
+      postgresql: { kind: "text", nullable: true },
+      mysql: { kind: "varchar", length: 191, nullable: true },
+      sqlite: { kind: "text", nullable: true },
     },
   },
   {
@@ -278,18 +321,22 @@ export const SYSTEM_COLUMNS: readonly SystemColumnDeclaration[] = [
     reservedIn: [],
     shape: {
       postgresql: {
-        dialectType: "varchar",
+        kind: "varchar",
         length: 20,
         nullable: false,
-        default: "'draft'",
+        default: { kind: "literal", value: "draft" },
       },
       mysql: {
-        dialectType: "varchar(20)",
+        kind: "varchar",
         length: 20,
         nullable: false,
-        default: "'draft'",
+        default: { kind: "literal", value: "draft" },
       },
-      sqlite: { dialectType: "text", nullable: false, default: "'draft'" },
+      sqlite: {
+        kind: "text",
+        nullable: false,
+        default: { kind: "literal", value: "draft" },
+      },
     },
   },
   {
@@ -324,9 +371,9 @@ export const SYSTEM_COLUMNS: readonly SystemColumnDeclaration[] = [
     // would otherwise collide at migration time rather than here, where the name is chosen.
     reservedIn: ["builder", "collectionConfig", "singleConfig"],
     shape: {
-      postgresql: { dialectType: "timestamp", nullable: true },
-      mysql: { dialectType: "timestamp", nullable: true },
-      sqlite: { dialectType: "integer", nullable: true },
+      postgresql: { kind: "timestamp", nullable: true },
+      mysql: { kind: "timestamp", nullable: true },
+      sqlite: { kind: "timestamp", nullable: true },
     },
   },
 ];

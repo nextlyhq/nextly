@@ -28,7 +28,11 @@
 
 import {
   SYSTEM_COLUMNS,
+  systemColumnDefaultSql,
+  systemColumnDialectType,
+  type SystemColumnDefault,
   type SystemColumnEntity,
+  type SystemColumnKind,
   type SystemColumnPresence,
 } from "../../../lib/system-columns";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
@@ -370,6 +374,14 @@ export interface SystemColumnSet {
 
 export interface SystemColumnDescriptor {
   name: string;
+  /**
+   * The column family, for consumers that build a column rather than describe one.
+   *
+   * The runtime Drizzle generator dispatches on this. It used to dispatch on the NAME, with a
+   * fall-through that made every unrecognised column non-null text, so a newly declared timestamp
+   * would be created as a timestamp and read through a text column.
+   */
+  kind: SystemColumnKind;
   dialectType: string;
   length?: number;
   nullable: boolean;
@@ -378,6 +390,8 @@ export interface SystemColumnDescriptor {
   // Must match what runtime-schema-generator.ts emits so the diff doesn't
   // classify ADD COLUMN as an interactive "required field with no default."
   default?: string;
+  /** The same default, before it was rendered as DDL, for callers that need the value itself. */
+  defaultValue?: SystemColumnDefault;
 }
 
 /**
@@ -421,13 +435,16 @@ export function getSystemColumnDescriptors(
       column.appliesTo.includes(entity) && isPresent(column.presence, opts)
   ).map(column => {
     const shape = column.shape[dialect];
+    const defaultSql = systemColumnDefaultSql(shape, dialect);
     return {
       name: column.name,
-      dialectType: shape.dialectType,
+      kind: shape.kind,
+      dialectType: systemColumnDialectType(shape, dialect),
       ...(shape.length !== undefined ? { length: shape.length } : {}),
       nullable: shape.nullable,
       primaryKey: shape.primaryKey === true,
-      ...(shape.default !== undefined ? { default: shape.default } : {}),
+      ...(defaultSql !== undefined ? { default: defaultSql } : {}),
+      ...(shape.default !== undefined ? { defaultValue: shape.default } : {}),
     };
   });
 }

@@ -1,12 +1,15 @@
 // The system columns are declared once and every consumer reads a projection of that declaration.
-// Two kinds of test guard it. The pinned sets below name today's columns on purpose: they are the
-// contract each consumer had before the declarations existed, so a projection that silently widens
-// or narrows one is caught rather than discovered by a reviewer. The property tests that follow
-// name no column at all — they are what makes the NEXT column safe.
+// Two kinds of test guard it. The pinned sets below name today's columns on purpose: they record
+// the exact contract each consumer holds, so a projection that silently widens or narrows one
+// fails here. The property tests that follow name no column at all — they are what makes the NEXT
+// column safe.
 
+import { getColumns } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 
 import { fieldNameSchema } from "../../domains/dynamic-collections/services/dynamic-collection-validation-service";
+import { getSystemColumnDescriptors } from "../../domains/schema/services/field-column-descriptor";
+import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import { SYSTEM_SCHEMA_VERSION } from "../../domains/schema/services/schema-hash";
 
 import {
@@ -16,8 +19,12 @@ import {
 import {
   reservedSystemFieldNames,
   SYSTEM_COLUMNS,
+  systemColumnDefaultSql,
+  systemColumnDialectType,
   systemColumnNames,
   type ReservationSurface,
+  type SystemColumnDialect,
+  type SystemColumnKind,
 } from "../system-columns";
 
 const sorted = (names: Iterable<string>): string[] => [...names].sort();
@@ -196,8 +203,10 @@ describe("the declaration set itself", () => {
     for (const column of SYSTEM_COLUMNS) {
       for (const dialect of ["postgresql", "mysql", "sqlite"] as const) {
         expect({
-          [`${column.name}.${dialect}`]:
-            typeof column.shape[dialect]?.dialectType,
+          [`${column.name}.${dialect}`]: typeof systemColumnDialectType(
+            column.shape[dialect],
+            dialect
+          ),
         }).toEqual({ [`${column.name}.${dialect}`]: "string" });
       }
     }
@@ -208,6 +217,84 @@ describe("the declaration set itself", () => {
       expect({ [column.name]: column.appliesTo.length > 0 }).toEqual({
         [column.name]: true,
       });
+    }
+  });
+
+  it("builds the runtime schema to match every declared shape", () => {
+    // The physical table and the runtime schema are made by different code from the same
+    // declaration, and a disagreement between them is silent: the table is created one way and
+    // every query reads it another. The runtime builder used to dispatch on the column NAME, with
+    // a fall-through that made anything it did not recognise non-null text, so a newly declared
+    // timestamp would have been created as a timestamp and read through text.
+    //
+    // This asserts the two agree for every declared column rather than for the ones that exist
+    // today, so a column added to the declarations cannot be silently mishandled by the builder.
+    const EXPECTED_COLUMN_TYPE: Record<
+      SystemColumnDialect,
+      Record<SystemColumnKind, string>
+    > = {
+      postgresql: {
+        text: "PgText",
+        varchar: "PgVarchar",
+        timestamp: "PgTimestamp",
+      },
+      mysql: {
+        text: "MySqlText",
+        varchar: "MySqlVarChar",
+        timestamp: "MySqlTimestamp",
+      },
+      sqlite: {
+        text: "SQLiteText",
+        varchar: "SQLiteText",
+        timestamp: "SQLiteTimestamp",
+      },
+    };
+
+    for (const dialect of [
+      "postgresql",
+      "mysql",
+      "sqlite",
+    ] as SystemColumnDialect[]) {
+      for (const isSingle of [false, true]) {
+        const { table } = generateRuntimeSchema(
+          isSingle ? "single_probe" : "dc_probe",
+          [{ name: "body", type: "textarea" }],
+          dialect,
+          { status: true, isSingle }
+        );
+        const built = getColumns(table as never) as Record<string, unknown>;
+        const byName = new Map(
+          Object.values(built).map(column => {
+            const c = column as Record<string, unknown>;
+            return [c.name as string, c];
+          })
+        );
+
+        for (const descriptor of getSystemColumnDescriptors(dialect, {
+          hasTitleField: false,
+          hasSlugField: false,
+          hasStatus: true,
+          isSingle,
+        })) {
+          const where = `${dialect}${isSingle ? "/single" : ""}.${descriptor.name}`;
+          const built = byName.get(descriptor.name);
+          expect({ [where]: built !== undefined }).toEqual({ [where]: true });
+          if (!built) continue;
+
+          expect({
+            [`${where}.type`]: built.columnType,
+            [`${where}.notNull`]: built.notNull,
+            [`${where}.hasDefault`]: built.hasDefault,
+            [`${where}.primary`]: built.primary,
+          }).toEqual({
+            [`${where}.type`]: EXPECTED_COLUMN_TYPE[dialect][descriptor.kind],
+            // A primary key is NOT NULL whether or not it says so.
+            [`${where}.notNull`]: descriptor.primaryKey || !descriptor.nullable,
+            [`${where}.hasDefault`]: descriptor.default !== undefined,
+            [`${where}.primary`]: descriptor.primaryKey,
+          });
+        }
+      }
     }
   });
 
@@ -250,11 +337,11 @@ describe("the physical shape is pinned to the schema version", () => {
           const s = column.shape[dialect];
           return [
             dialect.slice(0, 2),
-            s.dialectType,
+            systemColumnDialectType(s, dialect),
             s.length ?? "-",
             s.nullable ? "null" : "notnull",
             s.primaryKey ? "pk" : "-",
-            s.default ?? "-",
+            systemColumnDefaultSql(s, dialect) ?? "-",
           ].join(":");
         })
         .join(" ");
