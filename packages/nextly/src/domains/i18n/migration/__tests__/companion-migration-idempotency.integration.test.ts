@@ -90,7 +90,7 @@ for (const entry of DIALECTS) {
       companionTable,
       defaultLocale: "en",
       parentIdType: "TEXT",
-      columns: [{ name: "title", kind: "text" }],
+      columns: [{ name: "body", kind: "text" }],
     });
 
     async function drop(): Promise<void> {
@@ -106,38 +106,69 @@ for (const entry of DIALECTS) {
      * definition drifts from the shape Nextly actually creates, and the test would then exercise a
      * layout no real database has.
      */
-    async function createMainWithContent(): Promise<void> {
+    async function createMain(
+      options: { withLocalizedColumn: boolean } = { withLocalizedColumn: true }
+    ): Promise<void> {
       const schemaService = new DynamicCollectionSchemaService(
         undefined,
         entry.dialect
       );
+      // A collection localized from BIRTH never carried the translatable column on main — its
+      // values only ever lived in the companion. Building main with the column would describe a
+      // collection that was localized LATER, which is the other scenario entirely.
+      const fields = options.withLocalizedColumn
+        ? [{ name: "body", type: "text" }]
+        : [];
       for (const statement of splitStatements([
-        schemaService.generateMigrationSQL(mainTable, [
-          { name: "title", type: "text" },
-        ] as never),
+        schemaService.generateMigrationSQL(mainTable, fields as never),
       ])) {
         await adapter.executeQuery(statement);
       }
+      const cols = options.withLocalizedColumn
+        ? `(${q("id")}, ${q("body")}, ${q("title")}, ${q("slug")})`
+        : `(${q("id")}, ${q("title")}, ${q("slug")})`;
+      const vals = options.withLocalizedColumn
+        ? `('p1', 'Hello', 'p1', 'p1'), ('p2', 'World', 'p2', 'p2')`
+        : `('p1', 'p1', 'p1'), ('p2', 'p2', 'p2')`;
       await adapter.executeQuery(
-        `INSERT INTO ${q(mainTable)} (${q("id")}, ${q("title")}, ${q("slug")}) ` +
-          `VALUES ('p1', 'Hello', 'p1'), ('p2', 'World', 'p2')`
+        `INSERT INTO ${q(mainTable)} ${cols} VALUES ${vals}`
       );
     }
 
     /**
-     * The companion exactly as boot leaves it: created, and EMPTY.
+     * The companion as a dev-server boot actually leaves it, through the real entry point.
      *
-     * `di/register.ts` calls `ensureCompanionTable` without a `sourceLocale`, which that function
-     * documents as creating an empty companion rather than performing a transition. Seeding it here
-     * would test a state the product does not produce.
+     * 🔴 Driven by `ensureCompanionTable` rather than by executing the generated CREATE, because
+     * that function refuses some states outright. Without a `sourceLocale` it cannot say which
+     * language existing content is in, so `creatingWouldHideContent` stops it from creating an
+     * empty companion over a main table that still holds translatable columns AND rows — the
+     * caller is told to run `db:sync` or `migrate` instead.
+     *
+     * Executing the raw statement would therefore set up a state boot prevents, and the case would
+     * certify behaviour against a database no project can reach.
      */
-    async function createCompanionAsBootDoes(): Promise<void> {
-      const create = buildLocalizationUpStatements(spec()).find(s =>
-        s.startsWith("CREATE TABLE")
+    async function bootProvisionsCompanion(
+      fields: { name: string; type: string; localized?: boolean }[]
+    ): Promise<void> {
+      const { ensureCompanionTable } = await import(
+        "../../runtime/companion-io"
       );
-      if (create === undefined)
-        throw new Error("no create statement generated");
-      await adapter.executeQuery(create);
+      await ensureCompanionTable(adapter as never, {
+        slug: mainTable,
+        tableName: mainTable,
+        fields,
+        dialect: entry.dialect,
+      });
+    }
+
+    /** A create-only companion file, as `migrate:create` emits for a collection localized from birth. */
+    async function writeCreateOnlyFile(): Promise<void> {
+      const { buildCompanionCreateOnlySql } = await import("../generate-up");
+      await writeFile(
+        join(migrationsDir, "20260802_000002_fresh_localized.sql"),
+        `-- Migration: fresh_localized\n-- UP\n${buildCompanionCreateOnlySql(spec(), { emittedToFile: true })}\n\n-- DOWN\nSELECT 1;\n`,
+        "utf8"
+      );
     }
 
     async function writeMigrationFile(): Promise<void> {
@@ -161,7 +192,7 @@ for (const entry of DIALECTS) {
 
     async function companionRows(): Promise<Record<string, unknown>[]> {
       return adapter.executeQuery<Record<string, unknown>>(
-        `SELECT ${q("_parent")}, ${q("_locale")}, ${q("title")} FROM ${q(companionTable)} ORDER BY ${q("_parent")}`
+        `SELECT ${q("_parent")}, ${q("_locale")}, ${q("body")} FROM ${q(companionTable)} ORDER BY ${q("_parent")}`
       );
     }
 
@@ -175,8 +206,6 @@ for (const entry of DIALECTS) {
       for (const statement of getSchemaEventsDdl(entry.dialect)) {
         await adapter.executeQuery(statement);
       }
-      await createMainWithContent();
-      await writeMigrationFile();
       vi.clearAllMocks();
     });
 
@@ -187,37 +216,58 @@ for (const entry of DIALECTS) {
         await rm(migrationsDir, { recursive: true, force: true });
     });
 
-    // 🔴 The reported failure. Before the guard this threw
-    // `table "<companion>" already exists` and left the run part-applied.
-    it("applies when the companion already exists, and still seeds it", async () => {
-      await createCompanionAsBootDoes();
+    // 🔴 A collection localized from birth, whose companion the dev server has already made.
+    //
+    // This is the state the guard exists for, and it is ordinary rather than exotic: the main table
+    // never carried translatable columns, so boot creates the companion freely, and `migrate:create`
+    // emits a create-only file. Without the guard that file's bare CREATE aborts the run — after
+    // committing every migration ahead of it.
+    //
+    // Create-only carries no seed and no drops, so this scenario is closed completely here: there is
+    // no later statement that can still collide or destroy anything.
+    it("applies a create-only companion file when boot already made the table", async () => {
+      await createMain({ withLocalizedColumn: false });
+      await bootProvisionsCompanion([
+        { name: "body", type: "text", localized: true },
+      ]);
+      await writeCreateOnlyFile();
 
       await expect(migrate()).resolves.toBe(1);
 
-      const rows = await companionRows();
-      expect(rows).toHaveLength(2);
-      expect(rows.map(r => r.title)).toEqual(["Hello", "World"]);
-      expect(rows.every(r => r._locale === "en")).toBe(true);
+      // The table is usable afterwards, not merely present.
+      await adapter.executeQuery(
+        `INSERT INTO ${q(companionTable)} (${q("_parent")}, ${q("_locale")}, ${q("body")}) ` +
+          `VALUES ('p1', 'en', 'Hello')`
+      );
+      expect(await companionRows()).toHaveLength(1);
     });
 
     // The control: the guard must not have turned the create into a no-op on a database that
     // genuinely lacks the table. Without this, a generator emitting nothing at all would pass above.
-    it("applies when the companion does not exist, creating and seeding it", async () => {
+    it("applies a create-only companion file when the table is absent", async () => {
+      await createMain({ withLocalizedColumn: false });
+      await writeCreateOnlyFile();
+
       await expect(migrate()).resolves.toBe(1);
 
-      const rows = await companionRows();
-      expect(rows).toHaveLength(2);
-      expect(rows.map(r => r.title)).toEqual(["Hello", "World"]);
+      await adapter.executeQuery(
+        `INSERT INTO ${q(companionTable)} (${q("_parent")}, ${q("_locale")}, ${q("body")}) ` +
+          `VALUES ('p1', 'en', 'Hello')`
+      );
+      expect(await companionRows()).toHaveLength(1);
     });
 
-    // 🔴 What an emitted file does when the companion already holds default-locale rows: it stops
-    // loudly, and main is left intact.
+    // 🔴 What an ENABLE file does when the companion already holds default-locale rows — the state
+    // `db:sync` leaves, since it seeds while retaining main's columns. It stops loudly, and main is
+    // left intact.
     //
     // The file cannot know whether those rows are an interrupted copy to keep or the stale remains
     // of a disable, with main authoritative ever since — only the transition record says, and a
     // static file has none. Skipping them and proceeding to the drops would silently revert every
     // edit made while localization was off. Colliding costs a re-run; guessing costs data.
     it("stops on an already-seeded companion instead of dropping main's columns", async () => {
+      await createMain();
+      await writeMigrationFile();
       const statements = buildLocalizationUpStatements(spec());
       for (const statement of statements) {
         if (statement.includes("DROP COLUMN")) break;
@@ -229,17 +279,23 @@ for (const entry of DIALECTS) {
 
       // The load-bearing half: nothing was dropped, so the operator still has every value.
       const main = await adapter.executeQuery<Record<string, unknown>>(
-        `SELECT ${q("title")} FROM ${q(mainTable)} ORDER BY ${q("id")}`
+        `SELECT ${q("body")} FROM ${q(mainTable)} ORDER BY ${q("id")}`
       );
-      expect(main.map(r => r.title)).toEqual(["Hello", "World"]);
+      expect(main.map(r => r.body)).toEqual(["Hello", "World"]);
     });
 
     // The guard belongs to the runtime, which HAS read the transition record. Driven through the
     // generated statements so the property is asserted against a real server rather than a string.
     it("completes a partially seeded companion when the caller asks for the guard", async () => {
-      await createCompanionAsBootDoes();
+      await createMain();
+      // Created directly rather than through boot: this case needs a companion over a main table
+      // that still holds content, which is exactly what boot declines to produce.
+      const create = buildLocalizationUpStatements(spec()).find(statement =>
+        statement.startsWith("CREATE TABLE")
+      );
+      await adapter.executeQuery(create ?? "");
       await adapter.executeQuery(
-        `INSERT INTO ${q(companionTable)} (${q("_parent")}, ${q("_locale")}, ${q("title")}) ` +
+        `INSERT INTO ${q(companionTable)} (${q("_parent")}, ${q("_locale")}, ${q("body")}) ` +
           `VALUES ('p1', 'en', 'Edited since')`
       );
 
@@ -260,7 +316,7 @@ for (const entry of DIALECTS) {
       expect(rows).toHaveLength(2);
       // The row already present is kept as it stands: it may hold an edit made after the
       // interrupted copy, and re-copying from main would discard it.
-      expect(rows.map(r => r.title)).toEqual(["Edited since", "World"]);
+      expect(rows.map(r => r.body)).toEqual(["Edited since", "World"]);
     });
   });
 }
