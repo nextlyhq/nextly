@@ -270,16 +270,12 @@ function attrProducesDimension(
     // The fallback replaces the whole reference, so it is read as a standalone
     // value and not as an arithmetic expression: bare operators are illegal
     // here exactly as they are where the property is written out directly.
-    for (const term of fallback) {
-      if (
-        standaloneTermRejection(term, NO_KEYWORDS, {
-          ...limits,
-          allowNumber: false,
-        }) !== null
-      ) {
-        return false;
-      }
-    }
+    const rejection = standaloneValueRejection(fallback, NO_KEYWORDS, {
+      ...limits,
+      allowNumber: false,
+      maxParts: 1,
+    });
+    if (rejection !== null) return false;
   }
   const declared = first[1];
   if (declared === undefined) return false;
@@ -1182,17 +1178,40 @@ export function checkDimensionValue(
   if (ast === null || ast.type !== "Value") return "not-a-length";
   const allowed = new Set(keywords.map(keyword => asciiLower(keyword)));
   const allowedFunctions = new Set(functions.map(fnName => asciiLower(fnName)));
+  return standaloneValueRejection([...ast.children], allowed, {
+    allowNegative,
+    allowPercentage,
+    functions: allowedFunctions,
+    allowNumber,
+    maxParts,
+  });
+}
+
+/**
+ * Whether a run of terms is ONE standalone value.
+ *
+ * Per-term checks are not enough on their own: `1px 2px` is two well-formed
+ * lengths and no valid width, and `inherit 1px` is a CSS-wide keyword that
+ * voids whatever stands beside it. Both are properties of the run rather than
+ * of any term in it, so a caller that walks terms itself and stops there
+ * accepts values a browser discards.
+ *
+ * Shared with the `attr()` fallback, which is one standalone value in exactly
+ * this sense — a `px`-typed attribute substitutes a single length, so a
+ * fallback of two is as wrong there as it is written out.
+ */
+function standaloneValueRejection(
+  terms: readonly CssNode[],
+  keywords: ReadonlySet<string>,
+  rules: MeasurementLimits & { allowNumber: boolean; maxParts: number }
+): CssValueRejection | null {
+  const { maxParts, ...termRules } = rules;
   let parts = 0;
   let cssWideKeyword = false;
-  for (const child of ast.children) {
-    const childRejection = standaloneTermRejection(child, allowed, {
-      allowNegative,
-      allowPercentage,
-      functions: allowedFunctions,
-      allowNumber,
-    });
-    if (childRejection !== null) return childRejection;
-    if (child.type === "Identifier" && isCssWideKeyword(identifierOf(child))) {
+  for (const term of terms) {
+    const rejection = standaloneTermRejection(term, keywords, termRules);
+    if (rejection !== null) return rejection;
+    if (term.type === "Identifier" && isCssWideKeyword(identifierOf(term))) {
       cssWideKeyword = true;
     }
     parts += 1;

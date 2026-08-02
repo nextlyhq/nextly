@@ -2520,6 +2520,15 @@ describe("a deferred value still needs its name", () => {
     // Wrapped in a math function it is a value again.
     expect(codes({ width: "attr(data-x px, calc(1px + 2px))" })).toEqual([]);
     expect(codes({ width: "attr(data-x px, 1px)" })).toEqual([]);
+    // The fallback is ONE value, not a run of them: a px-typed attribute
+    // substitutes a single length, so two adjacent ones are as wrong here as
+    // they are written out, and a CSS-wide keyword still voids its neighbours.
+    expect(codes({ width: "attr(data-x px, 1px 2px)" })).toEqual([
+      "invalid-style-value",
+    ]);
+    expect(codes({ width: "attr(data-x px, inherit 1px)" })).toEqual([
+      "invalid-style-value",
+    ]);
   });
 
   it("reads the whole head, not only the name", () => {
