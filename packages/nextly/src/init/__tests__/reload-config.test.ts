@@ -2037,6 +2037,89 @@ describe("reloadNextlyConfig", () => {
       expect(edited).not.toHaveBeenCalled();
     });
 
+    it("keeps the newly loaded field types when it withholds after a successful apply", async () => {
+      // Withholding hooks and rolling back the plugin field-type registry are
+      // separate decisions, and this branch is inside a successful apply: the
+      // DDL and the runtime schema caches were generated FROM the field types
+      // this reload loaded. Putting the previous ones back would leave
+      // validation and storage transforms running definitions the landed
+      // schema no longer matches.
+      const registry = getHookRegistry();
+      const edited = vi.fn(() => undefined);
+      const { registerFieldType, clearFieldTypes, getFieldType } = await import(
+        "../../domains/schema/field-types/field-type-registry"
+      );
+      const { reloadNextlyConfig } = await import("../reload-config");
+
+      clearFieldTypes();
+      registerFieldType({
+        type: "legacy-rating",
+        storage: "number",
+        component: "plugin/legacy-rating",
+      });
+
+      const refusedCollection = {
+        slug: "refused",
+        tableName: "dc_refused",
+        fields: [{ name: "active", type: "checkbox" }],
+      };
+      const appliedCollection = {
+        slug: SLUG,
+        tableName: TABLE,
+        fields: [
+          { name: "body", type: "text" },
+          { name: "summary", type: "text" },
+        ],
+        hooks: { afterRead: [edited] },
+      };
+      introspectSpy.mockResolvedValue(
+        buildSnapshot([
+          {
+            name: TABLE,
+            columns: [
+              ...reservedColumns(TABLE),
+              { name: "body", type: "text", nullable: true },
+            ],
+          },
+          {
+            name: "dc_refused",
+            columns: [
+              ...reservedColumns("dc_refused"),
+              { name: "active", type: "text", nullable: true },
+            ],
+          },
+        ])
+      );
+
+      // The real `loadConfig` clears and repopulates the process-global
+      // field-type registry as it reads the new config, so the mock has to do
+      // the same or a rollback would have nothing observable to undo.
+      loadConfigSpy.mockImplementation(async () => {
+        clearFieldTypes();
+        registerFieldType({
+          type: "fresh-rating",
+          storage: "number",
+          component: "plugin/fresh-rating",
+        });
+        return {
+          config: { collections: [appliedCollection, refusedCollection] },
+        };
+      });
+
+      pipelineApplySpy.mockClear();
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      // Controls: the apply ran (so this is the post-DDL branch) and the gate
+      // withheld (so this is the withholding side of it).
+      expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
+      expect(registry.getHookCount("afterRead", SLUG)).toBe(0);
+
+      expect(getFieldType("fresh-rating")).toBeDefined();
+      expect(getFieldType("legacy-rating")).toBeUndefined();
+
+      clearFieldTypes();
+    });
+
     it("does not half-enable a plugin that never initialized", async () => {
       // `init` does not re-run on a config reload, so flipping `enabled: false`
       // to true produces a plugin the config calls enabled and the process

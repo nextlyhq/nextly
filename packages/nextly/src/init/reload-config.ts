@@ -1898,6 +1898,10 @@ async function applyReload(opts?: {
       // `!deferredSchemaChange`, which every deferral sets -- and is passed
       // anyway so the condition is read from the set itself rather than from
       // an invariant maintained at six other sites.
+      // Withheld by not committing, and without the field-type rollback: the
+      // sync that failed here is the metadata one, and this path is reached
+      // only when every diff was empty, so the live schema already matches what
+      // the new field types describe.
       if (
         reloadAdvancedEverything({
           deferredEntities,
@@ -1908,8 +1912,6 @@ async function applyReload(opts?: {
         })
       ) {
         commitReload();
-      } else {
-        abandonReload();
       }
     } else {
       // A real schema change was deferred (unsafe / needs review) or a diff
@@ -2471,6 +2473,13 @@ async function applyReload(opts?: {
     // metadata all synced. This is also the path a save that changes only a
     // hook takes -- its diff is empty, the apply has nothing to do and reports
     // success, so every dimension is trivially clean and the edit lands.
+    // Withholding is simply not committing: nothing is applied until the thunk
+    // runs, so the previous handlers stay in place on their own. It must NOT
+    // take the field-type rollback with it -- this branch is inside
+    // `applyResult.success`, so the DDL and the runtime schema caches were
+    // generated FROM the newly loaded field types, and putting the previous
+    // ones back would leave validation and storage transforms running the old
+    // definitions against the landed schema.
     if (
       reloadAdvancedEverything({
         deferredEntities,
@@ -2481,8 +2490,6 @@ async function applyReload(opts?: {
       })
     ) {
       commitReload();
-    } else {
-      abandonReload();
     }
   }
 
