@@ -102,15 +102,16 @@ interface NestedHookStateBase {
    */
   redactions: ReadAccessRedactions;
   /**
-   * The same removed values as `redactions`, but keyed by `relationKey(collection,
-   * id)` instead of the row object. A source hook can return a CLONE of a related
-   * row (a new object the WeakMap cannot key); the authoritative re-walk seeds the
-   * clone's evidence from here so an inverse conditional rule — a field visible
-   * only while a DENIED sibling is absent — cannot fall open on the clone. Keyed by
-   * id and re-judged (never a cached verdict): a replacement's denied fields are
-   * still stripped, and a same-id clone is judged against the original's evidence.
+   * The ORIGINAL related row object for each `relationKey(collection, id)` seen in
+   * the first walk. A source hook can return a CLONE of a related row (a new object
+   * graph the WeakMap cannot key); the authoritative re-walk finds the original
+   * here by id and transfers its removed-field evidence — at the root AND through
+   * every group/repeater below it — onto the clone, so an inverse conditional rule
+   * (a field visible only while a DENIED sibling is absent) cannot fall open on the
+   * clone at any depth. The clone is then re-judged (never a cached verdict): a
+   * replacement's own denied fields are still stripped.
    */
-  redactionsById: Map<string, Record<string, unknown>>;
+  originalRowById: Map<string, Record<string, unknown>>;
   /**
    * Every related row the pass reached, in visit order, with what is needed to
    * finish it. These entries drive the finalize step after every hook has run: it
@@ -141,7 +142,7 @@ function createNestedHookState(): NestedHookState {
     fields: new Map(),
     labelFields: new Map(),
     redactions: new WeakMap(),
-    redactionsById: new Map(),
+    originalRowById: new Map(),
     pending: [],
     applyFieldHooks: true,
   };
@@ -369,6 +370,25 @@ function parseJsonIfString(data: unknown): unknown {
     }
   }
   return data;
+}
+
+/**
+ * The row objects inside a container value (a `group` object, or a `repeater`
+ * array), parsing a JSON string first. Non-object entries are dropped. Used to
+ * walk an original and its clone in parallel when transferring redaction evidence.
+ */
+function containerRowsOf(value: unknown): Record<string, unknown>[] {
+  const parsed = parseJsonIfString(value);
+  if (Array.isArray(parsed)) {
+    return parsed.filter(
+      (row): row is Record<string, unknown> =>
+        row !== null && typeof row === "object"
+    );
+  }
+  if (parsed !== null && typeof parsed === "object") {
+    return [parsed as Record<string, unknown>];
+  }
+  return [];
 }
 
 /**
@@ -3109,7 +3129,7 @@ export class CollectionRelationshipService extends BaseService {
       fields: walkState.fields,
       labelFields: walkState.labelFields,
       redactions: walkState.redactions,
-      redactionsById: walkState.redactionsById,
+      originalRowById: walkState.originalRowById,
       applyFieldHooks: false,
     };
     for (const entry of entries) {
@@ -3173,25 +3193,89 @@ export class CollectionRelationshipService extends BaseService {
   }
 
   /**
-   * Decode a `group`/`repeater` field held as a JSON string into its objects, in
-   * place, so the walk can descend into the relationships inside it.
+   * Decode a JSON-backed field held as a string into its objects, in place, so the
+   * walk can descend into the relationships inside or behind it.
    *
-   * A source `afterRead` hook can return a container as the storage string SQLite
-   * keeps it as (the normal read decodes containers to objects before this walk;
-   * a hook that reshapes the document can hand one back as a string). Left as a
-   * string, {@link walkFieldValue} derives no rows from it and a denied target
-   * field on a relationship inside it would reach the response. Writing the decoded
-   * value back matches the object shape a normal read returns.
+   * A source `afterRead` hook can return a value as the storage string SQLite keeps
+   * it as (the normal read decodes these before this walk; a hook that reshapes the
+   * document can hand one back as a string). Two field kinds are JSON-backed:
+   * `group`/`repeater` containers, and a POPULATED `hasMany` or polymorphic
+   * relationship, which serializes to a JSON array (`[...]`) or object
+   * (`{"relationTo":...}`). Left a string, {@link walkFieldValue} derives no rows
+   * from it and a denied target field inside would reach the response.
+   *
+   * A relationship is decoded only when the string opens with `[` or `{`: a bare id
+   * is left alone (parsing `"12"` would coerce it to a number), and a Postgres
+   * array literal (`{id,...}`) is not JSON so {@link parseJsonIfString} returns it
+   * unchanged. Writing the decoded value back matches the shape a normal read
+   * returns.
    */
-  private decodeContainerFieldInPlace(
+  private decodeJsonBackedFieldInPlace(
     holder: Record<string, unknown>,
     field: FieldDefinition
   ): void {
-    if (
-      isRepeaterOrGroupField(field) &&
-      typeof holder[field.name] === "string"
+    const value = holder[field.name];
+    if (typeof value !== "string") return;
+    if (isRepeaterOrGroupField(field)) {
+      holder[field.name] = parseJsonIfString(value);
+    } else if (
+      isRelationshipField(field) &&
+      (value.startsWith("[") || value.startsWith("{"))
     ) {
-      holder[field.name] = parseJsonIfString(holder[field.name]);
+      holder[field.name] = parseJsonIfString(value);
+    }
+  }
+
+  /**
+   * Copy the removed-field evidence of an ORIGINAL related row, and of every row
+   * inside its groups/repeaters, onto a CLONE a source hook returned in its place.
+   *
+   * The redaction WeakMap keys evidence by object, so a deep clone loses it at
+   * every level; the id bridge finds the original, and this transfers its subtree
+   * evidence onto the clone so the authoritative re-walk can restore an inverse
+   * conditional's denied sibling throughout the tree, not only at the root, then
+   * re-judge. Matched by container index — a genuine replacement whose shape
+   * diverges inherits less and is judged on its own content.
+   */
+  private async transferSubtreeEvidence(
+    original: Record<string, unknown>,
+    clone: Record<string, unknown>,
+    collection: string,
+    state: NestedHookState
+  ): Promise<void> {
+    const rootEvidence = state.redactions.get(original);
+    if (rootEvidence && !state.redactions.has(clone)) {
+      state.redactions.set(clone, rootEvidence);
+    }
+    const fields = await this.fieldsForNestedWalk(collection, state);
+    this.transferContainerEvidence(original, clone, fields, state);
+  }
+
+  /** The recursive, container-level worker for {@link transferSubtreeEvidence}. */
+  private transferContainerEvidence(
+    original: Record<string, unknown>,
+    clone: Record<string, unknown>,
+    fields: FieldDefinition[],
+    state: NestedHookState
+  ): void {
+    for (const field of fields) {
+      if (!isRepeaterOrGroupField(field) || !field.name) continue;
+      const originalRows = containerRowsOf(original[field.name]);
+      const cloneRows = containerRowsOf(clone[field.name]);
+      const inner = getNestedFields(field);
+      const shared = Math.min(originalRows.length, cloneRows.length);
+      for (let i = 0; i < shared; i++) {
+        const evidence = state.redactions.get(originalRows[i]);
+        if (evidence && !state.redactions.has(cloneRows[i])) {
+          state.redactions.set(cloneRows[i], evidence);
+        }
+        this.transferContainerEvidence(
+          originalRows[i],
+          cloneRows[i],
+          inner,
+          state
+        );
+      }
     }
   }
 
@@ -3213,7 +3297,7 @@ export class CollectionRelationshipService extends BaseService {
 
     const fields = await this.fieldsForNestedWalk(collectionName, state);
     for (const field of fields) {
-      this.decodeContainerFieldInPlace(entry, field);
+      this.decodeJsonBackedFieldInPlace(entry, field);
       await this.walkFieldValue(entry[field.name], field, access, state, depth);
     }
   }
@@ -3247,7 +3331,7 @@ export class CollectionRelationshipService extends BaseService {
       // hooks of their own -- only the relationships inside them do.
       for (const row of rows) {
         for (const inner of nested) {
-          this.decodeContainerFieldInPlace(row, inner);
+          this.decodeJsonBackedFieldInPlace(row, inner);
           await this.walkFieldValue(
             row[inner.name],
             inner,
@@ -3307,6 +3391,21 @@ export class CollectionRelationshipService extends BaseService {
           operation: "read",
           user: access.user,
         });
+        // A field hook may have ADDED or REPLACED one of this row's own populated
+        // relationships. That child missed the descent above, so descend again:
+        // a genuinely new child is walked — its denied fields stripped and it
+        // queued — before this row returns to its parent, whose hooks (and the
+        // source collection's) run next and could otherwise read a denied value
+        // off the still-unsanitized child and copy it onto an allowed key the
+        // later pass no longer looks at. Rows already claimed in `visited` are
+        // skipped, so only new children are re-walked.
+        await this.walkNestedRows(
+          resolved.row,
+          resolved.collection,
+          access,
+          state,
+          depth + 1
+        );
       }
 
       // Apply THIS row's field access now, before returning to its parent —
@@ -3321,20 +3420,27 @@ export class CollectionRelationshipService extends BaseService {
       // recorded in the shared `redactions` so `finalizeRelatedRows` can restore
       // it as evidence and re-judge the row after every hook has run.
       //
-      // Seed this row's removed-evidence from the id-keyed store when the WeakMap
-      // has none for it: a source hook can return a CLONE (a new object the
-      // WeakMap cannot key), and without the original's evidence an inverse
+      // Transfer evidence from the ORIGINAL row (by id) when the WeakMap has none
+      // for this one: a source hook can return a CLONE (a new object graph the
+      // WeakMap cannot key), and without the original's removed siblings an inverse
       // conditional rule — a field visible only while a DENIED sibling is absent —
-      // would fall open on the clone. It is re-judged below, so a replacement's own
-      // denied fields are still stripped; only the removed siblings are restored.
+      // would fall open on the clone. Transferred through the whole subtree, then
+      // re-judged below (a replacement's own denied fields are still stripped).
       if (
         !state.redactions.has(resolved.row) &&
         typeof resolved.row.id === "string"
       ) {
-        const byId = state.redactionsById.get(
+        const original = state.originalRowById.get(
           relationKey(resolved.collection, resolved.row.id)
         );
-        if (byId) state.redactions.set(resolved.row, byId);
+        if (original && original !== resolved.row) {
+          await this.transferSubtreeEvidence(
+            original,
+            resolved.row,
+            resolved.collection,
+            state
+          );
+        }
       }
       await this.applyRelatedRowReadAccess(
         resolved.collection,
@@ -3342,13 +3448,12 @@ export class CollectionRelationshipService extends BaseService {
         access,
         state.redactions
       );
-      // Mirror what this row had removed into the id-keyed store, so a later clone
-      // of it can restore the same evidence.
-      const removedForRow = state.redactions.get(resolved.row);
-      if (removedForRow && typeof resolved.row.id === "string") {
-        state.redactionsById.set(
+      // Remember the ORIGINAL row object by id (first walk only), so a later clone
+      // of it can inherit its subtree evidence.
+      if (state.applyFieldHooks && typeof resolved.row.id === "string") {
+        state.originalRowById.set(
           relationKey(resolved.collection, resolved.row.id),
-          removedForRow
+          resolved.row
         );
       }
 

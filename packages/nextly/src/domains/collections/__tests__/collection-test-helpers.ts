@@ -253,7 +253,7 @@ export function createMockRelationshipService(): MockRecord {
       fields: new Map(),
       labelFields: new Map(),
       redactions: new WeakMap(),
-      redactionsById: new Map(),
+      originalRowById: new Map(),
       pending: [],
       applyFieldHooks: true,
     })),

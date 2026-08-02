@@ -125,7 +125,23 @@ async function boot(): Promise<TestNextly> {
           // before the ancestor snapshot is what keeps the two reads in step.
           group({
             name: "charter",
-            fields: [text({ name: "sealed", access: { read: () => false } })],
+            fields: [
+              text({ name: "sealed", access: { read: () => false } }),
+              // A NESTED inverse conditional: visible only while the denied nested
+              // `sealed` is NOT "locked". A locked charter strips both; a deep-clone
+              // drops the nested `sealed`, so a pass judging the clone without
+              // transferring the SUBTREE evidence reads `undefined !== "locked"` and
+              // falls open on the nested field — the root-only id bridge is not
+              // enough.
+              text({
+                name: "openSeal",
+                access: {
+                  read: ({ data }) =>
+                    (data as { sealed?: unknown } | undefined)?.sealed !==
+                    "locked",
+                },
+              }),
+            ],
           }),
           text({
             name: "emblem",
@@ -371,6 +387,27 @@ async function boot(): Promise<TestNextly> {
               ],
             },
           }),
+          // A target-collection FIELD hook that REPLACES this author's own
+          // `organization` relationship with a freshly populated org carrying a
+          // denied field, AFTER the walk already descended the original. The new
+          // child missed that descent, so unless the walk descends again the source
+          // collection's hooks could read its denied field and copy it out.
+          text({
+            name: "swapOrg",
+            hooks: {
+              afterRead: [
+                ({ value, data }) => {
+                  if (value !== "on") return value;
+                  (data as Record<string, unknown>).organization = {
+                    id: "swapped-org",
+                    name: "swapped",
+                    classification: "SECRET",
+                  };
+                  return value;
+                },
+              ],
+            },
+          }),
         ],
       }),
       defineCollection({
@@ -408,6 +445,14 @@ async function boot(): Promise<TestNextly> {
           group({
             name: "credits",
             fields: [relationship({ name: "editor", relationTo: AUTHORS })],
+          }),
+          // A hasMany relationship: populated + serialized it is a JSON ARRAY
+          // string, which a hook can hand back. The walk must decode that string
+          // before it can reach the denied fields on the rows inside.
+          relationship({
+            name: "contributors",
+            relationTo: AUTHORS,
+            hasMany: true,
           }),
         ],
       }),
@@ -1369,5 +1414,130 @@ describe("a target's field hooks apply to rows reached through a relationship", 
 
     const owner = doc.owner as Record<string, unknown>;
     expect(owner.passwordHash).toBeUndefined();
+  });
+
+  it("transfers subtree evidence to a deep-cloned relation, keeping a nested inverse rule closed", async () => {
+    // `charter.openSeal` is visible only while the denied nested `charter.sealed`
+    // is NOT "locked". A locked charter strips both. A source hook DEEP-clones the
+    // org (charter included) and reintroduces openSeal; without transferring the
+    // NESTED evidence the pass reads `undefined !== "locked"` and returns it — the
+    // root-only id bridge would miss it.
+    const t = await boot();
+    await t.nextly.create({
+      collection: ORGS,
+      data: {
+        name: "acme",
+        charter: { sealed: "locked", openSeal: "visible" },
+      },
+    });
+    const orgId = await onlyId(t, ORGS);
+    await t.nextly.create({
+      collection: AUTHORS,
+      data: { name: "ada", organization: orgId },
+    });
+    const authorId = await onlyId(t, AUTHORS);
+    await t.nextly.create({
+      collection: POSTS,
+      data: { title: "p", author: authorId },
+    });
+    const postId = await onlyId(t, POSTS);
+
+    t.hooks.register("afterRead", POSTS, ctx => {
+      const entry = ctx.data as Record<string, unknown>;
+      const author = entry.author as Record<string, unknown> | undefined;
+      const org = author?.organization as Record<string, unknown> | undefined;
+      if (author && org) {
+        const charter = (org.charter ?? {}) as Record<string, unknown>;
+        author.organization = {
+          ...org,
+          charter: { ...charter, openSeal: "LEAKED" },
+        };
+      }
+      return entry;
+    });
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    const author = expanded.data!.author as Record<string, unknown>;
+    const org = author.organization as Record<string, unknown> | undefined;
+    const charter = org?.charter as Record<string, unknown> | undefined;
+    expect(charter).toBeTruthy();
+    // Closed: the nested `sealed` evidence was transferred to the clone's charter.
+    expect(charter!.openSeal).toBeUndefined();
+  });
+
+  it("walks a relationship a target field hook swaps in before source hooks read it", async () => {
+    // The author's `swapOrg` field hook REPLACES its organization with a fresh org
+    // carrying denied `classification`, after the walk already descended the
+    // original. A source POSTS hook then copies `author.organization.classification`
+    // onto an allowed key. Only re-descending after the target field hooks strips
+    // the swapped org before the source hook can read it.
+    const t = await boot();
+    await t.nextly.create({ collection: ORGS, data: { name: "acme" } });
+    const orgId = await onlyId(t, ORGS);
+    await t.nextly.create({
+      collection: AUTHORS,
+      data: { name: "ada", organization: orgId, swapOrg: "on" },
+    });
+    const authorId = await onlyId(t, AUTHORS);
+    await t.nextly.create({
+      collection: POSTS,
+      data: { title: "p", author: authorId },
+    });
+    const postId = await onlyId(t, POSTS);
+
+    t.hooks.register("afterRead", POSTS, ctx => {
+      const entry = ctx.data as Record<string, unknown>;
+      const author = entry.author as Record<string, unknown> | undefined;
+      const org = author?.organization as Record<string, unknown> | undefined;
+      entry.leaked = org?.classification;
+      return entry;
+    });
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    // The swapped org's denied classification was stripped before the source hook
+    // ran, so it copied nothing.
+    expect(expanded.data!.leaked).toBeUndefined();
+  });
+
+  it("decodes a hasMany relationship a hook returns as a JSON string and sanitizes its rows", async () => {
+    // A populated hasMany relationship serializes to a JSON array string, which a
+    // hook can hand back. Left a string the walk derives no rows; decoded, the
+    // denied `dossier` on each contributor row is stripped.
+    const t = await boot();
+    await t.nextly.create({ collection: AUTHORS, data: { name: "c" } });
+    const contributorId = await onlyId(t, AUTHORS);
+    await t.nextly.create({ collection: POSTS, data: { title: "p" } });
+    const postId = await onlyId(t, POSTS);
+
+    t.hooks.register("afterRead", POSTS, ctx => {
+      const entry = ctx.data as Record<string, unknown>;
+      entry.contributors = JSON.stringify([
+        { id: contributorId, name: "c", dossier: "LEAKED" },
+      ]);
+      return entry;
+    });
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    const contributors = expanded.data!.contributors as
+      | Record<string, unknown>[]
+      | undefined;
+    expect(Array.isArray(contributors)).toBe(true);
+    expect(contributors![0]).toBeTruthy();
+    expect(contributors![0].dossier).toBeUndefined();
   });
 });
