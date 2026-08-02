@@ -14,16 +14,11 @@
  * half of the migration policy applied to data — a page that cannot reach its
  * database should degrade, not disappear.
  *
- * **What this cannot do yet, and why it is worth knowing.** `slots.children` is
- * already-rendered output, so every iteration below repeats the SAME element.
- * The template is duplicated once per entry, but a child inside it cannot show
- * that entry's fields, because nothing in the render contract lets a block ask
- * for its slot to be rendered again under a different value. A repeater needs
- * exactly that, and no arrangement of the current arguments provides it.
- *
- * That makes this useful for repeating a fixed template a data-driven number of
- * times, and not yet useful for listing content. Closing the gap is a change to
- * what a slot IS, which is why it is recorded rather than worked around here.
+ * The template is drawn once per entry rather than drawn once and copied, with
+ * the entry named on the context each time. That is the whole reason a slot is
+ * something a block DRAWS rather than something it receives finished: handed
+ * finished output, a repeater could only stamp the same picture, and nothing
+ * inside it could show its own entry's fields.
  *
  * @module blocks/library/collection-loop
  */
@@ -40,6 +35,19 @@ export interface CollectionLoopProps {
   sort?: string;
 }
 
+/**
+ * The key for one iteration.
+ *
+ * An entry's own id when it has one, of either type a database hands back, and
+ * its position otherwise. Falling back for a numeric id would give every row in
+ * a numerically-keyed collection a positional key, which is exactly the case
+ * where reordering silently reuses the wrong DOM node.
+ */
+function keyFor(item: Record<string, unknown>, index: number): string | number {
+  const id = item.id;
+  return typeof id === "string" || typeof id === "number" ? id : index;
+}
+
 export async function renderCollectionLoop({
   props,
   renderSlot,
@@ -52,9 +60,7 @@ export async function renderCollectionLoop({
     // Nothing to query against, so the block renders its template once rather
     // than vanishing: an author placing a loop before choosing a collection
     // still sees what they are building.
-    return (
-      <div className={className}>{renderSlot("children") as ReactElement}</div>
-    );
+    return <div className={className}>{renderSlot("children")}</div>;
   }
   let items: Record<string, unknown>[] = [];
   try {
@@ -71,11 +77,11 @@ export async function renderCollectionLoop({
   return (
     <div className={className}>
       {items.map((item, index) => (
-        <div key={typeof item.id === "string" ? item.id : index}>
+        <div key={keyFor(item, index)}>
           {/* Drawn again per entry, with this entry on the context, so anything
               inside the template reads its own values rather than the first
               entry's. */}
-          {renderSlot("children", { ...ctx, item }) as ReactElement}
+          {renderSlot("children", { ...ctx, item })}
         </div>
       ))}
     </div>

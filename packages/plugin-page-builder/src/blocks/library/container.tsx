@@ -94,7 +94,5 @@ export function renderContainer({
     props.contained === true
       ? `${className} ${CONTENT_WIDTH_CLASS}`
       : className;
-  return (
-    <Tag className={classes}>{renderSlot("children") as ReactElement}</Tag>
-  );
+  return <Tag className={classes}>{renderSlot("children")}</Tag>;
 }

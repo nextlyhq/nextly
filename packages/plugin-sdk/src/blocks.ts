@@ -32,6 +32,7 @@ import type {
   BlockRenderArgs as EngineBlockRenderArgs,
   BlockSupportValue,
 } from "@nextlyhq/blocks-engine";
+import type { ReactNode } from "react";
 
 /**
  * The support keys a block may declare.
@@ -102,6 +103,21 @@ export type BlockSupports = Partial<
 >;
 
 /**
+ * Supports as written at a definition, with unknown keys refused.
+ *
+ * TypeScript checks for excess properties only on a literal written in place,
+ * so lifting settings into a shared object skips it: `const shared = { spacing:
+ * true, spaceing: true }` assigns to `BlockSupports` without complaint, and the
+ * typo survives to be caught at boot in someone else's app — which is the whole
+ * failure this vocabulary exists to move earlier.
+ *
+ * Naming the offending key as `never` refuses it wherever it was written.
+ */
+type ExactSupports<S> = S & {
+  [K in Exclude<keyof S, keyof BlockSupportKeys>]: never;
+};
+
+/**
  * Everything a renderer makes available to every block it draws.
  *
  * ONE description per app, rather than each block inventing its own. A block
@@ -134,17 +150,26 @@ export interface BlockRenderContext {
 /**
  * What a block's `render` receives.
  *
- * The engine's own version leaves the context unnamed, because the engine does
- * not know what any renderer provides. This one defaults it to what THIS app's
- * renderer provides, which is what lets a block read `ctx.data` without its
- * author writing a type to say so.
+ * The engine's own version leaves both the context and the output unnamed,
+ * because the engine serves any renderer and cannot know either. This one names
+ * both: the context is what THIS app's renderer provides, which is what lets a
+ * block read `ctx.data` with no type written by hand, and the output is React,
+ * which is what lets a block place a slot straight into its JSX instead of
+ * asserting a type over it.
  *
  * @experimental Carried by the same freeze as `defineBlock`.
  */
-export type BlockRenderArgs<P, C = BlockRenderContext> = EngineBlockRenderArgs<
-  P,
-  C
->;
+export interface BlockRenderArgs<P>
+  extends Omit<EngineBlockRenderArgs<P, BlockRenderContext>, "renderSlot"> {
+  /**
+   * Render one of this block's slots, optionally under a different context.
+   *
+   * A promise is a legal child of a server component, which is what makes a
+   * block whose slot holds an async block work: the slot is drawn and whatever
+   * it returns is placed, with no awaiting for the author to remember.
+   */
+  renderSlot(this: void, name: string, ctx?: BlockRenderContext): ReactNode;
+}
 
 /**
  * One block type, as an author writes it.
@@ -156,28 +181,68 @@ export type BlockRenderArgs<P, C = BlockRenderContext> = EngineBlockRenderArgs<
  *
  * @experimental Carried by the same freeze as `defineBlock`.
  */
-export interface BlockDefinition<
-  P extends object = Record<string, unknown>,
-  C = BlockRenderContext,
-> extends Omit<EngineBlockDefinition<P, C>, "supports"> {
+export interface BlockDefinition<P extends object = Record<string, unknown>>
+  extends Omit<
+    EngineBlockDefinition<P, BlockRenderContext>,
+    "supports" | "render"
+  > {
   supports?: BlockSupports;
+  /** Renders the block. May be async. */
+  render(args: BlockRenderArgs<P>): ReactNode;
 }
 
 /**
  * Declare a block.
  *
- * Returns its argument. It exists to infer `P` and `C` from what is written and
- * to check that against the definition shape, which is what makes a mistyped
- * prop name or an unknown support key a compile error rather than a boot one.
+ * Returns its argument. It exists to infer the prop type from what is written
+ * and to check the rest against the definition shape, which is what makes a
+ * mistyped prop name or an unknown support key a compile error rather than a
+ * boot one.
+ *
+ * There is deliberately no per-block context parameter. What a renderer
+ * provides is one description per app, and a block that needs something unusual
+ * declares it on `BlockRenderContext` where the whole app can see it. A block
+ * naming its own context would be asserting privately that it will be handed
+ * something, which nothing checks and no registry can honour.
  *
  * @experimental The block API is frozen at the end of the engine phase, not
  *   now. Until then a contributed block may need changes when the definition
  *   shape settles.
  */
-export function defineBlock<P extends object, C = BlockRenderContext>(
-  definition: BlockDefinition<P, C>
-): BlockDefinition<P, C> {
+export function defineBlock<P extends object>(
+  definition: BlockDefinition<P>
+): BlockDefinition<P> {
   return definition;
+}
+
+/**
+ * Supports settings meant to be shared between blocks.
+ *
+ * Written straight into a definition, a typo is caught: TypeScript checks a
+ * literal for keys the target does not declare. Lifted into a variable first,
+ * it is not, because that check applies only where the literal is written. This
+ * puts the check back at the declaration, which is where the settings are.
+ *
+ * ```ts
+ * const layoutSupports = blockSupports({ spacing: true, layout: true });
+ * defineBlock<MyProps>({ …, supports: layoutSupports });
+ * ```
+ *
+ * `satisfies BlockSupports` does the same thing and needs nothing from this
+ * package; the helper exists because it reads as the obvious move and cannot be
+ * forgotten halfway through.
+ *
+ * It cannot live on `defineBlock` itself: catching this needs the supplied
+ * object's own keys inferred, and TypeScript infers nothing once any type
+ * argument is written by hand, so `defineBlock<MyProps>` — the form nearly
+ * every block uses — would stop checking anything at all.
+ *
+ * @experimental Carried by the same freeze as `defineBlock`.
+ */
+export function blockSupports<S extends BlockSupports>(
+  supports: ExactSupports<S>
+): BlockSupports {
+  return supports;
 }
 
 /**

@@ -227,6 +227,20 @@ describe("core/collection-loop", () => {
     expect(rendered.drawnWith.length).toBeGreaterThan(0);
   });
 
+  it("keys an iteration by a numeric id as readily as a string one", async () => {
+    // A numerically-keyed collection is ordinary. Falling back to the position
+    // for those gives every row a positional key, which is precisely the case
+    // where reordering makes React reuse the wrong DOM node.
+    const { provider } = stubProvider([{ id: 7 }, { id: 8 }]);
+    const element = await renderCollectionLoop(
+      args<{ collection?: string }>({ collection: "posts" }, { data: provider })
+    );
+    const children = (
+      element as ReactElement<{ children: ReactElement<unknown>[] }>
+    ).props.children;
+    expect(children.map(child => child.key)).toEqual(["7", "8"]);
+  });
+
   it("locks its template to content-only editing", () => {
     // The shape is the author's and the repetition is the block's; a structural
     // edit inside one iteration is how a repeater stops being predictable.

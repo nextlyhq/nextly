@@ -1,5 +1,5 @@
 import { readFileSync, readdirSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Dirent } from "node:fs";
 
@@ -41,6 +41,11 @@ const SRC_DIR = resolve(BLOCKS_DIR, "..");
  */
 const ALLOWED_OUTSIDE_PATHS = ["plugin"];
 
+/** A path in the one separator these assertions are written against. */
+function posix(path: string): string {
+  return path.split(sep).join("/");
+}
+
 function sourceFiles(dir: string = BLOCKS_DIR): string[] {
   const entries: Dirent[] = readdirSync(dir, { withFileTypes: true });
   const files: string[] = [];
@@ -79,11 +84,11 @@ describe("the block library does not depend on the code it replaces", () => {
       for (const specifier of allSpecifiers(source)) {
         if (!specifier.startsWith(".")) continue;
         const target = resolve(dirname(file), specifier);
-        if (!relative(BLOCKS_DIR, target).startsWith("..")) continue;
-        const outside = relative(SRC_DIR, target);
+        if (!posix(relative(BLOCKS_DIR, target)).startsWith("..")) continue;
+        const outside = posix(relative(SRC_DIR, target));
         expect(
           ALLOWED_OUTSIDE_PATHS,
-          `${relative(SRC_DIR, file)} imports "${specifier}", which resolves to "${outside}" outside the block library — write it against the engine API, or add the path to ALLOWED_OUTSIDE_PATHS with a reason`
+          `${posix(relative(SRC_DIR, file))} imports "${specifier}", which resolves to "${outside}" outside the block library — write it against the engine API, or add the path to ALLOWED_OUTSIDE_PATHS with a reason`
         ).toContain(outside);
       }
     }
@@ -91,7 +96,9 @@ describe("the block library does not depend on the code it replaces", () => {
 
   it("scans the files it claims to", () => {
     // A walk that silently found nothing would pass the check above forever.
-    const scanned = sourceFiles().map(file => relative(BLOCKS_DIR, file));
+    const scanned = sourceFiles().map(file =>
+      posix(relative(BLOCKS_DIR, file))
+    );
     expect(scanned).toContain("library/collection-loop.tsx");
     expect(scanned).toContain("context.ts");
     expect(scanned.length).toBeGreaterThan(5);

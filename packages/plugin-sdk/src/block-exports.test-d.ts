@@ -1,10 +1,11 @@
 import { expectTypeOf } from "vitest";
 
-import { defineBlock } from "@nextlyhq/plugin-sdk/blocks";
+import { blockSupports, defineBlock } from "@nextlyhq/plugin-sdk/blocks";
 import type {
   BlockEditorMeta,
   BlockExample,
   BlockRenderArgs,
+  BlockRenderContext,
   BlockSupports,
   BlockSupportValue,
   ComponentPath,
@@ -45,35 +46,45 @@ void typo;
 // own exhaustiveness guard, which is the thing that keeps the vocabulary from
 // drifting away from the registry.
 
-// The context a block renders against is the renderer's to name, and a block
-// that declares one gets it typed rather than as `unknown`.
-interface TestContext {
-  locale: string;
-}
-const contextual = defineBlock<{ text: string }, TestContext>({
+// The context is the app's, not the block's: an author writes no type and reads
+// what this app's renderer provides.
+const contextual = defineBlock<{ text: string }>({
   name: "test/contextual",
   version: 1,
   description: "Reads its locale from the render context.",
   props: { text: { type: "text" } },
   example: { props: { text: "hi" } },
   render: ({ props, ctx, className }) => {
-    expectTypeOf(ctx).toEqualTypeOf<TestContext>();
-    return `${className}:${ctx.locale}:${props.text}`;
+    expectTypeOf(ctx).toEqualTypeOf<BlockRenderContext>();
+    return `${className}:${String(ctx.locale)}:${props.text}`;
   },
 });
 expectTypeOf<Parameters<typeof contextual.render>[0]>().toEqualTypeOf<
-  BlockRenderArgs<{ text: string }, TestContext>
+  BlockRenderArgs<{ text: string }>
 >();
 void contextual;
 
-// A block that declares no context still renders; `ctx` is simply unknown.
-const plain = defineBlock<{ text: string }>({
-  name: "test/plain",
+// A slot is drawn rather than received, and what it returns is React, so a
+// block places it with no assertion.
+const container = defineBlock<{ text: string }>({
+  name: "test/container",
   version: 1,
-  description: "Needs nothing from the renderer.",
+  description: "Draws its children.",
   props: { text: { type: "text" } },
   example: { props: { text: "hi" } },
-  render: ({ props }) => props.text,
+  render: ({ renderSlot }) => renderSlot("children"),
 });
-expectTypeOf<Parameters<typeof plain.render>[0]>().toHaveProperty("ctx");
-void plain;
+void container;
+
+// Settings shared between blocks keep their check. Assigned to a plain variable
+// first, a typo would survive, because TypeScript checks for unknown keys only
+// where the literal is written.
+const layoutSupports = blockSupports({ spacing: true, layout: true });
+expectTypeOf(layoutSupports).toMatchTypeOf<BlockSupports>();
+
+// @ts-expect-error "spaceing" is not a support key.
+blockSupports({ spacing: true, spaceing: true });
+
+// The same check without the helper, for an author who prefers it.
+const viaSatisfies = { spacing: true } satisfies BlockSupports;
+void viaSatisfies;
