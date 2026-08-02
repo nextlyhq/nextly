@@ -377,10 +377,10 @@ export interface SystemColumnSet {
  * that never happened.
  *
  * Set once on the first transition into `published` and never modified again, so it is not a
- * "last published" timestamp. Those are different questions and Contentful, the most mature API
- * surface here, carries both (`sys.firstPublishedAt` alongside `sys.publishedAt`); the second is
- * left to a follow-up rather than guessed at, because whether it survives an unpublish is a
- * product decision and this one has only one defensible answer.
+ * "last published" timestamp. Those are different questions: a last-published value moves on every
+ * republish and its behaviour across an unpublish is a product choice, while this one has a single
+ * defensible answer. Contentful, the most mature API surface here, carries both under distinct
+ * names (`sys.firstPublishedAt` alongside `sys.publishedAt`) for the same reason.
  *
  * Gated on `hasStatus`: a collection with no draft lifecycle has no transition to record, and its
  * rows are public from the moment they are saved.

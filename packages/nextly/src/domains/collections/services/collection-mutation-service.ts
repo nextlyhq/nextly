@@ -1557,31 +1557,47 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
-   * Whether any locale OTHER than `exceptLocale` currently has this document published.
+   * Whether this document is already reachable by the public, ignoring what the current write is
+   * about to do to one locale.
    *
-   * Answers a document-level question the per-locale status cannot: publishing one translation
-   * makes a document public only if no other part of it already was. Reads by table name through
-   * the transaction, mirroring `readCompanionStatus`, because the companion table is created
-   * dynamically and has no Drizzle object on this path.
+   * The marker records a document's FIRST publication, and a localized document can be public
+   * through its main row or through any one of its translations. A write that publishes a single
+   * locale therefore cannot tell, from its own transition alone, whether the document is becoming
+   * public or already was — and the rows where that matters are the upgraded ones, whose marker is
+   * null because the history was never recorded rather than because they were never public.
+   *
+   * Reads through the transaction's Drizzle handle via the same companion scan the publish path
+   * uses, so there is one way to ask a companion for its per-locale statuses.
+   *
+   * `exceptLocale` is the locale this write is changing: its committed status is the "before" of
+   * the transition being judged, so counting it here would make every publish look like a
+   * republish.
    */
-  private async hasOtherPublishedLocale(
+  private async isDocumentAlreadyPublic(
     tx: TransactionContext,
-    companionTableName: string,
+    collectionName: string,
     entryId: string,
-    exceptLocale: string
+    mainRowStatus: string | null | undefined,
+    exceptLocale: string | undefined
   ): Promise<boolean> {
-    const isMysqlDialect = this.dialect === "mysql";
-    const quote = (id: string) => (isMysqlDialect ? `\`${id}\`` : `"${id}"`);
-    const placeholder = (i: number) =>
-      this.dialect === "postgresql" ? `$${i}` : "?";
-    const rows = await tx.execute<{ _locale?: unknown }>(
-      `SELECT ${quote("_locale")} FROM ${quote(companionTableName)} ` +
-        `WHERE ${quote("_parent")} = ${placeholder(1)} ` +
-        `AND ${quote("_status")} = ${placeholder(2)} ` +
-        `AND ${quote("_locale")} <> ${placeholder(3)} LIMIT 1`,
-      [entryId, "published", exceptLocale]
+    if (mainRowStatus === "published") return true;
+
+    const companion = await this.fileManager.loadCompanionSchema(
+      collectionName,
+      tx.getDrizzle()
     );
-    return rows.length > 0;
+    if (!companion) return false;
+
+    const statusesByLocale = await readCompanionLocaleStatusAll(
+      tx.getDrizzle<Parameters<typeof readCompanionLocaleStatusAll>[0]>(),
+      companion.table,
+      entryId,
+      cachedCompanionReadiness(this.adapter, companion.companionTableName)
+    );
+    for (const [locale, status] of statusesByLocale) {
+      if (locale !== exceptLocale && status === "published") return true;
+    }
+    return false;
   }
 
   /**
@@ -3633,13 +3649,31 @@ export class CollectionMutationService extends BaseService {
             // history was never captured. Dating those today would report a publication that
             // never happened.
             const publishNow = new Date();
+            const lockedMarker = (
+              lockedRow as { first_published_at?: unknown } | undefined
+            )?.first_published_at;
+            // Publish-all can find a document in a mixed state: a draft main row alongside a
+            // translation that has been live since before this column existed. The main row's own
+            // transition then reads as a first publication when the document was already
+            // reachable, so the same document-level question is asked here. No locale is excluded
+            // — this write publishes all of them, so any already-published one predates it.
+            const alreadyPublicBeforePublishAll =
+              lockedMarker == null
+                ? await this.isDocumentAlreadyPublic(
+                    tx,
+                    params.collectionName,
+                    params.entryId,
+                    lockedPreviousStatus,
+                    undefined
+                  )
+                : false;
             publishFirstPublishedAt = resolveFirstPublishedStamp({
               hasStatus: true,
-              previousStatus: lockedPreviousStatus,
+              previousStatus: alreadyPublicBeforePublishAll
+                ? "published"
+                : lockedPreviousStatus,
               nextStatus: "published",
-              existingMarker: (
-                lockedRow as { first_published_at?: unknown } | undefined
-              )?.first_published_at,
+              existingMarker: lockedMarker,
               now: publishNow,
             });
             // Through the adapter's Drizzle layer rather than an interpolated statement. That
@@ -5453,26 +5487,39 @@ export class CollectionMutationService extends BaseService {
           // Which transition to read therefore depends on where this write's status lands. A
           // non-default-locale write has its status stripped from the main payload and carried on
           // the companion instead, so the main row's status would show no move at all.
-          // Only asked when a per-locale write could otherwise record a first publication, which
-          // for any one document happens at most once ever — every later write is stopped by the
-          // marker already being set. So the common publish pays nothing for this read.
+          // Asked for ANY write that could record a first publication, not only a per-locale one.
+          // A default-locale or non-localized publish can equally be the second way a document
+          // goes public: its main row may be a draft while a translation has been live since
+          // before this column existed. Restricting the question to the per-locale branch left
+          // exactly that case stamping today's date over an unknown history.
+          //
+          // The branch flag is not a proxy for "this write touches a locale", either — it is
+          // forced false for a trusted write, while the localized split still moves the status
+          // onto the companion. Keying the question on it would skip every server-side write.
+          //
+          // Still gated on a stamp being possible at all, which for any one document happens at
+          // most once ever, since every later write is stopped by the marker already being set.
+          // The ordinary publish pays nothing for the read.
+          const intendedPublish =
+            isNonDefaultLocaleStatusWrite ||
+            localizedUpdate?.companionData?._status !== undefined
+              ? localizedUpdate?.companionData?._status === "published"
+              : intendedStatus === "published";
           const couldRecordFirstPublication =
             collectionHasStatus &&
-            isNonDefaultLocaleStatusWrite &&
+            intendedPublish &&
             (preUpdateRow as { first_published_at?: unknown } | undefined)
-              ?.first_published_at == null &&
-            localizedUpdate?.companionData?._status === "published";
+              ?.first_published_at == null;
           const documentAlreadyPublic = couldRecordFirstPublication
-            ? ((preUpdateRow as { status?: unknown } | undefined)?.status as
-                | string
-                | undefined) === "published" ||
-              (localizedUpdate?.hasStatus === true &&
-                (await this.hasOtherPublishedLocale(
-                  tx,
-                  localizedUpdate.companionTableName,
-                  params.entryId,
-                  localizedUpdate.writeLocale
-                )))
+            ? await this.isDocumentAlreadyPublic(
+                tx,
+                params.collectionName,
+                params.entryId,
+                ((preUpdateRow as { status?: unknown } | undefined)?.status as
+                  | string
+                  | undefined) ?? null,
+                localizedUpdate?.writeLocale
+              )
             : false;
 
           const publicationTransition = selectPublicationTransition({

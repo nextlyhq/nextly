@@ -313,9 +313,11 @@ describe("selectPublicationTransition — already-public documents", () => {
     expect(stampFor(t)).toBe(now);
   });
 
-  it("ignores the flag for a main-row write", () => {
-    // A default-locale or non-localized write is judged on the main row's own transition; an
-    // already-published main row cannot publish again, which the shared rule already handles.
+  it("records nothing for a main-row publish of an already-public document", () => {
+    // A default-locale or non-localized publish is equally capable of being the SECOND way a
+    // document goes public: its main row can be a draft while a translation has been live since
+    // before the marker existed. Judging it on the main row's own transition alone would stamp
+    // today over a history that was simply never recorded.
     const t = selectPublicationTransition({
       writesStatusToCompanion: false,
       mainPreviousStatus: "draft",
@@ -323,6 +325,18 @@ describe("selectPublicationTransition — already-public documents", () => {
       companionPreviousStatus: "published",
       companionNextStatus: "published",
       documentAlreadyPublic: true,
+    });
+    expect(stampFor(t)).toBeUndefined();
+  });
+
+  it("still records a main-row publish when nothing else was public", () => {
+    const t = selectPublicationTransition({
+      writesStatusToCompanion: false,
+      mainPreviousStatus: "draft",
+      mainNextStatus: "published",
+      companionPreviousStatus: "draft",
+      companionNextStatus: undefined,
+      documentAlreadyPublic: false,
     });
     expect(stampFor(t)).toBe(now);
   });

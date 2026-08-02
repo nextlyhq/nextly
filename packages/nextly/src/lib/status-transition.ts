@@ -145,29 +145,30 @@ export function selectPublicationTransition(args: {
   companionNextStatus: unknown;
   /**
    * Whether the document is ALREADY reachable by some route this write does not touch — its main
-   * row, or another locale.
+   * row, or any other locale.
    *
-   * Only consulted for a per-locale write, and it is what stops a translation going live from
-   * being read as the document becoming public. It matters most for rows published before the
-   * marker column existed: their marker is null because the history was never recorded, not
-   * because they were never public, and without this the next translation anyone publishes would
-   * date their first publication from today.
+   * It stops one part of a document going live from being read as the whole document becoming
+   * public, and it applies to EVERY write, not only a per-locale one: a default-locale publish of
+   * a draft main row can equally be the second way a document goes public, if a translation has
+   * been live since before the marker column existed. Those rows carry a null marker because
+   * their history was never recorded rather than because they were never public, so stamping
+   * would replace an unknown past with today.
    */
   documentAlreadyPublic?: boolean;
 }): { previousStatus: string | null | undefined; nextStatus: unknown } {
-  if (!args.writesStatusToCompanion) {
-    return {
-      previousStatus: args.mainPreviousStatus,
-      nextStatus: args.mainNextStatus,
-    };
+  const nextStatus = args.writesStatusToCompanion
+    ? args.companionNextStatus
+    : args.mainNextStatus;
+  // Reported as an already-published previous state rather than as a separate veto, so the one
+  // rule that decides what a publication is stays the only place that decides it.
+  if (args.documentAlreadyPublic) {
+    return { previousStatus: "published", nextStatus };
   }
   return {
-    // Reported as already published rather than by a separate flag, so the one rule that decides
-    // what a publication is stays the only place that decides it.
-    previousStatus: args.documentAlreadyPublic
-      ? "published"
-      : args.companionPreviousStatus,
-    nextStatus: args.companionNextStatus,
+    previousStatus: args.writesStatusToCompanion
+      ? args.companionPreviousStatus
+      : args.mainPreviousStatus,
+    nextStatus,
   };
 }
 

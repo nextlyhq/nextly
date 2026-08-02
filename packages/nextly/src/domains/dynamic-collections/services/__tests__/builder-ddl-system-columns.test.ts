@@ -129,3 +129,79 @@ describe.each(DIALECTS)("builder DDL system columns (%s)", dialect => {
     }
   });
 });
+
+describe.each(DIALECTS)("builder lifecycle toggle (%s)", dialect => {
+  const service = () => new DynamicCollectionSchemaService(undefined, dialect);
+
+  /** The columns the descriptor gains when the draft/publish lifecycle is enabled. */
+  const lifecycleColumns = (isSingle: boolean) => {
+    const off = new Set(
+      getSystemColumnDescriptors(dialect, {
+        hasTitleField: false,
+        hasSlugField: false,
+        hasStatus: false,
+        isSingle,
+      }).map(c => c.name)
+    );
+    return getSystemColumnDescriptors(dialect, {
+      hasTitleField: false,
+      hasSlugField: false,
+      hasStatus: true,
+      isSingle,
+    })
+      .map(c => c.name)
+      .filter(n => !off.has(n));
+  };
+
+  it.each([
+    { label: "collection", table: "dc_thing", isSingle: false },
+    { label: "single", table: "single_thing", isSingle: true },
+  ])(
+    "adds every lifecycle column when enabling: $label",
+    ({ table, isSingle }) => {
+      // Enabling the lifecycle must create every column the runtime schema starts selecting. Naming
+      // only `status` here left the marker expected by the schema and created by nothing, so the
+      // next read referenced a column the toggle had never added.
+      const sql = service().generateAlterTableMigration(table, [], [], {
+        wasStatus: false,
+        hasStatus: true,
+      });
+
+      for (const name of lifecycleColumns(isSingle)) {
+        expect(sql).toContain(`ADD COLUMN`);
+        expect(sql.includes(`"${name}"`) || sql.includes(`\`${name}\``)).toBe(
+          true
+        );
+      }
+    }
+  );
+
+  it.each([
+    { label: "collection", table: "dc_thing", isSingle: false },
+    { label: "single", table: "single_thing", isSingle: true },
+  ])(
+    "drops every lifecycle column when disabling: $label",
+    ({ table, isSingle }) => {
+      const sql = service().generateAlterTableMigration(table, [], [], {
+        wasStatus: true,
+        hasStatus: false,
+      });
+
+      for (const name of lifecycleColumns(isSingle)) {
+        expect(sql).toContain("DROP COLUMN");
+        expect(sql.includes(`"${name}"`) || sql.includes(`\`${name}\``)).toBe(
+          true
+        );
+      }
+    }
+  );
+
+  it("leaves the table alone when the lifecycle does not change", () => {
+    const sql = service().generateAlterTableMigration("dc_thing", [], [], {
+      wasStatus: true,
+      hasStatus: true,
+    });
+    expect(sql).not.toContain("DROP COLUMN");
+    expect(sql).not.toContain("first_published_at");
+  });
+});
