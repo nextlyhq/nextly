@@ -17,6 +17,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { defineCollection } from "../../collections/config/define-collection";
+import { defineSingle } from "../../singles/config/define-single";
 import { text } from "../../collections/fields";
 import { NextlyError } from "../../errors/nextly-error";
 import { createTestNextly, type TestNextly } from "../../plugins/test-nextly";
@@ -92,5 +93,48 @@ describe("a post-commit hook failure is reported as a warning", () => {
     const serialized = JSON.stringify(created.warnings);
     expect(serialized).not.toContain("secret-detail");
     expect(serialized).not.toContain("logContext");
+  });
+});
+
+describe("a single reports its post-commit failures the same way", () => {
+  it("returns the envelope AND the warning when a single's hook throws", async () => {
+    // Singles run the same post-commit phases as collections. Before the
+    // mutation envelope they returned a bare document, so a hook failure had
+    // nowhere to go and a caller updating a single was told nothing while a
+    // caller updating a collection was told everything.
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "site-settings",
+          fields: [text({ name: "siteName" })],
+          hooks: {
+            afterChange: [
+              () => {
+                throw NextlyError.internal({
+                  logContext: { detail: "single-secret" },
+                });
+              },
+            ],
+          },
+        }),
+      ],
+    });
+
+    const updated = await current.nextly.updateSingle({
+      slug: "site-settings",
+      data: { siteName: "Saved anyway" },
+    });
+
+    expect(updated.item).toBeDefined();
+    expect(updated.warnings).toHaveLength(1);
+    // `collection` carries the registry key, which for a single is namespaced.
+    // Asserted rather than loosened: a collection and a single may share a
+    // slug, so the bare slug would not tell a consumer which one failed.
+    expect(updated.warnings?.[0]).toMatchObject({
+      phase: "afterUpdate",
+      collection: "single:site-settings",
+      code: "INTERNAL_ERROR",
+    });
+    expect(JSON.stringify(updated.warnings)).not.toContain("single-secret");
   });
 });
