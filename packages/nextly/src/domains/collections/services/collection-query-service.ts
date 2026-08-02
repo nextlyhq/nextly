@@ -1571,8 +1571,11 @@ export class CollectionQueryService extends BaseService {
           nestedHookState
         );
       }
-      // Once, after the whole listing: hiding a row as it is finished would take
-      // the evidence away from a rule on a row walked later.
+      // Once, after the whole listing: the walk already applied field access to
+      // each related row before its parent's hooks; this re-applies it (restoring
+      // the removed evidence and re-judging the current content) to strip a denied
+      // field a parent hook reintroduced, mutated, or added, then rebuilds labels
+      // from the survivors.
       await this.relationshipService.finalizeRelatedRows(
         nestedHookState,
         nestedAccess
@@ -1595,6 +1598,18 @@ export class CollectionQueryService extends BaseService {
       const dataAfterCodeHooks = (transformedData ??
         expandedEntries) as unknown[];
 
+      // A code hook may have RETURNED a reshaped related row carrying a denied
+      // field; sanitize now, before the stored and field-level hooks run, so one
+      // of them cannot read that field and copy it onto an allowed source key the
+      // final pass no longer looks at. The authoritative pass is idempotent over
+      // the shared walk state, so running it after each source phase is safe.
+      await this.relationshipService.resanitizeAssembledRows(
+        dataAfterCodeHooks as Record<string, unknown>[],
+        params.collectionName,
+        nestedAccess,
+        nestedHookState
+      );
+
       // Execute stored afterRead hooks (UI-configured)
       const storedAfterResult =
         await this.hookService.storedHookExecutor.execute(
@@ -1613,15 +1628,6 @@ export class CollectionQueryService extends BaseService {
       let finalData = (storedAfterResult.data ??
         dataAfterCodeHooks) as unknown[];
 
-      // Apply field selection if select parameter is provided
-      // This filters the response to only include requested fields
-      if (params.select && Object.keys(params.select).length > 0) {
-        finalData = this.applyFieldSelectionToArray(
-          finalData as Record<string, unknown>[],
-          params.select
-        );
-      }
-
       // Convert snake_case timestamp columns to their camelCase API form.
       finalData = (finalData as Record<string, unknown>[]).map(entry =>
         convertTimestampsToCamelCase(entry)
@@ -1635,9 +1641,20 @@ export class CollectionQueryService extends BaseService {
         }
       }
 
+      // A stored hook may likewise have reintroduced a denied related field;
+      // sanitize before the field-level hooks read the assembled document.
+      await this.relationshipService.resanitizeAssembledRows(
+        finalData as Record<string, unknown>[],
+        params.collectionName,
+        nestedAccess,
+        nestedHookState
+      );
+
       // Field-level afterRead hooks + read access (code-first functions
       // resolved via the field-level registry): hooks may transform values;
-      // fields whose access.read denies are stripped from the response.
+      // fields whose access.read denies are stripped from the response. Runs on
+      // the whole rows, before selection, so a masking rule reads the sibling
+      // evidence a projected slice would be missing.
       for (const entry of finalData as Record<string, unknown>[]) {
         await runFieldHooks({
           kind: "collection",
@@ -1654,6 +1671,31 @@ export class CollectionQueryService extends BaseService {
           user: params.user,
           overrideAccess: params.overrideAccess,
         });
+      }
+
+      // Authoritative related-row sanitization: re-apply each related row's OWN
+      // collection field access over the ASSEMBLED response, after EVERY source
+      // afterRead hook phase above (code, stored, and field-level). Those hooks
+      // can write a denied target field back onto a related row, or return a
+      // reshaped document whose related rows are new objects the earlier walk
+      // never held; the root access pass above knows only this collection's
+      // schema and never descends into a related row. Before selection, so it
+      // judges whole rows with their sibling evidence intact.
+      await this.relationshipService.resanitizeAssembledRows(
+        finalData as Record<string, unknown>[],
+        params.collectionName,
+        nestedAccess,
+        nestedHookState
+      );
+
+      // Apply field selection if select parameter is provided. Last of the
+      // sanitizing steps, so every hook and access pass above judged the whole
+      // row rather than the projected slice.
+      if (params.select && Object.keys(params.select).length > 0) {
+        finalData = this.applyFieldSelectionToArray(
+          finalData as Record<string, unknown>[],
+          params.select
+        );
       }
 
       // Transform rich text fields to requested format (html, both)
@@ -2764,15 +2806,29 @@ export class CollectionQueryService extends BaseService {
       // a root property, and before selection rebuilds the row without the
       // siblings a masking rule judges on. Every populated related row is
       // walked, including one the projection drops.
+      //
+      // The state is held here rather than left to the inline finalize so the
+      // related rows can be sanitized twice: once now (so the source collection's
+      // hooks below are handed already sanitized rows), and again after those
+      // hooks (so a denied field one of them writes back onto a related row is
+      // stripped before the response).
+      const detailNestedState =
+        this.relationshipService.createNestedHookState();
+      const detailNestedAccess = {
+        enforceFieldAccess: true,
+        user: params.user,
+        overrideAccess: params.overrideAccess,
+        authenticatedScope: params.authenticatedScope,
+      };
       await this.relationshipService.applyNestedFieldHooks(
         expandedEntry,
         params.collectionName,
-        {
-          enforceFieldAccess: true,
-          user: params.user,
-          overrideAccess: params.overrideAccess,
-          authenticatedScope: params.authenticatedScope,
-        }
+        detailNestedAccess,
+        detailNestedState
+      );
+      await this.relationshipService.finalizeRelatedRows(
+        detailNestedState,
+        detailNestedAccess
       );
 
       // Execute afterRead hooks (code-registered)
@@ -2790,6 +2846,17 @@ export class CollectionQueryService extends BaseService {
         afterContext
       );
       const dataAfterCodeHooks = transformedData ?? expandedEntry;
+
+      // A code hook may have RETURNED a reshaped related row carrying a denied
+      // field; sanitize now, before the stored and field-level hooks run, so one
+      // of them cannot read that field and copy it onto an allowed source key the
+      // final pass no longer looks at. Idempotent over the shared walk state.
+      await this.relationshipService.resanitizeAssembledRows(
+        [dataAfterCodeHooks],
+        params.collectionName,
+        detailNestedAccess,
+        detailNestedState
+      );
 
       // Execute stored afterRead hooks (UI-configured)
       const storedAfterResult =
@@ -2811,12 +2878,6 @@ export class CollectionQueryService extends BaseService {
         unknown
       >;
 
-      // Apply field selection if select parameter is provided
-      // This filters the response to only include requested fields
-      if (params.select && Object.keys(params.select).length > 0) {
-        finalData = this.applyFieldSelection(finalData, params.select);
-      }
-
       // Convert snake_case timestamp columns to their camelCase API form.
       finalData = convertTimestampsToCamelCase(finalData);
 
@@ -2828,8 +2889,18 @@ export class CollectionQueryService extends BaseService {
       // Same defense in depth for the owner column.
       stripSystemOwnerField(finalData);
 
+      // A stored hook may likewise have reintroduced a denied related field;
+      // sanitize before the field-level hooks read the assembled document.
+      await this.relationshipService.resanitizeAssembledRows(
+        [finalData],
+        params.collectionName,
+        detailNestedAccess,
+        detailNestedState
+      );
+
       // Field-level afterRead hooks + read access — same semantics as the
-      // list path above.
+      // list path above. On the whole row, before selection, so a masking rule
+      // reads the sibling evidence a projected slice would be missing.
       await runFieldHooks({
         kind: "collection",
         slug: params.collectionName,
@@ -2845,6 +2916,27 @@ export class CollectionQueryService extends BaseService {
         user: params.user,
         overrideAccess: params.overrideAccess,
       });
+
+      // Authoritative related-row sanitization over the assembled response,
+      // after EVERY source afterRead hook phase above (code, stored, and
+      // field-level), for the reason given at the same point on the list path:
+      // those hooks can write a denied target field back onto a related row or
+      // return a reshaped document whose related rows are new objects, and the
+      // root access pass sees only this collection's schema. Before selection, so
+      // it judges whole rows with their sibling evidence intact.
+      await this.relationshipService.resanitizeAssembledRows(
+        [finalData],
+        params.collectionName,
+        detailNestedAccess,
+        detailNestedState
+      );
+
+      // Apply field selection if select parameter is provided. Last of the
+      // sanitizing steps, so every hook and access pass above judged the whole
+      // row rather than the projected slice.
+      if (params.select && Object.keys(params.select).length > 0) {
+        finalData = this.applyFieldSelection(finalData, params.select);
+      }
 
       // Transform rich text fields to requested format (html, both)
       // Default is "json" which returns the Lexical JSON structure as-is
