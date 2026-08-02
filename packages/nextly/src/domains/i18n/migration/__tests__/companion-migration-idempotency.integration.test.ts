@@ -29,7 +29,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { NextlyError } from "../../../../errors/nextly-error";
 import { runFileMigrations } from "../../../../cli/commands/migrate";
 import { DynamicCollectionSchemaService } from "../../../dynamic-collections/services/dynamic-collection-schema-service";
 import { splitStatements } from "../../../schema/pipeline/sql-statement-utils";
@@ -293,12 +292,14 @@ for (const entry of DIALECTS) {
     it("replays an interrupted enable migration over the companion it already created", async () => {
       await createMain();
       await writeMigrationFile();
-      const create = buildLocalizationUpStatements(spec(), {
+      // Selected with `filter` rather than `find` so the precondition can be asserted instead of
+      // guarded: an array needs no narrowing, and "exactly one create" is the stronger claim — a
+      // plan that emitted none, or a second one, would both leave this case testing something else.
+      const creates = buildLocalizationUpStatements(spec(), {
         emittedToFile: true,
-      }).find(statement => statement.startsWith("CREATE TABLE"));
-      if (create === undefined)
-        throw new Error("no companion create statement generated");
-      await adapter.executeQuery(create);
+      }).filter(statement => statement.startsWith("CREATE TABLE"));
+      expect(creates).toHaveLength(1);
+      for (const statement of creates) await adapter.executeQuery(statement);
       expect(await companionRows()).toHaveLength(0);
 
       await expect(migrate()).resolves.toBe(1);
