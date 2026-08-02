@@ -112,6 +112,14 @@ interface NestedHookStateBase {
     collection: string;
     field: FieldDefinition;
   }>;
+  /**
+   * Whether the walk runs each related row's `afterRead` field hooks. True for
+   * the first walk; false for the authoritative re-walk of the ASSEMBLED response
+   * (see {@link CollectionRelationshipService.resanitizeAssembledRows}), which
+   * only re-applies field access — the hooks already ran once, and running them
+   * again would transform values twice.
+   */
+  applyFieldHooks: boolean;
 }
 
 /** The state the walk carries; named separately so the interface reads first. */
@@ -124,6 +132,7 @@ function createNestedHookState(): NestedHookState {
     labelFields: new Map(),
     redactions: new WeakMap(),
     pending: [],
+    applyFieldHooks: true,
   };
 }
 
@@ -3045,6 +3054,52 @@ export class CollectionRelationshipService extends BaseService {
   }
 
   /**
+   * Re-apply related-row field access over the ASSEMBLED response, after every
+   * source-collection `afterRead` hook — code, stored, AND field-level — has run.
+   *
+   * {@link finalizeRelatedRows} sanitizes the row objects the first walk queued;
+   * this is the authoritative pass, and it covers what those objects cannot:
+   * - a source hook may RETURN a reshaped document (the registry supports it), so
+   *   the response can hold related rows that are new objects the pending list
+   *   never referenced;
+   * - a source field-level hook runs after the finalize pass and can write a
+   *   denied target field straight back onto a related row.
+   * The root read-access pass sees only the source collection's schema and never
+   * descends into a related row, so neither is caught without re-walking the
+   * actual response here.
+   *
+   * Runs on the whole rows, before selection projects them to slices: a sliced
+   * row is a fresh object missing the sibling evidence a conditional rule reads,
+   * so judging it would wrongly drop a field a full read keeps. It re-walks the
+   * given entries applying access ONLY (field hooks already ran), reusing the
+   * walk's `redactions` so an unchanged row keeps its verdict while a row a hook
+   * reshaped or reintroduced is judged against its current content.
+   */
+  async resanitizeAssembledRows(
+    entries: Record<string, unknown>[],
+    collectionName: string,
+    access: RelatedRowAccess,
+    walkState: NestedHookState
+  ): Promise<void> {
+    if (!access.enforceFieldAccess || access.overrideAccess) return;
+    // Fresh `visited`/`pending` so every related row in the assembled response is
+    // reached again (the first walk already claimed them), but the SAME
+    // `redactions` and metadata caches, so evidence carries over and the schema
+    // reads are not repeated.
+    const repass: NestedHookState = {
+      visited: new Set(),
+      pending: [],
+      fields: walkState.fields,
+      labelFields: walkState.labelFields,
+      redactions: walkState.redactions,
+      applyFieldHooks: false,
+    };
+    for (const entry of entries) {
+      await this.walkNestedRows(entry, collectionName, access, repass, 0);
+    }
+  }
+
+  /**
    * The collection's fields, read once per collection per read.
    *
    * A target whose schema will not load runs no hooks, and the read continues.
@@ -3197,15 +3252,19 @@ export class CollectionRelationshipService extends BaseService {
         await this.fieldsForNestedWalk(resolved.collection, state)
       );
       // Deepest first, so a hook reading into its own relations sees them
-      // already transformed rather than half-processed.
-      await runFieldHooks({
-        kind: "collection",
-        slug: resolved.collection,
-        phase: "afterRead",
-        data: resolved.row,
-        operation: "read",
-        user: access.user,
-      });
+      // already transformed rather than half-processed. Skipped on the
+      // access-only re-walk of the assembled response — the hooks already ran on
+      // the first walk, and running them again would transform values twice.
+      if (state.applyFieldHooks) {
+        await runFieldHooks({
+          kind: "collection",
+          slug: resolved.collection,
+          phase: "afterRead",
+          data: resolved.row,
+          operation: "read",
+          user: access.user,
+        });
+      }
 
       // Apply THIS row's field access now, before returning to its parent —
       // whose afterRead hooks run next up the stack. Deferring it (as this once
@@ -3223,6 +3282,20 @@ export class CollectionRelationshipService extends BaseService {
         [resolved.row],
         access,
         state.redactions
+      );
+
+      // Rebuild the label from what survived the access pass, NOW, before the
+      // parent's hooks run next up the stack. The fetch derives a row's `label`
+      // from a target field, so a label built from a caller-denied field still
+      // carries that value after the field itself is stripped; a parent hook
+      // reading `data.child.label` would copy the denied value under an allowed
+      // key. The finalize pass rebuilds labels again for hook mutations, but that
+      // runs after the parent hooks and cannot remove a copy they already made.
+      await this.refreshRelatedRowLabel(
+        resolved.row,
+        field,
+        { collection: resolved.collection },
+        state
       );
 
       // Queued for the finalize step, which re-applies access after every hook

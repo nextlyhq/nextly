@@ -26,6 +26,7 @@ import {
 const ORGS = "nestedhook_orgs";
 const AUTHORS = "nestedhook_authors";
 const POSTS = "nestedhook_posts";
+const VAULTS = "nestedhook_vaults";
 
 // How many times the target's token hook ran, for the selection test.
 let tokenHookRuns = 0;
@@ -62,6 +63,14 @@ async function onlyId(t: TestNextly, collection: string): Promise<string> {
 async function boot(): Promise<TestNextly> {
   current = await createTestNextly({
     collections: [
+      // Its only text field is denied, so the auto-selected display label is
+      // built from a value the caller may not see — the setup for the label-copy
+      // exfiltration test.
+      defineCollection({
+        slug: VAULTS,
+        access: { read: () => true, create: () => true, update: () => true },
+        fields: [text({ name: "codename", access: { read: () => false } })],
+      }),
       defineCollection({
         slug: ORGS,
         access: { read: () => true, create: () => true, update: () => true },
@@ -330,6 +339,26 @@ async function boot(): Promise<TestNextly> {
               ],
             },
           }),
+          // A relationship whose target's only text field — and so its derived
+          // display label — is DENIED. Expansion builds the label from the raw
+          // value, then the access pass strips the field but the label lingers, so
+          // a parent hook reading `data.vault.label` can copy the denied value
+          // unless the label is rebuilt right after that access pass.
+          relationship({ name: "vault", relationTo: VAULTS }),
+          // Copies the nested vault's `label` onto an allowed field of its own,
+          // the exfiltration the label rebuild must close.
+          text({
+            name: "vaultLabelCopy",
+            hooks: {
+              afterRead: [
+                ({ value, data }) => {
+                  if (value !== "on") return value;
+                  const vault = (data as { vault?: { label?: unknown } }).vault;
+                  return typeof vault?.label === "string" ? vault.label : value;
+                },
+              ],
+            },
+          }),
         ],
       }),
       defineCollection({
@@ -338,6 +367,24 @@ async function boot(): Promise<TestNextly> {
         fields: [
           text({ name: "title" }),
           relationship({ name: "author", relationTo: AUTHORS }),
+          // A source field-level afterRead hook that writes a denied field back
+          // onto a related row. It runs after the related-row sanitization the
+          // earlier rounds added, so only a pass after the field hooks strips it.
+          text({
+            name: "annotate",
+            hooks: {
+              afterRead: [
+                ({ value, data }) => {
+                  if (value !== "on") return value;
+                  const author = (data as { author?: unknown }).author;
+                  if (author && typeof author === "object") {
+                    (author as Record<string, unknown>).dossier = "LEAKED";
+                  }
+                  return value;
+                },
+              ],
+            },
+          }),
           // The blog template's shape: a relationship to the built-in users
           // entity, which has no dynamic-collection record.
           relationship({ name: "owner", relationTo: "users" }),
@@ -1080,5 +1127,101 @@ describe("a target's field hooks apply to rows reached through a relationship", 
     // The source hook's write-back onto the related author was stripped by the
     // pass after the hooks.
     expect(author.dossier).toBeUndefined();
+  });
+
+  it("re-sanitizes related rows a source hook returns in a reshaped document", async () => {
+    // A source afterRead hook may RETURN a new document (the hook registry
+    // supports reshaping the response), so the response can hold related rows that
+    // are new objects the walk never queued. Sanitizing only the queued rows would
+    // miss them; the authoritative pass re-walks the ACTUAL response.
+    const t = await boot();
+    const postId = await seed(t);
+
+    t.hooks.register("afterRead", POSTS, ctx => {
+      const entry = ctx.data as Record<string, unknown>;
+      const author = entry.author as Record<string, unknown> | undefined;
+      // A RESHAPED clone whose author is a NEW object carrying a denied field.
+      return { ...entry, author: { ...(author ?? {}), dossier: "LEAKED" } };
+    });
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    const author = expanded.data!.author as Record<string, unknown>;
+    expect(author).toBeTruthy();
+    // The denied field on the hook's replacement object was stripped too.
+    expect(author.dossier).toBeUndefined();
+  });
+
+  it("re-sanitizes a related row a source field hook writes to", async () => {
+    // A source collection FIELD-level afterRead hook runs after the related-row
+    // sanitization the earlier rounds added; it too can write a denied target
+    // field onto a related row, so the authoritative pass must run after the field
+    // hooks, not only after the code and stored hooks.
+    const t = await boot();
+    await t.nextly.create({ collection: ORGS, data: { name: "acme" } });
+    const orgId = await onlyId(t, ORGS);
+    await t.nextly.create({
+      collection: AUTHORS,
+      data: { name: "ada", organization: orgId },
+    });
+    const authorId = await onlyId(t, AUTHORS);
+    await t.nextly.create({
+      collection: POSTS,
+      // `annotate` present, so its field hook fires and writes the denied field.
+      data: { title: "p", author: authorId, annotate: "on" },
+    });
+    const postId = await onlyId(t, POSTS);
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    const author = expanded.data!.author as Record<string, unknown>;
+    expect(author).toBeTruthy();
+    expect(author.dossier).toBeUndefined();
+  });
+
+  it("rebuilds a related row's label before a parent hook can copy it", async () => {
+    // `vault`'s only text field — and so its derived label — is DENIED. Expansion
+    // builds the label from the raw value; the access pass strips the field but
+    // the derived label lingers. A parent hook copying `data.vault.label` would
+    // exfiltrate the denied value unless the label is rebuilt right after that
+    // access pass, before the parent's hooks run.
+    const t = await boot();
+    await t.nextly.create({
+      collection: VAULTS,
+      data: { codename: "TOPSECRET" },
+    });
+    const vaultId = await onlyId(t, VAULTS);
+    await t.nextly.create({
+      collection: AUTHORS,
+      data: { name: "ada", vault: vaultId, vaultLabelCopy: "on" },
+    });
+    const authorId = await onlyId(t, AUTHORS);
+    await t.nextly.create({
+      collection: POSTS,
+      data: { title: "p", author: authorId },
+    });
+    const postId = await onlyId(t, POSTS);
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    const author = expanded.data!.author as Record<string, unknown>;
+    expect(author).toBeTruthy();
+    // The copied label is not the denied `codename` value.
+    expect(author.vaultLabelCopy).not.toBe("TOPSECRET");
+    // And the nested vault's own label was rebuilt off a value the caller may see.
+    const vault = author.vault as Record<string, unknown> | undefined;
+    if (vault) expect(vault.label).not.toBe("TOPSECRET");
   });
 });
