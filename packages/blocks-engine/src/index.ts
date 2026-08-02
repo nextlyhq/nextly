@@ -155,6 +155,27 @@ export {
   tokenKindsForProperty,
 } from "./style/validate-style-value";
 export type { StyleIssueBudget } from "./style/validate-style-value";
+export { compilePageCss, BASE_BREAKPOINT } from "./style/compile-page";
+export type {
+  CompiledPageCss,
+  StyleCompileContext,
+} from "./style/compile-page";
+export {
+  blockTypeClassName,
+  nodeClassName,
+  nodeClassNames,
+  BLOCK_TYPE_CLASS_PREFIX,
+  NODE_CLASS_PREFIX,
+  PAGE_ROOT_CLASS,
+} from "./style/node-class";
+export {
+  compileStyleValues,
+  tokenCustomProperty,
+  DEFAULT_TOKEN_PREFIX,
+} from "./style/declarations";
+export type { CompiledDeclarations, Declaration } from "./style/declarations";
+export { serializeRules } from "./style/serialize";
+export type { CssRule } from "./style/serialize";
 export {
   styleSupportDefinitions,
   stylePropertiesForSupports,
