@@ -31,7 +31,10 @@ block that hides a panel no longer pays to render it.
 
 A block's `supports` is checked against the catalog while it is being written
 instead of at boot, and a plugin that registers its own support adds it to that
-check by augmenting `BlockSupportKeys` in `@nextlyhq/plugin-sdk/blocks`. The
+check by augmenting `BlockSupportKeys` in `@nextlyhq/plugin-sdk/blocks`. A key
+lists the sub-flags it recognises as a union of strings, and declares either
+`never` or `true` when it is all-or-nothing; both are read the same way, and a
+sub-flag the key does not declare is refused where it is written. The
 types a block definition asks for are all reachable from that same subpath, so
 writing a block no longer means importing the engine directly. Renderers now
 describe what they provide once by augmenting `BlockRenderContext`, so `ctx` is

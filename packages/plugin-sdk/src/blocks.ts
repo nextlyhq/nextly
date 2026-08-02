@@ -49,7 +49,8 @@ import type { ReactNode } from "react";
  * ```ts
  * declare module "@nextlyhq/plugin-sdk/blocks" {
  *   interface BlockSupportKeys {
- *     animation: true;
+ *     animation: "enter" | "exit";
+ *     parallax: true;
  *   }
  * }
  * ```
@@ -58,11 +59,12 @@ import type { ReactNode } from "react";
  * every key, which is what leaves a misspelled `spaceing` to be found at boot,
  * in someone else's app, instead of while it is being written.
  *
- * Each key names the sub-flags it recognises, so a nested typo is caught in the
- * same breath as a top-level one: `{ spacing: { paddding: true } }` enables
- * nothing at all, and finding that out at boot is exactly what this exists to
- * prevent. A support with no finer granularity than all-or-nothing declares
- * `never`.
+ * One rule reads the value: a union of strings names the sub-flags the support
+ * recognises, and anything else means the support is all-or-nothing. So a nested
+ * typo is caught in the same breath as a top-level one — `{ spacing: { paddding:
+ * true } }` enables nothing at all, and finding that out at boot is exactly what
+ * this exists to prevent — while a support with no finer granularity can be
+ * written the way it reads, as `never` or as `true`.
  *
  * The built-in keys are the style catalog's groups plus the capabilities that
  * have no catalog group of their own. A test holds both the keys and their
@@ -98,15 +100,36 @@ export interface BlockSupportKeys {
 }
 
 /**
+ * What one support key accepts, given the sub-flags it declares.
+ *
+ * The two cases are kept apart rather than both handed to `Record`, because
+ * `Record` demands a property key and a support that declares no flags has none
+ * to give. Feeding it either sentinel is unsound in opposite directions: `true`
+ * is not a property key at all, so the mapped type stops instantiating and an
+ * augmenting plugin's build fails on the declaration rather than on anything it
+ * wrote; `never` produces `Partial<Record<never, boolean>>`, which is `{}`, and
+ * `{}` accepts every object — so `{ layout: { typo: true } }` type-checks and is
+ * refused only later, by the registry, at boot.
+ *
+ * `[F] extends [never]` is asked first and in tuple form. Bare `F extends never`
+ * distributes and answers for the empty union rather than about it, and
+ * `[never] extends [string]` is true, so a `never` reaching the string case
+ * would rebuild the same `{}`.
+ */
+type SupportSetting<F> = [F] extends [never]
+  ? boolean
+  : [F] extends [string]
+    ? boolean | Partial<Record<F & string, boolean>>
+    : boolean;
+
+/**
  * Style capabilities a block opts into: `true` for a whole group, or an object
  * naming the sub-flags it wants.
  *
  * @experimental Carried by the same freeze as `defineBlock`.
  */
 export type BlockSupports = {
-  [K in keyof BlockSupportKeys]?:
-    | boolean
-    | Partial<Record<BlockSupportKeys[K], boolean>>;
+  [K in keyof BlockSupportKeys]?: SupportSetting<BlockSupportKeys[K]>;
 };
 
 /**
@@ -171,9 +194,19 @@ export interface BlockRenderArgs<P>
   /**
    * Render one of this block's slots, optionally under a different context.
    *
-   * A promise is a legal child of a server component, which is what makes a
-   * block whose slot holds an async block work: the slot is drawn and whatever
-   * it returns is placed, with no awaiting for the author to remember.
+   * `ReactNode` rather than the `ReactNode | Promise<ReactNode>` that `render`
+   * returns, and the asymmetry is deliberate: this value is one a block places
+   * into its own JSX, and that union is not a legal child under EITHER supported
+   * peer. React 18 admits no promise at all; React 19 admits only
+   * `Promise<AwaitedReactNode>`, a promise of a settled node, so a promise that
+   * may itself yield a promise is refused there too. Widening here would move
+   * the error onto every block that draws a slot.
+   *
+   * It still says what each peer can express, because React 19 counts
+   * `Promise<AwaitedReactNode>` as a `ReactNode`: a renderer on 19 may hand back
+   * a pending slot and the block places it unchanged. On 18 it may not, which
+   * costs nothing, since an async block cannot be drawn under React 18's types
+   * regardless — `<AsyncBlock />` is refused outright there.
    */
   renderSlot(this: void, name: string, ctx?: BlockRenderContext): ReactNode;
 }

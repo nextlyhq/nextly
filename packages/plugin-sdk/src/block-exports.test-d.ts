@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { expectTypeOf } from "vitest";
 
 import { blockSupports, defineBlock } from "@nextlyhq/plugin-sdk/blocks";
@@ -40,6 +41,27 @@ expectTypeOf(goodSupports).toMatchTypeOf<BlockSupports>();
 // @ts-expect-error "spaceing" is not a support key.
 const typo: BlockSupports = { spaceing: true };
 void typo;
+
+// A support that declares no sub-flags takes the whole group or nothing. Given
+// its flags to `Record`, the empty union would build `{}`, and `{}` accepts
+// every object — so a nested typo under such a key would reach the registry at
+// boot instead of stopping here.
+// @ts-expect-error "layout" declares no sub-flags, so it takes no object.
+const flaglessObject: BlockSupports = { layout: { typo: true } };
+void flaglessObject;
+
+// A key that does declare them still refuses one it does not.
+// @ts-expect-error "paddding" is not a spacing flag.
+const nestedTypo: BlockSupports = { spacing: { paddding: true } };
+void nestedTypo;
+
+// What a block places into its own JSX. A promise is not a legal child under
+// either supported peer, so this stays exactly `ReactNode`: React 19 already
+// counts a settled-node promise as one, and React 18 refuses async blocks
+// outright, so widening it would only break every block that draws a slot.
+expectTypeOf<
+  BlockRenderArgs<{ text: string }>["renderSlot"]
+>().returns.toEqualTypeOf<ReactNode>();
 
 // Augmenting the interface is proved from a package that CONSUMES this one, in
 // `plugin-page-builder`. Doing it here would widen the type for this package's
