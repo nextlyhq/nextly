@@ -30,15 +30,30 @@ export type ActivityLogAction = "create" | "update" | "delete";
 /** A single activity log record as returned by queries. */
 export interface ActivityLogEntry {
   id: string;
+  /**
+   * The actor, as an opaque reference that outlives their account.
+   *
+   * Still set after the account is deleted — that is what keeps one deleted
+   * actor's entries distinguishable from another's.
+   */
   userId: string;
-  userName: string;
-  userEmail: string;
+  /** NULL once the actor's account was deleted and their identity erased. */
+  userName: string | null;
+  /** NULL once the actor's account was deleted and their identity erased. */
+  userEmail: string | null;
   action: ActivityLogAction;
   collection: string;
   entryId: string | null;
   entryTitle: string | null;
   metadata: Record<string, unknown> | null;
   createdAt: string;
+  /**
+   * When the actor's account was deleted and this row's identity erased.
+   *
+   * NULL for a live actor. Separate from a NULL name because "erased" and
+   * "never carried a name" are different facts, and only this one answers when.
+   */
+  actorDeletedAt: string | null;
 }
 
 /** Input for recording a new activity. */
@@ -262,8 +277,11 @@ export class ActivityLogService extends BaseService {
     return {
       id: String(row.id),
       userId: String(row.user_id),
-      userName: String(row.user_name),
-      userEmail: String(row.user_email),
+      // Through the same narrowing as the other nullable columns: an erased
+      // row holds SQL NULL here, and `String(null)` would surface the literal
+      // text "null" as the actor's name.
+      userName: toNullableString(row.user_name),
+      userEmail: toNullableString(row.user_email),
       action: String(row.action) as ActivityLogAction,
       collection: String(row.collection),
       // Type-narrow before stringification so we don't fall through to
@@ -275,6 +293,10 @@ export class ActivityLogService extends BaseService {
         row.created_at instanceof Date
           ? row.created_at.toISOString()
           : String(row.created_at),
+      actorDeletedAt:
+        row.actor_deleted_at instanceof Date
+          ? row.actor_deleted_at.toISOString()
+          : toNullableString(row.actor_deleted_at),
     };
   };
 }

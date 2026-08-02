@@ -50,6 +50,7 @@ import { ServiceContainer } from "../../../services/index";
 import type { Logger } from "../../../services/shared";
 import { storageTypeToken } from "../../../shared/lib/plugin-storage";
 import type { UserConfig, UserFieldConfig } from "../../../users/config/types";
+import { eraseActorPersonalData } from "../../audit/erase-actor-personal-data";
 import {
   buildAcceptInviteLink,
   generateInviteTokenValue,
@@ -1316,6 +1317,19 @@ export class UserMutationService extends BaseService {
 
         // Delete user accounts
         await txDb.delete(accounts).where(eq(accounts.userId, userId));
+
+        // Strip the person out of the audit trail while leaving the trail
+        // standing. `activity_log.user_id` carries no foreign key precisely so
+        // these rows outlive the account; without this they would outlive it
+        // still carrying the name and email of someone who asked to be erased.
+        // Inside the transaction, so a failed erasure takes the deletion with
+        // it rather than leaving the two out of step.
+        await eraseActorPersonalData(
+          txDb,
+          this.tables,
+          String(userId),
+          new Date()
+        );
 
         // Delete user, capturing how many rows it removed.
         const deleteResult = await txDb

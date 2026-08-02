@@ -10,8 +10,10 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { protectedApi } from "@admin/lib/api/protectedApi";
-import { formatRelativeTime } from "@admin/lib/dashboard";
-import { getInitials } from "@admin/lib/utils";
+import {
+  describeActivityActor,
+  formatRelativeTime,
+} from "@admin/lib/dashboard";
 import type {
   Activity,
   ActivityCategory,
@@ -25,14 +27,18 @@ import type {
 interface ActivityLogEntry {
   id: string;
   userId: string;
-  userName: string;
-  userEmail: string;
+  /** Null once the actor's account was deleted and their identity erased. */
+  userName: string | null;
+  /** Null once the actor's account was deleted and their identity erased. */
+  userEmail: string | null;
   action: "create" | "update" | "delete";
   collection: string;
   entryId: string | null;
   entryTitle: string | null;
   metadata: Record<string, unknown> | null;
   createdAt: string;
+  /** When the actor's account was deleted; null while it still exists. */
+  actorDeletedAt: string | null;
 }
 
 interface ActivityLogApiResponse {
@@ -66,12 +72,7 @@ function mapEntry(entry: ActivityLogEntry): Activity {
 
   return {
     id: entry.id,
-    user: {
-      id: entry.userId,
-      name: entry.userName,
-      email: entry.userEmail,
-      initials: getInitials(entry.userName),
-    },
+    user: describeActivityActor(entry),
     type: entry.action,
     action: ACTION_LABELS[entry.action] ?? entry.action,
     target,
