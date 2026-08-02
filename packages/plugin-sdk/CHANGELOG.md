@@ -1,5 +1,263 @@
 # @nextlyhq/plugin-sdk
 
+## 0.0.2-alpha.50
+
+### Patch Changes
+
+- [#436](https://github.com/nextlyhq/nextly/pull/436) [`5e64acc`](https://github.com/nextlyhq/nextly/commit/5e64accfe7b86cc7a49717d636db91698f3af8af) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - `beforeOperation` hooks are now declared and registered as what they are. They receive the operation's `args` -- the data, id or where clause it is about to use -- rather than a document, so they are typed as `BeforeOperationHandler` and registered through `registerBeforeOperation()` / `registerBeforeOperationHook()`. Previously they were declared as ordinary hook handlers, so a handler written against the documented type read `context.data` and got `undefined`. Handlers for the other eight phases are unaffected.
+
+- [#455](https://github.com/nextlyhq/nextly/pull/455) [`80fdee6`](https://github.com/nextlyhq/nextly/commit/80fdee610bb7b60e85ff179a84f10ed16d30ba30) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A block that supplies its own editor component now loads without a hand-written import.
+
+  A block can name a custom inspector or canvas component through `editor.component`. That is a component path like any other admin contribution, so it now goes into the generated admin import map alongside plugin pages, settings and views — the editor bundle picks it up with no host wiring.
+
+  Paths are read from what plugins declare, so generation needs no plugin to boot. A block registered imperatively at runtime contributes no path, the same rule the block manifest follows. An app whose only components come from blocks now gets an import map too, where before none was written.
+
+- [#450](https://github.com/nextlyhq/nextly/pull/450) [`7a36ab6`](https://github.com/nextlyhq/nextly/commit/7a36ab616df206189b5e3f9ca8c19058af480222) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - `nextly generate:types` now writes a block manifest listing every block your plugins declare.
+
+  Until now the only way to ask what blocks an app has was to boot it and inspect the registry, which is not available to an editor build, a docs page, or an agent writing a page document. The manifest states it as a file beside your generated types: each block's name, schema version, description, worked example, prop schemas, style capabilities, slots, and the plugin that declared it.
+
+  It is written from what plugins declare rather than from the running registry, so generation stays a pure read of your config: no plugin boots and no database opens. Blocks registered imperatively at runtime are not listed, because they cannot be known without running the plugin. No file is written when nothing declares a block.
+
+- [#476](https://github.com/nextlyhq/nextly/pull/476) [`6cb97df`](https://github.com/nextlyhq/nextly/commit/6cb97df9b31058cfc6bd2a940d20a30afbd590ae) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Collections and singles created through the Schema Builder now get their system columns from the same definition the runtime schema and the migration diff already use, instead of a separate hand-written copy.
+
+  The copy had drifted. A Builder-created table declared `createdAt` and `updatedAt` as required while the rest of Nextly described them as optional, so `nextly db:sync` proposed a change to those columns on every Builder collection, and applying it rebuilt the table. On SQLite that rebuild also dropped the timestamp defaults. Both now agree, and the sync proposes nothing.
+
+  Newly created Builder tables declare the two timestamp columns as optional. Existing tables are brought in line by one schema sync, which preserves their rows.
+
+  The practical effect is that a system column added to Nextly in future reaches Builder-created tables as well as code-first ones. Previously it reached only code-first tables, and reading a Builder collection or single failed with a missing-column error.
+
+- [#480](https://github.com/nextlyhq/nextly/pull/480) [`3b39129`](https://github.com/nextlyhq/nextly/commit/3b391290b06a5161bedda88a9069c98573ec02ad) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A dev-server config reload now applies hook edits only when the reload advanced the runtime in every dimension. Previously a reload that applied part of a config — one collection's schema change refused while others landed, or a field-tree sync that failed for a scope — could still publish the new handlers, leaving them running against tables and serialized field metadata the save had not reached. A hook edit that shares a save with a refused schema change now takes effect on the next save instead; a hook edit on its own changes no table, so it still applies immediately.
+
+- [#441](https://github.com/nextlyhq/nextly/pull/441) [`55d3aa6`](https://github.com/nextlyhq/nextly/commit/55d3aa61153f0713495fdb1b4eca92e22ec47b42) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A plugin can now add its own blocks to the page builder.
+
+  The page builder exposes its block registry as a service, and a contributing plugin reaches it from `init` with `blockRegistry(ctx).register(myBlocks)`. Registering this way rather than by importing the engine is what makes the timing safe: the block registry is cleared and rebuilt on every boot, so a direct call can land before the rebuild and lose the blocks with no error, while services are recorded before any plugin's `init` runs. Each block is attributed to the plugin that registered it, taken from that plugin's own identity, so a name collision names the packages actually responsible.
+
+  `defineBlock` and the block types come from `@nextlyhq/plugin-sdk/blocks`, keeping the SDK the one stable surface a plugin author imports from while a plugin that has nothing to do with blocks never pulls the engine into its type graph. The registry itself comes from `@nextlyhq/plugin-page-builder/blocks`, since it belongs to that plugin rather than to core. Custom supports are registered through the same service as blocks, so both share the per-boot reset and neither collides on a second boot. Nextly core is unchanged: it carries no blocks contribution key and does not depend on the block engine, because contributing blocks is contributing to the page builder rather than to the framework.
+
+- [#464](https://github.com/nextlyhq/nextly/pull/464) [`a3b1f48`](https://github.com/nextlyhq/nextly/commit/a3b1f4893e14929c959da85d1ef6a8a210160140) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Editing a published entry on a drafts-enabled collection now works as a proper draft and publish flow.
+
+  When a collection has drafts enabled, editing a published entry saves your changes as a pending working draft instead of overwriting what is live. The editor shows a "Changed" status while a draft is pending, a Publish button promotes it to the live document, and a confirmed "Discard draft" action throws the pending edits away and restores the published version. The read API also surfaces the working draft to a trusted editor through `?draft=true`.
+
+- [#428](https://github.com/nextlyhq/nextly/pull/428) [`341890f`](https://github.com/nextlyhq/nextly/commit/341890fa15e1c403a9b4b886221e67b18d17e218) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - You can now edit a published document without changing what visitors see.
+
+  Saving changes to a published document (without choosing Publish) now keeps them as a pending draft: the live version stays exactly as it was until you publish. Clicking Publish brings the whole pending draft live at once, including fields the Publish action itself did not resend, and Unpublish does the same in reverse while returning the document to draft. Trusted editors see their pending edits when they open the document; anonymous and published-only reads always get the live version. This applies to non-localized collections that have draft/published status with drafts-enabled versioning; localized collections are unchanged for now.
+
+- [#451](https://github.com/nextlyhq/nextly/pull/451) [`9586432`](https://github.com/nextlyhq/nextly/commit/9586432d7f5f3fc0798f1fc2696682b48309c9f9) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Add a `draft` read option to fetch a document's pending working draft.
+
+  `nextly.findByID({ collection, id, draft: true })` and the REST `?draft=true` query parameter now return a published document's pending working draft in place of the live version. Access is gated on edit capability: a caller who cannot update the document still receives the published version, so this never exposes a draft to a read-only reader. Only non-localized collections with draft/published status and drafts-enabled versioning have a working draft to return.
+
+- [#434](https://github.com/nextlyhq/nextly/pull/434) [`b8c4941`](https://github.com/nextlyhq/nextly/commit/b8c494143e5ef8c545518e331e4404161947af86) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Groundwork for the field group storage migration. The engine can now plan a complete run in either direction and resume one that was interrupted. A rename also carries the pointers that address the table it moves: a field group nested inside another records its parent by physical table name, so renaming the parent without rewriting those records would leave the nested content in place but unreachable, and reads would return nothing rather than fail.
+
+  Nothing runs it yet. No command invokes the migration and no database is changed by installing this; the entry point ships separately, once the engine is covered end to end against real PostgreSQL, MySQL and SQLite servers.
+
+- [#463](https://github.com/nextlyhq/nextly/pull/463) [`a8f7a78`](https://github.com/nextlyhq/nextly/commit/a8f7a78bac918534acb8ee26892531758d6b05cf) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A write refused inside a field group is now reported as the refusal it is. A blank required field returned a generic server error with no per-field detail, because every dialect adapter re-classified anything thrown out of a transaction as a database failure — including an error the application raised deliberately to roll the write back. Collections were affected on create and update; singles already behaved correctly.
+
+- [#459](https://github.com/nextlyhq/nextly/pull/459) [`5d962d2`](https://github.com/nextlyhq/nextly/commit/5d962d20a9438845fbd22a66d90e9517fe1f2e14) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Field validators inside a field group now receive the write's request context, so a plugin field type whose rule depends on `req.user` behaves the same nested in a field group as it does at the top level. Previously that rule saw an empty context and accepted every value.
+
+  Adds `nextly generate:manifest`, which emits the block manifest on its own, and `--check`, which writes nothing and fails when the committed manifest no longer matches the config. The manifest also publishes its own schema, and generation now refuses to write a document that schema would reject.
+
+- [#469](https://github.com/nextlyhq/nextly/pull/469) [`13e3578`](https://github.com/nextlyhq/nextly/commit/13e3578fb6a7575c115f41f1d8e8d3eef24eedeb) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Schema applies and the `nextly migrate` / `nextly upgrade --reconcile-core` commands now address the field-group registry and each field group's storage by the names the database actually holds, instead of the names this release would have created. Without this, a database whose field-group storage had been renamed could have an empty second registry created beside the populated one, after which the app would read the empty one and its field groups would appear to be gone.
+
+- [#472](https://github.com/nextlyhq/nextly/pull/472) [`84f8a15`](https://github.com/nextlyhq/nextly/commit/84f8a15b5e27ab8d98a4518524495e306bb5ba83) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The field-group storage migration now re-checks the ledgers it rewrote before it settles, and refuses rather than reporting success when a row still carries the old vocabulary. Without this, content written while the migration was running could be left in the old format and the run would complete silently, with the problem only appearing in a much later release.
+
+- [#454](https://github.com/nextlyhq/nextly/pull/454) [`11f75b5`](https://github.com/nextlyhq/nextly/commit/11f75b5c9191f71f7e5cb4628c7338a69635ce24) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Field-group storage is now addressed by the name the database actually holds.
+
+  The storage migration renames the field-group registry table and each data table's type discriminator. Every reader resolves those names from the database catalog instead of a constant, so a database that has run the migration and one that has not are both read correctly by the same build. Nothing about stored data changes, and a database that has not migrated behaves exactly as before.
+
+- [#429](https://github.com/nextlyhq/nextly/pull/429) [`151efce`](https://github.com/nextlyhq/nextly/commit/151efce4c877543c9e390954b2c4dad6ee43fc97) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Turning localization off in `nextly.config.ts` now brings your content back onto the main table. Previously only the Schema Builder toggle did this, so setting `localized: false` in configuration left every translation in a table nothing read any more and fell back to whatever the entity held before it was localized. Turning localization on again no longer trusts the stale rows that companion still holds.
+
+  Enabling localization and Draft/Published in the same edit now applies. It used to fail part-way and could never succeed on a retry, because the copy read a `status` column the schema push had not added yet.
+
+  Saving a localized entity is faster, and on PostgreSQL a class of failure is gone. Every localized write used to ask the database whether each translation table existed — once per entity, plus once per field-group type in the payload, before the write and again inside it. That answer is now resolved once and remembered. The read that builds the response used to discover the same thing by running its query and catching the failure, which on PostgreSQL aborts the whole transaction: writes that should have succeeded failed with `current transaction is aborted`, blaming an unrelated statement.
+
+  When a translation write is refused, the message now names the right fix for where you are running. Production is told to run `nextly migrate` instead of `nextly db:sync`, which is a development tool and cannot help there — and `nextly migrate` now creates missing translation tables and repairs installs that enabled localization before Nextly began recording it.
+
+  Turning localization off now brings an entry's publishing state back with its content. Publishing is per language while an entity is localized, so an entry published only under a language that is no longer your default carried that state on its translation row alone — and restoring the content without it could put a draft in front of the public, or make live content disappear.
+
+  Two processes enabling localization for the same entity at once — a `db:sync` alongside a running dev server, say — no longer both do the work. Only one holds the transition; the other stops and says so, instead of racing to seed the same rows or overwriting translations written since the first one finished.
+
+  If you open your own transaction and call `createEntryInTransaction` / `updateEntryInTransaction` / `deleteEntryInTransaction` (or their batch equivalents), call `warmLocalizedReadiness(collectionName)` before you open it. Nothing fails if you do not, which is why it is worth knowing: the write commits, but the version history it records and the webhook event it sends will be missing every translated value from your localized components.
+
+- [#452](https://github.com/nextlyhq/nextly/pull/452) [`6536365`](https://github.com/nextlyhq/nextly/commit/653636534f5389c580a55c8b099b226d87705670) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Turning localization off now brings an entry back with the publishing state it was actually published under. Publishing is per language while an entity is localized, so an entry published only under a language that is not your default carried that state on its translation row alone — and the disable drops that table straight after restoring, so the state was lost for good. A draft could become publicly visible, or live content disappear.
+
+- [#440](https://github.com/nextlyhq/nextly/pull/440) [`ed94b78`](https://github.com/nextlyhq/nextly/commit/ed94b7849555afc7cd86d2dd2e21ff659d886098) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Plugin options on a code-defined user field are no longer refused when two of them share a reference, and a sparse array in them is now rejected rather than silently reshaped.
+
+  The JSON-shape check treated every object it had already visited as a cycle, so one object referenced from two places within a single option was refused even though it serializes correctly at both. It now tracks only the objects on the active path. It also walked arrays with a method that skips holes, so a sparse array passed the check and then had each hole written as `null`, handing the plugin's component different data than was declared.
+
+- [#442](https://github.com/nextlyhq/nextly/pull/442) [`5785ee5`](https://github.com/nextlyhq/nextly/commit/5785ee5e89db3c5683abd175cb9758f5901f44dc) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Apply read hooks per collection, and hand them the values a caller sees.
+
+  A read hook that reads a different collection now runs that collection's own
+  hooks instead of silently skipping them, so a hook cannot reach rows the other
+  collection withholds. A hook reading the collection it is already running for
+  still skips them, which is what stops it calling itself without end.
+
+  `afterRead` is now handed decoded JSON values rather than the storage encoding
+  SQLite returns, so a hook reads the value the field was configured with instead
+  of a string. Field hooks are also declared with the context they are actually
+  given, which includes the field's value and name.
+
+- [#468](https://github.com/nextlyhq/nextly/pull/468) [`375d796`](https://github.com/nextlyhq/nextly/commit/375d79683afa6879235e7c8e6ebf2eb0fbb281ed) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - On MySQL, the internal description of a collection table's `created_at` and `updated_at` columns said they had no database default, while the tables actually created for them do have one (`CURRENT_TIMESTAMP`). The schema comparison that decides what a migration should contain was reading the description rather than reality, so it could see a difference that was not there. The description now matches what is created.
+
+- [#460](https://github.com/nextlyhq/nextly/pull/460) [`cbaa8d8`](https://github.com/nextlyhq/nextly/commit/cbaa8d8ed96cb0c6fb5a9ad47f35dc73c4c0aa8e) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Run collection and single `beforeChange` hooks after validation, not before
+
+  A `beforeChange` handler declared on a collection or single used to be
+  registered onto the `beforeCreate`/`beforeUpdate` queue, which fires before the
+  schema rules are enforced. The phase documented as the last chance to shape a
+  stored value therefore ran on data that had not been validated, and it ran even
+  for writes that were about to be rejected. The field-level hook of the same name
+  was already in the right place, so the two `beforeChange`s meant different
+  moments.
+
+  `beforeChange` is now its own phase, executed immediately after the validation
+  gate on every write path: collection create and update, both of their
+  transactional forms, the transactional single paths, and the single update
+  service.
+
+  Singles gain `beforeValidate`, which they did not have. Moving `beforeChange`
+  past the gate would otherwise leave a single with no hook running before
+  validation at all, so the phase takes the pre-validation execution point
+  `beforeChange` vacated. A single and a collection now agree on both phases.
+
+  This changes when existing handlers run. A `beforeChange` that SUPPLIES a value
+  the schema requires now runs too late to satisfy it, because validation has
+  already been applied; move that work to `beforeValidate`, which runs before the
+  gate on collections and singles alike. This includes the Schema Builder's
+  pre-built "Auto-generate Slug" hook when it targets a required field of your
+  own. The framework's own `slug`/`title` derivation is unaffected: it does not
+  run as a hook.
+
+  What a `beforeChange` handler returns is written without being re-validated.
+  That is the point of the phase, and it is now true rather than accidental.
+
+- [#443](https://github.com/nextlyhq/nextly/pull/443) [`bdcde29`](https://github.com/nextlyhq/nextly/commit/bdcde29f9250b8fa9a530504e10f0341bbf63715) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Clear the hook registry when services shut down.
+
+  The registry is process-global and outlives the DI container, but handlers are
+  registered from config on every init. Re-initializing in one process therefore
+  left the previous instance's handlers in place and appended a fresh copy of
+  each, so every hook ran twice per operation and the dead instance's handlers
+  ran alongside the new ones.
+
+- [#467](https://github.com/nextlyhq/nextly/pull/467) [`8a4d4a3`](https://github.com/nextlyhq/nextly/commit/8a4d4a3bafd329268175a1c60eefa5bd3eaa7b6f) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Bind the Direct API for hook contexts at registration
+
+  `req.nextly` is now bound for hook contexts from the moment services are
+  registered. It previously resolved through a binding that `getNextly()` created
+  as a side effect of its first call, so a process that never called it — which is
+  any REST or admin write — handed every hook `undefined`, including the worked
+  example in the collections guide.
+
+- [#473](https://github.com/nextlyhq/nextly/pull/473) [`9dfbd80`](https://github.com/nextlyhq/nextly/commit/9dfbd80af303d21c875bf95cd35e4838389e1e3d) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Apply hook edits without restarting the dev server
+
+  Editing a hook in `nextly.config.ts` had no effect until the process restarted,
+  and deleting one left it firing. A config reload re-read the file but the
+  registry kept the function objects registered at boot, so the hook that ran was
+  always the one from startup.
+
+  Collection and single hooks are now rebuilt from the reloaded config. Clearing
+  them is safe because the registry records who registered each handler: a
+  reload replaces only what it can rebuild, and leaves alone both a plugin's hooks
+  (the form builder registers directly on `forms`, and plugins do not re-run on a
+  config reload) and any registered imperatively through `registerHook()` (nothing
+  re-runs those at all). Unregistering is likewise scoped to the caller's own
+  registrations, so a plugin removing a handler it shares with the config no
+  longer removes the config's instead.
+
+  A save that changes a hook and a schema at once is handled as one unit: the new
+  handlers are published only once the schema they were written against has landed,
+  so a request served while the reload is still running never sees a hook reaching
+  for a column that is not there yet, and a refused schema change leaves the
+  previous handlers in place. Replacing them also keeps their position, so a config
+  save no longer reorders a chain it is not changing. Switching a plugin to `enabled: false`
+  now stops everything it contributed -- the hooks its collections and singles
+  declared, and the ones it registered itself, which are suspended rather than
+  dropped so re-enabling it in the same session brings them straight back. Deleting
+  or renaming a collection stops its hooks too: a removed entity's table is kept until `nextly prune`, so it stayed
+  addressable and went on running hooks its config no longer declared.
+
+  Deleting a plugin from the config stops its hooks as well as disabling it does,
+  and a plugin that was disabled stays that way when it is later removed.
+
+  Registering straight into the registry that `getHookRegistry()` hands out now
+  marks the handler as the app's, matching `registerHook()`. Only the registrars
+  that read the config claim ownership a reload may replace, so a handler nothing
+  can rebuild is never removed by one.
+
+- [#445](https://github.com/nextlyhq/nextly/pull/445) [`d20e9d3`](https://github.com/nextlyhq/nextly/commit/d20e9d3b1e9f54fe50049e117d0bdc140cf8e5df) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Keep a typed error's status and code across the service boundary.
+
+  A service raising `authRequired`, `rateLimited`, `serviceUnavailable` or any
+  other 401 reached a REST caller as a generic 500, because the boundary rebuilt
+  errors from their HTTP status and only four statuses had a branch. A 400 was
+  rebuilt as a validation failure whatever code it carried, so a caller was told
+  its data failed validation when it had not been validated.
+
+  Errors are now rebuilt from the canonical code the envelope already carried,
+  with the status mapping kept as the fallback for envelopes that carry no code.
+
+- [#449](https://github.com/nextlyhq/nextly/pull/449) [`3dc6927`](https://github.com/nextlyhq/nextly/commit/3dc6927e426fa1b5c9a0f349babf7407c526e014) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A field masked by its collection stays masked when read through a relationship.
+
+  A field's `afterRead` hooks are how it masks itself on the way out, and they ran
+  only when the collection was read directly. Reaching the same row through a
+  relationship returned the unmasked value. They now run over the assembled
+  document, so a nested row gets its own collection's treatment at every depth,
+  and a hook that masks based on the row's own relations sees them expanded
+  rather than as raw ids.
+
+- [#446](https://github.com/nextlyhq/nextly/pull/446) [`4e5064e`](https://github.com/nextlyhq/nextly/commit/4e5064e42111d327e745ec629c1625442700ffe3) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A plugin can now declare data for another plugin statically, and the page builder registers contributed blocks from it.
+
+  `contributes.declarations` is the static counterpart to `contributes.services`. A service is a factory, so what it provides is knowable only once a plugin has booted — and `nextly generate:types` boots nothing, reading the config alone. A capability offered only through a service is therefore invisible to generation and cannot appear in generated types, an import map, or a manifest.
+
+  A block contributor can now declare its blocks instead of registering them by hand, and the page builder registers them at boot from the same declaration the tooling reads, attributed to the plugin that declared them. Registering imperatively from `init` still works for a plugin whose block list depends on runtime state.
+
+- [#438](https://github.com/nextlyhq/nextly/pull/438) [`7b0dddf`](https://github.com/nextlyhq/nextly/commit/7b0dddf13fef1e17f0919e6add4591b7aa45cafd) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The page builder now states the core version it actually needs, an empty default is checked against the column it will occupy, and a user field's plugin options are refused when JSON cannot hold them unchanged.
+
+  `@nextlyhq/plugin-page-builder` requires `nextly` 0.0.2-alpha.49 or newer, the release that first exports `pluginField`. Installed against an older core it now fails at install rather than throwing when a `blocks()` field is evaluated.
+
+  A single's default that resolves to an empty value is validated against the field's storage primitive and its type's own rules, instead of being treated as a field the writer left alone; a number-backed default of `""` no longer reaches the insert. Options declared on a code-defined user field are refused when they are values JSON cannot represent — a `Date`, `Set`, `Map`, `BigInt`, function or cycle — which previously either reached the admin component reshaped or failed the whole startup sync.
+
+- [#435](https://github.com/nextlyhq/nextly/pull/435) [`082fa67`](https://github.com/nextlyhq/nextly/commit/082fa67aa50eac4f351a1fecae6f37b543f0a525) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Plugin field types now work on every surface that accepts fields, and a column added to an existing table gets the same storage class the ORM binds.
+
+  A contributed field type can be declared in `contributes.extend` and `defineFieldGroup`, not just in collections and singles, and `pluginField()` keeps the shape it was given so a plugin's own factory stays typed. The page builder exports `isBlocksField` again and reaches core only through `@nextlyhq/plugin-sdk`, which now carries the field contracts a contributed type needs; it also states the core version its `blocks()` factory actually requires, so installing it against an older core fails at install rather than at runtime.
+
+  A contributed default is checked against the type's storage primitive before it reaches the database, disabling a plugin no longer leaves its empty-value callback registered, and `nextly build` and `migrate:check` now refuse a field type no installed plugin offers instead of generating types for a schema production would reject. Field names are validated even when the field's type is deferred to boot, so a duplicate or SQL-reserved name can no longer reach schema generation.
+
+  Plugin options declared on a code-defined user field are persisted and reach the contributed admin component, and a `number` field added to an existing table is created as the integer the ORM binds rather than NUMERIC/DECIMAL/REAL, honouring `dbType: "decimal"` and `format: "float"` for fields that ask for fractions.
+
+- [#456](https://github.com/nextlyhq/nextly/pull/456) [`1bc29b5`](https://github.com/nextlyhq/nextly/commit/1bc29b5b97ab7d7efce8a8aef829b26a9ff58818) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Editing a published entry's title no longer changes its URL. The slug follows the title while an entry is still a draft and stops once the entry has a public address, at which point it changes only if you edit it yourself. Previously a title edit silently retired the published address and every link to it started returning a not-found page.
+
+  An entry counts as publicly addressed in three cases, each of which was a way to lose a URL: it is published wherever its slug is served; it lives in a collection with no draft/published lifecycle, where saving is publishing; or you have published it at least once while the editor has been open, so unpublishing to make an edit does not put the address back up for grabs.
+
+  Where the slug is served depends on the slug field. The slug a collection gets by default is shared across languages, so one address serves all of them and any published language keeps it frozen: editing the title of a German draft no longer rewrites the URL the published English version is being served at. A slug you have explicitly localized is genuinely per language, and follows only that language's status.
+
+  When you do change a public entry's slug, the editor says so before you save: the public URL changes and the old one stops working. That notice now also appears in the quick-edit form opened from a relationship field, and it clears once the change is saved rather than lingering against the URL you already replaced.
+
+- [#439](https://github.com/nextlyhq/nextly/pull/439) [`f2c6e97`](https://github.com/nextlyhq/nextly/commit/f2c6e97130953b7a8e70542bc72cb9619942de32) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Read hooks now shape the query they precede. `beforeOperation` receives the caller's own `where` (it was handed an empty one), `beforeRead` receives what `beforeOperation` settled on, and `beforeRead's` return narrows the rows the read returns instead of being discarded. `countEntries` runs the same chain, so a total describes the same rows a list would return rather than counting rows the list withheld.
+
+- [#474](https://github.com/nextlyhq/nextly/pull/474) [`7c3b9f2`](https://github.com/nextlyhq/nextly/commit/7c3b9f299a1528bb172e959dcd4efd9b15971905) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - On SQLite, the `createdAt` and `updatedAt` columns of collection and single tables now carry a database default, matching PostgreSQL and MySQL and matching what the Schema Builder has always created.
+
+  Nextly sets both on every write, so content created through the admin panel or the API is unaffected. The difference shows up for rows written another way, such as a direct insert or a data import: on SQLite those stored no timestamp at all, and the value read back as null.
+
+  Existing SQLite tables pick the default up on the next schema sync, which rebuilds the affected tables in place and preserves their rows. Rows that already hold a null timestamp keep it, because a default applies only to inserts that omit the column.
+
+- [#481](https://github.com/nextlyhq/nextly/pull/481) [`e604c52`](https://github.com/nextlyhq/nextly/commit/e604c524d5768c1d8227952b686e0af16d01be8e) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - `createTestNextly` no longer resolves the Direct API while building its return value. `t.nextly` is now resolved when it is read. Resolving it registers the `nextlyDirectAPI` container binding as a side effect, and that binding is where a hook's `req.nextly` comes from, so the old eager call meant the binding always existed under the harness whatever the code under test did. Property access is unchanged for callers; a test that wants to assert something about `req.nextly` should do so before reading `t.nextly`.
+
+- [#479](https://github.com/nextlyhq/nextly/pull/479) [`f7fb1fb`](https://github.com/nextlyhq/nextly/commit/f7fb1fb1c511543fda08f2f3dbf9b3e64ae9ebb7) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - `nextly migrate` no longer fails outright when a localized project's companion table already exists but holds no rows yet, which is what a dev-server boot leaves behind. A project whose companion was already filled by `db:sync` still needs the follow-up fix to `migrate:create`.
+
+- [#447](https://github.com/nextlyhq/nextly/pull/447) [`ab6795f`](https://github.com/nextlyhq/nextly/commit/ab6795fb64034f4cde61b5e06f7cb18b325876e7) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A hook that throws after the write has committed no longer fails the write.
+
+  `afterCreate`, `afterUpdate` and `afterDelete` run once the row is durable, and
+  a throw there reported the operation as failed with no entry returned. Callers
+  could not learn the id of the row that existed, and a retry wrote it a second
+  time. These phases now report their failures instead of raising them: the
+  operation succeeds, the error is logged with its phase and collection, and the
+  remaining handlers still run. `beforeCreate` and the other pre-write phases are
+  unchanged -- refusing a write is what they are for.
+
+- [#475](https://github.com/nextlyhq/nextly/pull/475) [`f75c29f`](https://github.com/nextlyhq/nextly/commit/f75c29f2ad3092ea32f55cc999e31d20eacb7a07) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The field-group storage migration now re-checks the collection, single and field-group registries before it settles, so a definition saved while a run is in flight can no longer leave a database reporting success over storage that is only partly migrated.
+
+- Updated dependencies [[`5e64acc`](https://github.com/nextlyhq/nextly/commit/5e64accfe7b86cc7a49717d636db91698f3af8af), [`80fdee6`](https://github.com/nextlyhq/nextly/commit/80fdee610bb7b60e85ff179a84f10ed16d30ba30), [`7a36ab6`](https://github.com/nextlyhq/nextly/commit/7a36ab616df206189b5e3f9ca8c19058af480222), [`6cb97df`](https://github.com/nextlyhq/nextly/commit/6cb97df9b31058cfc6bd2a940d20a30afbd590ae), [`3b39129`](https://github.com/nextlyhq/nextly/commit/3b391290b06a5161bedda88a9069c98573ec02ad), [`55d3aa6`](https://github.com/nextlyhq/nextly/commit/55d3aa61153f0713495fdb1b4eca92e22ec47b42), [`a3b1f48`](https://github.com/nextlyhq/nextly/commit/a3b1f4893e14929c959da85d1ef6a8a210160140), [`341890f`](https://github.com/nextlyhq/nextly/commit/341890fa15e1c403a9b4b886221e67b18d17e218), [`9586432`](https://github.com/nextlyhq/nextly/commit/9586432d7f5f3fc0798f1fc2696682b48309c9f9), [`b8c4941`](https://github.com/nextlyhq/nextly/commit/b8c494143e5ef8c545518e331e4404161947af86), [`a8f7a78`](https://github.com/nextlyhq/nextly/commit/a8f7a78bac918534acb8ee26892531758d6b05cf), [`5d962d2`](https://github.com/nextlyhq/nextly/commit/5d962d20a9438845fbd22a66d90e9517fe1f2e14), [`13e3578`](https://github.com/nextlyhq/nextly/commit/13e3578fb6a7575c115f41f1d8e8d3eef24eedeb), [`84f8a15`](https://github.com/nextlyhq/nextly/commit/84f8a15b5e27ab8d98a4518524495e306bb5ba83), [`11f75b5`](https://github.com/nextlyhq/nextly/commit/11f75b5c9191f71f7e5cb4628c7338a69635ce24), [`151efce`](https://github.com/nextlyhq/nextly/commit/151efce4c877543c9e390954b2c4dad6ee43fc97), [`6536365`](https://github.com/nextlyhq/nextly/commit/653636534f5389c580a55c8b099b226d87705670), [`ed94b78`](https://github.com/nextlyhq/nextly/commit/ed94b7849555afc7cd86d2dd2e21ff659d886098), [`5785ee5`](https://github.com/nextlyhq/nextly/commit/5785ee5e89db3c5683abd175cb9758f5901f44dc), [`375d796`](https://github.com/nextlyhq/nextly/commit/375d79683afa6879235e7c8e6ebf2eb0fbb281ed), [`cbaa8d8`](https://github.com/nextlyhq/nextly/commit/cbaa8d8ed96cb0c6fb5a9ad47f35dc73c4c0aa8e), [`bdcde29`](https://github.com/nextlyhq/nextly/commit/bdcde29f9250b8fa9a530504e10f0341bbf63715), [`8a4d4a3`](https://github.com/nextlyhq/nextly/commit/8a4d4a3bafd329268175a1c60eefa5bd3eaa7b6f), [`9dfbd80`](https://github.com/nextlyhq/nextly/commit/9dfbd80af303d21c875bf95cd35e4838389e1e3d), [`d20e9d3`](https://github.com/nextlyhq/nextly/commit/d20e9d3b1e9f54fe50049e117d0bdc140cf8e5df), [`3dc6927`](https://github.com/nextlyhq/nextly/commit/3dc6927e426fa1b5c9a0f349babf7407c526e014), [`4e5064e`](https://github.com/nextlyhq/nextly/commit/4e5064e42111d327e745ec629c1625442700ffe3), [`7b0dddf`](https://github.com/nextlyhq/nextly/commit/7b0dddf13fef1e17f0919e6add4591b7aa45cafd), [`082fa67`](https://github.com/nextlyhq/nextly/commit/082fa67aa50eac4f351a1fecae6f37b543f0a525), [`1bc29b5`](https://github.com/nextlyhq/nextly/commit/1bc29b5b97ab7d7efce8a8aef829b26a9ff58818), [`f2c6e97`](https://github.com/nextlyhq/nextly/commit/f2c6e97130953b7a8e70542bc72cb9619942de32), [`7c3b9f2`](https://github.com/nextlyhq/nextly/commit/7c3b9f299a1528bb172e959dcd4efd9b15971905), [`e604c52`](https://github.com/nextlyhq/nextly/commit/e604c524d5768c1d8227952b686e0af16d01be8e), [`f7fb1fb`](https://github.com/nextlyhq/nextly/commit/f7fb1fb1c511543fda08f2f3dbf9b3e64ae9ebb7), [`ab6795f`](https://github.com/nextlyhq/nextly/commit/ab6795fb64034f4cde61b5e06f7cb18b325876e7), [`f75c29f`](https://github.com/nextlyhq/nextly/commit/f75c29f2ad3092ea32f55cc999e31d20eacb7a07)]:
+  - nextly@0.0.2-alpha.50
+  - @nextlyhq/admin@0.0.2-alpha.50
+  - @nextlyhq/blocks-engine@0.0.2-alpha.50
+
 ## 0.0.2-alpha.49
 
 ### Patch Changes
