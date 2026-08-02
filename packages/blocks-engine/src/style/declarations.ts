@@ -30,6 +30,7 @@ import {
   trimCssWhitespace,
 } from "./css-value";
 import { validateStyleValues } from "./validate-style-value";
+import type { StyleIssueBudget } from "./validate-style-value";
 
 /** One `property: value` pair bound for a rule. */
 export interface Declaration {
@@ -95,8 +96,26 @@ function warning(path: string, message: string): ValidationIssue {
 /**
  * The custom property a token reference reads.
  *
- * `color.primary` becomes `--site-color-primary`: a dot is not a custom-property
- * character, and a dash reads the same way to anyone who has seen the name.
+ * `color.primary` becomes `--site-color-primary`: a dot is not a
+ * custom-property character, and a dash reads the same way to anyone who has
+ * seen the name.
+ *
+ * The mapping is not injective, and that is a deliberate trade rather than an
+ * oversight. `color.primary-dark` and `color-primary.dark` are both legal names
+ * and both land on `--site-color-primary-dark`, so a site defining BOTH would
+ * have one resolve to the other's value. Encoding around it — a doubled dash,
+ * say — would make every token's custom property read oddly forever to prevent
+ * a pair almost nobody writes, and these names are user-facing: an author reads
+ * them in devtools and writes them in custom CSS.
+ *
+ * The answer is uniqueness where the token table is known, which is the same
+ * place a duplicate NAME is already refused, and the same answer the design-token
+ * tooling ecosystem reached: Style Dictionary emits kebab-case from dot paths
+ * and detects the collisions rather than escaping them away. The compiler sees
+ * references, never the table, so it cannot make that check here.
+ *
+ * Block-type classes take the opposite trade for the opposite reason: nobody
+ * reads or writes those, so a doubled separator there costs nothing.
  */
 export function tokenCustomProperty(name: string, prefix: string): string {
   return prefix + name.replace(/\./g, "-");
@@ -278,12 +297,17 @@ function refusedAt(path: string, refused: readonly string[]): boolean {
 export function compileStyleValues(
   values: Readonly<Record<string, unknown>>,
   basePath: string,
-  tokenPrefix?: string
+  tokenPrefix?: string,
+  budget?: StyleIssueBudget
 ): CompiledDeclarations {
   // Strict, because this decides what reaches a page: a property this engine
   // does not know is preserved in the document and left out of the stylesheet,
   // rather than written on the guess that it might mean something.
-  const issues = validateStyleValues(values, basePath, "strict");
+  // The budget spans the whole compile, not one style map. Without it every map
+  // starts fresh, so a document with a long slot key and many bad properties
+  // produces diagnostics quadratic in its own size — the amplification the
+  // allowance exists to stop, reintroduced by resetting it.
+  const issues = validateStyleValues(values, basePath, "strict", budget);
   const refused = issues
     .filter(issue => issue.severity === "error")
     .map(issue => issue.path);

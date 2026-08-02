@@ -39,6 +39,8 @@ import {
 } from "./node-class";
 import { serializeRules } from "./serialize";
 import type { CssRule } from "./serialize";
+import type { StyleIssueBudget } from "./validate-style-value";
+import { newStyleIssueBudget } from "./validate-style-value";
 
 /** Everything site-level the compiler needs; the caller loads it. */
 export interface StyleCompileContext {
@@ -56,6 +58,19 @@ export interface StyleCompileContext {
    * the page; the reserved prefixes belong to the admin and to Tailwind.
    */
   tokenPrefix?: string;
+  /**
+   * A class distinguishing this document's rules from another's.
+   *
+   * Node ids are unique within a document, not across documents, so two
+   * documents rendered into one DOM — a page and a region, say — can hold the
+   * same id and therefore the same generated class. Without a scope their rules
+   * cross-apply and page settings from each reach both roots.
+   *
+   * Added to the page root rather than replacing it, so the anchored selector
+   * shape is unchanged and a renderer showing one document at a time needs
+   * nothing. The renderer puts the same class on the element it mounts.
+   */
+  scope?: string;
 }
 
 /** A compiled page stylesheet. */
@@ -109,6 +124,10 @@ interface BreakpointContext {
  * its own box wins over the same value keyed to the window.
  */
 function breakpointContexts(set: BreakpointSet): BreakpointContext[] {
+  // The base context carries no upper bound and no at-rule, but it still needs
+  // to be bounded from below when a narrower breakpoint shows a node again:
+  // without that, hiding at base emits an unconditional rule that a later
+  // `true` cannot undo.
   const contexts: BreakpointContext[] = [
     { id: BASE_BREAKPOINT, axis: "viewport" },
   ];
@@ -186,7 +205,8 @@ function envelopeRules(
   basePath: string,
   contexts: readonly BreakpointContext[],
   tokenPrefix: string,
-  warnings: ValidationIssue[]
+  warnings: ValidationIssue[],
+  budget: StyleIssueBudget
 ): CssRule[] {
   if (!isPlainRecord(styles)) return [];
   warnings.push(...unknownBreakpointWarnings(styles, basePath, contexts));
@@ -198,7 +218,7 @@ function envelopeRules(
       const values = byBreakpoint[context.id];
       if (!isPlainRecord(values)) continue;
       const path = pointer(pointer(basePath, state), context.id);
-      const compiled = compileStyleValues(values, path, tokenPrefix);
+      const compiled = compileStyleValues(values, path, tokenPrefix, budget);
       warnings.push(...compiled.warnings);
       // A property that styles something inside the block goes into its own
       // rule. Keeping the exception in the catalog rather than in a branch here
@@ -254,11 +274,26 @@ function groupByDescendant(
 function visibilityRules(
   node: BlockNode,
   selector: string,
-  contexts: readonly BreakpointContext[]
+  contexts: readonly BreakpointContext[],
+  basePath: string,
+  warnings: ValidationIssue[]
 ): CssRule[] {
   const devices = node.visibility?.devices;
   if (!isPlainRecord(devices)) return [];
   const rules: CssRule[] = [];
+  const known = new Set(contexts.map(context => context.id));
+  for (const id of Object.keys(devices).sort()) {
+    if (known.has(id)) continue;
+    // The same promise the style envelope keeps: a breakpoint the site no
+    // longer defines leaves a stored `false` that hides nothing, and saying so
+    // is the difference between a node that reappears and a mystery.
+    warnings.push({
+      path: pointer(pointer(basePath, "visibility"), "devices"),
+      code: "unknown-breakpoint",
+      severity: "warning",
+      message: `Breakpoint "${describeValue(id)}" is not defined for this site, so this visibility setting was not applied.`,
+    });
+  }
   // Per axis: a container breakpoint neither inherits from nor cancels a
   // viewport one, because the two ask about different boxes.
   for (const axis of ["viewport", "container"] as const) {
@@ -267,11 +302,19 @@ function visibilityRules(
     let hidingFrom: BreakpointContext | undefined;
     const flush = (lowerBound: number | undefined): void => {
       if (hidingFrom === undefined) return;
+      const atRule = boundedAtRule(hidingFrom, lowerBound);
       rules.push({
-        ...(hidingFrom.atRule === undefined
-          ? {}
-          : { atRule: boundedAtRule(hidingFrom, lowerBound) }),
-        selector,
+        ...(atRule === undefined ? {} : { atRule }),
+        // Hiding has to beat the node's own `display`, including one stored on
+        // a state: `.node:focus-visible { display: block }` outranks a plain
+        // `.node { display: none }` however late it comes, so a focused node
+        // would stay on screen at a width it is meant to be gone from. Doubling
+        // the node class raises this rule above every state selector without
+        // reaching for `!important`, which an author could not then override.
+        selector: selector.replace(
+          /(\.[A-Za-z0-9_-]+)$/,
+          (match: string) => `${match}${match}`
+        ),
         declarations: [{ property: "display", value: "none" }],
       });
       hidingFrom = undefined;
@@ -285,11 +328,7 @@ function visibilityRules(
       }
       if (declared === true && hidden) {
         hidden = false;
-        // The band ends where this breakpoint begins: one pixel above its own
-        // upper bound is the widest width it does not cover.
-        flush(
-          context.maxWidth === undefined ? undefined : context.maxWidth + 1
-        );
+        flush(context.maxWidth);
       }
     }
     // Still hidden at the narrowest breakpoint, so the rule runs all the way
@@ -308,14 +347,19 @@ function visibilityRules(
 function boundedAtRule(
   context: BreakpointContext,
   lowerBound: number | undefined
-): string {
-  if (lowerBound === undefined) return context.atRule ?? "";
+): string | undefined {
+  if (lowerBound === undefined) return context.atRule;
   const feature = context.axis === "container" ? "@container" : "@media";
   const upper =
     context.maxWidth === undefined
       ? ""
       : `(max-width: ${context.maxWidth}px) and `;
-  return `${feature} ${upper}(min-width: ${lowerBound}px)`;
+  // A strict lower bound rather than the next whole pixel. Breakpoint widths
+  // are arbitrary numbers, so adding one can erase the band entirely — bounds
+  // of 640.5 and 640 would ask for `(max-width: 640.5px) and (min-width: 641px)`
+  // — and even between whole numbers it leaves fractional widths uncovered,
+  // which is exactly where a device pixel ratio puts a viewport.
+  return `${feature} ${upper}(width > ${lowerBound}px)`;
 }
 
 /** One node and the pointer that resolves to it inside the document. */
@@ -335,10 +379,21 @@ interface PlacedNode {
 function documentNodes(doc: BlockDocument): PlacedNode[] {
   const placed: PlacedNode[] = [];
   if (!Array.isArray(doc.nodes)) return placed;
-  const visit = (nodes: readonly BlockNode[], base: string): void => {
-    nodes.forEach((node, index) => {
+  // A worklist rather than recursion. A stored document is not required to have
+  // been validated before it is compiled — a render pass may validate
+  // forgivingly, or not at all — and a deeply nested slot chain would then
+  // overflow the stack and fail the request with a RangeError instead of
+  // returning a stylesheet. Validation walks the same adversarial shape the
+  // same way.
+  const queue: { nodes: readonly BlockNode[]; base: string }[] = [
+    { nodes: doc.nodes, base: "/nodes" },
+  ];
+  for (let at = 0; at < queue.length; at += 1) {
+    const level = queue[at];
+    if (level === undefined) continue;
+    level.nodes.forEach((node, index) => {
       if (!isPlainRecord(node) || typeof node.id !== "string") return;
-      const path = pointer(base, index);
+      const path = pointer(level.base, index);
       placed.push({ node, path });
       if (!isPlainRecord(node.slots)) return;
       // Sorted, so two documents whose slots were written in a different order
@@ -346,11 +401,13 @@ function documentNodes(doc: BlockDocument): PlacedNode[] {
       for (const slot of Object.keys(node.slots).sort()) {
         const children = node.slots[slot];
         if (!Array.isArray(children)) continue;
-        visit(children, pointer(pointer(path, "slots"), slot));
+        queue.push({
+          nodes: children,
+          base: pointer(pointer(path, "slots"), slot),
+        });
       }
     });
-  };
-  visit(doc.nodes, "/nodes");
+  }
   return placed;
 }
 
@@ -370,8 +427,19 @@ export function compilePageCss(
   ctx: StyleCompileContext
 ): CompiledPageCss {
   const warnings: ValidationIssue[] = [];
+  // One allowance for the whole compile. Per style map it would reset, and a
+  // document with a long slot key and many bad values would answer with output
+  // quadratic in its own size.
+  const budget = newStyleIssueBudget();
   const contexts = breakpointContexts(ctx.breakpoints);
   const tokenPrefix = ctx.tokenPrefix ?? DEFAULT_TOKEN_PREFIX;
+  // A scope is a class the renderer also puts on the mounted root, so it is
+  // held to what a class may contain rather than trusted into a selector.
+  const scope =
+    ctx.scope !== undefined && /^[A-Za-z][A-Za-z0-9_-]*$/.test(ctx.scope)
+      ? `.${ctx.scope}`
+      : "";
+  const pageRoot = `.${PAGE_ROOT_CLASS}${scope}`;
 
   const nodes = documentNodes(doc);
   const classes = nodeClassNames(nodes.map(entry => entry.node.id));
@@ -384,11 +452,12 @@ export function compilePageCss(
   rules.push(
     ...envelopeRules(
       doc.settings?.styles,
-      `.${PAGE_ROOT_CLASS}`,
+      pageRoot,
       "/settings/styles",
       contexts,
       tokenPrefix,
-      warnings
+      warnings,
+      budget
     )
   );
 
@@ -403,11 +472,12 @@ export function compilePageCss(
     rules.push(
       ...envelopeRules(
         bases[type],
-        `.${PAGE_ROOT_CLASS} .${blockTypeClassName(type)}`,
+        `${pageRoot} .${blockTypeClassName(type)}`,
         pointer("/blockBases", type),
         contexts,
         tokenPrefix,
-        warnings
+        warnings,
+        budget
       )
     );
   }
@@ -417,7 +487,7 @@ export function compilePageCss(
   for (const { node, path } of nodes) {
     const className = classes.get(node.id);
     if (className === undefined) continue;
-    const selector = `.${PAGE_ROOT_CLASS} .${className}`;
+    const selector = `${pageRoot} .${className}`;
     rules.push(
       ...envelopeRules(
         node.styles,
@@ -425,10 +495,11 @@ export function compilePageCss(
         pointer(path, "styles"),
         contexts,
         tokenPrefix,
-        warnings
+        warnings,
+        budget
       )
     );
-    rules.push(...visibilityRules(node, selector, contexts));
+    rules.push(...visibilityRules(node, selector, contexts, path, warnings));
   }
 
   return { css: serializeRules(rules), warnings, classes };

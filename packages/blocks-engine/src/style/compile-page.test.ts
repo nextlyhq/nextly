@@ -7,6 +7,10 @@ import { FIXTURE_BREAKPOINTS } from "../validation.fixtures";
 import { compilePageCss } from "./compile-page";
 import type { StyleCompileContext } from "./compile-page";
 import { nodeClassName, nodeClassNames } from "./node-class";
+import {
+  MAX_STYLE_ISSUES,
+  MAX_STYLE_ISSUE_PATH_BYTES,
+} from "./validate-style-value";
 
 const CTX: StyleCompileContext = { breakpoints: FIXTURE_BREAKPOINTS };
 
@@ -301,7 +305,9 @@ describe("visibility", () => {
     expect(out).toBe(
       [
         `@media (max-width: 640px) {`,
-        `  .nx-pb-page .${nodeClassName("n1")} { display: none }`,
+        // The class is doubled so hiding outranks a `display` stored on a
+        // state; a plain rule loses to `:focus-visible` however late it comes.
+        `  .nx-pb-page .${nodeClassName("n1")}.${nodeClassName("n1")} { display: none }`,
         `}`,
       ].join("\n")
     );
@@ -318,12 +324,14 @@ describe("visibility", () => {
     // No lower bound: hiding inherits downward like every other value in a
     // desktop-first model.
     expect(out).toContain("@media (max-width: 1024px) {");
-    expect(out).not.toContain("min-width");
+    expect(out).not.toContain("width >");
   });
 
   it("stops hiding where a narrower breakpoint says to show it again", () => {
     // The wider rule still matches at the narrower width, so an explicit `true`
-    // below it does nothing unless the wider rule is bounded.
+    // below it does nothing unless the wider rule is bounded. A strict lower
+    // bound rather than the next whole pixel: breakpoint widths are arbitrary
+    // numbers, and fractional viewports are what a device pixel ratio produces.
     const out = css(
       doc([
         node("n1", undefined, {
@@ -333,10 +341,57 @@ describe("visibility", () => {
     );
     expect(out).toBe(
       [
-        `@media (max-width: 1024px) and (min-width: 641px) {`,
-        `  .nx-pb-page .${nodeClassName("n1")} { display: none }`,
+        `@media (max-width: 1024px) and (width > 640px) {`,
+        `  .nx-pb-page .${nodeClassName("n1")}.${nodeClassName("n1")} { display: none }`,
         `}`,
       ].join("\n")
+    );
+  });
+
+  it("bounds a base-breakpoint hide that a narrower breakpoint undoes", () => {
+    // The base context carries no at-rule, so hiding there emitted an
+    // unconditional rule an explicit `true` below could never undo.
+    const cls = nodeClassName("n1");
+    const out = css(
+      doc([
+        node("n1", undefined, {
+          visibility: { devices: { base: false, mobile: true } },
+        }),
+      ])
+    );
+    expect(out).toBe(
+      [
+        `@media (width > 640px) {`,
+        `  .nx-pb-page .${cls}.${cls} { display: none }`,
+        `}`,
+      ].join("\n")
+    );
+  });
+
+  it("outranks a display stored on a state", () => {
+    const cls = nodeClassName("n1");
+    const out = css(
+      doc([
+        node(
+          "n1",
+          { focus: { base: { display: "block" } } },
+          { visibility: { devices: { mobile: false } } }
+        ),
+      ])
+    );
+    expect(out).toContain(`.${cls}.${cls} { display: none }`);
+  });
+
+  it("says so when a visibility setting names a breakpoint the site dropped", () => {
+    const result = compilePageCss(
+      doc([
+        node("n1", undefined, { visibility: { devices: { retired: false } } }),
+      ]),
+      CTX
+    );
+    expect(result.css).toBe("");
+    expect(result.warnings.some(w => w.code === "unknown-breakpoint")).toBe(
+      true
     );
   });
 
@@ -351,7 +406,7 @@ describe("visibility", () => {
       ])
     );
     expect(out).toContain("@media (max-width: 1024px) {");
-    expect(out).not.toContain("min-width");
+    expect(out).not.toContain("width >");
   });
 });
 
@@ -625,6 +680,74 @@ describe("node classes", () => {
     // make class names depend on which other nodes happen to be present.
     const ids = Array.from({ length: 5000 }, (_, i) => `node-${i}`);
     expect(new Set(ids.map(nodeClassName)).size).toBe(5000);
+  });
+});
+
+describe("two documents in one DOM", () => {
+  it("keeps each document's rules to its own root when given a scope", () => {
+    // Node ids are unique within a document, not across documents, so a page
+    // and a region rendered together can hold the same id and therefore the
+    // same class. Without a scope their rules cross-apply.
+    const document = doc([node("n1", { base: { base: { color: "#fff" } } })], {
+      styles: { base: { base: { color: "#000" } } },
+    });
+    const scoped = css(document, { ...CTX, scope: "nx-doc-a" });
+    expect(scoped).toContain(".nx-pb-page.nx-doc-a {");
+    expect(scoped).toContain(`.nx-pb-page.nx-doc-a .${nodeClassName("n1")}`);
+    // A renderer showing one document at a time passes nothing and is unchanged.
+    expect(css(document)).toContain(".nx-pb-page {");
+  });
+
+  it("ignores a scope that is not a class name", () => {
+    // The scope lands in a selector, so it is held to what a class may contain
+    // rather than trusted.
+    const out = css(doc([node("n1", { base: { base: { color: "#fff" } } })]), {
+      ...CTX,
+      scope: "a, .other { color: red } .x",
+    });
+    expect(out).not.toContain("color: red");
+    expect(out).toContain(".nx-pb-page .");
+  });
+});
+
+describe("diagnostics are bounded across the whole compile", () => {
+  it("does not restart the allowance at every style map", () => {
+    // Every warning repeats the pointer it came from, so a long slot key plus
+    // many bad properties answers with output quadratic in the input. One
+    // allowance per style map bounds each map and nothing overall.
+    const slot = "s".repeat(2_000);
+    const styles: Record<string, unknown> = {};
+    for (let i = 0; i < 60; i += 1) styles[`madeUp${i}`] = "1px";
+    let deepest: BlockNode = node("leaf", { base: { base: styles } });
+    for (let i = 0; i < 40; i += 1) {
+      deepest = {
+        ...node(`n${i}`, { base: { base: styles } }),
+        slots: { [slot]: [deepest] },
+      } as BlockNode;
+    }
+    const result = compilePageCss(doc([deepest]), CTX);
+    const bytes = result.warnings.reduce((sum, w) => sum + w.path.length, 0);
+    expect(bytes).toBeLessThanOrEqual(MAX_STYLE_ISSUE_PATH_BYTES + 100_000);
+    expect(result.warnings.length).toBeLessThanOrEqual(MAX_STYLE_ISSUES + 2);
+  });
+});
+
+describe("a forest deeper than the stack", () => {
+  it("compiles rather than overflowing", () => {
+    // A stored document is not required to have been validated before it is
+    // compiled, so a deeply nested slot chain must return a stylesheet rather
+    // than fail the request with a RangeError.
+    let deepest: BlockNode = node("leaf", {
+      base: { base: { color: "#fff" } },
+    });
+    for (let i = 0; i < 20_000; i += 1) {
+      deepest = {
+        ...node(`n${i}`),
+        slots: { children: [deepest] },
+      } as BlockNode;
+    }
+    const result = compilePageCss(doc([deepest]), CTX);
+    expect(result.css).toContain("color: #fff");
   });
 });
 
