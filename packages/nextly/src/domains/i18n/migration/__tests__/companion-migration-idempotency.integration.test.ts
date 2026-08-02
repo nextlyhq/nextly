@@ -11,10 +11,13 @@
  * the property under test is what the database does with the statements, not what they look like.
  * The unit suite covers the text; only a server can say whether a replay collides.
  *
- * Replays are exercised by re-executing the UP statements directly. That is the honest model of the
- * recovery path: the file is applied statement by statement with no enclosing transaction, so a
- * failure part-way leaves the earlier statements committed and the file recorded as NOT applied —
- * and the operator's only move is to run `migrate` again, which replays every statement in it.
+ * A file whose statements partly landed is what makes replays reachable. The runner does wrap them
+ * in a transaction, so the tear is not a missing BEGIN: on MySQL `CREATE TABLE` commits implicitly
+ * and escapes that transaction, so a later statement failing rolls back only the rest and leaves
+ * the companion behind with the file recorded as NOT applied. The operator's only move is to run
+ * `migrate` again, which replays every statement in the file. Cases that need such a state
+ * construct it by pre-executing the file's own statements, since it cannot be produced organically
+ * on the dialects this suite runs.
  */
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
@@ -275,6 +278,40 @@ for (const entry of DIALECTS) {
           `VALUES ('p1', 'en', 'Hello')`
       );
       expect(await companionRows()).toHaveLength(1);
+    });
+
+    // 🔴 An ENABLE file replayed after it was interrupted between its CREATE and its seed.
+    //
+    // The companion is present and EMPTY while main still holds the column and its rows, and the
+    // whole file runs again. Everything the interrupted run owed has to happen on that second pass:
+    // the create is skipped, the content is copied, and only then is main's column dropped. This is
+    // the case the guard is answerable for beyond merely not colliding.
+    //
+    // Constructed by pre-executing the file's own CREATE. Boot refuses to leave an empty companion
+    // over content-bearing main, and the tear that does produce this state is MySQL's implicit DDL
+    // commit, which cannot be induced on the dialects here.
+    it("replays an interrupted enable migration over the companion it already created", async () => {
+      await createMain();
+      await writeMigrationFile();
+      const create = buildLocalizationUpStatements(spec(), {
+        emittedToFile: true,
+      }).find(statement => statement.startsWith("CREATE TABLE"));
+      if (create === undefined)
+        throw new Error("no companion create statement generated");
+      await adapter.executeQuery(create);
+      expect(await companionRows()).toHaveLength(0);
+
+      await expect(migrate()).resolves.toBe(1);
+
+      const rows = await companionRows();
+      expect(rows).toHaveLength(2);
+      expect(rows.map(r => r.body)).toEqual(["Hello", "World"]);
+      expect(rows.every(r => r._locale === "en")).toBe(true);
+      // The drops ran too. Skipping the create must not have cost the file the rest of its work,
+      // which is what would leave the column on main and the project half-migrated for good.
+      await expect(
+        adapter.executeQuery(`SELECT ${q("body")} FROM ${q(mainTable)}`)
+      ).rejects.toThrow();
     });
 
     // 🔴 What an ENABLE file does when the companion already holds default-locale rows — the state
