@@ -22,8 +22,11 @@
 "@nextlyhq/tsconfig": patch
 ---
 
-Reject a field named `createdAt` or `updatedAt` in a Field Group (component) the way the Schema
-Builder already rejects one in a collection. A component keeps its values in a table of its own
-that carries `created_at` and `updated_at`, so such a field is emitted into the same
-`CREATE TABLE` as the injected column and the database refuses the statement. The name is now
-refused where it is chosen, with a message saying why.
+Reject a field named `id`, `createdAt` or `updatedAt` in a Field Group (component), through both
+the visual builder and `defineFieldGroup`. A component keeps its values in a table of its own
+carrying those columns, so such a field is emitted into the same `CREATE TABLE` as the injected one
+and the database refuses the statement. The name is now refused where it is chosen, with a message
+saying which system column it collides with.
+
+Field groups that already declare such a field could never have had a working table, since creating
+it fails; they will now be reported at configuration time instead of during schema application.

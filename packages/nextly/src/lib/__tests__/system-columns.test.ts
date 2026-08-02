@@ -7,12 +7,19 @@
 import { getColumns } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 
+// The validators and generators below are imported so the projections can be checked against the
+// code that consumes them, not only against themselves: a declared set nobody reads would satisfy
+// every assertion about its own contents. `fieldNameSchema`, `uiSchemaFieldSchema` and
+// `validateFieldGroupConfig` are the three validators fed by a reservation projection, and the two
+// generators are what turn a declared shape into a physical table and a runtime column.
 import type { FieldConfig } from "../../collections/fields/types";
 import { fieldNameSchema } from "../../domains/dynamic-collections/services/dynamic-collection-validation-service";
 import { FieldGroupSchemaService } from "../../domains/field-groups/services/field-group-schema-service";
 import { getSystemColumnDescriptors } from "../../domains/schema/services/field-column-descriptor";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import { SYSTEM_SCHEMA_VERSION } from "../../domains/schema/services/schema-hash";
+import { validateFieldGroupConfig } from "../../field-groups/config/validate-field-group";
+import type { FieldGroupConfig } from "../../field-groups/config/types";
 import { uiSchemaFieldSchema } from "../../schemas/_zod/ui-schema";
 
 import {
@@ -141,6 +148,13 @@ describe("reservation projections", () => {
     );
   });
 
+  it("refuses both spellings of the universal columns in a code-first field group", () => {
+    // A field group's table carries exactly these three, so these are the names that collide.
+    expect(sorted(reservedSystemFieldNames("fieldGroupConfig"))).toEqual(
+      sorted(["id", "created_at", "createdAt", "updated_at", "updatedAt"])
+    );
+  });
+
   it("refuses both spellings of the universal columns in the UI field-payload schema", () => {
     // The narrowest surface, because it also validates component fields and a component's table
     // carries only these three. It carries them under the same physical names, though, so the
@@ -210,6 +224,29 @@ describe("component tables, which are declared elsewhere on purpose", () => {
     }
   });
 
+  it("does not collide with a structural column that only resembles a field name", () => {
+    // The parent-linkage columns carry a leading underscore, which a field name cannot: `parentId`
+    // becomes `parent_id` and sits beside `_parent_id`. Counted inside the CREATE TABLE body only,
+    // because those columns appear again in the parent index and would look like duplicates.
+    for (const name of [
+      "parentId",
+      "parentTable",
+      "parentField",
+      "order",
+      "type",
+    ]) {
+      const body = new FieldGroupSchemaService("postgresql")
+        .generateMigrationSQL("comp_probe", [
+          { name, type: "text" } as FieldConfig,
+        ])
+        .split("--> statement-breakpoint")[0];
+      const columns = [...body.matchAll(/^\s*"([a-z_]+)"/gm)].map(m => m[1]);
+      const duplicated = columns.filter((c, i) => columns.indexOf(c) !== i);
+
+      expect({ [name]: duplicated }).toEqual({ [name]: [] });
+    }
+  });
+
   it("would emit a duplicate column for a field named like a shared one", () => {
     // The reason the UI field-payload schema refuses both spellings. `createdAt` snake-cases onto
     // the injected `created_at` and both are emitted, which the database rejects — so the payload
@@ -256,6 +293,53 @@ describe("the validators actually refuse what the projection lists", () => {
     expect(
       uiSchemaFieldSchema.safeParse({ name: "headline", type: "text" }).success
     ).toBe(true);
+  });
+
+  it("refuses every projected name in a code-first field group", () => {
+    // The path a TypeScript author uses. The visual path and this one build the same table, so a
+    // name refused in one and accepted in the other leaves the supported path producing DDL the
+    // database rejects.
+    for (const name of reservedSystemFieldNames("fieldGroupConfig")) {
+      const result = validateFieldGroupConfig({
+        slug: "probe",
+        fields: [{ name, type: "text" }],
+      } as unknown as FieldGroupConfig);
+      expect({ [name]: result.valid }).toEqual({ [name]: false });
+    }
+  });
+
+  it("accepts an ordinary field name in a code-first field group", () => {
+    // The mirror, so the case above cannot be satisfied by a validator that refuses everything.
+    const result = validateFieldGroupConfig({
+      slug: "probe",
+      fields: [{ name: "headline", type: "text" }],
+    } as unknown as FieldGroupConfig);
+
+    expect(result.valid).toBe(true);
+  });
+
+  it("does not reserve a name that only resembles a structural column", () => {
+    // The parent-linkage columns carry a leading underscore, which a field name cannot: `parentId`
+    // becomes `parent_id` and sits beside `_parent_id`. Asserted on THIS rule rather than on
+    // validity overall, because `order` and `type` are refused anyway as SQL keywords — a
+    // pre-existing rule this change must neither rely on nor disturb.
+    for (const name of [
+      "parentId",
+      "parentTable",
+      "parentField",
+      "order",
+      "type",
+    ]) {
+      const result = validateFieldGroupConfig({
+        slug: "probe",
+        fields: [{ name, type: "text" }],
+      } as unknown as FieldGroupConfig);
+      const reserved = (result.errors ?? []).filter(
+        e => e.code === "FIELD_NAME_RESERVED"
+      );
+
+      expect({ [name]: reserved }).toEqual({ [name]: [] });
+    }
   });
 
   it("refuses the camelCase spelling of a timestamp column", () => {

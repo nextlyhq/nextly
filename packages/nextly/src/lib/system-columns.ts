@@ -54,6 +54,7 @@ export type ReservationSurface =
   | "builder"
   | "collectionConfig"
   | "singleConfig"
+  | "fieldGroupConfig"
   | "uiSchema";
 
 /**
@@ -73,6 +74,7 @@ const RESERVATION_SPELLINGS: Readonly<
   builder: "both",
   collectionConfig: "both",
   singleConfig: "both",
+  fieldGroupConfig: "both",
   uiSchema: "both",
 };
 
@@ -194,7 +196,7 @@ export const SYSTEM_COLUMNS: readonly SystemColumnDeclaration[] = [
     writableByClient: false,
     publishedUnderCamelName: false,
     strippedFromResponses: false,
-    reservedIn: ["builder", "uiSchema"],
+    reservedIn: ["builder", "fieldGroupConfig", "uiSchema"],
     shape: {
       postgresql: { kind: "text", nullable: false, primaryKey: true },
       mysql: {
@@ -249,7 +251,7 @@ export const SYSTEM_COLUMNS: readonly SystemColumnDeclaration[] = [
     writableByClient: false,
     publishedUnderCamelName: true,
     strippedFromResponses: false,
-    reservedIn: ["builder", "uiSchema"],
+    reservedIn: ["builder", "fieldGroupConfig", "uiSchema"],
     shape: {
       postgresql: {
         kind: "timestamp",
@@ -268,7 +270,7 @@ export const SYSTEM_COLUMNS: readonly SystemColumnDeclaration[] = [
     writableByClient: false,
     publishedUnderCamelName: true,
     strippedFromResponses: false,
-    reservedIn: ["builder", "uiSchema"],
+    reservedIn: ["builder", "fieldGroupConfig", "uiSchema"],
     shape: {
       postgresql: {
         kind: "timestamp",

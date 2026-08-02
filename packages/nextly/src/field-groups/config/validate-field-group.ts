@@ -28,6 +28,7 @@
 import { RESERVED_SLUGS } from "../../collections/config/validate-config";
 import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
 import { NextlyError } from "../../errors";
+import { reservedSystemFieldNames } from "../../lib/system-columns";
 import {
   type BaseValidationError,
   DEFAULT_SQL_KEYWORDS_SET,
@@ -89,6 +90,9 @@ export type FieldGroupValidationErrorCode =
   | "FIELD_NAME_INVALID_FORMAT"
   | "FIELD_NAME_SQL_KEYWORD"
   | "FIELD_NAME_DUPLICATE"
+  // A name that snake-cases onto a column this group's table already carries. The same code the
+  // collection and single validators report, because it is the same mistake with the same fix.
+  | "FIELD_NAME_RESERVED"
   | "FIELD_TYPE_REQUIRED"
   | "FIELD_TYPE_INVALID"
   // A declared default the field's own rules reject.
@@ -311,12 +315,37 @@ function validateFields(
     return;
   }
 
+  // Block the injected system columns at the top level, before per-field validation. A field group
+  // keeps its values in a table of its own carrying these three, and a name that snake-cases onto
+  // one is emitted alongside the injected column: the CREATE TABLE then declares it twice and the
+  // database refuses the statement, so the group could never have been created. Refusing the name
+  // reports that where it is chosen rather than as a migration failure. Nested fields live inside
+  // JSON and are exempt, as they are for collections.
+  fields.forEach((field, index) => {
+    if (!field || typeof field !== "object") return;
+    const name = (field as Record<string, unknown>).name;
+    if (
+      typeof name === "string" &&
+      FIELD_GROUP_RESERVED_FIELD_NAMES.has(name)
+    ) {
+      errors.push({
+        path: `${path}[${index}].name`,
+        message: `Field name '${name}' is reserved for a system column`,
+        code: "FIELD_NAME_RESERVED",
+      });
+    }
+  });
+
   // An empty fields list is valid for both code-first defines and the
   // modal-driven create flow. A field group's table still gets its id and the
   // system columns that bind a row to its parent entry, so a fieldless group is
   // a usable table and an author can scaffold first and add fields later.
   validateFieldsArray(fields, path, errors);
 }
+
+const FIELD_GROUP_RESERVED_FIELD_NAMES: ReadonlySet<string> = new Set(
+  reservedSystemFieldNames("fieldGroupConfig")
+);
 
 // ============================================================
 // Main Validation Function
