@@ -364,15 +364,47 @@ export async function applyFieldWriteAccess(opts: {
  * Keys are field paths built from stable row identity (`id` when a row has one,
  * else its index), so a memo survives a hook reordering rows a row still owns.
  */
-export type ReadAccessMemo = Map<string, boolean>;
+export interface ReadAccessMemo {
+  /** The `access.read` verdict recorded for each field path. */
+  verdicts: Map<string, boolean>;
+  /**
+   * A stable synthetic id for each container row OBJECT that has no `id` of its
+   * own, so a verdict follows the row across a reorder while a REPLACEMENT row (a
+   * different object) misses the memo and is judged fresh. Keying such a row by
+   * its array index instead would hand a replacement the previous occupant's
+   * verdict. Row objects survive between the two passes because the nested walk
+   * decodes container values to arrays before hooks run, so the same objects are
+   * re-visited (a replacement is a genuinely new object).
+   */
+  rowIds: WeakMap<Record<string, unknown>, string>;
+  nextRowId: { value: number };
+}
 
-/** The stable key segment for a container row: its `id` when it has one (so it
- *  survives a reorder), otherwise its position. */
-function rowKeySegment(row: Record<string, unknown>, index: number): string {
+/** A fresh, empty read-access memo. */
+export function createReadAccessMemo(): ReadAccessMemo {
+  return {
+    verdicts: new Map(),
+    rowIds: new WeakMap(),
+    nextRowId: { value: 0 },
+  };
+}
+
+/** The stable key segment for a container row: its own `id` when it has one (so
+ *  it survives serialization), otherwise a synthetic id assigned by object
+ *  identity — so a reorder keeps the verdict and a replacement row misses it. */
+function rowKeySegment(
+  row: Record<string, unknown>,
+  memo: ReadAccessMemo
+): string {
   const id = row.id;
-  return typeof id === "string" || typeof id === "number"
-    ? `#${id}`
-    : `@${index}`;
+  if (typeof id === "string" || typeof id === "number") return `#${id}`;
+  let synthetic = memo.rowIds.get(row);
+  if (synthetic === undefined) {
+    synthetic = `~${memo.nextRowId.value}`;
+    memo.nextRowId.value += 1;
+    memo.rowIds.set(row, synthetic);
+  }
+  return synthetic;
 }
 
 /** Recursive worker for read access — same snapshot + recurse contract. Each
@@ -398,14 +430,13 @@ async function applyReadAccessRec(
     if (fieldFns.fields) {
       const container = openNestedContainer(entry[name]);
       if (container) {
-        for (let index = 0; index < container.rows.length; index++) {
-          const row = container.rows[index];
+        for (const row of container.rows) {
           await applyReadAccessRec(
             row,
             fieldFns.fields,
             ctx,
             memo,
-            `${path}.${name}[${rowKeySegment(row, index)}]`
+            `${path}.${name}[${rowKeySegment(row, memo)}]`
           );
         }
         entry[name] = container.serialize();
@@ -416,7 +447,7 @@ async function applyReadAccessRec(
     // Reuse a verdict already recorded for this exact field path; only judge it
     // (running the rule, possibly querying) when it is new to this row.
     const key = `${path}.${name}`;
-    let allowed = memo.get(key);
+    let allowed = memo.verdicts.get(key);
     if (allowed === undefined) {
       try {
         allowed = await fn({
@@ -428,7 +459,7 @@ async function applyReadAccessRec(
         // Fail-secure: an access rule that throws denies the field.
         allowed = false;
       }
-      memo.set(key, allowed);
+      memo.verdicts.set(key, allowed);
     }
     if (!allowed) denied.push(name);
   }
@@ -459,7 +490,7 @@ export async function applyFieldReadAccess(
   if (opts.overrideAccess) return undefined;
   const fns = getFieldFunctions(opts.kind, opts.slug);
   if (!fns) return undefined;
-  const verdicts: ReadAccessMemo = memo ?? new Map();
+  const used = memo ?? createReadAccessMemo();
   await applyReadAccessRec(
     opts.entry,
     fns,
@@ -467,10 +498,10 @@ export async function applyFieldReadAccess(
       user: opts.user,
       id: typeof opts.entry.id === "string" ? opts.entry.id : undefined,
     },
-    verdicts,
+    used,
     ""
   );
-  return verdicts;
+  return used;
 }
 
 /** Recursive worker for hooks. Transforms values in registration order. */

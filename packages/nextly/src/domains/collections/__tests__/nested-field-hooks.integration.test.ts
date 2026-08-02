@@ -87,14 +87,23 @@ async function boot(): Promise<TestNextly> {
                   ?.classification === "private",
             },
           }),
-          // A repeater whose `code` is denied. A parent hook can append a row
-          // here after the child's first access pass; the row it introduces has
-          // no recorded verdict, so the pass after the hooks must judge it fresh.
+          // A repeater whose `code` is visible only for a public division. A
+          // parent hook can append, or replace, a row here after the child's
+          // first access pass; the row it introduces has no recorded verdict (it
+          // is a new object), so the pass after the hooks must judge it fresh
+          // rather than inherit the previous occupant's.
           repeater({
             name: "divisions",
             fields: [
               text({ name: "label" }),
-              text({ name: "code", access: { read: () => false } }),
+              text({ name: "tier" }),
+              text({
+                name: "code",
+                access: {
+                  read: ({ data }) =>
+                    (data as { tier?: unknown } | undefined)?.tier === "public",
+                },
+              }),
             ],
           }),
         ],
@@ -208,6 +217,31 @@ async function boot(): Promise<TestNextly> {
                       : undefined;
                   if (Array.isArray(divisions)) {
                     divisions.push({ label: "added", code: "SNEAKED" });
+                  }
+                  return value;
+                },
+              ],
+            },
+          }),
+          // REPLACES the org's first division with a private one carrying `code`
+          // after the child's first pass. The replacement is a new object, so it
+          // must not inherit the public original's "allowed" verdict by index.
+          text({
+            name: "replacer",
+            hooks: {
+              afterRead: [
+                ({ value, data }) => {
+                  const org = (data as { organization?: unknown }).organization;
+                  const divisions =
+                    org && typeof org === "object"
+                      ? (org as { divisions?: unknown }).divisions
+                      : undefined;
+                  if (Array.isArray(divisions) && divisions.length > 0) {
+                    divisions[0] = {
+                      label: "swapped",
+                      tier: "private",
+                      code: "SNEAKED",
+                    };
                   }
                   return value;
                 },
@@ -659,6 +693,48 @@ describe("a target's field hooks apply to rows reached through a relationship", 
     for (const division of divisions) {
       expect(division.code).toBeUndefined();
     }
+  });
+
+  it("re-judges a repeater row a parent hook replaces with a stricter one", async () => {
+    // The original division is public, so its `code` is allowed on the first
+    // pass. A parent hook then REPLACES it with a private division carrying
+    // `code`. Keying the verdict by array index would hand the replacement the
+    // original's "allowed" result and leak it; keyed by object identity, the
+    // replacement (a new object) is judged fresh and its `code` is stripped.
+    const t = await boot();
+    await t.nextly.create({
+      collection: ORGS,
+      data: {
+        name: "acme",
+        divisions: [{ label: "public-div", tier: "public", code: "OK" }],
+      },
+    });
+    const orgId = await onlyId(t, ORGS);
+    await t.nextly.create({
+      collection: AUTHORS,
+      data: { name: "ada", organization: orgId, replacer: "on" },
+    });
+    const authorId = await onlyId(t, AUTHORS);
+    await t.nextly.create({
+      collection: POSTS,
+      data: { title: "p", author: authorId },
+    });
+    const postId = await onlyId(t, POSTS);
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    const author = expanded.data!.author as Record<string, unknown>;
+    const org = author.organization as Record<string, unknown> | undefined;
+    const divisions = (org?.divisions ?? []) as Record<string, unknown>[];
+    // The replacement landed...
+    expect(divisions[0]?.label).toBe("swapped");
+    // ...and its `code`, denied for a private division, did not ride in on the
+    // public original's verdict.
+    expect(divisions[0]?.code).toBeUndefined();
   });
 
   it("masks a dropped relationship before a source hook can copy out of it", async () => {
