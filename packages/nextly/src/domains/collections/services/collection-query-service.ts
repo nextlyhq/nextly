@@ -1572,11 +1572,10 @@ export class CollectionQueryService extends BaseService {
         );
       }
       // Once, after the whole listing: the walk already applied field access to
-      // each related row before its parent's hooks; this re-applies it (reusing
-      // each row's verdict memo, so unchanged content is not re-judged or
-      // re-queried while content a hook introduced is judged fresh) to strip
-      // anything a parent hook reintroduced, then rebuilds labels from the
-      // survivors.
+      // each related row before its parent's hooks; this re-applies it (restoring
+      // the removed evidence and re-judging the current content) to strip a denied
+      // field a parent hook reintroduced, mutated, or added, then rebuilds labels
+      // from the survivors.
       await this.relationshipService.finalizeRelatedRows(
         nestedHookState,
         nestedAccess

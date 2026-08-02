@@ -192,6 +192,7 @@ async function boot(): Promise<TestNextly> {
             hooks: {
               afterRead: [
                 ({ value, data }) => {
+                  if (value !== "on") return value;
                   const org = (data as { organization?: unknown }).organization;
                   if (org && typeof org === "object") {
                     (org as Record<string, unknown>).classification =
@@ -210,6 +211,7 @@ async function boot(): Promise<TestNextly> {
             hooks: {
               afterRead: [
                 ({ value, data }) => {
+                  if (value !== "on") return value;
                   const org = (data as { organization?: unknown }).organization;
                   const divisions =
                     org && typeof org === "object"
@@ -231,6 +233,7 @@ async function boot(): Promise<TestNextly> {
             hooks: {
               afterRead: [
                 ({ value, data }) => {
+                  if (value !== "on") return value;
                   const org = (data as { organization?: unknown }).organization;
                   const divisions =
                     org && typeof org === "object"
@@ -242,6 +245,34 @@ async function boot(): Promise<TestNextly> {
                       tier: "private",
                       code: "SNEAKED",
                     };
+                  }
+                  return value;
+                },
+              ],
+            },
+          }),
+          // MUTATES the org's first division IN PLACE (same object): flips it to
+          // private and writes a fresh `code`. Object identity is unchanged, so a
+          // cached verdict would let the new `code` through — only re-judging the
+          // current content strips it.
+          text({
+            name: "mutator",
+            hooks: {
+              afterRead: [
+                ({ value, data }) => {
+                  if (value !== "on") return value;
+                  const org = (data as { organization?: unknown }).organization;
+                  const divisions =
+                    org && typeof org === "object"
+                      ? (org as { divisions?: unknown }).divisions
+                      : undefined;
+                  const first =
+                    Array.isArray(divisions) && divisions[0]
+                      ? (divisions[0] as Record<string, unknown>)
+                      : undefined;
+                  if (first) {
+                    first.tier = "private";
+                    first.code = "MUTATED";
                   }
                   return value;
                 },
@@ -734,6 +765,46 @@ describe("a target's field hooks apply to rows reached through a relationship", 
     expect(divisions[0]?.label).toBe("swapped");
     // ...and its `code`, denied for a private division, did not ride in on the
     // public original's verdict.
+    expect(divisions[0]?.code).toBeUndefined();
+  });
+
+  it("re-judges a row a parent hook mutates in place", async () => {
+    // The division is public, so its `code` is allowed on the first pass. A hook
+    // then flips the SAME object to private and rewrites `code`. Object identity
+    // is unchanged, so reusing the earlier "allowed" verdict would leak the new
+    // code; only re-judging the current content denies it.
+    const t = await boot();
+    await t.nextly.create({
+      collection: ORGS,
+      data: {
+        name: "acme",
+        divisions: [{ label: "d", tier: "public", code: "OK" }],
+      },
+    });
+    const orgId = await onlyId(t, ORGS);
+    await t.nextly.create({
+      collection: AUTHORS,
+      data: { name: "ada", organization: orgId, mutator: "on" },
+    });
+    const authorId = await onlyId(t, AUTHORS);
+    await t.nextly.create({
+      collection: POSTS,
+      data: { title: "p", author: authorId },
+    });
+    const postId = await onlyId(t, POSTS);
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    const author = expanded.data!.author as Record<string, unknown>;
+    const org = author.organization as Record<string, unknown> | undefined;
+    const divisions = (org?.divisions ?? []) as Record<string, unknown>[];
+    // The mutation landed (now private)...
+    expect(divisions[0]?.tier).toBe("private");
+    // ...and the `code` the hook wrote is denied for a private division.
     expect(divisions[0]?.code).toBeUndefined();
   });
 

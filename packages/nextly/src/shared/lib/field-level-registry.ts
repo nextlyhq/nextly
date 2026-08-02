@@ -347,76 +347,52 @@ export async function applyFieldWriteAccess(opts: {
 }
 
 /**
- * A record of each `access.read` verdict from one pass, keyed by field path, so
- * a second pass over the same row reuses them instead of re-running the rules.
+ * The values each read-access pass removed from a row, keyed by the row OBJECT,
+ * so a later pass over the same row can restore them as EVIDENCE before it
+ * re-judges the row.
  *
  * The nested-read pipeline applies access to a related row BEFORE its parent's
- * hooks (so a hook cannot read a denied child field to copy it), then again
- * AFTER all hooks (to strip a denied field a hook wrote back). Re-running the
- * rules on that second pass would be wrong: a rule reads the row as `data`, so
- * judging it again against the already-stripped row could flip a verdict (a
- * field kept only while a now-denied sibling was present), and an async rule
- * would issue its queries twice. Reusing the memo keeps EXISTING content's
- * verdicts stable and query-free, while content a hook INTRODUCED between the
- * passes (a new field, or a new/reordered container row) misses the memo and is
- * judged fresh — which is exactly what must happen for it.
+ * hooks (so a hook cannot read a denied child field to copy it), then AGAIN
+ * after all hooks (a hook may have written a denied field back, mutated a row in
+ * place, or added, replaced, or reordered rows). The second pass MUST re-run the
+ * rules against the post-hook content — a cached verdict cannot be trusted once a
+ * hook may have changed what the rule reads. Re-running alone would flip a
+ * verdict, though: the first pass already removed the denied siblings a rule
+ * reads as evidence, so a field kept only while such a sibling was present would
+ * be wrongly dropped. Restoring each row's removed values first (unless a hook
+ * has since set them) gives the rules the same evidence the first pass — and a
+ * direct read — judged against, while the current values of everything a hook
+ * touched are seen and re-judged.
  *
- * Keys are field paths built from stable row identity (`id` when a row has one,
- * else its index), so a memo survives a hook reordering rows a row still owns.
+ * Keyed by the row object, never by an `id`: two rows may carry the same `id`,
+ * and a replacement row is a genuinely new object that must be judged on its own
+ * content. Row objects survive between the passes because the nested walk decodes
+ * container values to arrays before hooks run.
  */
-export interface ReadAccessMemo {
-  /** The `access.read` verdict recorded for each field path. */
-  verdicts: Map<string, boolean>;
-  /**
-   * A stable synthetic id for each container row OBJECT that has no `id` of its
-   * own, so a verdict follows the row across a reorder while a REPLACEMENT row (a
-   * different object) misses the memo and is judged fresh. Keying such a row by
-   * its array index instead would hand a replacement the previous occupant's
-   * verdict. Row objects survive between the two passes because the nested walk
-   * decodes container values to arrays before hooks run, so the same objects are
-   * re-visited (a replacement is a genuinely new object).
-   */
-  rowIds: WeakMap<Record<string, unknown>, string>;
-  nextRowId: { value: number };
-}
+export type ReadAccessRedactions = WeakMap<
+  Record<string, unknown>,
+  Record<string, unknown>
+>;
 
-/** A fresh, empty read-access memo. */
-export function createReadAccessMemo(): ReadAccessMemo {
-  return {
-    verdicts: new Map(),
-    rowIds: new WeakMap(),
-    nextRowId: { value: 0 },
-  };
-}
-
-/** The stable key segment for a container row: its own `id` when it has one (so
- *  it survives serialization), otherwise a synthetic id assigned by object
- *  identity — so a reorder keeps the verdict and a replacement row misses it. */
-function rowKeySegment(
-  row: Record<string, unknown>,
-  memo: ReadAccessMemo
-): string {
-  const id = row.id;
-  if (typeof id === "string" || typeof id === "number") return `#${id}`;
-  let synthetic = memo.rowIds.get(row);
-  if (synthetic === undefined) {
-    synthetic = `~${memo.nextRowId.value}`;
-    memo.nextRowId.value += 1;
-    memo.rowIds.set(row, synthetic);
-  }
-  return synthetic;
-}
-
-/** Recursive worker for read access — same snapshot + recurse contract. Each
- *  `access.read` verdict is memoized under its field path, so a later pass over
- *  the same row (after hooks) reuses it and only judges content introduced since. */
+/** Recursive worker for read access — same snapshot + recurse contract. When
+ *  `redactions` carries values a prior pass removed from this row, they are
+ *  restored as evidence (unless a hook has since set them) before the rules run,
+ *  then re-removed; the rules always run against the current content. */
 async function applyReadAccessRec(
   entry: Record<string, unknown>,
   fns: Record<string, FieldFunctions>,
   ctx: { user?: Record<string, unknown>; id?: string },
-  memo: ReadAccessMemo,
-  path: string
+  redactions: ReadAccessRedactions
 ): Promise<void> {
+  // Restore what a prior pass removed from THIS row, so a rule reading a denied
+  // sibling as evidence sees it again — matching a direct read's single pass.
+  // Only where a hook has not since set the key, so a hook's own value stands.
+  const priorlyRemoved = redactions.get(entry);
+  if (priorlyRemoved) {
+    for (const [name, value] of Object.entries(priorlyRemoved)) {
+      if (!(name in entry)) entry[name] = value;
+    }
+  }
   // Taken BEFORE the recursion below replaces nested containers with their
   // redacted serialization: a parent-level rule reading a protected nested
   // value would otherwise find it already removed, and the outcome would turn
@@ -431,51 +407,50 @@ async function applyReadAccessRec(
       const container = openNestedContainer(entry[name]);
       if (container) {
         for (const row of container.rows) {
-          await applyReadAccessRec(
-            row,
-            fieldFns.fields,
-            ctx,
-            memo,
-            `${path}.${name}[${rowKeySegment(row, memo)}]`
-          );
+          await applyReadAccessRec(row, fieldFns.fields, ctx, redactions);
         }
         entry[name] = container.serialize();
       }
     }
     const fn = fieldFns.access?.read;
     if (!fn) continue;
-    // Reuse a verdict already recorded for this exact field path; only judge it
-    // (running the rule, possibly querying) when it is new to this row.
-    const key = `${path}.${name}`;
-    let allowed = memo.verdicts.get(key);
-    if (allowed === undefined) {
-      try {
-        allowed = await fn({
-          req: { user: ctx.user },
-          id: ctx.id,
-          data: snapshot,
-        });
-      } catch {
-        // Fail-secure: an access rule that throws denies the field.
-        allowed = false;
-      }
-      memo.verdicts.set(key, allowed);
+    let allowed = false;
+    try {
+      allowed = await fn({
+        req: { user: ctx.user },
+        id: ctx.id,
+        data: snapshot,
+      });
+    } catch {
+      // Fail-secure: an access rule that throws denies the field.
+      allowed = false;
     }
     if (!allowed) denied.push(name);
   }
-  for (const name of denied) delete entry[name];
+  if (denied.length > 0) {
+    // Record the removed values (merged with any this row already carried) so a
+    // later pass can restore them as evidence and re-judge.
+    const removed: Record<string, unknown> = priorlyRemoved
+      ? { ...priorlyRemoved }
+      : {};
+    for (const name of denied) {
+      removed[name] = entry[name];
+      delete entry[name];
+    }
+    redactions.set(entry, removed);
+  }
 }
 
 /**
  * Enforce field-level read access on a serialized entry: fields whose
  * `access.read` denies are removed from the response, at every depth.
  *
- * Returns the {@link ReadAccessMemo} of the verdicts it made (undefined for a
- * trusted/override read or an unregistered entity). Passing that memo back on a
- * later call over the same row — after hooks may have mutated it — re-strips a
- * denied field a hook reintroduced while reusing the recorded verdicts, so
- * unchanged content is neither re-judged (no flipped verdict) nor re-queried,
- * and only content introduced since is judged anew.
+ * Pass a shared {@link ReadAccessRedactions} to run access more than once over
+ * rows a hook may have mutated in between (the nested-read pipeline's
+ * before-hooks and after-hooks passes): each pass restores the values a prior
+ * pass removed from a row as evidence, then re-judges the row against its current
+ * content — so a denied field a hook reintroduced or a row it changed is caught,
+ * while a field kept only because of a now-removed sibling keeps its verdict.
  */
 export async function applyFieldReadAccess(
   opts: {
@@ -485,12 +460,11 @@ export async function applyFieldReadAccess(
     user?: Record<string, unknown>;
     overrideAccess?: boolean;
   },
-  memo?: ReadAccessMemo
-): Promise<ReadAccessMemo | undefined> {
-  if (opts.overrideAccess) return undefined;
+  redactions?: ReadAccessRedactions
+): Promise<void> {
+  if (opts.overrideAccess) return;
   const fns = getFieldFunctions(opts.kind, opts.slug);
-  if (!fns) return undefined;
-  const used = memo ?? createReadAccessMemo();
+  if (!fns) return;
   await applyReadAccessRec(
     opts.entry,
     fns,
@@ -498,10 +472,8 @@ export async function applyFieldReadAccess(
       user: opts.user,
       id: typeof opts.entry.id === "string" ? opts.entry.id : undefined,
     },
-    used,
-    ""
+    redactions ?? new WeakMap()
   );
-  return used;
 }
 
 /** Recursive worker for hooks. Transforms values in registration order. */
