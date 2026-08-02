@@ -83,3 +83,21 @@ describe("a union that writes nothing still explains itself", () => {
     expect(out.warnings.length).toBeGreaterThan(0);
   });
 });
+
+describe("compiling one map directly is bounded too", () => {
+  it("makes its own issue budget when a caller supplies none", () => {
+    // The two-argument form is the natural way to reach this, and without a
+    // budget an untrusted map produced a warning for every invalid property,
+    // each repeating `basePath` — the amplification the allowance exists to
+    // stop, reachable simply by not passing one.
+    const values = Object.fromEntries(
+      Array.from({ length: 5_000 }, (_, index) => [
+        `notAProperty${index}`,
+        "1px",
+      ])
+    );
+    const out = compileStyleValues(values, "/nodes/0/styles/base/base");
+    expect(out.declarations).toEqual([]);
+    expect(out.warnings.length).toBeLessThan(1_000);
+  });
+});

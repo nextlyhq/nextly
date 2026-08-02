@@ -1165,3 +1165,55 @@ describe("settings the compiler cannot use are dropped, not obeyed", () => {
     );
   });
 });
+
+describe("documents the compiler cannot style unambiguously", () => {
+  it("refuses styles for two nodes sharing an id, and says why", () => {
+    // A class is derived from the id, and the returned map is keyed by it, so
+    // there is no second class to give the second node. Written, both envelopes
+    // land on the one selector and the later silently restyles BOTH elements —
+    // one of which never asked for it.
+    const out = compilePageCss(
+      doc([
+        node("dup", { base: { base: { color: "#f00" } } }),
+        node("dup", { base: { base: { color: "#00f" } } }),
+        node("fine", { base: { base: { color: "#0f0" } } }),
+      ]),
+      CTX
+    );
+    expect(out.css).not.toContain("#f00");
+    expect(out.css).not.toContain("#00f");
+    // A node that is not part of the ambiguity is unaffected.
+    expect(out.css).toContain("#0f0");
+    const duplicates = out.warnings.filter(
+      issue => issue.code === "duplicate-node-id"
+    );
+    expect(duplicates).toHaveLength(1);
+  });
+
+  it("resolves one breakpoint id to one definition across both axes", () => {
+    // Read per axis, a duplicate becomes two contexts, and one stored value
+    // keyed to it is emitted under both queries — responding to viewport width
+    // AND container width at once.
+    const out = compilePageCss(
+      doc([node("n1", { base: { dup: { color: "#0f0" } } })]),
+      {
+        breakpoints: {
+          viewport: [{ id: "base" }, { id: "dup", maxWidth: 900 }],
+          container: [{ id: "dup", maxWidth: 400 }],
+        },
+      } as unknown as StyleCompileContext
+    );
+    expect(out.css).not.toContain("@container");
+    expect([...out.css.matchAll(/#0f0/g)]).toHaveLength(1);
+  });
+
+  it("says so when a stored style envelope is not an object", () => {
+    const out = compilePageCss(
+      doc([node("n1", [] as unknown as Record<string, unknown>)]),
+      CTX
+    );
+    expect(out.warnings.map(issue => issue.code)).toContain(
+      "invalid-style-values"
+    );
+  });
+});

@@ -29,7 +29,11 @@ import {
   isCssWideKeyword,
   trimCssWhitespace,
 } from "./css-value";
-import { budgetSpent, validateStyleValues } from "./validate-style-value";
+import {
+  budgetSpent,
+  newStyleIssueBudget,
+  validateStyleValues,
+} from "./validate-style-value";
 import type { StyleIssueBudget } from "./validate-style-value";
 import { newWarningAllowance, pushBoundedWarning } from "./warning-allowance";
 import type { WarningAllowance } from "./warning-allowance";
@@ -327,7 +331,7 @@ export function compileStyleValues(
   values: Readonly<Record<string, unknown>>,
   basePath: string,
   tokenPrefix?: string,
-  budget?: StyleIssueBudget,
+  suppliedBudget?: StyleIssueBudget,
   suppliedAllowance?: WarningAllowance
 ): CompiledDeclarations {
   // Strict, because this decides what reaches a page: a property this engine
@@ -344,11 +348,16 @@ export function compileStyleValues(
   // unchecked, which is how a value like `red; } .owned { display: block` would
   // reach a page as a rule of its own. So an exhausted budget refuses the whole
   // map. Nothing here was checked, so nothing here is written.
-  const spentBefore = budget !== undefined && budgetSpent(budget);
+  // A direct caller gets one by default, so the diagnostics are bounded however
+  // this is reached. Without it an untrusted map produced a warning for every
+  // invalid property, each repeating `basePath`, and a caller compiling one map
+  // at a time — the natural two-argument form — had no bound at all.
+  const budget = suppliedBudget ?? newStyleIssueBudget();
+  const spentBefore = budgetSpent(budget);
   const issues = validateStyleValues(values, basePath, "strict", budget);
   const stopped =
     spentBefore ||
-    (budget !== undefined && budgetSpent(budget)) ||
+    budgetSpent(budget) ||
     issues.some(issue => issue.code === "style-issues-truncated");
   if (stopped) {
     return {

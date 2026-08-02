@@ -148,6 +148,14 @@ function breakpointContexts(set: BreakpointSet): BreakpointContext[] {
   const contexts: BreakpointContext[] = [
     { id: BASE_BREAKPOINT, axis: "viewport" },
   ];
+  // One id resolves to one definition. Each axis is read separately, so a
+  // duplicate — within an axis or across the two — would become two contexts,
+  // and a single stored value keyed to it would be emitted under both queries:
+  // one `dup` responding to viewport width AND to container width, from the one
+  // thing the document model says cannot happen. The document model calls this
+  // an error; compilation is the path that does not assume validation ran, so
+  // the first definition wins and the rest are not ids this site defines.
+  const claimed = new Set<string>([BASE_BREAKPOINT]);
   const widthDescending = (a: BreakpointDef, b: BreakpointDef): number =>
     (b.maxWidth ?? Infinity) - (a.maxWidth ?? Infinity);
   // The breakpoint set comes from stored settings, so it is read the way
@@ -197,7 +205,14 @@ function breakpointContexts(set: BreakpointSet): BreakpointContext[] {
     // than paid once, and a byte-bounded document could still stall a render.
     // The widest are kept, and values keyed to the rest are reported stale like
     // any other id this site does not define.
-    return usable.sort(widthDescending).slice(0, MAX_BREAKPOINTS_PER_AXIS);
+    return usable
+      .sort(widthDescending)
+      .filter(def => {
+        if (claimed.has(def.id)) return false;
+        claimed.add(def.id);
+        return true;
+      })
+      .slice(0, MAX_BREAKPOINTS_PER_AXIS);
   };
   for (const def of axisDefs("viewport")) {
     if (def.id === BASE_BREAKPOINT) continue;
@@ -313,7 +328,20 @@ function envelopeRules(
   budget: StyleIssueBudget,
   warningAllowance: WarningAllowance
 ): CssRule[] {
-  if (!isPlainRecord(styles)) return [];
+  if (styles === undefined) return [];
+  // A stored envelope that is not an object — `[]`, a string, `null` — styles
+  // nothing, and this compiler reads persisted data whether or not a caller
+  // validated it. Returning quietly would break the one promise this result
+  // makes: that everything absent from the stylesheet is accounted for.
+  if (!isPlainRecord(styles)) {
+    pushBoundedWarning(warningAllowance, warnings, {
+      path: basePath,
+      code: "invalid-style-values",
+      severity: "warning",
+      message: `Styles here are ${describeValue(styles)} rather than an object, so none of them were written.`,
+    });
+    return [];
+  }
   unknownBreakpointWarnings(
     styles,
     basePath,
@@ -591,6 +619,21 @@ export function compilePageCss(
 
   const nodes = documentNodes(doc);
   const classes = nodeClassNames(nodes.map(entry => entry.node.id));
+  // Two nodes sharing an id share a class, because a class is derived from the
+  // id and the map this returns is keyed by it — there is no second class to
+  // give the second node, and no way to tell a renderer about one. So their
+  // styles are refused rather than emitted: written, both envelopes would land
+  // on the one selector and the later would silently restyle BOTH elements, one
+  // of which never asked for it. Refusing costs the styling of two nodes and
+  // says so; writing corrupts a node the author did not touch.
+  const duplicateIds = new Set<string>();
+  const seenIds = new Set<string>();
+  for (const { node } of nodes) {
+    const id = node.id;
+    if (typeof id !== "string") continue;
+    if (seenIds.has(id)) duplicateIds.add(id);
+    seenIds.add(id);
+  }
 
   const rules: CssRule[] = [];
 
@@ -634,9 +677,25 @@ export function compilePageCss(
 
   // Each node's own values, in document order so the stylesheet reads the way
   // the page does.
+  const reportedDuplicates = new Set<string>();
   for (const { node, path } of nodes) {
     const className = classes.get(node.id);
     if (className === undefined) continue;
+    if (duplicateIds.has(node.id)) {
+      // Once per id rather than once per node carrying it: the second report
+      // would name the same defect and the same fix.
+      if (!reportedDuplicates.has(node.id)) {
+        reportedDuplicates.add(node.id);
+        pushBoundedWarning(warningAllowance, warnings, {
+          path: pointer(path, "id"),
+          code: "duplicate-node-id",
+          severity: "warning",
+          message: `More than one node has the id "${describeValue(node.id)}", so they cannot be styled apart and none of their styles were written.`,
+          suggestion: "Give every node a unique id.",
+        });
+      }
+      continue;
+    }
     const selector = `${pageRoot} .${className}`;
     rules.push(
       ...envelopeRules(
