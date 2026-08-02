@@ -311,6 +311,17 @@ export class UserMutationService extends BaseService {
   /** Set to true when a user_ext query fails (table missing), disabling ext operations */
   private userExtDisabled = false;
 
+  /**
+   * Whether this database has an `activity_log` to erase from, probed once.
+   *
+   * Cached only for `true`. A missing table is the state an operator fixes by
+   * provisioning it, and re-probing until then costs one catalogue lookup per
+   * deletion — cheap on a rare operation, and far better than caching a "no"
+   * that would keep skipping the erasure for the life of the process after the
+   * table appeared.
+   */
+  private activityLogPresent = false;
+
   /** Cached merged Zod schemas (lazy, rebuilt when merged fields are available) */
   private createSchema: typeof CreateLocalUserSchema;
   private updateSchema: typeof UpdateUserSchema;
@@ -379,6 +390,24 @@ export class UserMutationService extends BaseService {
    */
   private hasCustomFields(): boolean {
     return this.getEffectiveFields().length > 0;
+  }
+
+  /**
+   * Whether this database carries the activity trail a deletion erases from.
+   *
+   * A probe that cannot run answers `true`, so an unreadable catalogue leaves
+   * the erasure in place and the deletion fails loudly rather than quietly
+   * skipping it. Only a definite "the table is not there" is allowed to skip,
+   * because only then is there certainly nothing to erase.
+   */
+  private async hasActivityLog(): Promise<boolean> {
+    if (this.activityLogPresent) return true;
+    try {
+      this.activityLogPresent = await this.adapter.tableExists("activity_log");
+    } catch {
+      return true;
+    }
+    return this.activityLogPresent;
   }
 
   /**
@@ -1254,6 +1283,20 @@ export class UserMutationService extends BaseService {
   ): Promise<void> {
     const { users, accounts, userRoles } = this.tables;
 
+    // Asked once, before the transaction opens, because a failed statement
+    // aborts an open Postgres transaction and there would be no way back.
+    //
+    // The answer is allowed to be "no". A database whose `activity_log` has
+    // never been created carries no trail, and therefore no identifying data
+    // for the erasure to remove — the invariant that an account is never
+    // deleted while data identifying its owner remains is satisfied by there
+    // being none. That is a different thing from an erasure that fails, which
+    // still takes the deletion down with it. Databases in this state exist:
+    // the SQLite fallback bootstrap in earlier releases created a subset of
+    // the core tables, and neither first-run setup nor boot repairs an
+    // existing database that is missing one — they only warn.
+    const activityLogExists = await this.hasActivityLog();
+
     // Delete user and related data in a single Drizzle transaction so that
     // partial deletes can't leave orphaned rows. The tx alias is a structural
     // type because BaseService.withTransaction yields `unknown` (it can't
@@ -1324,12 +1367,14 @@ export class UserMutationService extends BaseService {
         // still carrying the name and email of someone who asked to be erased.
         // Inside the transaction, so a failed erasure takes the deletion with
         // it rather than leaving the two out of step.
-        await eraseActorPersonalData(
-          txDb,
-          this.tables,
-          String(userId),
-          new Date()
-        );
+        if (activityLogExists) {
+          await eraseActorPersonalData(
+            txDb,
+            this.tables,
+            String(userId),
+            new Date()
+          );
+        }
 
         // Delete user, capturing how many rows it removed.
         const deleteResult = await txDb
@@ -1373,12 +1418,14 @@ export class UserMutationService extends BaseService {
     // exists. Erasing is idempotent, so a second pass over rows already erased
     // costs one indexed update and changes nothing.
     try {
-      await eraseActorPersonalData(
-        this.db as Parameters<typeof eraseActorPersonalData>[0],
-        this.tables,
-        String(userId),
-        new Date()
-      );
+      if (activityLogExists) {
+        await eraseActorPersonalData(
+          this.db as Parameters<typeof eraseActorPersonalData>[0],
+          this.tables,
+          String(userId),
+          new Date()
+        );
+      }
     } catch (err) {
       // The account is already gone and the caller has been served; failing
       // here would report a completed deletion as an error and invite a retry
