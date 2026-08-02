@@ -151,8 +151,12 @@ function scalarText(
  * A keyword is the exception and is matched first, the way validation matches
  * it: `background-image: none` is how an image set at an earlier state is
  * cleared, and wrapping it would emit `url("none")` and go looking for a file.
+ *
+ * Exported for its own tests. What it escapes cannot be reached through
+ * `compileStyleValues`, which refuses those values first, so testing it through
+ * that entry would be testing the refusal instead.
  */
-function urlText(leaf: UrlLeaf, value: string): string {
+export function urlText(leaf: UrlLeaf, value: string): string {
   const written = asciiLower(decodeIdentifier(trimCssWhitespace(value)));
   const keywords = leaf.keywords ?? [];
   if (
@@ -161,10 +165,21 @@ function urlText(leaf: UrlLeaf, value: string): string {
   ) {
     return value;
   }
-  // Quoted, with the two characters that could end the string escaped. The
-  // safety check refuses the rest, and a URL that survives both is one the
-  // browser reads as a single argument whatever it contains.
-  const escaped = value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  // Quoted, with everything that could end the string escaped: the quote and
+  // the backslash, and the line terminators, because a raw newline closes a CSS
+  // string even inside quotes.
+  //
+  // The line terminators cannot reach here through `compileStyleValues`, which
+  // refuses the value before it is written. They are escaped anyway, because a
+  // function whose job is to produce a quoted CSS string should produce one for
+  // any input rather than for the inputs its current caller happens to allow.
+  const escaped = value
+    .replace(/[\\"]/g, character => `\\${character}`)
+    // A hex escape ends at the space, which CSS then discards.
+    .replace(
+      /[\n\r\f]/g,
+      character => `\\${character.charCodeAt(0).toString(16)} `
+    );
   return `url("${escaped}")`;
 }
 
