@@ -818,15 +818,6 @@ async function resumeInterruptedSeed(
   const copy = plan.filter(statement => !statement.startsWith("CREATE TABLE"));
   if (copy.length === 0) return false;
 
-  const q = (id: string) =>
-    args.dialect === "mysql" ? `\`${id}\`` : `"${id}"`;
-  const companion = q(companionTableName);
-  const main = q(args.tableName);
-  const guard =
-    ` WHERE NOT EXISTS (SELECT 1 FROM ${companion} ` +
-    `WHERE ${companion}.${q("_parent")} = ${main}.${q("id")} ` +
-    `AND ${companion}.${q("_locale")} = '${args.sourceLocale ?? ""}')`;
-
   try {
     // The plan is real, so the transition is recorded — before the first statement, and only now
     // that there is something for it to describe.
@@ -869,11 +860,11 @@ async function resumeInterruptedSeed(
       }
     }
     for (const statement of copy) {
-      // Only the INSERT ... SELECT is row-producing and therefore needs the guard; anything else
-      // the plan carries (a nullability relax, for instance) is already idempotent.
-      await adapter.executeQuery(
-        statement.startsWith("INSERT INTO") ? `${statement}${guard}` : statement
-      );
+      // Issued as generated. The seed carries its own `WHERE NOT EXISTS` from
+      // `buildLocalizationUpStatements`, so this no longer appends one — matching on a statement's
+      // leading text to decide whether to rewrite it made the guard a property of the caller when
+      // it is a property of the statement, and left the emitted migration file without it.
+      await adapter.executeQuery(statement);
     }
     // The interrupted run's debt is discharged, so the record stops describing one.
     // A settlement that did not land means this run no longer holds the transition: someone took
