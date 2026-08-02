@@ -12,8 +12,10 @@
  * @module schemas/_zod/ui-schema
  * @since v0.0.3-alpha (Plan D1)
  */
+
 import { z } from "zod";
 
+import { reservedSystemFieldNames } from "../../lib/system-columns";
 import {
   isPluginOptionContainer,
   RESERVED_PLUGIN_OPTION_KEYS,
@@ -55,7 +57,9 @@ const BUILT_IN_UI_FIELD_TYPES = new Set<string>(UI_FIELD_TYPES);
 // component). The collection-only owner column (`created_by`/`createdBy`) is
 // NOT reserved here — it would wrongly reject valid single/component fields;
 // it is enforced per-entity by assertValidFieldsPayload({ kind: "collection" }).
-const RESERVED_FIELD_NAMES = new Set(["id", "created_at", "updated_at"]);
+const RESERVED_FIELD_NAMES: ReadonlySet<string> = new Set(
+  reservedSystemFieldNames("uiSchema")
+);
 
 const SLUG_RE = /^[a-z][a-z0-9_-]*$/;
 

@@ -6,6 +6,8 @@
 
 import { describe, expect, it } from "vitest";
 
+import { fieldNameSchema } from "../../domains/dynamic-collections/services/dynamic-collection-validation-service";
+
 import {
   immutableSystemFieldsFor,
   IMMUTABLE_SYSTEM_FIELDS_ANY_ENTITY,
@@ -134,6 +136,33 @@ describe("reservation projections", () => {
     expect(sorted(reservedSystemFieldNames("uiSchema"))).toEqual(
       sorted(["id", "created_at", "updated_at"])
     );
+  });
+});
+
+describe("the validators actually refuse what the projection lists", () => {
+  // The projections above prove the SET. These prove the wiring: a validator reading the
+  // projection rather than a literal of its own is the whole point, and a set nobody consults
+  // would satisfy every test above.
+
+  it("refuses every projected name in the Schema Builder", () => {
+    for (const name of reservedSystemFieldNames("builder")) {
+      expect({ [name]: fieldNameSchema.safeParse(name).success }).toEqual({
+        [name]: false,
+      });
+    }
+  });
+
+  it("still accepts an ordinary field name", () => {
+    // The mirror, so the case above cannot be satisfied by a validator that refuses everything.
+    expect(fieldNameSchema.safeParse("headline").success).toBe(true);
+  });
+
+  it("refuses the camelCase spelling of a timestamp column", () => {
+    // The name this widened to. It snake-cases onto the injected column and lands in the same
+    // CREATE TABLE twice, so the collection could never have been created; refusing it here
+    // reports the collision where the name is chosen instead of as a database error.
+    expect(fieldNameSchema.safeParse("createdAt").success).toBe(false);
+    expect(fieldNameSchema.safeParse("updatedAt").success).toBe(false);
   });
 });
 
