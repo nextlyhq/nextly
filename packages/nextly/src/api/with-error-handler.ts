@@ -20,7 +20,10 @@ import { createRequire } from "node:module";
 
 import { isDbError } from "../database/errors";
 import { NextlyError } from "../errors/nextly-error";
-import { withSideEffectWarnings } from "../hooks/side-effect-warnings";
+import {
+  currentFlattenedErrors,
+  withSideEffectWarnings,
+} from "../hooks/side-effect-warnings";
 import { getNextlyLogger } from "../observability/logger";
 import { getGlobalOnError, type OnErrorHook } from "../observability/on-error";
 
@@ -96,9 +99,28 @@ export function withErrorHandler<TArgs extends unknown[]>(
       //
       // Scopes nest, so a handler reached through the dynamic router is inside
       // that request's scope as well and the failure still reaches both.
-      ({ result: response } = await withSideEffectWarnings(() =>
-        handler(...args)
-      ));
+      ({ result: response } = await withSideEffectWarnings(async () => {
+        try {
+          return await handler(...args);
+        } finally {
+          // Inside the scope on purpose: it closes when this returns, and the
+          // catch below runs after that. In a `finally` because a request that
+          // flattened an error and then threw is exactly the one whose detail
+          // an operator needs.
+          //
+          // Joined to the response by `requestId`, which the public envelope
+          // already carries, so an operator correlates them without any of the
+          // detail being disclosed.
+          for (const flattened of currentFlattenedErrors()) {
+            getNextlyLogger().error({
+              kind: "flattened-service-error",
+              ...flattened.toLogJSON(requestId),
+              route,
+              method,
+            });
+          }
+        }
+      }));
     } catch (err) {
       // (1) Re-throw Next.js sentinels FIRST. Without this, `redirect()` /
       // `notFound()` inside a handler get silently converted to 500s.

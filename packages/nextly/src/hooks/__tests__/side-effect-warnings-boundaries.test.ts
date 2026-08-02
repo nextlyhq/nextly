@@ -18,7 +18,9 @@ import {
 import { withErrorHandler } from "../../api/with-error-handler";
 import { NextlyError } from "../../errors/nextly-error";
 import {
+  currentFlattenedErrors,
   currentSideEffectWarnings,
+  recordFlattenedError,
   recordSideEffectWarning,
   withSideEffectWarnings,
 } from "../side-effect-warnings";
@@ -128,5 +130,52 @@ describe("the action envelope carries them too", () => {
     );
     const body = (await result.json()) as Record<string, unknown>;
     expect("warnings" in body).toBe(false);
+  });
+});
+
+describe("a flattened error's private detail is kept for the log, not the caller", () => {
+  it("keeps cause and logContext on the scope", async () => {
+    // The public envelope drops both on the way out and the boundary rebuilds
+    // an error from what survived, so without this the detail is gone before
+    // anything can log it and every unexpected failure looks alike.
+    const cause = new Error("driver: duplicate key on users_email_idx");
+    const original = NextlyError.internal({
+      cause,
+      logContext: { userId: "u-42", table: "users" },
+    });
+
+    const { result } = await withSideEffectWarnings(async () => {
+      recordFlattenedError(original);
+      return currentFlattenedErrors();
+    });
+
+    expect(result).toHaveLength(1);
+    // Unprojected on purpose: the only consumer is the logger.
+    expect(result[0]?.logContext).toMatchObject({ userId: "u-42" });
+    expect(result[0]?.cause).toBe(cause);
+  });
+
+  it("keeps the two dimensions of the scope apart", async () => {
+    // One scope holds both, so the risk is that a caller-facing projection
+    // starts including diagnostics. The warnings projection must never see
+    // them.
+    const { result } = await withSideEffectWarnings(async () => {
+      recordFlattenedError(
+        NextlyError.internal({ logContext: { secret: "never-disclosed" } })
+      );
+      recordSideEffectWarning(failure());
+      return currentSideEffectWarnings();
+    });
+
+    expect(result).toHaveLength(1);
+    expect(JSON.stringify(result)).not.toContain("never-disclosed");
+    expect(JSON.stringify(result)).not.toContain("private-detail");
+  });
+
+  it("records nothing outside a request", async () => {
+    // No response for the detail to be missing from, so this is a no-op rather
+    // than a throw, and nothing accumulates in a long-lived process.
+    expect(() => recordFlattenedError(NextlyError.internal({}))).not.toThrow();
+    expect(currentFlattenedErrors()).toHaveLength(0);
   });
 });
