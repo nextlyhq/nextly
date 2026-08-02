@@ -8,7 +8,7 @@
  * Eight op-types:
  *   respondList         to { items, meta }                   (paginated find)
  *   respondDoc          to T (bare)                          (findByID)
- *   respondMutation     to { message, item }                 (create/update/delete)
+ *   respondMutation     to { message, item, warnings? }      (create/update/delete)
  *   respondAction       to { message, ...result }            (non-CRUD mutation)
  *   respondData         to T (bare object)                   (non-CRUD read)
  *   respondCount        to { total }                         (count)
@@ -27,6 +27,8 @@
  * requests (e.g. empty `ids` array) where the dispatcher's pre-check
  * throws NextlyError.validation BEFORE entering the service.
  */
+
+import { currentSideEffectWarnings } from "../hooks/side-effect-warnings";
 
 export type PaginationMeta = {
   total: number;
@@ -73,7 +75,19 @@ export function respondMutation<T>(
   item: T,
   init?: ResponseInit
 ): Response {
-  return jsonResponse({ message, item }, init);
+  // A post-commit hook failure reports success with a warning: the row is
+  // durable and a side-effect phase cannot change it, so failing the operation
+  // would tell the caller its write did not happen and invite a retry that
+  // writes it twice. Read here rather than passed in, because the failures are
+  // raised deep in the write path and every one of this helper's call sites
+  // would otherwise have to accept and forward them.
+  //
+  // Omitted entirely when empty, so the ordinary body is unchanged.
+  const warnings = currentSideEffectWarnings();
+  return jsonResponse(
+    warnings.length > 0 ? { message, item, warnings } : { message, item },
+    init
+  );
 }
 
 /**

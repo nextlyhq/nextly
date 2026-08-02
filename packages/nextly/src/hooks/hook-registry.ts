@@ -11,6 +11,7 @@
 import { NextlyError } from "../errors/nextly-error";
 
 import { normalizeHookError } from "./normalize-hook-error";
+import { recordSideEffectWarning } from "./side-effect-warnings";
 import { HOOK_TYPES } from "./types";
 import type {
   BeforeOperationArgs,
@@ -798,7 +799,7 @@ export class HookRegistry {
         // `normalizeHookError` rethrows a typed error untouched and wraps an
         // untyped one, so this is a NextlyError in practice; the guard is what
         // makes that a fact rather than an assumption.
-        options?.onSideEffectError?.({
+        const failure: SideEffectHookFailure = {
           phase: hookType,
           collection: context.collection,
           error: NextlyError.is(normalized)
@@ -806,7 +807,12 @@ export class HookRegistry {
             : NextlyError.internal({
                 logContext: { hookType, collection: context.collection },
               }),
-        });
+        };
+        options?.onSideEffectError?.(failure);
+        // Also published to whatever is collecting for the current operation,
+        // so a caller gets the warning without every write path having to
+        // accept and forward the callback above.
+        recordSideEffectWarning(failure);
       }
     }
 

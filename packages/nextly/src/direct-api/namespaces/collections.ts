@@ -10,6 +10,11 @@
  */
 
 import { NextlyError } from "../../errors/nextly-error";
+import type { HookWarning } from "../../hooks/side-effect-warnings";
+import {
+  toHookWarning,
+  withSideEffectWarnings,
+} from "../../hooks/side-effect-warnings";
 import type { PaginatedResponse } from "../../types/pagination";
 import type {
   BulkDeleteArgs,
@@ -153,24 +158,44 @@ export async function findByID<TSlug extends CollectionSlug>(
  * collection slug capitalized (e.g. `"Posts created."`) so callers can
  * surface a generic toast without hand-writing copy per collection.
  */
+/**
+ * Run a write and hand back the post-commit hook failures it collected.
+ *
+ * The scope opens here because a Direct API call is its own operation boundary
+ * -- there is no request around it to open one. A scope already open (the call
+ * came from inside a request, or from another collection's hook) still receives
+ * the same failures, so an in-process call cannot hide one from the client
+ * waiting on the request that triggered it.
+ */
+async function collectingWarnings<T>(
+  operation: () => Promise<T>
+): Promise<{ result: T; warnings?: HookWarning[] }> {
+  const { result, failures } = await withSideEffectWarnings(operation);
+  return failures.length > 0
+    ? { result, warnings: failures.map(toHookWarning) }
+    : { result };
+}
+
 export async function create<TSlug extends CollectionSlug>(
   ctx: NextlyContext,
   args: CreateArgs<TSlug>
 ): Promise<MutationResult<DataFromCollectionSlug<TSlug>>> {
   const config = mergeConfig(ctx.defaultConfig, args);
 
-  const result = await ctx.collectionsHandler.createEntry(
-    {
-      collectionName: args.collection,
-      overrideAccess: config.overrideAccess,
-      user: config.user,
-      // Forward the content locale so a localized write lands in the requested
-      // language's companion row, not the default locale's.
-      locale: config.locale,
-      context: config.context,
-      disableRevalidate: config.disableRevalidate,
-    },
-    args.data
+  const { result, warnings } = await collectingWarnings(() =>
+    ctx.collectionsHandler.createEntry(
+      {
+        collectionName: args.collection,
+        overrideAccess: config.overrideAccess,
+        user: config.user,
+        // Forward the content locale so a localized write lands in the
+        // requested language's companion row, not the default locale's.
+        locale: config.locale,
+        context: config.context,
+        disableRevalidate: config.disableRevalidate,
+      },
+      args.data
+    )
   );
 
   if (!result.success) {
@@ -180,6 +205,7 @@ export async function create<TSlug extends CollectionSlug>(
   return {
     message: buildMutationMessage(args.collection, "created"),
     item: result.data as DataFromCollectionSlug<TSlug>,
+    ...(warnings ? { warnings } : {}),
   };
 }
 
@@ -204,19 +230,24 @@ export async function update<TSlug extends CollectionSlug>(
   }
 
   if (args.id) {
-    const result = await ctx.collectionsHandler.updateEntry(
-      {
-        collectionName: args.collection,
-        entryId: args.id,
-        overrideAccess: config.overrideAccess,
-        user: config.user,
-        // Forward the content locale so a localized update targets the requested
-        // language's companion row, not the default locale's.
-        locale: config.locale,
-        context: config.context,
-        disableRevalidate: config.disableRevalidate,
-      },
-      args.data
+    // Captured before the closure: the `if (args.id)` narrowing above does not
+    // reach inside a callback, and the id is what selects this branch.
+    const entryId = args.id;
+    const { result, warnings } = await collectingWarnings(() =>
+      ctx.collectionsHandler.updateEntry(
+        {
+          collectionName: args.collection,
+          entryId,
+          overrideAccess: config.overrideAccess,
+          user: config.user,
+          // Forward the content locale so a localized update targets the requested
+          // language's companion row, not the default locale's.
+          locale: config.locale,
+          context: config.context,
+          disableRevalidate: config.disableRevalidate,
+        },
+        args.data
+      )
     );
 
     if (!result.success) {
@@ -226,21 +257,27 @@ export async function update<TSlug extends CollectionSlug>(
     return {
       message: buildMutationMessage(args.collection, "updated"),
       item: result.data as DataFromCollectionSlug<TSlug>,
+      ...(warnings ? { warnings } : {}),
     };
   }
 
   if (args.where) {
-    const bulkResult = await ctx.collectionsHandler.bulkUpdateByQuery(
-      {
-        collectionName: args.collection,
-        where: args.where,
-        data: args.data,
-        overrideAccess: config.overrideAccess,
-        user: config.user,
-        context: config.context,
-        disableRevalidate: config.disableRevalidate,
-      },
-      { limit: 1 }
+    // Captured before the closure: the id/where branch above narrows `where`,
+    // and that narrowing does not reach inside a callback.
+    const where = args.where;
+    const { result: bulkResult, warnings } = await collectingWarnings(() =>
+      ctx.collectionsHandler.bulkUpdateByQuery(
+        {
+          collectionName: args.collection,
+          where,
+          data: args.data,
+          overrideAccess: config.overrideAccess,
+          user: config.user,
+          context: config.context,
+          disableRevalidate: config.disableRevalidate,
+        },
+        { limit: 1 }
+      )
     );
 
     if (bulkResult.successCount === 0) {
@@ -272,6 +309,7 @@ export async function update<TSlug extends CollectionSlug>(
     return {
       message: buildMutationMessage(args.collection, "updated"),
       item: updated,
+      ...(warnings ? { warnings } : {}),
     };
   }
 
@@ -306,14 +344,19 @@ export async function deleteEntry<
   }
 
   if (args.id) {
-    const result = await ctx.collectionsHandler.deleteEntry({
-      collectionName: args.collection,
-      entryId: args.id,
-      overrideAccess: config.overrideAccess,
-      user: config.user,
-      context: config.context,
-      disableRevalidate: config.disableRevalidate,
-    });
+    // Captured before the closure, as in `update`: the narrowing above does
+    // not reach inside a callback.
+    const entryId = args.id;
+    const { result, warnings } = await collectingWarnings(() =>
+      ctx.collectionsHandler.deleteEntry({
+        collectionName: args.collection,
+        entryId,
+        overrideAccess: config.overrideAccess,
+        user: config.user,
+        context: config.context,
+        disableRevalidate: config.disableRevalidate,
+      })
+    );
 
     if (!result.success) {
       throw createErrorFromResult(result);
@@ -321,7 +364,8 @@ export async function deleteEntry<
 
     return {
       message: buildMutationMessage(args.collection, "deleted"),
-      item: { id: args.id },
+      item: { id: entryId },
+      ...(warnings ? { warnings } : {}),
     };
   }
 
@@ -433,15 +477,17 @@ export async function duplicate<TSlug extends CollectionSlug>(
 ): Promise<MutationResult<DataFromCollectionSlug<TSlug>>> {
   const config = mergeConfig(ctx.defaultConfig, args);
 
-  const result = await ctx.collectionsHandler.duplicateEntry({
-    collectionName: args.collection,
-    entryId: args.id,
-    overrides: args.overrides,
-    overrideAccess: config.overrideAccess,
-    user: config.user,
-    context: config.context,
-    disableRevalidate: config.disableRevalidate,
-  });
+  const { result, warnings } = await collectingWarnings(() =>
+    ctx.collectionsHandler.duplicateEntry({
+      collectionName: args.collection,
+      entryId: args.id,
+      overrides: args.overrides,
+      overrideAccess: config.overrideAccess,
+      user: config.user,
+      context: config.context,
+      disableRevalidate: config.disableRevalidate,
+    })
+  );
 
   if (!result.success) {
     throw createErrorFromResult(result);
@@ -450,5 +496,6 @@ export async function duplicate<TSlug extends CollectionSlug>(
   return {
     message: buildMutationMessage(args.collection, "duplicated"),
     item: result.data as DataFromCollectionSlug<TSlug>,
+    ...(warnings ? { warnings } : {}),
   };
 }
