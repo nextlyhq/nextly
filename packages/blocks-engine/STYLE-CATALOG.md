@@ -231,9 +231,21 @@ Four things are checked on every value that reaches the stylesheet:
 3. **That a value is the KIND its property takes.** A length has to be a
    measurement and a colour has to be a colour, because `width: "red"` and
    `color: "16px"` are both well-formed CSS values that a browser silently
-   discards. Inside a length, the contents of `calc()` and friends are checked
-   too, so `calc(1px + red)` is refused; what `var()` and `env()` resolve to is
-   not knowable here and is left alone.
+   discards.
+
+   Inside a length, a math expression is typed with the algebra CSS Values and
+   Units 4 defines: multiplication adds exponents, division subtracts them, and
+   addition requires both sides to agree. So `calc(1px * 1px)` is an area,
+   `calc(1px / 1px)` is a number, `calc(1px + 2)` mixes kinds, and none of the
+   three is a width. The type is computed over the whole expression, so nesting
+   and operator precedence are both accounted for.
+
+   **Anything the expression cannot see through makes the whole of it
+   unreadable rather than partly readable.** What `var()`, `env()`, `attr()` and
+   `anchor-size()` resolve to is not knowable here, so an expression containing
+   one is accepted whatever else it holds. A percentage is the same case: what
+   it resolves against is a property's business, not the expression's.
+
 4. **Size and nesting depth.** Parsing a value is recursive and allocates a node
    per token, so both shapes of an oversized value are bounded: anything nested
    deeper than 32 brackets, or longer than 8,192 characters, is refused. No real

@@ -480,52 +480,193 @@ const RESOLUTION_UNITS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * The kind of quantity one argument is, when that is knowable from a literal
- * alone. `null` means it is not — a `var()`, an expression, anything computed
- * — and two arguments are only ever compared when both are known.
+ * A CSS numeric type: each base type mapped to the power it is raised to. An
+ * empty map is `<number>`, `{length: 1}` is a length, `{length: 2}` an area.
+ *
+ * This is the algebra CSS Values and Units 4 defines for math expressions,
+ * modelled once rather than reinvented per shape: multiplication adds
+ * exponents, division subtracts them, and addition requires both sides to
+ * agree already. One model is what lets any nesting be read — a function
+ * inside an expression inside a function — where a rule per shape only ever
+ * covers the shapes someone thought of.
  */
-function literalCategory(terms: readonly CssNode[]): string | null {
-  if (terms.length !== 1) return null;
-  const term = terms[0];
-  if (term === undefined) return null;
-  // Parentheses group a value without changing what kind it is, so a grouped
-  // literal answers the same as a bare one.
-  if (term.type === "Parentheses") return literalCategory([...term.children]);
-  if (term.type === "Number") return "number";
-  if (term.type === "Percentage") return "percentage";
-  if (term.type === "Dimension") return unitCategory(unitOf(term));
-  if (term.type === "Function") return functionCategory(term);
-  return null;
+type NumericType = ReadonlyMap<string, number>;
+
+/**
+ * What an expression works out to.
+ *
+ * `unknown` is an honest abstention: a reference, a function whose result is
+ * not knowable here, or a percentage whose meaning depends on the property.
+ * It is accepted everywhere. `invalid` is a positive finding that the result
+ * is a quantity no property can take, which is the only case that refuses.
+ */
+type TypeResult = NumericType | "unknown" | "invalid";
+
+const NUMBER_TYPE: NumericType = new Map();
+
+function sameType(a: NumericType, b: NumericType): boolean {
+  if (a.size !== b.size) return false;
+  for (const [base, power] of a) {
+    if (b.get(base) !== power) return false;
+  }
+  return true;
+}
+
+/** Multiplying quantities adds their exponents; dividing subtracts them. */
+function timesType(
+  a: NumericType,
+  b: NumericType,
+  invert: boolean
+): NumericType {
+  const product = new Map(a);
+  for (const [base, power] of b) {
+    const combined = (product.get(base) ?? 0) + (invert ? -power : power);
+    // A base type raised to zero has cancelled out: `1px / 1px` is a number.
+    if (combined === 0) product.delete(base);
+    else product.set(base, combined);
+  }
+  return product;
 }
 
 /**
- * The kind of quantity a nested function is, when that is knowable.
+ * The type two added quantities share.
  *
- * The math functions choose among their operands or combine them, so a
- * function whose operands are all the same known kind produces that kind:
- * `min(1px, 2px)` is a length wherever it appears. Operands that disagree, or
- * any that cannot be read, answer `null` rather than guessing, which keeps an
- * expression like `min(1px, 50%)` out of the comparison entirely.
- *
- * This is what lets a nested result be compared against its neighbours, so
- * `calc(min(1px, 2px) * 1px)` is seen to multiply two lengths.
+ * A percentage resolves against whatever it sits beside, and which quantity
+ * that is depends on the property rather than on the expression, so a sum
+ * involving one abstains instead of deciding here.
  */
-function functionCategory(node: {
+function addedType(a: NumericType, b: NumericType): TypeResult {
+  if (sameType(a, b)) return a;
+  if (a.get("percent") !== undefined || b.get("percent") !== undefined) {
+    return "unknown";
+  }
+  return "invalid";
+}
+
+/** The type of one term, which may itself be a group or a function. */
+function termType(node: CssNode): TypeResult {
+  switch (node.type) {
+    case "Number":
+      return NUMBER_TYPE;
+    case "Percentage":
+      return new Map([["percent", 1]]);
+    case "Dimension": {
+      const base = unitCategory(unitOf(node));
+      return base === null ? "unknown" : new Map([[base, 1]]);
+    }
+    case "Identifier":
+      // The constants a math expression may name are plain numbers. Anything
+      // else here is a keyword rather than a quantity.
+      return CALC_CONSTANTS.has(identifierOf(node)) ? NUMBER_TYPE : "unknown";
+    case "Parentheses":
+      return numericType([...node.children]);
+    case "Function":
+      return callType(node);
+    default:
+      return "unknown";
+  }
+}
+
+/** The type a function call produces. */
+function callType(node: {
   name: string;
   children: Iterable<CssNode>;
-}): string | null {
+}): TypeResult {
   const name = identifierOf(node);
-  if (NUMBER_FUNCTIONS.has(name)) return "number";
-  if (!MATH_FUNCTIONS.has(name)) return null;
-  let agreed: string | null = null;
+  // These report a ratio, a sign or an exponent, all of them bare numbers.
+  if (NUMBER_FUNCTIONS.has(name)) return NUMBER_TYPE;
+  if (ANGLE_FUNCTION_ARITY.has(name)) return new Map([["angle", 1]]);
+  // Everything else resolves to something this cannot see: a custom property,
+  // an environment variable, an anchor, an attribute.
+  if (!MATH_FUNCTIONS.has(name)) return "unknown";
+  // The math functions choose among their operands or combine them, so they
+  // produce whatever type those operands agree on.
+  let agreed: NumericType | undefined;
   for (const operand of mathOperands(name, splitArguments(node.children))) {
-    const category = literalCategory(operand);
-    if (category === null) return null;
-    if (agreed === null) agreed = category;
-    else if (agreed !== category) return null;
+    const type = numericType(operand);
+    if (type === "invalid" || type === "unknown") return type;
+    if (agreed === undefined) {
+      agreed = type;
+      continue;
+    }
+    const combined = addedType(agreed, type);
+    if (combined === "invalid" || combined === "unknown") return combined;
+    agreed = combined;
   }
-  return agreed;
+  return agreed ?? "unknown";
 }
+
+/**
+ * The type of an arithmetic expression: operands and operators in turn.
+ *
+ * Multiplication and division bind tighter than addition, so they fold first.
+ * Folding strictly left to right would read `calc(1 + 2 * 1px)` as a number
+ * added to a number and then scaled, making it a length, when the browser
+ * reads it as a number added to a length and discards it.
+ *
+ * Any operand this cannot read makes the whole expression unreadable rather
+ * than partly readable, which keeps a guess from being assembled out of the
+ * parts that happened to be literals.
+ */
+function numericType(terms: readonly CssNode[]): TypeResult {
+  if (terms.length === 0 || terms.length % 2 === 0) return "unknown";
+  const operands: TypeResult[] = [];
+  const symbols: string[] = [];
+  for (let index = 0; index < terms.length; index += 1) {
+    const term = terms[index];
+    if (term === undefined) return "unknown";
+    if (index % 2 === 0) {
+      operands.push(termType(term));
+      continue;
+    }
+    if (term.type !== "Operator") return "unknown";
+    symbols.push(term.value.trim());
+  }
+  if (operands.some(type => type === "invalid")) return "invalid";
+  if (operands.some(type => type === "unknown")) return "unknown";
+  const known = operands as NumericType[];
+  const first = known[0];
+  if (first === undefined) return "unknown";
+  const summands: NumericType[] = [first];
+  for (let index = 0; index < symbols.length; index += 1) {
+    const symbol = symbols[index];
+    const right = known[index + 1];
+    const left = summands[summands.length - 1];
+    if (right === undefined || left === undefined) return "unknown";
+    if (symbol === "*" || symbol === "/") {
+      summands[summands.length - 1] = timesType(left, right, symbol === "/");
+      continue;
+    }
+    if (symbol !== "+" && symbol !== "-") return "unknown";
+    summands.push(right);
+  }
+  let total = summands[0];
+  if (total === undefined) return "unknown";
+  for (let index = 1; index < summands.length; index += 1) {
+    const summand = summands[index];
+    if (summand === undefined) return "unknown";
+    const combined = addedType(total, summand);
+    if (combined === "invalid" || combined === "unknown") return combined;
+    total = combined;
+  }
+  return total;
+}
+
+/**
+ * Whether a computed type is a quantity the property takes.
+ *
+ * A length or a percentage is a measurement. A bare number is one only where
+ * the property says so, which is `line-height`. Anything else — an area from
+ * multiplying two lengths, an angle, a duration — is a declaration the browser
+ * discards.
+ */
+function typeIsMeasurement(type: NumericType, allowNumber: boolean): boolean {
+  if (type.size === 0) return allowNumber;
+  return sameType(type, LENGTH_TYPE) || sameType(type, PERCENT_TYPE);
+}
+
+const LENGTH_TYPE: NumericType = new Map([["length", 1]]);
+const PERCENT_TYPE: NumericType = new Map([["percent", 1]]);
 
 /**
  * The operands of a math function: its arguments, with a leading strategy
@@ -547,57 +688,6 @@ function mathOperands(name: string, args: CssNode[][]): CssNode[][] {
     leading[0]?.type === "Identifier" &&
     ownIdentifiers.has(identifierOf(leading[0]));
   return strategy ? args.slice(1) : args;
-}
-
-/**
- * Whether a math expression is built only out of bare numbers, and so is one.
- *
- * The math functions carry the kind of their operands through, and the
- * arithmetic operators do too when every operand is a number, so an expression
- * whose every leaf is a plain number is a number however deeply it nests. That
- * makes `width: "calc(1)"` a declaration the browser discards.
- *
- * This asks what was WRITTEN, not what the expression computes: a measurement,
- * a percentage, or any reference anywhere inside answers `false`. So
- * `calc(1px / 1px)` is left alone even though it is also a number, and a
- * property that takes a bare number keeps its expressions by declaring so
- * rather than by this guessing which property it is looking at.
- */
-function resolvesToNumber(node: CssNode): boolean {
-  switch (node.type) {
-    case "Number":
-      return true;
-    case "Identifier":
-      // The numeric constants a math expression may name; `auto` and friends
-      // are whole values rather than operands and never reach here.
-      return CALC_CONSTANTS.has(identifierOf(node));
-    case "Parentheses":
-      return everyOperandIsNumber([...node.children]);
-    case "Function": {
-      const name = identifierOf(node);
-      // Every function in this set reports a ratio, a sign or an exponent, all
-      // of which are bare numbers whatever they were given.
-      if (NUMBER_FUNCTIONS.has(name)) return true;
-      if (!MATH_FUNCTIONS.has(name)) return false;
-      return mathOperands(name, splitArguments(node.children)).every(
-        everyOperandIsNumber
-      );
-    }
-    default:
-      return false;
-  }
-}
-
-/**
- * Whether every operand of one arithmetic expression is a number. Operators are
- * skipped: with numbers on both sides all four of them yield a number. An
- * unrecognised term, such as a rounding strategy, answers `false` and the
- * expression is left alone.
- */
-function everyOperandIsNumber(terms: readonly CssNode[]): boolean {
-  return terms.every(
-    term => term.type === "Operator" || resolvesToNumber(term)
-  );
 }
 
 /** Units that measure an angle. */
@@ -704,10 +794,23 @@ function referenceNamesSomething(node: {
     // does not parse at all, so there is nothing left for this to refuse.
     return decodeIdentifier(named.name).startsWith("--");
   }
+  // An environment variable is named by a custom identifier, which excludes
+  // the CSS-wide keywords: `env(inherit)` names nothing, because `inherit` is
+  // never an identifier a value can carry.
+  if (!isCustomIdentifier(identifierOf(named))) return false;
   // `env()` may index into the variable it names, and an index is a
   // non-negative integer: `env(titlebar-area-x 1)` reads the second value.
   // Anything else in the head makes the reference resolve to nothing.
   return head.slice(1).every(isIndex);
+}
+
+/**
+ * Whether a name is a `<custom-ident>`: an author-chosen identifier. The
+ * CSS-wide keywords are excluded because they are whole values wherever they
+ * appear, and `default` is reserved alongside them.
+ */
+function isCustomIdentifier(name: string): boolean {
+  return !CSS_WIDE_KEYWORDS.has(name) && name !== "default";
 }
 
 /** Whether a node is a non-negative integer, which is what indexes a value. */
@@ -985,11 +1088,15 @@ export function checkDimensionValue(
       functions: allowedFunctions,
     });
     if (childRejection !== null) return childRejection;
-    // Reaching here means the operands agree with each other; what they add up
-    // to is a separate question, and one that is answerable when every one of
-    // them is a literal number.
-    if (!allowNumber && child.type === "Function" && resolvesToNumber(child)) {
-      return "not-a-length";
+    // The structural checks above say the value is WELL FORMED. What it works
+    // out to is a separate question, asked once over the whole expression so
+    // that nesting and operator precedence are both visible.
+    if (child.type === "Function") {
+      const type = numericType([child]);
+      if (type === "invalid") return "not-a-length";
+      if (type !== "unknown" && !typeIsMeasurement(type, allowNumber)) {
+        return "not-a-length";
+      }
     }
     if (child.type === "Identifier" && isCssWideKeyword(identifierOf(child))) {
       cssWideKeyword = true;
@@ -1110,14 +1217,18 @@ function measurementRejection(
           });
           if (rejection !== null) return rejection;
         }
-        // Two operands of one function have to be the same kind of quantity,
-        // which is a question about the arguments rather than about what the
-        // expression resolves to. Asked only when both are literals, so
-        // anything computed abstains instead of guessing.
+        // Two operands of one function have to be the same kind of quantity.
+        // Anything not readable answers nothing and abstains.
         if (angleArgs.length === 2) {
-          const first = literalCategory(angleArgs[0] ?? []);
-          const second = literalCategory(angleArgs[1] ?? []);
-          if (first !== null && second !== null && first !== second) {
+          const first = numericType(angleArgs[0] ?? []);
+          const second = numericType(angleArgs[1] ?? []);
+          if (first === "invalid" || second === "invalid")
+            return "not-a-length";
+          if (
+            first !== "unknown" &&
+            second !== "unknown" &&
+            !sameType(first, second)
+          ) {
             return "not-a-length";
           }
         }
@@ -1153,18 +1264,6 @@ function measurementRejection(
       if (arity !== null && !arity.includes(operands.length)) {
         return "not-a-length";
       }
-      // The operands of one function describe one kind of quantity: `min(1px,
-      // 2)` mixes a length with a number and is discarded. A percentage counts
-      // as a length here, because that is what it resolves against on a
-      // property taking one, and anything not a literal abstains.
-      const seen = new Set<string>();
-      for (const arg of operands) {
-        const category = literalCategory(arg);
-        if (category !== null) {
-          seen.add(category === "percentage" ? "length" : category);
-        }
-      }
-      if (seen.size > 1) return "not-a-length";
       for (const arg of operands) {
         // Inside a math function the sign of any one term says nothing about
         // the sign of the result, so the non-negative rule does not apply. The
@@ -1239,37 +1338,10 @@ function alternationRejection(
       if (term.type !== "Operator") return "not-a-length";
       const bad = operatorRejection(term.value);
       if (bad !== null) return bad;
-      // Multiplying two measurements yields an area, which satisfies no
-      // property at all, so this is decidable from the operands without
-      // modelling what the whole expression resolves to. Asked only of
-      // literals on both sides; anything computed abstains.
-      const symbol = term.value.trim();
-      if (symbol === "+" || symbol === "-") {
-        // A length cannot be added to a number in any context, so this is
-        // decidable from the operands. A percentage counts as the length it
-        // resolves to, and anything computed abstains.
-        const before = terms[index - 1];
-        const after = terms[index + 1];
-        const asLength = (node: CssNode | undefined): string | null => {
-          if (node === undefined) return null;
-          const category = literalCategory([node]);
-          return category === "percentage" ? "length" : category;
-        };
-        const left = asLength(before);
-        const right = asLength(after);
-        if (left !== null && right !== null && left !== right) {
-          return "not-a-length";
-        }
-      }
-      if (symbol === "*") {
-        const before = terms[index - 1];
-        const after = terms[index + 1];
-        const left = before === undefined ? null : literalCategory([before]);
-        const right = after === undefined ? null : literalCategory([after]);
-        const measured = (category: string | null): boolean =>
-          category !== null && category !== "number";
-        if (measured(left) && measured(right)) return "not-a-length";
-      }
+      // What the operands add up to is not asked here. Reading operators in
+      // pairs cannot see past its two neighbours, and precedence means the
+      // neighbours are not always what combine; the whole expression is typed
+      // once, by the caller, where the nesting is visible.
       continue;
     }
     const rejection = measurementRejection(term, true, keywords, limits);

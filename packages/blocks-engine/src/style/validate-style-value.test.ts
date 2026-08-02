@@ -2409,6 +2409,10 @@ describe("a deferred value still needs its name", () => {
     // carrying anything past the name, so this module never sees it.
     expect(codes({ width: "env(foo bar)" })).toEqual(["invalid-style-value"]);
     expect(codes({ width: "env(foo -1)" })).toEqual(["invalid-style-value"]);
+    // The name is a custom identifier, so a CSS-wide keyword is not one.
+    expect(codes({ width: "env(inherit)" })).toEqual(["invalid-style-value"]);
+    expect(codes({ color: "env(initial)" })).toEqual(["invalid-style-value"]);
+    expect(codes({ width: "env(default)" })).toEqual(["invalid-style-value"]);
     expect(codes({ width: "env(titlebar-area-x 1)" })).toEqual([]);
     expect(codes({ width: "env(foo 0, 1px)" })).toEqual([]);
   });
@@ -2454,6 +2458,45 @@ describe("an expression of bare numbers is a number", () => {
     }
   });
 
+  it("types an expression nested inside an expression", () => {
+    expect(codes({ width: "calc(calc(1px + 2px) * 1px)" })).toEqual([
+      "invalid-style-value",
+    ]);
+    expect(codes({ width: "calc(calc(1px + 2px) + 1)" })).toEqual([
+      "invalid-style-value",
+    ]);
+    expect(codes({ width: "calc(calc(1px + 2px) * 3)" })).toEqual([]);
+  });
+
+  it("gives multiplication precedence over addition", () => {
+    // Read left to right this is a number plus a number, then scaled — a
+    // length. The browser multiplies first and discards a number plus a
+    // length, so the folding order decides whether this is refused.
+    expect(codes({ width: "calc(1 + 2 * 1px)" })).toEqual([
+      "invalid-style-value",
+    ]);
+    expect(codes({ width: "calc(1px * 2 + 3px)" })).toEqual([]);
+  });
+
+  it("cancels a base type out when it divides away", () => {
+    // A length over a length is a number, which `width` cannot take and
+    // `line-height` can.
+    expect(codes({ width: "calc(1px / 1px)" })).toEqual([
+      "invalid-style-value",
+    ]);
+    expect(codes({ lineHeight: "calc(1px / 1px)" })).toEqual([]);
+    expect(codes({ width: "calc(1px / 2)" })).toEqual([]);
+  });
+
+  it("refuses a quantity no property takes", () => {
+    // An angle, a duration and an area are all well-formed and none is a width.
+    expect(codes({ width: "calc(2deg * 3)" })).toEqual(["invalid-style-value"]);
+    expect(codes({ width: "calc(2s + 1s)" })).toEqual(["invalid-style-value"]);
+    expect(codes({ width: "calc(1px * 1px * 1px)" })).toEqual([
+      "invalid-style-value",
+    ]);
+  });
+
   it("reads the kind a nested function produces", () => {
     // `min(1px, 2px)` is a length wherever it stands, so multiplying by one
     // makes an area and adding a number mixes kinds. Both were unreadable
@@ -2492,7 +2535,7 @@ describe("an expression of bare numbers is a number", () => {
     // A reference could resolve to anything, and reading the division would
     // need the result model this deliberately does without.
     expect(codes({ width: "calc(var(--x))" })).toEqual([]);
-    expect(codes({ width: "calc(1px / 1px)" })).toEqual([]);
+    expect(codes({ width: "calc(1px + var(--x))" })).toEqual([]);
     // Dropping the strategy does not make the rest readable on its own.
     expect(codes({ width: "round(up, var(--x), 2)" })).toEqual([]);
   });
