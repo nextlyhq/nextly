@@ -485,6 +485,44 @@ describe("first_published_at", () => {
     expect(row.first_published_at).toBeTruthy();
   });
 
+  it("returns the marker under one name whichever operation is called", async () => {
+    // The same entry gave different shapes depending on how it was fetched: a create response
+    // carried `firstPublishedAt` while list and detail reads returned the raw column name, so a
+    // client reading a field it had just written could not find it.
+    current = await createTestNextly({ collections: [posts()] });
+    const h = handler(current);
+
+    const created = await h.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "live", status: "published" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    const detail = await h.getEntry({
+      collectionName: "posts",
+      entryId: id,
+      overrideAccess: true,
+    });
+    const list = await h.listEntries({
+      collectionName: "posts",
+      overrideAccess: true,
+    });
+
+    for (const [label, doc] of [
+      ["create", created.data],
+      ["detail", detail.data],
+      ["list", list.data?.docs?.[0]],
+    ] as const) {
+      assert(isRecord(doc), `${label} returned no document`);
+      expect({ [label]: "firstPublishedAt" in doc }).toEqual({ [label]: true });
+      // The raw column name must not also be present, or a consumer sees two spellings of the
+      // same value and has to guess which is canonical.
+      expect({ [label]: "first_published_at" in doc }).toEqual({
+        [label]: false,
+      });
+    }
+  });
+
   it("records a Single's first publication, and reads still work", async () => {
     // This test used to assert the OPPOSITE. A Single's physical table was built by a generator
     // that restated the system columns by hand, so this column reached the runtime schema and not

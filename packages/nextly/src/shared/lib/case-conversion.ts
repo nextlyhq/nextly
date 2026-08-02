@@ -130,9 +130,22 @@ export function keysToSnakeCase(obj: unknown): unknown {
 }
 
 /**
- * Convert the DB timestamp columns (`created_at`, `updated_at`) on a row
- * object into their camelCase API form (`createdAt`, `updatedAt`) and remove
- * the snake_case keys. Pre-existing camelCase values are preserved.
+ * The system timestamp columns, and the camelCase name each is published under.
+ *
+ * Listed once because a row can reach the API through several paths, and a column converted on
+ * some of them and not others gives the same entry different shapes depending on the operation
+ * that returned it. That is what happened to `first_published_at`: create responses carried
+ * `firstPublishedAt` while list and detail reads returned the raw column name.
+ */
+const TIMESTAMP_COLUMN_NAMES: ReadonlyArray<readonly [string, string]> = [
+  ["created_at", "createdAt"],
+  ["updated_at", "updatedAt"],
+  ["first_published_at", "firstPublishedAt"],
+];
+
+/**
+ * Convert the DB timestamp columns on a row object into their camelCase API form and remove the
+ * snake_case keys. Pre-existing camelCase values are preserved.
  *
  * @param entry - The row object to mutate in place.
  * @param options.normalize - Optional value transform applied to the
@@ -145,21 +158,14 @@ export function convertTimestampsToCamelCase<T extends Record<string, unknown>>(
 ): T {
   const record = entry as Record<string, unknown>;
   const normalize = options?.normalize;
-  if (record.created_at !== undefined) {
-    if (record.createdAt === undefined) {
-      record.createdAt = normalize
-        ? normalize(record.created_at)
-        : record.created_at;
+  for (const [column, apiName] of TIMESTAMP_COLUMN_NAMES) {
+    if (record[column] === undefined) continue;
+    if (record[apiName] === undefined) {
+      // A null marker is a meaningful value — "not known to have been published" — so it is
+      // converted like any other, rather than being dropped as if the column were absent.
+      record[apiName] = normalize ? normalize(record[column]) : record[column];
     }
-    delete record.created_at;
-  }
-  if (record.updated_at !== undefined) {
-    if (record.updatedAt === undefined) {
-      record.updatedAt = normalize
-        ? normalize(record.updated_at)
-        : record.updated_at;
-    }
-    delete record.updated_at;
+    delete record[column];
   }
   return entry;
 }
