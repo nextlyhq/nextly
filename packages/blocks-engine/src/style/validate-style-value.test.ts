@@ -172,6 +172,31 @@ describe("the union token shortcut respects the checks around it", () => {
     );
     expect(asked).toBe(0);
   });
+
+  it("stops asking the lookup before a union arm is chosen, not only after", () => {
+    // The lookup allowance is distinct from the reporting allowance: a name the
+    // run has not yet answered costs the caller, and the run may keep room to
+    // REPORT while having no room left to ASK. The leaf reference honours that
+    // distinction; the union shortcut must too, or a token on `lineHeight` calls
+    // `kindOf` past the cap and the caller is billed for an answer the run was
+    // meant to stop requesting.
+    let asked = 0;
+    const budget = newStyleIssueBudget(200, 50_000, 50, 50_000, 0);
+    validateStyleValues(
+      { lineHeight: { $token: "x" } },
+      "/styles",
+      "strict",
+      budget,
+      false,
+      {
+        kindOf: () => {
+          asked += 1;
+          return "color" as const;
+        },
+      }
+    );
+    expect(asked).toBe(0);
+  });
 });
 
 describe("a budget that predates the site allowance", () => {

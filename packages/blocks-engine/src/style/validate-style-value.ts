@@ -853,11 +853,13 @@ function shapeIssues(
       // The allowance is asked BEFORE the lookup, not after: `kindOf` is the
       // caller's code and may be expensive, and a run that has already said
       // name checking stopped must stop calling it rather than call it and
-      // discard the answer.
+      // discard the answer. The lookup and reporting allowances are distinct
+      // (a name already answered this run costs the caller nothing), so the
+      // same guard the leaf reference uses bounds the ask here too.
       if (isTokenRef(value) && tokens !== undefined && !extraTokenKeys(value)) {
         const kinds = unionTokenKinds(shape);
         if (kinds.length > 0) {
-          if (siteAllowanceSpent(budget)) {
+          if (!canResolveName(tokens, value.$token, budget)) {
             return siteTruncationNotice(budget, path);
           }
           const kind = tokens.kindOf(value.$token);
