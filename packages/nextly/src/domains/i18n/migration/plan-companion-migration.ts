@@ -98,7 +98,9 @@ export function planCompanionMigration(
 
   return {
     kind: "create-only",
-    upSql: buildCompanionCreateOnlySql(spec),
+    // Written to a migration file, so the create may guard against a companion the dev server
+    // or a `db:sync` has already provisioned.
+    upSql: buildCompanionCreateOnlySql(spec, { emittedToFile: true }),
     // Reverse of a bare CREATE is a DROP TABLE (no data to restore — main never had it).
     downSql: `DROP TABLE ${spec.dialect === "mysql" ? `\`${spec.companionTable}\`` : `"${spec.companionTable}"`};`,
   };

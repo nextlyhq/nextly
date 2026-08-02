@@ -12,7 +12,10 @@ import type { CompanionCopyRef, CompanionMigrationSpec } from "./types";
  */
 export const COMPANION_DEFAULT_STATUS = "draft";
 
-function buildCompanionCreateStatement(spec: CompanionMigrationSpec): string {
+function buildCompanionCreateStatement(
+  spec: CompanionMigrationSpec,
+  ifNotExists: boolean
+): string {
   const { dialect, mainTable, companionTable, parentIdType, columns } = spec;
   const colDefs = columns
     .map(c => `  ${q(c.name, dialect)} ${ddlType(c, dialect)}`)
@@ -21,18 +24,23 @@ function buildCompanionCreateStatement(spec: CompanionMigrationSpec): string {
   const statusDef = spec.status
     ? `  ${q("_status", dialect)} VARCHAR(20) NOT NULL DEFAULT '${COMPANION_DEFAULT_STATUS}',\n`
     : "";
-  // 🔴 `IF NOT EXISTS`, because this statement reaches a database that very often already has the
-  // table. `ensureCompanionTable` runs at boot and on every `db:sync`, so any project that ran the
-  // dev server before graduating to migrations arrives here with the companion already present —
-  // and the file this statement lands in is applied verbatim, statement by statement, with no
-  // enclosing transaction and no drift check. Without the guard `migrate` dies on the first
-  // companion file having already applied the ones before it.
+  // 🔴 `IF NOT EXISTS` is OPT-IN, and only an emitted migration FILE may ask for it.
   //
-  // Honest here rather than papering over a collision: a companion's shape is fully determined by
-  // its entity's localized fields, so a table under this name IS this table. That is not true of
-  // tables in general, which is why the guard is stated here and not adopted as a habit.
+  // A file reaches a database that very often already has the companion: `ensureCompanionTable`
+  // runs at boot and on every `db:sync`, so any project that ran the dev server before adopting
+  // migrations arrives with the table present. The file is applied verbatim, statement by
+  // statement, with no enclosing transaction — so without the guard `migrate` dies on the first
+  // companion file having already committed the ones before it. The guard is honest there: a
+  // companion's shape is fully determined by its entity's localized fields, so a table under this
+  // name IS this table.
+  //
+  // The RUNTIME must keep the bare form. `ensureCompanionTable` detects a lost create race by the
+  // `CREATE TABLE` failing — its catch branch says so outright — and uses that to tell a process
+  // that lost the race before claiming the transition from one that lost it after, which must
+  // abandon the apply rather than settle over a companion another process may not have seeded.
+  // `IF NOT EXISTS` would silence that signal and let both callers proceed as creators.
   return (
-    `CREATE TABLE IF NOT EXISTS ${q(companionTable, dialect)} (\n` +
+    `CREATE TABLE${ifNotExists ? " IF NOT EXISTS" : ""} ${q(companionTable, dialect)} (\n` +
     `  ${q("_parent", dialect)} ${parentIdType} NOT NULL,\n` +
     `  ${q("_locale", dialect)} VARCHAR(20) NOT NULL,\n` +
     statusDef +
@@ -44,24 +52,21 @@ function buildCompanionCreateStatement(spec: CompanionMigrationSpec): string {
 }
 
 /**
- * The `WHERE NOT EXISTS` that makes the seed safe to run more than once.
+ * The `WHERE NOT EXISTS` that lets a seed skip rows the companion already has.
  *
- * 🔴 The seed is an `INSERT ... SELECT` into a table whose primary key is
- * `(_parent, _locale)`, so running it twice collides. That is not hypothetical: the file it lands
- * in is applied statement by statement with no enclosing transaction, and MySQL commits DDL
- * implicitly regardless — so a failure anywhere in the file leaves the earlier statements committed
- * and the file recorded as *not* applied. The operator's only recovery is to run `migrate` again,
- * which replays the seed. Guarding it is what turns "work out by hand which statements landed" into
- * "run it again".
+ * 🔴 Requested by the RUNTIME resume only, never emitted into a migration file, and the asymmetry
+ * is a data-safety decision rather than an oversight.
  *
- * Expressed here, at generation, rather than bolted onto the statement by whoever executes it. Both
- * consumers reach this through {@link buildLocalizationUpStatements} — the emitted migration file
- * and the runtime resume in `companion-io` — and a guard applied by only one of them is how the two
- * paths came to disagree about idempotency in the first place.
+ * Two states leave a companion holding default-locale rows, and they need OPPOSITE handling. An
+ * interrupted copy leaves rows that came from main and must be kept. A companion that outlived a
+ * *disable* leaves rows that are stale by definition, because main was authoritative while
+ * localization was off — skipping those and then dropping main's columns reverts every edit made
+ * in between. Only the transition record distinguishes them, which is why the runtime consults it
+ * and sets `overwriteExisting`.
  *
- * Row-level rather than table-level on purpose: a *partially* seeded companion keeps the rows it
- * already has and gains only the ones it is missing, which is exactly the state an interrupted copy
- * leaves behind.
+ * A migration file has no such record: it is static SQL. Guarding its seed would make it silently
+ * pick the wrong answer in the second state, whereas leaving it unguarded makes it collide on the
+ * composite primary key — loudly, with nothing lost. A loud stop beats a quiet revert.
  */
 function buildSeedGuard(spec: CompanionMigrationSpec): string {
   const { dialect, mainTable, companionTable, defaultLocale } = spec;
@@ -80,9 +85,13 @@ function buildSeedGuard(spec: CompanionMigrationSpec): string {
  * and no main-table drop. Used when a collection is localized from birth.
  */
 export function buildCompanionCreateOnlySql(
-  spec: CompanionMigrationSpec
+  spec: CompanionMigrationSpec,
+  options: { emittedToFile?: boolean } = {}
 ): string {
-  return `${buildCompanionCreateStatement(spec)};`;
+  // Defaults to the runtime form. Two of this function's three callers execute the statement
+  // immediately rather than writing it to a file, so an opt-in default keeps them on today's
+  // behaviour and makes the file emitter say what it is.
+  return `${buildCompanionCreateStatement(spec, options.emittedToFile === true)};`;
 }
 
 /**
@@ -96,7 +105,7 @@ export function buildCompanionCreateOnlySql(
  * Companion columns are created nullable (localized columns are always nullable).
  */
 export function buildLocalizationUpSql(spec: CompanionMigrationSpec): string {
-  return buildLocalizationUpStatements(spec)
+  return buildLocalizationUpStatements(spec, { emittedToFile: true })
     .map(s => `${s};`)
     .join("\n\n");
 }
@@ -143,6 +152,22 @@ export interface LocalizationUpOptions {
    * both run against a main table that already has the column.
    */
   statusOnMain?: boolean;
+  /**
+   * Whether the companion `CREATE TABLE` may carry `IF NOT EXISTS`.
+   *
+   * True only for statements written into a migration FILE, which is applied verbatim against a
+   * database that has usually provisioned the companion already. The runtime leaves it false so
+   * `ensureCompanionTable` keeps detecting a lost create race by the statement failing.
+   */
+  emittedToFile?: boolean;
+  /**
+   * Whether the seed should skip rows the companion already holds.
+   *
+   * Asked for by the runtime resume, which has read the transition record and therefore knows the
+   * existing rows are an interrupted copy rather than the stale remains of a disable. See
+   * {@link buildSeedGuard} for why a migration file must not ask for it.
+   */
+  guardSeed?: boolean;
 }
 
 /**
@@ -158,7 +183,10 @@ export function buildLocalizationUpStatements(
 ): string[] {
   const { dialect, mainTable, companionTable, defaultLocale, columns } = spec;
 
-  const create = buildCompanionCreateStatement(spec);
+  const create = buildCompanionCreateStatement(
+    spec,
+    options.emittedToFile === true
+  );
 
   // Only columns already on the main table can be seeded from or dropped. A field added and
   // localized in the same save is in `columns` (so the companion gets it) but not on main, so
@@ -188,7 +216,7 @@ export function buildLocalizationUpStatements(
             `(${q("_parent", dialect)}, ${q("_locale", dialect)}${statusInsertCol}${onMainCols}) ` +
             `SELECT ${q("id", dialect)}, ${lit(defaultLocale)}${statusSelectCol}${onMainCols} ` +
             `FROM ${q(mainTable, dialect)}` +
-            buildSeedGuard(spec),
+            (options.guardSeed === true ? buildSeedGuard(spec) : ""),
         ]
       : [];
 

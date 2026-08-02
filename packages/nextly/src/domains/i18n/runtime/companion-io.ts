@@ -811,7 +811,12 @@ async function resumeInterruptedSeed(
   companionTableName: string,
   onError?: (error: unknown) => void
 ): Promise<boolean> {
-  const plan = await buildSeedingCreateStatements(adapter, args, newLocalized);
+  // The guard belongs to THIS path: it has read the transition record, so it knows the rows the
+  // companion already holds are an interrupted copy to be kept rather than the stale remains of a
+  // disable. The initial-create path has no such record and asks for the plain seed.
+  const plan = await buildSeedingCreateStatements(adapter, args, newLocalized, {
+    guardSeed: true,
+  });
   if (!plan) return false;
 
   // Everything the plan emits except the CREATE, which the interrupted run already ran.
@@ -860,10 +865,10 @@ async function resumeInterruptedSeed(
       }
     }
     for (const statement of copy) {
-      // Issued as generated. The seed carries its own `WHERE NOT EXISTS` from
-      // `buildLocalizationUpStatements`, so this no longer appends one — matching on a statement's
-      // leading text to decide whether to rewrite it made the guard a property of the caller when
-      // it is a property of the statement, and left the emitted migration file without it.
+      // Issued as generated. The seed carries its guard from `buildLocalizationUpStatements`,
+      // which this path asks for — matching on a statement's leading text to decide whether to
+      // rewrite it made the guard a property of whoever executed the statement rather than of the
+      // statement itself.
       await adapter.executeQuery(statement);
     }
     // The interrupted run's debt is discharged, so the record stops describing one.
@@ -945,7 +950,8 @@ async function buildSeedingCreateStatements(
     sourceLocale?: string;
     requireColumnsOnMain?: boolean;
   },
-  newLocalized: CompanionFieldLike[]
+  newLocalized: CompanionFieldLike[],
+  options: { guardSeed?: boolean } = {}
 ): Promise<string[] | null> {
   if (!args.sourceLocale) return null;
 
@@ -999,6 +1005,7 @@ async function buildSeedingCreateStatements(
     { ...spec, columnsOnMain },
     {
       dropSeededColumns: false,
+      guardSeed: options.guardSeed,
       // Retained columns that were required must stop being so, or the first create after this
       // transition fails: the value now goes to the companion, so the main insert omits it.
       relaxColumns: onMain.filter(c => !c.nullable).map(c => c.name),
