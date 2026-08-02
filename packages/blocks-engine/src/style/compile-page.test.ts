@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { BlockDocument, BlockNode } from "../document";
+import { MAX_BREAKPOINTS_PER_AXIS } from "../document";
 import { validate } from "../validation";
 import { FIXTURE_BREAKPOINTS } from "../validation.fixtures";
 
@@ -1073,5 +1074,94 @@ describe("compiler-only objections are bounded too", () => {
       CTX
     );
     expect(out.css).toContain("color: #0f0");
+  });
+});
+
+describe("settings the compiler cannot use are dropped, not obeyed", () => {
+  it("drops a non-base viewport breakpoint that carries no bound", () => {
+    // Emitted, it would carry NO at-rule: a second unconditional context
+    // overriding the real base at every width, reachable from a settings record
+    // the type system accepts, since `maxWidth` is optional.
+    const out = compilePageCss(
+      doc([
+        node("n1", {
+          base: { base: { color: "#0f0" }, rogue: { color: "#f00" } },
+        }),
+      ]),
+      {
+        breakpoints: {
+          viewport: [{ id: "base" }, { id: "rogue" }],
+          container: [],
+        },
+      } as unknown as StyleCompileContext
+    );
+    expect(out.css).not.toContain("#f00");
+    expect(out.css).toContain("#0f0");
+    expect(out.warnings.map(issue => issue.code)).toContain(
+      "unknown-breakpoint"
+    );
+  });
+
+  it("keeps an unbounded CONTAINER breakpoint, which still emits a query", () => {
+    // The container axis is not the same case: its widest definition emits
+    // `@container (min-width: 0)`, so it stays scoped to a container rather
+    // than becoming a second unconditional base.
+    const out = css(
+      doc([node("n1", { base: { "card-base": { color: "#0f0" } } })])
+    );
+    expect(out).toContain("@container (min-width: 0)");
+    expect(out).toContain("#0f0");
+  });
+
+  it("enforces the declared per-axis breakpoint limit", () => {
+    // Every style envelope scans the whole context list, so a corrupt settings
+    // record costs its size times every node in the document, not once.
+    const viewport = [
+      { id: "base" },
+      ...Array.from({ length: 300 }, (_, index) => ({
+        id: `bp${index}`,
+        maxWidth: 2000 - index,
+      })),
+    ];
+    // Styled at one breakpoint inside the cap and one far outside it, so the
+    // assertion turns on which contexts were kept rather than on how many
+    // queries a single base value happens to produce — which is none.
+    const out = compilePageCss(
+      doc([
+        node("n1", {
+          base: { bp0: { color: "#0f0" }, bp250: { color: "#f00" } },
+        }),
+      ]),
+      {
+        breakpoints: { viewport, container: [] },
+      } as unknown as StyleCompileContext
+    );
+    // The widest survive; everything past the limit is not a breakpoint this
+    // site defines, so its values are reported stale like any other.
+    expect(out.css).toContain("#0f0");
+    expect(out.css).not.toContain("#f00");
+    expect(out.warnings.map(issue => issue.code)).toContain(
+      "unknown-breakpoint"
+    );
+    const emitted = [...out.css.matchAll(/max-width: \d+px/g)];
+    expect(emitted.length).toBeLessThanOrEqual(MAX_BREAKPOINTS_PER_AXIS);
+  });
+
+  it("says so when a stored visibility value is not a boolean", () => {
+    // `"false"` reads exactly like the thing it is not, and deciding nothing
+    // leaves the node visible — which is the outcome an author would call a bug
+    // and never find, since no rule was emitted to look at.
+    const out = compilePageCss(
+      doc([
+        node("n1", undefined, {
+          visibility: { devices: { mobile: "false" } },
+        }),
+      ]),
+      CTX
+    );
+    expect(out.css).not.toContain("display: none");
+    expect(out.warnings.map(issue => issue.code)).toContain(
+      "invalid-visibility"
+    );
   });
 });

@@ -25,7 +25,7 @@ import type {
   NodeStyles,
   StyleState,
 } from "../document";
-import { STYLE_STATES } from "../document";
+import { MAX_BREAKPOINTS_PER_AXIS, STYLE_STATES } from "../document";
 import { describeValue, pointer } from "../issue-text";
 import { isPlainRecord } from "../plain-record";
 import type { ValidationIssue } from "../validation";
@@ -171,17 +171,35 @@ function breakpointContexts(set: BreakpointSet): BreakpointContext[] {
   const axisDefs = (axis: "viewport" | "container"): BreakpointDef[] => {
     const defs = isPlainRecord(rawSet) ? rawSet[axis] : undefined;
     if (!Array.isArray(defs)) return [];
-    return defs.filter((def: unknown): def is BreakpointDef => {
+    const usable = defs.filter((def: unknown): def is BreakpointDef => {
       if (!isPlainRecord(def) || typeof def.id !== "string") return false;
+      // The base id names the unconditional context and carries no bound by
+      // definition; it is skipped below, and asking it for one would drop the
+      // very breakpoint every other rule is written against.
+      if (def.id === BASE_BREAKPOINT) return true;
+      if (def.maxWidth === undefined) {
+        // A container definition without a bound is the widest container query
+        // and still emits one, so it stays scoped to a container. A VIEWPORT
+        // definition without a bound would emit no at-rule at all: a second
+        // unconditional context, overriding the real base at every width, from
+        // a settings record the type system accepts.
+        return axis === "container";
+      }
       return (
-        def.maxWidth === undefined ||
-        (typeof def.maxWidth === "number" &&
-          Number.isFinite(def.maxWidth) &&
-          def.maxWidth > 0)
+        typeof def.maxWidth === "number" &&
+        Number.isFinite(def.maxWidth) &&
+        def.maxWidth > 0
       );
     });
+    // The declared per-axis limit, enforced here because nothing else enforces
+    // it. Every style envelope in the document scans the whole context list, so
+    // the cost of a corrupt settings record is multiplied by every node rather
+    // than paid once, and a byte-bounded document could still stall a render.
+    // The widest are kept, and values keyed to the rest are reported stale like
+    // any other id this site does not define.
+    return usable.sort(widthDescending).slice(0, MAX_BREAKPOINTS_PER_AXIS);
   };
-  for (const def of axisDefs("viewport").sort(widthDescending)) {
+  for (const def of axisDefs("viewport")) {
     if (def.id === BASE_BREAKPOINT) continue;
     contexts.push({
       id: def.id,
@@ -192,7 +210,7 @@ function breakpointContexts(set: BreakpointSet): BreakpointContext[] {
         : { atRule: `@media (max-width: ${def.maxWidth}px)` }),
     });
   }
-  for (const def of axisDefs("container").sort(widthDescending)) {
+  for (const def of axisDefs("container")) {
     if (def.id === BASE_BREAKPOINT) continue;
     contexts.push({
       id: def.id,
@@ -434,6 +452,24 @@ function visibilityRules(
     };
     for (const context of axisContexts) {
       const declared = devices[context.id];
+      // A stored value that is neither boolean decides nothing, and deciding
+      // nothing here means the node stays visible. This compiler reads
+      // persisted data whether or not a caller validated it, and promises that
+      // anything missing from the stylesheet is explained, so `"false"` — a
+      // string that reads exactly like the thing it is not — has to be said out
+      // loud rather than treated as "no opinion".
+      if (declared !== undefined && typeof declared !== "boolean") {
+        pushBoundedWarning(warningAllowance, warnings, {
+          path: pointer(
+            pointer(pointer(basePath, "visibility"), "devices"),
+            context.id
+          ),
+          code: "invalid-visibility",
+          severity: "warning",
+          message: `Visibility at "${describeValue(context.id)}" is ${describeValue(declared)} rather than true or false, so it was not applied and the node stays visible here.`,
+        });
+        continue;
+      }
       if (declared === false && !hidden) {
         hidden = true;
         hidingFrom = context;
