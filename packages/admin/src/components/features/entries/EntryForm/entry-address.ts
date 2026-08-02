@@ -133,15 +133,20 @@ export function anyLocalePublished(
  *
  * The column is nullable and null for every row that predates it, so a missing marker means "not
  * known to have been published" rather than "never published" — which is why it may only ever add
- * to the answer. Both the serialized string an API response carries and the `Date` a hook-shaped
- * document carries are accepted; an empty string is not a timestamp.
+ * to the answer.
+ *
+ * A response carries the timestamp serialized while a hook-shaped document carries it decoded, so
+ * both are accepted, and both are put through the same parse rather than a string being taken on
+ * trust for being non-empty. Freezing is permanent for the session, so a value that does not
+ * describe a moment in time — an empty string, a malformed one a custom `afterRead` hook
+ * substituted, an `Invalid Date` — must not buy it.
  */
 export function everPublishedOnRecord(
   entry: EntryData | null | undefined
 ): boolean {
   const marker = entry?.firstPublishedAt;
-  if (marker instanceof Date) return !Number.isNaN(marker.getTime());
-  return typeof marker === "string" && marker.length > 0;
+  if (typeof marker !== "string" && !(marker instanceof Date)) return false;
+  return !Number.isNaN(new Date(marker).getTime());
 }
 
 export interface PublicAddressArgs {

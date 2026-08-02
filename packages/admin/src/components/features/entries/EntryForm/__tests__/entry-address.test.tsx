@@ -170,9 +170,14 @@ describe("everPublishedOnRecord", () => {
   });
 
   it("does not treat an unparseable value as a publication", () => {
-    // An empty string and an invalid date are not timestamps. Accepting either would freeze a slug
-    // on the strength of a malformed field.
+    // Freezing is permanent for the session, so a value that does not describe a moment in time
+    // must not buy it. A serialized marker goes through the same parse as a decoded one: taking a
+    // string on trust for being non-empty would let a malformed value a custom `afterRead` hook
+    // substituted freeze the slug of an entry that may never have been published.
     expect(everPublishedOnRecord(entry({ firstPublishedAt: "" }))).toBe(false);
+    expect(
+      everPublishedOnRecord(entry({ firstPublishedAt: "not a date" }))
+    ).toBe(false);
     expect(
       everPublishedOnRecord(entry({ firstPublishedAt: new Date("nonsense") }))
     ).toBe(false);
