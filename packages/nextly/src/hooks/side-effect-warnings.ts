@@ -43,7 +43,13 @@ const collectorStack = new AsyncLocalStorage<SideEffectHookFailure[][]>();
 export interface HookWarning {
   /** The lifecycle phase whose handler failed. */
   phase: string;
-  /** The collection or single the handler was registered against. */
+  /**
+   * The registry key the handler was registered against.
+   *
+   * A collection's slug, or `single:<slug>` for a single. Namespaced rather
+   * than bare because a collection and a single may share a slug, and a
+   * consumer reacting to the warning has to know which one it came from.
+   */
   collection: string;
   /** The canonical `NextlyError` code, for a caller branching on the failure. */
   code: string;
@@ -101,4 +107,22 @@ export function currentSideEffectWarnings(): HookWarning[] {
   const stack = collectorStack.getStore();
   const innermost = stack?.[stack.length - 1];
   return (innermost ?? []).map(toHookWarning);
+}
+
+/**
+ * Run a write and hand back the post-commit hook failures it collected.
+ *
+ * The scope opens here because a Direct API call is its own operation boundary
+ * -- there is no request around it to open one. A scope already open (the call
+ * came from inside a request, or from another collection's hook) still receives
+ * the same failures, so an in-process call cannot hide one from the client
+ * waiting on the request that triggered it.
+ */
+export async function collectingWarnings<T>(
+  operation: () => Promise<T>
+): Promise<{ result: T; warnings?: HookWarning[] }> {
+  const { result, failures } = await withSideEffectWarnings(operation);
+  return failures.length > 0
+    ? { result, warnings: failures.map(toHookWarning) }
+    : { result };
 }

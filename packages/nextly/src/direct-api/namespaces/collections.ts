@@ -10,11 +10,7 @@
  */
 
 import { NextlyError } from "../../errors/nextly-error";
-import type { HookWarning } from "../../hooks/side-effect-warnings";
-import {
-  toHookWarning,
-  withSideEffectWarnings,
-} from "../../hooks/side-effect-warnings";
+import { collectingWarnings } from "../../hooks/side-effect-warnings";
 import type { PaginatedResponse } from "../../types/pagination";
 import type {
   BulkDeleteArgs,
@@ -158,23 +154,6 @@ export async function findByID<TSlug extends CollectionSlug>(
  * collection slug capitalized (e.g. `"Posts created."`) so callers can
  * surface a generic toast without hand-writing copy per collection.
  */
-/**
- * Run a write and hand back the post-commit hook failures it collected.
- *
- * The scope opens here because a Direct API call is its own operation boundary
- * -- there is no request around it to open one. A scope already open (the call
- * came from inside a request, or from another collection's hook) still receives
- * the same failures, so an in-process call cannot hide one from the client
- * waiting on the request that triggered it.
- */
-async function collectingWarnings<T>(
-  operation: () => Promise<T>
-): Promise<{ result: T; warnings?: HookWarning[] }> {
-  const { result, failures } = await withSideEffectWarnings(operation);
-  return failures.length > 0
-    ? { result, warnings: failures.map(toHookWarning) }
-    : { result };
-}
 
 export async function create<TSlug extends CollectionSlug>(
   ctx: NextlyContext,

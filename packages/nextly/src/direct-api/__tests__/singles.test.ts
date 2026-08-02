@@ -159,7 +159,11 @@ describe("Direct API - Singles Operations", () => {
         data: { siteName: "Updated Site" },
       });
 
-      expect(result).toEqual(mockData);
+      // The mutation envelope, matching the collection mutations. `warnings`
+      // is absent because no hook failed, so an ordinary result carries what
+      // it always did plus the message.
+      expect(result.item).toEqual(mockData);
+      expect(result.warnings).toBeUndefined();
       expect(mocks.singleEntryService.update).toHaveBeenCalledWith(
         "site-settings",
         { siteName: "Updated Site" },
