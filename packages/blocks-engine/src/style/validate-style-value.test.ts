@@ -735,6 +735,29 @@ describe("the issue budget reaches composites too", () => {
     expect(issues.at(-1)?.code).toBe("style-issues-truncated");
   });
 
+  it("bounds path text inside a composite, not only between properties", () => {
+    // The run is charged when a walk RETURNS, so a composite that only asked
+    // the budget would build every field's issue first. `background` under a
+    // long breakpoint id is the shape that reaches hundreds of megabytes from
+    // a document inside the byte cap.
+    const longKey = "b".repeat(200_000);
+    const fields: Record<string, unknown> = {};
+    for (let index = 0; index < 199; index += 1) fields[`nope${index}`] = "x";
+    const budget = newStyleIssueBudget();
+    const issues = validateStyleValues(
+      { background: fields },
+      `/nodes/0/styles/base/${longKey}`,
+      "strict",
+      budget
+    );
+    const totalPathBytes = issues.reduce(
+      (sum, issue) => sum + issue.path.length,
+      0
+    );
+    expect(totalPathBytes).toBeLessThan(2_000_000);
+    expect(issues.at(-1)?.code).toBe("style-issues-truncated");
+  });
+
   it("bounds the total path text, not only the number of issues", () => {
     // A pointer repeats every key above it. One very long key is therefore
     // copied into every issue beneath it, so a document inside the byte cap
@@ -2482,6 +2505,30 @@ describe("a deferred value still needs its name", () => {
     expect(codes({ width: "var(--x)" })).toEqual([]);
     expect(codes({ width: "var(--x, 1px)" })).toEqual([]);
     expect(codes({ width: "env(safe-area-inset-top)" })).toEqual([]);
+  });
+
+  it("reads an attr fallback as the value it replaces", () => {
+    // The fallback is substituted whole when the attribute is missing, so
+    // `1px + 2` reaches the property as written. Arithmetic belongs inside a
+    // math function; bare operators here are discarded by the browser.
+    expect(codes({ width: "attr(data-x px, 1px + 2)" })).toEqual([
+      "invalid-style-value",
+    ]);
+    expect(codes({ width: "attr(data-x px, 1px * 2)" })).toEqual([
+      "invalid-style-value",
+    ]);
+    // Wrapped in a math function it is a value again.
+    expect(codes({ width: "attr(data-x px, calc(1px + 2px))" })).toEqual([]);
+    expect(codes({ width: "attr(data-x px, 1px)" })).toEqual([]);
+    // The fallback is ONE value, not a run of them: a px-typed attribute
+    // substitutes a single length, so two adjacent ones are as wrong here as
+    // they are written out, and a CSS-wide keyword still voids its neighbours.
+    expect(codes({ width: "attr(data-x px, 1px 2px)" })).toEqual([
+      "invalid-style-value",
+    ]);
+    expect(codes({ width: "attr(data-x px, inherit 1px)" })).toEqual([
+      "invalid-style-value",
+    ]);
   });
 
   it("reads the whole head, not only the name", () => {
