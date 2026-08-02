@@ -22,6 +22,10 @@ export const box = defineBlock<ContainerProps>({
     "A generic container. Full width with no padding of its own; use display to make it a flex row, a stack, or a grid.",
   props: {
     as: { type: "select", options: ["div", "article", "aside"] },
+    // Declared even though a box is full width by default: a preset differs
+    // from its sibling in what it starts as, never in what it can be told to
+    // do, and a schema is what lets anything but a human change a value.
+    contained: { type: "checkbox" },
   },
   defaultProps: { as: "div", contained: false },
   example: { props: { as: "div" } },

@@ -14,6 +14,17 @@
  * half of the migration policy applied to data — a page that cannot reach its
  * database should degrade, not disappear.
  *
+ * **What this cannot do yet, and why it is worth knowing.** `slots.children` is
+ * already-rendered output, so every iteration below repeats the SAME element.
+ * The template is duplicated once per entry, but a child inside it cannot show
+ * that entry's fields, because nothing in the render contract lets a block ask
+ * for its slot to be rendered again under a different value. A repeater needs
+ * exactly that, and no arrangement of the current arguments provides it.
+ *
+ * That makes this useful for repeating a fixed template a data-driven number of
+ * times, and not yet useful for listing content. Closing the gap is a change to
+ * what a slot IS, which is why it is recorded rather than worked around here.
+ *
  * @module blocks/library/collection-loop
  */
 import { defineBlock } from "@nextlyhq/plugin-sdk/blocks";

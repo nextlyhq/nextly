@@ -55,68 +55,20 @@ export interface SlotSpec {
 export type BlockSupportValue = boolean | Record<string, boolean>;
 
 /**
- * The support keys a block may declare, as an interface so the vocabulary is
- * open at the type level the same way it is open at runtime.
- *
- * A plugin that calls `registerSupport()` adds its key to the vocabulary the
- * compiler checks against by augmenting this interface:
- *
- * ```ts
- * declare module "@nextlyhq/blocks-engine" {
- *   interface BlockSupportKeys {
- *     animation: true;
- *   }
- * }
- * ```
- *
- * Declaration merging rather than an index signature: an index signature would
- * accept every key, which is what leaves a misspelled `spaceing` to be caught at
- * boot instead of while it is being written.
- *
- * The built-in keys are the style catalog's groups. They are written out rather
- * than mapped from `StyleGroup` so each can carry the sub-flags it recognises in
- * its own doc comment, and a type test asserts these keys are exactly
- * `StyleGroup`, so the two lists fail to compile rather than drifting.
- *
- * @experimental Re-exported to plugin authors as `@nextlyhq/plugin-sdk/blocks`.
- *   Settles at the end of the engine phase.
- */
-export interface BlockSupportKeys {
-  /** Padding and margin. Flags: `padding`, `margin`. */
-  spacing: true;
-  /** Flow, alignment and gap. */
-  layout: true;
-  /** Width, height and their limits. */
-  dimensions: true;
-  /** Font, size, weight, line height and letter spacing. */
-  typography: true;
-  /** Text and other foreground colours. */
-  color: true;
-  /** Background colour, image and gradient. */
-  background: true;
-  /** Border lines and corner rounding. Flags include `radius`. */
-  border: true;
-  /** Box and text shadows. */
-  shadow: true;
-  /** Opacity, filters and transforms. */
-  effects: true;
-  /** Positioning and stacking. */
-  position: true;
-  /** Container-query behaviour. */
-  container: true;
-}
-
-/**
  * Style capabilities a block opts into. Each key must be a registered support
  * (built-in or added via `registerSupport`); `true` enables the whole group and
  * an object enables individual sub-flags.
  *
+ * Open at this level because the registry holds blocks from every source and
+ * validates their keys against what is registered at boot. The AUTHORING type
+ * is narrower and lives in `@nextlyhq/plugin-sdk/blocks`, where a plugin author
+ * can reach it: an augmentation has to name a module that resolves from the
+ * augmenting file, and a plugin installs the SDK rather than this package.
+ *
  * @experimental Re-exported to plugin authors as `@nextlyhq/plugin-sdk/blocks`.
  *   Settles at the end of the engine phase.
  */
-export type BlockSupports = Partial<
-  Record<keyof BlockSupportKeys, BlockSupportValue>
->;
+export type BlockSupports = Record<string, BlockSupportValue>;
 
 /** A path to an editor component, resolved through the admin import map. */
 export type ComponentPath = string;

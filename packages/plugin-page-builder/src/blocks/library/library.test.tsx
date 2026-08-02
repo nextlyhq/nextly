@@ -178,6 +178,33 @@ describe("core/collection-loop", () => {
     expect(children.map(child => child.key)).toEqual(["0", "1"]);
   });
 
+  it("repeats one already-rendered template rather than re-rendering it", async () => {
+    // The limitation stated in this block's own docs, asserted so it is visible
+    // in the suite instead of being discovered by whoever first tries to list
+    // content with it. `slots.children` arrives rendered, so every iteration is
+    // the same element and no child can show its own entry's fields. Closing
+    // that gap means changing what a slot is, not changing this file.
+    const { provider } = stubProvider([
+      { id: "a", title: "First" },
+      { id: "b", title: "Second" },
+    ]);
+    const element = await renderCollectionLoop(
+      args<{ collection?: string }, PageContext>(
+        { collection: "posts" },
+        { data: provider }
+      )
+    );
+    const html = renderToStaticMarkup(element);
+    expect(html).toBe(
+      '<div class="nx-n1">' +
+        "<div><span>child</span></div>".repeat(2) +
+        "</div>"
+    );
+    // Neither entry's own field appears anywhere, which is the whole finding.
+    expect(html).not.toContain("First");
+    expect(html).not.toContain("Second");
+  });
+
   it("locks its template to content-only editing", () => {
     // The shape is the author's and the repetition is the block's; a structural
     // edit inside one iteration is how a repeater stops being predictable.

@@ -27,14 +27,29 @@ expectTypeOf<BlockSupportValue>().toEqualTypeOf<
   boolean | Record<string, boolean>
 >();
 
-// A support key is checked against the catalog's groups while it is being
-// written rather than at boot.
-const goodSupports: BlockSupports = { spacing: true, border: { radius: true } };
+// A support key is checked while it is being written rather than at boot, and
+// the vocabulary covers the capabilities that have no style group of their own.
+const goodSupports: BlockSupports = {
+  spacing: true,
+  border: { radius: true },
+  customCss: true,
+};
 expectTypeOf(goodSupports).toMatchTypeOf<BlockSupports>();
 
-// @ts-expect-error "spaceing" is not a style group.
+// @ts-expect-error "spaceing" is not a support key.
 const typo: BlockSupports = { spaceing: true };
 void typo;
+
+// A plugin adds its own key by augmenting the interface in the package it
+// installed. Doing it here proves the target is reachable from a consumer's own
+// source, which is the only thing that makes the documented workflow real.
+declare module "@nextlyhq/plugin-sdk/blocks" {
+  interface BlockSupportKeys {
+    testOnlyAnimation: true;
+  }
+}
+const augmented: BlockSupports = { testOnlyAnimation: true };
+void augmented;
 
 // The context a block renders against is the renderer's to name, and a block
 // that declares one gets it typed rather than as `unknown`.

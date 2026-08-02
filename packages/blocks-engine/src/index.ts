@@ -84,7 +84,6 @@ export type {
   BlockExample,
   BlockRenderArgs,
   BlockRenderResult,
-  BlockSupportKeys,
   BlockSupports,
   BlockSupportValue,
   BlockVariation,
