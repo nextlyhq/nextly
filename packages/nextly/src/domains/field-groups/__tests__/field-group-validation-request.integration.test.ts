@@ -160,7 +160,7 @@ describe("a field group's validators and the parent write's request", () => {
       overrideAccess: true,
     });
 
-    expect((updated as { headline?: string }).headline).toBe("Hello");
+    expect(updated.item.headline).toBe("Hello");
   });
 
   it("refuses the same single update when nobody is signed in", async () => {

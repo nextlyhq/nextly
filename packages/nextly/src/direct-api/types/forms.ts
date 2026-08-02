@@ -6,6 +6,8 @@
  * @packageDocumentation
  */
 
+import type { HookWarning } from "../../hooks/side-effect-warnings";
+
 import type { DirectAPIConfig } from "./shared";
 
 /**
@@ -146,6 +148,16 @@ export interface SubmitFormResult {
 
   /** Redirect URL (if form configured for redirect on success) */
   redirect?: string;
+
+  /**
+   * Side effects that failed after the submission was saved, when any did.
+   *
+   * A submission collection's `afterCreate` hooks are where notification and
+   * integration work lives, so one throwing is the common case here: the row
+   * is durable and the caller has to be able to tell that the email or the
+   * webhook did not go out.
+   */
+  warnings?: HookWarning[];
 }
 
 /**

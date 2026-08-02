@@ -6,6 +6,8 @@
  * @packageDocumentation
  */
 
+import type { HookWarning } from "../../hooks/side-effect-warnings";
+
 import type {
   CollectionSlug,
   DirectAPIConfig,
@@ -457,6 +459,16 @@ export interface DeleteResult {
 
   /** IDs of deleted documents */
   ids: string[];
+
+  /**
+   * Side effects that failed after the rows were deleted, when any did.
+   *
+   * Present only when a post-commit hook threw. The rows are gone either way,
+   * so this reports a side effect that did not run rather than a failed
+   * delete. Mirrors `MutationResult.warnings`, so a delete by `where` reports
+   * a hook failure the same way a delete by id does.
+   */
+  warnings?: HookWarning[];
 }
 
 /**
@@ -494,4 +506,14 @@ export interface BulkOperationResult<T = { id: string }> {
 
   /** Number of failed operations. */
   failedCount: number;
+
+  /**
+   * Side effects that failed after the rows were written, when any did.
+   *
+   * Distinct from `failures`, which is per-ITEM and means that item did not
+   * happen. This is per-OPERATION: every listed success is durable, and a hook
+   * that ran after the write threw. Reporting one as the other would tell a
+   * caller a saved row failed and invite a retry that writes it twice.
+   */
+  warnings?: HookWarning[];
 }

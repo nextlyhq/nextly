@@ -78,6 +78,7 @@ import { readAccessTokenCookie } from "./auth/cookies/access-token-cookie";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
 import { container } from "./di/container";
 import { NextlyError } from "./errors/nextly-error";
+import { withSideEffectWarnings } from "./hooks/side-effect-warnings";
 import { withTimezoneFormatting } from "./lib/date-formatting";
 import { createCorsMiddleware } from "./middleware/cors";
 import { createRateLimiter } from "./middleware/rate-limit";
@@ -1471,8 +1472,15 @@ export function createDynamicHandlers(options?: {
       return applySecurityHeaders(corsRateLimited);
     }
 
-    // Run the handler, then layer on CORS + security headers
-    const response = await handler();
+    // Run the handler, then layer on CORS + security headers.
+    //
+    // Wrapped in a side-effect warning scope because this is the one place
+    // every verb converges on, and a post-commit hook failure has to reach the
+    // response the client is waiting on. The response builders read the scope
+    // from inside it, so nothing between here and them has to carry the
+    // failures; a request whose hooks all succeed collects an empty array and
+    // its body is unchanged.
+    const { result: response } = await withSideEffectWarnings(() => handler());
     const formattedResponse = await applyGlobalDateFormatting(response, req);
     const corsResponse = cors.applyHeaders(req, formattedResponse);
     return applySecurityHeaders(corsResponse);
