@@ -453,6 +453,8 @@ function MultiComponentNonRepeatable({
     setValue(name, null, { shouldDirty: true });
   }, [name, setValue]);
 
+  // Shown when the field carries no label of its own. The field TYPE stays `component`; only
+  // what the editor is called changed.
   const label = field.label || "Field Group";
 
   return (
@@ -484,14 +486,14 @@ function MultiComponentNonRepeatable({
       <CardContent className="space-y-4">
         {/* Type Selector */}
         <div className="space-y-2">
-          <label className="text-sm font-medium">Component Type</label>
+          <label className="text-sm font-medium">Field Group</label>
           <Select
             value={currentType || ""}
             onValueChange={handleTypeChange}
             disabled={disabled || readOnly}
           >
             <SelectTrigger>
-              <SelectValue placeholder="Select a component type..." />
+              <SelectValue placeholder="Select a field group..." />
             </SelectTrigger>
             <SelectContent>
               {availableSlugs.map(slug => {
@@ -526,7 +528,7 @@ function MultiComponentNonRepeatable({
 
         {!currentType && (
           <p className="text-sm text-muted-foreground text-center py-4  border border-border border-dashed rounded-md bg-primary/5">
-            Select a component type to add fields.
+            Select a field group to add fields.
           </p>
         )}
       </CardContent>
@@ -741,7 +743,7 @@ function RepeatableComponent<TFieldValues extends FieldValues = FieldValues>({
                 availableSlugs={availableSlugs}
                 onSelect={handleAdd}
                 title={`Add ${singularLabel}`}
-                description={`Choose a component type to add to ${pluralLabel.toLowerCase()}.`}
+                description={`Choose a field group to add to ${pluralLabel.toLowerCase()}.`}
               />
             </>
           ) : (

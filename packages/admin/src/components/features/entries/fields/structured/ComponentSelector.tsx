@@ -63,13 +63,13 @@ export interface ComponentSelectorProps {
 
   /**
    * Optional title for the dialog.
-   * @default "Add Component"
+   * @default "Add Field Group"
    */
   title?: string;
 
   /**
    * Optional description for the dialog.
-   * @default "Choose a component type to add."
+   * @default "Choose a field group to add."
    */
   description?: string;
 }
@@ -254,8 +254,10 @@ export function ComponentSelector({
   componentSchemas,
   availableSlugs,
   onSelect,
-  title = "Add Component",
-  description = "Choose a component type to add.",
+  // Defaults are display copy. Slugs and schema keys threaded through this component keep the
+  // stored `component` spelling.
+  title = "Add Field Group",
+  description = "Choose a field group to add.",
 }: ComponentSelectorProps) {
   // Search state
   const [searchQuery, setSearchQuery] = useState("");
@@ -316,7 +318,7 @@ export function ComponentSelector({
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
           <Input
             type="search"
-            placeholder="Search components..."
+            placeholder="Search field groups..."
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
             className="pl-10 pr-10"
@@ -380,8 +382,8 @@ export function ComponentSelector({
                 <Puzzle className="h-12 w-12 mx-auto text-muted-foreground mb-3" />
                 <p className="text-muted-foreground">
                   {searchQuery
-                    ? "No components match your search."
-                    : "No components available."}
+                    ? "No field groups match your search."
+                    : "No field groups available."}
                 </p>
                 {searchQuery && (
                   <Button

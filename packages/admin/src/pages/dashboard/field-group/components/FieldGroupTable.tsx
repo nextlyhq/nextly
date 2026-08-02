@@ -226,7 +226,7 @@ export default function FieldGroupTable() {
 
   const handleBulkDelete = useCallback(() => {
     if (selectedCount === 0) {
-      toast.error("No components selected");
+      toast.error("No field groups selected");
       return;
     }
     setBulkDeleteDialogOpen(true);
@@ -240,22 +240,22 @@ export default function FieldGroupTable() {
       onSuccess: result => {
         if (result.failed === 0) {
           toast.success("Field groups deleted", {
-            description: `${result.succeeded} components deleted successfully.`,
+            description: `${result.succeeded} field groups deleted successfully.`,
           });
         } else {
           toast.warning("Partially completed", {
             description: `${result.succeeded} deleted, ${result.failed} failed.`,
           });
-          console.error("Failed to delete components:", result.failedIds);
+          console.error("Failed to delete field groups:", result.failedIds);
         }
         setBulkDeleteDialogOpen(false);
         clearSelection();
       },
       onError: result => {
         toast.error("Deletion failed", {
-          description: `Failed to delete ${result.failed} components.`,
+          description: `Failed to delete ${result.failed} field groups.`,
         });
-        console.error("Failed components:", result.failedIds);
+        console.error("Failed field groups:", result.failedIds);
       },
     });
   }, [filteredData, selectedIds, bulkDeleteFieldGroups, clearSelection]);
@@ -269,7 +269,7 @@ export default function FieldGroupTable() {
     () => [
       {
         name: "label",
-        header: "COMPONENT",
+        header: "FIELD GROUP",
         cell: ({ row }) => {
           const iconName = row.admin?.icon || "Puzzle";
           const IconComponent =
@@ -453,7 +453,7 @@ export default function FieldGroupTable() {
         <SearchBar
           value={search}
           onChange={setSearch}
-          placeholder="Search components..."
+          placeholder="Search field groups..."
           isLoading={isFetching}
           className="w-full border-border bg-background text-foreground md:max-w-sm"
         />
@@ -585,7 +585,7 @@ export default function FieldGroupTable() {
         <Alert variant="destructive">
           {error instanceof Error
             ? error.message
-            : "Failed to load components. Please try again."}
+            : "Failed to load field groups. Please try again."}
         </Alert>
       ) : showLoadingSkeleton ? (
         <FieldGroupTableSkeleton />
@@ -600,9 +600,10 @@ export default function FieldGroupTable() {
             primaryColumn="label"
             selection={selection}
             rowActions={rowActions}
+            // Storage identifier, not copy: this addresses the registry the API serves.
             registryKey="components"
             ariaLabel="Field Groups table"
-            emptyMessage="No components found. Try adjusting your search or filters."
+            emptyMessage="No field groups found. Try adjusting your search or filters."
           />
           {data && (
             <Pagination

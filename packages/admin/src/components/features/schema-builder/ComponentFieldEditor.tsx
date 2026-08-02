@@ -41,6 +41,9 @@ import type { ComponentFieldEditorProps, ComponentFieldMode } from "./types";
 // ComponentFieldEditor Component
 // ============================================================
 
+// Field groups are called field groups in the UI. The `component` spelling that remains here is
+// the STORED one and stays: it is the field type written into `fields` JSON and the registry key
+// the API is addressed by, so renaming it would make existing content unreadable.
 export function ComponentFieldEditor({
   component,
   onComponentChange,
@@ -305,7 +308,7 @@ export function ComponentFieldEditor({
             <SelectContent>
               <SelectItem value="__none__">
                 <span className="text-muted-foreground">
-                  No component selected
+                  No field group selected
                 </span>
               </SelectItem>
               {availableComponents.map(comp => (
