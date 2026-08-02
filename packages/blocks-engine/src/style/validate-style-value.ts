@@ -48,38 +48,36 @@ const REJECTION_MESSAGES = {
 } as const;
 
 /**
- * One allowance: how many more issues may be reported, how many bytes of
- * JSON-Pointer path they may carry between them, and whether this allowance has
- * already said that it stopped early.
- *
- * Counting issues alone does not bound what is returned. A pointer repeats
- * every key above it, so one very long key — a breakpoint id, a property
- * name — is copied into every issue beneath it, and a document well inside the
- * byte cap can produce output hundreds of times its own size. Charging the
- * paths bounds the ANSWER, the way the byte cap bounds the question.
- */
-export interface IssueAllowance {
-  count: number;
-  pathBytes: number;
-  truncated: boolean;
-}
-
-/**
  * A shared allowance for what one validation run may report. Held by the caller
  * so the limits span a whole document rather than resetting at every node.
+ *
+ * Counting issues alone does not bound what is returned. A pointer repeats every
+ * key above it, so one very long key — a breakpoint id, a property name — is
+ * copied into every issue beneath it, and a document well inside the byte cap
+ * can produce output hundreds of times its own size. Charging the paths bounds
+ * the ANSWER, the way the byte cap bounds the question.
  *
  * Two allowances, spent independently. Structural findings describe the
  * document; site findings — a token name or a class id that resolves against
  * tables the caller supplied — describe the configuration it was read against.
- * Sharing one allowance lets the second kind consume the first: renaming a
- * token produces a warning at every use of it, and the marker saying checking
- * stopped early is an ERROR, so warnings documented as never blocking a publish
- * would block one. Separate allowances make that impossible rather than
- * unlikely.
+ * Sharing one allowance lets the second kind consume the first: renaming a token
+ * produces a warning at every use of it, and the marker saying checking stopped
+ * early is an ERROR, so warnings documented as never blocking a publish would
+ * block one. Separate allowances make that impossible rather than unlikely.
  */
 export interface StyleIssueBudget {
-  structural: IssueAllowance;
-  site: IssueAllowance;
+  /** How many more structural issues this run may report. */
+  remaining: number;
+  /** How many more bytes of path those issues may carry between them. */
+  pathBytes: number;
+  /** Whether this run has already said structural checking stopped early. */
+  truncated: boolean;
+  /** How many more unresolved-name warnings this run may report. */
+  siteRemaining: number;
+  /** How many more bytes of path those warnings may carry between them. */
+  sitePathBytes: number;
+  /** Whether this run has already said name resolution stopped early. */
+  siteTruncated: boolean;
 }
 
 /** The default number of structural style issues one validation reports. */
@@ -123,9 +121,35 @@ export function newStyleIssueBudget(
   sitePathBytes: number = MAX_SITE_ISSUE_PATH_BYTES
 ): StyleIssueBudget {
   return {
-    structural: { count: remaining, pathBytes, truncated: false },
-    site: { count: siteRemaining, pathBytes: sitePathBytes, truncated: false },
+    remaining,
+    pathBytes,
+    truncated: false,
+    siteRemaining,
+    sitePathBytes,
+    siteTruncated: false,
   };
+}
+
+/**
+ * Fill in a budget that predates the site allowance.
+ *
+ * The structural fields have been public since this type shipped, so a caller
+ * may hand back an object carrying only those. Reading a missing allowance
+ * would bound nothing, and validation reports rather than throwing, so the
+ * missing half is filled with its defaults instead.
+ */
+export function normalizeStyleIssueBudget(
+  budget: StyleIssueBudget | undefined
+): StyleIssueBudget | undefined {
+  if (budget === undefined) return undefined;
+  if (typeof budget.siteRemaining !== "number") {
+    budget.siteRemaining = MAX_SITE_ISSUES;
+  }
+  if (typeof budget.sitePathBytes !== "number") {
+    budget.sitePathBytes = MAX_SITE_ISSUE_PATH_BYTES;
+  }
+  if (typeof budget.siteTruncated !== "boolean") budget.siteTruncated = false;
+  return budget;
 }
 
 /** Charge a run for the issues just produced, each against its own allowance. */
@@ -135,9 +159,13 @@ export function chargeIssueBudget(
 ): void {
   if (budget === undefined) return;
   for (const issue of produced) {
-    const allowance = isSiteIssue(issue) ? budget.site : budget.structural;
-    allowance.count -= 1;
-    allowance.pathBytes -= issue.path.length;
+    if (isSiteIssue(issue)) {
+      budget.siteRemaining -= 1;
+      budget.sitePathBytes -= issue.path.length;
+    } else {
+      budget.remaining -= 1;
+      budget.pathBytes -= issue.path.length;
+    }
   }
 }
 
@@ -150,44 +178,29 @@ export function chargeIssueBudget(
  * was given, and the allowance is what keeps a document full of unknown keys
  * from building an issue for each one before anything looks at the result.
  *
- * A shallow copy of each allowance keeps both properties at once. The arm reads
- * the same remaining amounts, so it stops in the same place; every charge and
- * every truncation flag lands on the copy and goes away with it.
+ * A copy keeps both properties at once. The arm reads the same remaining
+ * amounts, so it stops in the same place; every charge and every truncation flag
+ * lands on the copy and goes away with it.
  */
 export function speculativeBudget(
   budget: StyleIssueBudget | undefined
 ): StyleIssueBudget | undefined {
-  if (budget === undefined) return undefined;
-  return {
-    structural: { ...budget.structural },
-    site: { ...budget.site },
-  };
-}
-
-/** Whether an allowance has spent either of its limits. */
-function allowanceSpent(allowance: IssueAllowance): boolean {
-  return allowance.count <= 0 || allowance.pathBytes <= 0;
+  return budget === undefined ? undefined : { ...budget };
 }
 
 /** Whether the structural allowance is spent and the walk must stop. */
 export function structuralAllowanceSpent(budget: StyleIssueBudget): boolean {
-  return allowanceSpent(budget.structural);
+  return budget.remaining <= 0 || budget.pathBytes <= 0;
 }
 
 /** Whether a run may still ask, and report, whether a name resolves. */
 export function siteAllowanceSpent(
   budget: StyleIssueBudget | undefined
 ): boolean {
-  return budget !== undefined && allowanceSpent(budget.site);
-}
-
-/** Record one site finding against its allowance and return it as the result. */
-function charged(
-  budget: StyleIssueBudget | undefined,
-  issue: ValidationIssue
-): ValidationIssue[] {
-  chargeIssueBudget(budget, [issue]);
-  return [issue];
+  return (
+    budget !== undefined &&
+    (budget.siteRemaining <= 0 || budget.sitePathBytes <= 0)
+  );
 }
 
 /**
@@ -203,8 +216,8 @@ export function siteTruncationNotice(
   budget: StyleIssueBudget | undefined,
   path: string
 ): ValidationIssue[] {
-  if (budget === undefined || budget.site.truncated) return [];
-  budget.site.truncated = true;
+  if (budget === undefined || budget.siteTruncated) return [];
+  budget.siteTruncated = true;
   return charged(budget, {
     path,
     code: "site-issues-truncated",
@@ -212,6 +225,15 @@ export function siteTruncationNotice(
     message:
       "Some token and class names were not checked against this site, so any that do not resolve are not reported here.",
   });
+}
+
+/** Record one site finding against its allowance and return it as the result. */
+function charged(
+  budget: StyleIssueBudget | undefined,
+  issue: ValidationIssue
+): ValidationIssue[] {
+  chargeIssueBudget(budget, [issue]);
+  return [issue];
 }
 
 /** True when a token of the given kind may be stored at this leaf. */
@@ -285,8 +307,8 @@ function truncationNotice(
   budget: StyleIssueBudget,
   path: string
 ): ValidationIssue[] {
-  if (budget.structural.truncated) return [];
-  budget.structural.truncated = true;
+  if (budget.truncated) return [];
+  budget.truncated = true;
   return [
     {
       path,
@@ -513,6 +535,23 @@ function leafIssues(
   }
 }
 
+/**
+ * Every token kind any arm of a union accepts.
+ *
+ * A union accepts a token the moment one arm does, so the kinds it accepts are
+ * the union of its arms'. Order is the catalog's, deduplicated, so the message
+ * built from this reads the same way every time.
+ */
+function unionTokenKinds(shape: StyleShape): TokenKind[] {
+  const kinds: TokenKind[] = [];
+  for (const leaf of shapeLeaves(shape)) {
+    for (const kind of leaf.tokenKinds) {
+      if (!kinds.includes(kind)) kinds.push(kind);
+    }
+  }
+  return kinds;
+}
+
 /** Validate a value against one named part of a composite shape. */
 function partIssues(
   parts: Readonly<Record<string, StyleShape>>,
@@ -561,8 +600,8 @@ function partIssues(
     if (
       budget !== undefined &&
       (structuralAllowanceSpent(budget) ||
-        spent + count >= budget.structural.count ||
-        spentBytes + bytes >= budget.structural.pathBytes)
+        spent + count >= budget.remaining ||
+        spentBytes + bytes >= budget.pathBytes)
     ) {
       issues.push(...truncationNotice(budget, path));
       break;
@@ -649,6 +688,29 @@ function shapeIssues(
         tokens
       );
     case "union": {
+      // A token is judged against every arm's kinds at once. Reporting the
+      // first refusing arm's list names a subset: `lineHeight` takes a number
+      // OR a dimension token, and a colour token there would be told the
+      // property takes only numbers, steering the author away from a spelling
+      // that works.
+      if (isTokenRef(value) && tokens !== undefined) {
+        const kinds = unionTokenKinds(shape);
+        if (kinds.length > 0) {
+          const kind = tokens.kindOf(value.$token);
+          if (kind !== undefined && !kinds.includes(kind)) {
+            if (siteAllowanceSpent(budget)) {
+              return siteTruncationNotice(budget, path);
+            }
+            return charged(budget, {
+              path,
+              code: "token-kind-mismatch",
+              severity: "warning",
+              message: `The design token "${describeValue(value.$token)}" is a ${kind}, and this value takes ${kinds.join(" or ")}.`,
+              suggestion: `Use a token of kind ${kinds.join(" or ")}.`,
+            });
+          }
+        }
+      }
       // A union accepts the value if any variant does. Variants are tried in
       // order and the first clean one wins; when none accepts, the first
       // variant's issues are reported, because it is the shape the catalog
@@ -728,10 +790,14 @@ export function validateStyleValues(
   values: Readonly<Record<string, unknown>>,
   basePath: string,
   mode: ValidationMode,
-  budget?: StyleIssueBudget,
+  suppliedBudget?: StyleIssueBudget,
   skipValueParsing = false,
   tokens?: TokenLookup
 ): ValidationIssue[] {
+  // The structural half of this shape has been public since it shipped, so a
+  // caller may hand back an object that predates the site allowance. Filling it
+  // in beats reading a missing number: validation reports, it does not throw.
+  const budget = normalizeStyleIssueBudget(suppliedBudget);
   const issues: ValidationIssue[] = [];
   // Lazily enumerated for the same reason the composite walk is: a style map
   // with a hundred thousand keys would otherwise be materialised in full before

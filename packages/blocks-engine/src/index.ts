@@ -159,10 +159,7 @@ export {
   tokenKindAllowedAt,
   tokenKindsForProperty,
 } from "./style/validate-style-value";
-export type {
-  IssueAllowance,
-  StyleIssueBudget,
-} from "./style/validate-style-value";
+export type { StyleIssueBudget } from "./style/validate-style-value";
 export {
   styleSupportDefinitions,
   stylePropertiesForSupports,

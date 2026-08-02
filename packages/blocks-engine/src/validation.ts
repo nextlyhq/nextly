@@ -875,8 +875,8 @@ function styleBudgetExhausted(
   state: NodeCheckState,
   path: string
 ): ValidationIssue[] {
-  if (state.styleBudget.structural.truncated) return [];
-  state.styleBudget.structural.truncated = true;
+  if (state.styleBudget.truncated) return [];
+  state.styleBudget.truncated = true;
   return [
     {
       path,

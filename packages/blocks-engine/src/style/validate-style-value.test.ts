@@ -4,6 +4,7 @@ import type { StyleValues } from "../document";
 import { ISSUE_CODES } from "../validation";
 import { checkColorValue, checkCssValue, checkUrlValue } from "./css-value";
 import {
+  MAX_SITE_ISSUES,
   MAX_STYLE_ISSUES,
   newStyleIssueBudget,
   speculativeBudget,
@@ -93,6 +94,55 @@ describe("a design token reference is checked against the site", () => {
   });
 });
 
+describe("a union says which kinds it really accepts", () => {
+  it("names every arm's kinds, not the first one to refuse", () => {
+    // `lineHeight` takes a number OR a dimension token. Reporting the first
+    // refusing arm's list would tell an author the property takes only numbers
+    // and steer them away from a spelling that works.
+    const issues = validateStyleValues(
+      { lineHeight: { $token: "brand.primary" } },
+      "/styles",
+      "strict",
+      undefined,
+      false,
+      { kindOf: () => "color" as const }
+    );
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.code).toBe("token-kind-mismatch");
+    expect(issues[0]?.message).toContain("number");
+    expect(issues[0]?.message).toContain("dimension");
+  });
+});
+
+describe("a budget that predates the site allowance", () => {
+  it("bounds name resolution it never knew it had", () => {
+    // The structural half of this shape has been public since it shipped, so a
+    // caller can legitimately hand back an object carrying only those fields.
+    // The site allowance is missing from such an object, and an allowance read
+    // as `undefined` bounds nothing: `undefined <= 0` is false, and charging it
+    // reaches NaN, which is never spent either. Filling it in is what keeps the
+    // bound, and validation reports rather than throwing on the way.
+    const legacy = { remaining: 200, pathBytes: 50_000, truncated: false };
+    const styles: Record<string, unknown> = { color: { $token: "gone" } };
+    const issues = validateStyleValues(
+      styles,
+      "/styles",
+      "strict",
+      legacy as never,
+      false,
+      { kindOf: () => undefined }
+    );
+    // One warning, and the allowance it came out of now exists on the object.
+    expect(issues.map(i => i.code)).toEqual(["unknown-token"]);
+    expect(typeof (legacy as { siteRemaining?: number }).siteRemaining).toBe(
+      "number"
+    );
+    expect((legacy as { siteRemaining: number }).siteRemaining).toBe(
+      MAX_SITE_ISSUES - 1
+    );
+  });
+});
+
 describe("the site allowance bounds what name resolution reports", () => {
   const nothingResolves = { kindOf: () => undefined };
   /** A run whose site allowance holds exactly `n` findings. */
@@ -171,18 +221,18 @@ describe("the site allowance bounds what name resolution reports", () => {
     // so the reported issues are identical and only the work differs.
     const real = newStyleIssueBudget(5, 100, 3, 50);
     const speculative = speculativeBudget(real);
-    expect(speculative?.structural.count).toBe(5);
-    expect(speculative?.structural.pathBytes).toBe(100);
-    expect(speculative?.site.count).toBe(3);
+    expect(speculative?.remaining).toBe(5);
+    expect(speculative?.pathBytes).toBe(100);
+    expect(speculative?.siteRemaining).toBe(3);
     if (speculative === undefined) throw new Error("expected a budget");
-    speculative.structural.count -= 5;
-    speculative.structural.truncated = true;
-    speculative.site.count -= 3;
-    speculative.site.truncated = true;
-    expect(real.structural.count).toBe(5);
-    expect(real.structural.truncated).toBe(false);
-    expect(real.site.count).toBe(3);
-    expect(real.site.truncated).toBe(false);
+    speculative.remaining -= 5;
+    speculative.truncated = true;
+    speculative.siteRemaining -= 3;
+    speculative.siteTruncated = true;
+    expect(real.remaining).toBe(5);
+    expect(real.truncated).toBe(false);
+    expect(real.siteRemaining).toBe(3);
+    expect(real.siteTruncated).toBe(false);
   });
 
   it("keeps the reported issues bounded whichever arm wins", () => {
@@ -2156,7 +2206,7 @@ describe("the issue budget spans nested composites", () => {
         budget
       )
     ).toEqual([]);
-    expect(budget.structural.count).toBe(MAX_STYLE_ISSUES);
+    expect(budget.remaining).toBe(MAX_STYLE_ISSUES);
   });
 });
 
