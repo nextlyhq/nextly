@@ -130,6 +130,28 @@ describe("the union token shortcut respects the checks around it", () => {
     expect(issues.map(i => i.severity)).toEqual(["error"]);
   });
 
+  it("asks the caller's lookup once per name, however often it is consulted", () => {
+    // A union asks before choosing an arm, each arm asks while being tried, and
+    // the winning arm asks again when it is re-run. `kindOf` is the caller's
+    // code and may be expensive, and whether a name resolves cannot change
+    // inside one run.
+    let asked = 0;
+    validateStyleValues(
+      { lineHeight: { $token: "gone" } },
+      "/styles",
+      "strict",
+      newStyleIssueBudget(),
+      false,
+      {
+        kindOf: () => {
+          asked += 1;
+          return undefined;
+        },
+      }
+    );
+    expect(asked).toBe(1);
+  });
+
   it("does not call the lookup once name checking has stopped", () => {
     // `kindOf` is the caller's code. A run that has already said it stopped
     // checking names must stop calling it, not call it and discard the answer.

@@ -257,6 +257,28 @@ function charged(
   return [issue];
 }
 
+/**
+ * A lookup that asks the caller's at most once per name.
+ *
+ * `kindOf` is caller-supplied and may be expensive, and one reference is asked
+ * about several times over: a union asks before choosing an arm, each arm asks
+ * while being tried, and the winning arm asks again when it is re-run. Whether
+ * a name resolves cannot change inside one run, so asking again is pure waste.
+ */
+function memoized(tokens: TokenLookup | undefined): TokenLookup | undefined {
+  if (tokens === undefined) return undefined;
+  const seen = new Map<string, TokenKind | undefined>();
+  return {
+    kindOf(name: string): TokenKind | undefined {
+      const cached = seen.get(name);
+      if (cached !== undefined || seen.has(name)) return cached;
+      const kind = tokens.kindOf(name);
+      seen.set(name, kind);
+      return kind;
+    },
+  };
+}
+
 /** True when a token of the given kind may be stored at this leaf. */
 export function tokenKindAllowedAt(leaf: StyleLeaf, kind: TokenKind): boolean {
   return leaf.tokenKinds.includes(kind);
@@ -830,12 +852,13 @@ export function validateStyleValues(
   mode: ValidationMode,
   suppliedBudget?: StyleIssueBudget,
   skipValueParsing = false,
-  tokens?: TokenLookup
+  suppliedTokens?: TokenLookup
 ): ValidationIssue[] {
   // The structural half of this shape has been public since it shipped, so a
   // caller may hand back an object that predates the site allowance. Filling it
   // in beats reading a missing number: validation reports, it does not throw.
   const budget = normalizeStyleIssueBudget(suppliedBudget);
+  const tokens = memoized(suppliedTokens);
   const issues: ValidationIssue[] = [];
   // Lazily enumerated for the same reason the composite walk is: a style map
   // with a hundred thousand keys would otherwise be materialised in full before
