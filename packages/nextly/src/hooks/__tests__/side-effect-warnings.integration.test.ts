@@ -1,16 +1,16 @@
 /**
  * A post-commit hook failure reaches the caller as a warning.
  *
- * The founder's rule for gap L: the row is durable and a side-effect phase
- * cannot change it, so the operation reports SUCCESS and the failure travels
- * beside it. A side effect that silently did not run is the outcome this has to
- * avoid, so "it is in the logs" is not sufficient -- an integration cannot read
- * the server log.
+ * A side-effect phase runs after the transaction has committed, so a handler
+ * throwing there cannot un-save the row. The operation therefore reports
+ * success and the failure travels beside it: reporting failure for a durable
+ * write invites a retry that writes it twice, and reporting nothing hides a
+ * side effect that did not run.
  *
  * Driven through the Direct API rather than a unit double, because what is
  * under test is that the failure survives the whole distance from the hook
- * registry to the caller's result. A test that called the registry directly
- * would prove the collector works and say nothing about whether anything is
+ * registry to the caller's result. A test calling the registry directly would
+ * prove the collector works and say nothing about whether anything is
  * connected to it.
  */
 
@@ -98,10 +98,8 @@ describe("a post-commit hook failure is reported as a warning", () => {
 
 describe("a single reports its post-commit failures the same way", () => {
   it("returns the envelope AND the warning when a single's hook throws", async () => {
-    // Singles run the same post-commit phases as collections. Before the
-    // mutation envelope they returned a bare document, so a hook failure had
-    // nowhere to go and a caller updating a single was told nothing while a
-    // caller updating a collection was told everything.
+    // Singles run the same post-commit phases as collections and report a
+    // failure the same way, through the same mutation envelope.
     current = await createTestNextly({
       singles: [
         defineSingle({
@@ -141,14 +139,11 @@ describe("a single reports its post-commit failures the same way", () => {
 
 describe("every mutation shape reports its failures, not just the single-item ones", () => {
   it("reports a where-based delete's failures on DeleteResult", async () => {
-    // The `where` branch is a different service call from the id branch, and
-    // it runs the same afterDelete hooks. Wrapping only the id branch meant a
-    // caller deleting by query was told nothing while the equivalent delete by
-    // id reported it -- the same operation, two contracts.
+    // Deleting by query is a different service call from deleting by id, and
+    // both run the same `afterDelete` hooks, so both report a failure.
     //
-    // `afterChange` maps to the create/update phases; a delete fires
-    // `afterDelete`. Registering the wrong phase is how a test like this ends
-    // up asserting against a hook that never ran.
+    // The hook is registered on `afterDelete`: `afterChange` maps to the
+    // create and update phases and would never run here.
     current = await createTestNextly({
       collections: [
         defineCollection({
@@ -183,9 +178,8 @@ describe("every mutation shape reports its failures, not just the single-item on
   });
 
   it("reports an in-process bulkDelete's failures on BulkOperationResult", async () => {
-    // `bulkDelete` calls a third service again, so it needed the scope of its
-    // own. Its `failures` array is per-ITEM and stays empty here: every row
-    // really was deleted, and only the side effect failed.
+    // `failures` is per-ITEM and stays empty here: every row really was
+    // deleted, and only the side effect failed.
     current = await createTestNextly({
       collections: [
         defineCollection({
@@ -217,18 +211,22 @@ describe("every mutation shape reports its failures, not just the single-item on
     expect(result.successes).toHaveLength(1);
     expect(result.failures).toHaveLength(0);
     expect(result.warnings).toHaveLength(1);
+    // Bulk items run concurrently, so warning order cannot be matched against
+    // the ordered `successes`. The id is what lets a caller remediate the
+    // specific durable row rather than all of them.
+    expect(result.warnings?.[0]?.entryId).toBe(
+      (created.item as { id: string }).id
+    );
     expect(JSON.stringify(result)).not.toContain("bulk-secret");
   });
 });
 
 describe("a field-level afterChange failure does not fail the write", () => {
   it("saves the row, reports the warning, and does not throw", async () => {
-    // The behaviour half of gap L, not just the reporting half. A field-level
-    // `afterChange` runs once the row is durable, but it propagated: the
-    // service returned an error for a write that had happened, and a bulk
-    // operation classified a committed row as failed. That is the
-    // retry-duplicates-the-write hazard the collection-level phases already
-    // avoid, reached through the field-level door.
+    // A field-level `afterChange` runs once the row is durable, so a throw
+    // there must not fail the operation: doing so reports an error for a write
+    // that happened, and makes a bulk operation classify a committed row as
+    // failed.
     current = await createTestNextly({
       collections: [
         defineCollection({

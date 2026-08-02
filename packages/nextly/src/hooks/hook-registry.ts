@@ -77,6 +77,15 @@ export interface SideEffectHookFailure {
   collection: string;
   /** The normalized error, with its type and context preserved. */
   error: NextlyError;
+  /**
+   * The row the handler was running for, when it is known.
+   *
+   * A bulk operation runs its items concurrently, so warning order cannot be
+   * matched against the ordered `successes` array. Without the id a caller
+   * knows a side effect failed for one of the rows it just wrote and cannot
+   * tell which, which is not enough to remediate.
+   */
+  entryId?: string;
 }
 
 const SIDE_EFFECT_HOOK_TYPES: ReadonlySet<HookType> = new Set([
@@ -799,9 +808,17 @@ export class HookRegistry {
         // `normalizeHookError` rethrows a typed error untouched and wraps an
         // untyped one, so this is a NextlyError in practice; the guard is what
         // makes that a fact rather than an assumption.
+        // Post-commit phases see the persisted row, so its id is on the data
+        // they were handed. Read defensively: a handler may have replaced the
+        // document with something else before this phase.
+        const entryId =
+          typeof (context.data as { id?: unknown } | undefined)?.id === "string"
+            ? (context.data as { id: string }).id
+            : undefined;
         const failure: SideEffectHookFailure = {
           phase: hookType,
           collection: context.collection,
+          ...(entryId ? { entryId } : {}),
           error: NextlyError.is(normalized)
             ? normalized
             : NextlyError.internal({

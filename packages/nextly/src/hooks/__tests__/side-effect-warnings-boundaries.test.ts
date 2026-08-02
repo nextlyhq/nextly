@@ -2,11 +2,10 @@
  * Every request boundary opens the warning scope, and every mutation response
  * builder reads it.
  *
- * The first pass covered one boundary (`createDynamicHandlers`) and one
- * responder (`respondMutation`), which left two shapes silently dropping what
- * they had collected: the standalone handlers this package exports for direct
- * re-export, and the bulk envelopes. Both ran hooks and both discarded the
- * failures.
+ * A boundary that does not open one leaves the recorder with nowhere to write,
+ * and a responder that does not read one discards what was collected before
+ * the scope exits. Either way a post-commit hook failure is invisible to the
+ * caller while the write is durable.
  */
 
 import { describe, expect, it } from "vitest";
@@ -71,9 +70,9 @@ describe("the bulk envelopes carry post-commit warnings", () => {
 
 describe("the standalone handler boundary opens the scope", () => {
   it("gives a handler wrapped by withErrorHandler a live collector", async () => {
-    // These handlers are exported for direct re-export (`nextly/api/*`) and
-    // never pass through `createDynamicHandlers`, so the dynamic router's
-    // scope does not cover them.
+    // The handlers exported for direct re-export (`nextly/api/*`) do not pass
+    // through `createDynamicHandlers`, so this wrapper is the only boundary
+    // they have.
     let seen: unknown;
     const handler = withErrorHandler(async (_req: Request) => {
       recordSideEffectWarning(failure());
@@ -98,9 +97,8 @@ describe("the standalone handler boundary opens the scope", () => {
 
 describe("the action envelope carries them too", () => {
   it("respondAction includes warnings when a hook failed", async () => {
-    // Some actions ARE writes: a version restore goes through the ordinary
-    // update path, so its post-commit hooks run and can fail. Serializing that
-    // as an unqualified success hides the side effect that did not happen.
+    // Some actions are writes: a version restore goes through the ordinary
+    // update path, so its post-commit hooks run and can fail.
     const { result } = await withSideEffectWarnings(async () => {
       recordSideEffectWarning(failure());
       return respondAction("Restored.", { versionId: "v1" });

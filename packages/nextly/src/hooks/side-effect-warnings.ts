@@ -55,6 +55,14 @@ export interface HookWarning {
   code: string;
   /** The §13.8-compliant public message. Never carries identifiers. */
   message: string;
+  /**
+   * The row whose side effect failed, when the phase knows it.
+   *
+   * The caller supplied this id or is being handed it back in the same
+   * response, so it discloses nothing new — and without it a bulk caller
+   * cannot tell which of its durable rows to remediate.
+   */
+  entryId?: string;
 }
 
 /** Reduce a failure to what may cross a public boundary. */
@@ -64,6 +72,7 @@ export function toHookWarning(failure: SideEffectHookFailure): HookWarning {
     collection: failure.collection,
     code: failure.error.code,
     message: failure.error.publicMessage,
+    ...(failure.entryId ? { entryId: failure.entryId } : {}),
   };
 }
 
