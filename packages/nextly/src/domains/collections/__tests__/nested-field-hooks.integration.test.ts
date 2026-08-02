@@ -12,6 +12,7 @@ import {
   group,
   relationship,
   password,
+  repeater,
   text,
   upload,
 } from "../../../config";
@@ -85,6 +86,16 @@ async function boot(): Promise<TestNextly> {
                 (data as { classification?: unknown } | undefined)
                   ?.classification === "private",
             },
+          }),
+          // A repeater whose `code` is denied. A parent hook can append a row
+          // here after the child's first access pass; the row it introduces has
+          // no recorded verdict, so the pass after the hooks must judge it fresh.
+          repeater({
+            name: "divisions",
+            fields: [
+              text({ name: "label" }),
+              text({ name: "code", access: { read: () => false } }),
+            ],
           }),
         ],
       }),
@@ -176,6 +187,27 @@ async function boot(): Promise<TestNextly> {
                   if (org && typeof org === "object") {
                     (org as Record<string, unknown>).classification =
                       "reintroduced";
+                  }
+                  return value;
+                },
+              ],
+            },
+          }),
+          // Appends a NEW row to the nested org's `divisions` repeater after that
+          // child's first access pass, so the appended row's denied `code` has no
+          // recorded verdict and must be judged fresh by the pass after the hooks.
+          text({
+            name: "appender",
+            hooks: {
+              afterRead: [
+                ({ value, data }) => {
+                  const org = (data as { organization?: unknown }).organization;
+                  const divisions =
+                    org && typeof org === "object"
+                      ? (org as { divisions?: unknown }).divisions
+                      : undefined;
+                  if (Array.isArray(divisions)) {
+                    divisions.push({ label: "added", code: "SNEAKED" });
                   }
                   return value;
                 },
@@ -584,6 +616,49 @@ describe("a target's field hooks apply to rows reached through a relationship", 
     expect(org!.region).toBe("emea");
     // The denied sibling is still withheld.
     expect(org!.classification).toBeUndefined();
+  });
+
+  it("judges a repeater row a parent hook appends after the first pass", async () => {
+    // The first pass strips the denied `code` from the existing division. A
+    // parent hook then appends a NEW division carrying its own `code`. That row
+    // has no recorded verdict, so the pass after the hooks must judge it fresh
+    // and strip its `code` — an index-keyed replay would skip the appended row.
+    const t = await boot();
+    await t.nextly.create({
+      collection: ORGS,
+      data: {
+        name: "acme",
+        divisions: [{ label: "core", code: "ORIGINAL" }],
+      },
+    });
+    const orgId = await onlyId(t, ORGS);
+    await t.nextly.create({
+      collection: AUTHORS,
+      // `appender` present, so its hook fires and pushes a division onto the org.
+      data: { name: "ada", organization: orgId, appender: "on" },
+    });
+    const authorId = await onlyId(t, AUTHORS);
+    await t.nextly.create({
+      collection: POSTS,
+      data: { title: "p", author: authorId },
+    });
+    const postId = await onlyId(t, POSTS);
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    const author = expanded.data!.author as Record<string, unknown>;
+    const org = author.organization as Record<string, unknown> | undefined;
+    const divisions = (org?.divisions ?? []) as Record<string, unknown>[];
+    // The hook's row landed...
+    expect(divisions.some(d => d.label === "added")).toBe(true);
+    // ...and NO division exposes `code`, including the appended one.
+    for (const division of divisions) {
+      expect(division.code).toBeUndefined();
+    }
   });
 
   it("masks a dropped relationship before a source hook can copy out of it", async () => {

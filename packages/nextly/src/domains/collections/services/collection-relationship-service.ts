@@ -41,9 +41,8 @@ import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import {
   applyFieldReadAccess,
-  replayFieldRedaction,
   runFieldHooks,
-  type FieldRedactionPlan,
+  type ReadAccessMemo,
 } from "../../../shared/lib/field-level-registry";
 import {
   hasPasswordField,
@@ -97,21 +96,21 @@ interface NestedHookStateBase {
    * Every related row the pass reached, in visit order, with what is needed to
    * finish it.
    *
-   * Field access is EVALUATED and applied to each row during the walk (before its
-   * parent's hooks, so a parent hook cannot read a denied child field to copy
-   * it), and the redaction it performed is captured as `redaction`. These entries
-   * drive the finalize step after every hook has run: it REPLAYS each row's
-   * captured redaction -- stripping a denied field a parent hook reintroduced
-   * onto an already-redacted child, without re-running the policy -- then rebuilds
+   * Field access is applied to each row during the walk (before its parent's
+   * hooks, so a parent hook cannot read a denied child field to copy it), and the
+   * verdicts it made are captured as `memo`. These entries drive the finalize
+   * step after every hook has run: it re-applies access reusing `memo` -- so an
+   * unchanged field keeps its verdict while a field or row a hook introduced is
+   * judged fresh -- stripping anything a parent hook reintroduced, then rebuilds
    * labels last from the values that survived.
    */
   pending: Array<{
     row: Record<string, unknown>;
     collection: string;
     field: FieldDefinition;
-    /** The redaction applied to `row` during the walk, replayed in finalize.
-     *  Undefined for a trusted/override read. */
-    redaction?: FieldRedactionPlan;
+    /** The read-access verdicts made for `row` during the walk, reused when
+     *  finalize re-applies access. Undefined for a trusted/override read. */
+    memo?: ReadAccessMemo;
   }>;
 }
 
@@ -2998,19 +2997,20 @@ export class CollectionRelationshipService extends BaseService {
   }
 
   /**
-   * Re-apply each related row's redaction after every hook has run, then rebuild
-   * the labels.
+   * Re-apply each related row's field access after every hook has run, then
+   * rebuild the labels.
    *
-   * The walk already EVALUATED and applied field access to each row (before its
-   * parent's hooks, so a parent hook cannot read a denied child field to copy
-   * it). This REPLAYS that redaction -- deleting the same fields again -- because
-   * a parent hook can REINTRODUCE a denied field onto an already-redacted child
-   * (assigning `data.child.secret` to mask or derive a value); without a pass
-   * after the hooks it would be returned. Replaying the captured decisions rather
-   * than re-running the policy is deliberate: a rule reads the row as `data`, so
-   * re-evaluating against the already-stripped row could flip a decision (a field
-   * kept only while a now-denied sibling was present) or re-issue an async rule's
-   * queries. It is a no-op on a row nothing reintroduced into.
+   * The walk already applied access to each row (before its parent's hooks, so a
+   * parent hook cannot read a denied child field to copy it). This runs it once
+   * more because a parent hook can REINTRODUCE a denied field onto an
+   * already-redacted child (assigning `data.child.secret` to mask or derive a
+   * value), or add/reorder rows in the child, and without a pass after the hooks
+   * that would be returned. It reuses the walk's verdict memo, so an unchanged
+   * field keeps its first verdict -- a rule reads the row as `data`, and re-judging
+   * against the already-stripped row could flip a decision (a field kept only
+   * while a now-denied sibling was present) or re-issue an async rule's queries --
+   * while a field or row a hook introduced between the passes misses the memo and
+   * is judged fresh. A no-op on a row nothing changed.
    *
    * Labels come last of all, from the values that survived: a label copies a
    * field under another key, so one rebuilt earlier would outlive the removal of
@@ -3021,8 +3021,8 @@ export class CollectionRelationshipService extends BaseService {
     access: RelatedRowAccess
   ): Promise<void> {
     if (!access.enforceFieldAccess) return;
-    for (const { row, redaction } of state.pending) {
-      if (redaction) replayFieldRedaction(row, redaction);
+    for (const { row, collection, memo } of state.pending) {
+      await this.applyRelatedRowReadAccess(collection, [row], access, [memo]);
     }
     for (const { row, collection, field } of state.pending) {
       await this.refreshRelatedRowLabel(row, field, { collection }, state);
@@ -3201,26 +3201,26 @@ export class CollectionRelationshipService extends BaseService {
       // values, and a direct read redacts a nested row before the parent
       // collection's field hooks for the same reason, so applying it here keeps
       // the nested path consistent with the direct one. Under `overrideAccess`
-      // this is a no-op, leaving trusted assembly untouched. This is the only
-      // place the policy is EVALUATED; `finalizeRelatedRows` replays the
-      // decisions it captured to catch anything a later parent hook reintroduces.
-      const [redaction] = await this.applyRelatedRowReadAccess(
+      // this is a no-op, leaving trusted assembly untouched. The verdicts it
+      // makes are memoized so `finalizeRelatedRows` can run access once more
+      // after every hook — stripping anything a parent hook reintroduced —
+      // without re-judging (or re-querying) content that has not changed.
+      const [memo] = await this.applyRelatedRowReadAccess(
         resolved.collection,
         [resolved.row],
         access
       );
 
-      // Queued with the redaction the pass performed. `finalizeRelatedRows`
-      // replays it after every hook has run — stripping a denied field a parent
-      // hook wrote back onto this row — WITHOUT re-evaluating the policy, which
-      // run against the already-stripped row could flip a decision (a field
-      // allowed only while a now-denied sibling is present) or re-issue an async
-      // rule's queries. Labels come last, from the values that survived.
+      // Queued with that verdict memo. `finalizeRelatedRows` re-applies access
+      // after every hook, reusing the memo so an unchanged field keeps its
+      // verdict (no flip when a rule reads a now-denied sibling, no second query)
+      // while a field or row a hook introduced since is judged fresh. Labels come
+      // last, from the values that survived.
       state.pending.push({
         row: resolved.row,
         collection: resolved.collection,
         field,
-        redaction,
+        memo,
       });
 
       // Secrets are stripped from a related row when it is fetched, but a hook
@@ -3300,26 +3300,32 @@ export class CollectionRelationshipService extends BaseService {
   private async applyRelatedRowReadAccess(
     targetCollection: string,
     rows: Record<string, unknown>[],
-    access: RelatedRowAccess
-  ): Promise<Array<FieldRedactionPlan | undefined>> {
+    access: RelatedRowAccess,
+    priorMemos?: Array<ReadAccessMemo | undefined>
+  ): Promise<Array<ReadAccessMemo | undefined>> {
     if (!access.enforceFieldAccess || access.overrideAccess) {
       return rows.map(() => undefined);
     }
-    // The redaction each row got, in row order, so the caller can replay it after
-    // later hooks run instead of re-evaluating the policy against a mutated row.
-    const plans: Array<FieldRedactionPlan | undefined> = [];
-    for (const row of rows) {
-      plans.push(
-        await applyFieldReadAccess({
-          kind: "collection",
-          slug: targetCollection,
-          entry: row,
-          user: access.user,
-          overrideAccess: false,
-        })
+    // The verdict memo for each row, in row order, so a second pass after later
+    // hooks reuses those verdicts (unchanged content is neither re-judged nor
+    // re-queried) while judging anew only what a hook introduced. Passing a
+    // row's prior memo back is what makes that second pass reuse them.
+    const memos: Array<ReadAccessMemo | undefined> = [];
+    for (let i = 0; i < rows.length; i++) {
+      memos.push(
+        await applyFieldReadAccess(
+          {
+            kind: "collection",
+            slug: targetCollection,
+            entry: rows[i],
+            user: access.user,
+            overrideAccess: false,
+          },
+          priorMemos?.[i]
+        )
       );
     }
-    return plans;
+    return memos;
   }
 
   /**

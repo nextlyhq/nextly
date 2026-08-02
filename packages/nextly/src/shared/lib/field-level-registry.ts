@@ -347,28 +347,44 @@ export async function applyFieldWriteAccess(opts: {
 }
 
 /**
- * What a read-access pass removed from one row, at every depth, so a later
- * cleanup can remove the SAME fields a hook reintroduced without re-running the
- * policy. Re-running it is unsafe: a rule reads the row as `data`, so evaluating
- * it a second time against the already-stripped row can flip a decision (a field
- * allowed only while a now-denied sibling is present would be wrongly removed),
- * and an async rule would issue its queries twice.
+ * A record of each `access.read` verdict from one pass, keyed by field path, so
+ * a second pass over the same row reuses them instead of re-running the rules.
+ *
+ * The nested-read pipeline applies access to a related row BEFORE its parent's
+ * hooks (so a hook cannot read a denied child field to copy it), then again
+ * AFTER all hooks (to strip a denied field a hook wrote back). Re-running the
+ * rules on that second pass would be wrong: a rule reads the row as `data`, so
+ * judging it again against the already-stripped row could flip a verdict (a
+ * field kept only while a now-denied sibling was present), and an async rule
+ * would issue its queries twice. Reusing the memo keeps EXISTING content's
+ * verdicts stable and query-free, while content a hook INTRODUCED between the
+ * passes (a new field, or a new/reordered container row) misses the memo and is
+ * judged fresh — which is exactly what must happen for it.
+ *
+ * Keys are field paths built from stable row identity (`id` when a row has one,
+ * else its index), so a memo survives a hook reordering rows a row still owns.
  */
-export interface FieldRedactionPlan {
-  /** Field names denied at this level. */
-  denied: string[];
-  /** Per container field, the plan for each of its rows, by index. */
-  nested: Array<{ name: string; rows: FieldRedactionPlan[] }>;
+export type ReadAccessMemo = Map<string, boolean>;
+
+/** The stable key segment for a container row: its `id` when it has one (so it
+ *  survives a reorder), otherwise its position. */
+function rowKeySegment(row: Record<string, unknown>, index: number): string {
+  const id = row.id;
+  return typeof id === "string" || typeof id === "number"
+    ? `#${id}`
+    : `@${index}`;
 }
 
-/** Recursive worker for read access — same snapshot + recurse contract.
- *  Returns the redaction it performed so it can be replayed (see
- *  {@link replayFieldRedaction}). */
+/** Recursive worker for read access — same snapshot + recurse contract. Each
+ *  `access.read` verdict is memoized under its field path, so a later pass over
+ *  the same row (after hooks) reuses it and only judges content introduced since. */
 async function applyReadAccessRec(
   entry: Record<string, unknown>,
   fns: Record<string, FieldFunctions>,
-  ctx: { user?: Record<string, unknown>; id?: string }
-): Promise<FieldRedactionPlan> {
+  ctx: { user?: Record<string, unknown>; id?: string },
+  memo: ReadAccessMemo,
+  path: string
+): Promise<void> {
   // Taken BEFORE the recursion below replaces nested containers with their
   // redacted serialization: a parent-level rule reading a protected nested
   // value would otherwise find it already removed, and the outcome would turn
@@ -377,84 +393,84 @@ async function applyReadAccessRec(
     ? detachData(entry)
     : undefined;
   const denied: string[] = [];
-  const nested: FieldRedactionPlan["nested"] = [];
   for (const [name, fieldFns] of Object.entries(fns)) {
     if (!(name in entry)) continue;
     if (fieldFns.fields) {
       const container = openNestedContainer(entry[name]);
       if (container) {
-        const rows: FieldRedactionPlan[] = [];
-        for (const row of container.rows) {
-          rows.push(await applyReadAccessRec(row, fieldFns.fields, ctx));
+        for (let index = 0; index < container.rows.length; index++) {
+          const row = container.rows[index];
+          await applyReadAccessRec(
+            row,
+            fieldFns.fields,
+            ctx,
+            memo,
+            `${path}.${name}[${rowKeySegment(row, index)}]`
+          );
         }
         entry[name] = container.serialize();
-        nested.push({ name, rows });
       }
     }
     const fn = fieldFns.access?.read;
     if (!fn) continue;
-    let allowed = false;
-    try {
-      allowed = await fn({
-        req: { user: ctx.user },
-        id: ctx.id,
-        data: snapshot,
-      });
-    } catch {
-      allowed = false;
+    // Reuse a verdict already recorded for this exact field path; only judge it
+    // (running the rule, possibly querying) when it is new to this row.
+    const key = `${path}.${name}`;
+    let allowed = memo.get(key);
+    if (allowed === undefined) {
+      try {
+        allowed = await fn({
+          req: { user: ctx.user },
+          id: ctx.id,
+          data: snapshot,
+        });
+      } catch {
+        // Fail-secure: an access rule that throws denies the field.
+        allowed = false;
+      }
+      memo.set(key, allowed);
     }
     if (!allowed) denied.push(name);
   }
   for (const name of denied) delete entry[name];
-  return { denied, nested };
-}
-
-/**
- * Re-remove the fields a prior {@link applyFieldReadAccess} pass denied on a
- * row, WITHOUT re-running the policy, so a denied value a later hook wrote back
- * onto the row is stripped again. The policy already ran once (that produced the
- * plan); replaying its decisions avoids both re-deciding against mutated data
- * and re-issuing async rule queries.
- */
-export function replayFieldRedaction(
-  entry: Record<string, unknown>,
-  plan: FieldRedactionPlan
-): void {
-  for (const { name, rows } of plan.nested) {
-    if (!(name in entry)) continue;
-    const container = openNestedContainer(entry[name]);
-    if (container) {
-      container.rows.forEach((row, index) => {
-        const rowPlan = rows[index];
-        if (rowPlan) replayFieldRedaction(row, rowPlan);
-      });
-      entry[name] = container.serialize();
-    }
-  }
-  for (const name of plan.denied) delete entry[name];
 }
 
 /**
  * Enforce field-level read access on a serialized entry: fields whose
- * `access.read` denies are removed from the response, at every depth. Returns
- * the redaction it performed (undefined for a trusted/override read or an
- * unregistered entity), which {@link replayFieldRedaction} can re-apply after
- * later hooks run.
+ * `access.read` denies are removed from the response, at every depth.
+ *
+ * Returns the {@link ReadAccessMemo} of the verdicts it made (undefined for a
+ * trusted/override read or an unregistered entity). Passing that memo back on a
+ * later call over the same row — after hooks may have mutated it — re-strips a
+ * denied field a hook reintroduced while reusing the recorded verdicts, so
+ * unchanged content is neither re-judged (no flipped verdict) nor re-queried,
+ * and only content introduced since is judged anew.
  */
-export async function applyFieldReadAccess(opts: {
-  kind: EntityKind;
-  slug: string;
-  entry: Record<string, unknown>;
-  user?: Record<string, unknown>;
-  overrideAccess?: boolean;
-}): Promise<FieldRedactionPlan | undefined> {
+export async function applyFieldReadAccess(
+  opts: {
+    kind: EntityKind;
+    slug: string;
+    entry: Record<string, unknown>;
+    user?: Record<string, unknown>;
+    overrideAccess?: boolean;
+  },
+  memo?: ReadAccessMemo
+): Promise<ReadAccessMemo | undefined> {
   if (opts.overrideAccess) return undefined;
   const fns = getFieldFunctions(opts.kind, opts.slug);
   if (!fns) return undefined;
-  return applyReadAccessRec(opts.entry, fns, {
-    user: opts.user,
-    id: typeof opts.entry.id === "string" ? opts.entry.id : undefined,
-  });
+  const verdicts: ReadAccessMemo = memo ?? new Map();
+  await applyReadAccessRec(
+    opts.entry,
+    fns,
+    {
+      user: opts.user,
+      id: typeof opts.entry.id === "string" ? opts.entry.id : undefined,
+    },
+    verdicts,
+    ""
+  );
+  return verdicts;
 }
 
 /** Recursive worker for hooks. Transforms values in registration order. */
