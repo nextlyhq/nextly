@@ -669,6 +669,39 @@ describe("validation never throws on adversarial input", () => {
     expect(issues.length).toBeGreaterThan(0);
   });
 
+  it("does not resolve class names on a document past its byte cap", () => {
+    // Resolving a name hands the string to a lookup that hashes it, and a known
+    // id spends no allowance to stop that. A document already refused for its
+    // size would otherwise be read in full, right after the byte cap said not
+    // to read it.
+    const classes = Array.from({ length: 400 }, (_, i) => "c".repeat(600) + i);
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: Array.from({ length: 20 }, (_, i) => ({
+        id: `n${i}`,
+        type: "core/text",
+        version: 1,
+        props: {},
+        classes,
+      })),
+    });
+    let asked = 0;
+    const issues = validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+      limits: { maxDepth: 12, maxNodes: 5000, maxBytes: 1024 },
+      classes: {
+        has: () => {
+          asked += 1;
+          return true;
+        },
+      },
+    });
+    expect(issues.some(i => i.code === "document-too-large")).toBe(true);
+    expect(asked).toBe(0);
+  });
+
   it("bounds the path text unknown class warnings can return", () => {
     // A JSON Pointer repeats every key above it, so a node under a very long
     // slot key copies that key into every warning reported beneath it. Counting

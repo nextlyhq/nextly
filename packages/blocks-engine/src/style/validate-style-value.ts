@@ -158,6 +158,15 @@ export function siteAllowanceSpent(
   return budget !== undefined && allowanceSpent(budget.site);
 }
 
+/** Record one site finding against its allowance and return it as the result. */
+function charged(
+  budget: StyleIssueBudget | undefined,
+  issue: ValidationIssue
+): ValidationIssue[] {
+  chargeIssueBudget(budget, [issue]);
+  return [issue];
+}
+
 /**
  * The marker saying name resolution stopped early, emitted once per run.
  *
@@ -173,15 +182,13 @@ export function siteTruncationNotice(
 ): ValidationIssue[] {
   if (budget === undefined || budget.site.truncated) return [];
   budget.site.truncated = true;
-  return [
-    {
-      path,
-      code: "site-issues-truncated",
-      severity: "warning",
-      message:
-        "There are more unresolved token and class names than are reported here.",
-    },
-  ];
+  return charged(budget, {
+    path,
+    code: "site-issues-truncated",
+    severity: "warning",
+    message:
+      "Some token and class names were not checked against this site, so any that do not resolve are not reported here.",
+  });
 }
 
 /** True when a token of the given kind may be stored at this leaf. */
@@ -273,6 +280,7 @@ function leafIssues(
   leaf: StyleLeaf,
   value: unknown,
   path: string,
+  budget?: StyleIssueBudget,
   tokens?: TokenLookup
 ): ValidationIssue[] {
   // A token reference substitutes for the whole leaf value, so it is checked
@@ -316,29 +324,32 @@ function leafIssues(
     // the trap where defining a site's FIRST token invalidates every other
     // reference in storage.
     if (tokens === undefined) return [];
+    // The site allowance is spent HERE, at the reference, rather than once per
+    // property. A property is a whole composite: charging only when it returns
+    // lets one `border` emit a warning per leaf past an allowance with a single
+    // slot left, which is not a bound. Asking here is also what makes the
+    // marker below truthful — it is reported only when a reference really did
+    // go unchecked, never because the next property happened to hold a literal.
+    if (siteAllowanceSpent(budget)) return siteTruncationNotice(budget, path);
     const name = value.$token;
     const kind = tokens.kindOf(name);
     if (kind === undefined) {
-      return [
-        {
-          path,
-          code: "unknown-token",
-          severity: "warning",
-          message: `This site defines no design token named "${describeValue(name)}".`,
-          suggestion: "Create the token, or store a literal value instead.",
-        },
-      ];
+      return charged(budget, {
+        path,
+        code: "unknown-token",
+        severity: "warning",
+        message: `This site defines no design token named "${describeValue(name)}".`,
+        suggestion: "Create the token, or store a literal value instead.",
+      });
     }
     if (!leaf.tokenKinds.includes(kind)) {
-      return [
-        {
-          path,
-          code: "token-kind-mismatch",
-          severity: "warning",
-          message: `The design token "${describeValue(name)}" is a ${kind}, and this value takes ${leaf.tokenKinds.join(" or ")}.`,
-          suggestion: `Use a token of kind ${leaf.tokenKinds.join(" or ")}.`,
-        },
-      ];
+      return charged(budget, {
+        path,
+        code: "token-kind-mismatch",
+        severity: "warning",
+        message: `The design token "${describeValue(name)}" is a ${kind}, and this value takes ${leaf.tokenKinds.join(" or ")}.`,
+        suggestion: `Use a token of kind ${leaf.tokenKinds.join(" or ")}.`,
+      });
     }
     return [];
   }
@@ -579,7 +590,7 @@ function shapeIssues(
   spentBytes = 0,
   tokens?: TokenLookup
 ): ValidationIssue[] {
-  if (isStyleLeaf(shape)) return leafIssues(shape, value, path, tokens);
+  if (isStyleLeaf(shape)) return leafIssues(shape, value, path, budget, tokens);
   switch (shape.kind) {
     case "logicalSides":
       return partIssues(
@@ -714,16 +725,16 @@ export function validateStyleValues(
       // while structural checking carries on to the end of the document: what a
       // name resolves to cannot decide whether a document is valid, so running
       // out of room to report on names must not cut short the checks that can.
-      let resolveNames = tokens;
-      if (tokens !== undefined && siteAllowanceSpent(budget)) {
-        issues.push(...siteTruncationNotice(budget, basePath));
-        resolveNames = undefined;
-      }
       issues.push(
-        ...shapeIssues(entry.shape, value, path, budget, 0, 0, resolveNames)
+        ...shapeIssues(entry.shape, value, path, budget, 0, 0, tokens)
       );
     }
-    chargeIssueBudget(budget, issues.slice(before));
+    // Structural findings only: a site finding is charged at the reference that
+    // produced it, so billing the whole batch here would charge it twice.
+    chargeIssueBudget(
+      budget,
+      issues.slice(before).filter(issue => !isSiteIssue(issue))
+    );
   }
   return issues;
 }

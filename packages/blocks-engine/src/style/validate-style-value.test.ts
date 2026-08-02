@@ -92,6 +92,92 @@ describe("a design token reference is checked against the site", () => {
   });
 });
 
+describe("the site allowance bounds what name resolution reports", () => {
+  const nothingResolves = { kindOf: () => undefined };
+  /** A run whose site allowance holds exactly `n` findings. */
+  const withSiteRoom = (n: number) => newStyleIssueBudget(200, 50_000, n);
+
+  it("says it stopped only when a reference really went unchecked", () => {
+    // One unknown token spends the last slot; what follows is a literal, so
+    // nothing more was skipped and there is nothing to announce. Claiming
+    // otherwise would report unresolved names on a document that has none.
+    const budget = withSiteRoom(1);
+    const issues = validateStyleValues(
+      { color: { $token: "gone" }, textAlign: "start", display: "block" },
+      "/styles",
+      "strict",
+      budget,
+      false,
+      nothingResolves
+    );
+    expect(issues.map(i => i.code)).toEqual(["unknown-token"]);
+  });
+
+  it("says it stopped when the next reference is the one skipped", () => {
+    const budget = withSiteRoom(1);
+    const issues = validateStyleValues(
+      { color: { $token: "gone" }, backgroundColor: { $token: "also-gone" } },
+      "/styles",
+      "strict",
+      budget,
+      false,
+      nothingResolves
+    );
+    expect(issues.map(i => i.code)).toEqual([
+      "unknown-token",
+      "site-issues-truncated",
+    ]);
+    // Reported where the skipped reference is, not at the document root.
+    expect(issues[1]?.path).toBe("/styles/backgroundColor");
+    expect(issues[1]?.severity).toBe("warning");
+  });
+
+  it("holds inside a composite, not only between properties", () => {
+    // One property is a whole composite. An allowance charged only when the
+    // property returns lets every token-bearing side of a box report first,
+    // which is not a bound.
+    const budget = withSiteRoom(1);
+    const issues = validateStyleValues(
+      {
+        padding: {
+          blockStart: { $token: "a" },
+          blockEnd: { $token: "b" },
+          inlineStart: { $token: "c" },
+          inlineEnd: { $token: "d" },
+        },
+      },
+      "/styles",
+      "strict",
+      budget,
+      false,
+      nothingResolves
+    );
+    expect(issues.map(i => i.code)).toEqual([
+      "unknown-token",
+      "site-issues-truncated",
+    ]);
+  });
+
+  it("leaves structural checking untouched once it has stopped", () => {
+    // The whole point of a separate allowance: running out of room to talk
+    // about names must not cost the checks that decide whether the document is
+    // valid at all.
+    const budget = withSiteRoom(0);
+    const issues = validateStyleValues(
+      { color: { $token: "gone" }, textAlign: "sideways" },
+      "/styles",
+      "strict",
+      budget,
+      false,
+      nothingResolves
+    );
+    expect(issues.some(i => i.code === "style-issues-truncated")).toBe(false);
+    const structural = issues.filter(i => i.severity === "error");
+    expect(structural).toHaveLength(1);
+    expect(structural[0]?.path).toBe("/styles/textAlign");
+  });
+});
+
 describe("unknown properties", () => {
   it("is an error under strict validation", () => {
     const issues = validateStyleValues({ nope: "1px" }, "/styles", "strict");
