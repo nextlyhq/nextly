@@ -23,6 +23,7 @@ import { isPlainRecord } from "./plain-record";
 import type { TokenKind } from "./style/catalog-types";
 import {
   chargeIssueBudget,
+  memoizeTokenLookup,
   newStyleIssueBudget,
   siteAllowanceSpent,
   siteTruncationNotice,
@@ -259,7 +260,12 @@ export function validate(
     );
 
   const nodeState: NodeCheckState = {
-    ctx,
+    // The token lookup is wrapped once here rather than per style envelope, so
+    // a name repeated across nodes, states and breakpoints costs the caller one
+    // answer for the whole walk. Nothing else bounds that repetition: a name
+    // that resolves produces no issue, so it is never charged the allowance
+    // that stops the rest of the per-value work.
+    ctx: { ...ctx, tokens: memoizeTokenLookup(ctx.tokens) },
     issues,
     knownBreakpoints,
     unknownSeverity,

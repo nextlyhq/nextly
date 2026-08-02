@@ -826,6 +826,42 @@ describe("validation never throws on adversarial input", () => {
     ]);
   });
 
+  it("asks the caller's token lookup once per name for the whole document", () => {
+    // The cache belongs to the walk, not to one style envelope. Built per
+    // envelope it would reset at every node, state and breakpoint, so a site
+    // token repeated across a large document would be resolved once per
+    // occurrence. Nothing else bounds that: a name that RESOLVES produces no
+    // issue, so it never charges the allowance that stops the rest of the work.
+    const nodes = Array.from({ length: 25 }, (_, index) => ({
+      id: `n${index}`,
+      type: "core/box",
+      version: 1,
+      props: {},
+      styles: {
+        base: { base: { color: { $token: "color.primary" } } },
+        hover: { base: { color: { $token: "color.primary" } } },
+      },
+    }));
+    const asked: string[] = [];
+    const issues = validate(
+      invalidDoc({ formatVersion: 1, kind: "page", nodes }),
+      {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        mode: "strict",
+        tokens: {
+          kindOf: (name: string) => {
+            asked.push(name);
+            return "color" as const;
+          },
+        },
+      }
+    );
+    // A resolving token is not a finding, so the document is clean and every
+    // one of the 50 envelopes was really walked.
+    expect(issues).toEqual([]);
+    expect(asked).toEqual(["color.primary"]);
+  });
+
   it("rejects an oversized string prop by byte size without materializing it", () => {
     // A single node well under the node/depth caps but carrying a ~50MB string:
     // the bounded byte counter must reject it quickly, not allocate a full copy.

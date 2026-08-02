@@ -258,17 +258,40 @@ function charged(
 }
 
 /**
+ * Wrappers this module made, so one is never wrapped again.
+ *
+ * A document walk memoizes once and hands the result down, while a caller
+ * reaching `validateStyleValues` directly hands in a raw lookup that still has
+ * to be wrapped. Recognising our own is what lets both hold: the walk's cache
+ * survives across envelopes instead of a second Map being stacked on it per
+ * envelope, each starting empty.
+ *
+ * A `WeakSet` rather than a marker property: the lookup is a caller-facing
+ * interface, and nothing a caller can see should have to carry a field that
+ * exists for this.
+ */
+const memoizedLookups = new WeakSet<TokenLookup>();
+
+/**
  * A lookup that asks the caller's at most once per name.
  *
  * `kindOf` is caller-supplied and may be expensive, and one reference is asked
  * about several times over: a union asks before choosing an arm, each arm asks
  * while being tried, and the winning arm asks again when it is re-run. Whether
  * a name resolves cannot change inside one run, so asking again is pure waste.
+ *
+ * The cache belongs to the walk that made it, not to one style envelope. A
+ * document repeating a token across thousands of nodes, states and breakpoints
+ * resolves it once; nothing bounds that repetition otherwise, because a name
+ * that resolves is not an issue and so is never charged the issue allowance.
  */
-function memoized(tokens: TokenLookup | undefined): TokenLookup | undefined {
+export function memoizeTokenLookup(
+  tokens: TokenLookup | undefined
+): TokenLookup | undefined {
   if (tokens === undefined) return undefined;
+  if (memoizedLookups.has(tokens)) return tokens;
   const seen = new Map<string, TokenKind | undefined>();
-  return {
+  const lookup: TokenLookup = {
     kindOf(name: string): TokenKind | undefined {
       const cached = seen.get(name);
       if (cached !== undefined || seen.has(name)) return cached;
@@ -277,6 +300,8 @@ function memoized(tokens: TokenLookup | undefined): TokenLookup | undefined {
       return kind;
     },
   };
+  memoizedLookups.add(lookup);
+  return lookup;
 }
 
 /** True when a token of the given kind may be stored at this leaf. */
@@ -858,7 +883,7 @@ export function validateStyleValues(
   // caller may hand back an object that predates the site allowance. Filling it
   // in beats reading a missing number: validation reports, it does not throw.
   const budget = normalizeStyleIssueBudget(suppliedBudget);
-  const tokens = memoized(suppliedTokens);
+  const tokens = memoizeTokenLookup(suppliedTokens);
   const issues: ValidationIssue[] = [];
   // Lazily enumerated for the same reason the composite walk is: a style map
   // with a hundred thousand keys would otherwise be materialised in full before
