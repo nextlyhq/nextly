@@ -15,6 +15,7 @@
  */
 
 import { hashPassword } from "../../auth/password";
+import { systemColumnNames } from "../../lib/system-columns";
 
 /** The minimal field shape both FieldConfig and FieldDefinition satisfy. */
 interface NamedField {
@@ -163,8 +164,15 @@ export function hasPasswordField(fields: NamedField[]): boolean {
   );
 }
 
-/** System owner column, in the snake_case column form and the camelCase form. */
-const OWNER_COLUMN_KEYS = ["created_by", "createdBy"] as const;
+/**
+ * The system columns that never leave the server, in every spelling.
+ *
+ * A projection of `strippedFromResponses` rather than a list of its own, so a column added with
+ * that policy is removed here without an edit.
+ */
+const RESPONSE_STRIPPED_KEYS: readonly string[] = systemColumnNames(
+  column => column.strippedFromResponses
+);
 
 /**
  * Remove the system owner column (`created_by`) from a response row, in place.
@@ -176,7 +184,7 @@ const OWNER_COLUMN_KEYS = ["created_by", "createdBy"] as const;
  * response boundary, the same place password values are cleared.
  */
 export function stripSystemOwnerField(entry: Record<string, unknown>): void {
-  for (const key of OWNER_COLUMN_KEYS) {
+  for (const key of RESPONSE_STRIPPED_KEYS) {
     if (key in entry) delete entry[key];
   }
 }
