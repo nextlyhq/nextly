@@ -36,7 +36,6 @@ import {
 } from "../../api/versions-access";
 import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
-import { DynamicCollectionSchemaService } from "../../domains/dynamic-collections/services/dynamic-collection-schema-service";
 import { teardownEntityComponentData } from "../../domains/field-groups/services/teardown-entity-field-group-data";
 import { resolveLocalizedFieldNames } from "../../domains/i18n/classify-fields";
 import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
@@ -87,6 +86,7 @@ import {
   isSuperAdmin,
   listEffectivePermissions,
 } from "../../services/lib/permissions";
+import { applyBuilderSchema } from "../helpers/apply-builder-schema";
 import {
   readAuthenticatedActor,
   readAuthenticatedScope,
@@ -193,28 +193,6 @@ function injectSingleDefaultFields<T extends SingleWithFields | null>(
 
 // ============================================================
 // Migration SQL execution helper
-// ============================================================
-
-async function executeMigrationStatements(
-  adapter: DrizzleAdapter,
-  migrationSQL: string
-): Promise<void> {
-  const statements = migrationSQL
-    .split("--> statement-breakpoint")
-    .map(s => s.trim())
-    .filter(s => s.length > 0);
-
-  for (const statement of statements) {
-    const cleanStatement = statement
-      .split("\n")
-      .filter(line => !line.trim().startsWith("--"))
-      .join("\n")
-      .trim();
-    if (cleanStatement) {
-      await adapter.executeQuery(cleanStatement);
-    }
-  }
-}
 
 // ============================================================
 // Singles services bundle
@@ -653,21 +631,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // adapter registered the statements are generated and never run, so the
       // service keeps its own default rather than this path demanding a
       // connection it is not going to use.
-      const createDialect = container.has("adapter")
-        ? container.get<DrizzleAdapter>("adapter").getCapabilities().dialect
-        : undefined;
-      const schemaService = new DynamicCollectionSchemaService(
-        undefined,
-        createDialect
-      );
       const isLocalized = b.localized === true;
-      const migrationSQL = schemaService.generateMigrationSQL(
-        tableName,
-        b.fields as unknown as FieldDefinition[],
-        // i18n: omit translatable columns from the main table when localized — they live in the
-        // companion single_<slug>_locales table (provisioned below), mirroring collections.
-        { isSingle: true, hasStatus: b.status === true, localized: isLocalized }
-      );
 
       // Run migration immediately (same semantics as Collections).
       let migrationStatus: "pending" | "applied" | "failed" = "pending";
@@ -676,7 +640,25 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         if (container.has("adapter")) {
           const adapter = container.get<DrizzleAdapter>("adapter");
 
-          await executeMigrationStatements(adapter, migrationSQL);
+          // The same route the SAVE handler takes. Creating through the shared pipeline is what
+          // gives a created table the column types the ORM binds, the index set a code-first
+          // definition would produce, and a row in the schema journal.
+          await applyBuilderSchema({
+            adapter,
+            dialect: adapter.getCapabilities().dialect,
+            slug: b.slug,
+            apply: desired => {
+              desired.singles[b.slug!] = {
+                slug: b.slug!,
+                tableName,
+                fields: b.fields as DesiredSingle["fields"],
+                status: b.status === true,
+                // i18n: carry the flag so the diff omits translatable columns from the main
+                // table — they live in single_<slug>_locales, provisioned below.
+                localized: isLocalized,
+              };
+            },
+          });
 
           const tableExists = await adapter.tableExists(tableName);
           if (tableExists) {
@@ -761,8 +743,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           migrationError instanceof Error
             ? migrationError.message
             : String(migrationError);
+        // The statements belong to the pipeline now, which reports them through the journal row
+        // and the notifier rather than through this handler.
         console.error("[Singles] Migration execution failed:", message);
-        console.error("[Singles] Migration SQL was:", migrationSQL);
       }
 
       const single = await svc.registry.registerSingle({
@@ -1168,13 +1151,6 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // the adapter that will run it, for the same reason as the create
         // path above: the service's own default is "postgresql". Read
         // optionally, matching how the execution below reads it.
-        const updateDialect = container.has("adapter")
-          ? container.get<DrizzleAdapter>("adapter").getCapabilities().dialect
-          : undefined;
-        const schemaService = new DynamicCollectionSchemaService(
-          undefined,
-          updateDialect
-        );
         const tableName = existing.tableName;
 
         // Normalize field lists for ALTER TABLE comparison. The physical
@@ -1188,8 +1164,6 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           { name: "slug", type: "text", required: true },
         ];
 
-        const existingFields = (existing.fields ??
-          []) as unknown as FieldDefinition[];
         // i18n: when the single is localized (in either state), translatable columns live on the
         // companion, never the main table — drop them from the ALTER input so the main-table diff
         // never tries to ADD/DROP them. `reconcileSingleCompanion` owns the companion side.
@@ -1202,19 +1176,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           );
           return fields.filter(f => !localizedNames.has(f.name));
         };
-        const existingFieldsForAlter = omitLocalized(existingFields);
-        const existingFieldNames = new Set(
-          existingFieldsForAlter.map(f => f.name)
-        );
-        const normalizedOldFields: FieldDefinition[] = [
-          ...systemFields.filter(sf => !existingFieldNames.has(sf.name)),
-          ...existingFieldsForAlter,
-          {
-            name: "updatedAt",
-            type: "date",
-            required: false,
-          },
-        ];
+        // The previous shape is no longer assembled here. The pipeline reads what the database
+        // actually has rather than being told what it used to hold, so a stale or hand-edited
+        // registry row can no longer produce an alter against a shape that was never there.
 
         const newFieldsRaw = b.fields as unknown as FieldDefinition[];
         const newFieldsForAlter = omitLocalized(newFieldsRaw);
@@ -1236,34 +1200,30 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         const wasStatus = (existing as { status?: boolean }).status === true;
         const hasStatus =
           b.status !== undefined ? b.status === true : wasStatus;
-        const migrationSQL = schemaService.generateAlterTableMigration(
-          tableName,
-          normalizedOldFields,
-          normalizedNewFields,
-          { wasStatus, hasStatus }
-        );
-
         migrationStatus = "pending";
 
         try {
           if (container.has("adapter")) {
             const adapter = container.get<DrizzleAdapter>("adapter");
 
-            // If the table doesn't exist (e.g. earlier creation failed),
-            // create it fresh instead of altering nothing.
-            const tableExistsBefore = await adapter.tableExists(tableName);
-
-            if (!tableExistsBefore) {
-              const createSQL = schemaService.generateMigrationSQL(
-                tableName,
-                normalizedNewFields,
-                // i18n: fresh (re)create omits translatable columns when localized.
-                { isSingle: true, hasStatus, localized: isLocalized }
-              );
-              await executeMigrationStatements(adapter, createSQL);
-            } else {
-              await executeMigrationStatements(adapter, migrationSQL);
-            }
+            // One route whether or not the table is there. The pipeline diffs the declared shape
+            // against what the database actually has, so the missing-table case (an earlier create
+            // that failed) needs no branch of its own — it simply produces a create instead of an
+            // alter, from the same declaration.
+            await applyBuilderSchema({
+              adapter,
+              dialect: adapter.getCapabilities().dialect,
+              slug,
+              apply: desired => {
+                desired.singles[slug] = {
+                  slug,
+                  tableName,
+                  fields: normalizedNewFields as DesiredSingle["fields"],
+                  status: hasStatus,
+                  localized: isLocalized,
+                };
+              },
+            });
 
             const tableExistsAfter = await adapter.tableExists(tableName);
             if (tableExistsAfter) {
@@ -1349,8 +1309,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             migrationError instanceof Error
               ? migrationError.message
               : String(migrationError);
+          // Reported through the journal row and the notifier by the pipeline now.
           console.error("[Singles] Migration execution failed:", message);
-          console.error("[Singles] Migration SQL was:", migrationSQL);
         }
 
         updateData.migrationStatus = migrationStatus;

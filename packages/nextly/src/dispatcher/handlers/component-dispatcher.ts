@@ -65,6 +65,7 @@ import {
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import type { FieldGroupRegistryService } from "../../services/field-groups/field-group-registry-service";
 import { FieldGroupSchemaService } from "../../services/field-groups/field-group-schema-service";
+import { applyBuilderSchema } from "../helpers/apply-builder-schema";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
@@ -110,31 +111,6 @@ function offsetPaginationToMeta(args: {
     hasNext: page < totalPages,
     hasPrev: page > 1,
   };
-}
-
-// ============================================================
-// Migration SQL execution helper
-// ============================================================
-
-async function executeMigrationStatements(
-  adapter: DrizzleAdapter,
-  migrationSQL: string
-): Promise<void> {
-  const statements = migrationSQL
-    .split("--> statement-breakpoint")
-    .map(s => s.trim())
-    .filter(s => s.length > 0);
-
-  for (const statement of statements) {
-    const cleanStatement = statement
-      .split("\n")
-      .filter(line => !line.trim().startsWith("--"))
-      .join("\n")
-      .trim();
-    if (cleanStatement) {
-      await adapter.executeQuery(cleanStatement);
-    }
-  }
 }
 
 // Refresh the cached Drizzle table so the next entry query joining this
@@ -384,20 +360,8 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
       // migrate:create paths, so the created table and the registry row agree.
       const tableName = resolveComponentTableName(b.slug);
 
-      // Use FieldGroupSchemaService to generate tables with parent
-      // reference columns (_parent_id, _parent_table, _parent_field,
-      // _order, _component_type).
       const adapter = getAdapterFromDI();
       const dialect = adapter?.dialect || "postgresql";
-      const fieldGroupSchemaService = new FieldGroupSchemaService(dialect);
-
-      const migrationSQL = fieldGroupSchemaService.generateMigrationSQL(
-        tableName,
-        b.fields,
-        // i18n: omit translatable columns from the main comp_ table when localized — they live
-        // in the companion comp_<slug>_locales table (provisioned below).
-        { localized: isLocalized }
-      );
 
       let migrationStatus: "pending" | "applied" | "failed" = "pending";
 
@@ -405,7 +369,25 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         if (container.has("adapter")) {
           const diAdapter = container.get<DrizzleAdapter>("adapter");
 
-          await executeMigrationStatements(diAdapter, migrationSQL);
+          // The same route the EDIT handler below takes. Creating through the shared pipeline
+          // rather than executing generated SQL directly is what gives a created table the column
+          // types the ORM actually binds, an index set identical to a code-first definition, and a
+          // row in the schema journal — three things the create path silently did without.
+          await applyBuilderSchema({
+            adapter: diAdapter,
+            dialect,
+            slug: b.slug,
+            apply: desired => {
+              desired.components[b.slug!] = {
+                slug: b.slug!,
+                tableName,
+                fields: b.fields as DesiredFieldGroup["fields"],
+                // i18n: carry the flag so the diff omits translatable columns from the main
+                // comp_ table — they live in comp_<slug>_locales, reconciled out-of-band below.
+                localized: isLocalized,
+              };
+            },
+          });
 
           const tableExists = await diAdapter.tableExists(tableName);
           if (tableExists) {
@@ -476,8 +458,9 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
           migrationError instanceof Error
             ? migrationError.message
             : String(migrationError);
+        // The statements are the pipeline's now, and it reports them through the journal row and
+        // the notifier rather than through this handler, so there is nothing local left to echo.
         console.error("[Components] Migration execution failed:", message);
-        console.error("[Components] Migration SQL was:", migrationSQL);
       }
 
       const created = await svc.registry.registerComponent({
