@@ -3,6 +3,8 @@ import { resolve } from "node:path";
 
 import { buildLocalizationDownSql } from "./generate-down";
 import { buildLocalizationUpSql } from "./generate-up";
+import { formatLocalizationIntent } from "./migration-intent";
+import type { I18nTransitionKind } from "./transition-state";
 import type { CompanionMigrationSpec } from "./types";
 
 /** UTC `YYYYMMDD_HHMMSS_mmm` (matches format-file.ts `formatTimestamp`). */
@@ -71,6 +73,12 @@ export interface WriteCompanionMigrationOpts {
    * `disable` = restore default onto main + archive other languages + drop the companion.
    */
   kind: "enable" | "create-only" | "disable";
+  /**
+   * Which kind of entity the companion belongs to. Recorded because the transition marker is
+   * keyed by kind as well as slug — a collection, a single and a field group may share a slug,
+   * and the file has to name which one it is about.
+   */
+  entity: I18nTransitionKind;
   /** Pre-planned UP SQL (from `planCompanionMigration`). */
   upSql: string;
   /** Pre-planned DOWN SQL (from `planCompanionMigration`). */
@@ -103,10 +111,14 @@ export function writeCompanionMigrationFile(
         : "create";
   const slug = `${verb}_localization_${spec.collection}`;
   const baseName = `${formatTimestamp(opts.now)}_${slug}`;
+  // The statements below are one route to the goal — the right one for a database that has had
+  // nothing done to it yet. Recording the goal itself lets the apply path choose a different route
+  // when the target database has already come part of the way.
   const header =
     `-- Migration: ${baseName}\n` +
     `-- Collections: ${spec.collection}\n` +
-    `${LOCALIZATION_MIGRATION_MARKER} companion (${opts.kind}) (i18n)\n`;
+    `${LOCALIZATION_MIGRATION_MARKER} companion (${opts.kind}) (i18n)\n` +
+    `${formatLocalizationIntent({ kind: opts.kind, entity: opts.entity, spec })}\n`;
   const content = `${header}\n-- UP\n${opts.upSql}\n\n-- DOWN\n${opts.downSql}\n`;
 
   const path = resolve(migrationsDir, `${baseName}.sql`);

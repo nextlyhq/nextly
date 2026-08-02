@@ -109,7 +109,7 @@ describe("AdvancedTab -- unique disabled when nested (PR E3)", () => {
     expect(screen.getByRole("switch", { name: /^unique$/i })).toBeDisabled();
     expect(
       screen.getByText(
-        /unique can't be enforced inside a repeater or repeatable component/i
+        /unique can't be enforced inside a repeater or repeatable field group/i
       )
     ).toBeInTheDocument();
   });

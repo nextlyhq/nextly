@@ -14,6 +14,7 @@ import { join, resolve } from "node:path";
 
 import { beforeEach, describe, expect, it } from "vitest";
 
+import { parseLocalizationIntent } from "../../../i18n/migration/migration-intent";
 import { generateMigration, type MinimalConfigEntity } from "../generate";
 import { writeSnapshot } from "../snapshot-io";
 
@@ -423,5 +424,149 @@ describe("generateMigration — localized companion emission", () => {
       const files = await listSqlFiles(migrationsDir);
       expect(files.some(f => f.includes("disable_localization"))).toBe(false);
     });
+  });
+});
+
+// The three entity kinds are planned from one merged list, and the transition marker a companion
+// belongs to is keyed by kind as well as slug. An entry that lost track of which list it came from
+// would name another entity's record — and a collection, a single and a field group may all be
+// called "hero".
+describe("generateMigration — the companion records which kind of entity it is for", () => {
+  let migrationsDir: string;
+
+  beforeEach(async () => {
+    migrationsDir = await mkdtemp(join(tmpdir(), "nextly-i18n-kind-"));
+  });
+
+  const localized = (slug: string, tableName: string): MinimalConfigEntity => ({
+    slug,
+    tableName,
+    localized: true,
+    fields: [{ name: "body", type: "longText", localized: true }],
+  });
+
+  const cases: [
+    string,
+    "collection" | "single" | "fieldGroup",
+    () => object,
+  ][] = [
+    [
+      "collection",
+      "collection",
+      () => ({
+        collections: [localized("hero", "dc_hero")],
+        singles: [],
+        components: [],
+      }),
+    ],
+    [
+      "single",
+      "single",
+      () => ({
+        collections: [],
+        singles: [localized("hero", "single_hero")],
+        components: [],
+      }),
+    ],
+    [
+      "component",
+      "fieldGroup",
+      () => ({
+        collections: [],
+        singles: [],
+        components: [localized("hero", "comp_hero")],
+      }),
+    ],
+  ];
+
+  for (const [label, expected, entities] of cases) {
+    it(`records entity "${expected}" for a localized ${label}`, async () => {
+      await generateMigration({
+        name: "add_hero",
+        dialect: "sqlite",
+        migrationsDir,
+        defaultLocale: "en",
+        now: NOW,
+        ...entities(),
+      } as Parameters<typeof generateMigration>[0]);
+
+      const file = await findCompanionFile(migrationsDir, "hero");
+      expect(file).toBeDefined();
+      const content = await readFile(resolve(migrationsDir, file!), "utf-8");
+      expect(parseLocalizationIntent(content, file!)?.entity).toBe(expected);
+    });
+  }
+});
+
+// 🔴 An ENABLE narrows `columnsOnMain` to the subset the previous main table really carried, and
+// its statements follow that subset. The recorded intent has to describe the same subset: an absent
+// `columnsOnMain` means "all of them", so a reader acting on the wider spec would seed from, or
+// drop, a column that was never on main and fail with "no such column".
+describe("generateMigration — the recorded intent matches the emitted statements", () => {
+  let migrationsDir: string;
+
+  beforeEach(async () => {
+    migrationsDir = await mkdtemp(join(tmpdir(), "nextly-i18n-subset-"));
+  });
+
+  it("records only the columns the previous main table actually held", async () => {
+    const metaDir = resolve(migrationsDir, "meta");
+    // Previous state: `body` on main and not yet localized. `subtitle` does not exist at all.
+    await writeSnapshot(
+      metaDir,
+      "20260101_000000_base",
+      {
+        tables: [
+          {
+            name: "dc_docs",
+            columns: [
+              { name: "id", type: "text", nullable: false, primaryKey: true },
+              { name: "body", type: "text", nullable: true },
+            ],
+            indexes: [],
+          },
+        ],
+      },
+      "-- UP\nSELECT 1;\n"
+    );
+
+    // The same edit localizes the collection AND adds a second localized field.
+    await generateMigration({
+      name: "localize_docs",
+      dialect: "sqlite",
+      migrationsDir,
+      defaultLocale: "en",
+      now: NOW,
+      collections: [
+        {
+          slug: "docs",
+          tableName: "dc_docs",
+          localized: true,
+          fields: [
+            { name: "body", type: "longText", localized: true },
+            { name: "subtitle", type: "text", localized: true },
+          ],
+        },
+      ],
+      singles: [],
+      components: [],
+    });
+
+    const file = await findCompanionFile(migrationsDir, "docs");
+    expect(file).toBeDefined();
+    const content = await readFile(resolve(migrationsDir, file!), "utf-8");
+    const intent = parseLocalizationIntent(content, file!);
+
+    expect(intent?.kind).toBe("enable");
+    // The companion still gets both columns...
+    expect(intent?.spec.columns.map(c => c.name).sort()).toEqual([
+      "body",
+      "subtitle",
+    ]);
+    // ...but only `body` was ever on main, so only it may be seeded from or dropped.
+    expect(intent?.spec.columnsOnMain).toEqual(["body"]);
+    // The statements agree: the drop names body and never subtitle.
+    expect(content).toContain('DROP COLUMN "body"');
+    expect(content).not.toContain('DROP COLUMN "subtitle"');
   });
 });

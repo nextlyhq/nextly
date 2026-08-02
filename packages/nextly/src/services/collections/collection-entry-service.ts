@@ -584,9 +584,15 @@ export class CollectionEntryService extends BaseService {
     return this.mutationService.discardWorkingDraft(params);
   }
 
+  // Params are taken from the method being delegated to rather than restated here. Restating them
+  // had already dropped `overrideAccess`, `routeAuthorized` and `transitionAuth`: the object is
+  // forwarded whole, so those kept working at runtime while the type denied they existed, and a
+  // caller doing a trusted server write through this facade could not say so without a cast.
   async createEntryInTransaction(
     tx: TransactionContext,
-    params: { collectionName: string; user?: UserContext },
+    params: Parameters<
+      CollectionMutationService["createEntryInTransaction"]
+    >[1],
     body: Record<string, unknown>
   ): Promise<CollectionServiceResult<unknown>> {
     return this.mutationService.createEntryInTransaction(tx, params, body);
@@ -594,7 +600,9 @@ export class CollectionEntryService extends BaseService {
 
   async updateEntryInTransaction(
     tx: TransactionContext,
-    params: { collectionName: string; entryId: string; user?: UserContext },
+    params: Parameters<
+      CollectionMutationService["updateEntryInTransaction"]
+    >[1],
     body: Record<string, unknown>
   ): Promise<CollectionServiceResult<unknown>> {
     return this.mutationService.updateEntryInTransaction(tx, params, body);

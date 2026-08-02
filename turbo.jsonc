@@ -132,11 +132,15 @@
     //
     // Environment Variables:
     //   - NODE_ENV affects build output (production vs development)
+    //   - NEXTLY_DEV_DIAGNOSTICS is read at runtime, alongside NODE_ENV, before
+    //     an error response may carry the detail the public shape withholds.
+    //     Declared so the lint rule can see it and so a change is not silently
+    //     served from a cached build.
     "build": {
       "dependsOn": ["^build"], // Build dependencies first (critical for npm packages)
       "inputs": ["$TURBO_DEFAULT$", ".env*"], // Source files + env files
       "outputs": ["dist/**", ".next/**", "!.next/cache/**", "**/*.tsbuildinfo"],
-      "env": ["NODE_ENV"] // Build output changes based on NODE_ENV
+      "env": ["NODE_ENV", "NEXTLY_DEV_DIAGNOSTICS"]
     },
 
     // ==================== TYPE CHECKING ====================

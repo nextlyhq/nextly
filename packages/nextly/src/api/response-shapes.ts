@@ -8,12 +8,12 @@
  * Eight op-types:
  *   respondList         to { items, meta }                   (paginated find)
  *   respondDoc          to T (bare)                          (findByID)
- *   respondMutation     to { message, item }                 (create/update/delete)
- *   respondAction       to { message, ...result }            (non-CRUD mutation)
+ *   respondMutation     to { message, item, warnings? }      (create/update/delete)
+ *   respondAction       to { message, warnings?, ...result } (non-CRUD mutation)
  *   respondData         to T (bare object)                   (non-CRUD read)
  *   respondCount        to { total }                         (count)
- *   respondBulk         to { message, items, errors }        (bulk by id)
- *   respondBulkUpload   to { message, items, errors }        (bulk upload)
+ *   respondBulk         to { message, items, errors, warnings? } (bulk by id)
+ *   respondBulkUpload   to { message, items, errors, warnings? } (bulk upload)
  *
  * Errors do NOT use these helpers. Errors flow through `withErrorHandler`
  * (REST API) or the routeHandler error path (dispatcher API), both of
@@ -27,6 +27,8 @@
  * requests (e.g. empty `ids` array) where the dispatcher's pre-check
  * throws NextlyError.validation BEFORE entering the service.
  */
+
+import { currentSideEffectWarnings } from "../hooks/side-effect-warnings";
 
 export type PaginationMeta = {
   total: number;
@@ -73,7 +75,19 @@ export function respondMutation<T>(
   item: T,
   init?: ResponseInit
 ): Response {
-  return jsonResponse({ message, item }, init);
+  // A post-commit hook failure reports success with a warning: the row is
+  // durable and a side-effect phase cannot change it, so failing the operation
+  // would tell the caller its write did not happen and invite a retry that
+  // writes it twice. Read here rather than passed in, because the failures are
+  // raised deep in the write path and every one of this helper's call sites
+  // would otherwise have to accept and forward them.
+  //
+  // Omitted entirely when empty, so the ordinary body is unchanged.
+  const warnings = currentSideEffectWarnings();
+  return jsonResponse(
+    warnings.length > 0 ? { message, item, warnings } : { message, item },
+    init
+  );
 }
 
 /**
@@ -88,7 +102,19 @@ export function respondAction(
   result: Record<string, unknown> = {},
   init?: ResponseInit
 ): Response {
-  return jsonResponse({ message, ...result }, init);
+  // Some actions ARE writes: a version restore calls the ordinary update path,
+  // so its post-commit hooks run and can fail. Reporting a durable restore as
+  // an unqualified success would hide exactly the side effect this reports.
+  //
+  // A caller-supplied `warnings` key wins, so an action that computes its own
+  // is not overwritten by the ambient ones.
+  const warnings = currentSideEffectWarnings();
+  return jsonResponse(
+    warnings.length > 0
+      ? { message, warnings, ...result }
+      : { message, ...result },
+    init
+  );
 }
 
 /**
@@ -165,7 +191,17 @@ export function respondBulk<T>(
   errors: PerItemError[],
   init?: ResponseInit
 ): Response {
-  return jsonResponse({ message, items, errors }, init);
+  // Same rule as `respondMutation`: a hook that failed after the write
+  // committed is reported beside the result rather than turned into an error.
+  // `errors` is per-ITEM and means that item did not happen; `warnings` is
+  // per-OPERATION and means every item happened and a side effect did not.
+  const warnings = currentSideEffectWarnings();
+  return jsonResponse(
+    warnings.length > 0
+      ? { message, items, errors, warnings }
+      : { message, items, errors },
+    init
+  );
 }
 
 /**
@@ -181,5 +217,15 @@ export function respondBulkUpload<T>(
   errors: BulkUploadError[],
   init?: ResponseInit
 ): Response {
-  return jsonResponse({ message, items, errors }, init);
+  // Same rule as `respondMutation`: a hook that failed after the write
+  // committed is reported beside the result rather than turned into an error.
+  // `errors` is per-ITEM and means that item did not happen; `warnings` is
+  // per-OPERATION and means every item happened and a side effect did not.
+  const warnings = currentSideEffectWarnings();
+  return jsonResponse(
+    warnings.length > 0
+      ? { message, items, errors, warnings }
+      : { message, items, errors },
+    init
+  );
 }

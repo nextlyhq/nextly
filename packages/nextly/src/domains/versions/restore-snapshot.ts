@@ -17,27 +17,24 @@
  */
 
 import type { FieldConfig } from "../../collections/fields/types";
+import { IMMUTABLE_SYSTEM_FIELDS_ANY_ENTITY } from "../../lib/immutable-system-fields";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { isFieldLocalized } from "../i18n/classify-fields";
 
 /**
- * Columns a write must never carry.
+ * Columns a restore must never carry back.
  *
- * The collection update path strips these too, but only inside its transaction
- * — long after `beforeUpdate` hooks have seen the payload. Stripping here means
- * a hook is never handed a forged `createdBy` or a stale `createdAt`. The
- * singles path strips only `id` and `createdAt`, so for that path this is the
- * only place ownership is protected at all.
+ * Both write paths strip these too, but only inside their transaction — long
+ * after `beforeUpdate` hooks have seen the payload. Stripping here means a hook
+ * is never handed a forged `createdBy` or a stale `createdAt`.
+ *
+ * The set spans every entity rather than the one being restored, because this
+ * path protects the owner column for singles as well, where it is not a system
+ * column at all. Assembled by hand, this copy fell behind the writers' one and
+ * a restored snapshot then reported the first-publication marker as an unknown
+ * field, describing every complete restore as partial.
  */
-const IMMUTABLE_FIELDS = new Set([
-  "id",
-  "createdAt",
-  "created_at",
-  "updatedAt",
-  "updated_at",
-  "createdBy",
-  "created_by",
-]);
+const IMMUTABLE_FIELDS = IMMUTABLE_SYSTEM_FIELDS_ANY_ENTITY;
 
 /**
  * A component's own schema, as the payload filter needs to see it.

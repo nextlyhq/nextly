@@ -32,6 +32,7 @@ import { isSideEffectHookType } from "./hook-registry";
 import { normalizeHookError } from "./normalize-hook-error";
 import type { PrebuiltHookContext } from "./prebuilt";
 import { getPrebuiltHook, mapHookType } from "./prebuilt";
+import { recordSideEffectWarning } from "./side-effect-warnings";
 import type { HookType } from "./types";
 
 /**
@@ -250,7 +251,7 @@ export class StoredHookExecutor {
           `Stored hook "${storedHook.hookId}" failed for "${context.collection}" after the write committed:`,
           normalized
         );
-        failures.push({
+        const failure: SideEffectHookFailure = {
           phase: hookType,
           collection: context.collection,
           error: NextlyError.is(normalized)
@@ -262,7 +263,11 @@ export class StoredHookExecutor {
                   storedHookId: storedHook.hookId,
                 },
               }),
-        });
+        };
+        failures.push(failure);
+        // A stored hook and a code-registered one fail identically as far as a
+        // caller is concerned, so both reach the same collector.
+        recordSideEffectWarning(failure);
       }
     }
 

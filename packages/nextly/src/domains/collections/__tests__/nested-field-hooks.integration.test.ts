@@ -12,6 +12,7 @@ import {
   group,
   relationship,
   password,
+  repeater,
   text,
   upload,
 } from "../../../config";
@@ -25,6 +26,7 @@ import {
 const ORGS = "nestedhook_orgs";
 const AUTHORS = "nestedhook_authors";
 const POSTS = "nestedhook_posts";
+const VAULTS = "nestedhook_vaults";
 
 // How many times the target's token hook ran, for the selection test.
 let tokenHookRuns = 0;
@@ -61,6 +63,14 @@ async function onlyId(t: TestNextly, collection: string): Promise<string> {
 async function boot(): Promise<TestNextly> {
   current = await createTestNextly({
     collections: [
+      // Its only text field is denied, so the auto-selected display label is
+      // built from a value the caller may not see — the setup for the label-copy
+      // exfiltration test.
+      defineCollection({
+        slug: VAULTS,
+        access: { read: () => true, create: () => true, update: () => true },
+        fields: [text({ name: "codename", access: { read: () => false } })],
+      }),
       defineCollection({
         slug: ORGS,
         access: { read: () => true, create: () => true, update: () => true },
@@ -72,6 +82,101 @@ async function boot(): Promise<TestNextly> {
           text({
             name: "classification",
             access: { read: () => false },
+          }),
+          // Allowed ONLY while `classification` is present as evidence. Its rule
+          // reads the row as `data`, so a later pass judging it against the
+          // already-stripped row (where classification is gone) would wrongly deny
+          // it — which is why each pass first RESTORES the values a prior pass
+          // removed as evidence, then re-runs the rule against that restored row.
+          text({
+            name: "region",
+            access: {
+              read: ({ data }) =>
+                (data as { classification?: unknown } | undefined)
+                  ?.classification === "private",
+            },
+          }),
+          // A repeater whose `code` is visible only for a public division. A
+          // parent hook can append, or replace, a row here after the child's
+          // first access pass; the row it introduces has no recorded verdict (it
+          // is a new object), so the pass after the hooks must judge it fresh
+          // rather than inherit the previous occupant's.
+          repeater({
+            name: "divisions",
+            fields: [
+              text({ name: "label" }),
+              text({ name: "tier" }),
+              text({
+                name: "code",
+                access: {
+                  read: ({ data }) =>
+                    (data as { tier?: unknown } | undefined)?.tier === "public",
+                },
+              }),
+              // A denied field on the repeater ROW, and an INVERSE sibling visible
+              // only while `grade` is NOT "restricted". A restricted division
+              // strips both. A hook that deep-clones the org and REORDERS this
+              // repeater must not let the restricted row inherit a public row's
+              // evidence by array position and fall open: repeater rows are matched
+              // by id, not index, and an unmatchable clone row fails closed.
+              text({ name: "grade", access: { read: () => false } }),
+              text({
+                name: "openTag",
+                access: {
+                  read: ({ data }) =>
+                    (data as { grade?: unknown } | undefined)?.grade !==
+                    "restricted",
+                },
+              }),
+            ],
+          }),
+          // A group holding a denied field, beside a top-level sibling whose
+          // visibility depends on that nested value. The nested read judges each
+          // row twice — before and after the parent's hooks — and the second pass
+          // snapshots the org row before descending to restore the group's
+          // evidence, so re-judging `emblem` against the already-stripped group
+          // would wrongly drop it. A direct read judges `emblem` once with the
+          // group intact and keeps it; restoring the whole subtree's evidence
+          // before the ancestor snapshot is what keeps the two reads in step.
+          group({
+            name: "charter",
+            fields: [
+              text({ name: "sealed", access: { read: () => false } }),
+              // A NESTED inverse conditional: visible only while the denied nested
+              // `sealed` is NOT "locked". A locked charter strips both; a deep-clone
+              // drops the nested `sealed`, so a pass judging the clone without
+              // transferring the SUBTREE evidence reads `undefined !== "locked"` and
+              // falls open on the nested field — the root-only id bridge is not
+              // enough.
+              text({
+                name: "openSeal",
+                access: {
+                  read: ({ data }) =>
+                    (data as { sealed?: unknown } | undefined)?.sealed !==
+                    "locked",
+                },
+              }),
+            ],
+          }),
+          text({
+            name: "emblem",
+            access: {
+              read: ({ data }) =>
+                (data as { charter?: { sealed?: unknown } } | undefined)
+                  ?.charter?.sealed === "yes",
+            },
+          }),
+          // INVERSE conditional: visible only while the denied `classification` is
+          // NOT "private". A private row strips both; a hook cloning it drops
+          // `classification`, so a pass that judged the clone without restoring the
+          // original evidence would read `undefined !== "private"` and fall OPEN.
+          text({
+            name: "openInfo",
+            access: {
+              read: ({ data }) =>
+                (data as { classification?: unknown } | undefined)
+                  ?.classification !== "private",
+            },
           }),
         ],
       }),
@@ -88,6 +193,11 @@ async function boot(): Promise<TestNextly> {
           // batch expansion does not recurse into a related row's OWN
           // relationships, so a hook needing that evidence cannot mask there.
           password({ name: "passwordHash" }),
+          // Denied to everyone. Unlike the org's `classification`, this sits on
+          // the author itself, which a list read walks (a related row's own
+          // relations are not expanded on a list), so it is the field a
+          // source-hook re-contamination test uses on the list path.
+          text({ name: "dossier", access: { read: () => false } }),
           // Writes a secret back after the fetch stripped it. Only a second
           // strip AFTER the hooks keeps it out of the response.
           text({
@@ -129,6 +239,190 @@ async function boot(): Promise<TestNextly> {
               ],
             },
           }),
+          // Copies the org's denied `classification` value onto an allowed field
+          // of its own. Only reachable when the parent's hook is handed the child
+          // with that field still present, so it is the exfiltration a nested
+          // read must not allow.
+          text({
+            name: "stolen",
+            hooks: {
+              afterRead: [
+                ({ value, data }) => {
+                  const org = (data as { organization?: unknown }).organization;
+                  const classification =
+                    typeof org === "object" && org !== null
+                      ? (org as { classification?: unknown }).classification
+                      : undefined;
+                  return typeof classification === "string"
+                    ? classification
+                    : value;
+                },
+              ],
+            },
+          }),
+          // Writes a denied field back ONTO the child after the child's access
+          // pass has already removed it. Fires only when the field is present, so
+          // a test opts in per row; a second access pass after all hooks must
+          // strip what it reintroduced.
+          text({
+            name: "reintroducer",
+            hooks: {
+              afterRead: [
+                ({ value, data }) => {
+                  if (value !== "on") return value;
+                  const org = (data as { organization?: unknown }).organization;
+                  if (org && typeof org === "object") {
+                    (org as Record<string, unknown>).classification =
+                      "reintroduced";
+                  }
+                  return value;
+                },
+              ],
+            },
+          }),
+          // Appends a NEW row to the nested org's `divisions` repeater after that
+          // child's first access pass, so the appended row's denied `code` has no
+          // recorded verdict and must be judged fresh by the pass after the hooks.
+          text({
+            name: "appender",
+            hooks: {
+              afterRead: [
+                ({ value, data }) => {
+                  if (value !== "on") return value;
+                  const org = (data as { organization?: unknown }).organization;
+                  const divisions =
+                    org && typeof org === "object"
+                      ? (org as { divisions?: unknown }).divisions
+                      : undefined;
+                  if (Array.isArray(divisions)) {
+                    divisions.push({ label: "added", code: "SNEAKED" });
+                  }
+                  return value;
+                },
+              ],
+            },
+          }),
+          // REPLACES the org's first division with a private one carrying `code`
+          // after the child's first pass. The replacement is a new object, so it
+          // must not inherit the public original's "allowed" verdict by index.
+          text({
+            name: "replacer",
+            hooks: {
+              afterRead: [
+                ({ value, data }) => {
+                  if (value !== "on") return value;
+                  const org = (data as { organization?: unknown }).organization;
+                  const divisions =
+                    org && typeof org === "object"
+                      ? (org as { divisions?: unknown }).divisions
+                      : undefined;
+                  if (Array.isArray(divisions) && divisions.length > 0) {
+                    divisions[0] = {
+                      label: "swapped",
+                      tier: "private",
+                      code: "SNEAKED",
+                    };
+                  }
+                  return value;
+                },
+              ],
+            },
+          }),
+          // MUTATES the org's first division IN PLACE (same object): flips it to
+          // private and writes a fresh `code`. Object identity is unchanged, so a
+          // cached verdict would let the new `code` through — only re-judging the
+          // current content strips it.
+          text({
+            name: "mutator",
+            hooks: {
+              afterRead: [
+                ({ value, data }) => {
+                  if (value !== "on") return value;
+                  const org = (data as { organization?: unknown }).organization;
+                  const divisions =
+                    org && typeof org === "object"
+                      ? (org as { divisions?: unknown }).divisions
+                      : undefined;
+                  const first =
+                    Array.isArray(divisions) && divisions[0]
+                      ? (divisions[0] as Record<string, unknown>)
+                      : undefined;
+                  if (first) {
+                    first.tier = "private";
+                    first.code = "MUTATED";
+                  }
+                  return value;
+                },
+              ],
+            },
+          }),
+          // Flips the org's first division to public WITHOUT setting `code`. The
+          // first pass removed `code` for the private division; the second pass
+          // restores it only as evidence to re-judge the row, so the restored
+          // value must not ride out in the response just because the flipped
+          // condition now allows the field — the hook never supplied `code`.
+          text({
+            name: "tierflip",
+            hooks: {
+              afterRead: [
+                ({ value, data }) => {
+                  if (value !== "on") return value;
+                  const org = (data as { organization?: unknown }).organization;
+                  const divisions =
+                    org && typeof org === "object"
+                      ? (org as { divisions?: unknown }).divisions
+                      : undefined;
+                  const first =
+                    Array.isArray(divisions) && divisions[0]
+                      ? (divisions[0] as Record<string, unknown>)
+                      : undefined;
+                  if (first) first.tier = "public";
+                  return value;
+                },
+              ],
+            },
+          }),
+          // A relationship whose target's only text field — and so its derived
+          // display label — is DENIED. Expansion builds the label from the raw
+          // value, then the access pass strips the field but the label lingers, so
+          // a parent hook reading `data.vault.label` can copy the denied value
+          // unless the label is rebuilt right after that access pass.
+          relationship({ name: "vault", relationTo: VAULTS }),
+          // Copies the nested vault's `label` onto an allowed field of its own,
+          // the exfiltration the label rebuild must close.
+          text({
+            name: "vaultLabelCopy",
+            hooks: {
+              afterRead: [
+                ({ value, data }) => {
+                  if (value !== "on") return value;
+                  const vault = (data as { vault?: { label?: unknown } }).vault;
+                  return typeof vault?.label === "string" ? vault.label : value;
+                },
+              ],
+            },
+          }),
+          // A target-collection FIELD hook that REPLACES this author's own
+          // `organization` relationship with a freshly populated org carrying a
+          // denied field, AFTER the walk already descended the original. The new
+          // child missed that descent, so unless the walk descends again the source
+          // collection's hooks could read its denied field and copy it out.
+          text({
+            name: "swapOrg",
+            hooks: {
+              afterRead: [
+                ({ value, data }) => {
+                  if (value !== "on") return value;
+                  (data as Record<string, unknown>).organization = {
+                    id: "swapped-org",
+                    name: "swapped",
+                    classification: "SECRET",
+                  };
+                  return value;
+                },
+              ],
+            },
+          }),
         ],
       }),
       defineCollection({
@@ -137,6 +431,42 @@ async function boot(): Promise<TestNextly> {
         fields: [
           text({ name: "title" }),
           relationship({ name: "author", relationTo: AUTHORS }),
+          // A source field-level afterRead hook that writes a denied field back
+          // onto a related row. It runs after the related-row sanitization the
+          // earlier rounds added, so only a pass after the field hooks strips it.
+          text({
+            name: "annotate",
+            hooks: {
+              afterRead: [
+                ({ value, data }) => {
+                  if (value !== "on") return value;
+                  const author = (data as { author?: unknown }).author;
+                  if (author && typeof author === "object") {
+                    (author as Record<string, unknown>).dossier = "LEAKED";
+                  }
+                  return value;
+                },
+              ],
+            },
+          }),
+          // A field-level (last-phase) hook that copies the related author's
+          // denied `dossier` onto an allowed source key. A code or stored hook
+          // that reintroduces `dossier` on the author must be re-sanitized before
+          // this phase runs, or the copy escapes the field-access system.
+          text({
+            name: "harvest",
+            hooks: {
+              afterRead: [
+                ({ value, data }) => {
+                  if (value !== "on") return value;
+                  const author = (data as { author?: { dossier?: unknown } })
+                    .author;
+                  (data as Record<string, unknown>).leaked = author?.dossier;
+                  return value;
+                },
+              ],
+            },
+          }),
           // The blog template's shape: a relationship to the built-in users
           // entity, which has no dynamic-collection record.
           relationship({ name: "owner", relationTo: "users" }),
@@ -148,6 +478,14 @@ async function boot(): Promise<TestNextly> {
           group({
             name: "credits",
             fields: [relationship({ name: "editor", relationTo: AUTHORS })],
+          }),
+          // A hasMany relationship: populated + serialized it is a JSON ARRAY
+          // string, which a hook can hand back. The walk must decode that string
+          // before it can reach the denied fields on the rows inside.
+          relationship({
+            name: "contributors",
+            relationTo: AUTHORS,
+            hasMany: true,
           }),
         ],
       }),
@@ -421,14 +759,21 @@ describe("a target's field hooks apply to rows reached through a relationship", 
     expect(tokenHookRuns).toBeGreaterThan(0);
   });
 
-  it("judges a masking rule before the denied sibling it reads is removed", async () => {
-    // `classification` denies read, and the author's `secret` rule masks on it.
-    // Removing denied fields as a row is fetched hands that rule a row its
-    // evidence has already been cut out of: it reads `undefined`, declines to
-    // mask, and the value it guards goes out. Masking has to run first.
+  it("hands a parent's hooks a nested child with its denied fields already removed", async () => {
+    // `classification` denies read. A parent hook that reads it — to copy it out
+    // (`stolen`) or to mask a sibling on it (`secret`) — must be handed the child
+    // with that field already gone, or the copy leaks it under an allowed key and
+    // outlives the child's own redaction. Applying each child's field access
+    // before its parent's hooks is what a direct read does; the nested walk now
+    // matches it.
     //
-    // Read WITHOUT overrideAccess: field rules are skipped for a trusted read,
-    // so an overriding caller cannot show this either way.
+    // The deliberate trade-off: a hook can no longer mask on a caller-denied
+    // field, because it can no longer see one. A value that must stay hidden
+    // needs an access rule keyed on the caller, not a hook reading data the
+    // caller cannot see.
+    //
+    // Read WITHOUT overrideAccess: field rules are skipped for a trusted read, so
+    // an overriding caller is handed the complete row either way.
     const t = await boot();
     const postId = await seed(t);
 
@@ -440,13 +785,300 @@ describe("a target's field hooks apply to rows reached through a relationship", 
 
     const author = expanded.data!.author as Record<string, unknown>;
     expect(author).toBeTruthy();
-    // Masked, because the rule saw the classification.
-    expect(author.secret).toBe("REDACTED");
-
-    // And the evidence is still withheld from the response: deferring WHEN the
-    // rules run must not change WHETHER they run.
+    // The exfiltration is closed: the copy hook was handed a child whose denied
+    // field had already been removed, so it copied nothing.
+    expect(author.stolen).not.toBe("private");
+    // The denied field is absent from the response itself.
     const org = author.organization as Record<string, unknown> | undefined;
     if (org) expect(org.classification).toBeUndefined();
+    // Same cause, visible from the other hook: it could not read the classification
+    // either, so it did not mask — the value it tried to guard on that basis is
+    // returned unchanged. Masking must not depend on data the caller cannot see.
+    expect(author.secret).toBe("TOP_SECRET");
+  });
+
+  it("re-strips a denied child field a parent hook reintroduces after the first pass", async () => {
+    // The first access pass (during the walk) removes the child's denied field
+    // before the parent's hooks run. A parent hook can still write it back onto
+    // the child afterward — to mask or derive a value — so a second access pass
+    // after every hook is what keeps that reintroduced field out of the response.
+    const t = await boot();
+    await t.nextly.create({
+      collection: ORGS,
+      data: { name: "acme", classification: "private" },
+    });
+    const orgId = await onlyId(t, ORGS);
+    await t.nextly.create({
+      collection: AUTHORS,
+      // `reintroducer` present, so its hook fires and reassigns the org's denied
+      // `classification` after the first pass stripped it.
+      data: { name: "ada", organization: orgId, reintroducer: "on" },
+    });
+    const authorId = await onlyId(t, AUTHORS);
+    await t.nextly.create({
+      collection: POSTS,
+      data: { title: "p", author: authorId },
+    });
+    const postId = await onlyId(t, POSTS);
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    const author = expanded.data!.author as Record<string, unknown>;
+    const org = author.organization as Record<string, unknown> | undefined;
+    // The second pass removed the value the hook wrote back — not "reintroduced".
+    if (org) expect(org.classification).toBeUndefined();
+  });
+
+  it("keeps a field whose access depended on a denied sibling, evidence restored", async () => {
+    // `region` is allowed only while `classification` is present; `classification`
+    // is denied. The first pass judges `region` against the complete row (keeps
+    // it) and removes `classification`. Every later pass must RESTORE the removed
+    // `classification` as evidence and re-run the rule against the restored row,
+    // not re-judge `region` against the stripped row — that would wrongly deny it,
+    // unlike a direct read where the sibling is still present.
+    const t = await boot();
+    await t.nextly.create({
+      collection: ORGS,
+      data: { name: "acme", classification: "private", region: "emea" },
+    });
+    const orgId = await onlyId(t, ORGS);
+    await t.nextly.create({
+      collection: AUTHORS,
+      data: { name: "ada", organization: orgId },
+    });
+    const authorId = await onlyId(t, AUTHORS);
+    await t.nextly.create({
+      collection: POSTS,
+      data: { title: "p", author: authorId },
+    });
+    const postId = await onlyId(t, POSTS);
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    const author = expanded.data!.author as Record<string, unknown>;
+    const org = author.organization as Record<string, unknown> | undefined;
+    expect(org).toBeTruthy();
+    // Kept: every pass re-ran the rule with its evidence restored.
+    expect(org!.region).toBe("emea");
+    // The denied sibling is still withheld.
+    expect(org!.classification).toBeUndefined();
+  });
+
+  it("keeps an outer field whose access reads a denied value nested in a group", async () => {
+    // `emblem` is allowed only while the group's denied `sealed` is present as
+    // evidence; `sealed` denies read. A direct read judges `emblem` once, with
+    // the group intact, and keeps it. The nested read judges twice — before and
+    // after the parent's hooks — and the second pass snapshots the org row before
+    // descending to restore the group, so unless the whole subtree's evidence is
+    // restored FIRST it sees the stripped group and wrongly drops `emblem`.
+    const t = await boot();
+    await t.nextly.create({
+      collection: ORGS,
+      data: { name: "acme", charter: { sealed: "yes" }, emblem: "crest" },
+    });
+    const orgId = await onlyId(t, ORGS);
+    await t.nextly.create({
+      collection: AUTHORS,
+      data: { name: "ada", organization: orgId },
+    });
+    const authorId = await onlyId(t, AUTHORS);
+    await t.nextly.create({
+      collection: POSTS,
+      data: { title: "p", author: authorId },
+    });
+    const postId = await onlyId(t, POSTS);
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    const author = expanded.data!.author as Record<string, unknown>;
+    const org = author.organization as Record<string, unknown> | undefined;
+    expect(org).toBeTruthy();
+    // Kept: judged with the group's evidence intact, as a direct read would.
+    expect(org!.emblem).toBe("crest");
+    // The denied nested field is still withheld from the response.
+    const charter = org!.charter as Record<string, unknown> | undefined;
+    if (charter) expect(charter.sealed).toBeUndefined();
+  });
+
+  it("judges a repeater row a parent hook appends after the first pass", async () => {
+    // The first pass strips the denied `code` from the existing division. A
+    // parent hook then appends a NEW division carrying its own `code`. That row
+    // has no removed-evidence recorded against it, so the pass after the hooks
+    // judges it against its own content and strips its `code` — nothing about the
+    // existing rows lets the appended one inherit an "allowed" outcome.
+    const t = await boot();
+    await t.nextly.create({
+      collection: ORGS,
+      data: {
+        name: "acme",
+        divisions: [{ label: "core", code: "ORIGINAL" }],
+      },
+    });
+    const orgId = await onlyId(t, ORGS);
+    await t.nextly.create({
+      collection: AUTHORS,
+      // `appender` present, so its hook fires and pushes a division onto the org.
+      data: { name: "ada", organization: orgId, appender: "on" },
+    });
+    const authorId = await onlyId(t, AUTHORS);
+    await t.nextly.create({
+      collection: POSTS,
+      data: { title: "p", author: authorId },
+    });
+    const postId = await onlyId(t, POSTS);
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    const author = expanded.data!.author as Record<string, unknown>;
+    const org = author.organization as Record<string, unknown> | undefined;
+    const divisions = (org?.divisions ?? []) as Record<string, unknown>[];
+    // The hook's row landed...
+    expect(divisions.some(d => d.label === "added")).toBe(true);
+    // ...and NO division exposes `code`, including the appended one.
+    for (const division of divisions) {
+      expect(division.code).toBeUndefined();
+    }
+  });
+
+  it("re-judges a repeater row a parent hook replaces with a stricter one", async () => {
+    // The original division is public, so its `code` is allowed on the first
+    // pass. A parent hook then REPLACES it with a private division carrying
+    // `code`. Keying the verdict by array index would hand the replacement the
+    // original's "allowed" result and leak it; keyed by object identity, the
+    // replacement (a new object) is judged fresh and its `code` is stripped.
+    const t = await boot();
+    await t.nextly.create({
+      collection: ORGS,
+      data: {
+        name: "acme",
+        divisions: [{ label: "public-div", tier: "public", code: "OK" }],
+      },
+    });
+    const orgId = await onlyId(t, ORGS);
+    await t.nextly.create({
+      collection: AUTHORS,
+      data: { name: "ada", organization: orgId, replacer: "on" },
+    });
+    const authorId = await onlyId(t, AUTHORS);
+    await t.nextly.create({
+      collection: POSTS,
+      data: { title: "p", author: authorId },
+    });
+    const postId = await onlyId(t, POSTS);
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    const author = expanded.data!.author as Record<string, unknown>;
+    const org = author.organization as Record<string, unknown> | undefined;
+    const divisions = (org?.divisions ?? []) as Record<string, unknown>[];
+    // The replacement landed...
+    expect(divisions[0]?.label).toBe("swapped");
+    // ...and its `code`, denied for a private division, did not ride in on the
+    // public original's verdict.
+    expect(divisions[0]?.code).toBeUndefined();
+  });
+
+  it("re-judges a row a parent hook mutates in place", async () => {
+    // The division is public, so its `code` is allowed on the first pass. A hook
+    // then flips the SAME object to private and rewrites `code`. Object identity
+    // is unchanged, so reusing the earlier "allowed" verdict would leak the new
+    // code; only re-judging the current content denies it.
+    const t = await boot();
+    await t.nextly.create({
+      collection: ORGS,
+      data: {
+        name: "acme",
+        divisions: [{ label: "d", tier: "public", code: "OK" }],
+      },
+    });
+    const orgId = await onlyId(t, ORGS);
+    await t.nextly.create({
+      collection: AUTHORS,
+      data: { name: "ada", organization: orgId, mutator: "on" },
+    });
+    const authorId = await onlyId(t, AUTHORS);
+    await t.nextly.create({
+      collection: POSTS,
+      data: { title: "p", author: authorId },
+    });
+    const postId = await onlyId(t, POSTS);
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    const author = expanded.data!.author as Record<string, unknown>;
+    const org = author.organization as Record<string, unknown> | undefined;
+    const divisions = (org?.divisions ?? []) as Record<string, unknown>[];
+    // The mutation landed (now private)...
+    expect(divisions[0]?.tier).toBe("private");
+    // ...and the `code` the hook wrote is denied for a private division.
+    expect(divisions[0]?.code).toBeUndefined();
+  });
+
+  it("withholds a denied field a hook only unlocks by flipping its condition", async () => {
+    // The first pass removes the private division's denied `code`. A parent hook
+    // then flips only `tier` to public, never supplying `code`. The second pass
+    // restores `code` so it can re-judge the row against the same evidence a
+    // direct read would, but that restored value is the one the caller was denied
+    // and the hook never reintroduced — it must be withheld again rather than
+    // returned just because the flipped condition now allows the field.
+    const t = await boot();
+    await t.nextly.create({
+      collection: ORGS,
+      data: {
+        name: "acme",
+        divisions: [{ label: "d", tier: "private", code: "SECRET" }],
+      },
+    });
+    const orgId = await onlyId(t, ORGS);
+    await t.nextly.create({
+      collection: AUTHORS,
+      data: { name: "ada", organization: orgId, tierflip: "on" },
+    });
+    const authorId = await onlyId(t, AUTHORS);
+    await t.nextly.create({
+      collection: POSTS,
+      data: { title: "p", author: authorId },
+    });
+    const postId = await onlyId(t, POSTS);
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    const author = expanded.data!.author as Record<string, unknown>;
+    const org = author.organization as Record<string, unknown> | undefined;
+    const divisions = (org?.divisions ?? []) as Record<string, unknown>[];
+    // The hook's flip landed...
+    expect(divisions[0]?.tier).toBe("public");
+    // ...but the denied `code`, restored only as evidence and never supplied by
+    // the hook, does not ride out in the response.
+    expect(divisions[0]?.code).toBeUndefined();
   });
 
   it("masks a dropped relationship before a source hook can copy out of it", async () => {
@@ -523,5 +1155,655 @@ describe("a target's field hooks apply to rows reached through a relationship", 
     // The masked value, not the stored "RAW_TOKEN": the hook was handed a row
     // the target's own protections had already run on.
     expect(expanded.data!.leaked).toBe("HIDDEN");
+  });
+
+  it("re-sanitizes a related row a source collection hook re-contaminates", async () => {
+    // The related-row field-access pass runs BEFORE the source collection's own
+    // code/stored afterRead hooks. One of those hooks can write a denied field
+    // straight back onto an already-sanitized related row
+    // (`entry.author.organization.classification`), and the root field-access
+    // pass knows only the SOURCE collection's schema, so it never descends into
+    // the related row to strip it. A field-access pass AFTER the source hooks
+    // re-sanitizes the related rows and keeps the denied value out.
+    const t = await boot();
+    const postId = await seed(t);
+
+    t.hooks.register("afterRead", POSTS, ctx => {
+      const entry = ctx.data as Record<string, unknown>;
+      const author = entry.author as Record<string, unknown> | undefined;
+      const org = author?.organization as Record<string, unknown> | undefined;
+      if (org) org.classification = "LEAKED";
+      return entry;
+    });
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    const author = expanded.data!.author as Record<string, unknown>;
+    const org = author.organization as Record<string, unknown> | undefined;
+    expect(org).toBeTruthy();
+    // The source hook's write-back was stripped by the pass after the hooks.
+    expect(org!.classification).toBeUndefined();
+  });
+
+  it("re-sanitizes a related row a source hook re-contaminates on a list read", async () => {
+    // The same re-contamination on the list path, whose source hooks run after
+    // its own finalize pass at a different call site than the detail path's. A
+    // list read walks the immediate `author` but not the author's OWN relations,
+    // so the denied field lives on the author itself here.
+    const t = await boot();
+    await seed(t);
+
+    t.hooks.register("afterRead", POSTS, ctx => {
+      const rows = (Array.isArray(ctx.data) ? ctx.data : [ctx.data]) as Record<
+        string,
+        unknown
+      >[];
+      for (const entry of rows) {
+        const author = entry.author as Record<string, unknown> | undefined;
+        if (author) author.dossier = "LEAKED";
+      }
+      return ctx.data;
+    });
+
+    const listed = await handlerOf(t).listEntries({
+      collectionName: POSTS,
+      depth: 2,
+    });
+
+    const author = listed.data!.docs[0].author as Record<string, unknown>;
+    expect(author).toBeTruthy();
+    // The source hook's write-back onto the related author was stripped by the
+    // pass after the hooks.
+    expect(author.dossier).toBeUndefined();
+  });
+
+  it("re-sanitizes related rows a source hook returns in a reshaped document", async () => {
+    // A source afterRead hook may RETURN a new document (the hook registry
+    // supports reshaping the response), so the response can hold related rows that
+    // are new objects the walk never queued. Sanitizing only the queued rows would
+    // miss them; the authoritative pass re-walks the ACTUAL response.
+    const t = await boot();
+    const postId = await seed(t);
+
+    t.hooks.register("afterRead", POSTS, ctx => {
+      const entry = ctx.data as Record<string, unknown>;
+      const author = entry.author as Record<string, unknown> | undefined;
+      // A RESHAPED clone whose author is a NEW object carrying a denied field.
+      return { ...entry, author: { ...(author ?? {}), dossier: "LEAKED" } };
+    });
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    const author = expanded.data!.author as Record<string, unknown>;
+    expect(author).toBeTruthy();
+    // The denied field on the hook's replacement object was stripped too.
+    expect(author.dossier).toBeUndefined();
+  });
+
+  it("re-sanitizes a related row a source field hook writes to", async () => {
+    // A source collection FIELD-level afterRead hook runs after the related-row
+    // sanitization the earlier rounds added; it too can write a denied target
+    // field onto a related row, so the authoritative pass must run after the field
+    // hooks, not only after the code and stored hooks.
+    const t = await boot();
+    await t.nextly.create({ collection: ORGS, data: { name: "acme" } });
+    const orgId = await onlyId(t, ORGS);
+    await t.nextly.create({
+      collection: AUTHORS,
+      data: { name: "ada", organization: orgId },
+    });
+    const authorId = await onlyId(t, AUTHORS);
+    await t.nextly.create({
+      collection: POSTS,
+      // `annotate` present, so its field hook fires and writes the denied field.
+      data: { title: "p", author: authorId, annotate: "on" },
+    });
+    const postId = await onlyId(t, POSTS);
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    const author = expanded.data!.author as Record<string, unknown>;
+    expect(author).toBeTruthy();
+    expect(author.dossier).toBeUndefined();
+  });
+
+  it("rebuilds a related row's label before a parent hook can copy it", async () => {
+    // `vault`'s only text field — and so its derived label — is DENIED. Expansion
+    // builds the label from the raw value; the access pass strips the field but
+    // the derived label lingers. A parent hook copying `data.vault.label` would
+    // exfiltrate the denied value unless the label is rebuilt right after that
+    // access pass, before the parent's hooks run.
+    const t = await boot();
+    await t.nextly.create({
+      collection: VAULTS,
+      data: { codename: "TOPSECRET" },
+    });
+    const vaultId = await onlyId(t, VAULTS);
+    await t.nextly.create({
+      collection: AUTHORS,
+      data: { name: "ada", vault: vaultId, vaultLabelCopy: "on" },
+    });
+    const authorId = await onlyId(t, AUTHORS);
+    await t.nextly.create({
+      collection: POSTS,
+      data: { title: "p", author: authorId },
+    });
+    const postId = await onlyId(t, POSTS);
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    const author = expanded.data!.author as Record<string, unknown>;
+    expect(author).toBeTruthy();
+    // The copied label is not the denied `codename` value.
+    expect(author.vaultLabelCopy).not.toBe("TOPSECRET");
+    // And the nested vault's own label was rebuilt off a value the caller may see.
+    const vault = author.vault as Record<string, unknown> | undefined;
+    if (vault) expect(vault.label).not.toBe("TOPSECRET");
+  });
+
+  it("restores evidence for a related row a hook clones, keeping an inverse rule closed", async () => {
+    // `openInfo` is visible only while the denied `classification` is NOT
+    // "private". A private org strips both. A source hook returns a CLONE of the
+    // sanitized org (a new object) carrying `openInfo` but no `classification`;
+    // without restoring the original evidence the authoritative pass reads
+    // `undefined !== "private"` and returns it — a fail-OPEN, not over-redaction.
+    const t = await boot();
+    await t.nextly.create({
+      collection: ORGS,
+      data: { name: "acme", classification: "private" },
+    });
+    const orgId = await onlyId(t, ORGS);
+    await t.nextly.create({
+      collection: AUTHORS,
+      data: { name: "ada", organization: orgId },
+    });
+    const authorId = await onlyId(t, AUTHORS);
+    await t.nextly.create({
+      collection: POSTS,
+      data: { title: "p", author: authorId },
+    });
+    const postId = await onlyId(t, POSTS);
+
+    t.hooks.register("afterRead", POSTS, ctx => {
+      const entry = ctx.data as Record<string, unknown>;
+      const author = entry.author as Record<string, unknown> | undefined;
+      const org = author?.organization as Record<string, unknown> | undefined;
+      if (author && org) {
+        author.organization = { ...org, openInfo: "LEAKED" };
+      }
+      return entry;
+    });
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    const author = expanded.data!.author as Record<string, unknown>;
+    const org = author.organization as Record<string, unknown> | undefined;
+    expect(org).toBeTruthy();
+    // The original evidence was restored for the clone, so the inverse rule denied
+    // openInfo. Fail-closed.
+    expect(org!.openInfo).toBeUndefined();
+  });
+
+  it("decodes a container a hook returns as a JSON string and sanitizes inside it", async () => {
+    // A source hook returns `credits` as the JSON string SQLite stores it as, with
+    // a populated editor carrying a denied field. Left a string the walk derives no
+    // rows from it; decoded, the editor's denied `dossier` is stripped.
+    const t = await boot();
+    await t.nextly.create({ collection: AUTHORS, data: { name: "ed" } });
+    const editorId = await onlyId(t, AUTHORS);
+    await t.nextly.create({ collection: POSTS, data: { title: "p" } });
+    const postId = await onlyId(t, POSTS);
+
+    t.hooks.register("afterRead", POSTS, ctx => {
+      const entry = ctx.data as Record<string, unknown>;
+      entry.credits = JSON.stringify({
+        editor: { id: editorId, name: "ed", dossier: "LEAKED" },
+      });
+      return entry;
+    });
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    const credits = expanded.data!.credits as
+      | Record<string, unknown>
+      | undefined;
+    expect(credits).toBeTruthy();
+    const editor = credits!.editor as Record<string, unknown> | undefined;
+    expect(editor).toBeTruthy();
+    expect(editor!.dossier).toBeUndefined();
+  });
+
+  it("re-strips a password a source hook reintroduces under overrideAccess", async () => {
+    // Password removal is unconditional, trusted reads included. A source hook
+    // writes a password back onto a related row after the walk; under override the
+    // authoritative pass was skipped, leaving it in the response.
+    const t = await boot();
+    const postId = await seed(t);
+
+    t.hooks.register("afterRead", POSTS, ctx => {
+      const entry = ctx.data as Record<string, unknown>;
+      const author = entry.author as Record<string, unknown> | undefined;
+      if (author) author.passwordHash = "$2yLEAKED";
+      return entry;
+    });
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      overrideAccess: true,
+      depth: 2,
+    });
+
+    const author = expanded.data!.author as Record<string, unknown>;
+    expect(author).toBeTruthy();
+    expect(author.passwordHash).toBeUndefined();
+  });
+
+  it("re-strips a system-entity secret column a hook reintroduces", async () => {
+    // A `users` target has no field registry, so the registry-based password strip
+    // never sees its secret columns; they are stripped by name. A source hook can
+    // reintroduce `passwordHash`, so the walk must re-strip it by column name.
+    const t = await boot();
+    const service = t.getService("relationshipService") as unknown as {
+      applyNestedFieldHooks: (
+        entry: Record<string, unknown>,
+        collection: string,
+        access: Record<string, unknown>
+      ) => Promise<void>;
+    };
+
+    const doc = {
+      title: "owned",
+      owner: { id: "u1", email: "owner@example.test", passwordHash: "$2yHASH" },
+    };
+
+    await service.applyNestedFieldHooks(doc, POSTS, {
+      enforceFieldAccess: true,
+    });
+
+    const owner = doc.owner as Record<string, unknown>;
+    expect(owner.passwordHash).toBeUndefined();
+  });
+
+  it("transfers subtree evidence to a deep-cloned relation, keeping a nested inverse rule closed", async () => {
+    // `charter.openSeal` is visible only while the denied nested `charter.sealed`
+    // is NOT "locked". A locked charter strips both. A source hook DEEP-clones the
+    // org (charter included) and reintroduces openSeal; without transferring the
+    // NESTED evidence the pass reads `undefined !== "locked"` and returns it — the
+    // root-only id bridge would miss it.
+    const t = await boot();
+    await t.nextly.create({
+      collection: ORGS,
+      data: {
+        name: "acme",
+        charter: { sealed: "locked", openSeal: "visible" },
+      },
+    });
+    const orgId = await onlyId(t, ORGS);
+    await t.nextly.create({
+      collection: AUTHORS,
+      data: { name: "ada", organization: orgId },
+    });
+    const authorId = await onlyId(t, AUTHORS);
+    await t.nextly.create({
+      collection: POSTS,
+      data: { title: "p", author: authorId },
+    });
+    const postId = await onlyId(t, POSTS);
+
+    t.hooks.register("afterRead", POSTS, ctx => {
+      const entry = ctx.data as Record<string, unknown>;
+      const author = entry.author as Record<string, unknown> | undefined;
+      const org = author?.organization as Record<string, unknown> | undefined;
+      if (author && org) {
+        const charter = (org.charter ?? {}) as Record<string, unknown>;
+        author.organization = {
+          ...org,
+          charter: { ...charter, openSeal: "LEAKED" },
+        };
+      }
+      return entry;
+    });
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    const author = expanded.data!.author as Record<string, unknown>;
+    const org = author.organization as Record<string, unknown> | undefined;
+    const charter = org?.charter as Record<string, unknown> | undefined;
+    expect(charter).toBeTruthy();
+    // Closed: the nested `sealed` evidence was transferred to the clone's charter.
+    expect(charter!.openSeal).toBeUndefined();
+  });
+
+  it("walks a relationship a target field hook swaps in before source hooks read it", async () => {
+    // The author's `swapOrg` field hook REPLACES its organization with a fresh org
+    // carrying denied `classification`, after the walk already descended the
+    // original. A source POSTS hook then copies `author.organization.classification`
+    // onto an allowed key. Only re-descending after the target field hooks strips
+    // the swapped org before the source hook can read it.
+    const t = await boot();
+    await t.nextly.create({ collection: ORGS, data: { name: "acme" } });
+    const orgId = await onlyId(t, ORGS);
+    await t.nextly.create({
+      collection: AUTHORS,
+      data: { name: "ada", organization: orgId, swapOrg: "on" },
+    });
+    const authorId = await onlyId(t, AUTHORS);
+    await t.nextly.create({
+      collection: POSTS,
+      data: { title: "p", author: authorId },
+    });
+    const postId = await onlyId(t, POSTS);
+
+    t.hooks.register("afterRead", POSTS, ctx => {
+      const entry = ctx.data as Record<string, unknown>;
+      const author = entry.author as Record<string, unknown> | undefined;
+      const org = author?.organization as Record<string, unknown> | undefined;
+      entry.leaked = org?.classification;
+      return entry;
+    });
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    // The swapped org's denied classification was stripped before the source hook
+    // ran, so it copied nothing.
+    expect(expanded.data!.leaked).toBeUndefined();
+  });
+
+  it("decodes a hasMany relationship a hook returns as a JSON string and sanitizes its rows", async () => {
+    // A populated hasMany relationship serializes to a JSON array string, which a
+    // hook can hand back. Left a string the walk derives no rows; decoded, the
+    // denied `dossier` on each contributor row is stripped.
+    const t = await boot();
+    await t.nextly.create({ collection: AUTHORS, data: { name: "c" } });
+    const contributorId = await onlyId(t, AUTHORS);
+    await t.nextly.create({ collection: POSTS, data: { title: "p" } });
+    const postId = await onlyId(t, POSTS);
+
+    t.hooks.register("afterRead", POSTS, ctx => {
+      const entry = ctx.data as Record<string, unknown>;
+      entry.contributors = JSON.stringify([
+        { id: contributorId, name: "c", dossier: "LEAKED" },
+      ]);
+      return entry;
+    });
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    const contributors = expanded.data!.contributors as
+      | Record<string, unknown>[]
+      | undefined;
+    expect(Array.isArray(contributors)).toBe(true);
+    expect(contributors![0]).toBeTruthy();
+    expect(contributors![0].dossier).toBeUndefined();
+  });
+
+  it("matches cloned repeater rows by id, not index, when a hook reorders them", async () => {
+    // `openTag` on a division is visible only while the denied `grade` is NOT
+    // "restricted". A restricted division strips both. A source hook DEEP-clones
+    // the org and REVERSES its divisions, reintroducing `openTag` on the restricted
+    // row now sitting at the index a public row held. Transferring the cloned
+    // rows' evidence by array position would hand the restricted row the public
+    // row's (empty) evidence and let `openTag` fall open; matching by id keeps it
+    // closed, and a clone row that cannot be matched fails closed.
+    const t = await boot();
+    await t.nextly.create({
+      collection: ORGS,
+      data: {
+        name: "acme",
+        divisions: [
+          { label: "pub", grade: "open" },
+          { label: "sec", grade: "restricted", openTag: "topsecret" },
+        ],
+      },
+    });
+    const orgId = await onlyId(t, ORGS);
+    await t.nextly.create({
+      collection: AUTHORS,
+      data: { name: "ada", organization: orgId },
+    });
+    const authorId = await onlyId(t, AUTHORS);
+    await t.nextly.create({
+      collection: POSTS,
+      data: { title: "p", author: authorId },
+    });
+    const postId = await onlyId(t, POSTS);
+
+    t.hooks.register("afterRead", POSTS, ctx => {
+      const entry = ctx.data as Record<string, unknown>;
+      const author = entry.author as Record<string, unknown> | undefined;
+      const org = author?.organization as Record<string, unknown> | undefined;
+      const divisions = org?.divisions as Record<string, unknown>[] | undefined;
+      if (author && org && Array.isArray(divisions)) {
+        const reordered = [...divisions].reverse().map(d => ({ ...d }));
+        const restricted = reordered.find(d => d.label === "sec");
+        if (restricted) restricted.openTag = "LEAKED";
+        author.organization = { ...org, divisions: reordered };
+      }
+      return entry;
+    });
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    const author = expanded.data!.author as Record<string, unknown>;
+    const org = author.organization as Record<string, unknown> | undefined;
+    const divisions = (org?.divisions ?? []) as Record<string, unknown>[];
+    const restricted = divisions.find(d => d.label === "sec");
+    expect(restricted).toBeTruthy();
+    // Closed: the restricted row was judged with its OWN evidence (or failed
+    // closed), never the public row's, so the reintroduced `openTag` was stripped.
+    expect(restricted!.openTag).toBeUndefined();
+  });
+
+  it("fails closed on a related-row clone that omits its id", async () => {
+    // `openInfo` is visible only while the denied `classification` is NOT
+    // "private". A private org strips both. A source hook returns a CLONE of the
+    // sanitized org that carries `openInfo` but DROPS its id, so it cannot be
+    // matched to the original whose evidence would keep the inverse rule closed.
+    // Its provenance is unrecoverable, so its access-controlled fields are denied.
+    const t = await boot();
+    await t.nextly.create({
+      collection: ORGS,
+      data: { name: "acme", classification: "private" },
+    });
+    const orgId = await onlyId(t, ORGS);
+    await t.nextly.create({
+      collection: AUTHORS,
+      data: { name: "ada", organization: orgId },
+    });
+    const authorId = await onlyId(t, AUTHORS);
+    await t.nextly.create({
+      collection: POSTS,
+      data: { title: "p", author: authorId },
+    });
+    const postId = await onlyId(t, POSTS);
+
+    t.hooks.register("afterRead", POSTS, ctx => {
+      const entry = ctx.data as Record<string, unknown>;
+      const author = entry.author as Record<string, unknown> | undefined;
+      const org = author?.organization as Record<string, unknown> | undefined;
+      if (author && org) {
+        const clone: Record<string, unknown> = { ...org, openInfo: "LEAKED" };
+        delete clone.id;
+        author.organization = clone;
+      }
+      return entry;
+    });
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    const author = expanded.data!.author as Record<string, unknown>;
+    const org = author.organization as Record<string, unknown> | undefined;
+    expect(org).toBeTruthy();
+    // Fail-closed: an id-less clone cannot be matched, so the reintroduced
+    // `openInfo` was denied along with the org's other access-controlled fields.
+    expect(org!.openInfo).toBeUndefined();
+  });
+
+  it("decodes a relationship a hook returns as JSON with leading whitespace", async () => {
+    // A populated relationship serialized to JSON can arrive with leading
+    // whitespace (a pretty-printed hook return). The container guard detects it by
+    // the first non-whitespace character; otherwise the walk leaves it a string
+    // and the denied `dossier` inside reaches the response unsanitized.
+    const t = await boot();
+    await t.nextly.create({ collection: AUTHORS, data: { name: "c" } });
+    const contributorId = await onlyId(t, AUTHORS);
+    await t.nextly.create({ collection: POSTS, data: { title: "p" } });
+    const postId = await onlyId(t, POSTS);
+
+    t.hooks.register("afterRead", POSTS, ctx => {
+      const entry = ctx.data as Record<string, unknown>;
+      entry.contributors =
+        "\n  " +
+        JSON.stringify([{ id: contributorId, name: "c", dossier: "LEAKED" }]);
+      return entry;
+    });
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    const contributors = expanded.data!.contributors as
+      | Record<string, unknown>[]
+      | undefined;
+    expect(Array.isArray(contributors)).toBe(true);
+    expect(contributors![0].dossier).toBeUndefined();
+  });
+
+  it("fails closed on a nested row a hook replaces in place under an unchanged root", async () => {
+    // A source hook keeps the related root object identical but REPLACES a row
+    // inside its repeater, reintroducing an inverse-conditional field on the new
+    // row. The root's identity does not prove the nested row's provenance: the
+    // replacement carries no evidence, so it fails closed rather than judging the
+    // inverse field against a row that dropped its denied sibling.
+    const t = await boot();
+    await t.nextly.create({
+      collection: ORGS,
+      data: {
+        name: "acme",
+        divisions: [{ label: "d", grade: "restricted", openTag: "topsecret" }],
+      },
+    });
+    const orgId = await onlyId(t, ORGS);
+    await t.nextly.create({
+      collection: AUTHORS,
+      data: { name: "ada", organization: orgId },
+    });
+    const authorId = await onlyId(t, AUTHORS);
+    await t.nextly.create({
+      collection: POSTS,
+      data: { title: "p", author: authorId },
+    });
+    const postId = await onlyId(t, POSTS);
+
+    t.hooks.register("afterRead", POSTS, ctx => {
+      const entry = ctx.data as Record<string, unknown>;
+      const author = entry.author as Record<string, unknown> | undefined;
+      const org = author?.organization as Record<string, unknown> | undefined;
+      const divisions = org?.divisions as Record<string, unknown>[] | undefined;
+      if (Array.isArray(divisions) && divisions.length > 0) {
+        // Same org object, same divisions array — only the row is swapped.
+        divisions[0] = { label: "d", openTag: "LEAKED" };
+      }
+      return entry;
+    });
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    const author = expanded.data!.author as Record<string, unknown>;
+    const org = author.organization as Record<string, unknown> | undefined;
+    const divisions = (org?.divisions ?? []) as Record<string, unknown>[];
+    expect(divisions[0]?.label).toBe("d");
+    // Fail-closed: the replaced nested row carries no evidence, so its inverse
+    // field is denied.
+    expect(divisions[0]?.openTag).toBeUndefined();
+  });
+
+  it("re-sanitizes a related row a code hook reshapes before a later field hook reads it", async () => {
+    // A code (entity-level) afterRead hook reintroduces a denied field on a
+    // related row; a LATER field-level hook copies it onto an allowed source key.
+    // The authoritative pass runs after EACH source phase, so the denied field is
+    // stripped after the code hook and before the field hook can read it.
+    const t = await boot();
+    await t.nextly.create({ collection: ORGS, data: { name: "acme" } });
+    const orgId = await onlyId(t, ORGS);
+    await t.nextly.create({
+      collection: AUTHORS,
+      data: { name: "ada", organization: orgId, dossier: "SECRET" },
+    });
+    const authorId = await onlyId(t, AUTHORS);
+    await t.nextly.create({
+      collection: POSTS,
+      data: { title: "p", author: authorId, harvest: "on" },
+    });
+    const postId = await onlyId(t, POSTS);
+
+    t.hooks.register("afterRead", POSTS, ctx => {
+      const entry = ctx.data as Record<string, unknown>;
+      const author = entry.author as Record<string, unknown> | undefined;
+      if (author) author.dossier = "SECRET";
+      return entry;
+    });
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    // The field hook was handed a sanitized author, so it copied nothing.
+    expect(expanded.data!.leaked).toBeUndefined();
+    const author = expanded.data!.author as Record<string, unknown>;
+    expect(author.dossier).toBeUndefined();
   });
 });

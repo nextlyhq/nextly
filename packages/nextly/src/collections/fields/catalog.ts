@@ -173,10 +173,13 @@ export const FIELD_TYPE_CATALOG: readonly FieldTypeCatalogEntry[] = [
     icon: "FolderOpen",
   },
   {
+    // `type` is the STORED value and deliberately still reads `component`; the label is what the
+    // picker shows. Renaming the type would make every existing `fields` JSON row unreadable, so
+    // the two are pinned apart by a test rather than left to be kept in step by hand.
     type: STORAGE_FORMAT.fieldType,
-    label: "Component",
+    label: "Field Group",
     category: "Structured",
-    hint: "Embed a reusable component",
+    hint: "Embed a reusable field group",
     icon: "Puzzle",
   },
 ];

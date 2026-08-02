@@ -87,7 +87,7 @@ function ComponentSkeleton() {
     <SidebarMenuItem>
       <SidebarMenuButton disabled className="opacity-50">
         <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-        <span className="text-muted-foreground">Loading components...</span>
+        <span className="text-muted-foreground">Loading field groups...</span>
       </SidebarMenuButton>
     </SidebarMenuItem>
   );

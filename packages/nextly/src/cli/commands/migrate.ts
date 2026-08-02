@@ -37,6 +37,12 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
 import { resolveRegistryNameFromCatalog } from "../../domains/field-groups/storage/resolve-storage-names";
+import {
+  isLocalizationIntentRefusal,
+  LOCALIZATION_INTENT_HEADER,
+  parseLocalizationIntent,
+  type LocalizationMigrationIntent,
+} from "../../domains/i18n/migration/migration-intent";
 import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
 import { getSchemaEventsDdl } from "../../domains/schema/events/schema-events-ddl";
 import {
@@ -152,6 +158,13 @@ interface ParsedMigration {
   singles: string[];
   /** Component slugs (if present in file header) */
   components: string[];
+  /**
+   * What a companion migration declares it is FOR, when it declares anything.
+   *
+   * Undefined for ordinary migrations and for companion files written before the field existed;
+   * both apply verbatim, which is what they have always done.
+   */
+  localization?: LocalizationMigrationIntent;
   /** Timestamp extracted from filename */
   timestamp: string;
   /** Source of the migration (core bundled or app) */
@@ -692,6 +705,10 @@ async function discoverMigrations(
       const parsed = parseMigrationFile(baseName, filePath, content, source);
       migrations.push(parsed);
     } catch (error) {
+      // A declared intent this build cannot read has to stop the run. Dropping the file with a
+      // warning, as an unreadable file is dropped, would let every later migration apply and the
+      // run report success while the transition this one describes never happened.
+      if (isLocalizationIntentRefusal(error)) throw error;
       logger.warn(
         `Failed to parse migration file ${selectedFile}: ${error instanceof Error ? error.message : String(error)}`
       );
@@ -743,6 +760,7 @@ function parseMigrationFile(
   const timestamp = timestampMatch?.[1] ?? name;
 
   const { upSql, downSql } = parseSqlSections(content);
+  const localization = parseLocalizationIntent(content, `${name}.sql`);
 
   return {
     name,
@@ -756,6 +774,7 @@ function parseMigrationFile(
     components,
     timestamp,
     source,
+    ...(localization === null ? {} : { localization }),
   };
 }
 
@@ -806,7 +825,10 @@ export function parseSqlSections(content: string): {
         !line.trim().startsWith("-- Dialect:") &&
         !line.trim().startsWith("-- Checksum:") &&
         !line.trim().startsWith("-- Collections:") &&
-        !line.trim().startsWith("-- Singles:")
+        !line.trim().startsWith("-- Singles:") &&
+        // Only reached by a file with no `-- UP` marker at all. Without this the declared intent
+        // would be handed to the SQL splitter as though it were a statement.
+        !line.trim().startsWith(LOCALIZATION_INTENT_HEADER)
     );
   }
 

@@ -302,77 +302,92 @@ function buildDrizzleColumnRecord(
 }
 
 /**
- * Translates a system-column descriptor (id / title / slug /
- * created_at / updated_at) into the appropriate Drizzle column
- * builder for the given dialect. Mirrors the legacy hardcoded
- * builders byte-for-byte: id is primaryKey, title/slug are
- * notNull, timestamps carry a database-side default on every dialect.
+ * Applies the modifiers every column family shares.
+ *
+ * Structurally typed rather than tied to one Drizzle builder, because the three families return
+ * three unrelated builder types that all carry these two methods. A primary key is already NOT NULL
+ * on every dialect, so it is not also marked.
+ */
+function finishColumn<T extends { notNull(): unknown; primaryKey(): unknown }>(
+  column: T,
+  spec: { nullable: boolean; primaryKey: boolean }
+): unknown {
+  if (spec.primaryKey) return column.primaryKey();
+  return spec.nullable ? column : column.notNull();
+}
+
+/**
+ * Translates a system-column descriptor into the Drizzle column builder for the given dialect.
+ *
+ * Dispatches on the declared column FAMILY, never on the column name. Name dispatch carried a
+ * fall-through that made anything unrecognised a non-null text column, so a newly declared
+ * timestamp was created in the database as a timestamp and read back through a text column —
+ * precisely the drift between the physical table and the runtime schema that the declarations
+ * exist to prevent.
  *
  * The timestamps stay nullable, but a row reaching the database without them does not: the
  * default supplies a value for any insert that omits the column, which is what an insert
  * bypassing the write path does. Nullable and defaulted are independent choices, and only
- * the default can be added to a table a user already has without rewriting its rows.
+ * the default can be added to a table a user already has without rewriting its rows. A column
+ * declared with no default keeps none — a first-publication marker must read NULL until it is
+ * earned, and a default would date a publication that never happened.
  */
 function buildSystemDrizzleColumn(
   sys: ReturnType<typeof getSystemColumnDescriptors>[number],
   dialect: SupportedDialect
 ): unknown {
+  const literal =
+    sys.defaultValue?.kind === "literal" ? sys.defaultValue.value : undefined;
+  const clockDefault = sys.defaultValue?.kind === "now";
+
   if (dialect === "postgresql") {
-    if (sys.name === "id") return pgText("id").primaryKey();
-    if (sys.name === "created_at")
-      return pgTimestamp("created_at").defaultNow();
-    if (sys.name === "updated_at")
-      return pgTimestamp("updated_at").defaultNow();
-    if (sys.name === "status") {
-      // Why: 'draft' default ensures backfill on enable doesn't accidentally
-      // publish anything. Length 20 leaves headroom over "published" (9 chars).
-      return pgVarchar("status", { length: 20 }).notNull().default("draft");
+    if (sys.kind === "timestamp") {
+      const col = pgTimestamp(sys.name);
+      return finishColumn(clockDefault ? col.defaultNow() : col, sys);
     }
-    // Row owner — nullable text (matches the id column type); no default so
-    // system/seed creates and existing rows stay null.
-    if (sys.name === "created_by") return pgText("created_by");
-    // title / slug — text NOT NULL.
-    return pgText(sys.name).notNull();
+    if (sys.kind === "varchar") {
+      const col = pgVarchar(sys.name, { length: sys.length ?? 255 });
+      return finishColumn(
+        literal === undefined ? col : col.default(literal),
+        sys
+      );
+    }
+    const col = pgText(sys.name);
+    return finishColumn(
+      literal === undefined ? col : col.default(literal),
+      sys
+    );
   }
+
   if (dialect === "mysql") {
-    if (sys.name === "id") {
-      return mysqlVarchar("id", { length: 36 }).primaryKey();
+    if (sys.kind === "timestamp") {
+      const col = mysqlTimestamp(sys.name);
+      return finishColumn(clockDefault ? col.defaultNow() : col, sys);
     }
-    if (sys.name === "created_at") {
-      return mysqlTimestamp("created_at").defaultNow();
+    if (sys.kind === "varchar") {
+      const col = mysqlVarchar(sys.name, { length: sys.length ?? 255 });
+      return finishColumn(
+        literal === undefined ? col : col.default(literal),
+        sys
+      );
     }
-    if (sys.name === "updated_at") {
-      return mysqlTimestamp("updated_at").defaultNow();
-    }
-    if (sys.name === "status") {
-      return mysqlVarchar("status", { length: 20 }).notNull().default("draft");
-    }
-    // Row owner — nullable varchar(191) sized to the MySQL users.id column
-    // (holds a user id, not the row id).
-    if (sys.name === "created_by") {
-      return mysqlVarchar("created_by", { length: 191 });
-    }
-    return mysqlVarchar(sys.name, { length: 255 }).notNull();
-  }
-  // sqlite
-  if (sys.name === "id") return sqliteText("id").primaryKey();
-  if (sys.name === "created_at") {
-    return sqliteInteger("created_at", { mode: "timestamp" }).default(
-      sql`(strftime('%s', 'now'))`
+    const col = mysqlText(sys.name);
+    return finishColumn(
+      literal === undefined ? col : col.default(literal),
+      sys
     );
   }
-  if (sys.name === "updated_at") {
-    return sqliteInteger("updated_at", { mode: "timestamp" }).default(
-      sql`(strftime('%s', 'now'))`
+
+  // SQLite stores a timestamp as an epoch integer and has no distinct varchar.
+  if (sys.kind === "timestamp") {
+    const col = sqliteInteger(sys.name, { mode: "timestamp" });
+    return finishColumn(
+      clockDefault ? col.default(sql`(strftime('%s', 'now'))`) : col,
+      sys
     );
   }
-  if (sys.name === "status") {
-    // SQLite has no varchar — text with default 'draft' is the equivalent.
-    return sqliteText("status").notNull().default("draft");
-  }
-  // Row owner — nullable text (matches the id column type).
-  if (sys.name === "created_by") return sqliteText("created_by");
-  return sqliteText(sys.name).notNull();
+  const col = sqliteText(sys.name);
+  return finishColumn(literal === undefined ? col : col.default(literal), sys);
 }
 
 /**

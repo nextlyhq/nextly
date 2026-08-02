@@ -23,6 +23,7 @@
 
 import { RESERVED_SLUGS } from "../../collections/config/validate-config";
 import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
+import { reservedSystemFieldNames } from "../../lib/system-columns";
 import { SYSTEM_RESOURCES } from "../../schemas/_zod/rbac";
 import {
   type BaseValidationError,
@@ -70,6 +71,8 @@ export type SingleValidationErrorCode =
   | "FIELD_NAME_INVALID_FORMAT"
   | "FIELD_NAME_SQL_KEYWORD"
   | "FIELD_NAME_DUPLICATE"
+  // A field named after a column the system injects onto the Single's table.
+  | "FIELD_NAME_RESERVED"
   | "FIELD_TYPE_REQUIRED"
   | "FIELD_TYPE_INVALID"
   // A declared default the field's own rules reject.
@@ -259,6 +262,15 @@ function validateField(
   }
 }
 
+// System columns injected onto a Single's table, under both the snake_case name
+// and the camelCase alias that snake-cases to the same column. A Single gets no
+// owner column, so unlike a collection only the first-publication marker is
+// reserved here — which is why this check had to be added rather than extended:
+// until the marker reached a Single's table there was nothing to collide with.
+const SINGLE_RESERVED_FIELD_NAMES: ReadonlySet<string> = new Set(
+  reservedSystemFieldNames("singleConfig")
+);
+
 /**
  * Validate an array of field configurations.
  */
@@ -301,6 +313,22 @@ function validateFields(
     });
     return;
   }
+
+  // Block the injected system columns at the top level, before per-field
+  // validation. Reserved even when the draft/publish lifecycle is off, so
+  // enabling it later fails here rather than at migration time. Nested
+  // repeater/group fields live inside JSON and are exempt, as for collections.
+  fields.forEach((field, index) => {
+    if (!field || typeof field !== "object") return;
+    const name = (field as Record<string, unknown>).name;
+    if (typeof name === "string" && SINGLE_RESERVED_FIELD_NAMES.has(name)) {
+      errors.push({
+        path: `${path}[${index}].name`,
+        message: `Field name '${name}' is reserved for a system column`,
+        code: "FIELD_NAME_RESERVED",
+      });
+    }
+  });
 
   // Why: empty fields list is now valid for both code-first defines and the
   // new modal-driven create flow (Builder redesign PR 2/3). System columns

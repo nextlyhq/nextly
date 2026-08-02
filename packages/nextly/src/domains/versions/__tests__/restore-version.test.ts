@@ -542,6 +542,7 @@ describe("restoreVersion", () => {
     vi.mocked(applyFieldReadAccess).mockImplementation(
       async ({ entry }: { entry: Record<string, unknown> }) => {
         delete entry.secret;
+        return undefined;
       }
     );
 
@@ -577,6 +578,7 @@ describe("restoreVersion", () => {
       async ({ entry }: { entry: Record<string, unknown> }) => {
         const meta = entry.meta as Record<string, unknown> | undefined;
         if (meta) delete meta.secret;
+        return undefined;
       }
     );
 
@@ -594,6 +596,7 @@ describe("restoreVersion", () => {
     vi.mocked(applyFieldReadAccess).mockImplementation(
       async ({ entry }: { entry: Record<string, unknown> }) => {
         seenId = entry.id;
+        return undefined;
       }
     );
 

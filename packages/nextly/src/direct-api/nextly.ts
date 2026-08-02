@@ -543,10 +543,16 @@ export class Nextly implements NextlyContext {
     return singlesNs.findSingle(this, args);
   }
 
-  /** Update a Single (global) document by slug. */
+  /**
+   * Update a Single (global) document by slug.
+   *
+   * Returns the same `{ message, item }` envelope the collection mutations do,
+   * so every mutation reports its outcome the same way and a post-commit hook
+   * failure has somewhere to be reported.
+   */
   updateSingle<TSlug extends SingleSlug>(
     args: UpdateSingleArgs<TSlug>
-  ): Promise<DataFromSingleSlug<TSlug>> {
+  ): Promise<MutationResult<DataFromSingleSlug<TSlug>>> {
     return singlesNs.updateSingle(this, args);
   }
 

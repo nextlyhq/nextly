@@ -283,7 +283,7 @@ function SingleComponentNonRepeatable({
     field.label ||
     (field.componentSchemas?.[field.component!]?.label ??
       field.component ??
-      "Component");
+      "Field Group");
 
   const isSidebar = field.admin?.position === "sidebar";
   const [isOpen, setIsOpen] = useState(true);
@@ -395,7 +395,7 @@ function SingleComponentNonRepeatable({
           })}
           {componentFields.length === 0 && (
             <p className="text-sm text-muted-foreground text-center py-4">
-              No fields configured for this component.
+              No fields configured for this field group.
             </p>
           )}
         </div>
@@ -453,7 +453,9 @@ function MultiComponentNonRepeatable({
     setValue(name, null, { shouldDirty: true });
   }, [name, setValue]);
 
-  const label = field.label || "Component";
+  // Shown when the field carries no label of its own. The field TYPE stays `component`; only
+  // what the editor is called changed.
+  const label = field.label || "Field Group";
 
   return (
     <Card className={cn("", field.admin?.className)}>
@@ -484,14 +486,14 @@ function MultiComponentNonRepeatable({
       <CardContent className="space-y-4">
         {/* Type Selector */}
         <div className="space-y-2">
-          <label className="text-sm font-medium">Component Type</label>
+          <label className="text-sm font-medium">Field Group</label>
           <Select
             value={currentType || ""}
             onValueChange={handleTypeChange}
             disabled={disabled || readOnly}
           >
             <SelectTrigger>
-              <SelectValue placeholder="Select a component type..." />
+              <SelectValue placeholder="Select a field group..." />
             </SelectTrigger>
             <SelectContent>
               {availableSlugs.map(slug => {
@@ -526,7 +528,7 @@ function MultiComponentNonRepeatable({
 
         {!currentType && (
           <p className="text-sm text-muted-foreground text-center py-4  border border-border border-dashed rounded-md bg-primary/5">
-            Select a component type to add fields.
+            Select a field group to add fields.
           </p>
         )}
       </CardContent>
@@ -644,8 +646,8 @@ function RepeatableComponent<TFieldValues extends FieldValues = FieldValues>({
   const isSortable = field.admin?.isSortable !== false;
 
   // Labels
-  const singularLabel = field.label || "Component";
-  const pluralLabel = field.label ? `${field.label}s` : "Components";
+  const singularLabel = field.label || "Field Group";
+  const pluralLabel = field.label ? `${field.label}s` : "Field Groups";
 
   return (
     <div className={cn("space-y-3", field.admin?.className)}>
@@ -741,7 +743,7 @@ function RepeatableComponent<TFieldValues extends FieldValues = FieldValues>({
                 availableSlugs={availableSlugs}
                 onSelect={handleAdd}
                 title={`Add ${singularLabel}`}
-                description={`Choose a component type to add to ${pluralLabel.toLowerCase()}.`}
+                description={`Choose a field group to add to ${pluralLabel.toLowerCase()}.`}
               />
             </>
           ) : (
@@ -927,11 +929,11 @@ export function ComponentInput<TFieldValues extends FieldValues = FieldValues>({
       )}
     >
       <p className="text-sm text-warning-700 dark:text-warning-300">
-        <strong>Component field:</strong> {field.name}
+        <strong>Field group field:</strong> {field.name}
       </p>
       <p className="text-xs text-warning-600 dark:text-warning-400 mt-1">
         Schema data not available. Ensure the collection schema API returns
-        enriched component fields.
+        enriched field-group fields.
       </p>
     </div>
   );
