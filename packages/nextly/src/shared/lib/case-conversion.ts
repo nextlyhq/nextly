@@ -7,6 +7,8 @@
  * @module lib/case-conversion
  */
 
+import { SYSTEM_COLUMNS } from "../../lib/system-columns";
+
 /**
  * Convert a snake_case string to camelCase.
  * Example: "created_at" -> "createdAt"
@@ -132,17 +134,16 @@ export function keysToSnakeCase(obj: unknown): unknown {
 /**
  * The system timestamp columns, and the camelCase name each is published under.
  *
- * Listed once because a row can reach the API through several paths, and a column converted on
- * some of them and not others gives the same entry different shapes depending on the operation
- * that returned it. That is what happened to `first_published_at`: create responses carried
- * `firstPublishedAt` while list and detail reads returned the raw column name.
+ * A projection of the columns declared `publishedUnderCamelName`, because a row reaches the API
+ * through several paths and a column converted on some of them and not others gives the same
+ * entry different shapes depending on the operation that returned it. That is what happened to
+ * `first_published_at`: create responses carried `firstPublishedAt` while list and detail reads
+ * returned the raw column name.
  */
 export const TIMESTAMP_COLUMN_NAMES: ReadonlyArray<readonly [string, string]> =
-  [
-    ["created_at", "createdAt"],
-    ["updated_at", "updatedAt"],
-    ["first_published_at", "firstPublishedAt"],
-  ];
+  SYSTEM_COLUMNS.filter(column => column.publishedUnderCamelName).map(
+    column => [column.name, column.camelName] as const
+  );
 
 /**
  * Every spelling of every system timestamp, both the physical column and the API name.
@@ -177,6 +178,30 @@ export function convertTimestampsToCamelCase<T extends Record<string, unknown>>(
       record[apiName] = normalize ? normalize(record[column]) : record[column];
     }
     delete record[column];
+  }
+  return entry;
+}
+
+/**
+ * Turn any system timestamp still held as an ISO string back into a `Date`, in place.
+ *
+ * A row loaded from the database arrives Drizzle-decoded, but a row reassembled from a stored
+ * snapshot arrives as JSON, where a timestamp is a string. A caller that overlays a snapshot onto a
+ * read has to restore the decoded shape or the same hook that works for every other entry fails on
+ * a drafted one the moment it calls a date method.
+ *
+ * Both spellings are covered, because an overlay can run either side of the camelCase conversion.
+ * A value that does not parse is left as it is rather than replaced with an `Invalid Date`.
+ */
+export function rehydrateSystemTimestamps<T extends Record<string, unknown>>(
+  entry: T
+): T {
+  const record = entry as Record<string, unknown>;
+  for (const key of SYSTEM_TIMESTAMP_KEYS) {
+    const value = record[key];
+    if (typeof value !== "string") continue;
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) record[key] = parsed;
   }
   return entry;
 }

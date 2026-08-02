@@ -346,12 +346,150 @@ export async function applyFieldWriteAccess(opts: {
   });
 }
 
-/** Recursive worker for read access — same snapshot + recurse contract. */
+/**
+ * The values each read-access pass removed from a row, keyed by the row OBJECT,
+ * so a later pass over the same row can restore them as EVIDENCE before it
+ * re-judges the row.
+ *
+ * The nested-read pipeline applies access to a related row BEFORE its parent's
+ * hooks (so a hook cannot read a denied child field to copy it), then AGAIN
+ * after all hooks (a hook may have written a denied field back, mutated a row in
+ * place, or added, replaced, or reordered rows). The second pass MUST re-run the
+ * rules against the post-hook content — a cached verdict cannot be trusted once a
+ * hook may have changed what the rule reads. Re-running alone would flip a
+ * verdict, though: the first pass already removed the denied values a rule reads
+ * as evidence, so a field kept only while such a value was present would be
+ * wrongly dropped. Restoring each row's removed values first (unless a hook has
+ * since set them) gives the rules the same evidence the first pass — and a direct
+ * read — judged against, while the current values of everything a hook touched
+ * are seen and re-judged.
+ *
+ * A restored value is EVIDENCE only, never response data: it is one the caller
+ * was denied and the post-hook row did not itself supply, so it is removed again
+ * once every snapshot that needed it has been taken. Otherwise a hook that flips
+ * a field's CONDITION from deny to allow (say, a sibling `tier`) without
+ * reintroducing the value would resurrect the value the first pass removed.
+ *
+ * The restore runs over the WHOLE subtree before any level's snapshot is taken,
+ * because the evidence a rule reads is not always a sibling: an outer field's
+ * rule can depend on a value inside a nested group or repeater the first pass
+ * already redacted. Snapshotting a level before descending to restore its nested
+ * rows would judge that outer rule against a stripped subtree and drop it, unlike
+ * a direct read which judges once with the subtree intact.
+ *
+ * Keyed by the row object, never by an `id`: two rows may carry the same `id`,
+ * and a replacement row is a genuinely new object that must be judged on its own
+ * content. Row objects survive between the passes because the nested walk decodes
+ * container values to arrays before hooks run.
+ */
+export type ReadAccessRedactions = WeakMap<
+  Record<string, unknown>,
+  Record<string, unknown>
+>;
+
+/**
+ * Rows whose redaction provenance could not be established, keyed by the row
+ * OBJECT like {@link ReadAccessRedactions}. The nested-read pipeline flags a
+ * related-row clone here when it cannot be matched to its source row (a reshaped
+ * or id-less clone a hook returned); every field on such a row that carries an
+ * `access.read` rule is then denied WITHOUT running the rule, because the rule's
+ * evidence — sibling values on an untrusted clone — cannot be relied on. This is
+ * the fail-secure default: deny when the inputs to an access decision are not
+ * trustworthy, rather than judge on them.
+ */
+export type FailClosedRows = WeakSet<Record<string, unknown>>;
+
+/** One value a pass put back purely as evidence: the row it was written onto and
+ *  the key, so it can be removed again once the snapshots that needed it are
+ *  taken. */
+interface RestoredEvidence {
+  row: Record<string, unknown>;
+  name: string;
+}
+
+/**
+ * The field names a pass RESTORED onto each row purely as evidence, keyed by the
+ * row object. The recorder consults it to tell a value the post-hook row
+ * genuinely supplies — which clears its stale redaction — from one present only
+ * because this pass restored it, which must be remembered as still-removed.
+ */
+type RestoredByRow = WeakMap<Record<string, unknown>, Set<string>>;
+
+/**
+ * Restore, throughout the subtree rooted at `entry`, the values a prior pass
+ * removed from each row — unless a hook has since set the key, so a hook's own
+ * value stands. Runs once before any snapshot is taken, so a rule at any level is
+ * judged against the evidence a single direct read would see. Every value it puts
+ * back is recorded in `restored`, because it is EVIDENCE, not response data: the
+ * caller was denied it and the post-hook row did not supply it, so it must be
+ * removed again once the snapshots are taken (see {@link applyFieldReadAccess}).
+ *
+ * The restore has to span the whole subtree, not just the current row: an outer
+ * field's rule can read a value that lives in a nested group or repeater a prior
+ * pass already redacted. Restoring per row on the way down would take the outer
+ * level's snapshot before descending to restore that nested value, and the rule
+ * would judge against the stripped subtree and wrongly drop the outer field.
+ */
+function restoreReadAccessEvidence(
+  entry: Record<string, unknown>,
+  fns: Record<string, FieldFunctions>,
+  redactions: ReadAccessRedactions,
+  restored: RestoredEvidence[],
+  restoredByRow: RestoredByRow
+): void {
+  const priorlyRemoved = redactions.get(entry);
+  if (priorlyRemoved) {
+    for (const [name, value] of Object.entries(priorlyRemoved)) {
+      if (!(name in entry)) {
+        entry[name] = value;
+        restored.push({ row: entry, name });
+        // Recorded so the judge can distinguish this evidence-only value, which
+        // stays removed, from one the post-hook row genuinely supplied.
+        let names = restoredByRow.get(entry);
+        if (!names) {
+          names = new Set();
+          restoredByRow.set(entry, names);
+        }
+        names.add(name);
+      }
+    }
+  }
+  for (const [name, fieldFns] of Object.entries(fns)) {
+    if (!fieldFns.fields || !(name in entry)) continue;
+    const container = openNestedContainer(entry[name]);
+    if (!container) continue;
+    for (const row of container.rows) {
+      restoreReadAccessEvidence(
+        row,
+        fieldFns.fields,
+        redactions,
+        restored,
+        restoredByRow
+      );
+    }
+    entry[name] = container.serialize();
+  }
+}
+
+/** Recursive worker for read access — same snapshot + recurse contract. Prior
+ *  passes' removed values are restored across the whole subtree by
+ *  {@link restoreReadAccessEvidence} before this runs, so the snapshot reflects
+ *  the content a single direct read would judge; the rules always run against the
+ *  current content, and what this pass removes is recorded for the next. */
 async function applyReadAccessRec(
   entry: Record<string, unknown>,
   fns: Record<string, FieldFunctions>,
-  ctx: { user?: Record<string, unknown>; id?: string }
+  ctx: { user?: Record<string, unknown>; id?: string },
+  redactions: ReadAccessRedactions,
+  restoredByRow: RestoredByRow,
+  failClosed?: FailClosedRows
 ): Promise<void> {
+  // A row whose redaction provenance could not be established (a reshaped or
+  // id-less related-row clone). Every access-controlled field on it is denied
+  // without consulting its rule, because the rule's evidence — sibling values on
+  // an untrusted clone — cannot be relied on. Recursion into containers still
+  // runs, so each nested row is judged against this same set individually.
+  const failed = failClosed?.has(entry) ?? false;
   // Taken BEFORE the recursion below replaces nested containers with their
   // redacted serialization: a parent-level rule reading a protected nested
   // value would otherwise find it already removed, and the outcome would turn
@@ -366,13 +504,26 @@ async function applyReadAccessRec(
       const container = openNestedContainer(entry[name]);
       if (container) {
         for (const row of container.rows) {
-          await applyReadAccessRec(row, fieldFns.fields, ctx);
+          await applyReadAccessRec(
+            row,
+            fieldFns.fields,
+            ctx,
+            redactions,
+            restoredByRow,
+            failClosed
+          );
         }
         entry[name] = container.serialize();
       }
     }
     const fn = fieldFns.access?.read;
     if (!fn) continue;
+    if (failed) {
+      // Fail-closed: deny every access-controlled field on an untrusted row
+      // without running its rule.
+      denied.push(name);
+      continue;
+    }
     let allowed = false;
     try {
       allowed = await fn({
@@ -381,31 +532,97 @@ async function applyReadAccessRec(
         data: snapshot,
       });
     } catch {
+      // Fail-secure: an access rule that throws denies the field.
       allowed = false;
     }
     if (!allowed) denied.push(name);
   }
-  for (const name of denied) delete entry[name];
+  // Record what stays removed for the next pass to restore as evidence. A prior
+  // pass's removed value is carried forward only while the row still lacks the
+  // key, or holds it solely because THIS pass restored it as evidence (about to
+  // be stripped again). A field the post-hook row genuinely supplies and that was
+  // allowed clears its stale evidence, so a later rule keyed on the old value is
+  // not judged against a value the row no longer carries.
+  const priorlyRemoved = redactions.get(entry);
+  const restoredHere = restoredByRow.get(entry);
+  const removed: Record<string, unknown> = {};
+  if (priorlyRemoved) {
+    for (const [name, value] of Object.entries(priorlyRemoved)) {
+      if (!(name in entry) || restoredHere?.has(name)) {
+        removed[name] = value;
+      }
+    }
+  }
+  for (const name of denied) {
+    removed[name] = entry[name];
+    delete entry[name];
+  }
+  if (Object.keys(removed).length > 0) {
+    redactions.set(entry, removed);
+  } else {
+    // Nothing stays removed: drop any stale entry so a later pass does not
+    // restore a value this row now legitimately carries or no longer hides.
+    redactions.delete(entry);
+  }
 }
 
 /**
  * Enforce field-level read access on a serialized entry: fields whose
  * `access.read` denies are removed from the response, at every depth.
+ *
+ * Pass a shared {@link ReadAccessRedactions} to run access more than once over
+ * rows a hook may have mutated in between (the nested-read pipeline's
+ * before-hooks and after-hooks passes): each pass restores the values a prior
+ * pass removed from a row as evidence, then re-judges the row against its current
+ * content — so a denied field a hook reintroduced or a row it changed is caught,
+ * while a field kept only because of a now-removed sibling keeps its verdict.
+ *
+ * Pass a {@link FailClosedRows} set to deny every access-controlled field on a
+ * row whose provenance could not be established (a reshaped or id-less clone),
+ * without running its rules.
  */
-export async function applyFieldReadAccess(opts: {
-  kind: EntityKind;
-  slug: string;
-  entry: Record<string, unknown>;
-  user?: Record<string, unknown>;
-  overrideAccess?: boolean;
-}): Promise<void> {
+export async function applyFieldReadAccess(
+  opts: {
+    kind: EntityKind;
+    slug: string;
+    entry: Record<string, unknown>;
+    user?: Record<string, unknown>;
+    overrideAccess?: boolean;
+  },
+  redactions?: ReadAccessRedactions,
+  failClosed?: FailClosedRows
+): Promise<void> {
   if (opts.overrideAccess) return;
   const fns = getFieldFunctions(opts.kind, opts.slug);
   if (!fns) return;
-  await applyReadAccessRec(opts.entry, fns, {
-    user: opts.user,
-    id: typeof opts.entry.id === "string" ? opts.entry.id : undefined,
-  });
+  const store = redactions ?? new WeakMap();
+  // Restore the whole subtree's prior-pass evidence before any level's snapshot,
+  // so an outer rule reading a value nested in a group or repeater is judged
+  // against the same content a single direct read would (a no-op on the first
+  // pass, whose store is empty). The judge below re-removes what stays denied.
+  // The restored keys are tracked so the judge can tell them from values the row
+  // genuinely supplies when it decides what stays recorded as removed.
+  const restored: RestoredEvidence[] = [];
+  const restoredByRow: RestoredByRow = new WeakMap();
+  restoreReadAccessEvidence(opts.entry, fns, store, restored, restoredByRow);
+  await applyReadAccessRec(
+    opts.entry,
+    fns,
+    {
+      user: opts.user,
+      id: typeof opts.entry.id === "string" ? opts.entry.id : undefined,
+    },
+    store,
+    restoredByRow,
+    failClosed
+  );
+  // A restored value existed only to feed the snapshots above. The caller was
+  // denied it and the post-hook row did not supply it, so it must not appear in
+  // the response even when the current pass judged it allowed — a hook that
+  // flipped the field's CONDITION from deny to allow (say, a sibling `tier`)
+  // without reintroducing the value must not resurrect the value the first pass
+  // removed. Removed after every snapshot is taken, so re-judging still saw it.
+  for (const { row, name } of restored) delete row[name];
 }
 
 /** Recursive worker for hooks. Transforms values in registration order. */

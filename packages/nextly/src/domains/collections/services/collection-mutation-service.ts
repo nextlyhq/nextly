@@ -37,6 +37,7 @@ import { typedErrorEnvelopeFields } from "../../../errors/from-service-envelope"
 import type { ValidationPublicData } from "../../../errors/public-data";
 import { emitDocumentEvent } from "../../../events/domain-events";
 import { getEventBus } from "../../../events/event-bus";
+import { recordFlattenedError } from "../../../hooks/side-effect-warnings";
 import { toSnakeCase } from "../../../lib/case-conversion";
 import { stripImmutableSystemFields } from "../../../lib/immutable-system-fields";
 import {
@@ -61,7 +62,11 @@ import type {
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
-import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
+import {
+  convertTimestampsToCamelCase,
+  rehydrateSystemTimestamps,
+  SYSTEM_TIMESTAMP_KEYS,
+} from "../../../shared/lib/case-conversion";
 import { validateEntryData } from "../../../shared/lib/entry-validation";
 import { applyFieldDefaults } from "../../../shared/lib/field-defaults";
 import {
@@ -229,6 +234,11 @@ function errorToServiceResult<T = unknown>(
   dialect: SupportedDialect
 ): CollectionServiceResult<T> {
   if (NextlyError.is(error)) {
+    // Kept for the log before the detail is dropped below. The boundary
+    // rebuilds an error from what survives this shape, so without this the
+    // `cause` and `logContext` the thrower attached are gone before anything
+    // logs them and every unexpected failure looks alike.
+    recordFlattenedError(error);
     // Preserve per-field validation issues: the dispatcher and Direct API
     // rebuild the canonical envelope from this result, and without the
     // errors array the admin cannot map failures onto form fields.
@@ -262,6 +272,9 @@ function errorToServiceResult<T = unknown>(
   // `this.dialect` from BaseService. Normalising raw driver errors first
   // is what keeps unique/fk violations from collapsing to INTERNAL_ERROR.
   const mapped = NextlyError.fromDatabaseError(toDbError(dialect, error));
+  // The mapping is where a unique or FK violation gains the context that says
+  // WHICH constraint; the envelope below drops it, so it is kept here too.
+  recordFlattenedError(mapped);
   if (mapped.code === "INTERNAL_ERROR") {
     return {
       success: false,
@@ -1689,22 +1702,14 @@ export class CollectionMutationService extends BaseService {
       documentLocalized: false,
       localeUnknown: false,
     });
-    for (const key of [
-      "id",
-      "createdAt",
-      "created_at",
-      "updatedAt",
-      "updated_at",
-    ]) {
+    // Every system timestamp spelling, taken from the shared list rather than named here: a list
+    // written out by hand carries only the columns that existed when it was written, so the
+    // first-publication marker was absent from a working-draft save's response document while an
+    // ordinary read of the same entry returned it.
+    for (const key of ["id", ...SYSTEM_TIMESTAMP_KEYS]) {
       if (key in rawDraft) payload[key] = rawDraft[key];
     }
-    for (const key of ["createdAt", "updatedAt"]) {
-      const value = payload[key];
-      if (typeof value === "string") {
-        const parsed = new Date(value);
-        if (!Number.isNaN(parsed.getTime())) payload[key] = parsed;
-      }
-    }
+    rehydrateSystemTimestamps(payload);
     rehydrateSnapshotDates(payload, fields, componentSchemas);
     return payload;
   }
@@ -6850,10 +6855,6 @@ export class CollectionMutationService extends BaseService {
         // A typed error keeps its own status and code. Hardcoding 500 reported
         // a hook's refusal or rate limit as a server fault, and left a boundary
         // nothing to rebuild it from.
-        ...(typedErrorEnvelopeFields(error) ?? {}),
-        // A typed error keeps its own status and code. Hardcoding 500 reported
-        // a delete hook's refusal or rate limit as a server fault, and left a
-        // boundary nothing to rebuild it from.
         ...(typedErrorEnvelopeFields(error) ?? {}),
         eventRecorded,
         revalidationIntent,
