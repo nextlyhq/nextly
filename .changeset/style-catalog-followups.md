@@ -22,10 +22,8 @@
 "nextly": patch
 ---
 
-Document validation can now check design-token names and class ids against the
-site that will render them. Both are optional: validation is given the site or
-it is not, and without it these names are not checked at all. An unresolved name
-is always a warning, never an error, so renaming a token or retiring a class
-never makes a stored document unpublishable — including when a rename leaves
-more unresolved names than one report can carry, which is now said separately
-and does not stop the checks that decide whether a document is valid.
+Style values are read more carefully in three places. A composite no longer
+builds an unbounded amount of issue text before its allowance is checked, an
+`attr()` fallback is validated as the single value it substitutes rather than as
+an arithmetic expression, and an expression is still judged where it can be even
+when part of it cannot be read.

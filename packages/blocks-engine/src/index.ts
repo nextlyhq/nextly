@@ -153,10 +153,16 @@ export {
   validateStyleValues,
   newStyleIssueBudget,
   MAX_STYLE_ISSUES,
+  MAX_STYLE_ISSUE_PATH_BYTES,
+  MAX_SITE_ISSUES,
+  MAX_SITE_ISSUE_PATH_BYTES,
   tokenKindAllowedAt,
   tokenKindsForProperty,
 } from "./style/validate-style-value";
-export type { StyleIssueBudget } from "./style/validate-style-value";
+export type {
+  IssueAllowance,
+  StyleIssueBudget,
+} from "./style/validate-style-value";
 export {
   styleSupportDefinitions,
   stylePropertiesForSupports,

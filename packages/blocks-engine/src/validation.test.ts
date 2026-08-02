@@ -3,7 +3,11 @@ import { describe, expect, it } from "vitest";
 import { DOCUMENT_KINDS } from "./document";
 import type { BlockDocument, BreakpointSet } from "./document";
 import { documentBytes } from "./limits";
-import { MAX_STYLE_ISSUES } from "./style/validate-style-value";
+import {
+  MAX_SITE_ISSUES,
+  MAX_SITE_ISSUE_PATH_BYTES,
+  MAX_STYLE_ISSUES,
+} from "./style/validate-style-value";
 import {
   FIXTURE_BREAKPOINTS,
   VALIDATION_FIXTURES,
@@ -665,6 +669,49 @@ describe("validation never throws on adversarial input", () => {
     expect(issues.length).toBeGreaterThan(0);
   });
 
+  it("bounds the path text unknown class warnings can return", () => {
+    // A JSON Pointer repeats every key above it, so a node under a very long
+    // slot key copies that key into every warning reported beneath it. Counting
+    // the warnings bounds how many come back without bounding how large they
+    // are, and a document inside the byte cap can answer with hundreds of times
+    // its own size.
+    const slot = "s".repeat(20_000);
+    const classes = Array.from({ length: 200 }, (_, i) => `c_missing_${i}`);
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/box",
+          version: 1,
+          props: {},
+          slots: {
+            [slot]: [
+              { id: "n2", type: "core/text", version: 1, props: {}, classes },
+            ],
+          },
+        },
+      ],
+    });
+    const issues = validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+      classes: { has: () => false },
+    });
+    const warnings = issues.filter(i => i.code === "unknown-class");
+    const bytes = warnings.reduce((sum, i) => sum + i.path.length, 0);
+    // One warning may cross the line rather than being refused at it, so the
+    // allowance plus a single longest path is the bound, not the allowance.
+    expect(bytes).toBeLessThanOrEqual(MAX_SITE_ISSUE_PATH_BYTES + slot.length);
+    expect(warnings.length).toBeGreaterThan(0);
+    // Stopping early is said out loud, and said as a warning: what went
+    // unreported is which names resolve, which never blocks a publish.
+    const marker = issues.filter(i => i.code === "site-issues-truncated");
+    expect(marker).toHaveLength(1);
+    expect(marker[0]?.severity).toBe("warning");
+  });
+
   it("reports a realistic document the same way with and without a site", () => {
     // End-to-end rather than per-check: one node carrying a good token, a
     // missing token, a token of the wrong kind, a known class and a dropped
@@ -1162,6 +1209,57 @@ describe("style keys inherited from a prototype", () => {
     } finally {
       delete polluted.hover;
     }
+  });
+});
+
+describe("unresolved names never block a publish", () => {
+  it("keeps checking structure after a renamed token is used everywhere", () => {
+    // The scenario is a commonly used token being renamed: every document that
+    // referenced it now warns at every use. Those warnings are documented as
+    // never blocking a publish, but the marker for stopping early is an ERROR,
+    // so letting them spend the structural allowance would block one anyway —
+    // on a document whose structure nothing objects to.
+    const nodes: unknown[] = Array.from(
+      { length: MAX_SITE_ISSUES + 60 },
+      (_, index) => ({
+        id: `n${index}`,
+        type: "core/box",
+        version: 1,
+        props: {},
+        styles: { base: { base: { color: { $token: "brand.renamed" } } } },
+      })
+    );
+    // Last, so that reaching it proves the walk was not cut short.
+    nodes.push({
+      id: "last",
+      type: "core/box",
+      version: 1,
+      props: {},
+      styles: { base: { base: { color: 42 } } },
+    });
+    const issues = validate(
+      invalidDoc({ formatVersion: 1, kind: "page", nodes }),
+      {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        mode: "strict",
+        tokens: { kindOf: () => undefined },
+      }
+    );
+    expect(issues.some(i => i.code === "style-issues-truncated")).toBe(false);
+    expect(
+      issues.some(
+        i =>
+          i.code === "invalid-style-value" &&
+          i.path === `/nodes/${nodes.length - 1}/styles/base/base/color`
+      )
+    ).toBe(true);
+    // The warnings are still bounded, and still only warnings.
+    const unresolved = issues.filter(i => i.code === "unknown-token");
+    expect(unresolved.length).toBeLessThanOrEqual(MAX_SITE_ISSUES);
+    expect(unresolved.every(i => i.severity === "warning")).toBe(true);
+    expect(issues.filter(i => i.code === "site-issues-truncated")).toHaveLength(
+      1
+    );
   });
 });
 

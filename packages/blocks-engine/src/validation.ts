@@ -22,7 +22,11 @@ import type { DocumentLimits } from "./limits";
 import { isPlainRecord } from "./plain-record";
 import type { TokenKind } from "./style/catalog-types";
 import {
+  chargeIssueBudget,
   newStyleIssueBudget,
+  siteAllowanceSpent,
+  siteTruncationNotice,
+  structuralAllowanceSpent,
   validateStyleValues,
 } from "./style/validate-style-value";
 import type { StyleIssueBudget } from "./style/validate-style-value";
@@ -152,6 +156,8 @@ export const ISSUE_CODES = {
     "A design-token reference is used where only literal values are accepted.",
   "style-issues-truncated":
     "More style problems were found than the validation reports.",
+  "site-issues-truncated":
+    "More unresolved token and class names were found than the validation reports.",
 } as const;
 
 /** A stable validation issue code. */
@@ -747,20 +753,31 @@ function validateClasses(
   // make every document that used it unpublishable.
   for (let index = 0; index < node.classes.length; index += 1) {
     // A node may list as many class ids as a document has room for, and each
-    // unknown one costs a lookup and an allocated issue. Bounded by the same
-    // budget the style walk spends, so one node cannot turn a small document
-    // into a large report.
-    if (budget !== undefined && budget.remaining <= 0) break;
+    // unknown one costs a lookup and an allocated issue. Bounded by the run's
+    // SITE allowance, and by both of its dimensions: the count keeps one node
+    // from turning a small document into a long report, and the path bytes keep
+    // a node nested under a very long slot key from repeating that key in every
+    // warning, which bounds how many are returned without bounding how large.
+    //
+    // The site allowance, not the structural one, because these are warnings
+    // that never block a publish. Spending the structural allowance on them
+    // would stop the checks that do decide validity, and the marker for
+    // stopping those is an error.
+    if (siteAllowanceSpent(budget)) {
+      issues.push(...siteTruncationNotice(budget, pointer(path, "classes")));
+      break;
+    }
     const id = node.classes[index];
     if (typeof id !== "string" || lookup.has(id)) continue;
-    if (budget !== undefined) budget.remaining -= 1;
-    issues.push({
+    const issue: ValidationIssue = {
       path: pointer(pointer(path, "classes"), index),
       code: "unknown-class",
       severity: "warning",
       message: `The class "${describeValue(id)}" is not defined by this site.`,
       suggestion: "Create the class, or remove it from this node.",
-    });
+    };
+    chargeIssueBudget(budget, [issue]);
+    issues.push(issue);
   }
 }
 
@@ -835,8 +852,8 @@ function styleBudgetExhausted(
   state: NodeCheckState,
   path: string
 ): ValidationIssue[] {
-  if (state.styleBudget.truncated) return [];
-  state.styleBudget.truncated = true;
+  if (state.styleBudget.structural.truncated) return [];
+  state.styleBudget.structural.truncated = true;
   return [
     {
       path,
@@ -848,6 +865,19 @@ function styleBudgetExhausted(
   ];
 }
 
+/**
+ * Record one style-envelope issue and charge the run for it.
+ *
+ * Both dimensions of the allowance, never the count alone: these paths carry
+ * the node's own pointer, so a node nested under a very long slot key repeats
+ * that key in every issue reported beneath it, and a count-only charge bounds
+ * how many are returned without bounding how large they are.
+ */
+function pushStyleIssue(state: NodeCheckState, issue: ValidationIssue): void {
+  state.issues.push(issue);
+  chargeIssueBudget(state.styleBudget, [issue]);
+}
+
 function validateStyleEnvelope(
   styles: unknown,
   stylesPath: string,
@@ -857,17 +887,16 @@ function validateStyleEnvelope(
     // Charged like every other style issue, and checked first: one per node
     // sounds bounded until a document carries thousands of nodes, and the cap
     // is document-wide rather than per node.
-    if (state.styleBudget.remaining <= 0) {
+    if (structuralAllowanceSpent(state.styleBudget)) {
       state.issues.push(...styleBudgetExhausted(state, stylesPath));
       return;
     }
-    state.issues.push({
+    pushStyleIssue(state, {
       path: stylesPath,
       code: "invalid-style-values",
       severity: "error",
       message: "A styles field must be an object.",
     });
-    state.styleBudget.remaining -= 1;
     return;
   }
   // Enumerated lazily: `Object.entries` would build a pair for every state name
@@ -888,30 +917,28 @@ function validateStyleEnvelope(
       stateKey as (typeof STYLE_STATES)[number]
     );
     const stateHasOwnIssue = !stateIsKnown || !isPlainRecord(byBreakpoint);
-    if (state.styleBudget.remaining <= 0 && stateHasOwnIssue) {
+    if (structuralAllowanceSpent(state.styleBudget) && stateHasOwnIssue) {
       state.issues.push(...styleBudgetExhausted(state, stylesPath));
       return;
     }
     const statePath = pointer(stylesPath, stateKey);
     if (!stateIsKnown) {
-      state.issues.push({
+      pushStyleIssue(state, {
         path: statePath,
         code: "invalid-style-state",
         severity: "error",
         message: `"${describeValue(stateKey)}" is not a known style state.`,
         suggestion: `Use one of: ${STYLE_STATES.join(", ")}.`,
       });
-      state.styleBudget.remaining -= 1;
       continue;
     }
     if (!isPlainRecord(byBreakpoint)) {
-      state.issues.push({
+      pushStyleIssue(state, {
         path: statePath,
         code: "invalid-style-values",
         severity: "error",
         message: `Style state "${describeValue(stateKey)}" must map breakpoint ids to values.`,
       });
-      state.styleBudget.remaining -= 1;
       continue;
     }
     for (const breakpointId in byBreakpoint) {
@@ -926,19 +953,18 @@ function validateStyleEnvelope(
       const noValuesHere = isPlainRecord(values) && !hasOwnKey(values);
       const nothingLeftHere =
         noValuesHere && state.knownBreakpoints.has(breakpointId);
-      if (state.styleBudget.remaining <= 0 && !nothingLeftHere) {
+      if (structuralAllowanceSpent(state.styleBudget) && !nothingLeftHere) {
         state.issues.push(...styleBudgetExhausted(state, statePath));
         return;
       }
       const bpPath = pointer(statePath, breakpointId);
       if (!state.knownBreakpoints.has(breakpointId)) {
-        state.issues.push({
+        pushStyleIssue(state, {
           path: bpPath,
           code: "unknown-breakpoint",
           severity: state.unknownSeverity,
           message: `Breakpoint "${describeValue(breakpointId)}" is not defined for this site.`,
         });
-        state.styleBudget.remaining -= 1;
       }
       // Rechecked between the two: an unknown breakpoint and a malformed value
       // are independently chargeable, so the first can spend the last slot and
@@ -946,18 +972,17 @@ function validateStyleEnvelope(
       // Nothing is skipped when this breakpoint holds no values, though, and
       // the marker is an error — claiming a document went unchecked when it did
       // not would reject it for having been fully read.
-      if (state.styleBudget.remaining <= 0 && !noValuesHere) {
+      if (structuralAllowanceSpent(state.styleBudget) && !noValuesHere) {
         state.issues.push(...styleBudgetExhausted(state, bpPath));
         return;
       }
       if (!isPlainRecord(values)) {
-        state.issues.push({
+        pushStyleIssue(state, {
           path: bpPath,
           code: "invalid-style-values",
           severity: "error",
           message: `Style values at "${describeValue(breakpointId)}" must be an object.`,
         });
-        state.styleBudget.remaining -= 1;
         continue;
       }
       // The envelope's shape is only half of what makes a style block valid:

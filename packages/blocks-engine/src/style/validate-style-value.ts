@@ -11,6 +11,7 @@ import { isTokenRef } from "../document";
 import { describeValue, pointer } from "../issue-text";
 import { isPlainRecord } from "../plain-record";
 import type {
+  IssueCode,
   TokenLookup,
   ValidationIssue,
   ValidationMode,
@@ -47,26 +48,41 @@ const REJECTION_MESSAGES = {
 } as const;
 
 /**
- * A shared allowance for how many style issues one validation run may report.
- * Held by the caller so the limit spans a whole document rather than resetting
- * at every node.
+ * One allowance: how many more issues may be reported, how many bytes of
+ * JSON-Pointer path they may carry between them, and whether this allowance has
+ * already said that it stopped early.
+ *
+ * Counting issues alone does not bound what is returned. A pointer repeats
+ * every key above it, so one very long key — a breakpoint id, a property
+ * name — is copied into every issue beneath it, and a document well inside the
+ * byte cap can produce output hundreds of times its own size. Charging the
+ * paths bounds the ANSWER, the way the byte cap bounds the question.
  */
-export interface StyleIssueBudget {
-  remaining: number;
-  truncated: boolean;
-  /**
-   * How many more bytes of JSON-Pointer path this run may return.
-   *
-   * Counting issues alone does not bound what is returned. A pointer repeats
-   * every key above it, so one very long key — a breakpoint id, a property
-   * name — is copied into every issue beneath it, and a document well inside
-   * the byte cap can produce output hundreds of times its own size. Charging
-   * the paths bounds the ANSWER, the way the byte cap bounds the question.
-   */
+export interface IssueAllowance {
+  count: number;
   pathBytes: number;
+  truncated: boolean;
 }
 
-/** The default number of style issues one document validation reports. */
+/**
+ * A shared allowance for what one validation run may report. Held by the caller
+ * so the limits span a whole document rather than resetting at every node.
+ *
+ * Two allowances, spent independently. Structural findings describe the
+ * document; site findings — a token name or a class id that resolves against
+ * tables the caller supplied — describe the configuration it was read against.
+ * Sharing one allowance lets the second kind consume the first: renaming a
+ * token produces a warning at every use of it, and the marker saying checking
+ * stopped early is an ERROR, so warnings documented as never blocking a publish
+ * would block one. Separate allowances make that impossible rather than
+ * unlikely.
+ */
+export interface StyleIssueBudget {
+  structural: IssueAllowance;
+  site: IssueAllowance;
+}
+
+/** The default number of structural style issues one validation reports. */
 export const MAX_STYLE_ISSUES = 200;
 
 /**
@@ -76,27 +92,96 @@ export const MAX_STYLE_ISSUES = 200;
  */
 export const MAX_STYLE_ISSUE_PATH_BYTES = 50_000;
 
+/** The default number of unresolved-name warnings one validation reports. */
+export const MAX_SITE_ISSUES = 200;
+
+/** The default path allowance for unresolved-name warnings. */
+export const MAX_SITE_ISSUE_PATH_BYTES = 50_000;
+
+/**
+ * The diagnostics that ask about the SITE rather than about the document. Each
+ * one resolves against a table the caller supplies, so the same document
+ * produces it or not depending on configuration the document does not contain.
+ */
+const SITE_ISSUE_CODES: ReadonlySet<IssueCode> = new Set<IssueCode>([
+  "unknown-token",
+  "token-kind-mismatch",
+  "unknown-class",
+  "site-issues-truncated",
+]);
+
+/** Whether an issue resolves against the site rather than against the document. */
+export function isSiteIssue(issue: ValidationIssue): boolean {
+  return SITE_ISSUE_CODES.has(issue.code);
+}
+
 /** A fresh budget for one validation run. */
 export function newStyleIssueBudget(
   remaining: number = MAX_STYLE_ISSUES,
-  pathBytes: number = MAX_STYLE_ISSUE_PATH_BYTES
+  pathBytes: number = MAX_STYLE_ISSUE_PATH_BYTES,
+  siteRemaining: number = MAX_SITE_ISSUES,
+  sitePathBytes: number = MAX_SITE_ISSUE_PATH_BYTES
 ): StyleIssueBudget {
-  return { remaining, truncated: false, pathBytes };
+  return {
+    structural: { count: remaining, pathBytes, truncated: false },
+    site: { count: siteRemaining, pathBytes: sitePathBytes, truncated: false },
+  };
 }
 
-/** Charge a run for the issues just produced: their count and their paths. */
-function chargeBudget(
+/** Charge a run for the issues just produced, each against its own allowance. */
+export function chargeIssueBudget(
   budget: StyleIssueBudget | undefined,
   produced: readonly ValidationIssue[]
 ): void {
   if (budget === undefined) return;
-  budget.remaining -= produced.length;
-  for (const issue of produced) budget.pathBytes -= issue.path.length;
+  for (const issue of produced) {
+    const allowance = isSiteIssue(issue) ? budget.site : budget.structural;
+    allowance.count -= 1;
+    allowance.pathBytes -= issue.path.length;
+  }
 }
 
-/** Whether a run has spent either allowance and must stop. */
-function budgetSpent(budget: StyleIssueBudget): boolean {
-  return budget.remaining <= 0 || budget.pathBytes <= 0;
+/** Whether an allowance has spent either of its limits. */
+function allowanceSpent(allowance: IssueAllowance): boolean {
+  return allowance.count <= 0 || allowance.pathBytes <= 0;
+}
+
+/** Whether the structural allowance is spent and the walk must stop. */
+export function structuralAllowanceSpent(budget: StyleIssueBudget): boolean {
+  return allowanceSpent(budget.structural);
+}
+
+/** Whether a run may still ask, and report, whether a name resolves. */
+export function siteAllowanceSpent(
+  budget: StyleIssueBudget | undefined
+): boolean {
+  return budget !== undefined && allowanceSpent(budget.site);
+}
+
+/**
+ * The marker saying name resolution stopped early, emitted once per run.
+ *
+ * A WARNING, unlike its structural counterpart. What went unchecked is whether
+ * names resolve, and an unresolved name costs one dropped declaration rather
+ * than a document that cannot render, so stopping early here leaves nothing
+ * unsafe behind. Reporting it as an error is exactly the laundering of a
+ * warning into a blocker that the separate allowance exists to prevent.
+ */
+export function siteTruncationNotice(
+  budget: StyleIssueBudget | undefined,
+  path: string
+): ValidationIssue[] {
+  if (budget === undefined || budget.site.truncated) return [];
+  budget.site.truncated = true;
+  return [
+    {
+      path,
+      code: "site-issues-truncated",
+      severity: "warning",
+      message:
+        "There are more unresolved token and class names than are reported here.",
+    },
+  ];
 }
 
 /** True when a token of the given kind may be stored at this leaf. */
@@ -170,8 +255,8 @@ function truncationNotice(
   budget: StyleIssueBudget,
   path: string
 ): ValidationIssue[] {
-  if (budget.truncated) return [];
-  budget.truncated = true;
+  if (budget.structural.truncated) return [];
+  budget.structural.truncated = true;
   return [
     {
       path,
@@ -402,6 +487,7 @@ function partIssues(
   partLabel: string,
   budget?: StyleIssueBudget,
   spent = 0,
+  spentBytes = 0,
   tokens?: TokenLookup
 ): ValidationIssue[] {
   if (!isPlainRecord(value)) {
@@ -414,6 +500,19 @@ function partIssues(
     ];
   }
   const issues: ValidationIssue[] = [];
+  // What this level has produced towards the STRUCTURAL allowance: how many
+  // issues, and how many bytes of path between them. Tracked here and compared
+  // against the run's allowance because the run is charged when this walk
+  // RETURNS, so a loop that only asked the budget would build every issue it
+  // can first. One long key above a composite is enough for that to be hundreds
+  // of megabytes from a document inside the byte cap.
+  //
+  // Site findings are excluded from both. They are spent from their own
+  // allowance, so counting them here would let unresolved names stop structural
+  // checking early, which is the truncation error that must not follow from a
+  // warning.
+  let count = 0;
+  let bytes = 0;
   // Enumerated lazily rather than through `Object.entries`, which would build a
   // pair for every key before the budget below sees the first one — the budget
   // is meant to bound the work, not only the issues it reports.
@@ -427,7 +526,9 @@ function partIssues(
     // allowance again, so a value one level deeper reported past the cap.
     if (
       budget !== undefined &&
-      (budgetSpent(budget) || spent + issues.length >= budget.remaining)
+      (structuralAllowanceSpent(budget) ||
+        spent + count >= budget.structural.count ||
+        spentBytes + bytes >= budget.structural.pathBytes)
     ) {
       issues.push(...truncationNotice(budget, path));
       break;
@@ -439,25 +540,31 @@ function partIssues(
     const partValue = value[key];
     const partShape = Object.hasOwn(parts, key) ? parts[key] : undefined;
     if (partShape === undefined) {
-      issues.push(
-        invalid(
-          pointer(path, key),
-          `"${describeValue(key)}" is not a known ${partLabel}.`,
-          `Use one of: ${Object.keys(parts).join(", ")}.`
-        )
+      const unknownField = invalid(
+        pointer(path, key),
+        `"${describeValue(key)}" is not a known ${partLabel}.`,
+        `Use one of: ${Object.keys(parts).join(", ")}.`
       );
+      count += 1;
+      bytes += unknownField.path.length;
+      issues.push(unknownField);
       continue;
     }
-    issues.push(
-      ...shapeIssues(
-        partShape,
-        partValue,
-        pointer(path, key),
-        budget,
-        spent + issues.length,
-        tokens
-      )
+    const nested = shapeIssues(
+      partShape,
+      partValue,
+      pointer(path, key),
+      budget,
+      spent + count,
+      spentBytes + bytes,
+      tokens
     );
+    for (const issue of nested) {
+      if (isSiteIssue(issue)) continue;
+      count += 1;
+      bytes += issue.path.length;
+    }
+    issues.push(...nested);
   }
   return issues;
 }
@@ -469,6 +576,7 @@ function shapeIssues(
   path: string,
   budget?: StyleIssueBudget,
   spent = 0,
+  spentBytes = 0,
   tokens?: TokenLookup
 ): ValidationIssue[] {
   if (isStyleLeaf(shape)) return leafIssues(shape, value, path, tokens);
@@ -481,6 +589,7 @@ function shapeIssues(
         "side",
         budget,
         spent,
+        spentBytes,
         tokens
       );
     case "logicalCorners":
@@ -491,6 +600,7 @@ function shapeIssues(
         "corner",
         budget,
         spent,
+        spentBytes,
         tokens
       );
     case "object":
@@ -501,6 +611,7 @@ function shapeIssues(
         "field",
         budget,
         spent,
+        spentBytes,
         tokens
       );
     case "union": {
@@ -511,7 +622,15 @@ function shapeIssues(
       let best: ValidationIssue[] | undefined;
       let bestRejects = true;
       for (const variant of shape.of) {
-        const issues = shapeIssues(variant, value, path, budget, spent, tokens);
+        const issues = shapeIssues(
+          variant,
+          value,
+          path,
+          budget,
+          spent,
+          spentBytes,
+          tokens
+        );
         if (issues.length === 0) return [];
         // A variant that reports only warnings has ACCEPTED the value and
         // remarked on it. One that reports an error has refused it. Ranking by
@@ -569,7 +688,7 @@ export function validateStyleValues(
     // byte cap can hold a hundred thousand keys. Stopping at a budget keeps the
     // work and the returned array proportional to what a reader can use, and
     // says so rather than going quiet.
-    if (budget !== undefined && budgetSpent(budget)) {
+    if (budget !== undefined && structuralAllowanceSpent(budget)) {
       issues.push(...truncationNotice(budget, basePath));
       break;
     }
@@ -584,16 +703,27 @@ export function validateStyleValues(
         severity: mode === "strict" ? "error" : "warning",
         message: `"${describeValue(property)}" is not a style property.`,
       });
-      chargeBudget(budget, issues.slice(before));
+      chargeIssueBudget(budget, issues.slice(before));
       continue;
     }
     // A document that already failed the byte cap is rejected whatever its
     // values say, and parsing each one builds an AST apiece. The property is
     // still recognised, which is cheap; reading its value is not.
     if (!skipValueParsing) {
-      issues.push(...shapeIssues(entry.shape, value, path, budget, 0, tokens));
+      // Name resolution stops being asked for once its own allowance is spent,
+      // while structural checking carries on to the end of the document: what a
+      // name resolves to cannot decide whether a document is valid, so running
+      // out of room to report on names must not cut short the checks that can.
+      let resolveNames = tokens;
+      if (tokens !== undefined && siteAllowanceSpent(budget)) {
+        issues.push(...siteTruncationNotice(budget, basePath));
+        resolveNames = undefined;
+      }
+      issues.push(
+        ...shapeIssues(entry.shape, value, path, budget, 0, 0, resolveNames)
+      );
     }
-    chargeBudget(budget, issues.slice(before));
+    chargeIssueBudget(budget, issues.slice(before));
   }
   return issues;
 }
