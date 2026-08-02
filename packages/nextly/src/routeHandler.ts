@@ -54,7 +54,7 @@ import {
   updateImageSize,
   deleteImageSize,
 } from "./api/image-sizes";
-import { readOrGenerateRequestId } from "./api/request-id";
+import { readOrGenerateRequestId, withRequestIdHeader } from "./api/request-id";
 // canonical respondX wire shapes (spec §5.1) instead of the
 // hand-rolled `{ data: <payload> }` envelope.
 import { respondData, respondMutation } from "./api/response-shapes";
@@ -1504,9 +1504,10 @@ export function createDynamicHandlers(options?: {
     // which is the join the diagnostics exist for.
     const effectiveRequestId =
       response.headers.get("x-request-id") ?? readOrGenerateRequestId(req);
-    if (!response.headers.has("x-request-id")) {
-      response.headers.set("x-request-id", effectiveRequestId);
-    }
+    const identifiedResponse = withRequestIdHeader(
+      response,
+      effectiveRequestId
+    );
     // Imported here rather than at module scope, matching how this file already
     // reaches the logger, so the route entry point keeps its import graph.
     const { getNextlyLogger: resolveLogger } = await import(
@@ -1521,7 +1522,10 @@ export function createDynamicHandlers(options?: {
         method: req.method,
       }
     );
-    const formattedResponse = await applyGlobalDateFormatting(response, req);
+    const formattedResponse = await applyGlobalDateFormatting(
+      identifiedResponse,
+      req
+    );
     const corsResponse = cors.applyHeaders(req, formattedResponse);
     return applySecurityHeaders(corsResponse);
   }

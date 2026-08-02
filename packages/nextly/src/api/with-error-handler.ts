@@ -28,7 +28,7 @@ import {
 import { getNextlyLogger } from "../observability/logger";
 import { getGlobalOnError, type OnErrorHook } from "../observability/on-error";
 
-import { readOrGenerateRequestId } from "./request-id";
+import { readOrGenerateRequestId, withRequestIdHeader } from "./request-id";
 
 type UnstableRethrow = (err: unknown) => void;
 let cachedUnstableRethrow: UnstableRethrow | null = null;
@@ -334,9 +334,7 @@ export function withErrorHandler<TArgs extends unknown[]>(
     }
 
     // Always set X-Request-Id on the way out, unless the handler already did.
-    if (!response.headers.has("x-request-id")) {
-      response.headers.set("x-request-id", requestId);
-    }
+    response = withRequestIdHeader(response, requestId);
 
     // Written here rather than where they were collected, for two reasons.
     //
