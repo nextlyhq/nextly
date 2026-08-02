@@ -494,7 +494,37 @@ function literalCategory(terms: readonly CssNode[]): string | null {
   if (term.type === "Number") return "number";
   if (term.type === "Percentage") return "percentage";
   if (term.type === "Dimension") return unitCategory(unitOf(term));
+  if (term.type === "Function") return functionCategory(term);
   return null;
+}
+
+/**
+ * The kind of quantity a nested function is, when that is knowable.
+ *
+ * The math functions choose among their operands or combine them, so a
+ * function whose operands are all the same known kind produces that kind:
+ * `min(1px, 2px)` is a length wherever it appears. Operands that disagree, or
+ * any that cannot be read, answer `null` rather than guessing, which keeps an
+ * expression like `min(1px, 50%)` out of the comparison entirely.
+ *
+ * This is what lets a nested result be compared against its neighbours, so
+ * `calc(min(1px, 2px) * 1px)` is seen to multiply two lengths.
+ */
+function functionCategory(node: {
+  name: string;
+  children: Iterable<CssNode>;
+}): string | null {
+  const name = identifierOf(node);
+  if (NUMBER_FUNCTIONS.has(name)) return "number";
+  if (!MATH_FUNCTIONS.has(name)) return null;
+  let agreed: string | null = null;
+  for (const operand of mathOperands(name, splitArguments(node.children))) {
+    const category = literalCategory(operand);
+    if (category === null) return null;
+    if (agreed === null) agreed = category;
+    else if (agreed !== category) return null;
+  }
+  return agreed;
 }
 
 /**
@@ -666,11 +696,23 @@ function referenceNamesSomething(node: {
   name: string;
   children: Iterable<CssNode>;
 }): boolean {
-  const head = splitArguments(node.children)[0]?.[0];
-  if (head?.type !== "Identifier") return false;
-  return (
-    identifierOf(node) !== "var" || decodeIdentifier(head.name).startsWith("--")
-  );
+  const head = splitArguments(node.children)[0] ?? [];
+  const named = head[0];
+  if (named?.type !== "Identifier") return false;
+  if (identifierOf(node) === "var") {
+    // Only the name is read here. A `var()` head carrying anything besides it
+    // does not parse at all, so there is nothing left for this to refuse.
+    return decodeIdentifier(named.name).startsWith("--");
+  }
+  // `env()` may index into the variable it names, and an index is a
+  // non-negative integer: `env(titlebar-area-x 1)` reads the second value.
+  // Anything else in the head makes the reference resolve to nothing.
+  return head.slice(1).every(isIndex);
+}
+
+/** Whether a node is a non-negative integer, which is what indexes a value. */
+function isIndex(node: CssNode): boolean {
+  return node.type === "Number" && /^\d+$/.test(node.value);
 }
 
 /**

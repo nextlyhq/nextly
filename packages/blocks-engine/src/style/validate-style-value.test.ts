@@ -2403,6 +2403,16 @@ describe("a deferred value still needs its name", () => {
     expect(codes({ width: "env(safe-area-inset-top)" })).toEqual([]);
   });
 
+  it("reads the whole head, not only the name", () => {
+    // `env()` takes indices after the variable name and nothing else. The
+    // equivalent `var()` head is not asserted here: css-tree refuses one
+    // carrying anything past the name, so this module never sees it.
+    expect(codes({ width: "env(foo bar)" })).toEqual(["invalid-style-value"]);
+    expect(codes({ width: "env(foo -1)" })).toEqual(["invalid-style-value"]);
+    expect(codes({ width: "env(titlebar-area-x 1)" })).toEqual([]);
+    expect(codes({ width: "env(foo 0, 1px)" })).toEqual([]);
+  });
+
   it("asks the same of a colour, which took the name for proof", () => {
     expect(codes({ color: "var(red)" })).toEqual(["invalid-style-value"]);
     expect(codes({ color: "env()" })).toEqual(["invalid-style-value"]);
@@ -2442,6 +2452,28 @@ describe("an expression of bare numbers is a number", () => {
     ]) {
       expect(codes({ width: value }), value).toEqual([]);
     }
+  });
+
+  it("reads the kind a nested function produces", () => {
+    // `min(1px, 2px)` is a length wherever it stands, so multiplying by one
+    // makes an area and adding a number mixes kinds. Both were unreadable
+    // while only direct literals answered.
+    expect(codes({ width: "calc(min(1px, 2px) * 1px)" })).toEqual([
+      "invalid-style-value",
+    ]);
+    expect(codes({ width: "calc(max(1px, 2px) + 1)" })).toEqual([
+      "invalid-style-value",
+    ]);
+    expect(codes({ width: "calc(min(1px, 2px) * 2)" })).toEqual([]);
+    expect(codes({ width: "calc(max(1px, 2px) + 1em)" })).toEqual([]);
+  });
+
+  it("abstains when a nested function's own operands disagree", () => {
+    // A percentage resolves to the length beside it, so the function is a
+    // length; reading the operands as disagreeing is what keeps this out of
+    // the comparison rather than refusing it.
+    expect(codes({ width: "calc(min(1px, 50%) * 1px)" })).toEqual([]);
+    expect(codes({ width: "calc(min(1px, var(--x)) + 1)" })).toEqual([]);
   });
 
   it("reads past a rounding strategy to the operands", () => {
