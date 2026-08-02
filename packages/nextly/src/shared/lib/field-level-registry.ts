@@ -28,6 +28,7 @@
 
 import { NextlyError } from "../../errors/nextly-error";
 import { normalizeHookError } from "../../hooks/normalize-hook-error";
+import { singleHookNamespace } from "../../hooks/register-single-hooks";
 import { recordSideEffectWarning } from "../../hooks/side-effect-warnings";
 import type { FieldHookHandler } from "../../hooks/types";
 
@@ -414,6 +415,7 @@ async function runFieldHooksRec(
   phase: "beforeValidate" | "beforeChange" | "afterChange" | "afterRead",
   ctx: {
     slug: string;
+    kind: EntityKind;
     operation: "create" | "read" | "update" | "delete";
     user?: Record<string, unknown>;
   }
@@ -458,23 +460,29 @@ async function runFieldHooksRec(
           // what a collection-level handler on the same write reports.
           const committedPhase =
             ctx.operation === "create" ? "afterCreate" : "afterUpdate";
+          // The key the hook registry stores a Single under, so a warning
+          // from a field-level handler and one from an entity-level handler
+          // on the same write name the same entity. A bare slug would also
+          // collide with a collection sharing it.
+          const registryKey =
+            ctx.kind === "single" ? singleHookNamespace(ctx.slug) : ctx.slug;
           const normalized = normalizeHookError(
             error,
             committedPhase,
-            ctx.slug,
+            registryKey,
             { fieldName: name }
           );
           console.error(
-            `Field hook "afterChange" failed for "${ctx.slug}.${name}" after the write committed:`,
+            `Field hook "afterChange" failed for "${registryKey}.${name}" after the write committed:`,
             normalized
           );
           recordSideEffectWarning({
             phase: committedPhase,
-            collection: ctx.slug,
+            collection: registryKey,
             error: NextlyError.is(normalized)
               ? normalized
               : NextlyError.internal({
-                  logContext: { collection: ctx.slug, fieldName: name },
+                  logContext: { collection: registryKey, fieldName: name },
                 }),
           });
         }
@@ -511,6 +519,7 @@ export async function runFieldHooks(opts: {
   if (!fns) return;
   await runFieldHooksRec(opts.data, fns, opts.phase, {
     slug: opts.slug,
+    kind: opts.kind,
     operation: opts.operation,
     user: opts.user,
   });

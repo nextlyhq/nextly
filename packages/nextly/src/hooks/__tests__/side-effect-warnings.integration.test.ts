@@ -265,3 +265,43 @@ describe("a field-level afterChange failure does not fail the write", () => {
     expect(JSON.stringify(created.warnings)).not.toContain("field-secret");
   });
 });
+
+describe("a single's field-level failure names the same entity as its own hooks", () => {
+  it("uses the namespaced registry key, not the bare slug", async () => {
+    // A field-level handler and an entity-level handler on the same write must
+    // name the entity identically, or a consumer classifies the warning by
+    // where the hook happened to be declared. The bare slug would also
+    // collide with a collection sharing it.
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "site-settings",
+          fields: [
+            text({
+              name: "siteName",
+              hooks: {
+                afterChange: [
+                  () => {
+                    throw NextlyError.internal({});
+                  },
+                ],
+              },
+            }),
+          ],
+        }),
+      ],
+    });
+
+    const updated = await current.nextly.updateSingle({
+      slug: "site-settings",
+      data: { siteName: "Saved anyway" },
+    });
+
+    expect(updated.item).toBeDefined();
+    expect(updated.warnings).toHaveLength(1);
+    expect(updated.warnings?.[0]).toMatchObject({
+      phase: "afterUpdate",
+      collection: "single:site-settings",
+    });
+  });
+});
