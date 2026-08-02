@@ -346,12 +346,29 @@ export async function applyFieldWriteAccess(opts: {
   });
 }
 
-/** Recursive worker for read access — same snapshot + recurse contract. */
+/**
+ * What a read-access pass removed from one row, at every depth, so a later
+ * cleanup can remove the SAME fields a hook reintroduced without re-running the
+ * policy. Re-running it is unsafe: a rule reads the row as `data`, so evaluating
+ * it a second time against the already-stripped row can flip a decision (a field
+ * allowed only while a now-denied sibling is present would be wrongly removed),
+ * and an async rule would issue its queries twice.
+ */
+export interface FieldRedactionPlan {
+  /** Field names denied at this level. */
+  denied: string[];
+  /** Per container field, the plan for each of its rows, by index. */
+  nested: Array<{ name: string; rows: FieldRedactionPlan[] }>;
+}
+
+/** Recursive worker for read access — same snapshot + recurse contract.
+ *  Returns the redaction it performed so it can be replayed (see
+ *  {@link replayFieldRedaction}). */
 async function applyReadAccessRec(
   entry: Record<string, unknown>,
   fns: Record<string, FieldFunctions>,
   ctx: { user?: Record<string, unknown>; id?: string }
-): Promise<void> {
+): Promise<FieldRedactionPlan> {
   // Taken BEFORE the recursion below replaces nested containers with their
   // redacted serialization: a parent-level rule reading a protected nested
   // value would otherwise find it already removed, and the outcome would turn
@@ -360,15 +377,18 @@ async function applyReadAccessRec(
     ? detachData(entry)
     : undefined;
   const denied: string[] = [];
+  const nested: FieldRedactionPlan["nested"] = [];
   for (const [name, fieldFns] of Object.entries(fns)) {
     if (!(name in entry)) continue;
     if (fieldFns.fields) {
       const container = openNestedContainer(entry[name]);
       if (container) {
+        const rows: FieldRedactionPlan[] = [];
         for (const row of container.rows) {
-          await applyReadAccessRec(row, fieldFns.fields, ctx);
+          rows.push(await applyReadAccessRec(row, fieldFns.fields, ctx));
         }
         entry[name] = container.serialize();
+        nested.push({ name, rows });
       }
     }
     const fn = fieldFns.access?.read;
@@ -386,11 +406,40 @@ async function applyReadAccessRec(
     if (!allowed) denied.push(name);
   }
   for (const name of denied) delete entry[name];
+  return { denied, nested };
+}
+
+/**
+ * Re-remove the fields a prior {@link applyFieldReadAccess} pass denied on a
+ * row, WITHOUT re-running the policy, so a denied value a later hook wrote back
+ * onto the row is stripped again. The policy already ran once (that produced the
+ * plan); replaying its decisions avoids both re-deciding against mutated data
+ * and re-issuing async rule queries.
+ */
+export function replayFieldRedaction(
+  entry: Record<string, unknown>,
+  plan: FieldRedactionPlan
+): void {
+  for (const { name, rows } of plan.nested) {
+    if (!(name in entry)) continue;
+    const container = openNestedContainer(entry[name]);
+    if (container) {
+      container.rows.forEach((row, index) => {
+        const rowPlan = rows[index];
+        if (rowPlan) replayFieldRedaction(row, rowPlan);
+      });
+      entry[name] = container.serialize();
+    }
+  }
+  for (const name of plan.denied) delete entry[name];
 }
 
 /**
  * Enforce field-level read access on a serialized entry: fields whose
- * `access.read` denies are removed from the response, at every depth.
+ * `access.read` denies are removed from the response, at every depth. Returns
+ * the redaction it performed (undefined for a trusted/override read or an
+ * unregistered entity), which {@link replayFieldRedaction} can re-apply after
+ * later hooks run.
  */
 export async function applyFieldReadAccess(opts: {
   kind: EntityKind;
@@ -398,11 +447,11 @@ export async function applyFieldReadAccess(opts: {
   entry: Record<string, unknown>;
   user?: Record<string, unknown>;
   overrideAccess?: boolean;
-}): Promise<void> {
-  if (opts.overrideAccess) return;
+}): Promise<FieldRedactionPlan | undefined> {
+  if (opts.overrideAccess) return undefined;
   const fns = getFieldFunctions(opts.kind, opts.slug);
-  if (!fns) return;
-  await applyReadAccessRec(opts.entry, fns, {
+  if (!fns) return undefined;
+  return applyReadAccessRec(opts.entry, fns, {
     user: opts.user,
     id: typeof opts.entry.id === "string" ? opts.entry.id : undefined,
   });

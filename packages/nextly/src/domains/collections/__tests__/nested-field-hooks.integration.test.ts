@@ -73,6 +73,19 @@ async function boot(): Promise<TestNextly> {
             name: "classification",
             access: { read: () => false },
           }),
+          // Allowed ONLY while `classification` is present as evidence. Its rule
+          // reads the row as `data`, so evaluating it a second time against the
+          // already-stripped row (where classification is gone) would wrongly
+          // deny it — which is why the finalize step replays decisions instead of
+          // re-evaluating.
+          text({
+            name: "region",
+            access: {
+              read: ({ data }) =>
+                (data as { classification?: unknown } | undefined)
+                  ?.classification === "private",
+            },
+          }),
         ],
       }),
       defineCollection({
@@ -533,6 +546,44 @@ describe("a target's field hooks apply to rows reached through a relationship", 
     const org = author.organization as Record<string, unknown> | undefined;
     // The second pass removed the value the hook wrote back — not "reintroduced".
     if (org) expect(org.classification).toBeUndefined();
+  });
+
+  it("keeps a field whose access depended on a denied sibling, judged once", async () => {
+    // `region` is allowed only while `classification` is present; `classification`
+    // is denied. The first pass judges `region` against the complete row (keeps
+    // it) and removes `classification`. The finalize step must REPLAY that
+    // decision, not re-judge `region` against the now-stripped row — re-judging
+    // would wrongly deny it, unlike a direct read which evaluates it once.
+    const t = await boot();
+    await t.nextly.create({
+      collection: ORGS,
+      data: { name: "acme", classification: "private", region: "emea" },
+    });
+    const orgId = await onlyId(t, ORGS);
+    await t.nextly.create({
+      collection: AUTHORS,
+      data: { name: "ada", organization: orgId },
+    });
+    const authorId = await onlyId(t, AUTHORS);
+    await t.nextly.create({
+      collection: POSTS,
+      data: { title: "p", author: authorId },
+    });
+    const postId = await onlyId(t, POSTS);
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    const author = expanded.data!.author as Record<string, unknown>;
+    const org = author.organization as Record<string, unknown> | undefined;
+    expect(org).toBeTruthy();
+    // Kept: judged once, while its evidence was still present.
+    expect(org!.region).toBe("emea");
+    // The denied sibling is still withheld.
+    expect(org!.classification).toBeUndefined();
   });
 
   it("masks a dropped relationship before a source hook can copy out of it", async () => {
