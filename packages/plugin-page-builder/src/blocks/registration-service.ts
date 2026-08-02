@@ -14,6 +14,16 @@
  * pass 1 and `init` runs in pass 2, so a contributor calling from `init` is
  * guaranteed to reach a live registry whatever order the plugins load in.
  *
+ * **What registration buys today, and what it does not.** A registered block is
+ * known to `@nextlyhq/blocks-engine`: validation stops calling its type unknown,
+ * and generation, manifests and tooling can see it. It is NOT yet rendered. The
+ * renderer and the editor canvas resolve definitions from this package's own
+ * earlier registry, which holds none of these, so a page containing a
+ * registered type still draws the unknown-block placeholder. Bridging the two
+ * is the renderer rewrite, not a line here — and registering blocks into the
+ * engine before that bridge exists is deliberate, because validation and
+ * tooling are worth having first.
+ *
  * @module blocks/registration-service
  */
 

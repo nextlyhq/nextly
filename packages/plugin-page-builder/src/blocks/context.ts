@@ -47,3 +47,46 @@ export interface QueryBudget {
   /** Claim one read. False when the page has spent its allowance. */
   take(): boolean;
 }
+
+/**
+ * What a page render provides, as one named shape.
+ *
+ * An app states that this IS its block render context with a single line,
+ * placed anywhere in its own source:
+ *
+ * ```ts
+ * declare module "@nextlyhq/plugin-sdk/blocks" {
+ *   interface BlockRenderContext extends PageContext {}
+ * }
+ * ```
+ *
+ * Written by the app rather than shipped by this package, and that is the
+ * better arrangement rather than a workaround for one. The declaration bundler
+ * that produces the published types resolves imports with a scheme older than
+ * package `exports` maps, so an augmentation naming a subpath cannot be
+ * published at all — but the reason to prefer this survives that: an app-wide
+ * claim about what every block receives should be something the app says out
+ * loud, in one visible place, not something a dependency arranges quietly.
+ */
+export interface PageContext {
+  /**
+   * Where a block reads content from. Absent when nothing can be queried,
+   * which is the editor drawing a block before a source has been chosen.
+   */
+  data?: DataProvider;
+  /**
+   * The entry the surrounding repeater is on.
+   *
+   * Set by a block rendering its slot once per entry, and read by whatever is
+   * inside that slot. It lives on the CONTEXT rather than being passed as a
+   * prop because a repeater does not know, and should not know, which of its
+   * descendants cares: the value flows down to all of them and each takes what
+   * it needs.
+   */
+  item?: Record<string, unknown>;
+  /**
+   * What is left of this render's query allowance. Absent means the renderer is
+   * not counting, which is the editor drawing one block in isolation.
+   */
+  queries?: QueryBudget;
+}

@@ -17,29 +17,15 @@
  *
  * @module blocks/context-augmentation
  */
-import type { DataProvider, QueryBudget } from "./context";
+import type { PageContext } from "./context";
 
 declare module "@nextlyhq/plugin-sdk/blocks" {
   interface BlockRenderContext {
-    /**
-     * Where a block reads content from. Absent when nothing can be queried,
-     * which is the editor drawing a block before a source has been chosen.
-     */
-    data?: DataProvider;
-    /**
-     * The entry the surrounding repeater is on.
-     *
-     * Set by a block rendering its slot once per entry, and read by whatever is
-     * inside that slot. It lives on the CONTEXT rather than being passed as a
-     * prop because a repeater does not know, and should not know, which of its
-     * descendants cares: the value flows down to all of them and each takes
-     * what it needs.
-     */
-    item?: Record<string, unknown>;
-    /**
-     * What is left of this render's query allowance. Absent means the renderer
-     * is not counting, which is the editor drawing one block in isolation.
-     */
-    queries?: QueryBudget;
+    // Each member's TYPE comes from `PageContext`, so the shape is written
+    // once. Only the names are repeated, and a type test holds the two key sets
+    // equal so a member added to one and not the other fails to compile.
+    data?: PageContext["data"];
+    item?: PageContext["item"];
+    queries?: PageContext["queries"];
   }
 }

@@ -23,11 +23,20 @@ export {
 export type { BlockRegistrationService } from "./registration-service";
 
 /**
- * The renderer's own context declaration.
+ * What a page render provides to every block.
  *
- * Re-exported from the package's published entry so the augmentation it carries
- * reaches a consumer's type graph. A plugin importing only the documented
- * subpaths would otherwise never load that file, and `ctx.data` — the whole
- * point of the context — would not exist for them.
+ * An app names this as its block render context in one line of its own source,
+ * which is what makes `ctx.data` typed for blocks it writes:
+ *
+ * ```ts
+ * declare module "@nextlyhq/plugin-sdk/blocks" {
+ *   interface BlockRenderContext extends PageContext {}
+ * }
+ * ```
  */
-export type { DataProvider, FindArgs, QueryBudget } from "./context";
+export type {
+  DataProvider,
+  FindArgs,
+  PageContext,
+  QueryBudget,
+} from "./context";
