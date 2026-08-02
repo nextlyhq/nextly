@@ -2,8 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../../errors/nextly-error";
 
+import { parseSqlSections } from "../../../cli/commands/migrate";
+
 import {
   formatLocalizationIntent,
+  isLocalizationIntentRefusal,
+  isUpSectionMarker,
   LOCALIZATION_INTENT_HEADER,
   LOCALIZATION_INTENT_VERSION,
   parseLocalizationIntent,
@@ -136,7 +140,8 @@ describe("localization migration intent", () => {
   it("refuses an entity kind it has no transition record key for", () => {
     const file = fileWith(
       `${LOCALIZATION_INTENT_HEADER} {"version":1,"kind":"enable","entity":"widget","spec":` +
-        `{"collection":"p","mainTable":"a","companionTable":"b","defaultLocale":"en","columns":[]}}`
+        `{"dialect":"sqlite","collection":"p","mainTable":"a","companionTable":"b",` +
+        `"defaultLocale":"en","parentIdType":"TEXT","columns":[]}}`
     );
     try {
       parseLocalizationIntent(file, "kind.sql");
@@ -154,7 +159,146 @@ describe("localization migration intent", () => {
     const file = fileWith(
       `${LOCALIZATION_INTENT_HEADER} {"version":${LOCALIZATION_INTENT_VERSION + 1},` +
         `"kind":"enable","entity":"collection","spec":` +
-        `{"collection":"p","mainTable":"a","companionTable":"b","defaultLocale":"en","columns":[]}}`
+        `{"dialect":"sqlite","collection":"p","mainTable":"a","companionTable":"b",` +
+        `"defaultLocale":"en","parentIdType":"TEXT","columns":[]}}`
+    );
+    try {
+      parseLocalizationIntent(file, "future.sql");
+      expect.unreachable("expected a refusal");
+    } catch (error) {
+      expect(NextlyError.is(error) ? error.logContext?.reason : undefined).toBe(
+        "localization_intent_version_unsupported"
+      );
+    }
+  });
+});
+
+describe("the header field is confined to the preamble", () => {
+  // A hand-written migration is free to comment its own SQL. Scanning the whole file would read
+  // such a comment as a corrupt header and take the file out of the run entirely.
+  it("ignores a lookalike comment inside the UP section", () => {
+    const file =
+      `-- Migration: 20260101_000001_add_index\n\n-- UP\n` +
+      `${LOCALIZATION_INTENT_HEADER} this is prose, not a payload\n` +
+      `CREATE INDEX idx_a ON t (c);\n`;
+    expect(parseLocalizationIntent(file, "prose.sql")).toBeNull();
+  });
+
+  it("ignores a lookalike comment inside the DOWN section", () => {
+    const file =
+      `-- Migration: m\n\n-- UP\nSELECT 1;\n\n-- DOWN\n` +
+      `${LOCALIZATION_INTENT_HEADER} {"version":1}\nSELECT 1;\n`;
+    expect(parseLocalizationIntent(file, "down.sql")).toBeNull();
+  });
+
+  // If this module's idea of where the header ends drifts from the one the SQL splitter uses, the
+  // scan walks back into statements and the case above regresses silently.
+  it("ends the header on every spelling the SQL splitter treats as UP", () => {
+    for (const marker of ["-- UP", "-- UP:", "-- UP extra"]) {
+      expect(isUpSectionMarker(marker)).toBe(true);
+      const { upSql } = parseSqlSections(
+        `-- Migration: m\n${marker}\nSELECT 1;\n`
+      );
+      expect(upSql).toBe("SELECT 1;");
+    }
+    expect(isUpSectionMarker("-- UPDATE something")).toBe(false);
+  });
+});
+
+describe("the spec guard covers every required field", () => {
+  const base = {
+    version: 1,
+    kind: "enable",
+    entity: "collection",
+    spec: {
+      dialect: "postgresql",
+      collection: "posts",
+      mainTable: "dc_posts",
+      companionTable: "dc_posts_locales",
+      defaultLocale: "en",
+      parentIdType: "TEXT",
+      columns: [{ name: "body", kind: "text" }],
+    },
+  };
+  const withSpec = (patch: Record<string, unknown>): string =>
+    fileWith(
+      `${LOCALIZATION_INTENT_HEADER} ${JSON.stringify({
+        ...base,
+        spec: { ...base.spec, ...patch },
+      })}`
+    );
+
+  it("accepts the complete payload", () => {
+    expect(parseLocalizationIntent(withSpec({}), "ok.sql")).not.toBeNull();
+  });
+
+  // Each of these is declared required and is read by the apply path. Accepting the payload
+  // without them would hand back a value typed as complete that is not.
+  const missing: [string, Record<string, unknown>][] = [
+    ["dialect", { dialect: undefined }],
+    ["an unknown dialect", { dialect: "oracle" }],
+    ["parentIdType", { parentIdType: undefined }],
+    ["a column name", { columns: [{ kind: "text" }] }],
+    ["a known column kind", { columns: [{ name: "body", kind: "blob" }] }],
+    ["a well-formed columnsOnMain", { columnsOnMain: [1, 2] }],
+    ["a boolean status", { status: "yes" }],
+  ];
+  for (const [label, patch] of missing) {
+    it(`refuses a payload without ${label}`, () => {
+      try {
+        parseLocalizationIntent(withSpec(patch), "bad.sql");
+        expect.unreachable("expected a refusal");
+      } catch (error) {
+        expect(
+          NextlyError.is(error) ? error.logContext?.reason : undefined
+        ).toBe("localization_intent_malformed");
+      }
+    });
+  }
+});
+
+describe("a refusal is distinguishable from an unreadable file", () => {
+  // Migration discovery drops a file it cannot parse and warns. That is survivable for a file it
+  // cannot read at all, and not survivable for one whose intent it cannot read: the run would
+  // continue past it and report success.
+  it("identifies each refusal this module raises", () => {
+    for (const payload of [
+      "{not json",
+      '{"version":1,"kind":"enable","entity":"collection","spec":{}}',
+      '{"version":999,"kind":"enable","entity":"collection","spec":' +
+        '{"dialect":"sqlite","collection":"p","mainTable":"a","companionTable":"b",' +
+        '"defaultLocale":"en","parentIdType":"TEXT","columns":[]}}',
+    ]) {
+      try {
+        parseLocalizationIntent(
+          fileWith(`${LOCALIZATION_INTENT_HEADER} ${payload}`),
+          "x.sql"
+        );
+        expect.unreachable("expected a refusal");
+      } catch (error) {
+        expect(isLocalizationIntentRefusal(error)).toBe(true);
+      }
+    }
+  });
+
+  it("does not claim an unrelated failure as its own", () => {
+    expect(isLocalizationIntentRefusal(new Error("disk gone"))).toBe(false);
+    expect(
+      isLocalizationIntentRefusal(
+        NextlyError.internal({ logContext: { reason: "something_else" } })
+      )
+    ).toBe(false);
+  });
+});
+
+// A newer writer is entitled to a shape this build has never seen, so version skew must be
+// reported as version skew. Diagnosing it as corruption sends the operator looking for damage
+// that is not there when the remedy is to upgrade.
+describe("version skew is reported before shape", () => {
+  it("names the version even when the payload's shape is unknown to this build", () => {
+    const file = fileWith(
+      `${LOCALIZATION_INTENT_HEADER} {"version":${LOCALIZATION_INTENT_VERSION + 1},` +
+        `"somethingEntirelyNew":true}`
     );
     try {
       parseLocalizationIntent(file, "future.sql");

@@ -38,6 +38,7 @@ import type { Command } from "commander";
 
 import { resolveRegistryNameFromCatalog } from "../../domains/field-groups/storage/resolve-storage-names";
 import {
+  isLocalizationIntentRefusal,
   LOCALIZATION_INTENT_HEADER,
   parseLocalizationIntent,
   type LocalizationMigrationIntent,
@@ -704,6 +705,10 @@ async function discoverMigrations(
       const parsed = parseMigrationFile(baseName, filePath, content, source);
       migrations.push(parsed);
     } catch (error) {
+      // A declared intent this build cannot read has to stop the run. Dropping the file with a
+      // warning, as an unreadable file is dropped, would let every later migration apply and the
+      // run report success while the transition this one describes never happened.
+      if (isLocalizationIntentRefusal(error)) throw error;
       logger.warn(
         `Failed to parse migration file ${selectedFile}: ${error instanceof Error ? error.message : String(error)}`
       );

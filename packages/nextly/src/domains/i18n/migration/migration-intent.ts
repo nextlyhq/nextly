@@ -92,7 +92,81 @@ export function formatLocalizationIntent(
   return `${LOCALIZATION_INTENT_HEADER} ${JSON.stringify(ordered)}`;
 }
 
-/** Shape guard for the parsed payload — the file is user-editable text, not a trusted channel. */
+/**
+ * True for the line that ends the header and begins the executable SQL.
+ *
+ * Mirrors the spellings `parseSqlSections` accepts. A test pins the two in agreement, because if
+ * they drift this scan walks into statements again.
+ */
+export function isUpSectionMarker(line: string): boolean {
+  const t = line.trim();
+  return t === "-- UP" || t.startsWith("-- UP ") || t.startsWith("-- UP:");
+}
+
+/**
+ * The lines before the first `-- UP`, which is the only region a header field may occupy.
+ *
+ * Scanning the whole file would let any SQL comment that happens to begin with the header's prefix
+ * be read as intent — a descriptive comment inside a hand-written migration would then be rejected
+ * as a corrupt header and take the whole file out of the run.
+ */
+function headerLines(content: string): string[] {
+  const lines = content.split("\n");
+  const end = lines.findIndex(isUpSectionMarker);
+  return end === -1 ? lines : lines.slice(0, end);
+}
+
+/** Reasons this module refuses a header, named so callers can tell them from a parse failure. */
+const INTENT_REFUSAL_REASONS = new Set([
+  "localization_intent_unparsable",
+  "localization_intent_malformed",
+  "localization_intent_version_unsupported",
+]);
+
+/**
+ * Whether an error is this module refusing a declared intent.
+ *
+ * Migration discovery catches parse errors per file and drops the file with a warning, which is
+ * survivable for a file it cannot read at all. It is NOT survivable here: dropping a file whose
+ * intent is unreadable lets the run apply everything after it and report success, while the
+ * transition the file describes never happened. Callers use this to rethrow instead.
+ */
+export function isLocalizationIntentRefusal(error: unknown): boolean {
+  if (!NextlyError.is(error)) return false;
+  const reason = error.logContext?.reason;
+  return typeof reason === "string" && INTENT_REFUSAL_REASONS.has(reason);
+}
+
+/** Dialects a spec may name. Drives DDL, so an unknown one cannot be carried forward. */
+const DIALECTS = new Set(["postgresql", "mysql", "sqlite"]);
+
+/** Storage kinds a localized column may declare, mirroring `LocalizedColumnSpec["kind"]`. */
+const COLUMN_KINDS = new Set([
+  "text",
+  "longText",
+  "boolean",
+  "integer",
+  "double",
+  "decimal",
+  "timestamp",
+  "json",
+  "fkSingle",
+]);
+
+function isColumnShape(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const c = value as Record<string, unknown>;
+  return typeof c.name === "string" && COLUMN_KINDS.has(c.kind as string);
+}
+
+/**
+ * Shape guard for the parsed payload — the file is user-editable text, not a trusted channel.
+ *
+ * Checks EVERY field the spec declares as required, not just enough of them to look right. A
+ * partial guard is worse than none here: it hands back a value typed as a complete
+ * `CompanionMigrationSpec`, so the apply path that reads `dialect` to pick its DDL, or walks
+ * `columns` to build statements, would be trusting a guarantee nothing established.
+ */
 function isIntentShape(value: unknown): value is LocalizationMigrationIntent {
   if (typeof value !== "object" || value === null) return false;
   const v = value as Record<string, unknown>;
@@ -108,13 +182,25 @@ function isIntentShape(value: unknown): value is LocalizationMigrationIntent {
   const spec = v.spec;
   if (typeof spec !== "object" || spec === null) return false;
   const s = spec as Record<string, unknown>;
-  return (
-    typeof s.mainTable === "string" &&
-    typeof s.companionTable === "string" &&
-    typeof s.defaultLocale === "string" &&
-    typeof s.collection === "string" &&
-    Array.isArray(s.columns)
-  );
+  if (
+    typeof s.mainTable !== "string" ||
+    typeof s.companionTable !== "string" ||
+    typeof s.defaultLocale !== "string" ||
+    typeof s.collection !== "string" ||
+    typeof s.parentIdType !== "string" ||
+    !DIALECTS.has(s.dialect as string)
+  )
+    return false;
+  if (!Array.isArray(s.columns) || !s.columns.every(isColumnShape))
+    return false;
+  // Optionals: absent is fine, present and wrong is not.
+  if (
+    s.columnsOnMain !== undefined &&
+    (!Array.isArray(s.columnsOnMain) ||
+      !s.columnsOnMain.every(n => typeof n === "string"))
+  )
+    return false;
+  return s.status === undefined || typeof s.status === "boolean";
 }
 
 /**
@@ -132,9 +218,9 @@ export function parseLocalizationIntent(
   content: string,
   filename: string
 ): LocalizationMigrationIntent | null {
-  const line = content
-    .split("\n")
-    .find(l => l.trim().startsWith(LOCALIZATION_INTENT_HEADER));
+  const line = headerLines(content).find(l =>
+    l.trim().startsWith(LOCALIZATION_INTENT_HEADER)
+  );
   if (line === undefined) return null;
 
   const payload = line.trim().slice(LOCALIZATION_INTENT_HEADER.length).trim();
@@ -147,22 +233,26 @@ export function parseLocalizationIntent(
       logContext: { reason: "localization_intent_unparsable", filename },
     });
   }
-  if (!isIntentShape(parsed)) {
-    throw NextlyError.internal({
-      logContext: { reason: "localization_intent_malformed", filename },
-    });
-  }
-  // A newer writer may describe the transition in terms this reader has no rule for. Refusing is
-  // the safe half of the trade: applying it verbatim would run statements chosen for a database
-  // in a different state from the one in front of us.
-  if (parsed.version > LOCALIZATION_INTENT_VERSION) {
+  // Version is settled BEFORE shape, because a newer writer is entitled to a shape this build has
+  // never seen. Checking today's shape first would report tomorrow's payload as corrupt and send
+  // the operator looking for damage that is not there, when the actual remedy is to upgrade.
+  const version =
+    typeof parsed === "object" && parsed !== null
+      ? (parsed as Record<string, unknown>).version
+      : undefined;
+  if (typeof version === "number" && version > LOCALIZATION_INTENT_VERSION) {
     throw NextlyError.internal({
       logContext: {
         reason: "localization_intent_version_unsupported",
         filename,
-        found: parsed.version,
+        found: version,
         supported: LOCALIZATION_INTENT_VERSION,
       },
+    });
+  }
+  if (!isIntentShape(parsed)) {
+    throw NextlyError.internal({
+      logContext: { reason: "localization_intent_malformed", filename },
     });
   }
   return parsed;
