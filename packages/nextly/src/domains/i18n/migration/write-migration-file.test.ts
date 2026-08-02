@@ -46,7 +46,7 @@ describe("writeLocalizationMigrationFile", () => {
 
     // parses into non-empty UP and DOWN
     const { upSql, downSql } = parseSqlSections(readFileSync(path, "utf-8"));
-    expect(upSql).toContain(`CREATE TABLE "dc_pages_locales"`);
+    expect(upSql).toContain(`CREATE TABLE IF NOT EXISTS "dc_pages_locales"`);
     expect(downSql).toContain(`DROP TABLE "dc_pages_locales"`);
   });
 
@@ -59,6 +59,6 @@ describe("writeLocalizationMigrationFile", () => {
     expect(path).toMatch(/_disable_localization_pages\.sql$/);
     const { upSql, downSql } = parseSqlSections(readFileSync(path, "utf-8"));
     expect(upSql).toContain(`DROP TABLE "dc_pages_locales"`);
-    expect(downSql).toContain(`CREATE TABLE "dc_pages_locales"`);
+    expect(downSql).toContain(`CREATE TABLE IF NOT EXISTS "dc_pages_locales"`);
   });
 });

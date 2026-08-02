@@ -25,7 +25,7 @@ const spec = (
 describe("buildLocalizationUpSql", () => {
   it("creates the companion table with composite PK and FK", () => {
     const sql = buildLocalizationUpSql(spec("sqlite"));
-    expect(sql).toContain(`CREATE TABLE "dc_pages_locales"`);
+    expect(sql).toContain(`CREATE TABLE IF NOT EXISTS "dc_pages_locales"`);
     expect(sql).toContain(`PRIMARY KEY ("_parent", "_locale")`);
     expect(sql).toContain(`REFERENCES "dc_pages" ("id") ON DELETE CASCADE`);
   });
@@ -57,7 +57,7 @@ describe("buildLocalizationUpSql", () => {
 describe("buildCompanionCreateOnlySql", () => {
   it("emits only the CREATE (no seed, no drop) for a fresh collection", () => {
     const sql = buildCompanionCreateOnlySql(spec("sqlite"));
-    expect(sql).toContain(`CREATE TABLE "dc_pages_locales"`);
+    expect(sql).toContain(`CREATE TABLE IF NOT EXISTS "dc_pages_locales"`);
     expect(sql).toContain(`PRIMARY KEY ("_parent", "_locale")`);
     expect(sql).toContain(`REFERENCES "dc_pages" ("id") ON DELETE CASCADE`);
     expect(sql).not.toContain("INSERT INTO");
@@ -166,5 +166,58 @@ describe("retained columns that were required", () => {
 
     expect(statements.some(s => s.includes("DROP NOT NULL"))).toBe(false);
     expect(statements.some(s => s.includes("DROP COLUMN"))).toBe(false);
+  });
+});
+
+describe("running the same companion migration twice", () => {
+  // 🔴 The file this lands in is applied statement by statement with no enclosing transaction,
+  // and MySQL commits DDL implicitly regardless. A failure part-way therefore leaves the earlier
+  // statements committed while the file is recorded as NOT applied, so the operator's only
+  // recovery is to run `migrate` again — which replays every statement in it.
+  //
+  // `ensureCompanionTable` also runs at boot and on every `db:sync`, so the companion is already
+  // present for any project that ran the dev server before graduating to migrations. That is the
+  // ordinary state, not an edge case.
+  it.each(["sqlite", "postgresql", "mysql"] as const)(
+    "guards the create against an existing companion on %s",
+    dialect => {
+      for (const sql of [
+        buildLocalizationUpSql(spec(dialect)),
+        buildCompanionCreateOnlySql(spec(dialect)),
+      ]) {
+        expect(sql).toContain("CREATE TABLE IF NOT EXISTS");
+        // Asserted as an absence too: a bare CREATE anywhere in the file is the failure, and a
+        // substring check for the guarded form alone would pass with both present.
+        expect(/CREATE TABLE(?! IF NOT EXISTS)/.test(sql)).toBe(false);
+      }
+    }
+  );
+
+  // The seed inserts into a table keyed on (_parent, _locale), so a replay collides outright.
+  // Row-level rather than table-level: an interrupted copy leaves a PARTIALLY seeded companion,
+  // which must keep the rows it has and gain only the ones it is missing.
+  it.each(["sqlite", "postgresql", "mysql"] as const)(
+    "guards the seed row by row on %s",
+    dialect => {
+      const sql = buildLocalizationUpSql(spec(dialect));
+      const q = (id: string) => (dialect === "mysql" ? `\`${id}\`` : `"${id}"`);
+      expect(sql).toContain(
+        `WHERE NOT EXISTS (SELECT 1 FROM ${q("dc_pages_locales")} ` +
+          `WHERE ${q("dc_pages_locales")}.${q("_parent")} = ${q("dc_pages")}.${q("id")} ` +
+          `AND ${q("dc_pages_locales")}.${q("_locale")} = 'en')`
+      );
+    }
+  );
+
+  // The control. Guarding must not cost the statements their actual work, so the seed still
+  // carries its columns and the drops still happen — without this, a generator that emitted only
+  // guards would satisfy every assertion above.
+  it("still seeds and still drops", () => {
+    const sql = buildLocalizationUpSql(spec("sqlite"));
+    expect(sql).toContain(
+      `INSERT INTO "dc_pages_locales" ("_parent", "_locale", "title", "body") ` +
+        `SELECT "id", 'en', "title", "body" FROM "dc_pages"`
+    );
+    expect(sql).toContain(`ALTER TABLE "dc_pages" DROP COLUMN "title"`);
   });
 });

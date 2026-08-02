@@ -89,7 +89,9 @@ describe("generateMigration — localized companion emission", () => {
       resolve(migrationsDir, companion!),
       "utf-8"
     );
-    expect(companionSql).toContain(`CREATE TABLE "dc_docs_locales"`);
+    expect(companionSql).toContain(
+      `CREATE TABLE IF NOT EXISTS "dc_docs_locales"`
+    );
     expect(companionSql).not.toContain("INSERT INTO");
     expect(companionSql).not.toContain("DROP COLUMN");
     // No paired snapshot for the companion (runs verbatim).
@@ -151,7 +153,9 @@ describe("generateMigration — localized companion emission", () => {
       resolve(migrationsDir, companion!),
       "utf-8"
     );
-    expect(companionSql).toContain(`CREATE TABLE "dc_pages_locales"`);
+    expect(companionSql).toContain(
+      `CREATE TABLE IF NOT EXISTS "dc_pages_locales"`
+    );
     expect(companionSql).toContain("INSERT INTO");
     expect(companionSql).toContain(`SELECT "id", 'en', "body"`);
     expect(companionSql).toContain(`ALTER TABLE "dc_pages" DROP COLUMN "body"`);
