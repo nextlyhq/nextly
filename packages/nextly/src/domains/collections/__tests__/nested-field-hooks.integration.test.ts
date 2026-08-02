@@ -141,6 +141,11 @@ async function boot(): Promise<TestNextly> {
           // batch expansion does not recurse into a related row's OWN
           // relationships, so a hook needing that evidence cannot mask there.
           password({ name: "passwordHash" }),
+          // Denied to everyone. Unlike the org's `classification`, this sits on
+          // the author itself, which a list read walks (a related row's own
+          // relations are not expanded on a list), so it is the field a
+          // source-hook re-contamination test uses on the list path.
+          text({ name: "dossier", access: { read: () => false } }),
           // Writes a secret back after the fetch stripped it. Only a second
           // strip AFTER the hooks keeps it out of the response.
           text({
@@ -1011,5 +1016,69 @@ describe("a target's field hooks apply to rows reached through a relationship", 
     // The masked value, not the stored "RAW_TOKEN": the hook was handed a row
     // the target's own protections had already run on.
     expect(expanded.data!.leaked).toBe("HIDDEN");
+  });
+
+  it("re-sanitizes a related row a source collection hook re-contaminates", async () => {
+    // The related-row field-access pass runs BEFORE the source collection's own
+    // code/stored afterRead hooks. One of those hooks can write a denied field
+    // straight back onto an already-sanitized related row
+    // (`entry.author.organization.classification`), and the root field-access
+    // pass knows only the SOURCE collection's schema, so it never descends into
+    // the related row to strip it. A field-access pass AFTER the source hooks
+    // re-sanitizes the related rows and keeps the denied value out.
+    const t = await boot();
+    const postId = await seed(t);
+
+    t.hooks.register("afterRead", POSTS, ctx => {
+      const entry = ctx.data as Record<string, unknown>;
+      const author = entry.author as Record<string, unknown> | undefined;
+      const org = author?.organization as Record<string, unknown> | undefined;
+      if (org) org.classification = "LEAKED";
+      return entry;
+    });
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    const author = expanded.data!.author as Record<string, unknown>;
+    const org = author.organization as Record<string, unknown> | undefined;
+    expect(org).toBeTruthy();
+    // The source hook's write-back was stripped by the pass after the hooks.
+    expect(org!.classification).toBeUndefined();
+  });
+
+  it("re-sanitizes a related row a source hook re-contaminates on a list read", async () => {
+    // The same re-contamination on the list path, whose source hooks run after
+    // its own finalize pass at a different call site than the detail path's. A
+    // list read walks the immediate `author` but not the author's OWN relations,
+    // so the denied field lives on the author itself here.
+    const t = await boot();
+    await seed(t);
+
+    t.hooks.register("afterRead", POSTS, ctx => {
+      const rows = (Array.isArray(ctx.data) ? ctx.data : [ctx.data]) as Record<
+        string,
+        unknown
+      >[];
+      for (const entry of rows) {
+        const author = entry.author as Record<string, unknown> | undefined;
+        if (author) author.dossier = "LEAKED";
+      }
+      return ctx.data;
+    });
+
+    const listed = await handlerOf(t).listEntries({
+      collectionName: POSTS,
+      depth: 2,
+    });
+
+    const author = listed.data!.docs[0].author as Record<string, unknown>;
+    expect(author).toBeTruthy();
+    // The source hook's write-back onto the related author was stripped by the
+    // pass after the hooks.
+    expect(author.dossier).toBeUndefined();
   });
 });

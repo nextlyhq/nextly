@@ -2998,20 +2998,29 @@ export class CollectionRelationshipService extends BaseService {
   }
 
   /**
-   * Re-apply each related row's field access after every hook has run, then
-   * rebuild the labels.
+   * Re-apply each related row's field access, then rebuild the labels.
    *
    * The walk already applied access to each row (before its parent's hooks, so a
-   * parent hook cannot read a denied child field to copy it). This runs it once
-   * more because a parent hook can REINTRODUCE a denied field onto an
-   * already-redacted child (assigning `data.child.secret` to mask or derive a
-   * value), mutate a row in place, or add/replace/reorder rows -- and without a
-   * pass after the hooks that would be returned. It re-judges the current content
-   * (a cached verdict cannot be trusted once a hook may have changed what a rule
-   * reads), restoring from the shared `redactions` what the first pass removed
-   * from each row so a rule reading a now-denied sibling as evidence still sees
-   * it -- keeping an unchanged verdict stable, as a direct read's single pass
-   * would, while judging everything a hook touched afresh.
+   * parent hook cannot read a denied child field to copy it). This runs it again
+   * because a hook can REINTRODUCE a denied field onto an already-redacted row
+   * (assigning `data.child.secret` to mask or derive a value), mutate a row in
+   * place, or add/replace/reorder rows -- and without a pass after the hooks that
+   * would be returned. It re-judges the current content (a cached verdict cannot
+   * be trusted once a hook may have changed what a rule reads), restoring from the
+   * shared `redactions` what a prior pass removed from each row so a rule reading
+   * a now-denied sibling as evidence still sees it -- keeping an unchanged verdict
+   * stable, as a direct read's single pass would, while judging everything a hook
+   * touched afresh.
+   *
+   * Called more than once per read, and safe to repeat: once after the related
+   * rows' OWN field hooks (so the source collection's hooks are handed already
+   * sanitized rows), and again after the SOURCE collection's code and stored
+   * afterRead hooks. Those hooks receive the whole assembled document and can
+   * write a denied field straight back onto a related row (`entry.author.secret`);
+   * the root-level read-access pass evaluates only the source collection's schema
+   * and never descends into a related row, so without a pass here after them the
+   * reintroduced value is returned. It leaves `pending` in place for exactly that
+   * repeat; the state is scoped to one read and discarded when it finishes.
    *
    * Labels come last of all, from the values that survived: a label copies a
    * field under another key, so one rebuilt earlier would outlive the removal of
@@ -3033,7 +3042,6 @@ export class CollectionRelationshipService extends BaseService {
     for (const { row, collection, field } of state.pending) {
       await this.refreshRelatedRowLabel(row, field, { collection }, state);
     }
-    state.pending.length = 0;
   }
 
   /**

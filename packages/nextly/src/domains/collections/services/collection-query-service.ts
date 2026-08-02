@@ -1616,6 +1616,18 @@ export class CollectionQueryService extends BaseService {
       let finalData = (storedAfterResult.data ??
         dataAfterCodeHooks) as unknown[];
 
+      // Re-apply each related row's field access after the SOURCE collection's
+      // own afterRead hooks. Those hooks are handed the whole assembled document
+      // and can write a denied target field straight back onto an already
+      // sanitized related row (`entry.author.secret`); the root read-access pass
+      // below evaluates only this collection's schema and never descends into a
+      // related row, so without this the reintroduced value is returned. Runs
+      // before selection, while the response still holds the walked row objects.
+      await this.relationshipService.finalizeRelatedRows(
+        nestedHookState,
+        nestedAccess
+      );
+
       // Apply field selection if select parameter is provided
       // This filters the response to only include requested fields
       if (params.select && Object.keys(params.select).length > 0) {
@@ -2767,15 +2779,29 @@ export class CollectionQueryService extends BaseService {
       // a root property, and before selection rebuilds the row without the
       // siblings a masking rule judges on. Every populated related row is
       // walked, including one the projection drops.
+      //
+      // The state is held here rather than left to the inline finalize so the
+      // related rows can be sanitized twice: once now (so the source collection's
+      // hooks below are handed already sanitized rows), and again after those
+      // hooks (so a denied field one of them writes back onto a related row is
+      // stripped before the response).
+      const detailNestedState =
+        this.relationshipService.createNestedHookState();
+      const detailNestedAccess = {
+        enforceFieldAccess: true,
+        user: params.user,
+        overrideAccess: params.overrideAccess,
+        authenticatedScope: params.authenticatedScope,
+      };
       await this.relationshipService.applyNestedFieldHooks(
         expandedEntry,
         params.collectionName,
-        {
-          enforceFieldAccess: true,
-          user: params.user,
-          overrideAccess: params.overrideAccess,
-          authenticatedScope: params.authenticatedScope,
-        }
+        detailNestedAccess,
+        detailNestedState
+      );
+      await this.relationshipService.finalizeRelatedRows(
+        detailNestedState,
+        detailNestedAccess
       );
 
       // Execute afterRead hooks (code-registered)
@@ -2813,6 +2839,16 @@ export class CollectionQueryService extends BaseService {
         string,
         unknown
       >;
+
+      // Re-apply each related row's field access after this collection's own
+      // afterRead hooks, for the reason given at the same point on the list path:
+      // a source hook can write a denied target field back onto an already
+      // sanitized related row, and the root read-access pass below sees only this
+      // collection's schema. Runs before selection rebuilds the related rows.
+      await this.relationshipService.finalizeRelatedRows(
+        detailNestedState,
+        detailNestedAccess
+      );
 
       // Apply field selection if select parameter is provided
       // This filters the response to only include requested fields
