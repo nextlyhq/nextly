@@ -37,6 +37,7 @@ import { typedErrorEnvelopeFields } from "../../../errors/from-service-envelope"
 import type { ValidationPublicData } from "../../../errors/public-data";
 import { emitDocumentEvent } from "../../../events/domain-events";
 import { getEventBus } from "../../../events/event-bus";
+import { recordFlattenedError } from "../../../hooks/side-effect-warnings";
 import { toSnakeCase } from "../../../lib/case-conversion";
 import { stripImmutableSystemFields } from "../../../lib/immutable-system-fields";
 import {
@@ -233,6 +234,11 @@ function errorToServiceResult<T = unknown>(
   dialect: SupportedDialect
 ): CollectionServiceResult<T> {
   if (NextlyError.is(error)) {
+    // Kept for the log before the detail is dropped below. The boundary
+    // rebuilds an error from what survives this shape, so without this the
+    // `cause` and `logContext` the thrower attached are gone before anything
+    // logs them and every unexpected failure looks alike.
+    recordFlattenedError(error);
     // Preserve per-field validation issues: the dispatcher and Direct API
     // rebuild the canonical envelope from this result, and without the
     // errors array the admin cannot map failures onto form fields.
@@ -266,6 +272,9 @@ function errorToServiceResult<T = unknown>(
   // `this.dialect` from BaseService. Normalising raw driver errors first
   // is what keeps unique/fk violations from collapsing to INTERNAL_ERROR.
   const mapped = NextlyError.fromDatabaseError(toDbError(dialect, error));
+  // The mapping is where a unique or FK violation gains the context that says
+  // WHICH constraint; the envelope below drops it, so it is kept here too.
+  recordFlattenedError(mapped);
   if (mapped.code === "INTERNAL_ERROR") {
     return {
       success: false,
@@ -6846,10 +6855,6 @@ export class CollectionMutationService extends BaseService {
         // A typed error keeps its own status and code. Hardcoding 500 reported
         // a hook's refusal or rate limit as a server fault, and left a boundary
         // nothing to rebuild it from.
-        ...(typedErrorEnvelopeFields(error) ?? {}),
-        // A typed error keeps its own status and code. Hardcoding 500 reported
-        // a delete hook's refusal or rate limit as a server fault, and left a
-        // boundary nothing to rebuild it from.
         ...(typedErrorEnvelopeFields(error) ?? {}),
         eventRecorded,
         revalidationIntent,
