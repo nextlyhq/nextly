@@ -91,3 +91,41 @@ describe("a plugin declares blocks statically", () => {
     ).rejects.toThrow(/@acme\/bad/);
   });
 });
+
+describe("a declared support is registered before the blocks that use it", () => {
+  it("registers a block opting into a support the same plugin declared", async () => {
+    // The contributing plugin's own `init` runs AFTER the page builder's, which
+    // is where declared blocks are registered, so calling `registerSupport()`
+    // there is always too late: registration refuses a block naming a support
+    // nothing knows yet, and no plugin ordering fixes it because the two happen
+    // in different passes.
+    const contributor = definePlugin({
+      name: "@acme/animated-blocks",
+      version: "1.0.0",
+      nextly: ">=0.0.0",
+      contributes: {
+        declarations: {
+          [PAGE_BUILDER_PLUGIN]: {
+            supports: [{ key: "animation", label: "Animation" }],
+            blocks: [
+              {
+                name: "acme/animated",
+                version: 1,
+                description: "Opts into a support its own plugin declared.",
+                example: { props: {} },
+                supports: { animation: true },
+                render: () => null,
+              },
+            ],
+          },
+        },
+      },
+    } as never);
+
+    current = await createTestNextly({
+      plugins: [pageBuilder(), contributor],
+    });
+
+    expect(getBlock("acme/animated")?.supports).toEqual({ animation: true });
+  });
+});

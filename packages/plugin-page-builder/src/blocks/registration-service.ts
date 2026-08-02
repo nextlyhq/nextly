@@ -14,6 +14,16 @@
  * pass 1 and `init` runs in pass 2, so a contributor calling from `init` is
  * guaranteed to reach a live registry whatever order the plugins load in.
  *
+ * **What registration buys today, and what it does not.** A registered block is
+ * known to `@nextlyhq/blocks-engine`: validation stops calling its type unknown,
+ * and generation, manifests and tooling can see it. It is NOT yet rendered. The
+ * renderer and the editor canvas resolve definitions from this package's own
+ * earlier registry, which holds none of these, so a page containing a
+ * registered type still draws the unknown-block placeholder. Bridging the two
+ * is the renderer rewrite, not a line here — and registering blocks into the
+ * engine before that bridge exists is deliberate, because validation and
+ * tooling are worth having first.
+ *
  * @module blocks/registration-service
  */
 
@@ -27,7 +37,7 @@ import {
 import type { PluginContext } from "@nextlyhq/plugin-sdk";
 import { collectDeclarations } from "nextly";
 
-import { blocksIn } from "./declared-blocks";
+import { blocksIn, supportsIn } from "./declared-blocks";
 
 /** The page builder's own name, as the cross-plugin namespace keys it. */
 export const PAGE_BUILDER_PLUGIN = "@nextlyhq/plugin-page-builder";
@@ -200,10 +210,20 @@ function isBlockRegistrationBackend(
 export function registerDeclaredBlocks(ctx: PluginContext): void {
   const service = ctx.services.plugins[PAGE_BUILDER_PLUGIN]?.[BLOCK_SERVICE];
   if (!isBlockRegistrationBackend(service)) return;
-  for (const declaration of collectDeclarations(
+  const declarations = collectDeclarations(
     ctx.config.plugins ?? [],
     PAGE_BUILDER_PLUGIN
-  )) {
+  );
+  // Supports first, across every declaration, before any block is registered.
+  // Registration refuses a block naming a support nothing knows yet, and a
+  // block declared by one plugin may use a support declared by another, so
+  // interleaving the two would make the outcome depend on plugin order.
+  for (const declaration of declarations) {
+    const { supports, error } = supportsIn(declaration);
+    if (error) throw new Error(error);
+    for (const support of supports) service.registerSupport(support);
+  }
+  for (const declaration of declarations) {
     const { blocks, error } = blocksIn(declaration);
     if (error) throw new Error(error);
     if (blocks.length > 0) service.register(blocks, declaration.source);

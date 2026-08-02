@@ -109,6 +109,18 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
+ * How a malformed support value is named in a boot error. The kind rather than
+ * the value: what is wrong with `{ padding: "yes" }` is that it is a string
+ * where a flag belongs, and printing the string alone reads like a value the
+ * flag might have accepted.
+ */
+function describeSupportValue(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "an array";
+  return `a ${typeof value}`;
+}
+
+/**
  * Check one definition against the rules registration enforces. Split out so a
  * caller can validate a definition without committing it to the registry.
  */
@@ -201,17 +213,34 @@ function assertKnownSupports(
         `block "${blockName}" declares unknown support "${key}". Register it with registerSupport() first.`
       );
     }
-    // When a support enumerates its sub-flags, an unrecognized nested flag is
-    // as much a typo as an unknown support key and would silently enable
-    // nothing, so it is rejected the same way.
-    if (support.flags && isPlainRecord(value)) {
-      for (const flag of Object.keys(value)) {
-        if (!support.flags.includes(flag)) {
-          fail(
-            "NEXTLY_BLOCK_UNKNOWN_SUPPORT",
-            `block "${blockName}" declares unknown "${key}" flag "${flag}". Known flags: ${support.flags.join(", ")}.`
-          );
-        }
+    // The VALUE is checked, not only the key. A definition can arrive from
+    // plain JavaScript or through the deliberately untyped declarations
+    // channel, where the authoring types never ran, and the style mapping
+    // enables a group only on exactly `true`: `{ spacing: { padding: "yes" } }`
+    // would register without complaint and then style nothing at all, which is
+    // the silent failure the key check already exists to prevent.
+    if (typeof value !== "boolean" && !isPlainRecord(value)) {
+      fail(
+        "NEXTLY_BLOCK_INVALID",
+        `block "${blockName}" declares support "${key}" as ${describeSupportValue(value)}. Use true, false, or an object of sub-flags.`
+      );
+    }
+    if (!isPlainRecord(value)) continue;
+    for (const [flag, flagValue] of Object.entries(value)) {
+      // When a support enumerates its sub-flags, an unrecognized nested flag is
+      // as much a typo as an unknown support key and would silently enable
+      // nothing, so it is rejected the same way.
+      if (support.flags && !support.flags.includes(flag)) {
+        fail(
+          "NEXTLY_BLOCK_UNKNOWN_SUPPORT",
+          `block "${blockName}" declares unknown "${key}" flag "${flag}". Known flags: ${support.flags.join(", ")}.`
+        );
+      }
+      if (typeof flagValue !== "boolean") {
+        fail(
+          "NEXTLY_BLOCK_INVALID",
+          `block "${blockName}" declares "${key}" flag "${flag}" as ${describeSupportValue(flagValue)}. Use true or false.`
+        );
       }
     }
   }
