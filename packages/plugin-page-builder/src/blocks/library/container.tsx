@@ -67,7 +67,7 @@ export const CONTENT_WIDTH_CLASS = "nx-pb-contained";
  */
 export function renderContainer({
   props,
-  slots,
+  renderSlot,
   className,
 }: BlockRenderArgs<ContainerProps>): ReactElement {
   const Tag = props.as ?? "div";
@@ -75,5 +75,7 @@ export function renderContainer({
     props.contained === true
       ? `${className} ${CONTENT_WIDTH_CLASS}`
       : className;
-  return <Tag className={classes}>{slots.children as ReactElement}</Tag>;
+  return (
+    <Tag className={classes}>{renderSlot("children") as ReactElement}</Tag>
+  );
 }

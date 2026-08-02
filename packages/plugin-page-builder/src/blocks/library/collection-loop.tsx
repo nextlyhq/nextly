@@ -31,8 +31,6 @@ import { defineBlock } from "@nextlyhq/plugin-sdk/blocks";
 import type { BlockRenderArgs } from "@nextlyhq/plugin-sdk/blocks";
 import type { ReactElement } from "react";
 
-import type { PageContext } from "../context";
-
 export interface CollectionLoopProps {
   /** The collection queried. */
   collection?: string;
@@ -44,17 +42,19 @@ export interface CollectionLoopProps {
 
 export async function renderCollectionLoop({
   props,
-  slots,
+  renderSlot,
   className,
   ctx,
-}: BlockRenderArgs<CollectionLoopProps, PageContext>): Promise<ReactElement> {
+}: BlockRenderArgs<CollectionLoopProps>): Promise<ReactElement> {
   const { collection } = props;
   const { data } = ctx;
   if (collection === undefined || data === undefined) {
     // Nothing to query against, so the block renders its template once rather
     // than vanishing: an author placing a loop before choosing a collection
     // still sees what they are building.
-    return <div className={className}>{slots.children as ReactElement}</div>;
+    return (
+      <div className={className}>{renderSlot("children") as ReactElement}</div>
+    );
   }
   let items: Record<string, unknown>[] = [];
   try {
@@ -72,14 +72,17 @@ export async function renderCollectionLoop({
     <div className={className}>
       {items.map((item, index) => (
         <div key={typeof item.id === "string" ? item.id : index}>
-          {slots.children as ReactElement}
+          {/* Drawn again per entry, with this entry on the context, so anything
+              inside the template reads its own values rather than the first
+              entry's. */}
+          {renderSlot("children", { ...ctx, item }) as ReactElement}
         </div>
       ))}
     </div>
   );
 }
 
-export const collectionLoop = defineBlock<CollectionLoopProps, PageContext>({
+export const collectionLoop = defineBlock<CollectionLoopProps>({
   name: "core/collection-loop",
   version: 1,
   description:

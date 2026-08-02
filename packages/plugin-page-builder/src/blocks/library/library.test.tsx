@@ -8,10 +8,13 @@ import {
   registerBlocks,
 } from "@nextlyhq/blocks-engine";
 import type { BlockNode } from "@nextlyhq/blocks-engine";
-import type { BlockRenderArgs } from "@nextlyhq/plugin-sdk/blocks";
+import type {
+  BlockRenderArgs,
+  BlockRenderContext,
+} from "@nextlyhq/plugin-sdk/blocks";
 import type { ReactElement } from "react";
 
-import type { DataProvider, PageContext } from "../context";
+import type { DataProvider } from "../context";
 
 import { box } from "./box";
 import { collectionLoop, renderCollectionLoop } from "./collection-loop";
@@ -21,13 +24,30 @@ import { section } from "./section";
 
 const NODE: BlockNode = { id: "n1", type: "core/box", version: 1, props: {} };
 
-function args<P, C>(props: P, ctx: C): BlockRenderArgs<P, C> {
+/**
+ * Render arguments whose slot draws what it is asked to draw.
+ *
+ * The stub echoes the entry on the context it was handed, which is the only way
+ * to tell a slot drawn once per entry from one drawn once and copied: identical
+ * output either way, unless the output depends on the entry.
+ */
+function args<P>(
+  props: P,
+  ctx: BlockRenderContext = {}
+): BlockRenderArgs<P> & { drawnWith: BlockRenderContext[] } {
+  const drawnWith: BlockRenderContext[] = [];
   return {
     props,
     node: NODE,
-    slots: { children: <span>child</span> },
     className: "nx-n1",
     ctx,
+    drawnWith,
+    renderSlot: (_name: string, override?: BlockRenderContext) => {
+      const used = override ?? ctx;
+      drawnWith.push(used);
+      const title = used.item?.title;
+      return <span>{typeof title === "string" ? title : "child"}</span>;
+    },
   };
 }
 
@@ -51,7 +71,7 @@ function stubProvider(items: Record<string, unknown>[]): {
 describe("the container presets", () => {
   it("renders the tag it is told to and no wrapper around it", () => {
     const html = renderToStaticMarkup(
-      renderContainer(args<ContainerProps, unknown>({ as: "section" }, {}))
+      renderContainer(args<ContainerProps>({ as: "section" }))
     );
     // One element carrying the generated class, with the slot inside it: a
     // wrapper here would break the one-selector-per-node contract the compiler
@@ -61,22 +81,18 @@ describe("the container presets", () => {
 
   it("adds the content-width class only when contained", () => {
     const contained = renderToStaticMarkup(
-      renderContainer(
-        args<ContainerProps, unknown>({ as: "div", contained: true }, {})
-      )
+      renderContainer(args<ContainerProps>({ as: "div", contained: true }))
     );
     expect(contained).toContain(CONTENT_WIDTH_CLASS);
     const full = renderToStaticMarkup(
-      renderContainer(
-        args<ContainerProps, unknown>({ as: "div", contained: false }, {})
-      )
+      renderContainer(args<ContainerProps>({ as: "div", contained: false }))
     );
     expect(full).not.toContain(CONTENT_WIDTH_CLASS);
   });
 
   it("defaults to a div, so a preset that names no tag still renders", () => {
     const html = renderToStaticMarkup(
-      renderContainer(args<ContainerProps, unknown>({}, {}))
+      renderContainer(args<ContainerProps>({}))
     );
     expect(html.startsWith("<div ")).toBe(true);
   });
@@ -102,7 +118,7 @@ describe("core/collection-loop", () => {
   it("repeats its template once per entry", async () => {
     const { provider, calls } = stubProvider([{ id: "a" }, { id: "b" }]);
     const element = await renderCollectionLoop(
-      args<{ collection?: string; limit?: number }, PageContext>(
+      args<{ collection?: string; limit?: number }>(
         { collection: "posts", limit: 5 },
         { data: provider }
       )
@@ -115,7 +131,7 @@ describe("core/collection-loop", () => {
   it("passes a sort through only when one is set", async () => {
     const { provider, calls } = stubProvider([]);
     await renderCollectionLoop(
-      args<{ collection?: string; sort?: string }, PageContext>(
+      args<{ collection?: string; sort?: string }>(
         { collection: "posts", sort: "-publishedAt" },
         { data: provider }
       )
@@ -130,7 +146,7 @@ describe("core/collection-loop", () => {
   it("renders its template once while no collection is chosen", async () => {
     const { provider, calls } = stubProvider([{ id: "a" }, { id: "b" }]);
     const element = await renderCollectionLoop(
-      args<{ collection?: string }, PageContext>({}, { data: provider })
+      args<{ collection?: string }>({}, { data: provider })
     );
     const html = renderToStaticMarkup(element);
     // An author who has placed the loop but not chosen a collection still sees
@@ -141,7 +157,7 @@ describe("core/collection-loop", () => {
 
   it("renders its template once when the renderer supplies no data source", async () => {
     const element = await renderCollectionLoop(
-      args<{ collection?: string }, PageContext>({ collection: "posts" }, {})
+      args<{ collection?: string }>({ collection: "posts" }, {})
     );
     expect(renderToStaticMarkup(element)).toContain("<span>child</span>");
   });
@@ -151,10 +167,7 @@ describe("core/collection-loop", () => {
       find: () => Promise.reject(new Error("no database")),
     };
     const element = await renderCollectionLoop(
-      args<{ collection?: string }, PageContext>(
-        { collection: "posts" },
-        { data: failing }
-      )
+      args<{ collection?: string }>({ collection: "posts" }, { data: failing })
     );
     const html = renderToStaticMarkup(element);
     // The page survives a data source it cannot reach: this block goes empty,
@@ -167,10 +180,7 @@ describe("core/collection-loop", () => {
     // fixed key would do the moment a collection has no id field.
     const { provider } = stubProvider([{ title: "x" }, { title: "y" }]);
     const element = await renderCollectionLoop(
-      args<{ collection?: string }, PageContext>(
-        { collection: "posts" },
-        { data: provider }
-      )
+      args<{ collection?: string }>({ collection: "posts" }, { data: provider })
     );
     const children = (
       element as ReactElement<{ children: ReactElement<unknown>[] }>
@@ -178,31 +188,38 @@ describe("core/collection-loop", () => {
     expect(children.map(child => child.key)).toEqual(["0", "1"]);
   });
 
-  it("repeats one already-rendered template rather than re-rendering it", async () => {
-    // The limitation stated in this block's own docs, asserted so it is visible
-    // in the suite instead of being discovered by whoever first tries to list
-    // content with it. `slots.children` arrives rendered, so every iteration is
-    // the same element and no child can show its own entry's fields. Closing
-    // that gap means changing what a slot is, not changing this file.
+  it("draws its template again per entry, under that entry's context", async () => {
+    // The point of a slot being something a block DRAWS. Drawn once and copied,
+    // every row would read "child"; drawn per entry with that entry named on
+    // the context, each row reads its own title.
     const { provider } = stubProvider([
       { id: "a", title: "First" },
       { id: "b", title: "Second" },
     ]);
-    const element = await renderCollectionLoop(
-      args<{ collection?: string }, PageContext>(
-        { collection: "posts" },
-        { data: provider }
-      )
+    const rendered = args<{ collection?: string }>(
+      { collection: "posts" },
+      { data: provider }
     );
-    const html = renderToStaticMarkup(element);
-    expect(html).toBe(
-      '<div class="nx-n1">' +
-        "<div><span>child</span></div>".repeat(2) +
-        "</div>"
-    );
-    // Neither entry's own field appears anywhere, which is the whole finding.
-    expect(html).not.toContain("First");
-    expect(html).not.toContain("Second");
+    const html = renderToStaticMarkup(await renderCollectionLoop(rendered));
+    expect(html).toContain("First");
+    expect(html).toContain("Second");
+    // The surrounding context is carried through, not replaced wholesale: a
+    // block deeper in the template can still reach the data source.
+    expect(rendered.drawnWith.map(c => c.item?.title)).toEqual([
+      "First",
+      "Second",
+    ]);
+    expect(rendered.drawnWith.every(c => c.data === provider)).toBe(true);
+  });
+
+  it("draws nothing until it is asked to", async () => {
+    // Laziness is the other half of the change: a slot that is never drawn
+    // costs nothing, which is what lets a block show one panel out of four
+    // without paying for the three it hides.
+    const rendered = args<{ collection?: string }>({ collection: "posts" }, {});
+    expect(rendered.drawnWith).toEqual([]);
+    await renderCollectionLoop(rendered);
+    expect(rendered.drawnWith.length).toBeGreaterThan(0);
   });
 
   it("locks its template to content-only editing", () => {

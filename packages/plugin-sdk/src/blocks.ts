@@ -29,6 +29,7 @@
 
 import type {
   BlockDefinition as EngineBlockDefinition,
+  BlockRenderArgs as EngineBlockRenderArgs,
   BlockSupportValue,
 } from "@nextlyhq/blocks-engine";
 
@@ -101,6 +102,51 @@ export type BlockSupports = Partial<
 >;
 
 /**
+ * Everything a renderer makes available to every block it draws.
+ *
+ * ONE description per app, rather than each block inventing its own. A block
+ * author writes `defineBlock<MyProps>` and `ctx` is already typed as whatever
+ * this app's renderer provides, with no type written by hand; a block that
+ * needs something unusual has to add it here, which is an app-wide statement
+ * anyone can see rather than a quiet assumption inside one file.
+ *
+ * A renderer declares what it supplies by augmenting this from its own package:
+ *
+ * ```ts
+ * declare module "@nextlyhq/plugin-sdk/blocks" {
+ *   interface BlockRenderContext {
+ *     data?: DataProvider;
+ *   }
+ * }
+ * ```
+ *
+ * `locale` is here because every renderer of localized content has one, and a
+ * block that varies its own output by language should not have to reach past
+ * this interface to find out which.
+ *
+ * @experimental Carried by the same freeze as `defineBlock`.
+ */
+export interface BlockRenderContext {
+  /** The locale being rendered, when the renderer is rendering one. */
+  locale?: string;
+}
+
+/**
+ * What a block's `render` receives.
+ *
+ * The engine's own version leaves the context unnamed, because the engine does
+ * not know what any renderer provides. This one defaults it to what THIS app's
+ * renderer provides, which is what lets a block read `ctx.data` without its
+ * author writing a type to say so.
+ *
+ * @experimental Carried by the same freeze as `defineBlock`.
+ */
+export type BlockRenderArgs<P, C = BlockRenderContext> = EngineBlockRenderArgs<
+  P,
+  C
+>;
+
+/**
  * One block type, as an author writes it.
  *
  * The engine's own definition leaves `supports` open, because its registry holds
@@ -112,7 +158,7 @@ export type BlockSupports = Partial<
  */
 export interface BlockDefinition<
   P extends object = Record<string, unknown>,
-  C = unknown,
+  C = BlockRenderContext,
 > extends Omit<EngineBlockDefinition<P, C>, "supports"> {
   supports?: BlockSupports;
 }
@@ -128,7 +174,7 @@ export interface BlockDefinition<
  *   now. Until then a contributed block may need changes when the definition
  *   shape settles.
  */
-export function defineBlock<P extends object, C = unknown>(
+export function defineBlock<P extends object, C = BlockRenderContext>(
   definition: BlockDefinition<P, C>
 ): BlockDefinition<P, C> {
   return definition;
@@ -140,7 +186,6 @@ export function defineBlock<P extends object, C = unknown>(
  */
 export type {
   AnyBlockDefinition,
-  BlockRenderArgs,
   BlockRenderResult,
   InferBlockProps,
   PropSchema,
