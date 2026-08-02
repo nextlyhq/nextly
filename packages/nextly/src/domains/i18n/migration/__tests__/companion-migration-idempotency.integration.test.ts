@@ -26,7 +26,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { NextlyError } from "../../../../errors/nextly-error";
 import { runFileMigrations } from "../../../../cli/commands/migrate";
+import { DynamicCollectionSchemaService } from "../../../dynamic-collections/services/dynamic-collection-schema-service";
+import { splitStatements } from "../../../schema/pipeline/sql-statement-utils";
 import { getSchemaEventsDdl } from "../../../schema/events/schema-events-ddl";
 import {
   buildLocalizationUpSql,
@@ -96,13 +99,28 @@ for (const entry of DIALECTS) {
       }
     }
 
-    /** The main table with two rows of real content, as a pre-localization project has it. */
+    /**
+     * The main table with two rows of real content, as a pre-localization project has it.
+     *
+     * Built by the production collection generator rather than a hand-written CREATE: a copied
+     * definition drifts from the shape Nextly actually creates, and the test would then exercise a
+     * layout no real database has.
+     */
     async function createMainWithContent(): Promise<void> {
-      await adapter.executeQuery(
-        `CREATE TABLE ${q(mainTable)} (${q("id")} TEXT PRIMARY KEY, ${q("title")} TEXT)`
+      const schemaService = new DynamicCollectionSchemaService(
+        undefined,
+        entry.dialect
       );
+      for (const statement of splitStatements([
+        schemaService.generateMigrationSQL(mainTable, [
+          { name: "title", type: "text" },
+        ] as never),
+      ])) {
+        await adapter.executeQuery(statement);
+      }
       await adapter.executeQuery(
-        `INSERT INTO ${q(mainTable)} (${q("id")}, ${q("title")}) VALUES ('p1', 'Hello'), ('p2', 'World')`
+        `INSERT INTO ${q(mainTable)} (${q("id")}, ${q("title")}, ${q("slug")}) ` +
+          `VALUES ('p1', 'Hello', 'p1'), ('p2', 'World', 'p2')`
       );
     }
 
@@ -192,52 +210,56 @@ for (const entry of DIALECTS) {
       expect(rows.map(r => r.title)).toEqual(["Hello", "World"]);
     });
 
-    // 🔴 The recovery path, modelled as the interruption that actually produces it.
+    // 🔴 What an emitted file does when the companion already holds default-locale rows: it stops
+    // loudly, and main is left intact.
     //
-    // The file is applied statement by statement with no enclosing transaction, and MySQL commits
-    // DDL implicitly regardless, so a failure part-way commits the statements before it and leaves
-    // the file recorded as NOT applied. The operator re-runs `migrate`, which replays the whole
-    // file. Here the run is interrupted after the seed and before the drops — the widest window,
-    // because the seed is the statement a replay would otherwise collide on.
-    //
-    // Note what is NOT asserted: replaying a COMPLETED migration. That state is unreachable (the
-    // journal skips applied files) and could not be made to work anyway — the drops have removed
-    // the columns the seed reads, so the source data is gone by construction. Idempotency here
-    // means "safe to re-run from the states an interruption can leave", not "the drops are
-    // reversible".
-    it("resumes after an interruption between the seed and the drops", async () => {
+    // The file cannot know whether those rows are an interrupted copy to keep or the stale remains
+    // of a disable, with main authoritative ever since — only the transition record says, and a
+    // static file has none. Skipping them and proceeding to the drops would silently revert every
+    // edit made while localization was off. Colliding costs a re-run; guessing costs data.
+    it("stops on an already-seeded companion instead of dropping main's columns", async () => {
       const statements = buildLocalizationUpStatements(spec());
       for (const statement of statements) {
         if (statement.includes("DROP COLUMN")) break;
         await adapter.executeQuery(statement);
       }
-      // The interrupted run got as far as a fully seeded companion.
       expect(await companionRows()).toHaveLength(2);
 
-      // The replay: every statement again, including the two that already ran.
-      await expect(migrate()).resolves.toBe(1);
+      await expect(migrate()).rejects.toThrow();
 
-      const rows = await companionRows();
-      expect(rows).toHaveLength(2);
-      expect(rows.map(r => r.title)).toEqual(["Hello", "World"]);
+      // The load-bearing half: nothing was dropped, so the operator still has every value.
+      const main = await adapter.executeQuery<Record<string, unknown>>(
+        `SELECT ${q("title")} FROM ${q(mainTable)} ORDER BY ${q("id")}`
+      );
+      expect(main.map(r => r.title)).toEqual(["Hello", "World"]);
     });
 
-    // A partially seeded companion — the state an interrupted copy leaves — must keep the row it
-    // has and gain only the one it is missing. That is why the guard is row-level rather than a
-    // table-level "skip the seed if the companion has any rows at all".
-    it("completes a partially seeded companion rather than skipping it", async () => {
+    // The guard belongs to the runtime, which HAS read the transition record. Driven through the
+    // generated statements so the property is asserted against a real server rather than a string.
+    it("completes a partially seeded companion when the caller asks for the guard", async () => {
       await createCompanionAsBootDoes();
       await adapter.executeQuery(
         `INSERT INTO ${q(companionTable)} (${q("_parent")}, ${q("_locale")}, ${q("title")}) ` +
           `VALUES ('p1', 'en', 'Edited since')`
       );
 
-      await expect(migrate()).resolves.toBe(1);
+      const plan = buildLocalizationUpStatements(spec(), {
+        guardSeed: true,
+        dropSeededColumns: false,
+      });
+      // The CREATE is dropped exactly as `resumeInterruptedSeed` drops it: the interrupted run
+      // already made the table, and the runtime form is deliberately not `IF NOT EXISTS` so that
+      // `ensureCompanionTable` can still detect a lost create race.
+      for (const statement of plan.filter(
+        statement => !statement.startsWith("CREATE TABLE")
+      )) {
+        await adapter.executeQuery(statement);
+      }
 
       const rows = await companionRows();
       expect(rows).toHaveLength(2);
-      // The existing row is kept as it stands, not overwritten from main: it may hold an edit made
-      // after the interrupted copy, and main stopped being the authority the moment it was written.
+      // The row already present is kept as it stands: it may hold an edit made after the
+      // interrupted copy, and re-copying from main would discard it.
       expect(rows.map(r => r.title)).toEqual(["Edited since", "World"]);
     });
   });
