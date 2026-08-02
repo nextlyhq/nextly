@@ -22,6 +22,6 @@
 "@nextlyhq/tsconfig": patch
 ---
 
-The admin now calls field groups "field groups" everywhere it used to say "components".
+The admin now calls field groups "field groups" in the places that used to say "components".
 
-The field picker, the Schema Builder's field-group editor, the entry form, the entries table badge and the Field Groups list all carried the old wording, so a page titled "Field Groups" could tell you that you had selected components. Only the words changed: the stored field type, table names and API payloads are untouched, so no data or integration is affected.
+The field picker, the Schema Builder's field-group editor, the entry form, the entries table badge, the Field Groups list and its empty states, and the dashboard's getting-started panel all carried the old wording, so a page titled "Field Groups" could tell you that you had selected components. Only the words changed: the stored field type, table names and API payloads are untouched, so no data or integration is affected.
