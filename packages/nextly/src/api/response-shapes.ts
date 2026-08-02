@@ -9,7 +9,7 @@
  *   respondList         to { items, meta }                   (paginated find)
  *   respondDoc          to T (bare)                          (findByID)
  *   respondMutation     to { message, item, warnings? }      (create/update/delete)
- *   respondAction       to { message, ...result }            (non-CRUD mutation)
+ *   respondAction       to { message, warnings?, ...result } (non-CRUD mutation)
  *   respondData         to T (bare object)                   (non-CRUD read)
  *   respondCount        to { total }                         (count)
  *   respondBulk         to { message, items, errors, warnings? } (bulk by id)
@@ -102,7 +102,19 @@ export function respondAction(
   result: Record<string, unknown> = {},
   init?: ResponseInit
 ): Response {
-  return jsonResponse({ message, ...result }, init);
+  // Some actions ARE writes: a version restore calls the ordinary update path,
+  // so its post-commit hooks run and can fail. Reporting a durable restore as
+  // an unqualified success would hide exactly the side effect this reports.
+  //
+  // A caller-supplied `warnings` key wins, so an action that computes its own
+  // is not overwritten by the ambient ones.
+  const warnings = currentSideEffectWarnings();
+  return jsonResponse(
+    warnings.length > 0
+      ? { message, warnings, ...result }
+      : { message, ...result },
+    init
+  );
 }
 
 /**

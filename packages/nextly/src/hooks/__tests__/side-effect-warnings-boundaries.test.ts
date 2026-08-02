@@ -11,7 +11,11 @@
 
 import { describe, expect, it } from "vitest";
 
-import { respondBulk, respondBulkUpload } from "../../api/response-shapes";
+import {
+  respondAction,
+  respondBulk,
+  respondBulkUpload,
+} from "../../api/response-shapes";
 import { withErrorHandler } from "../../api/with-error-handler";
 import { NextlyError } from "../../errors/nextly-error";
 import {
@@ -89,5 +93,42 @@ describe("the standalone handler boundary opens the scope", () => {
     // throwing, so internal work with no caller to report to still runs.
     expect(() => recordSideEffectWarning(failure())).not.toThrow();
     expect(currentSideEffectWarnings()).toHaveLength(0);
+  });
+});
+
+describe("the action envelope carries them too", () => {
+  it("respondAction includes warnings when a hook failed", async () => {
+    // Some actions ARE writes: a version restore goes through the ordinary
+    // update path, so its post-commit hooks run and can fail. Serializing that
+    // as an unqualified success hides the side effect that did not happen.
+    const { result } = await withSideEffectWarnings(async () => {
+      recordSideEffectWarning(failure());
+      return respondAction("Restored.", { versionId: "v1" });
+    });
+
+    const body = (await result.json()) as Record<string, unknown>;
+    expect(body.warnings).toHaveLength(1);
+    // The action's own payload survives beside them.
+    expect(body.versionId).toBe("v1");
+  });
+
+  it("lets an action's own warnings win over the ambient ones", async () => {
+    // The spread puts `result` last, so a caller that computes its own
+    // `warnings` is not silently overwritten by the collector's.
+    const { result } = await withSideEffectWarnings(async () => {
+      recordSideEffectWarning(failure());
+      return respondAction("Done.", { warnings: ["mine"] });
+    });
+
+    const body = (await result.json()) as { warnings: unknown[] };
+    expect(body.warnings).toEqual(["mine"]);
+  });
+
+  it("omits the field when nothing failed", async () => {
+    const { result } = await withSideEffectWarnings(async () =>
+      respondAction("Done.", { versionId: "v1" })
+    );
+    const body = (await result.json()) as Record<string, unknown>;
+    expect("warnings" in body).toBe(false);
   });
 });

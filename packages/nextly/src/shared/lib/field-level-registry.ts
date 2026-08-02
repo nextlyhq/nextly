@@ -26,6 +26,9 @@
  * @module shared/lib/field-level-registry
  */
 
+import { NextlyError } from "../../errors/nextly-error";
+import { normalizeHookError } from "../../hooks/normalize-hook-error";
+import { recordSideEffectWarning } from "../../hooks/side-effect-warnings";
 import type { FieldHookHandler } from "../../hooks/types";
 
 import { detachData } from "./detach";
@@ -426,6 +429,57 @@ async function runFieldHooksRec(
     if (!handlers?.length) continue;
     let value = data[name];
     for (const handler of handlers) {
+      // `afterChange` runs once the row is durable, so a handler throwing
+      // there cannot un-save it. Letting it propagate failed the whole write
+      // -- and in a bulk operation classified a committed row as failed,
+      // which is the retry-duplicates-the-write hazard the collection-level
+      // phases already avoid. Field-level handlers get the same treatment:
+      // normalize, report, and keep going, so one broken handler does not
+      // silently skip the ones after it.
+      //
+      // Every other phase runs BEFORE the write and keeps failing fast: there
+      // the throw is the handler rejecting the input, and the operation has
+      // not happened yet.
+      if (phase === "afterChange") {
+        try {
+          const result = await handler({
+            collection: ctx.slug,
+            operation: ctx.operation,
+            fieldName: name,
+            value,
+            data,
+            user: ctx.user,
+          });
+          if (result !== undefined) value = result;
+        } catch (error) {
+          // The registry has no `afterChange` phase: it maps onto
+          // `afterCreate` / `afterUpdate`, and the operation says which. A
+          // warning naming a phase the registry does not have would not match
+          // what a collection-level handler on the same write reports.
+          const committedPhase =
+            ctx.operation === "create" ? "afterCreate" : "afterUpdate";
+          const normalized = normalizeHookError(
+            error,
+            committedPhase,
+            ctx.slug,
+            { fieldName: name }
+          );
+          console.error(
+            `Field hook "afterChange" failed for "${ctx.slug}.${name}" after the write committed:`,
+            normalized
+          );
+          recordSideEffectWarning({
+            phase: committedPhase,
+            collection: ctx.slug,
+            error: NextlyError.is(normalized)
+              ? normalized
+              : NextlyError.internal({
+                  logContext: { collection: ctx.slug, fieldName: name },
+                }),
+          });
+        }
+        continue;
+      }
       const result = await handler({
         collection: ctx.slug,
         operation: ctx.operation,

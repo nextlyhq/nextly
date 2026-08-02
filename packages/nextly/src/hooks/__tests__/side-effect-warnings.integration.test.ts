@@ -220,3 +220,50 @@ describe("every mutation shape reports its failures, not just the single-item on
     expect(JSON.stringify(result)).not.toContain("bulk-secret");
   });
 });
+
+describe("a field-level afterChange failure does not fail the write", () => {
+  it("saves the row, reports the warning, and does not throw", async () => {
+    // The behaviour half of gap L, not just the reporting half. A field-level
+    // `afterChange` runs once the row is durable, but it propagated: the
+    // service returned an error for a write that had happened, and a bulk
+    // operation classified a committed row as failed. That is the
+    // retry-duplicates-the-write hazard the collection-level phases already
+    // avoid, reached through the field-level door.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "notes",
+          fields: [
+            text({
+              name: "body",
+              hooks: {
+                afterChange: [
+                  () => {
+                    throw NextlyError.internal({
+                      logContext: { detail: "field-secret" },
+                    });
+                  },
+                ],
+              },
+            }),
+          ],
+        }),
+      ],
+    });
+
+    const created = await current.nextly.create({
+      collection: "notes",
+      data: { title: "kept", body: "kept" },
+    });
+
+    // The write stands.
+    expect(created.item).toBeDefined();
+    // And the failure is reported rather than swallowed.
+    expect(created.warnings).toHaveLength(1);
+    expect(created.warnings?.[0]).toMatchObject({
+      phase: "afterCreate",
+      collection: "notes",
+    });
+    expect(JSON.stringify(created.warnings)).not.toContain("field-secret");
+  });
+});
