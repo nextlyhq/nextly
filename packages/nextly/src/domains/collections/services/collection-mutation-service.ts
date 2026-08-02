@@ -38,6 +38,7 @@ import type { ValidationPublicData } from "../../../errors/public-data";
 import { emitDocumentEvent } from "../../../events/domain-events";
 import { getEventBus } from "../../../events/event-bus";
 import { toSnakeCase } from "../../../lib/case-conversion";
+import { stripImmutableSystemFields } from "../../../lib/immutable-system-fields";
 import {
   resolveFirstPublishedStamp,
   resolvePublishTransition,
@@ -277,46 +278,6 @@ function errorToServiceResult<T = unknown>(
     message: mapped.publicMessage,
     data: null,
   };
-}
-
-/**
- * System columns a client must never write: the primary key, the timestamps,
- * the owner stamp, and the first-publication marker (both the snake_case column
- * name and the camelCase form a client might send). They are not declared
- * fields, so field validation passes
- * them through. Stripping them on BOTH create and update means the service
- * remains authoritative: on create the generated id / stamped `created_by` /
- * timestamps win (a stray `createdBy` alias can't survive the snake-case pass
- * and overwrite the stamp with an attacker-chosen owner), and on update an
- * authorized updater can't transfer a row to another user, forge `created_at`,
- * duplicate `updated_at`, or reassign `id`.
- *
- * `first_published_at` is here for a reason the others are not: it is meant to
- * be written once and never moved, and a value taken from the request would
- * make that guarantee decorative. A draft create could claim a publication that
- * never happened, and any later update could reset a real one. The service's own
- * stamps are applied AFTER this strip, so they still land.
- */
-const IMMUTABLE_SYSTEM_FIELDS = new Set([
-  "id",
-  "created_at",
-  "createdAt",
-  "updated_at",
-  "updatedAt",
-  "created_by",
-  "createdBy",
-  "first_published_at",
-  "firstPublishedAt",
-]);
-
-function stripImmutableSystemFields(
-  data: Record<string, unknown>
-): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(data)) {
-    if (!IMMUTABLE_SYSTEM_FIELDS.has(key)) out[key] = value;
-  }
-  return out;
 }
 
 /**

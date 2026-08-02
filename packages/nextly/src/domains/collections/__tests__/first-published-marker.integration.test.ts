@@ -8,6 +8,8 @@
  * trip, so these run against a real database rather than asserting on statement text: what matters
  * is the value that is still there after the unpublish committed.
  */
+import assert from "node:assert/strict";
+
 import { afterEach, describe, expect, it } from "vitest";
 
 import { defineCollection, defineSingle, text } from "../../../config";
@@ -475,6 +477,61 @@ describe("first_published_at", () => {
     expect(read).toBeTruthy();
   });
 
+  it("ignores a marker supplied by the client on a Single", async () => {
+    // A Single's writer had no immutable-field stripping at all, so a supplied value reached the
+    // row: a draft update could invent a publication date, and an update to an already-published
+    // Single could reset a real one, since the stamp only replaces the value during a first
+    // publication. Both spellings, because the write snake-cases its keys before storing.
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "banner",
+          status: true,
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const singles = current.getService("singleEntryService");
+
+    await singles.update(
+      "banner",
+      {
+        title: "hi",
+        status: "draft",
+        firstPublishedAt: new Date("1999-01-01T00:00:00.000Z"),
+        first_published_at: new Date("1999-01-01T00:00:00.000Z"),
+      },
+      { overrideAccess: true }
+    );
+    expect(
+      (await tableRows(current, "single_banner"))[0]?.first_published_at
+    ).toBeFalsy();
+
+    // And a real marker cannot be overwritten once the Single has been published.
+    await singles.update(
+      "banner",
+      { status: "published" },
+      { overrideAccess: true }
+    );
+    const stamped = String(
+      (await tableRows(current, "single_banner"))[0]?.first_published_at
+    );
+
+    await singles.update(
+      "banner",
+      {
+        title: "edited",
+        firstPublishedAt: new Date("1999-01-01T00:00:00.000Z"),
+        first_published_at: new Date("1999-01-01T00:00:00.000Z"),
+      },
+      { overrideAccess: true }
+    );
+
+    expect(
+      String((await tableRows(current, "single_banner"))[0]?.first_published_at)
+    ).toBe(stamped);
+  });
+
   it("keeps a Single's marker across an unpublish and a republish", async () => {
     // Same set-once guarantee collections get. Backdated first, because both publications
     // otherwise land inside the same second and these columns store no finer resolution — the
@@ -496,12 +553,12 @@ describe("first_published_at", () => {
       { overrideAccess: true }
     );
     const singleId = (await tableRows(current, "single_banner"))[0]?.id;
-    // Narrowed rather than asserted: the row is read back as `Record<string, unknown>`, and a
-    // missing id would otherwise reach the adapter as an undefined bind parameter and update
-    // every row, which is not the thing this test means to set up.
-    if (typeof singleId !== "string") {
-      throw new Error("single_banner row has no id");
-    }
+    // Narrowed rather than asserted loosely: the row is read back as `Record<string, unknown>`,
+    // and a missing id would otherwise reach the adapter as an undefined bind parameter and
+    // update every row, which is not the setup this test intends. `node:assert` narrows the type
+    // through its `asserts` signature, so the value is usable without a cast and without a bare
+    // throw.
+    assert(typeof singleId === "string", "single_banner row has no id");
     await current.adapter.update(
       "single_banner",
       { first_published_at: new Date("2020-01-01T00:00:00.000Z") },

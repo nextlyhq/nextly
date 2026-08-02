@@ -30,6 +30,7 @@ import type { RBACAccessControlService } from "../../../domains/auth/services/rb
 import { NextlyError } from "../../../errors/nextly-error";
 import type { HookRegistry } from "../../../hooks/hook-registry";
 import { keysToSnakeCase } from "../../../lib/case-conversion";
+import { stripImmutableSystemFields } from "../../../lib/immutable-system-fields";
 import {
   resolvePublishTransition,
   stripUndefinedStatus,
@@ -867,15 +868,17 @@ export class SingleMutationService extends BaseService {
       // 7. Serialize JSON fields for storage
       const serializedData = serializeJsonFields(currentData, fieldConfigs);
 
-      // 8. Remove id and createdAt from update data (if present)
-      delete serializedData.id;
-      delete serializedData.createdAt;
-
-      // 9. Update document in database
-      const snakeCaseData = keysToSnakeCase(serializedData) as Record<
-        string,
-        unknown
-      >;
+      // 8. Update document in database.
+      //
+      // System columns are dropped AFTER snake-casing, so a caller cannot reach one by choosing
+      // its other spelling: `firstPublishedAt` and `first_published_at` both arrive here as the
+      // physical column name and both are refused. This previously removed `id` and `createdAt`
+      // only, which left `updatedAt` and the first-publication marker writable from the request —
+      // and the marker is meant to be set once, so a caller able to supply it could date a
+      // publication that never happened or overwrite a real one.
+      const snakeCaseData = stripImmutableSystemFields(
+        keysToSnakeCase(serializedData) as Record<string, unknown>
+      );
       // Commit the scalar update, the component subtree writes, the companion
       // upsert, AND the version snapshot atomically so any failure rolls back the
       // others (no partial single/localized/version state). The rows are RETURNED
