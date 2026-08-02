@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { BlockDocument, BlockNode } from "../document";
 import { MAX_BREAKPOINTS_PER_AXIS } from "../document";
+import { DEFAULT_LIMITS } from "../limits";
 import { validate } from "../validation";
 import { FIXTURE_BREAKPOINTS } from "../validation.fixtures";
 
@@ -803,10 +804,16 @@ describe("the compiler fails closed", () => {
 });
 
 describe("a forest deeper than the stack", () => {
-  it("compiles rather than overflowing", () => {
+  it("compiles rather than overflowing, and stops at the document limits", () => {
     // A stored document is not required to have been validated before it is
     // compiled, so a deeply nested slot chain must return a stylesheet rather
     // than fail the request with a RangeError.
+    //
+    // Iterating instead of recursing is only half of that. Every queued level
+    // retains the cumulative pointer to it, so a chain this deep holds path
+    // text growing with its own depth at every level; walking it all would
+    // trade a stack overflow for a memory one. It stops where validation would
+    // have stopped, and says which subtree went unstyled.
     let deepest: BlockNode = node("leaf", {
       base: { base: { color: "#fff" } },
     });
@@ -817,7 +824,41 @@ describe("a forest deeper than the stack", () => {
       } as BlockNode;
     }
     const result = compilePageCss(doc([deepest]), CTX);
-    expect(result.css).toContain("color: #fff");
+    expect(result.warnings.map(issue => issue.code)).toContain(
+      "node-count-exceeded"
+    );
+    // Nothing past the bound was read, so the leaf below it is not styled.
+    expect(result.css).not.toContain("color: #fff");
+  });
+
+  it("stops on depth alone, well before the node count is reached", () => {
+    // Fifty nested nodes is far under `maxNodes` and far over `maxDepth`, so
+    // this pins the depth bound rather than letting the node bound cover for it.
+    let nested: BlockNode = node("leaf", { base: { base: { color: "#fff" } } });
+    for (let i = 0; i < 50; i += 1) {
+      nested = {
+        ...node(`n${i}`),
+        slots: { children: [nested] },
+      } as BlockNode;
+    }
+    const out = compilePageCss(doc([nested]), CTX);
+    expect(out.css).not.toContain("color: #fff");
+    expect(out.warnings.map(issue => issue.code)).toContain(
+      "node-count-exceeded"
+    );
+  });
+
+  it("still styles a document that sits inside the limits", () => {
+    // The bound is the document model's, not a new one: a tree a document may
+    // legitimately contain is compiled in full, leaf included.
+    let nested: BlockNode = node("leaf", { base: { base: { color: "#fff" } } });
+    for (let i = 0; i < DEFAULT_LIMITS.maxDepth - 2; i += 1) {
+      nested = {
+        ...node(`n${i}`),
+        slots: { children: [nested] },
+      } as BlockNode;
+    }
+    expect(css(doc([nested]))).toContain("color: #fff");
   });
 });
 
@@ -1215,5 +1256,131 @@ describe("documents the compiler cannot style unambiguously", () => {
     expect(out.warnings.map(issue => issue.code)).toContain(
       "invalid-style-values"
     );
+  });
+});
+
+describe("what reaches a selector is held to a grammar", () => {
+  it("refuses a block type that would break out of its rule", () => {
+    // A node type is interpolated into a SELECTOR, and this compiler reads
+    // persisted data whether or not a caller validated it. Unchecked, this
+    // emits a second selector of the author's choosing and applies a block's
+    // defaults to every `body` on the page.
+    const hostile = "evil/x, body";
+    const out = compilePageCss(
+      doc([
+        {
+          id: "n1",
+          type: hostile,
+          version: 1,
+          props: {},
+        } as unknown as BlockNode,
+      ]),
+      {
+        ...CTX,
+        blockBases: { [hostile]: { base: { base: { color: "#f00" } } } },
+      }
+    );
+    expect(out.css).not.toContain("body");
+    expect(out.css).not.toContain("#f00");
+    expect(out.warnings.map(issue => issue.code)).toContain(
+      "invalid-node-type"
+    );
+  });
+
+  it("still writes defaults for a well-formed block type", () => {
+    const out = compilePageCss(doc([node("n1")]), {
+      ...CTX,
+      blockBases: { "core/box": { base: { base: { color: "#0f0" } } } },
+    });
+    expect(out.css).toContain("#0f0");
+    expect(out.warnings).toEqual([]);
+  });
+});
+
+describe("more of what the compiler skips is now accounted for", () => {
+  it("reports a style state it does not recognise", () => {
+    const out = compilePageCss(
+      doc([node("n1", { pressed: { base: { color: "#f00" } } })]),
+      CTX
+    );
+    expect(out.css).not.toContain("#f00");
+    expect(out.warnings.map(issue => issue.code)).toContain(
+      "invalid-style-state"
+    );
+  });
+
+  it("keeps a scope containing a space HTML does not split on", () => {
+    // HTML tokenizes a class attribute on ASCII whitespace only, so a scope
+    // holding NBSP is one valid class the renderer really attaches. Rejecting
+    // it sent the document back to the selector every other document shares.
+    const out = compilePageCss(
+      doc([node("n1", { base: { base: { color: "#0f0" } } })]),
+      { ...CTX, scope: "region\u00a0one" }
+    );
+    expect(out.warnings).toEqual([]);
+    expect(out.css).toContain("#0f0");
+  });
+
+  it("treats only one unbounded container definition as the container base", () => {
+    // Two both compile to `@container (min-width: 0)`, covering the identical
+    // range, so whichever sorts later silently overrides the other.
+    const out = compilePageCss(
+      doc([node("n1", { base: { "c-two": { color: "#f00" } } })]),
+      {
+        breakpoints: {
+          viewport: [{ id: "base" }],
+          container: [{ id: "c-one" }, { id: "c-two" }],
+        },
+      } as unknown as StyleCompileContext
+    );
+    expect(out.css).not.toContain("#f00");
+    expect(out.warnings.map(issue => issue.code)).toContain(
+      "unknown-breakpoint"
+    );
+  });
+
+  it("counts the viewport base toward the per-axis limit", () => {
+    // The unconditional base context is inserted separately and filtered out of
+    // the axis list, so counting only survivors honours one definition past the
+    // declared limit.
+    const viewport = [
+      { id: "base" },
+      ...Array.from({ length: MAX_BREAKPOINTS_PER_AXIS }, (_, index) => ({
+        id: `bp${index}`,
+        maxWidth: 2000 - index * 100,
+      })),
+    ];
+    const styles = Object.fromEntries(
+      Array.from({ length: MAX_BREAKPOINTS_PER_AXIS }, (_, index) => [
+        `bp${index}`,
+        { color: "#0f0" },
+      ])
+    );
+    const out = compilePageCss(doc([node("n1", { base: styles })]), {
+      breakpoints: { viewport, container: [] },
+    } as unknown as StyleCompileContext);
+    const queries = [...out.css.matchAll(/max-width: \d+px/g)];
+    expect(queries.length).toBe(MAX_BREAKPOINTS_PER_AXIS - 1);
+  });
+
+  it("says an unusable token prefix once, not once per styled node", () => {
+    // The prefix is one CONFIGURATION fact discovered while compiling every
+    // map. Repeated per map it spends the whole allowance restating one
+    // setting, then announces truncation — so the values that really were
+    // dropped go unexplained.
+    const nodes = Array.from({ length: 60 }, (_, index) =>
+      node(`n${index}`, { base: { base: { color: "#0f0" } } })
+    );
+    const out = compilePageCss(doc(nodes), {
+      ...CTX,
+      tokenPrefix: "not a prefix",
+    });
+    const prefixWarnings = out.warnings.filter(issue =>
+      issue.message.includes("custom-property prefix")
+    );
+    expect(prefixWarnings).toHaveLength(1);
+    expect(
+      out.warnings.filter(issue => issue.code === "style-issues-truncated")
+    ).toHaveLength(0);
   });
 });

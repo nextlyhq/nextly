@@ -28,6 +28,16 @@ export interface WarningAllowance {
   pathBytes: number;
   /** Whether the run has already said it stopped reporting. */
   announced: boolean;
+  /**
+   * Whether this run has already reported an unusable token prefix.
+   *
+   * The prefix is one CONFIGURATION fact, not a fact about any style map, but
+   * it is discovered while compiling each of them. Reported per map, a page of
+   * fifty styled nodes spends the whole allowance restating one setting — and
+   * then announces truncation, so the values that really were dropped go
+   * unexplained because the compiler was busy repeating itself.
+   */
+  prefixReported: boolean;
 }
 
 /** A fresh allowance for one compile. */
@@ -36,7 +46,13 @@ export function newWarningAllowance(): WarningAllowance {
     remaining: MAX_COMPILE_WARNINGS,
     pathBytes: MAX_COMPILE_WARNING_PATH_BYTES,
     announced: false,
+    prefixReported: false,
   };
+}
+
+/** Whether an allowance has nothing left, so producing more is wasted work. */
+export function allowanceSpent(allowance: WarningAllowance): boolean {
+  return allowance.remaining <= 0 || allowance.pathBytes <= 0;
 }
 
 /**
@@ -50,7 +66,7 @@ export function pushBoundedWarning(
   warnings: ValidationIssue[],
   issue: ValidationIssue
 ): void {
-  if (allowance.remaining <= 0 || allowance.pathBytes <= 0) {
+  if (allowanceSpent(allowance)) {
     if (allowance.announced) return;
     allowance.announced = true;
     warnings.push({

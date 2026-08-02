@@ -27,6 +27,8 @@ import type {
 } from "../document";
 import { MAX_BREAKPOINTS_PER_AXIS, STYLE_STATES } from "../document";
 import { describeValue, pointer } from "../issue-text";
+import { DEFAULT_LIMITS } from "../limits";
+import type { DocumentLimits } from "../limits";
 import { isPlainRecord } from "../plain-record";
 import type { ValidationIssue } from "../validation";
 
@@ -42,7 +44,11 @@ import { serializeRules } from "./serialize";
 import type { CssRule } from "./serialize";
 import type { StyleIssueBudget } from "./validate-style-value";
 import { newStyleIssueBudget } from "./validate-style-value";
-import { newWarningAllowance, pushBoundedWarning } from "./warning-allowance";
+import {
+  allowanceSpent,
+  newWarningAllowance,
+  pushBoundedWarning,
+} from "./warning-allowance";
 import type { WarningAllowance } from "./warning-allowance";
 
 /** Everything site-level the compiler needs; the caller loads it. */
@@ -74,6 +80,15 @@ export interface StyleCompileContext {
    * nothing. The renderer puts the same class on the element it mounts.
    */
   scope?: string;
+  /**
+   * The document limits this site enforces, for bounding the node walk.
+   *
+   * The same object validation takes, so a caller that raised or lowered a
+   * limit gets one answer from both halves rather than a stylesheet compiled
+   * against a bound the document was never held to. Defaults to the standard
+   * limits when the caller has no opinion.
+   */
+  limits?: DocumentLimits;
 }
 
 /** A compiled page stylesheet. */
@@ -156,6 +171,7 @@ function breakpointContexts(set: BreakpointSet): BreakpointContext[] {
   // an error; compilation is the path that does not assume validation ran, so
   // the first definition wins and the rest are not ids this site defines.
   const claimed = new Set<string>([BASE_BREAKPOINT]);
+  let unboundedContainer = false;
   const widthDescending = (a: BreakpointDef, b: BreakpointDef): number =>
     (b.maxWidth ?? Infinity) - (a.maxWidth ?? Infinity);
   // The breakpoint set comes from stored settings, so it is read the way
@@ -186,12 +202,21 @@ function breakpointContexts(set: BreakpointSet): BreakpointContext[] {
       // very breakpoint every other rule is written against.
       if (def.id === BASE_BREAKPOINT) return true;
       if (def.maxWidth === undefined) {
-        // A container definition without a bound is the widest container query
-        // and still emits one, so it stays scoped to a container. A VIEWPORT
-        // definition without a bound would emit no at-rule at all: a second
-        // unconditional context, overriding the real base at every width, from
-        // a settings record the type system accepts.
-        return axis === "container";
+        // Only one unbounded definition per container axis. Two both compile to
+        // `@container (min-width: 0)`, so they cover the identical range and
+        // whichever sorts later silently overrides the other — the same
+        // ambiguity a duplicate id creates, spelled differently.
+        if (axis === "container") {
+          if (unboundedContainer) return false;
+          unboundedContainer = true;
+          return true;
+        }
+        // A VIEWPORT definition without a bound would emit no at-rule at all:
+        // a second unconditional context, overriding the real base at every
+        // width, from a settings record the type system accepts. The container
+        // axis is not the same case and was answered above, because its
+        // unbounded definition still emits a query and stays scoped.
+        return false;
       }
       return (
         typeof def.maxWidth === "number" &&
@@ -212,7 +237,15 @@ function breakpointContexts(set: BreakpointSet): BreakpointContext[] {
         claimed.add(def.id);
         return true;
       })
-      .slice(0, MAX_BREAKPOINTS_PER_AXIS);
+      .slice(
+        0,
+        // The unconditional base context is inserted separately and filtered
+        // out of this list, so counting only what survives would honour one
+        // definition past the declared limit on the viewport axis.
+        axis === "viewport"
+          ? MAX_BREAKPOINTS_PER_AXIS - 1
+          : MAX_BREAKPOINTS_PER_AXIS
+      );
   };
   for (const def of axisDefs("viewport")) {
     if (def.id === BASE_BREAKPOINT) continue;
@@ -249,6 +282,14 @@ function breakpointContexts(set: BreakpointSet): BreakpointContext[] {
 export const BASE_BREAKPOINT = "base";
 
 /**
+ * The grammar a block type has to match before it reaches a selector.
+ *
+ * The same shape document validation requires of `node.type`, restated here
+ * because compilation is the path that does not assume validation ran.
+ */
+const BLOCK_TYPE_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*\/[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/**
  * The scope written as a class selector, or nothing when it cannot be one.
  *
  * A scope is what keeps two documents rendered into one DOM apart, and node
@@ -272,7 +313,12 @@ function scopeSelector(
   warnings: ValidationIssue[]
 ): string {
   if (scope === undefined) return "";
-  if (scope === "" || /\s/.test(scope)) {
+  // ASCII whitespace only, which is what HTML splits a class attribute on.
+  // JavaScript's `\s` also matches NBSP and the Unicode spaces, and those do
+  // NOT split a class: a renderer attaching `region\u00a0one` attaches one
+  // valid class, so rejecting it here would drop the scope for a document whose
+  // scope was fine and send it back to the selector every other document shares.
+  if (scope === "" || /[ \t\n\f\r]/.test(scope)) {
     warnings.push({
       path: "/scope",
       code: "invalid-scope",
@@ -302,10 +348,29 @@ function unknownBreakpointWarnings(
   allowance: WarningAllowance
 ): void {
   const known = new Set(contexts.map(context => context.id));
-  for (const state of STYLE_STATES) {
-    const byBreakpoint = styles[state];
+  const knownStates = new Set<string>(STYLE_STATES);
+  // Iterating only the states this engine knows means an unrecognised one is
+  // never compiled AND never mentioned. The envelope's own keys are read here
+  // so a stored `pressed` is accounted for rather than disappearing.
+  for (const state of Object.keys(styles).sort()) {
+    if (!knownStates.has(state)) {
+      pushBoundedWarning(allowance, warnings, {
+        path: pointer(basePath, state),
+        code: "invalid-style-state",
+        severity: "warning",
+        message: `"${describeValue(state)}" is not a style state, so nothing stored under it was written.`,
+        suggestion: `Use one of: ${STYLE_STATES.join(", ")}.`,
+      });
+      continue;
+    }
+    const byBreakpoint = styles[state as StyleState];
     if (!isPlainRecord(byBreakpoint)) continue;
     for (const id of Object.keys(byBreakpoint).sort()) {
+      // Enumeration stops where reporting stops. The allowance bounds what is
+      // RETURNED, and a state map with a very large number of stale ids costs a
+      // full sort and a full scan before that bound is ever consulted — work
+      // done on every render to produce warnings already known to be capped.
+      if (allowanceSpent(allowance)) break;
       if (known.has(id)) continue;
       pushBoundedWarning(allowance, warnings, {
         path: pointer(pointer(basePath, state), id),
@@ -553,7 +618,12 @@ interface PlacedNode {
  * inside a slot lives at `/nodes/0/slots/children/1`, and numbering nodes in
  * visit order would produce a path that reaches a different node or none at all.
  */
-function documentNodes(doc: BlockDocument): PlacedNode[] {
+function documentNodes(
+  doc: BlockDocument,
+  warnings: ValidationIssue[],
+  warningAllowance: WarningAllowance,
+  limits: DocumentLimits = DEFAULT_LIMITS
+): PlacedNode[] {
   const placed: PlacedNode[] = [];
   if (!Array.isArray(doc.nodes)) return placed;
   // A worklist rather than recursion. A stored document is not required to have
@@ -562,13 +632,45 @@ function documentNodes(doc: BlockDocument): PlacedNode[] {
   // overflow the stack and fail the request with a RangeError instead of
   // returning a stylesheet. Validation walks the same adversarial shape the
   // same way.
-  const queue: { nodes: readonly BlockNode[]; base: string }[] = [
-    { nodes: doc.nodes, base: "/nodes" },
-  ];
-  for (let at = 0; at < queue.length; at += 1) {
+  const queue: { nodes: readonly BlockNode[]; base: string; depth: number }[] =
+    [{ nodes: doc.nodes, base: "/nodes", depth: 1 }];
+  // Iterating instead of recursing keeps a deep document from overflowing the
+  // stack; it does not keep one from exhausting memory. Every queued level
+  // retains the cumulative pointer to it, so a chain nested as deep as the byte
+  // cap allows holds path text growing with its own depth at every level, and a
+  // document nothing rejected can still stall the render it was asked for.
+  // Stopping at the same limits validation enforces bounds the work rather than
+  // only the shape of it.
+  let stopped = false;
+  const stop = (path: string, reason: string): void => {
+    if (stopped) return;
+    stopped = true;
+    pushBoundedWarning(warningAllowance, warnings, {
+      path,
+      code: "node-count-exceeded",
+      severity: "warning",
+      message: reason,
+    });
+  };
+  for (let at = 0; at < queue.length && !stopped; at += 1) {
     const level = queue[at];
     if (level === undefined) continue;
+    if (level.depth > limits.maxDepth) {
+      stop(
+        level.base,
+        `Nodes below depth ${limits.maxDepth} were not styled, because the document nests deeper than a document may.`
+      );
+      break;
+    }
     level.nodes.forEach((node, index) => {
+      if (stopped) return;
+      if (placed.length >= limits.maxNodes) {
+        stop(
+          level.base,
+          `Only the first ${limits.maxNodes} nodes were styled, because the document holds more than a document may.`
+        );
+        return;
+      }
       if (!isPlainRecord(node) || typeof node.id !== "string") return;
       const path = pointer(level.base, index);
       placed.push({ node, path });
@@ -581,6 +683,7 @@ function documentNodes(doc: BlockDocument): PlacedNode[] {
         queue.push({
           nodes: children,
           base: pointer(pointer(path, "slots"), slot),
+          depth: level.depth + 1,
         });
       }
     });
@@ -617,7 +720,7 @@ export function compilePageCss(
   const scope = scopeSelector(ctx.scope, warnings);
   const pageRoot = `.${PAGE_ROOT_CLASS}${scope}`;
 
-  const nodes = documentNodes(doc);
+  const nodes = documentNodes(doc, warnings, warningAllowance, ctx.limits);
   const classes = nodeClassNames(nodes.map(entry => entry.node.id));
   // Two nodes sharing an id share a class, because a class is derived from the
   // id and the map this returns is keyed by it — there is no second class to
@@ -661,10 +764,34 @@ export function compilePageCss(
   const bases = ctx.blockBases ?? {};
   for (const type of [...usedTypes].sort()) {
     if (!Object.hasOwn(bases, type)) continue;
+    // A node type reaches a SELECTOR, and this compiler reads persisted data
+    // whether or not a caller validated it. Unchecked, `"evil/x, body"` emits
+    // `.nx-pb-page .nx-bt-evil--x, body { … }` — a second selector of the
+    // author's choosing, applying a block's defaults to every `body` on the
+    // page, and more hostile spellings close the rule and open their own.
+    //
+    // Held to the same grammar the document model defines for a node type
+    // rather than escaped into something safe: a type that is not a namespaced
+    // slug is not a type this engine can style, and quietly renaming it would
+    // emit a class no renderer will ever put on an element.
+    if (!BLOCK_TYPE_RE.test(type)) {
+      pushBoundedWarning(warningAllowance, warnings, {
+        path: pointer("/blockBases", type),
+        code: "invalid-node-type",
+        severity: "warning",
+        message: `"${describeValue(type)}" is not a block type, so its default styles were not written.`,
+        suggestion: 'Use a namespaced slug such as "core/section".',
+      });
+      continue;
+    }
     rules.push(
       ...envelopeRules(
         bases[type],
-        `${pageRoot} .${blockTypeClassName(type)}`,
+        // Escaped as well as refused above. The check is what makes this safe;
+        // escaping is what keeps it safe if the check is ever loosened, and it
+        // changes nothing for a type that passed, whose characters are all
+        // legal in a class already.
+        `${pageRoot} .${escapeIdentifier(blockTypeClassName(type))}`,
         pointer("/blockBases", type),
         contexts,
         tokenPrefix,

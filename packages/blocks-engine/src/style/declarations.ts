@@ -392,7 +392,10 @@ export function compileStyleValues(
     prefix: safe.prefix,
     allowance,
   };
-  if (safe.warning !== undefined) {
+  // Once per run. The prefix is one setting, and every map compiled under it
+  // would otherwise repeat the same sentence about it.
+  if (safe.warning !== undefined && !allowance.prefixReported) {
+    allowance.prefixReported = true;
     pushBoundedWarning(
       allowance,
       walk.warnings,

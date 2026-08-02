@@ -40,4 +40,9 @@ default at every width, and a value set for a state beats a base value set at a
 narrower breakpoint.
 
 A value the validator refuses is left out of the stylesheet and reported rather
-than written, whether or not the caller validated first.
+than written, whether or not the caller validated first. The same holds for
+everything the compiler cannot act on: a block type that is not a namespaced
+slug, a style state it does not recognise, a breakpoint id that resolves to more
+than one definition, two nodes sharing an id, and a malformed envelope are all
+left out and named. `StyleCompileContext` takes the document `limits`, so the
+node walk stops where validation would have.
