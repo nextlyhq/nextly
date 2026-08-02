@@ -98,6 +98,57 @@ describe("deleting a user on a database with no activity_log (real SQLite)", () 
     rmSync(TEST_DB_DIR, { recursive: true, force: true });
   });
 
+  it("removes the account on a database still holding the pre-erasure shape", async () => {
+    // The other way the erasure cannot run. An upgrade does not always reach
+    // `activity_log`: the core reconcile pushes only the static tables, and
+    // drizzle-kit's SQLite entrypoint takes no table filter, so an ordinary
+    // `dc_*` table reads as an orphan and trips its rename resolver — after
+    // which the recovery pass creates missing tables but never alters an
+    // existing one. `core-reconcile-activity-actor.integration.test.ts` pins
+    // that. Failing every deletion on those installations would be a worse
+    // regression than the defect the erasure fixes.
+    await adapter.executeQuery(`
+      CREATE TABLE "activity_log" (
+        "id" TEXT PRIMARY KEY,
+        "user_id" TEXT NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
+        "user_name" TEXT NOT NULL,
+        "user_email" TEXT NOT NULL,
+        "action" TEXT NOT NULL,
+        "collection" TEXT NOT NULL,
+        "entry_id" TEXT,
+        "entry_title" TEXT,
+        "metadata" TEXT,
+        "created_at" INTEGER NOT NULL
+      )`);
+    // A fresh service, because the previous case cached its answer for a
+    // database that had no table at all.
+    const legacyUsers = new UserMutationService(adapter, silentLogger);
+
+    // The premise: the table is present but predates the erasure columns.
+    expect(await adapter.tableExists("activity_log")).toBe(true);
+    const columns = await adapter.executeQuery<{ name: string }>(
+      `SELECT name FROM pragma_table_info('activity_log')`
+    );
+    expect(columns.map(c => c.name)).not.toContain("actor_deleted_at");
+
+    const doomed = await legacyUsers.createLocalUser({
+      email: "legacy-activity-log@test.local",
+      name: "Legacy Shape",
+      password: "TestPassword123!",
+      isActive: true,
+    });
+
+    await expect(legacyUsers.deleteUser(doomed.id)).resolves.toBeUndefined();
+
+    const survivors = await adapter.executeQuery<{ id: string }>(
+      "SELECT id FROM users WHERE id = ?",
+      [String(doomed.id)]
+    );
+    expect(survivors).toHaveLength(0);
+
+    await adapter.executeQuery(`DROP TABLE "activity_log"`);
+  });
+
   it("removes the account instead of failing on the missing table", async () => {
     // The premise. If a later change starts provisioning the table here, this
     // suite would silently stop exercising the case it exists for.

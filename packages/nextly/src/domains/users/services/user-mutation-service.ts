@@ -393,21 +393,56 @@ export class UserMutationService extends BaseService {
   }
 
   /**
-   * Whether this database carries the activity trail a deletion erases from.
+   * Whether this database's activity trail can actually be erased.
    *
-   * A probe that cannot run answers `true`, so an unreadable catalogue leaves
-   * the erasure in place and the deletion fails loudly rather than quietly
-   * skipping it. Only a definite "the table is not there" is allowed to skip,
-   * because only then is there certainly nothing to erase.
+   * Two ways it cannot, and both must let the deletion proceed rather than
+   * fail. The table may be absent entirely, in which case there is no trail
+   * and so no identifying data to leave behind. Or it may still be on its
+   * pre-erasure shape, on a database whose upgrade did not reach it: the core
+   * reconcile pushes only the static tables, and drizzle-kit's SQLite
+   * entrypoint takes no table filter, so an ordinary `dc_*` content table
+   * reads as an orphan and trips its rename resolver — after which the
+   * recovery pass can create missing tables but never alters an existing one.
+   *
+   * Refusing to delete an account on those installations would be a worse
+   * regression than the defect this erasure fixes, so it is skipped and said
+   * out loud. The trail there keeps its old cascading key and is still lost
+   * with the account, which only a real upgrade can fix.
+   *
+   * The table probe answering `false` is the only definite skip: a probe that
+   * cannot run answers `true`, so an unreadable catalogue leaves the erasure
+   * in place and the deletion fails loudly instead of quietly skipping.
    */
-  private async hasActivityLog(): Promise<boolean> {
+  private async activityLogSupportsErasure(): Promise<boolean> {
     if (this.activityLogPresent) return true;
+
+    let tableExists: boolean;
     try {
-      this.activityLogPresent = await this.adapter.tableExists("activity_log");
+      tableExists = await this.adapter.tableExists("activity_log");
     } catch {
       return true;
     }
-    return this.activityLogPresent;
+    if (!tableExists) return false;
+
+    try {
+      // Reads no rows; it is the column list that is being asked about, and
+      // this is the one question the adapter can answer on every dialect.
+      await this.adapter.select("activity_log", {
+        columns: ["actorDeletedAt"],
+        limit: 0,
+      });
+    } catch {
+      this.logger.warn(
+        "activity_log predates actor erasure (no actor_deleted_at column); " +
+          "deleting a user will not scrub their name and email from it, and " +
+          "the table's cascading key still removes their entries. Run " +
+          "`nextly migrate` to apply the core schema change."
+      );
+      return false;
+    }
+
+    this.activityLogPresent = true;
+    return true;
   }
 
   /**
@@ -1295,7 +1330,7 @@ export class UserMutationService extends BaseService {
     // the SQLite fallback bootstrap in earlier releases created a subset of
     // the core tables, and neither first-run setup nor boot repairs an
     // existing database that is missing one — they only warn.
-    const activityLogExists = await this.hasActivityLog();
+    const activityLogExists = await this.activityLogSupportsErasure();
 
     // Delete user and related data in a single Drizzle transaction so that
     // partial deletes can't leave orphaned rows. The tx alias is a structural
