@@ -7,6 +7,8 @@
  * @module lib/case-conversion
  */
 
+import { SYSTEM_COLUMNS } from "../../lib/system-columns";
+
 /**
  * Convert a snake_case string to camelCase.
  * Example: "created_at" -> "createdAt"
@@ -132,17 +134,16 @@ export function keysToSnakeCase(obj: unknown): unknown {
 /**
  * The system timestamp columns, and the camelCase name each is published under.
  *
- * Listed once because a row can reach the API through several paths, and a column converted on
- * some of them and not others gives the same entry different shapes depending on the operation
- * that returned it. That is what happened to `first_published_at`: create responses carried
- * `firstPublishedAt` while list and detail reads returned the raw column name.
+ * A projection of the columns declared `publishedUnderCamelName`, because a row reaches the API
+ * through several paths and a column converted on some of them and not others gives the same
+ * entry different shapes depending on the operation that returned it. That is what happened to
+ * `first_published_at`: create responses carried `firstPublishedAt` while list and detail reads
+ * returned the raw column name.
  */
 export const TIMESTAMP_COLUMN_NAMES: ReadonlyArray<readonly [string, string]> =
-  [
-    ["created_at", "createdAt"],
-    ["updated_at", "updatedAt"],
-    ["first_published_at", "firstPublishedAt"],
-  ];
+  SYSTEM_COLUMNS.filter(column => column.publishedUnderCamelName).map(
+    column => [column.name, column.camelName] as const
+  );
 
 /**
  * Every spelling of every system timestamp, both the physical column and the API name.

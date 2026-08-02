@@ -23,6 +23,7 @@
 
 import { RESERVED_SLUGS } from "../../collections/config/validate-config";
 import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
+import { reservedSystemFieldNames } from "../../lib/system-columns";
 import { SYSTEM_RESOURCES } from "../../schemas/_zod/rbac";
 import {
   type BaseValidationError,
@@ -266,10 +267,9 @@ function validateField(
 // owner column, so unlike a collection only the first-publication marker is
 // reserved here — which is why this check had to be added rather than extended:
 // until the marker reached a Single's table there was nothing to collide with.
-const SINGLE_RESERVED_FIELD_NAMES: Set<string> = new Set([
-  "first_published_at",
-  "firstPublishedAt",
-]);
+const SINGLE_RESERVED_FIELD_NAMES: ReadonlySet<string> = new Set(
+  reservedSystemFieldNames("singleConfig")
+);
 
 /**
  * Validate an array of field configurations.
