@@ -8631,6 +8631,21 @@ export class CollectionMutationService extends BaseService {
         created_by: params.user?.id ?? null,
       };
 
+      // The bulk worker is a separate, streamlined path — the batch service calls it rather than
+      // `createEntryInTransaction` — so it needs the rule too. Leaving it out is how batch writes
+      // came to publish documents that carried no marker while single writes did.
+      const bulkCreateStamp = resolveFirstPublishedStamp({
+        hasStatus: (collection as { status?: boolean }).status === true,
+        previousStatus: null,
+        nextStatus: finalData.status,
+        existingMarker: null,
+        now: nowForTxCreate,
+      });
+      if (bulkCreateStamp) {
+        (entryData as Record<string, unknown>).first_published_at =
+          bulkCreateStamp;
+      }
+
       // The bulk create worker inserts status like any other field, so publishing
       // through it needs `publish-<slug>` the same as a single create — otherwise
       // batch create is a way around the gate. Judged on the post-hook `finalData`
@@ -9269,11 +9284,37 @@ export class CollectionMutationService extends BaseService {
         return transitionDenied;
       }
 
+      // Same rule as every other update seam. Read under the lock the transition gate above
+      // already holds, so the prior status and stored marker are the committed ones, and only
+      // when the write could publish at all — a content-only edit must not pay for the read.
+      const nowForBulkUpdate = new Date();
+      let bulkUpdateStamp: Date | undefined;
+      if (
+        (collection as { status?: boolean }).status === true &&
+        finalData.status === "published"
+      ) {
+        const lockedForMarker = await tx.selectOne<Record<string, unknown>>(
+          tableName,
+          { where: this.whereEq("id", entryId), forUpdate: true }
+        );
+        bulkUpdateStamp = resolveFirstPublishedStamp({
+          hasStatus: true,
+          previousStatus:
+            typeof lockedForMarker?.status === "string"
+              ? lockedForMarker.status
+              : null,
+          nextStatus: finalData.status,
+          existingMarker: lockedForMarker?.first_published_at,
+          now: nowForBulkUpdate,
+        });
+      }
+
       const [updated] = await tx.update<unknown>(
         tableName,
         {
           ...stripImmutableSystemFields(finalData, "collection"),
-          updatedAt: new Date(),
+          updatedAt: nowForBulkUpdate,
+          ...(bulkUpdateStamp ? { first_published_at: bulkUpdateStamp } : {}),
         },
         this.whereEq("id", entryId),
         { returning: "*" }

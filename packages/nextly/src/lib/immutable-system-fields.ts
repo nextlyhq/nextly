@@ -29,7 +29,7 @@ export type WritableEntityKind = "collection" | "single";
  * a draft create could claim a publication that never happened, and any later update could reset
  * a real one.
  */
-const ALWAYS_IMMUTABLE: readonly string[] = [
+export const ALWAYS_IMMUTABLE_SYSTEM_FIELDS: readonly string[] = [
   "id",
   "created_at",
   "createdAt",
@@ -54,10 +54,10 @@ const COLLECTION_ONLY_IMMUTABLE: readonly string[] = [
 ];
 
 const COLLECTION_SET: ReadonlySet<string> = new Set([
-  ...ALWAYS_IMMUTABLE,
+  ...ALWAYS_IMMUTABLE_SYSTEM_FIELDS,
   ...COLLECTION_ONLY_IMMUTABLE,
 ]);
-const SINGLE_SET: ReadonlySet<string> = new Set(ALWAYS_IMMUTABLE);
+const SINGLE_SET: ReadonlySet<string> = new Set(ALWAYS_IMMUTABLE_SYSTEM_FIELDS);
 
 /** The names a client may not write for the given entity. */
 export function immutableSystemFieldsFor(

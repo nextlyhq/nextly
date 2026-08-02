@@ -17,24 +17,25 @@
  */
 
 import type { FieldConfig } from "../../collections/fields/types";
+import { ALWAYS_IMMUTABLE_SYSTEM_FIELDS } from "../../lib/immutable-system-fields";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { isFieldLocalized } from "../i18n/classify-fields";
 
 /**
- * Columns a write must never carry.
+ * Columns a restore must never carry back.
  *
- * The collection update path strips these too, but only inside its transaction
- * — long after `beforeUpdate` hooks have seen the payload. Stripping here means
- * a hook is never handed a forged `createdBy` or a stale `createdAt`. The
- * singles path strips only `id` and `createdAt`, so for that path this is the
- * only place ownership is protected at all.
+ * Both write paths strip these too, but only inside their transaction — long
+ * after `beforeUpdate` hooks have seen the payload. Stripping here means a hook
+ * is never handed a forged `createdBy` or a stale `createdAt`.
+ *
+ * The always-immutable names come from the shared list rather than being
+ * repeated: this copy had fallen behind it, so a restored snapshot reported the
+ * first-publication marker as an unknown field and every complete restore came
+ * back described as partial. The owner column is added on top because this path
+ * protects it for singles as well, where it is not a system column.
  */
 const IMMUTABLE_FIELDS = new Set([
-  "id",
-  "createdAt",
-  "created_at",
-  "updatedAt",
-  "updated_at",
+  ...ALWAYS_IMMUTABLE_SYSTEM_FIELDS,
   "createdBy",
   "created_by",
 ]);

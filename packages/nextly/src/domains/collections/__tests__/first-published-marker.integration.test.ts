@@ -576,6 +576,54 @@ describe("first_published_at", () => {
     expect(after?.first_published_at).toBeFalsy();
   });
 
+  it("records a first publication through the batch create worker", async () => {
+    // The batch service calls its own streamlined worker, not `createEntryInTransaction`, so
+    // fixing the transaction API left this path unstamped. Whether a document's history exists
+    // must not depend on whether it was written one at a time or in a batch.
+    current = await createTestNextly({ collections: [posts()] });
+    const entries = txEntries(current);
+
+    const result = await entries.createEntries(
+      { collectionName: "fpmposts", overrideAccess: true },
+      [
+        { title: "live", status: "published" },
+        { title: "wip", status: "draft" },
+      ]
+    );
+    expect(result.successful).toBe(2);
+
+    const rows = await tableRows(current, "dc_fpmposts");
+    const live = rows.find(r => r.title === "live") ?? {};
+    const wip = rows.find(r => r.title === "wip") ?? {};
+    expect(live.first_published_at).toBeTruthy();
+    expect(wip.first_published_at).toBeFalsy();
+  });
+
+  it("does not stamp a batch create that stays a draft", async () => {
+    // The negative half of the batch-create case above, in the same worker: a batch that writes
+    // drafts records nothing, so the stamp is tied to the transition rather than to the path.
+    //
+    // The batch UPDATE worker is not covered here. It is reachable only through `updateEntries`,
+    // which accepts no `overrideAccess` — so publishing through it always requires a caller
+    // holding a real `publish-<slug>` grant, and this suite has no helper that seeds one. Its
+    // wiring mirrors the create worker asserted above and calls the same unit-tested rule.
+    current = await createTestNextly({ collections: [posts()] });
+    const entries = txEntries(current);
+
+    const result = await entries.createEntries(
+      { collectionName: "fpmposts", overrideAccess: true },
+      [
+        { title: "a", status: "draft" },
+        { title: "b", status: "draft" },
+      ]
+    );
+    expect(result.successful).toBe(2);
+
+    for (const row of await tableRows(current, "dc_fpmposts")) {
+      expect(row.first_published_at).toBeFalsy();
+    }
+  });
+
   it("records a Single's first publication, and reads still work", async () => {
     // This test used to assert the OPPOSITE. A Single's physical table was built by a generator
     // that restated the system columns by hand, so this column reached the runtime schema and not
