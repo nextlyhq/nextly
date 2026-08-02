@@ -150,15 +150,35 @@ for (const entry of DIALECTS) {
     async function bootProvisionsCompanion(
       fields: { name: string; type: string; localized?: boolean }[]
     ): Promise<void> {
-      const { ensureCompanionTable } = await import(
+      const { companionTableExists, ensureCompanionTable } = await import(
         "../../runtime/companion-io"
       );
-      await ensureCompanionTable(adapter as never, {
-        slug: mainTable,
-        tableName: mainTable,
-        fields,
-        dialect: entry.dialect,
-      });
+      // A refusal is reported, never thrown: the function hands its reason to `onError` and returns
+      // false. Left unchecked, the companion would simply be absent, the migration below would
+      // create it, and the case would pass having exercised none of what it names. Captured rather
+      // than merely asserted so a future refusal explains itself instead of reading as `false`.
+      let refusal: unknown;
+      const provisioned = await ensureCompanionTable(
+        adapter as never,
+        {
+          slug: mainTable,
+          tableName: mainTable,
+          fields,
+          dialect: entry.dialect,
+        },
+        error => {
+          refusal = error;
+        }
+      );
+      expect(
+        provisioned,
+        `boot did not provision the companion: ${String(refusal)}`
+      ).toBe(true);
+      // Separately confirmed, because a true return says the statements ran, not that the table
+      // they were meant to build is there to be found.
+      expect(await companionTableExists(adapter as never, companionTable)).toBe(
+        true
+      );
     }
 
     /** A create-only companion file, as `migrate:create` emits for a collection localized from birth. */
