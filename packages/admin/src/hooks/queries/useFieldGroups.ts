@@ -199,7 +199,7 @@ export function useFieldGroup(
       : fieldGroupKeys.details(),
     queryFn: async () => {
       if (!fieldGroupSlug) {
-        throw new Error("Component slug is required");
+        throw new Error("Field group slug is required");
       }
       return await fieldGroupApi.get(fieldGroupSlug);
     },
