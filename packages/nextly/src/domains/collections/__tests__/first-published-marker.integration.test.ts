@@ -36,6 +36,12 @@ function handler(t: TestNextly) {
   return t.getService("collectionsHandler");
 }
 
+/** The transaction-scoped writer behind createMany and batch writes. Reached through the handler
+ *  because the service-level wrapper does not forward `overrideAccess`. */
+function txEntries(t: TestNextly) {
+  return t.getService("collectionsHandler").getEntryService();
+}
+
 /** Rows read straight from the physical table, so the assertion sees the column itself rather
  *  than whatever the read shape chooses to project. */
 async function tableRows(
@@ -287,6 +293,84 @@ describe("first_published_at", () => {
     const after = await storedRow(current, id);
     expect(after.status).toBe("published");
     expect(after.first_published_at).toBeTruthy();
+  });
+
+  it("records a first publication through the transaction create API", async () => {
+    // `createEntryInTransaction` is a public API and also backs createMany and batch writes. A
+    // document created as published through it must carry the same marker the pooled path gives
+    // it, or which API a caller happened to use would decide whether the history exists.
+    current = await createTestNextly({ collections: [posts()] });
+    const entries = txEntries(current);
+
+    const res = await current.adapter.transaction(tx =>
+      entries.createEntryInTransaction(
+        tx as never,
+        { collectionName: "posts", overrideAccess: true },
+        { title: "live", status: "published" }
+      )
+    );
+    const id = (res.data as { id: string }).id;
+
+    expect((await storedRow(current, id)).first_published_at).toBeTruthy();
+  });
+
+  it("records a first publication through the transaction update API", async () => {
+    current = await createTestNextly({ collections: [posts()] });
+    const entries = txEntries(current);
+
+    const created = await handler(current).createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "wip", status: "draft" }
+    );
+    const id = (created.data as { id: string }).id;
+    expect((await storedRow(current, id)).first_published_at).toBeFalsy();
+
+    await current.adapter.transaction(tx =>
+      entries.updateEntryInTransaction(
+        tx as never,
+        { collectionName: "posts", entryId: id, overrideAccess: true },
+        { status: "published" }
+      )
+    );
+
+    expect((await storedRow(current, id)).first_published_at).toBeTruthy();
+  });
+
+  it("does not move the marker on a republish through the transaction API", async () => {
+    // The set-once rule has to hold on every write path, not only the pooled one.
+    current = await createTestNextly({ collections: [posts()] });
+    const entries = txEntries(current);
+
+    const created = await handler(current).createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "live", status: "published" }
+    );
+    const id = (created.data as { id: string }).id;
+    await current.adapter.update(
+      "dc_posts",
+      { first_published_at: new Date("2020-01-01T00:00:00.000Z") },
+      { and: [{ column: "id", op: "=", value: id }] }
+    );
+    const before = String((await storedRow(current, id)).first_published_at);
+
+    await current.adapter.transaction(tx =>
+      entries.updateEntryInTransaction(
+        tx as never,
+        { collectionName: "posts", entryId: id, overrideAccess: true },
+        { status: "draft" }
+      )
+    );
+    await current.adapter.transaction(tx =>
+      entries.updateEntryInTransaction(
+        tx as never,
+        { collectionName: "posts", entryId: id, overrideAccess: true },
+        { status: "published" }
+      )
+    );
+
+    expect(String((await storedRow(current, id)).first_published_at)).toBe(
+      before
+    );
   });
 
   it("records a Single's first publication, and reads still work", async () => {

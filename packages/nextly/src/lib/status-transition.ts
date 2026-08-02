@@ -74,3 +74,64 @@ export function stripUndefinedStatus<T extends Record<string, unknown>>(
   }
   return data;
 }
+
+/**
+ * The value a write should record as a document's first publication, or
+ * `undefined` when it should record nothing.
+ *
+ * Three conditions have to hold, and the reason this is one function rather than
+ * a condition repeated at each write seam is that there are many seams: create,
+ * update, the transaction-scoped variants behind `createMany` and batch writes,
+ * publish-all-locales, and the single-entry writer. Every one of them can move a
+ * document into published, so every one of them has to agree. Restating the rule
+ * per seam is how three of them came to disagree — one stamping a document that
+ * was already public, others not stamping at all.
+ *
+ *   1. The entity has a draft/publish lifecycle. Without one there is no
+ *      transition to record, and its rows are public from the moment they save.
+ *   2. The write actually moves the document INTO published, judged by
+ *      `resolvePublishTransition` so "what counts as publishing" is decided in
+ *      exactly one place. A no-op publish of an already-published row records
+ *      nothing — which matters most for rows published before this column
+ *      existed, whose marker is null precisely because their history was never
+ *      recorded. Dating those today would report a publication that never
+ *      happened.
+ *   3. Nothing is recorded yet. This dates the FIRST publication, so a republish
+ *      after an unpublish must not move it.
+ *
+ * `existingMarker` is read as `unknown` because callers pass a column straight
+ * off a database row, where its type varies by dialect and driver — a `Date` on
+ * PostgreSQL, an integer on SQLite. Only its absence is examined, and `== null`
+ * covers both null and undefined; a row read that omitted the column entirely is
+ * therefore treated as "nothing recorded", which is the safe reading for a
+ * column that starts null.
+ *
+ * The caller supplies `now` so the marker can be the same instant as the
+ * `updated_at` written beside it, rather than a few microseconds later.
+ *
+ * Callers must read `existingMarker` under whatever lock guards the write. Two
+ * concurrent publishes that both observe an absent marker would both stamp, and
+ * the later would win — the row lock the write already takes is what prevents
+ * that interleaving, not this function.
+ */
+export function resolveFirstPublishedStamp(args: {
+  /** Whether the collection or single has the draft/publish lifecycle enabled. */
+  hasStatus: boolean;
+  /** The document's committed status before this write; `null` for a create. */
+  previousStatus: string | null | undefined;
+  /** The status this write assigns, exactly as the caller supplied it. */
+  nextStatus: unknown;
+  /** The marker already stored on the row, read under the write's lock. */
+  existingMarker: unknown;
+  /** The instant to record, shared with the write's other timestamps. */
+  now: Date;
+}): Date | undefined {
+  if (!args.hasStatus) return undefined;
+  if (args.existingMarker != null) return undefined;
+  if (
+    resolvePublishTransition(args.previousStatus, args.nextStatus) !== "publish"
+  ) {
+    return undefined;
+  }
+  return args.now;
+}

@@ -6,7 +6,10 @@
  */
 import { describe, it, expect } from "vitest";
 
-import { resolvePublishTransition } from "./status-transition";
+import {
+  resolveFirstPublishedStamp,
+  resolvePublishTransition,
+} from "./status-transition";
 
 describe("resolvePublishTransition", () => {
   it("treats draft → published as a publish", () => {
@@ -68,5 +71,92 @@ describe("resolvePublishTransition", () => {
     // Some callers pass undefined rather than null for "no prior status".
     expect(resolvePublishTransition(undefined, "published")).toBe("publish");
     expect(resolvePublishTransition(undefined, "draft")).toBeNull();
+  });
+});
+
+describe("resolveFirstPublishedStamp", () => {
+  const now = new Date("2026-08-02T10:00:00.000Z");
+  const base = {
+    hasStatus: true,
+    previousStatus: "draft" as string | null | undefined,
+    nextStatus: "published" as unknown,
+    existingMarker: null as unknown,
+    now,
+  };
+
+  it("records the instant a draft becomes published", () => {
+    expect(resolveFirstPublishedStamp(base)).toBe(now);
+  });
+
+  it("records a create that lands directly on published", () => {
+    // A create has no prior status, so landing on published IS the first publication.
+    expect(resolveFirstPublishedStamp({ ...base, previousStatus: null })).toBe(
+      now
+    );
+  });
+
+  it("records nothing when the entity has no draft lifecycle", () => {
+    // Nothing transitions, so there is no publication moment to date.
+    expect(
+      resolveFirstPublishedStamp({ ...base, hasStatus: false })
+    ).toBeUndefined();
+  });
+
+  it("records nothing when a marker is already stored", () => {
+    // It dates the FIRST publication; a republish must not move it.
+    expect(
+      resolveFirstPublishedStamp({
+        ...base,
+        previousStatus: "draft",
+        existingMarker: new Date("2020-01-01T00:00:00.000Z"),
+      })
+    ).toBeUndefined();
+  });
+
+  it("records nothing for an already-published row", () => {
+    // The case that matters for rows published before the column existed: their marker is null
+    // because the history was never recorded, and dating them now would invent a publication.
+    expect(
+      resolveFirstPublishedStamp({ ...base, previousStatus: "published" })
+    ).toBeUndefined();
+  });
+
+  it("records nothing for an unpublish", () => {
+    expect(
+      resolveFirstPublishedStamp({
+        ...base,
+        previousStatus: "published",
+        nextStatus: "draft",
+      })
+    ).toBeUndefined();
+  });
+
+  it("records nothing when the write names no status", () => {
+    // A content-only edit moves nothing.
+    expect(
+      resolveFirstPublishedStamp({ ...base, nextStatus: undefined })
+    ).toBeUndefined();
+  });
+
+  it("treats a marker of 0 as already recorded", () => {
+    // SQLite stores these as integers, and the epoch is falsy — a truthiness check here would
+    // re-stamp a row that already carries a (very old) date.
+    expect(
+      resolveFirstPublishedStamp({ ...base, existingMarker: 0 })
+    ).toBeUndefined();
+  });
+
+  it("treats an absent column as nothing recorded", () => {
+    // A row read that did not project the column must not be mistaken for a stored value.
+    expect(
+      resolveFirstPublishedStamp({ ...base, existingMarker: undefined })
+    ).toBe(now);
+  });
+
+  it("does not record for a non-string status coerced into the column", () => {
+    // Only the exact string is published, matching resolvePublishTransition.
+    expect(
+      resolveFirstPublishedStamp({ ...base, nextStatus: 1 })
+    ).toBeUndefined();
   });
 });
