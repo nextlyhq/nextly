@@ -56,6 +56,7 @@ import {
   generateInviteTokenValue,
 } from "../../auth/lib/invite-token";
 import { affectedRowCount } from "../../auth/services/auth-service";
+import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-live";
 import { recordMutationEventInTx } from "../../webhooks/record-mutation-event";
 
 import type { UserExtSchemaService } from "./user-ext-schema-service";
@@ -63,6 +64,9 @@ import type { UserExtSchemaService } from "./user-ext-schema-service";
 // ============================================================
 // Drizzle Runtime Types
 // ============================================================
+
+/** The column whose presence means this database can erase an identity. */
+const ERASURE_STAMP_COLUMN = "identity_erased_at";
 
 /**
  * Runtime-generated Drizzle table object (e.g., from `pgTable()` / `mysqlTable()` / `sqliteTable()`).
@@ -424,18 +428,23 @@ export class UserMutationService extends BaseService {
     }
     if (!tableExists) return false;
 
-    try {
-      // Reads no rows; it is the column list that is being asked about, and
-      // this is the one question the adapter can answer on every dialect.
-      await this.adapter.select("activity_log", {
-        columns: ["actorDeletedAt"],
-        limit: 0,
-      });
-    } catch {
+    // Introspection rather than a probe query, because this needs an answer
+    // and a failed statement is not one. A SELECT that throws cannot say
+    // whether the column is missing or the connection blinked, and reading a
+    // blink as "legacy shape" would delete an account without erasing it —
+    // permanently, since the table no longer cascades. This asks the catalogue
+    // directly and propagates anything that goes wrong, so an unanswerable
+    // question fails the deletion instead of silently skipping the erasure.
+    const snapshot = await introspectLiveSnapshot(this.db, this.dialect, [
+      "activity_log",
+    ]);
+    const columns =
+      snapshot.tables.find(t => t.name === "activity_log")?.columns ?? [];
+    if (!columns.some(c => c.name === ERASURE_STAMP_COLUMN)) {
       this.logger.warn(
-        "activity_log predates actor erasure (no actor_deleted_at column); " +
-          "deleting a user will not scrub their name and email from it, and " +
-          "the table's cascading key still removes their entries. Run " +
+        `activity_log predates identity erasure (no ${ERASURE_STAMP_COLUMN} ` +
+          "column); deleting a user will not scrub their name and email from " +
+          "it, and the table's cascading key still removes their entries. Run " +
           "`nextly migrate` to apply the core schema change."
       );
       return false;

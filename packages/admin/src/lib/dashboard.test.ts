@@ -49,7 +49,7 @@ describe("describeActivityActor", () => {
     userId: "a1b2c3d4-0000-4000-8000-000000000001",
     userName: "Ada Author",
     userEmail: "ada@example.com",
-    actorDeletedAt: null,
+    identityErasedAt: null,
   };
 
   it("shows a live actor by name", () => {
@@ -69,7 +69,7 @@ describe("describeActivityActor", () => {
       ...live,
       userName: null,
       userEmail: null,
-      actorDeletedAt: "2026-08-03T10:00:00Z",
+      identityErasedAt: "2026-08-03T10:00:00Z",
     });
 
     expect(actor.deleted).toBe(true);
@@ -84,13 +84,13 @@ describe("describeActivityActor", () => {
     const first = describeActivityActor({
       ...live,
       userName: null,
-      actorDeletedAt: "2026-08-03T10:00:00Z",
+      identityErasedAt: "2026-08-03T10:00:00Z",
     });
     const second = describeActivityActor({
       ...live,
       userId: "9f8e7d6c-0000-4000-8000-000000000002",
       userName: null,
-      actorDeletedAt: "2026-08-03T10:00:00Z",
+      identityErasedAt: "2026-08-03T10:00:00Z",
     });
 
     expect(first.name).not.toBe(second.name);

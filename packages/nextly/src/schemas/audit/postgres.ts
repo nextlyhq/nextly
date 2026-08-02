@@ -61,12 +61,17 @@ export const auditLog = pgTable(
  * constraint would make deleting an account that ever did anything fail
  * outright. The actor's identity is instead erased in place —
  * `eraseActorPersonalData` NULLs `user_name` / `user_email` and stamps
- * `actor_deleted_at` — so the audit FACT survives while the personal data
+ * `identity_erased_at` — so the audit FACT survives while the personal data
  * does not.
  *
  * `user_name` / `user_email` are therefore nullable: NULL means erased, and
- * `actor_deleted_at` records when, which is the evidence an erasure request
- * needs and which a bare NULL cannot supply.
+ * `identity_erased_at` records when, which is the evidence an erasure request
+ * needs and which a bare NULL cannot supply. It times THIS ROW's erasure
+ * rather than the account's deletion: for an entry erased by a deletion the
+ * two coincide, because the erasure runs inside that transaction, and for one
+ * written after the account was already gone nothing retains when that
+ * deletion happened — so naming it for the deletion would put a number in an
+ * audit field that no record supports.
  *
  * Retention: 90-day default cleanup via ActivityLogService.cleanupOldActivities()
  */
@@ -85,7 +90,7 @@ export const activityLog = pgTable(
     createdAt: timestamp("created_at", { withTimezone: false })
       .defaultNow()
       .notNull(),
-    actorDeletedAt: timestamp("actor_deleted_at", { withTimezone: false }),
+    identityErasedAt: timestamp("identity_erased_at", { withTimezone: false }),
   },
   t => [
     index("idx_activity_log_created_at").on(t.createdAt),

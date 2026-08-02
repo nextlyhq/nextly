@@ -66,7 +66,7 @@ export const activityLog = sqliteTable(
     createdAt: integer("created_at", { mode: "timestamp" })
       .notNull()
       .$defaultFn(() => new Date()),
-    actorDeletedAt: integer("actor_deleted_at", { mode: "timestamp" }),
+    identityErasedAt: integer("identity_erased_at", { mode: "timestamp" }),
   },
   t => [
     index("idx_activity_log_created_at").on(t.createdAt),

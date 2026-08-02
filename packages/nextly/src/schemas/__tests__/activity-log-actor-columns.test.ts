@@ -66,7 +66,7 @@ describe.each(DIALECTS)("activity_log on $name", ({ config }) => {
 
     // The marker that distinguishes an erased row from one that never carried
     // a name, and records when the erasure happened.
-    expect(byName.has("actor_deleted_at")).toBe(true);
-    expect(byName.get("actor_deleted_at")?.notNull).toBe(false);
+    expect(byName.has("identity_erased_at")).toBe(true);
+    expect(byName.get("identity_erased_at")?.notNull).toBe(false);
   });
 });

@@ -63,15 +63,8 @@ describeMaybe(
     beforeAll(async () => {
       adapter = createPostgresAdapter({ url: URL as string });
       await adapter.connect();
-
-      // Production DDL, applied only for a table that is genuinely missing —
-      // another suite in the same sequential run may already have created it.
       const kit = await getPgDrizzleKit();
-      for (const [name, table] of [
-        ["users", usersPg],
-        ["activity_log", activityLogPg],
-      ] as const) {
-        if (await adapter.tableExists(name)) continue;
+      const applyDdl = async (name: string, table: unknown): Promise<void> => {
         const statements = await kit.generateMigration(
           await kit.generateDrizzleJson({}),
           await kit.generateDrizzleJson({ [name]: table })
@@ -79,7 +72,21 @@ describeMaybe(
         for (const stmt of splitStatements(statements)) {
           await adapter.executeQuery(stmt);
         }
+      };
+
+      // `users` is shared with other suites in this sequential run, so it is
+      // only created when genuinely absent.
+      if (!(await adapter.tableExists("users"))) {
+        await applyDdl("users", usersPg);
       }
+
+      // `activity_log` is rebuilt outright. The Postgres test database is
+      // long-lived, and a table left by an older revision of this schema is
+      // missing the columns under test — which surfaces as a query error
+      // rather than a failed assertion, and says nothing about the code.
+      await adapter.executeQuery(`DROP TABLE IF EXISTS activity_log`);
+      await applyDdl("activity_log", activityLogPg);
+
       await adapter.executeQuery(
         `DELETE FROM activity_log WHERE user_id = $1`,
         [actorId]
@@ -145,9 +152,9 @@ describeMaybe(
         user_name: string | null;
         user_email: string | null;
         entry_title: string | null;
-        actor_deleted_at: Date | null;
+        identity_erased_at: Date | null;
       }>(
-        `SELECT user_name, user_email, entry_title, actor_deleted_at
+        `SELECT user_name, user_email, entry_title, identity_erased_at
          FROM activity_log WHERE user_id = $1`,
         [goneId]
       );
@@ -156,7 +163,7 @@ describeMaybe(
       expect(rows[0].entry_title).toBe("Landed After Deletion");
       expect(rows[0].user_name).toBeNull();
       expect(rows[0].user_email).toBeNull();
-      expect(rows[0].actor_deleted_at).not.toBeNull();
+      expect(rows[0].identity_erased_at).not.toBeNull();
 
       await adapter.executeQuery(
         `DELETE FROM activity_log WHERE user_id = $1`,
@@ -177,15 +184,15 @@ describeMaybe(
 
       const rows = await adapter.executeQuery<{
         user_name: string | null;
-        actor_deleted_at: Date | null;
+        identity_erased_at: Date | null;
       }>(
-        `SELECT user_name, actor_deleted_at FROM activity_log
+        `SELECT user_name, identity_erased_at FROM activity_log
         WHERE user_id = $1 AND entry_title = $2`,
         [actorId, "While Alive"]
       );
       expect(rows).toHaveLength(1);
       expect(rows[0].user_name).toBe("Locked Actor");
-      expect(rows[0].actor_deleted_at).toBeNull();
+      expect(rows[0].identity_erased_at).toBeNull();
     });
 
     it("waits for a conflicting hold on the account row, then commits", async () => {

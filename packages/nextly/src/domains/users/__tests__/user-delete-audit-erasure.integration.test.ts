@@ -83,7 +83,7 @@ interface ActivityRow {
   user_email: string | null;
   collection: string;
   entry_title: string | null;
-  actor_deleted_at: number | null;
+  identity_erased_at: number | null;
 }
 
 describe("deleting a user erases them from the activity log without erasing the log (real SQLite)", () => {
@@ -132,7 +132,7 @@ describe("deleting a user erases them from the activity log without erasing the 
   async function rowsFor(userId: string | number): Promise<ActivityRow[]> {
     return adapter.executeQuery<ActivityRow>(
       `SELECT id, user_id, user_name, user_email, collection, entry_title,
-              actor_deleted_at
+              identity_erased_at
          FROM activity_log WHERE user_id = ? ORDER BY collection`,
       [String(userId)]
     );
@@ -163,7 +163,7 @@ describe("deleting a user erases them from the activity log without erasing the 
     const before = await rowsFor(author.id);
     expect(before).toHaveLength(1);
     expect(before[0].user_name).toBe("Ada Author");
-    expect(before[0].actor_deleted_at).toBeNull();
+    expect(before[0].identity_erased_at).toBeNull();
 
     await users.deleteUser(author.id);
 
@@ -178,7 +178,7 @@ describe("deleting a user erases them from the activity log without erasing the 
     // Erasure: nothing identifying the human is left.
     expect(after[0].user_name).toBeNull();
     expect(after[0].user_email).toBeNull();
-    expect(after[0].actor_deleted_at).not.toBeNull();
+    expect(after[0].identity_erased_at).not.toBeNull();
 
     // The account itself really is gone — otherwise the assertions above would
     // hold for a delete that never happened.
@@ -230,14 +230,14 @@ describe("deleting a user erases them from the activity log without erasing the 
     // The identity does not.
     expect(rows[0].user_name).toBeNull();
     expect(rows[0].user_email).toBeNull();
-    expect(rows[0].actor_deleted_at).not.toBeNull();
+    expect(rows[0].identity_erased_at).not.toBeNull();
   });
 
   it("reports the erased state through the query API the admin reads", async () => {
     // The raw-SQL assertions above prove what is STORED. They say nothing
     // about what `getRecentActivity` returns, and the adapter keys rows by the
-    // Drizzle property (`actorDeletedAt`) whenever a table object resolves and
-    // by the column (`actor_deleted_at`) when it falls back to raw SQL. Reading
+    // Drizzle property (`identityErasedAt`) whenever a table object resolves and
+    // by the column (`identity_erased_at`) when it falls back to raw SQL. Reading
     // one spelling only reports every erased row as live, and the admin then
     // renders a blank actor instead of the deleted-user placeholder.
     const author = await users.createLocalUser({
@@ -263,7 +263,7 @@ describe("deleting a user erases them from the activity log without erasing the 
     expect(live.activities[0].userId).toBe(String(author.id));
     expect(live.activities[0].userName).toBe("Read Path");
     expect(live.activities[0].createdAt).not.toBe("undefined");
-    expect(live.activities[0].actorDeletedAt).toBeNull();
+    expect(live.activities[0].identityErasedAt).toBeNull();
 
     await users.deleteUser(author.id);
 
@@ -274,7 +274,7 @@ describe("deleting a user erases them from the activity log without erasing the 
     expect(erased.activities[0].userName).toBeNull();
     expect(erased.activities[0].userEmail).toBeNull();
     // The field the admin branches on to render "[deleted user · …]".
-    expect(erased.activities[0].actorDeletedAt).not.toBeNull();
+    expect(erased.activities[0].identityErasedAt).not.toBeNull();
   });
 
   it("returns the feed newest first", async () => {
@@ -339,12 +339,12 @@ describe("deleting a user erases them from the activity log without erasing the 
     await users.deleteUser(author.id);
     const erased = (await rowsFor(author.id))[0];
     expect(erased.user_name).toBeNull();
-    expect(erased.actor_deleted_at).not.toBeNull();
+    expect(erased.identity_erased_at).not.toBeNull();
 
     // A recognisable stamp, far enough in the past that a pass which rewrites
     // the row cannot land on the same value.
     await adapter.executeQuery(
-      "UPDATE activity_log SET actor_deleted_at = ? WHERE user_id = ?",
+      "UPDATE activity_log SET identity_erased_at = ? WHERE user_id = ?",
       [1000, String(author.id)]
     );
 
@@ -360,7 +360,7 @@ describe("deleting a user erases them from the activity log without erasing the 
     // Untouched: the row records when the identity was actually erased, not
     // when some later sweep happened to run over it again.
     const afterSweep = (await rowsFor(author.id))[0];
-    expect(afterSweep.actor_deleted_at).toBe(1000);
+    expect(afterSweep.identity_erased_at).toBe(1000);
   });
 
   it("leaves every other actor's entries untouched", async () => {
@@ -399,6 +399,6 @@ describe("deleting a user erases them from the activity log without erasing the 
     expect(untouched).toHaveLength(1);
     expect(untouched[0].user_name).toBe("Staying");
     expect(untouched[0].user_email).toBe("erasure-staying@test.local");
-    expect(untouched[0].actor_deleted_at).toBeNull();
+    expect(untouched[0].identity_erased_at).toBeNull();
   });
 });

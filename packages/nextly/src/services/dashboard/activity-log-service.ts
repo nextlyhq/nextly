@@ -49,12 +49,17 @@ export interface ActivityLogEntry {
   metadata: Record<string, unknown> | null;
   createdAt: string;
   /**
-   * When the actor's account was deleted and this row's identity erased.
+   * When THIS ROW's identity was erased. NULL while the actor still exists.
    *
-   * NULL for a live actor. Separate from a NULL name because "erased" and
-   * "never carried a name" are different facts, and only this one answers when.
+   * The row's own erasure, deliberately, not the account's deletion. For an
+   * entry erased by a deletion the two coincide, because the erasure runs
+   * inside that transaction. For one written after the account was already
+   * gone they do not: nothing retains when that deletion happened, and
+   * claiming otherwise would put a number in an audit field that no record
+   * supports. Separate from a NULL name because "erased" and "never carried a
+   * name" are different facts, and only this one answers when.
    */
-  actorDeletedAt: string | null;
+  identityErasedAt: string | null;
 }
 
 /** Input for recording a new activity. */
@@ -115,7 +120,7 @@ interface TransactionalActivityDb extends ActivityWriteDb {
 
 /** The two tables an activity write reads and writes. */
 interface ActivityWriteTables {
-  activityLog: Table & { actorDeletedAt: Column };
+  activityLog: Table & { identityErasedAt: Column };
   users: Table & { id: Column };
 }
 
@@ -165,7 +170,7 @@ export class ActivityLogService extends BaseService {
     identity: {
       userName: unknown;
       userEmail: unknown;
-      actorDeletedAt: unknown;
+      identityErasedAt: unknown;
     }
   ): Record<string, unknown> {
     return {
@@ -217,19 +222,21 @@ export class ActivityLogService extends BaseService {
     try {
       const tables = this.tables as ActivityWriteTables;
       const { activityLog, users } = tables;
-      const now = new Date();
 
       if (this.dialect === "sqlite") {
+        // Nothing to wait for here: SQLite takes no lock, so the statement
+        // runs at the moment this is read.
+        const now = new Date();
         const actorIsGone = sql`NOT EXISTS (SELECT 1 FROM ${users} WHERE ${users.id} = ${input.userId})`;
         // Encoded through the column itself: the stamp is an epoch integer
         // here, and an SQL fragment bypasses the mapping Drizzle would
         // otherwise apply to a plain value.
-        const erasedAt = activityLog.actorDeletedAt.mapToDriverValue(now);
+        const erasedAt = activityLog.identityErasedAt.mapToDriverValue(now);
         await (this.db as ActivityWriteDb).insert(activityLog).values(
           this.entryValues(input, now, {
             userName: sql`CASE WHEN ${actorIsGone} THEN NULL ELSE ${input.userName} END`,
             userEmail: sql`CASE WHEN ${actorIsGone} THEN NULL ELSE ${input.userEmail} END`,
-            actorDeletedAt: sql`CASE WHEN ${actorIsGone} THEN ${erasedAt} ELSE NULL END`,
+            identityErasedAt: sql`CASE WHEN ${actorIsGone} THEN ${erasedAt} ELSE NULL END`,
           })
         );
         return;
@@ -242,6 +249,10 @@ export class ActivityLogService extends BaseService {
           .where(eq(users.id, input.userId))
           .limit(1)
           .for("share");
+        // Read AFTER the lock is granted. Acquiring it can wait out a whole
+        // deletion, and a stamp taken before the wait would claim the identity
+        // was erased at a moment that precedes the deletion it records.
+        const settled = new Date();
         // Plain values, decided in JS: the lock makes the answer stable for the
         // rest of this transaction, and the transaction makes the read and the
         // write land together. Deciding it in SQL instead would need the same
@@ -249,10 +260,10 @@ export class ActivityLogService extends BaseService {
         // infer a parameter type for.
         const actorStillExists = actor.length > 0;
         await tx.insert(activityLog).values(
-          this.entryValues(input, now, {
+          this.entryValues(input, settled, {
             userName: actorStillExists ? input.userName : null,
             userEmail: actorStillExists ? input.userEmail : null,
-            actorDeletedAt: actorStillExists ? null : now,
+            identityErasedAt: actorStillExists ? null : settled,
           })
         );
       });
@@ -420,7 +431,7 @@ export class ActivityLogService extends BaseService {
     // `user_name`. Reading the column spelling yielded undefined for every
     // field and surfaced as the string "undefined" in the feed.
     const createdAt = row.createdAt;
-    const actorDeletedAt = row.actorDeletedAt;
+    const identityErasedAt = row.identityErasedAt;
 
     return {
       id: String(row.id),
@@ -439,10 +450,10 @@ export class ActivityLogService extends BaseService {
       metadata,
       createdAt:
         createdAt instanceof Date ? createdAt.toISOString() : String(createdAt),
-      actorDeletedAt:
-        actorDeletedAt instanceof Date
-          ? actorDeletedAt.toISOString()
-          : toNullableString(actorDeletedAt),
+      identityErasedAt:
+        identityErasedAt instanceof Date
+          ? identityErasedAt.toISOString()
+          : toNullableString(identityErasedAt),
     };
   };
 }

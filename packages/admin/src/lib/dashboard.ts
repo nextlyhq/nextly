@@ -40,12 +40,12 @@ export function describeActivityActor(entry: {
   userId: string;
   userName: string | null;
   userEmail: string | null;
-  actorDeletedAt: string | null;
+  identityErasedAt: string | null;
 }): ActivityUser {
   // The stamp is the authority: a live actor can legitimately have no name
   // (the writer falls back through name → firstName → email), and calling
   // that person deleted would be worse than showing an empty label.
-  const deleted = entry.actorDeletedAt !== null;
+  const deleted = entry.identityErasedAt !== null;
 
   if (!deleted) {
     return {

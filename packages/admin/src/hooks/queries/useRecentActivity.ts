@@ -37,8 +37,8 @@ interface ActivityLogEntry {
   entryTitle: string | null;
   metadata: Record<string, unknown> | null;
   createdAt: string;
-  /** When the actor's account was deleted; null while it still exists. */
-  actorDeletedAt: string | null;
+  /** When this row's identity was erased; null while the actor exists. */
+  identityErasedAt: string | null;
 }
 
 interface ActivityLogApiResponse {

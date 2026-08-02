@@ -123,16 +123,16 @@ describeMaybe("the locked activity write on MySQL", () => {
 
     const rows = await adapter.executeQuery<{
       user_name: string | null;
-      actor_deleted_at: Date | null;
+      identity_erased_at: Date | null;
     }>(
-      `SELECT user_name, actor_deleted_at FROM activity_log WHERE user_id = ?`,
+      `SELECT user_name, identity_erased_at FROM activity_log WHERE user_id = ?`,
       [LIVE_ACTOR]
     );
     // A write that silently failed would leave this empty, which is exactly
     // how the Postgres defect presented.
     expect(rows).toHaveLength(1);
     expect(rows[0].user_name).toBe("Live Actor");
-    expect(rows[0].actor_deleted_at).toBeNull();
+    expect(rows[0].identity_erased_at).toBeNull();
   });
 
   it("writes an entry erased when its author is already gone", async () => {
@@ -156,9 +156,9 @@ describeMaybe("the locked activity write on MySQL", () => {
       user_name: string | null;
       user_email: string | null;
       entry_title: string | null;
-      actor_deleted_at: Date | null;
+      identity_erased_at: Date | null;
     }>(
-      `SELECT user_name, user_email, entry_title, actor_deleted_at
+      `SELECT user_name, user_email, entry_title, identity_erased_at
          FROM activity_log WHERE user_id = ?`,
       [GONE_ACTOR]
     );
@@ -167,6 +167,6 @@ describeMaybe("the locked activity write on MySQL", () => {
     expect(rows[0].entry_title).toBe("Landed After Deletion");
     expect(rows[0].user_name).toBeNull();
     expect(rows[0].user_email).toBeNull();
-    expect(rows[0].actor_deleted_at).not.toBeNull();
+    expect(rows[0].identity_erased_at).not.toBeNull();
   });
 });

@@ -79,7 +79,7 @@ export const activityLog = mysqlTable(
     // the server's explicit_defaults_for_timestamp mode, which can rewrite it
     // to NOT NULL DEFAULT CURRENT_TIMESTAMP and make every row read as an
     // erased actor.
-    actorDeletedAt: datetime("actor_deleted_at"),
+    identityErasedAt: datetime("identity_erased_at"),
   },
   t => [
     index("idx_activity_log_created_at").on(t.createdAt),

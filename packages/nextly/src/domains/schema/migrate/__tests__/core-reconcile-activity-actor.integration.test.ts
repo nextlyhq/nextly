@@ -134,7 +134,7 @@ describe("core reconcile on a pre-change SQLite database with content", () => {
     const before = sqlite
       .prepare(`PRAGMA table_info("activity_log")`)
       .all() as ColumnInfo[];
-    expect(before.map(c => c.name)).not.toContain("actor_deleted_at");
+    expect(before.map(c => c.name)).not.toContain("identity_erased_at");
     expect(before.find(c => c.name === "user_name")?.notnull).toBe(1);
     expect(
       sqlite
@@ -151,7 +151,7 @@ describe("core reconcile on a pre-change SQLite database with content", () => {
       .prepare(`PRAGMA table_info("activity_log")`)
       .all() as ColumnInfo[];
     // The marker the erasure writes; without it every user deletion fails.
-    expect(after.map(c => c.name)).toContain("actor_deleted_at");
+    expect(after.map(c => c.name)).toContain("identity_erased_at");
     // The identity columns have to be erasable.
     expect(after.find(c => c.name === "user_name")?.notnull).toBe(0);
     expect(after.find(c => c.name === "user_email")?.notnull).toBe(0);

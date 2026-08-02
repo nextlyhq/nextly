@@ -46,7 +46,7 @@ export interface ErasableAuditTables {
     userId: Column;
     userName: Column;
     userEmail: Column;
-    actorDeletedAt: Column;
+    identityErasedAt: Column;
   };
 }
 
@@ -77,12 +77,14 @@ export async function eraseActorPersonalData(
   await db
     .update(activityLog)
     .set({
-      // NULL is the erased state. `actorDeletedAt` is what distinguishes it
+      // NULL is the erased state. `identityErasedAt` is what distinguishes it
       // from a row that simply never carried a name, and it records when the
-      // erasure happened, which is the evidence an erasure request needs.
+      // erasure happened, which is the evidence an erasure request needs. On
+      // this path that is also when the account was deleted, because it runs
+      // inside that transaction.
       userName: null,
       userEmail: null,
-      actorDeletedAt: erasedAt,
+      identityErasedAt: erasedAt,
     })
     .where(
       and(
@@ -96,7 +98,7 @@ export async function eraseActorPersonalData(
         or(
           isNotNull(activityLog.userName),
           isNotNull(activityLog.userEmail),
-          isNull(activityLog.actorDeletedAt)
+          isNull(activityLog.identityErasedAt)
         )
       )
     );

@@ -129,7 +129,7 @@ describe("deleting a user on a database with no activity_log (real SQLite)", () 
     const columns = await adapter.executeQuery<{ name: string }>(
       `SELECT name FROM pragma_table_info('activity_log')`
     );
-    expect(columns.map(c => c.name)).not.toContain("actor_deleted_at");
+    expect(columns.map(c => c.name)).not.toContain("identity_erased_at");
 
     const doomed = await legacyUsers.createLocalUser({
       email: "legacy-activity-log@test.local",

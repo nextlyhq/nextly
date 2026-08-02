@@ -186,7 +186,7 @@ const addsWebhooksColumn = (stmt: string): boolean =>
 // activity trail. Undoing that is a one-time migration on a table that predates
 // the fixture, so it lands outside every allowlist above: the key is dropped,
 // the two identity columns become nullable so a deleted account's name and
-// email can be erased without deleting the row, and `actor_deleted_at` is
+// email can be erased without deleting the row, and `identity_erased_at` is
 // added. Every one of those is data-preserving — nothing here drops a column or
 // a row — and the pass-2 assertion is what proves the new shape then
 // round-trips to silence rather than being re-proposed forever.
@@ -231,7 +231,7 @@ const migratesActivityLogActor = (stmt: string): boolean => {
       s
     ) ||
     // The marker that says an identity was erased, and when.
-    /\bADD (COLUMN )?[`"]?actor_deleted_at[`"]?\b/i.test(s)
+    /\bADD (COLUMN )?[`"]?identity_erased_at[`"]?\b/i.test(s)
   );
 };
 
