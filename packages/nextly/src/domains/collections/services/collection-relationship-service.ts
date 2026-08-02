@@ -95,11 +95,12 @@ interface NestedHookStateBase {
    * Every related row the pass reached, in visit order, with what is needed to
    * finish it.
    *
-   * Masking and hiding cannot be interleaved per row. The walk descends deepest
-   * first, so hiding a child's fields as it is finished removes exactly the
-   * evidence its PARENT's masking rule is about to read -- reproducing, one
-   * level down, the defect the reordering exists to fix. So the rows are
-   * collected here and hidden only once every hook in the document has run.
+   * Field access is applied to each row during the walk (before its parent's
+   * hooks, so a parent hook cannot read a denied child field to copy it). These
+   * entries drive a SECOND access pass and the label rebuild in
+   * `finalizeRelatedRows`, after every hook has run: the second pass strips a
+   * denied field a parent hook reintroduced onto an already-redacted child, and
+   * labels are rebuilt last from the values that survived.
    */
   pending: Array<{
     row: Record<string, unknown>;
@@ -2991,19 +2992,30 @@ export class CollectionRelationshipService extends BaseService {
   }
 
   /**
-   * Rebuild the labels of every related row the walk reached.
+   * The SECOND field-access pass over every related row the walk reached, then
+   * the label rebuild.
    *
-   * Field access is applied during the walk now (each row right after its own
-   * hooks, before its parent's), so this no longer hides anything -- it only
-   * refreshes labels. Labels come last of all, from the values that survived
-   * redaction: a label copies a field under another key, so one rebuilt earlier
-   * would outlive the removal of its own source field.
+   * Access is applied to each row once during the walk already -- right after
+   * its own hooks and before its parent's, so a parent hook cannot read a denied
+   * child field to copy it elsewhere. This pass runs it again, after every hook
+   * in the document has run, because a parent hook can also REINTRODUCE a denied
+   * field onto an already-redacted child (assigning `data.child.secret` to mask
+   * or derive a value); without a pass after the hooks that reintroduced field
+   * would be returned. It is idempotent on a row nothing reintroduced into -- the
+   * denied field is simply already gone.
+   *
+   * Labels come last of all, from the values that survived both passes: a label
+   * copies a field under another key, so one rebuilt earlier would outlive the
+   * removal of its own source field.
    */
   async finalizeRelatedRows(
     state: NestedHookState,
     access: RelatedRowAccess
   ): Promise<void> {
     if (!access.enforceFieldAccess) return;
+    for (const { row, collection } of state.pending) {
+      await this.applyRelatedRowReadAccess(collection, [row], access);
+    }
     for (const { row, collection, field } of state.pending) {
       await this.refreshRelatedRowLabel(row, field, { collection }, state);
     }
@@ -3181,17 +3193,19 @@ export class CollectionRelationshipService extends BaseService {
       // values, and a direct read redacts a nested row before the parent
       // collection's field hooks for the same reason, so applying it here keeps
       // the nested path consistent with the direct one. Under `overrideAccess`
-      // this is a no-op, leaving trusted assembly untouched.
+      // this is a no-op, leaving trusted assembly untouched. This is the FIRST of
+      // two passes: `finalizeRelatedRows` runs it once more after every hook, to
+      // strip a denied field a later parent hook reintroduces onto this row.
       await this.applyRelatedRowReadAccess(
         resolved.collection,
         [resolved.row],
         access
       );
 
-      // Still queued for the label refresh, which runs last of all (in
-      // `finalizeRelatedRows`) from the values that survived redaction: a label
-      // copies a field under another key, so one rebuilt earlier would outlive
-      // the removal of its own source field.
+      // Queued for the second access pass and the label refresh, both in
+      // `finalizeRelatedRows` once every hook has run. Labels come last of all,
+      // from the values that survived: a label copies a field under another key,
+      // so one rebuilt earlier would outlive the removal of its own source field.
       state.pending.push({
         row: resolved.row,
         collection: resolved.collection,

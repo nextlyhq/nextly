@@ -1571,8 +1571,10 @@ export class CollectionQueryService extends BaseService {
           nestedHookState
         );
       }
-      // Once, after the whole listing: hiding a row as it is finished would take
-      // the evidence away from a rule on a row walked later.
+      // Once, after the whole listing: the walk already applied field access to
+      // each related row before its parent's hooks; this runs the SECOND pass
+      // (stripping a denied field a parent hook reintroduced) and rebuilds labels
+      // from the survivors.
       await this.relationshipService.finalizeRelatedRows(
         nestedHookState,
         nestedAccess

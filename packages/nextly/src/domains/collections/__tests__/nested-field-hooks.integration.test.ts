@@ -150,6 +150,25 @@ async function boot(): Promise<TestNextly> {
               ],
             },
           }),
+          // Writes a denied field back ONTO the child after the child's access
+          // pass has already removed it. Fires only when the field is present, so
+          // a test opts in per row; a second access pass after all hooks must
+          // strip what it reintroduced.
+          text({
+            name: "reintroducer",
+            hooks: {
+              afterRead: [
+                ({ value, data }) => {
+                  const org = (data as { organization?: unknown }).organization;
+                  if (org && typeof org === "object") {
+                    (org as Record<string, unknown>).classification =
+                      "reintroduced";
+                  }
+                  return value;
+                },
+              ],
+            },
+          }),
         ],
       }),
       defineCollection({
@@ -478,6 +497,42 @@ describe("a target's field hooks apply to rows reached through a relationship", 
     // either, so it did not mask — the value it tried to guard on that basis is
     // returned unchanged. Masking must not depend on data the caller cannot see.
     expect(author.secret).toBe("TOP_SECRET");
+  });
+
+  it("re-strips a denied child field a parent hook reintroduces after the first pass", async () => {
+    // The first access pass (during the walk) removes the child's denied field
+    // before the parent's hooks run. A parent hook can still write it back onto
+    // the child afterward — to mask or derive a value — so a second access pass
+    // after every hook is what keeps that reintroduced field out of the response.
+    const t = await boot();
+    await t.nextly.create({
+      collection: ORGS,
+      data: { name: "acme", classification: "private" },
+    });
+    const orgId = await onlyId(t, ORGS);
+    await t.nextly.create({
+      collection: AUTHORS,
+      // `reintroducer` present, so its hook fires and reassigns the org's denied
+      // `classification` after the first pass stripped it.
+      data: { name: "ada", organization: orgId, reintroducer: "on" },
+    });
+    const authorId = await onlyId(t, AUTHORS);
+    await t.nextly.create({
+      collection: POSTS,
+      data: { title: "p", author: authorId },
+    });
+    const postId = await onlyId(t, POSTS);
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    const author = expanded.data!.author as Record<string, unknown>;
+    const org = author.organization as Record<string, unknown> | undefined;
+    // The second pass removed the value the hook wrote back — not "reintroduced".
+    if (org) expect(org.classification).toBeUndefined();
   });
 
   it("masks a dropped relationship before a source hook can copy out of it", async () => {
