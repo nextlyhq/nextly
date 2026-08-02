@@ -25,7 +25,6 @@
  */
 import type { CssNode } from "css-tree";
 import parse from "css-tree/parser";
-import walk from "css-tree/walker";
 
 /** Why a value was refused. Each maps to a stable validation issue code. */
 export type CssValueRejection =
@@ -573,9 +572,21 @@ function callType(
   percentBase: string
 ): TypeResult {
   const name = identifierOf(node);
-  // These report a ratio, a sign or an exponent, all of them bare numbers.
-  if (NUMBER_FUNCTIONS.has(name)) return NUMBER_TYPE;
-  if (ANGLE_FUNCTION_ARITY.has(name)) return new Map([["angle", 1]]);
+  // These report a ratio, a sign or an exponent, all of them bare numbers, and
+  // these an angle. What they PRODUCE is fixed, but an argument that is itself
+  // nonsense makes the whole declaration nonsense, so the arguments are still
+  // read: `sign(1px + 1deg)` reports on a sum that does not exist.
+  const fixed = NUMBER_FUNCTIONS.has(name)
+    ? NUMBER_TYPE
+    : ANGLE_FUNCTION_ARITY.has(name)
+      ? ANGLE_TYPE
+      : undefined;
+  if (fixed !== undefined) {
+    for (const argument of splitArguments(node.children)) {
+      if (numericType(argument, percentBase) === "invalid") return "invalid";
+    }
+    return fixed;
+  }
   // Everything else resolves to something this cannot see: a custom property,
   // an environment variable, an anchor, an attribute.
   if (!MATH_FUNCTIONS.has(name)) return "unknown";
@@ -676,6 +687,7 @@ function typeIsMeasurement(type: NumericType, allowNumber: boolean): boolean {
 
 const LENGTH_TYPE: NumericType = new Map([["length", 1]]);
 const PERCENT_TYPE: NumericType = new Map([["percent", 1]]);
+const ANGLE_TYPE: NumericType = new Map([["angle", 1]]);
 
 /**
  * The operands of a math function: its arguments, with a leading strategy
@@ -898,57 +910,71 @@ function nestedUrlRejection(ast: CssNode): CssValueRejection | null {
 }
 
 function walkForUrlRejection(
-  ast: CssNode,
+  node: CssNode,
+  urlContext = false,
   depth = 0
 ): CssValueRejection | null {
-  let rejection: CssValueRejection | null = null;
-  const raws: string[] = [];
-  walk(ast, {
-    enter(node: CssNode) {
-      if (node.type === "Url") {
-        rejection ??= checkUrlValue(node.value, "quoted");
-        return;
-      }
-      // A custom property's fallback is kept unparsed, so nothing inside it is
-      // walked: `var(--x, url("javascript:…"))` reaches the page whenever the
-      // property is absent, and would otherwise never meet the scheme check.
-      if (node.type === "Raw") {
-        raws.push(node.value);
-        return;
-      }
-      if (node.type !== "Function") return;
-      const name = identifierOf(node);
-      if (!URL_STRING_FUNCTIONS.has(name)) return;
-      let sawString = false;
-      for (const child of node.children) {
-        if (child.type !== "String") continue;
-        sawString = true;
-        rejection ??= checkUrlValue(child.value, "quoted");
-      }
+  switch (node.type) {
+    case "Url":
+      return checkUrlValue(node.value, "quoted");
+    case "String":
+      // A quoted string is a URL only where the function around it loads one.
+      // The same string is a font family somewhere else, so the surrounding
+      // context decides, not the node.
+      return urlContext ? checkUrlValue(node.value, "quoted") : null;
+    case "Raw": {
+      // A custom property's fallback is kept unparsed, so it has to be read
+      // back or `var(--x, url("javascript:…"))` reaches the page whenever the
+      // property is absent. It is read back IN CONTEXT: an unset property
+      // hands its fallback straight to the function around it, so a bare
+      // string there is loaded exactly as a written-out one would be.
+      // Bounded by the same depth cap the bracket count enforces, so a
+      // fallback inside a fallback cannot recurse without end.
+      if (depth >= MAX_VALUE_NESTING) return null;
+      const parsed = parseValue(node.value);
+      return parsed === null
+        ? null
+        : walkForUrlRejection(parsed, urlContext, depth + 1);
+    }
+    default:
+      break;
+  }
+  if (!("children" in node) || node.children === null) return null;
+  let inner = urlContext;
+  if (node.type === "Function") {
+    const name = identifierOf(node);
+    if (URL_STRING_FUNCTIONS.has(name)) {
+      inner = true;
       // Only `url()` takes an unquoted argument, and only by an escaped
       // spelling does one reach here as a function: a run of tokens rather
       // than a string, with the colon that names the scheme hidden inside an
       // identifier. The image functions take a string or a nested `url()`,
-      // both of which are already covered, so reading their tokens back would
-      // refuse values the walk has in hand.
-      if (!sawString && name === "url") {
+      // both of which the recursion already reaches.
+      if (name === "url" && !hasStringChild(node.children)) {
         const text = unquotedUrlText(node.children);
-        rejection ??=
-          text === null ? "unsafe-url-characters" : checkUrlValue(text, "raw");
+        return text === null
+          ? "unsafe-url-characters"
+          : checkUrlValue(text, "raw");
       }
-    },
-  });
-  if (rejection !== null) return rejection;
-  // Bounded by the same depth cap the bracket count enforces, so a fallback
-  // nested inside a fallback cannot recurse without end.
-  if (depth >= MAX_VALUE_NESTING) return null;
-  for (const raw of raws) {
-    const parsed = parseValue(raw);
-    if (parsed === null) continue;
-    const nested = walkForUrlRejection(parsed, depth + 1);
-    if (nested !== null) return nested;
+    } else if (name !== "var" && name !== "env") {
+      // A reference passes its context through to whatever stands in for it;
+      // every other function establishes its own, and a string inside one is
+      // not a URL because it sits inside something that is.
+      inner = false;
+    }
+  }
+  for (const child of node.children) {
+    const rejection = walkForUrlRejection(child, inner, depth);
+    if (rejection !== null) return rejection;
   }
   return null;
+}
+
+function hasStringChild(children: Iterable<CssNode>): boolean {
+  for (const child of children) {
+    if (child.type === "String") return true;
+  }
+  return false;
 }
 
 /**

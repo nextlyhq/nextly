@@ -1020,35 +1020,46 @@ describe("style keys inherited from a prototype", () => {
     });
   }
 
-  it("are not walked as if the document declared them", () => {
-    // The envelope is enumerated lazily, which reaches inherited enumerable
-    // keys as well; a crafted prototype would otherwise be validated, and
-    // reported against, as though it were stored content.
+  function codesFor(styles: unknown): string[] {
+    return validate(docWithRawStyles(styles), {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+    }).map(issue => issue.code);
+  }
+
+  it("are refused along with the object carrying them", () => {
+    // A document is JSON, and this object is not a JSON value: what would be
+    // stored is the own keys alone. Saying so is better than validating the
+    // own keys and dropping the rest in silence.
     const styles = Object.create({
       hover: { base: { nope: "1px" } },
     }) as Record<string, unknown>;
     styles.base = { base: { display: "block" } };
-    expect(
-      validate(docWithRawStyles(styles), {
-        breakpoints: FIXTURE_BREAKPOINTS,
-        mode: "strict",
-      })
-    ).toEqual([]);
+    expect(codesFor(styles)).toEqual(["invalid-style-values"]);
   });
 
-  it("are not walked at the breakpoint level either", () => {
+  it("are refused at the breakpoint level too", () => {
     // The inherited key has to differ from the own one, or it is shadowed and
     // never enumerated separately, which would prove nothing.
     const byBreakpoint = Object.create({
       tablet: { nope: "1px" },
     }) as Record<string, unknown>;
     byBreakpoint.base = { display: "block" };
-    expect(
-      validate(docWithRawStyles({ base: byBreakpoint }), {
-        breakpoints: FIXTURE_BREAKPOINTS,
-        mode: "strict",
-      })
-    ).toEqual([]);
+    expect(codesFor({ base: byBreakpoint })).toEqual(["invalid-style-values"]);
+  });
+
+  it("are not read off a polluted Object.prototype", () => {
+    // The threat a plain object cannot be refused out of: every object built
+    // from JSON inherits from Object.prototype, so polluting it would make
+    // every document appear to declare a state it never stored. The own-key
+    // walk is what holds here, not the shape check.
+    const polluted = Object.prototype as unknown as Record<string, unknown>;
+    polluted.hover = { base: { nope: "1px" } };
+    try {
+      expect(codesFor({ base: { base: { display: "block" } } })).toEqual([]);
+    } finally {
+      delete polluted.hover;
+    }
   });
 });
 

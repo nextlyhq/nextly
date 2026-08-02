@@ -19,6 +19,7 @@ import {
 import { describeValue, pointer } from "./issue-text";
 import { DEFAULT_LIMITS, LIMIT_WARNING_RATIO } from "./limits";
 import type { DocumentLimits } from "./limits";
+import { isPlainRecord } from "./plain-record";
 import {
   newStyleIssueBudget,
   validateStyleValues,
@@ -130,10 +131,6 @@ const NODE_TYPE_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*\/[a-z0-9]+(?:-[a-z0-9]+)*$/;
  */
 const ENGINE_NODE_TYPES = new Set<string>([COMPONENT_INSTANCE_TYPE]);
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 /**
  * Validate a document. Returns every issue found (empty array = valid). In
  * `strict` mode, preservable-but-unknown problems (unknown node type, dangling
@@ -155,7 +152,7 @@ export function validate(
   // aliases the same value as `unknown`: reads through it are legitimately
   // untrusted, while `doc` keeps its declared type for the typed helper calls.
   const rawDoc: unknown = doc;
-  if (!isPlainObject(rawDoc)) {
+  if (!isPlainRecord(rawDoc)) {
     issues.push({
       path: "",
       code: "invalid-document",
@@ -223,7 +220,7 @@ export function validate(
 
   // Document-level styles use the same envelope as node styles but have no
   // owning node, so validate them here or they would go unchecked.
-  if (isPlainObject(rawDoc.settings) && rawDoc.settings.styles !== undefined) {
+  if (isPlainRecord(rawDoc.settings) && rawDoc.settings.styles !== undefined) {
     validateStyleEnvelope(
       rawDoc.settings.styles,
       "/settings/styles",
@@ -250,7 +247,7 @@ export function validate(
   for (let i = 0; i < queue.length && i < limits.maxNodes; i++) {
     const { node, path } = queue[i];
     validateNode(node, path, nodeState);
-    if (isPlainObject(node) && isPlainObject(node.slots)) {
+    if (isPlainRecord(node) && isPlainRecord(node.slots)) {
       for (const [slot, children] of Object.entries(node.slots)) {
         if (Array.isArray(children)) {
           const slotPath = pointer(pointer(path, "slots"), slot);
@@ -286,13 +283,13 @@ function collectBreakpointIds(
   // null/malformed set or axis is skipped rather than dereferenced.
   const set: unknown = breakpoints;
   const scanAxis = (axis: "viewport" | "container"): void => {
-    const defs = isPlainObject(set) ? set[axis] : undefined;
+    const defs = isPlainRecord(set) ? set[axis] : undefined;
     if (!Array.isArray(defs)) return;
     defs.forEach((def, index) => {
       // A malformed definition (null, missing id) contributes no usable
       // breakpoint id, so it is skipped rather than dereferenced.
       const rawDef: unknown = def;
-      if (!isPlainObject(rawDef) || typeof rawDef.id !== "string") return;
+      if (!isPlainRecord(rawDef) || typeof rawDef.id !== "string") return;
       const id = rawDef.id;
       if (ids.has(id)) {
         issues.push({
@@ -512,7 +509,7 @@ function validateNode(
   state: NodeCheckState
 ): void {
   const { issues } = state;
-  if (!isPlainObject(node)) {
+  if (!isPlainRecord(node)) {
     issues.push({
       path,
       code: "invalid-node",
@@ -583,7 +580,7 @@ function validateNode(
     });
   }
 
-  if (!isPlainObject(node.props)) {
+  if (!isPlainRecord(node.props)) {
     issues.push({
       path: pointer(path, "props"),
       code: "invalid-props",
@@ -637,7 +634,7 @@ function validateDomIds(
   } else if (typeof node.cssId === "string" && node.cssId.length > 0) {
     report(node.cssId, pointer(path, "cssId"));
   }
-  if (isPlainObject(node.attributes)) {
+  if (isPlainRecord(node.attributes)) {
     for (const [key, value] of Object.entries(node.attributes)) {
       if (key.toLowerCase() === "id" && typeof value === "string" && value) {
         // One node setting the same id through both `cssId` and `attributes.id`
@@ -656,7 +653,7 @@ function validateSlots(
   state: NodeCheckState
 ): void {
   if (node.slots === undefined) return;
-  if (!isPlainObject(node.slots)) {
+  if (!isPlainRecord(node.slots)) {
     state.issues.push({
       path: pointer(path, "slots"),
       code: "invalid-slots",
@@ -712,7 +709,7 @@ function validateAttributes(
 ): void {
   if (node.attributes === undefined) return;
   if (
-    !isPlainObject(node.attributes) ||
+    !isPlainRecord(node.attributes) ||
     !Object.values(node.attributes).every(v => typeof v === "string")
   ) {
     issues.push({
@@ -794,7 +791,7 @@ function validateStyleEnvelope(
   stylesPath: string,
   state: NodeCheckState
 ): void {
-  if (!isPlainObject(styles)) {
+  if (!isPlainRecord(styles)) {
     // Charged like every other style issue, and checked first: one per node
     // sounds bounded until a document carries thousands of nodes, and the cap
     // is document-wide rather than per node.
@@ -828,7 +825,7 @@ function validateStyleEnvelope(
     const stateIsKnown = STYLE_STATES.includes(
       stateKey as (typeof STYLE_STATES)[number]
     );
-    const stateHasOwnIssue = !stateIsKnown || !isPlainObject(byBreakpoint);
+    const stateHasOwnIssue = !stateIsKnown || !isPlainRecord(byBreakpoint);
     if (state.styleBudget.remaining <= 0 && stateHasOwnIssue) {
       state.issues.push(...styleBudgetExhausted(state, stylesPath));
       return;
@@ -845,7 +842,7 @@ function validateStyleEnvelope(
       state.styleBudget.remaining -= 1;
       continue;
     }
-    if (!isPlainObject(byBreakpoint)) {
+    if (!isPlainRecord(byBreakpoint)) {
       state.issues.push({
         path: statePath,
         code: "invalid-style-values",
@@ -864,7 +861,7 @@ function validateStyleEnvelope(
       // would let the walk run past the cap while emitting. Skipping just this
       // entry's VALUES, at the recheck below, is free whenever there are none,
       // whatever the breakpoint id turned out to be.
-      const noValuesHere = isPlainObject(values) && !hasOwnKey(values);
+      const noValuesHere = isPlainRecord(values) && !hasOwnKey(values);
       const nothingLeftHere =
         noValuesHere && state.knownBreakpoints.has(breakpointId);
       if (state.styleBudget.remaining <= 0 && !nothingLeftHere) {
@@ -891,7 +888,7 @@ function validateStyleEnvelope(
         state.issues.push(...styleBudgetExhausted(state, bpPath));
         return;
       }
-      if (!isPlainObject(values)) {
+      if (!isPlainRecord(values)) {
         state.issues.push({
           path: bpPath,
           code: "invalid-style-values",
@@ -928,7 +925,7 @@ function validateVisibility(
   if (node.visibility === undefined) return;
   const vis = node.visibility;
   const visPath = pointer(path, "visibility");
-  if (!isPlainObject(vis)) {
+  if (!isPlainRecord(vis)) {
     state.issues.push({
       path: visPath,
       code: "invalid-visibility",
@@ -953,7 +950,7 @@ function validateVisibility(
     }
   }
   if (vis.devices !== undefined) {
-    if (!isPlainObject(vis.devices)) {
+    if (!isPlainRecord(vis.devices)) {
       state.issues.push({
         path: pointer(visPath, "devices"),
         code: "invalid-visibility",
@@ -999,7 +996,7 @@ function isConditionsShapeValid(conditions: unknown): boolean {
     for (let c = 0; c < group.length; c++) {
       const cond: unknown = group[c];
       if (
-        !isPlainObject(cond) ||
+        !isPlainRecord(cond) ||
         typeof cond.field !== "string" ||
         typeof cond.op !== "string"
       ) {
@@ -1026,7 +1023,7 @@ function validateBindings(
   issues: ValidationIssue[]
 ): void {
   if (node.bindings === undefined) return;
-  if (!isPlainObject(node.bindings)) {
+  if (!isPlainRecord(node.bindings)) {
     issues.push({
       path: pointer(path, "bindings"),
       code: "invalid-binding",
@@ -1040,7 +1037,7 @@ function validateBindings(
     const bPath = pointer(bindingsPath, prop);
     // Check the shape BEFORE reading any field: a null/primitive binding value
     // must produce an issue, not a thrown property access.
-    if (!isPlainObject(binding)) {
+    if (!isPlainRecord(binding)) {
       issues.push({
         path: bPath,
         code: "invalid-binding",
@@ -1113,7 +1110,7 @@ function validateComponentInstance(
   // Only check componentId once props is an object: if props is missing or
   // malformed, `invalid-props` already covers it and a `/props/componentId`
   // pointer would target a location a fixer cannot edit.
-  if (!isPlainObject(node.props)) return;
+  if (!isPlainRecord(node.props)) return;
   const componentId = node.props.componentId;
   if (typeof componentId !== "string" || componentId.length === 0) {
     issues.push({

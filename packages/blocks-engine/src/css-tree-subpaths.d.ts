@@ -1,5 +1,5 @@
 /**
- * Types for the two css-tree subpath entries this package imports.
+ * Types for the css-tree subpath entry this package imports.
  *
  * `@types/css-tree` describes only the root entry, but the root pulls in
  * css-tree's MDN-backed reference data, which loads `node:module` and would

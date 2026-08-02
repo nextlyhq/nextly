@@ -9,6 +9,7 @@
  */
 import { isTokenRef } from "../document";
 import { describeValue, pointer } from "../issue-text";
+import { isPlainRecord } from "../plain-record";
 import type { ValidationIssue, ValidationMode } from "../validation";
 
 import { getStyleProperty } from "./catalog";
@@ -82,10 +83,6 @@ export function tokenKindsForProperty(property: string): readonly TokenKind[] {
     }
   }
   return kinds;
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function invalid(
@@ -331,11 +328,11 @@ function partIssues(
   budget?: StyleIssueBudget,
   spent = 0
 ): ValidationIssue[] {
-  if (!isPlainObject(value)) {
+  if (!isPlainRecord(value)) {
     return [
       invalid(
         path,
-        `${describeValue(value)} is not an object.`,
+        `${describeValue(value)} is not a plain object.`,
         `Use an object with any of: ${Object.keys(parts).join(", ")}.`
       ),
     ];

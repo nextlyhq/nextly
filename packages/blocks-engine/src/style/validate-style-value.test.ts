@@ -118,6 +118,22 @@ describe("composite shapes", () => {
     const issues = check({ background: { srcset: "x.png" } });
     expect(issues[0]?.path).toBe("/styles/background/srcset");
   });
+
+  it("refuses an object that is not a plain record", () => {
+    // These carry no own enumerable keys, so a walk over one finds nothing to
+    // complain about and reports it clean. Storage then puts the document
+    // through JSON, where a Date becomes a string and a Map becomes `{}`, and
+    // the same validator refuses on the next read what it just accepted.
+    expect(codes({ margin: new Date() })).toEqual(["invalid-style-value"]);
+    expect(codes({ background: new Map() })).toEqual(["invalid-style-value"]);
+    expect(codes({ position: /x/ })).toEqual(["invalid-style-value"]);
+  });
+
+  it("accepts a record with no prototype, which JSON leaves alone", () => {
+    const sides = Object.create(null) as Record<string, unknown>;
+    sides.inlineStart = "2rem";
+    expect(codes({ padding: sides })).toEqual([]);
+  });
 });
 
 describe("union shapes", () => {
@@ -229,6 +245,34 @@ describe("url safety", () => {
       "unsafe-url-scheme"
     );
     expect(checkCssValue("url('java\\73 cript:alert(1)')")).toBe(
+      "unsafe-url-scheme"
+    );
+  });
+
+  it("reads a fallback in the context it will stand in for", () => {
+    // An unset custom property hands its fallback straight to the function
+    // around it, so a bare string there is loaded exactly as a written-out one
+    // would be. Re-parsing the fallback on its own loses that.
+    expect(checkCssValue('image-set(var(--img, "javascript:foo") 1x)')).toBe(
+      "unsafe-url-scheme"
+    );
+    expect(checkCssValue('image(var(--i, "data:text/html,x"))')).toBe(
+      "unsafe-url-scheme"
+    );
+    // The same string outside a URL context is ordinary text.
+    expect(checkCssValue('var(--font, "javascript:foo")')).toBeNull();
+    expect(
+      checkCssValue('image-set(var(--img, "/media/a.png") 1x)')
+    ).toBeNull();
+  });
+
+  it("stops the url context at a function that is not one", () => {
+    // `type()` names a MIME type inside `image-set()`, not a resource to
+    // fetch, so the context the image function establishes must not carry
+    // into it. A string there is text, however much it looks like a scheme.
+    expect(checkCssValue('image-set("a.png" type("javascript:x"))')).toBeNull();
+    // The sibling string is still a URL, so the context itself is intact.
+    expect(checkCssValue('image-set("javascript:x" type("image/png"))')).toBe(
       "unsafe-url-scheme"
     );
   });
@@ -1271,13 +1315,13 @@ describe("keys a document did not put there", () => {
     expect(codes(crafted as never)).toEqual([]);
   });
 
-  it("are not read from the prototype inside a composite", () => {
+  it("are refused along with the composite carrying them", () => {
     const parts = Object.create({ inheritedSide: "1px" }) as Record<
       string,
       unknown
     >;
     parts.blockStart = "1rem";
-    expect(codes({ padding: parts } as never)).toEqual([]);
+    expect(codes({ padding: parts } as never)).toEqual(["invalid-style-value"]);
   });
 });
 
@@ -2529,6 +2573,20 @@ describe("an expression of bare numbers is a number", () => {
     expect(codes({ width: "clamp(10%, 1, 20%)" })).toEqual([
       "invalid-style-value",
     ]);
+  });
+
+  it("reads the argument of a function whose result is fixed", () => {
+    // `sign()` reports a number whatever it is given, but it cannot be given a
+    // sum that does not exist. What a function PRODUCES and whether its
+    // argument makes sense are separate questions.
+    expect(codes({ width: "calc(sign(1px + 1deg) * 1px)" })).toEqual([
+      "invalid-style-value",
+    ]);
+    expect(codes({ width: "calc(sin(1deg + 1) * 1px)" })).toEqual([
+      "invalid-style-value",
+    ]);
+    expect(codes({ width: "calc(sign(1px + 1em) * 1px)" })).toEqual([]);
+    expect(codes({ width: "calc(sin(45deg) * 1px)" })).toEqual([]);
   });
 
   it("refuses a product of two quantities even when a division undoes it", () => {
