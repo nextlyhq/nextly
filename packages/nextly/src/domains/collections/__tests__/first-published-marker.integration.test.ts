@@ -27,7 +27,7 @@ afterEach(async () => {
 
 const posts = () =>
   defineCollection({
-    slug: "posts",
+    slug: "fpmposts",
     status: true,
     fields: [text({ name: "title" })],
   });
@@ -63,7 +63,7 @@ async function storedRow(
   t: TestNextly,
   id: string
 ): Promise<Record<string, unknown>> {
-  const rows = await tableRows(t, "dc_posts");
+  const rows = await tableRows(t, "dc_fpmposts");
   return rows.find(r => r.id === id) ?? {};
 }
 
@@ -74,7 +74,7 @@ describe("first_published_at", () => {
     current = await createTestNextly({ collections: [posts()] });
 
     const created = await handler(current).createEntry(
-      { collectionName: "posts", overrideAccess: true },
+      { collectionName: "fpmposts", overrideAccess: true },
       { title: "wip", status: "draft" }
     );
     const id = (created.data as { id: string }).id;
@@ -87,14 +87,14 @@ describe("first_published_at", () => {
     const h = handler(current);
 
     const created = await h.createEntry(
-      { collectionName: "posts", overrideAccess: true },
+      { collectionName: "fpmposts", overrideAccess: true },
       { title: "wip", status: "draft" }
     );
     const id = (created.data as { id: string }).id;
     expect((await storedRow(current, id)).first_published_at).toBeFalsy();
 
     await h.updateEntry(
-      { collectionName: "posts", entryId: id, overrideAccess: true },
+      { collectionName: "fpmposts", entryId: id, overrideAccess: true },
       { status: "published" }
     );
 
@@ -107,7 +107,7 @@ describe("first_published_at", () => {
     current = await createTestNextly({ collections: [posts()] });
 
     const created = await handler(current).createEntry(
-      { collectionName: "posts", overrideAccess: true },
+      { collectionName: "fpmposts", overrideAccess: true },
       { title: "live", status: "published" }
     );
     const id = (created.data as { id: string }).id;
@@ -122,7 +122,7 @@ describe("first_published_at", () => {
     const h = handler(current);
 
     const created = await h.createEntry(
-      { collectionName: "posts", overrideAccess: true },
+      { collectionName: "fpmposts", overrideAccess: true },
       { title: "live", status: "published" }
     );
     const id = (created.data as { id: string }).id;
@@ -130,7 +130,7 @@ describe("first_published_at", () => {
     expect(stamped).toBeTruthy();
 
     await h.updateEntry(
-      { collectionName: "posts", entryId: id, overrideAccess: true },
+      { collectionName: "fpmposts", entryId: id, overrideAccess: true },
       { status: "draft" }
     );
 
@@ -146,7 +146,7 @@ describe("first_published_at", () => {
     const h = handler(current);
 
     const created = await h.createEntry(
-      { collectionName: "posts", overrideAccess: true },
+      { collectionName: "fpmposts", overrideAccess: true },
       { title: "live", status: "published" }
     );
     const id = (created.data as { id: string }).id;
@@ -157,7 +157,7 @@ describe("first_published_at", () => {
     // reason. Confirmed: without the backdate, removing the guard leaves this test green.
     const backdated = new Date("2020-01-01T00:00:00.000Z");
     await current.adapter.update(
-      "dc_posts",
+      "dc_fpmposts",
       { first_published_at: backdated },
       { and: [{ column: "id", op: "=", value: id }] }
     );
@@ -165,11 +165,11 @@ describe("first_published_at", () => {
     expect(before).toBeTruthy();
 
     await h.updateEntry(
-      { collectionName: "posts", entryId: id, overrideAccess: true },
+      { collectionName: "fpmposts", entryId: id, overrideAccess: true },
       { status: "draft" }
     );
     await h.updateEntry(
-      { collectionName: "posts", entryId: id, overrideAccess: true },
+      { collectionName: "fpmposts", entryId: id, overrideAccess: true },
       { status: "published" }
     );
 
@@ -183,16 +183,19 @@ describe("first_published_at", () => {
     // a migration every user pays for and nothing ever writes.
     current = await createTestNextly({
       collections: [
-        defineCollection({ slug: "notes", fields: [text({ name: "title" })] }),
+        defineCollection({
+          slug: "fpmnotes",
+          fields: [text({ name: "title" })],
+        }),
       ],
     });
 
     const created = await handler(current).createEntry(
-      { collectionName: "notes", overrideAccess: true },
+      { collectionName: "fpmnotes", overrideAccess: true },
       { title: "n" }
     );
     const id = (created.data as { id: string }).id;
-    const rows = await tableRows(current, "dc_notes");
+    const rows = await tableRows(current, "dc_fpmnotes");
     const row = rows.find(r => r.id === id) ?? {};
 
     expect(Object.keys(row)).not.toContain("first_published_at");
@@ -206,7 +209,7 @@ describe("first_published_at", () => {
     current = await createTestNextly({ collections: [posts()] });
 
     const created = await handler(current).createEntry(
-      { collectionName: "posts", overrideAccess: true },
+      { collectionName: "fpmposts", overrideAccess: true },
       {
         title: "wip",
         status: "draft",
@@ -227,14 +230,14 @@ describe("first_published_at", () => {
     const h = handler(current);
 
     const created = await h.createEntry(
-      { collectionName: "posts", overrideAccess: true },
+      { collectionName: "fpmposts", overrideAccess: true },
       { title: "live", status: "published" }
     );
     const id = (created.data as { id: string }).id;
     const stamped = String((await storedRow(current, id)).first_published_at);
 
     await h.updateEntry(
-      { collectionName: "posts", entryId: id, overrideAccess: true },
+      { collectionName: "fpmposts", entryId: id, overrideAccess: true },
       {
         title: "edited",
         firstPublishedAt: new Date("1999-01-01T00:00:00.000Z"),
@@ -257,19 +260,19 @@ describe("first_published_at", () => {
     const h = handler(current);
 
     const created = await h.createEntry(
-      { collectionName: "posts", overrideAccess: true },
+      { collectionName: "fpmposts", overrideAccess: true },
       { title: "live", status: "published" }
     );
     const id = (created.data as { id: string }).id;
     await current.adapter.update(
-      "dc_posts",
+      "dc_fpmposts",
       { first_published_at: null },
       { and: [{ column: "id", op: "=", value: id }] }
     );
     expect((await storedRow(current, id)).first_published_at).toBeFalsy();
 
     await h.publishAllLocales({
-      collectionName: "posts",
+      collectionName: "fpmposts",
       entryId: id,
       overrideAccess: true,
     });
@@ -286,14 +289,14 @@ describe("first_published_at", () => {
     const h = handler(current);
 
     const created = await h.createEntry(
-      { collectionName: "posts", overrideAccess: true },
+      { collectionName: "fpmposts", overrideAccess: true },
       { title: "wip", status: "draft" }
     );
     const id = (created.data as { id: string }).id;
     expect((await storedRow(current, id)).first_published_at).toBeFalsy();
 
     await h.publishAllLocales({
-      collectionName: "posts",
+      collectionName: "fpmposts",
       entryId: id,
       overrideAccess: true,
     });
@@ -313,7 +316,7 @@ describe("first_published_at", () => {
     const res = await current.adapter.transaction(tx =>
       entries.createEntryInTransaction(
         tx as never,
-        { collectionName: "posts", overrideAccess: true },
+        { collectionName: "fpmposts", overrideAccess: true },
         { title: "live", status: "published" }
       )
     );
@@ -327,7 +330,7 @@ describe("first_published_at", () => {
     const entries = txEntries(current);
 
     const created = await handler(current).createEntry(
-      { collectionName: "posts", overrideAccess: true },
+      { collectionName: "fpmposts", overrideAccess: true },
       { title: "wip", status: "draft" }
     );
     const id = (created.data as { id: string }).id;
@@ -336,7 +339,7 @@ describe("first_published_at", () => {
     await current.adapter.transaction(tx =>
       entries.updateEntryInTransaction(
         tx as never,
-        { collectionName: "posts", entryId: id, overrideAccess: true },
+        { collectionName: "fpmposts", entryId: id, overrideAccess: true },
         { status: "published" }
       )
     );
@@ -350,12 +353,12 @@ describe("first_published_at", () => {
     const entries = txEntries(current);
 
     const created = await handler(current).createEntry(
-      { collectionName: "posts", overrideAccess: true },
+      { collectionName: "fpmposts", overrideAccess: true },
       { title: "live", status: "published" }
     );
     const id = (created.data as { id: string }).id;
     await current.adapter.update(
-      "dc_posts",
+      "dc_fpmposts",
       { first_published_at: new Date("2020-01-01T00:00:00.000Z") },
       { and: [{ column: "id", op: "=", value: id }] }
     );
@@ -364,14 +367,14 @@ describe("first_published_at", () => {
     await current.adapter.transaction(tx =>
       entries.updateEntryInTransaction(
         tx as never,
-        { collectionName: "posts", entryId: id, overrideAccess: true },
+        { collectionName: "fpmposts", entryId: id, overrideAccess: true },
         { status: "draft" }
       )
     );
     await current.adapter.transaction(tx =>
       entries.updateEntryInTransaction(
         tx as never,
-        { collectionName: "posts", entryId: id, overrideAccess: true },
+        { collectionName: "fpmposts", entryId: id, overrideAccess: true },
         { status: "published" }
       )
     );
@@ -381,58 +384,56 @@ describe("first_published_at", () => {
     );
   });
 
-  it("reports the marker on the publish-all event that establishes it", async () => {
-    // The event payload, the version snapshot and the workflow reaction are all built from the
-    // PRE-update row with the new status overlaid, because publishing otherwise changes nothing
-    // else. The marker is the exception: it IS written by that update, so without carrying it
-    // across, the one event that announces a first publication reports no first publication.
-    current = await createTestNextly({ collections: [posts()] });
+  it("captures the marker in the version the publish records", async () => {
+    // The publish builds its event payload, version snapshot and workflow reaction from the
+    // PRE-update row with the new status overlaid, because publishing changes nothing else. The
+    // marker is the exception: that same update writes it, so without carrying it across, the
+    // publication that establishes a first publication records a snapshot saying there was none.
+    //
+    // Asserted on the version row rather than the emitted event. Both are built from the same
+    // overlaid row, but the version is written inside the publish transaction and can be read
+    // back, whereas event DELIVERY through the process-wide bus proved order-dependent in this
+    // harness — the assertion passed alone and saw nothing once another file booted first.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "fpmversioned",
+          status: true,
+          versions: true,
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
     const h = handler(current);
 
     const created = await h.createEntry(
-      { collectionName: "posts", overrideAccess: true },
+      { collectionName: "fpmversioned", overrideAccess: true },
       { title: "wip", status: "draft" }
     );
     const id = (created.data as { id: string }).id;
 
     await h.publishAllLocales({
-      collectionName: "posts",
+      collectionName: "fpmversioned",
       entryId: id,
       overrideAccess: true,
     });
-    await current.events.settle();
 
-    const rows =
-      await current.adapter.select<Record<string, unknown>>("nextly_events");
-    const published = rows.filter(r => r.type === "entry.published");
-    expect(published.length).toBeGreaterThan(0);
+    const versions = (
+      await current.adapter.select<Record<string, unknown>>("nextly_versions")
+    ).filter(v => v.entryId === id && v.status === "published");
+    expect(versions.length).toBeGreaterThan(0);
 
-    // Asserting the VALUE, not the presence of the key. The pre-image row carries
-    // `first_published_at: null`, so the key is in the payload either way — a substring or
-    // `in` check passes with the overlay removed and proves nothing.
-    const markers = published.map(row => {
-      const raw = row.payload;
-      const payload =
+    // The VALUE, not the key: the pre-image carries `first_published_at: null`, so the key is in
+    // the snapshot either way and an `in` check would pass with the overlay removed.
+    const markers = versions.map(v => {
+      const raw = v.snapshot;
+      const snapshot =
         typeof raw === "string"
           ? (JSON.parse(raw) as Record<string, unknown>)
           : ((raw ?? {}) as Record<string, unknown>);
-      const data = payload.data;
-      return isRecord(data) ? data.first_published_at : undefined;
+      return snapshot.first_published_at ?? snapshot.firstPublishedAt;
     });
     expect(markers.some(m => m != null)).toBe(true);
-
-    // And the pre-image must still say it was absent: the event describes a transition, so a
-    // `previous` that already carried the marker would report no change.
-    const previousMarkers = published.map(row => {
-      const raw = row.payload;
-      const payload =
-        typeof raw === "string"
-          ? (JSON.parse(raw) as Record<string, unknown>)
-          : ((raw ?? {}) as Record<string, unknown>);
-      const previous = payload.previous;
-      return isRecord(previous) ? previous.first_published_at : undefined;
-    });
-    expect(previousMarkers.every(m => m == null)).toBe(true);
   });
 
   it("records a first publication made in a non-default locale", async () => {
@@ -447,7 +448,7 @@ describe("first_published_at", () => {
     current = await createTestNextly({
       collections: [
         defineCollection({
-          slug: "posts",
+          slug: "fpmposts",
           status: true,
           localized: true,
           fields: [text({ name: "title", localized: true })],
@@ -458,7 +459,7 @@ describe("first_published_at", () => {
     const h = handler(current);
 
     const created = await h.createEntry(
-      { collectionName: "posts", overrideAccess: true, locale: "en" },
+      { collectionName: "fpmposts", overrideAccess: true, locale: "en" },
       { title: "wip", status: "draft" }
     );
     const id = (created.data as { id: string }).id;
@@ -470,7 +471,7 @@ describe("first_published_at", () => {
     // user holding a real `publish-posts` grant and the suite has no helper that seeds one.
     await h.updateEntry(
       {
-        collectionName: "posts",
+        collectionName: "fpmposts",
         entryId: id,
         locale: "es",
         overrideAccess: true,
@@ -493,18 +494,18 @@ describe("first_published_at", () => {
     const h = handler(current);
 
     const created = await h.createEntry(
-      { collectionName: "posts", overrideAccess: true },
+      { collectionName: "fpmposts", overrideAccess: true },
       { title: "live", status: "published" }
     );
     const id = (created.data as { id: string }).id;
 
     const detail = await h.getEntry({
-      collectionName: "posts",
+      collectionName: "fpmposts",
       entryId: id,
       overrideAccess: true,
     });
     const list = await h.listEntries({
-      collectionName: "posts",
+      collectionName: "fpmposts",
       overrideAccess: true,
     });
 
@@ -533,7 +534,7 @@ describe("first_published_at", () => {
     current = await createTestNextly({
       singles: [
         defineSingle({
-          slug: "banner",
+          slug: "fpmbanner",
           status: true,
           fields: [text({ name: "title" })],
         }),
@@ -542,26 +543,26 @@ describe("first_published_at", () => {
     const singles = current.getService("singleEntryService");
 
     await singles.update(
-      "banner",
+      "fpmbanner",
       { title: "hi", status: "draft" },
       { overrideAccess: true }
     );
     expect(
-      (await tableRows(current, "single_banner"))[0]?.first_published_at
+      (await tableRows(current, "single_fpmbanner"))[0]?.first_published_at
     ).toBeFalsy();
 
     await singles.update(
-      "banner",
+      "fpmbanner",
       { title: "hi", status: "published" },
       { overrideAccess: true }
     );
 
-    const row = (await tableRows(current, "single_banner"))[0] ?? {};
+    const row = (await tableRows(current, "single_fpmbanner"))[0] ?? {};
     expect(row.status).toBe("published");
     expect(row.first_published_at).toBeTruthy();
     // The read path is the thing the missing column broke, so exercise it rather than only
     // inspecting the table.
-    const read = await singles.get("banner", { overrideAccess: true });
+    const read = await singles.get("fpmbanner", { overrideAccess: true });
     expect(read).toBeTruthy();
   });
 
@@ -573,7 +574,7 @@ describe("first_published_at", () => {
     current = await createTestNextly({
       singles: [
         defineSingle({
-          slug: "banner",
+          slug: "fpmbanner",
           status: true,
           fields: [text({ name: "title" })],
         }),
@@ -582,7 +583,7 @@ describe("first_published_at", () => {
     const singles = current.getService("singleEntryService");
 
     await singles.update(
-      "banner",
+      "fpmbanner",
       {
         title: "hi",
         status: "draft",
@@ -592,21 +593,21 @@ describe("first_published_at", () => {
       { overrideAccess: true }
     );
     expect(
-      (await tableRows(current, "single_banner"))[0]?.first_published_at
+      (await tableRows(current, "single_fpmbanner"))[0]?.first_published_at
     ).toBeFalsy();
 
     // And a real marker cannot be overwritten once the Single has been published.
     await singles.update(
-      "banner",
+      "fpmbanner",
       { status: "published" },
       { overrideAccess: true }
     );
     const stamped = String(
-      (await tableRows(current, "single_banner"))[0]?.first_published_at
+      (await tableRows(current, "single_fpmbanner"))[0]?.first_published_at
     );
 
     await singles.update(
-      "banner",
+      "fpmbanner",
       {
         title: "edited",
         firstPublishedAt: new Date("1999-01-01T00:00:00.000Z"),
@@ -616,7 +617,9 @@ describe("first_published_at", () => {
     );
 
     expect(
-      String((await tableRows(current, "single_banner"))[0]?.first_published_at)
+      String(
+        (await tableRows(current, "single_fpmbanner"))[0]?.first_published_at
+      )
     ).toBe(stamped);
   });
 
@@ -627,7 +630,7 @@ describe("first_published_at", () => {
     current = await createTestNextly({
       singles: [
         defineSingle({
-          slug: "banner",
+          slug: "fpmbanner",
           status: true,
           fields: [text({ name: "title" })],
         }),
@@ -636,42 +639,44 @@ describe("first_published_at", () => {
     const singles = current.getService("singleEntryService");
 
     await singles.update(
-      "banner",
+      "fpmbanner",
       { title: "hi", status: "published" },
       { overrideAccess: true }
     );
-    const singleId = (await tableRows(current, "single_banner"))[0]?.id;
+    const singleId = (await tableRows(current, "single_fpmbanner"))[0]?.id;
     // Narrowed rather than asserted loosely: the row is read back as `Record<string, unknown>`,
     // and a missing id would otherwise reach the adapter as an undefined bind parameter and
     // update every row, which is not the setup this test intends. `node:assert` narrows the type
     // through its `asserts` signature, so the value is usable without a cast and without a bare
     // throw.
-    assert(typeof singleId === "string", "single_banner row has no id");
+    assert(typeof singleId === "string", "single_fpmbanner row has no id");
     await current.adapter.update(
-      "single_banner",
+      "single_fpmbanner",
       { first_published_at: new Date("2020-01-01T00:00:00.000Z") },
       { and: [{ column: "id", op: "=", value: singleId }] }
     );
-    const before = (await tableRows(current, "single_banner"))[0]
+    const before = (await tableRows(current, "single_fpmbanner"))[0]
       ?.first_published_at;
     expect(before).toBeTruthy();
 
     await singles.update(
-      "banner",
+      "fpmbanner",
       { status: "draft" },
       { overrideAccess: true }
     );
-    const unpublished = (await tableRows(current, "single_banner"))[0] ?? {};
+    const unpublished = (await tableRows(current, "single_fpmbanner"))[0] ?? {};
     expect(unpublished.status).toBe("draft");
     expect(unpublished.first_published_at).toBeTruthy();
 
     await singles.update(
-      "banner",
+      "fpmbanner",
       { status: "published" },
       { overrideAccess: true }
     );
     expect(
-      String((await tableRows(current, "single_banner"))[0]?.first_published_at)
+      String(
+        (await tableRows(current, "single_fpmbanner"))[0]?.first_published_at
+      )
     ).toBe(String(before));
   });
 });
