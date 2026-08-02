@@ -29,6 +29,7 @@ import {
   coerceBuilderMaxPerDoc,
   resolveBuilderVersions,
 } from "../domains/versions/builder-versions";
+import { schemaDraftsEnabled } from "../domains/versions/draft-split-eligibility";
 import { resolveBuilderWebhooks } from "../domains/webhooks/builder-webhooks";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
@@ -117,9 +118,31 @@ export const GET = withErrorHandler(
       config?.plugins ?? []
     );
 
+    // Derived flag: whether the draft/published working-draft split will actually
+    // run for this collection. The admin editor reads it to decide whether a
+    // "Save" stores a working draft or writes the live row, so it is derived from
+    // the SAME shared predicate the mutation service gates on — a mismatch would
+    // make the editor present a status-less save as a pending draft while the
+    // server writes it live. Resolution runs over the ORIGINAL fields (not the
+    // enriched ones, which drop the component localized/resolved markers).
+    //
+    // A resolution failure is propagated, not defaulted to false: for a
+    // drafts-configured collection false is the destructive answer — the admin
+    // would send an explicit published save that overwrites the live row instead
+    // of storing a working draft — so this independently exported GET fails
+    // closed and is retryable, matching the dispatcher path and the fail-closed
+    // resolveComponentSchemas it calls into.
+    const draftsEnabled = await schemaDraftsEnabled({
+      status: (collection as { status?: boolean }).status,
+      versions: collection.versions,
+      localized: (collection as { localized?: boolean }).localized,
+      fields: collection.fields,
+    });
+
     return respondDoc({
       ...(collectionWithViews as unknown as typeof collection),
       fields: enrichedFields,
+      draftsEnabled,
     } as unknown as typeof collection);
   }
 );

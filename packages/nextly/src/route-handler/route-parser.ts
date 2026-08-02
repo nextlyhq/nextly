@@ -829,6 +829,26 @@ function parseCollectionEntryVersionRoutes(
     };
   }
 
+  // `versions/working-draft` DELETE discards the pending working draft
+  // (draft/published split), reverting the document to its live published row.
+  // `working-draft` is a named sub-resource, never a version number, so it can
+  // never collide with `versions/{versionNo}`. Authorized as an update: it
+  // changes what the editor sees, not the document's history.
+  if (
+    additionalParams.length === 2 &&
+    additionalParams[1] === "working-draft" &&
+    httpMethod === "DELETE"
+  ) {
+    routeParams.collectionName = id;
+    routeParams.entryId = subId;
+    return {
+      service: "collections",
+      operation: "update",
+      method: "discardWorkingDraft",
+      routeParams,
+    };
+  }
+
   if (
     // Only `versions` or `versions/{versionNo}`; anything deeper is not a
     // route this owns and must not be silently truncated to one that is.

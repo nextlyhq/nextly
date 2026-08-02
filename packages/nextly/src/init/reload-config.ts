@@ -626,11 +626,55 @@ function republishRecordingPolicies(
  * Nothing here is optimistic, so an abandoned reload needs no undo: it simply
  * never calls the thunk.
  */
+/**
+ * Whether a reload advanced the runtime in every dimension it touched, which is
+ * the condition for publishing the config's hook edits.
+ *
+ * A reload reapplies part of a boot, and the parts fail independently: a diff
+ * can be refused for one entity while the rest apply, and a field-tree sync can
+ * fail for a scope or for individual singles while the DDL lands. Each failure
+ * leaves some state behind the config the handlers were written against -- a
+ * refused diff leaves a table without the column a handler sets, an unsynced
+ * field tree leaves the mutation services validating and serializing against
+ * the previous fields, so a value a handler supplies for a new field is
+ * dropped. Publishing into any of those states runs a handler against state it
+ * does not match.
+ *
+ * So this is deliberately all-or-nothing rather than a per-entity judgement.
+ * The dimensions are not per-entity to begin with -- a component-tree or
+ * collection-scope sync failure covers every entity at once -- and a rule that
+ * publishes one entity's handlers while withholding another's has to assume the
+ * two cannot interact, which nothing enforces. The cost is that a hook edit
+ * sharing a save with a refused schema change waits for the next save; a hook
+ * edit alone changes no table, so its reload is clean and it applies
+ * immediately, which is the case the dev loop is built around.
+ */
+function reloadAdvancedEverything(dimensions: {
+  /** Entities whose schema change the diff gate refused. Absent where no schema apply ran. */
+  deferredEntities?: ReadonlySet<string>;
+  /** The collection field-tree sync completed. */
+  collections: boolean;
+  /** The single field-tree sync completed. */
+  singles: boolean;
+  /** The component (field-group) tree synced; a failure here taints both scopes. */
+  components: boolean;
+  /** Singles the sync reported individually as failed. */
+  failedSingles: ReadonlySet<string>;
+}): boolean {
+  return (
+    (dimensions.deferredEntities?.size ?? 0) === 0 &&
+    dimensions.collections &&
+    dimensions.singles &&
+    dimensions.components &&
+    dimensions.failedSingles.size === 0
+  );
+}
+
 function stageConfigHooks(newConfig: {
   collections?: CollectionDef[];
   singles?: SingleDef[];
   plugins?: unknown[];
-}): (deferredEntities: ReadonlySet<string>) => void {
+}): () => void {
   const disabledPlugins = (newConfig.plugins ?? []).filter(
     plugin => (plugin as { enabled?: boolean }).enabled === false
   );
@@ -704,23 +748,7 @@ function stageConfigHooks(newConfig: {
   // previously disabled would actively resume it. So the candidates come from
   // the registry and the config only says which of them survive.
 
-  return (deferredEntities: ReadonlySet<string>) => {
-    // An entity whose schema change was deferred still has its PREVIOUS table,
-    // so its edited handler would run against columns the save has not added or
-    // renamed yet. A batch can succeed for one entity while another defers, so
-    // this cannot be decided for the reload as a whole -- those entities keep
-    // the handlers that match the schema they still have, and a later clean
-    // reload picks them up.
-    const landed = <T extends { slug: string }>(
-      entities: T[],
-      kind: "collection" | "single"
-    ): T[] =>
-      entities.filter(
-        entity => !deferredEntities.has(`${kind}:${entity.slug}`)
-      );
-    const landedCollections = landed(collections, "collection");
-    const landedSingles = landed(singles, "single");
-
+  return () => {
     // The registry service registration actually bound its handlers to, which
     // is not always the process-global singleton: a caller may supply its own,
     // and replacing handlers anywhere else would leave the live registry
@@ -729,9 +757,9 @@ function stageConfigHooks(newConfig: {
     // happened during the reload is still the one that gets written to.
     const registry = getActiveHookRegistry();
 
-    // What the re-registration below is going to rebuild.
-    // A deferred entity is NOT rebuilt, and must not be swept either: its
-    // handlers are the ones that match its table.
+    // What the re-registration below is going to rebuild: every entity the
+    // config declares, because this thunk runs only for a reload that advanced
+    // every dimension.
     const rebuilt = new Set<string>([
       ...collections.map(collection => collection.slug),
       ...singles.map(single => singleHookNamespace(single.slug)),
@@ -753,8 +781,8 @@ function stageConfigHooks(newConfig: {
       }
     }
 
-    reregisterCollectionHooks(landedCollections, registry);
-    reregisterSingleHooks(landedSingles, registry);
+    reregisterCollectionHooks(collections, registry);
+    reregisterSingleHooks(singles, registry);
 
     // Recomputed whole rather than mutated, so an owner that is running again
     // resumes by simply not appearing -- nothing has to remember what a
@@ -1366,12 +1394,10 @@ async function applyReload(opts?: {
   // paths as well as after a successful apply, not on the apply alone.
   const commitConfigHooks = stageConfigHooks(newConfig);
   let committed = false;
-  const commitReload = (
-    deferredEntities: ReadonlySet<string> = new Set()
-  ): void => {
+  const commitReload = (): void => {
     if (committed) return;
     committed = true;
-    commitConfigHooks(deferredEntities);
+    commitConfigHooks();
   };
 
   // databaseAdapter doubles as our DI-readiness probe. We don't need any
@@ -1867,24 +1893,26 @@ async function applyReload(opts?: {
       // sync deliberately keeps the prior snapshot for those -- so their
       // validation and serialization still run against the old field tree, and
       // a handler written for a field only the new tree has would have it
-      // ignored. Excluded on the same terms as the post-DDL path.
-      commitReload(
-        new Set([
-          ...(synced.collections && synced.components
-            ? []
-            : (newConfig.collections ?? [])
-                .map(collection => collection.slug)
-                .filter((slug): slug is string => !!slug)
-                .map(slug => `collection:${slug}`)),
-          ...(synced.singles && synced.components
-            ? []
-            : (newConfig.singles ?? [])
-                .map(single => single.slug)
-                .filter((slug): slug is string => !!slug)
-                .map(slug => `single:${slug}`)),
-          ...[...synced.failedSingles].map(slug => `single:${slug}`),
-        ])
-      );
+      // ignored. Judged on the same dimensions as the post-DDL path. The
+      // deferred set is empty here -- this branch is gated on
+      // `!deferredSchemaChange`, which every deferral sets -- and is passed
+      // anyway so the condition is read from the set itself rather than from
+      // an invariant maintained at six other sites.
+      // Withheld by not committing, and without the field-type rollback: the
+      // sync that failed here is the metadata one, and this path is reached
+      // only when every diff was empty, so the live schema already matches what
+      // the new field types describe.
+      if (
+        reloadAdvancedEverything({
+          deferredEntities,
+          collections: synced.collections,
+          singles: synced.singles,
+          components: synced.components,
+          failedSingles: synced.failedSingles,
+        })
+      ) {
+        commitReload();
+      }
     } else {
       // A real schema change was deferred (unsafe / needs review) or a diff
       // threw, so the field metadata must NOT be synced — the physical table
@@ -2440,39 +2468,29 @@ async function applyReload(opts?: {
       // Non-fatal.
     }
 
-    // The schema, the metadata and the runtime schema are all in step by here,
-    // so the handlers written against them can go in. Also the path a save that
-    // changes only a hook takes: its diff is empty, the apply has nothing to do
-    // and reports success, and the commit still happens.
-    //
-    // A batch can succeed while individual entities were held back, so the
-    // deferred set travels with it: those keep the handlers matching the table
-    // they still have.
-    //
-    // A failed metadata sync is the same problem one layer up: the DDL landed,
-    // but the mutation services still read the previous serialized fields, so a
-    // handler supplying a newly added field would have it ignored. Those
-    // entities keep their previous handlers too, until a later reload repairs
-    // the sync. A collection sync THROWS rather than reporting per slug, so a
-    // failure there holds every collection back.
-    commitReload(
-      new Set([
-        ...deferredEntities,
-        ...(collectionSynced && componentSynced
-          ? []
-          : (newConfig.collections ?? [])
-              .map(collection => collection.slug)
-              .filter((slug): slug is string => !!slug)
-              .map(slug => `collection:${slug}`)),
-        ...(singleSynced && componentSynced
-          ? []
-          : (newConfig.singles ?? [])
-              .map(single => single.slug)
-              .filter((slug): slug is string => !!slug)
-              .map(slug => `single:${slug}`)),
-        ...[...failedSingleMetadata].map(slug => `single:${slug}`),
-      ])
-    );
+    // Handlers go in only when every dimension of this reload advanced: the
+    // DDL applied for every entity, and the collection, single and component
+    // metadata all synced. This is also the path a save that changes only a
+    // hook takes -- its diff is empty, the apply has nothing to do and reports
+    // success, so every dimension is trivially clean and the edit lands.
+    // Withholding is simply not committing: nothing is applied until the thunk
+    // runs, so the previous handlers stay in place on their own. It must NOT
+    // take the field-type rollback with it -- this branch is inside
+    // `applyResult.success`, so the DDL and the runtime schema caches were
+    // generated FROM the newly loaded field types, and putting the previous
+    // ones back would leave validation and storage transforms running the old
+    // definitions against the landed schema.
+    if (
+      reloadAdvancedEverything({
+        deferredEntities,
+        collections: collectionSynced,
+        singles: singleSynced,
+        components: componentSynced,
+        failedSingles: failedSingleMetadata,
+      })
+    ) {
+      commitReload();
+    }
   }
 
   if (!applyResult.success) {

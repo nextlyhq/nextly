@@ -2868,6 +2868,15 @@ export class CollectionQueryService extends BaseService {
       // nothing downstream can re-expose the creator's user id.
       stripSystemOwnerField(finalData);
 
+      // Signal that the returned document is the pending working draft, not the
+      // live row (draft/published split). The overlay keeps the draft's `status`
+      // at the live parent's value, so an editor UI needs an explicit flag to show
+      // an "unpublished changes" state. Set only when a draft was actually
+      // surfaced; mirrors the synthetic `_translations` read-response convention.
+      if (draftOverlaid) {
+        finalData._isWorkingDraft = true;
+      }
+
       return {
         success: true,
         statusCode: 200,

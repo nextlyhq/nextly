@@ -247,6 +247,11 @@ export default function EditEntryPage({
     collectionSlug: slug || "",
     entryId: id,
     depth: 2,
+    // Load the pending working draft in place of the live row when the
+    // collection has the draft/published split enabled, so the editor shows and
+    // saves onto the unpublished edits. Inert for non-drafts collections (the
+    // server only overlays a draft it actually has).
+    draft: collection?.draftsEnabled === true,
     locale,
     // Edit the ACTUAL per-locale values — disable fallback so an untranslated field
     // shows empty (not the default-language text, which a save would otherwise persist

@@ -6,11 +6,13 @@ import { getHookRegistry } from "@nextly/hooks/hook-registry";
 
 import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import type { RequestActor } from "../auth/request-actor";
+import type { FieldConfig } from "../collections/fields/types";
 import { container } from "../di/container";
 import type { PermissionSeedService } from "../domains/auth/services/permission-seed-service";
 import type { RBACAccessControlService } from "../domains/auth/services/rbac-access-control-service";
 import { DynamicCollectionService } from "../domains/dynamic-collections";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
+import { schemaDraftsEnabled } from "../domains/versions/draft-split-eligibility";
 import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
 import type { ResolvedWebhookRetentionConfig } from "../domains/webhooks/retention-config";
 import { MetaRetentionGate } from "../domains/webhooks/retention-gate";
@@ -378,6 +380,10 @@ export class CollectionsHandler {
     // form rendering works without extra API calls per component.
     const data = result.data as Record<string, unknown> | null;
     if (result.success && data?.fields) {
+      // The ORIGINAL fields, captured before enrichment replaces them: the
+      // working-draft eligibility below needs the un-enriched shape (the enriched
+      // one drops the component localized/resolved markers it inspects).
+      const originalFields = data.fields as unknown as FieldConfig[];
       try {
         const hasComponentRegistry = container.has("fieldGroupRegistryService");
         if (hasComponentRegistry) {
@@ -404,6 +410,31 @@ export class CollectionsHandler {
             : String(enrichError)
         );
       }
+
+      // Surface whether the draft/published working-draft split will run for this
+      // collection so the admin editor offers the matching Save / Publish /
+      // Discard affordances. This is the dispatcher path the built-in admin
+      // actually fetches through, and it derives the flag from the SAME predicate
+      // the mutation service gates on, so the editor can never present a
+      // status-less save as a pending draft while the server writes the live row.
+      //
+      // A failure to resolve component eligibility is propagated, not defaulted
+      // to false: the only path that throws is a drafts-configured collection
+      // whose components could not be resolved (a transient registry/database
+      // error), and false is the DESTRUCTIVE answer there — the admin would send
+      // an explicit published save that overwrites the live row instead of the
+      // status-less save that stores a working draft. Failing the read keeps the
+      // editor from acting on an unknown verdict; it is retryable, and mirrors
+      // resolveComponentSchemas, which is fail-closed for the same reason.
+      data.draftsEnabled = await schemaDraftsEnabled({
+        status: data.status as boolean | undefined,
+        versions: data.versions as
+          | { drafts?: { enabled?: boolean } }
+          | null
+          | undefined,
+        localized: data.localized as boolean | undefined,
+        fields: originalFields,
+      });
     }
 
     return result;
@@ -626,6 +657,19 @@ export class CollectionsHandler {
     authenticatedScope?: AuthenticatedScope;
   }) {
     return this.entryService.getEntry(params);
+  }
+
+  /**
+   * Remove a document's pending working-draft sidecar under the same parent-row
+   * lock a draft save takes. Serializing the discard with concurrent draft saves
+   * keeps it from deleting a draft another editor committed after this request's
+   * authorization checks. The discard handler authorizes read and update first.
+   */
+  async discardWorkingDraft(params: {
+    collectionName: string;
+    entryId: string;
+  }): Promise<void> {
+    return this.entryService.discardWorkingDraft(params);
   }
 
   /**

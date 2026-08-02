@@ -114,6 +114,12 @@ export interface SetVersionLabelResponse {
   item: VersionMeta;
 }
 
+/** What a discard reports back: the live published document, now authoritative. */
+export interface DiscardWorkingDraftResponse {
+  message: string;
+  item: Record<string, unknown>;
+}
+
 export const versionApi = {
   list: (
     scope: VersionScope,
@@ -166,6 +172,21 @@ export const versionApi = {
     protectedApi.patch<SetVersionLabelResponse>(
       `${basePath(scope)}/${versionNo}`,
       { label }
+    ),
+
+  /**
+   * Discard a collection entry's pending working draft (draft/published split),
+   * reverting the editor to the live published row. A DELETE on the sidecar
+   * sub-resource; the response carries the live published document.
+   *
+   * Collection-only: the split gives a published document a separate draft head,
+   * which a Single — one row, no published/draft pair — never has.
+   */
+  discardWorkingDraft: (
+    scope: Extract<VersionScope, { kind: "collection" }>
+  ): Promise<DiscardWorkingDraftResponse> =>
+    protectedApi.delete<DiscardWorkingDraftResponse>(
+      `${basePath(scope)}/working-draft`
     ),
 
   /**

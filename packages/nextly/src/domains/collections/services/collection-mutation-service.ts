@@ -100,6 +100,7 @@ import {
 } from "../../i18n/runtime/companion-readiness";
 import { assembleDocument } from "../../versions/assemble-document";
 import { captureInTx } from "../../versions/capture-in-tx";
+import { isDraftSplitEligible } from "../../versions/draft-split-eligibility";
 import {
   buildRestorePayload,
   type ComponentSchemas,
@@ -1454,6 +1455,46 @@ export class CollectionMutationService extends BaseService {
       // it leaves behind.
       data: {},
       locale: undefined,
+    });
+  }
+
+  /**
+   * Remove a document's pending working-draft sidecar under the same parent-row
+   * lock a draft save takes.
+   *
+   * A status-less save upserts the working draft while holding the parent row's
+   * lock (see the working-draft branch of updateEntry). Discarding has to take
+   * the same lock: without it, a save that commits between a discard's
+   * authorization checks and its delete would have its brand-new draft removed,
+   * and both requests would report success, silently losing that edit. Running
+   * the delete inside a transaction that locks the parent row serializes it with
+   * those saves. The lock is a no-op where row locking is unavailable (SQLite,
+   * which already serializes writers).
+   *
+   * Authorization is the caller's concern: the discard handler establishes read
+   * and update on the document before this runs. Deleting when no working draft
+   * exists is a no-op, not an error.
+   */
+  async discardWorkingDraft(params: {
+    collectionName: string;
+    entryId: string;
+  }): Promise<void> {
+    const collection = await this.collectionService.getCollection(
+      params.collectionName
+    );
+    const tableName = this.resolveTableName(collection, params.collectionName);
+    await this.adapter.transaction(async tx => {
+      // Serialize with concurrent draft-save upserts, which lock this same parent
+      // row before writing the sidecar.
+      await tx.lockRow(tableName, params.entryId);
+      await new VersionsRepository(tx).deleteWorkingDraft(
+        {
+          scopeKind: "collection",
+          scopeSlug: params.collectionName,
+          entryId: params.entryId,
+        },
+        null
+      );
     });
   }
 
@@ -4756,42 +4797,21 @@ export class CollectionMutationService extends BaseService {
         !hasPasswordField(fields)
           ? await resolveComponentSchemas(fields as unknown as FieldConfig[])
           : null;
-      // A localized component stores its values per locale, but a working draft
-      // is keyed under one unlocalized slot, so a draft saved under one locale
-      // would be promoted under another and misfile the translation into the
-      // wrong companion. A component whose schema cannot be resolved is treated
-      // the same way: it could itself be localized, and promoting a draft while
-      // it stays unresolvable drops the component subtree (the restore filter
-      // cannot see inside a schema it cannot load) before the sidecar is deleted,
-      // silently losing the pending edit. Until per-locale drafts exist, either
-      // kind of component makes the collection ineligible for the split,
-      // alongside a localized document.
-      const hasIneligibleComponent = splitComponentSchemas
-        ? [...splitComponentSchemas.values()].some(
-            schema => schema.localized || !schema.resolved
-          )
-        : false;
-      // A password field cannot ride safely in a working draft: the snapshot
-      // strips passwords so no plaintext credential is stored at rest, and the
-      // promote filter drops any field whose subtree holds one, so a draft can
-      // neither carry a password change nor preserve an ordinary edit made
-      // alongside a password in the same component. Until drafts persist password
-      // changes through a secure path, a collection with a reachable password
-      // field (top-level or inside a reachable component) is excluded from the
-      // split and edits the live row directly, exactly as before the split.
-      const hasReachablePassword =
-        hasPasswordField(fields) ||
-        (splitComponentSchemas
-          ? [...splitComponentSchemas.values()].some(schema =>
-              hasPasswordField(schema.fields)
-            )
-          : false);
-      const splitEnabled =
-        collectionHasStatus &&
-        versionsConfig?.drafts?.enabled === true &&
-        !documentLocalized &&
-        !hasIneligibleComponent &&
-        !hasReachablePassword;
+      // Eligibility is decided by the shared predicate so the admin's
+      // `draftsEnabled` flag (surfaced on the schema read) can never disagree
+      // with whether a status-less update here actually stores a working draft.
+      // A localized document or component, an unresolved component, or a
+      // reachable password field all rule it out — a localized component would
+      // misfile a promoted draft into the wrong companion, an unresolved one
+      // drops its subtree on promote, and a password cannot ride a draft
+      // snapshot. See isDraftSplitEligible.
+      const splitEnabled = isDraftSplitEligible({
+        collectionHasStatus,
+        draftsVersioningEnabled: versionsConfig?.drafts?.enabled === true,
+        documentLocalized,
+        fields: fields as unknown as FieldConfig[],
+        componentSchemas: splitComponentSchemas,
+      });
       // No status named ⇒ neither the main row nor the write-locale companion
       // `_status` is being set (matches the transition guard's own build gate at
       // `transitionNextStatus !== undefined`).
@@ -6238,6 +6258,16 @@ export class CollectionMutationService extends BaseService {
         },
         params.collectionName
       );
+
+      // Signal that this save stored a pending working draft rather than writing
+      // the live row (draft/published split): the caller edited a published,
+      // drafts-enabled document without naming a status. The response reflects the
+      // draft, but its `status` stays the live parent's value, so an editor UI
+      // needs an explicit flag to show an "unpublished changes" state. Mirrors the
+      // read overlay's `_isWorkingDraft`.
+      if (workingDraftDocument) {
+        responseEntry._isWorkingDraft = true;
+      }
 
       return {
         success: true,

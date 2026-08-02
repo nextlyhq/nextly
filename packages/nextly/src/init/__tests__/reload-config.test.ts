@@ -1889,6 +1889,237 @@ describe("reloadNextlyConfig", () => {
       expect(edited).not.toHaveBeenCalled();
     });
 
+    it("holds hooks back when the component tree fails to sync", async () => {
+      // A component's field tree is shared: the mutation services read it when
+      // validating and serializing any entity that references the component, so
+      // a failed component sync leaves every scope reading a stale tree, not
+      // just the collections that declare one.
+      const registry = getHookRegistry();
+      const original = vi.fn(() => undefined);
+      const edited = vi.fn(() => undefined);
+      const { reloadNextlyConfig } = await import("../reload-config");
+
+      // The component sync is skipped outright when the config declares no
+      // field groups, so a config that declares one is what puts this
+      // dimension in play at all.
+      const withComponent = (hook: () => undefined) => ({
+        collections: [settledCollection({ afterRead: [hook] })],
+        fieldGroups: [
+          { slug: "hero", fields: [{ name: "headline", type: "text" }] },
+        ],
+      });
+      const settleBoth = (): void => {
+        introspectSpy.mockResolvedValue(
+          buildSnapshot([
+            {
+              name: TABLE,
+              columns: [
+                ...reservedColumns(TABLE),
+                { name: "body", type: "text", nullable: true },
+              ],
+            },
+            {
+              name: "comp_hero",
+              columns: [
+                ...reservedColumns("comp_hero"),
+                { name: "headline", type: "text", nullable: true },
+              ],
+            },
+          ])
+        );
+      };
+
+      settleBoth();
+      loadConfigSpy.mockResolvedValue({ config: withComponent(original) });
+      await reloadNextlyConfig({ resolver: buildResolver() });
+      // The control: the same config with a healthy component sync installs
+      // the handler, so the assertion below is about the sync failure.
+      expect(registry.getHookCount("afterRead", SLUG)).toBe(1);
+
+      settleBoth();
+      loadConfigSpy.mockResolvedValue({ config: withComponent(edited) });
+      await reloadNextlyConfig({
+        resolver: buildResolver({ failComponentSync: true }),
+      });
+
+      await registry.execute("afterRead", {
+        collection: SLUG,
+        operation: "read",
+        data: {},
+        context: {},
+      });
+      expect(original).toHaveBeenCalledTimes(1);
+      expect(edited).not.toHaveBeenCalled();
+    });
+
+    it("holds an APPLIED collection's hooks back when another's diff is refused", async () => {
+      // The batch succeeds for one collection while another's diff is refused.
+      // The applied collection reaches the post-DDL commit with a non-empty
+      // deferred set, and its edited handler is still withheld: the reload
+      // applied part of a boot, so the runtime it would run against is only
+      // partly the one the config describes.
+      const registry = getHookRegistry();
+      const original = vi.fn(() => undefined);
+      const edited = vi.fn(() => undefined);
+      const { reloadNextlyConfig } = await import("../reload-config");
+
+      // `dc_refused` has a live `text` column the config declares as a
+      // checkbox: a column type change the gate refuses rather than applies.
+      const refusedCollection = {
+        slug: "refused",
+        tableName: "dc_refused",
+        fields: [{ name: "active", type: "checkbox" }],
+      };
+      // The edited collection gains a column, so its own diff is additive and
+      // DOES apply -- without that this reload would never reach the post-DDL
+      // commit and the deferred set would not be the thing under test.
+      const appliedCollection = (hook: () => undefined) => ({
+        slug: SLUG,
+        tableName: TABLE,
+        fields: [
+          { name: "body", type: "text" },
+          { name: "summary", type: "text" },
+        ],
+        hooks: { afterRead: [hook] },
+      });
+      const settleBothTables = (): void => {
+        introspectSpy.mockResolvedValue(
+          buildSnapshot([
+            {
+              name: TABLE,
+              columns: [
+                ...reservedColumns(TABLE),
+                { name: "body", type: "text", nullable: true },
+              ],
+            },
+            {
+              name: "dc_refused",
+              columns: [
+                ...reservedColumns("dc_refused"),
+                { name: "active", type: "text", nullable: true },
+              ],
+            },
+          ])
+        );
+      };
+
+      // The control installs the handler through the same applying reload,
+      // without the refusal in the config, so the difference between the two
+      // reloads is the deferred set and nothing else.
+      settleBothTables();
+      pipelineApplySpy.mockClear();
+      loadConfigSpy.mockResolvedValue({
+        config: { collections: [appliedCollection(original)] },
+      });
+      await reloadNextlyConfig({ resolver: buildResolver() });
+      expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
+      expect(registry.getHookCount("afterRead", SLUG)).toBe(1);
+
+      settleBothTables();
+      pipelineApplySpy.mockClear();
+      loadConfigSpy.mockResolvedValue({
+        config: {
+          collections: [appliedCollection(edited), refusedCollection],
+        },
+      });
+      await reloadNextlyConfig({ resolver: buildResolver() });
+      // The control that this reload reached the post-DDL commit rather than
+      // bailing on the deferred branch, which withholds for its own reason.
+      expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
+
+      await registry.execute("afterRead", {
+        collection: SLUG,
+        operation: "read",
+        data: {},
+        context: {},
+      });
+      expect(original).toHaveBeenCalledTimes(1);
+      expect(edited).not.toHaveBeenCalled();
+    });
+
+    it("keeps the newly loaded field types when it withholds after a successful apply", async () => {
+      // Withholding hooks and rolling back the plugin field-type registry are
+      // separate decisions, and this branch is inside a successful apply: the
+      // DDL and the runtime schema caches were generated FROM the field types
+      // this reload loaded. Putting the previous ones back would leave
+      // validation and storage transforms running definitions the landed
+      // schema no longer matches.
+      const registry = getHookRegistry();
+      const edited = vi.fn(() => undefined);
+      const { registerFieldType, clearFieldTypes, getFieldType } = await import(
+        "../../domains/schema/field-types/field-type-registry"
+      );
+      const { reloadNextlyConfig } = await import("../reload-config");
+
+      clearFieldTypes();
+      registerFieldType({
+        type: "legacy-rating",
+        storage: "number",
+        component: "plugin/legacy-rating",
+      });
+
+      const refusedCollection = {
+        slug: "refused",
+        tableName: "dc_refused",
+        fields: [{ name: "active", type: "checkbox" }],
+      };
+      const appliedCollection = {
+        slug: SLUG,
+        tableName: TABLE,
+        fields: [
+          { name: "body", type: "text" },
+          { name: "summary", type: "text" },
+        ],
+        hooks: { afterRead: [edited] },
+      };
+      introspectSpy.mockResolvedValue(
+        buildSnapshot([
+          {
+            name: TABLE,
+            columns: [
+              ...reservedColumns(TABLE),
+              { name: "body", type: "text", nullable: true },
+            ],
+          },
+          {
+            name: "dc_refused",
+            columns: [
+              ...reservedColumns("dc_refused"),
+              { name: "active", type: "text", nullable: true },
+            ],
+          },
+        ])
+      );
+
+      // The real `loadConfig` clears and repopulates the process-global
+      // field-type registry as it reads the new config, so the mock has to do
+      // the same or a rollback would have nothing observable to undo.
+      loadConfigSpy.mockImplementation(async () => {
+        clearFieldTypes();
+        registerFieldType({
+          type: "fresh-rating",
+          storage: "number",
+          component: "plugin/fresh-rating",
+        });
+        return {
+          config: { collections: [appliedCollection, refusedCollection] },
+        };
+      });
+
+      pipelineApplySpy.mockClear();
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      // Controls: the apply ran (so this is the post-DDL branch) and the gate
+      // withheld (so this is the withholding side of it).
+      expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
+      expect(registry.getHookCount("afterRead", SLUG)).toBe(0);
+
+      expect(getFieldType("fresh-rating")).toBeDefined();
+      expect(getFieldType("legacy-rating")).toBeUndefined();
+
+      clearFieldTypes();
+    });
+
     it("does not half-enable a plugin that never initialized", async () => {
       // `init` does not re-run on a config reload, so flipping `enabled: false`
       // to true produces a plugin the config calls enabled and the process

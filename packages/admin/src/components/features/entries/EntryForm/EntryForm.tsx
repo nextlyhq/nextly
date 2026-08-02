@@ -50,6 +50,7 @@ import { PublicUrlChangeNotice } from "./PublicUrlChangeNotice";
 import {
   useEntryForm,
   getCollectionFields,
+  resolveDefaultSaveIntent,
   type EntryFormCollection,
   type EntryData,
   type EntryFormMode,
@@ -77,6 +78,13 @@ export interface EntryFormProps {
   onCancel?: () => void;
   /** Active content locale (i18n M7) — saves target this language. */
   locale?: string;
+  /**
+   * Whether the parent read this entry with the working-draft overlay (`draft`).
+   * Forwarded to the update so its optimistic cache key matches the query on
+   * screen. Omit for the full-page editor (it reads the overlay for a drafts
+   * collection); an embedded editor reading the live row passes `false`.
+   */
+  readDraft?: boolean;
   /** Called when the user switches the active content language (i18n M7). */
   onLocaleChange?: (locale: string) => void;
   /**
@@ -182,6 +190,7 @@ export function EntryForm({
   onDelete,
   onCancel,
   locale,
+  readDraft,
   onLocaleChange,
   sourceValues,
   embedded = false,
@@ -191,6 +200,7 @@ export function EntryForm({
     form,
     handleSubmit,
     handleDelete,
+    handleDiscardWorkingDraft,
     handleCancel,
     isSubmitting,
     isDirty,
@@ -199,6 +209,7 @@ export function EntryForm({
     entry,
     mode,
     locale,
+    readDraft,
     onSuccess: data => {
       onSuccess?.(data);
     },
@@ -326,10 +337,25 @@ export function EntryForm({
   // Keyboard Shortcuts (standalone mode only)
   // ---------------------------------------------------------------------------
 
+  // Route Cmd/Ctrl+S to the same intent the primary Save button uses for this
+  // document's state, so a keyboard save and a button save behave identically:
+  // on a drafts collection a published entry stores a working draft
+  // (status-less), on a non-drafts collection it re-asserts published, and any
+  // other editing state saves a draft. Create mode and non-status collections
+  // keep the intent-less single-Save behavior.
+  const keyboardSaveIntent = resolveDefaultSaveIntent({
+    mode,
+    hasStatus,
+    // The ACTIVE locale's status, not the main row's — the same effective status
+    // the header's submit buttons use, so a keyboard save and a button save agree.
+    effectiveStatus: effectiveEntryStatus(entry, locale, defaultLocale),
+    draftsEnabled: collection.draftsEnabled === true,
+  });
+
   // Only enable shortcuts in standalone mode (not embedded modals)
   useEntryFormShortcuts({
     onSave: () => {
-      void handleSubmit();
+      void handleSubmit(undefined, keyboardSaveIntent);
     },
     onCancel: handleCancel,
     isDirty,
@@ -418,6 +444,7 @@ export function EntryForm({
                   mode={mode}
                   titleField={titleField}
                   hasStatus={hasStatus}
+                  draftsEnabled={collection.draftsEnabled === true}
                   isSubmitting={isSubmitting}
                   isDirty={isDirty}
                   entry={entry}
@@ -442,11 +469,15 @@ export function EntryForm({
                   onSaveChanges={() => {
                     void handleSubmit(undefined, "save-changes");
                   }}
+                  onSaveWorkingDraft={() => {
+                    void handleSubmit(undefined, "save-working-draft");
+                  }}
                   onUnpublish={() => {
                     void handleSubmit(undefined, "unpublish");
                   }}
                   onCancel={handleCancel}
                   onDelete={handleDelete}
+                  onDiscardWorkingDraft={handleDiscardWorkingDraft}
                   isRailCollapsed={railCollapsed}
                   onToggleRail={mode === "edit" ? toggleRail : undefined}
                 />
@@ -459,6 +490,10 @@ export function EntryForm({
                   status={
                     effectiveEntryStatus(entry, locale, defaultLocale) ??
                     "draft"
+                  }
+                  hasWorkingDraft={
+                    (entry as { _isWorkingDraft?: boolean } | null | undefined)
+                      ?._isWorkingDraft === true
                   }
                   isRailCollapsed={railCollapsed}
                   hasPublicAddress={hasPublicAddress}

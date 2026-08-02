@@ -571,6 +571,19 @@ export class CollectionEntryService extends BaseService {
     return this.mutationService.warmLocalizedReadiness(collectionName);
   }
 
+  /**
+   * Remove a document's pending working-draft sidecar under the same parent-row
+   * lock a draft save takes, so a discard cannot delete a draft that a
+   * concurrent save committed after the discard's checks. The discard handler
+   * has already authorized read and update on the document.
+   */
+  async discardWorkingDraft(params: {
+    collectionName: string;
+    entryId: string;
+  }): Promise<void> {
+    return this.mutationService.discardWorkingDraft(params);
+  }
+
   async createEntryInTransaction(
     tx: TransactionContext,
     params: { collectionName: string; user?: UserContext },
