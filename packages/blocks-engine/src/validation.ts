@@ -29,7 +29,7 @@ import {
   structuralAllowanceSpent,
   validateStyleValues,
 } from "./style/validate-style-value";
-import type { StyleIssueBudget } from "./style/validate-style-value";
+import type { ReadyStyleIssueBudget } from "./style/validate-style-value";
 
 /** Severity of a validation issue. `error` blocks a strict publish. */
 export type IssueSeverity = "error" | "warning";
@@ -543,7 +543,7 @@ interface NodeCheckState {
   /** Non-empty DOM ids seen so far (from `cssId` or `attributes.id`) → pointer. */
   seenDomIds: Map<string, string>;
   /** Shared across the whole document, so the limit is not per node. */
-  styleBudget: StyleIssueBudget;
+  styleBudget: ReadyStyleIssueBudget;
   /**
    * Set when the document already failed the byte cap. Its style values are
    * still walked for shape, which is cheap, but not PARSED: parsing every
@@ -738,7 +738,7 @@ function validateClasses(
   path: string,
   issues: ValidationIssue[],
   ctx: ValidationContext,
-  budget?: StyleIssueBudget,
+  budget?: ReadyStyleIssueBudget,
   overLimits = false
 ): void {
   if (node.classes === undefined) return;

@@ -73,13 +73,30 @@ export interface StyleIssueBudget {
   pathBytes: number;
   /** Whether this run has already said structural checking stopped early. */
   truncated: boolean;
-  /** How many more unresolved-name warnings this run may report. */
-  siteRemaining: number;
+  /**
+   * How many more unresolved-name warnings this run may report.
+   *
+   * Optional, along with the two below, because the three structural fields
+   * were this type's whole shape when it shipped: a caller still holding that
+   * object has to keep compiling, not only keep running. They are filled in on
+   * the way through, so everything past the entry point works with all six.
+   */
+  siteRemaining?: number;
   /** How many more bytes of path those warnings may carry between them. */
-  sitePathBytes: number;
+  sitePathBytes?: number;
   /** Whether this run has already said name resolution stopped early. */
-  siteTruncated: boolean;
+  siteTruncated?: boolean;
 }
+
+/**
+ * A budget with every allowance present.
+ *
+ * What the walk works with, produced from whatever a caller supplied by
+ * {@link normalizeStyleIssueBudget}. Keeping the two apart is what lets the
+ * accepted shape stay compatible without every read inside having to ask
+ * whether an allowance exists.
+ */
+export type ReadyStyleIssueBudget = Required<StyleIssueBudget>;
 
 /** The default number of structural style issues one validation reports. */
 export const MAX_STYLE_ISSUES = 200;
@@ -120,7 +137,7 @@ export function newStyleIssueBudget(
   pathBytes: number = MAX_STYLE_ISSUE_PATH_BYTES,
   siteRemaining: number = MAX_SITE_ISSUES,
   sitePathBytes: number = MAX_SITE_ISSUE_PATH_BYTES
-): StyleIssueBudget {
+): ReadyStyleIssueBudget {
   return {
     remaining,
     pathBytes,
@@ -141,7 +158,7 @@ export function newStyleIssueBudget(
  */
 export function normalizeStyleIssueBudget(
   budget: StyleIssueBudget | undefined
-): StyleIssueBudget | undefined {
+): ReadyStyleIssueBudget | undefined {
   if (budget === undefined) return undefined;
   if (typeof budget.siteRemaining !== "number") {
     budget.siteRemaining = MAX_SITE_ISSUES;
@@ -150,12 +167,13 @@ export function normalizeStyleIssueBudget(
     budget.sitePathBytes = MAX_SITE_ISSUE_PATH_BYTES;
   }
   if (typeof budget.siteTruncated !== "boolean") budget.siteTruncated = false;
-  return budget;
+  // Every allowance is present now, which is what the walk below requires.
+  return budget as ReadyStyleIssueBudget;
 }
 
 /** Charge a run for the issues just produced, each against its own allowance. */
 export function chargeIssueBudget(
-  budget: StyleIssueBudget | undefined,
+  budget: ReadyStyleIssueBudget | undefined,
   produced: readonly ValidationIssue[]
 ): void {
   if (budget === undefined) return;
@@ -184,19 +202,21 @@ export function chargeIssueBudget(
  * lands on the copy and goes away with it.
  */
 export function speculativeBudget(
-  budget: StyleIssueBudget | undefined
-): StyleIssueBudget | undefined {
+  budget: ReadyStyleIssueBudget | undefined
+): ReadyStyleIssueBudget | undefined {
   return budget === undefined ? undefined : { ...budget };
 }
 
 /** Whether the structural allowance is spent and the walk must stop. */
-export function structuralAllowanceSpent(budget: StyleIssueBudget): boolean {
+export function structuralAllowanceSpent(
+  budget: ReadyStyleIssueBudget
+): boolean {
   return budget.remaining <= 0 || budget.pathBytes <= 0;
 }
 
 /** Whether a run may still ask, and report, whether a name resolves. */
 export function siteAllowanceSpent(
-  budget: StyleIssueBudget | undefined
+  budget: ReadyStyleIssueBudget | undefined
 ): boolean {
   return (
     budget !== undefined &&
@@ -214,7 +234,7 @@ export function siteAllowanceSpent(
  * warning into a blocker that the separate allowance exists to prevent.
  */
 export function siteTruncationNotice(
-  budget: StyleIssueBudget | undefined,
+  budget: ReadyStyleIssueBudget | undefined,
   path: string
 ): ValidationIssue[] {
   if (budget === undefined || budget.siteTruncated) return [];
@@ -230,7 +250,7 @@ export function siteTruncationNotice(
 
 /** Record one site finding against its allowance and return it as the result. */
 function charged(
-  budget: StyleIssueBudget | undefined,
+  budget: ReadyStyleIssueBudget | undefined,
   issue: ValidationIssue
 ): ValidationIssue[] {
   chargeIssueBudget(budget, [issue]);
@@ -326,7 +346,7 @@ function leafIssues(
   leaf: StyleLeaf,
   value: unknown,
   path: string,
-  budget?: StyleIssueBudget,
+  budget?: ReadyStyleIssueBudget,
   tokens?: TokenLookup
 ): ValidationIssue[] {
   // A token reference substitutes for the whole leaf value, so it is checked
@@ -572,7 +592,7 @@ function partIssues(
   value: unknown,
   path: string,
   partLabel: string,
-  budget?: StyleIssueBudget,
+  budget?: ReadyStyleIssueBudget,
   spent = 0,
   spentBytes = 0,
   tokens?: TokenLookup
@@ -661,7 +681,7 @@ function shapeIssues(
   shape: StyleShape,
   value: unknown,
   path: string,
-  budget?: StyleIssueBudget,
+  budget?: ReadyStyleIssueBudget,
   spent = 0,
   spentBytes = 0,
   tokens?: TokenLookup

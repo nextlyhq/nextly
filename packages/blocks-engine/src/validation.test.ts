@@ -665,7 +665,10 @@ describe("validation never throws on adversarial input", () => {
       mode: "strict",
       classes: { has: () => false },
     }).filter(i => i.code === "unknown-class");
-    expect(issues.length).toBeLessThanOrEqual(MAX_STYLE_ISSUES);
+    // The SITE allowance is what bounds this: `unknown-class` is charged there,
+    // not against the structural one. Both default to 200, so naming the wrong
+    // constant passes today and stops meaning anything the moment they differ.
+    expect(issues.length).toBeLessThanOrEqual(MAX_SITE_ISSUES);
     expect(issues.length).toBeGreaterThan(0);
   });
 
