@@ -43,3 +43,29 @@ export type {
   PropSchema,
   SupportDefinition,
 } from "@nextlyhq/blocks-engine";
+
+/**
+ * The rest of the definition's own vocabulary. Every one of these names a field
+ * a block author fills in, so leaving them off this surface meant writing a slot
+ * template, an example, or an editor entry against a type that could only be
+ * reached by importing the engine directly — which is the one thing this subpath
+ * exists to make unnecessary.
+ *
+ * `BlockSupportKeys` is here for the same reason as the rest, and carries one
+ * extra job: a plugin that registers its own support augments that interface to
+ * add its key to the vocabulary the compiler checks a block's `supports`
+ * against.
+ *
+ * @experimental Carried by the same freeze as `defineBlock`.
+ */
+export type {
+  BlockEditorMeta,
+  BlockExample,
+  BlockSupportKeys,
+  BlockSupportValue,
+  BlockVariation,
+  ComponentPath,
+  NodeStyles,
+  SlotLock,
+  SlotSpec,
+} from "@nextlyhq/blocks-engine";

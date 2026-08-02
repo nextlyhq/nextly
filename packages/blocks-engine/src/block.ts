@@ -47,6 +47,66 @@ export interface SlotSpec {
 }
 
 /**
+ * What one support declaration may say: on, off, or a set of named sub-flags.
+ *
+ * @experimental Re-exported to plugin authors as `@nextlyhq/plugin-sdk/blocks`.
+ *   Settles at the end of the engine phase.
+ */
+export type BlockSupportValue = boolean | Record<string, boolean>;
+
+/**
+ * The support keys a block may declare, as an interface so the vocabulary is
+ * open at the type level the same way it is open at runtime.
+ *
+ * A plugin that calls `registerSupport()` adds its key to the vocabulary the
+ * compiler checks against by augmenting this interface:
+ *
+ * ```ts
+ * declare module "@nextlyhq/blocks-engine" {
+ *   interface BlockSupportKeys {
+ *     animation: true;
+ *   }
+ * }
+ * ```
+ *
+ * Declaration merging rather than an index signature: an index signature would
+ * accept every key, which is what leaves a misspelled `spaceing` to be caught at
+ * boot instead of while it is being written.
+ *
+ * The built-in keys are the style catalog's groups. They are written out rather
+ * than mapped from `StyleGroup` so each can carry the sub-flags it recognises in
+ * its own doc comment, and a type test asserts these keys are exactly
+ * `StyleGroup`, so the two lists fail to compile rather than drifting.
+ *
+ * @experimental Re-exported to plugin authors as `@nextlyhq/plugin-sdk/blocks`.
+ *   Settles at the end of the engine phase.
+ */
+export interface BlockSupportKeys {
+  /** Padding and margin. Flags: `padding`, `margin`. */
+  spacing: true;
+  /** Flow, alignment and gap. */
+  layout: true;
+  /** Width, height and their limits. */
+  dimensions: true;
+  /** Font, size, weight, line height and letter spacing. */
+  typography: true;
+  /** Text and other foreground colours. */
+  color: true;
+  /** Background colour, image and gradient. */
+  background: true;
+  /** Border lines and corner rounding. Flags include `radius`. */
+  border: true;
+  /** Box and text shadows. */
+  shadow: true;
+  /** Opacity, filters and transforms. */
+  effects: true;
+  /** Positioning and stacking. */
+  position: true;
+  /** Container-query behaviour. */
+  container: true;
+}
+
+/**
  * Style capabilities a block opts into. Each key must be a registered support
  * (built-in or added via `registerSupport`); `true` enables the whole group and
  * an object enables individual sub-flags.
@@ -54,7 +114,9 @@ export interface SlotSpec {
  * @experimental Re-exported to plugin authors as `@nextlyhq/plugin-sdk/blocks`.
  *   Settles at the end of the engine phase.
  */
-export type BlockSupports = Record<string, boolean | Record<string, unknown>>;
+export type BlockSupports = Partial<
+  Record<keyof BlockSupportKeys, BlockSupportValue>
+>;
 
 /** A path to an editor component, resolved through the admin import map. */
 export type ComponentPath = string;
@@ -90,7 +152,7 @@ export interface BlockVariation<P extends object = Record<string, unknown>> {
  * @experimental Re-exported to plugin authors as `@nextlyhq/plugin-sdk/blocks`.
  *   Settles at the end of the engine phase.
  */
-export interface BlockRenderArgs<P> {
+export interface BlockRenderArgs<P, C = unknown> {
   props: P;
   node: BlockNode;
   /** Rendered children per slot, keyed by slot name. */
@@ -100,6 +162,18 @@ export interface BlockRenderArgs<P> {
    * render a single element and never wrap it, so styles target that element.
    */
   className: string;
+  /**
+   * Whatever the renderer makes available to a block: a data source, the
+   * current locale, a request. Its type is the renderer's to name, not this
+   * package's — the engine stays free of both React and any renderer, so it
+   * carries the handle without knowing what is on the other end.
+   *
+   * A block that reads data declares the context it needs
+   * (`BlockRenderArgs<MyProps, PageContext>`) and gets it typed. Without this
+   * an async block has no way to reach anything, which makes a dynamic block
+   * unwritable however many other members the definition has.
+   */
+  ctx: C;
 }
 
 /**
@@ -127,7 +201,10 @@ export interface BlockExample<P> {
  * @experimental Re-exported to plugin authors as `@nextlyhq/plugin-sdk/blocks`.
  *   Settles at the end of the engine phase.
  */
-export interface BlockDefinition<P extends object = Record<string, unknown>> {
+export interface BlockDefinition<
+  P extends object = Record<string, unknown>,
+  C = unknown,
+> {
   /** Namespaced, immutable identity, e.g. "core/heading". */
   name: string;
   /** Schema version stamped onto every node of this type. */
@@ -165,7 +242,7 @@ export interface BlockDefinition<P extends object = Record<string, unknown>> {
    * make a typed definition unassignable to the heterogeneous collection
    * without buying any safety.
    */
-  render(args: BlockRenderArgs<P>): BlockRenderResult;
+  render(args: BlockRenderArgs<P, C>): BlockRenderResult;
   /** Optional editor-side data hydration before rendering. */
   resolve?(props: P, ctx: unknown): unknown;
   /** Editor-only metadata; never serialized. */
@@ -186,9 +263,9 @@ export interface BlockDefinition<P extends object = Record<string, unknown>> {
  *   re-export is collapsed to one line by its declaration bundler, which drops
  *   the comments attached to it.
  */
-export function defineBlock<P extends object>(
-  definition: BlockDefinition<P>
-): BlockDefinition<P> {
+export function defineBlock<P extends object, C = unknown>(
+  definition: BlockDefinition<P, C>
+): BlockDefinition<P, C> {
   return definition;
 }
 
@@ -229,6 +306,6 @@ export interface AnyBlockDefinition
   defaultProps?: object;
   props?: Partial<Record<string, PropSchema>>;
   localized?: string[];
-  render(args: BlockRenderArgs<object>): BlockRenderResult;
+  render(args: BlockRenderArgs<object, unknown>): BlockRenderResult;
   resolve?(props: object, ctx: unknown): unknown;
 }
