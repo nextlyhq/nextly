@@ -180,3 +180,27 @@ export function convertTimestampsToCamelCase<T extends Record<string, unknown>>(
   }
   return entry;
 }
+
+/**
+ * Turn any system timestamp still held as an ISO string back into a `Date`, in place.
+ *
+ * A row loaded from the database arrives Drizzle-decoded, but a row reassembled from a stored
+ * snapshot arrives as JSON, where a timestamp is a string. A caller that overlays a snapshot onto a
+ * read has to restore the decoded shape or the same hook that works for every other entry fails on
+ * a drafted one the moment it calls a date method.
+ *
+ * Both spellings are covered, because an overlay can run either side of the camelCase conversion.
+ * A value that does not parse is left as it is rather than replaced with an `Invalid Date`.
+ */
+export function rehydrateSystemTimestamps<T extends Record<string, unknown>>(
+  entry: T
+): T {
+  const record = entry as Record<string, unknown>;
+  for (const key of SYSTEM_TIMESTAMP_KEYS) {
+    const value = record[key];
+    if (typeof value !== "string") continue;
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) record[key] = parsed;
+  }
+  return entry;
+}

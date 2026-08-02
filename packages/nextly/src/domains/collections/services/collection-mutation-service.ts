@@ -61,7 +61,11 @@ import type {
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
-import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
+import {
+  convertTimestampsToCamelCase,
+  rehydrateSystemTimestamps,
+  SYSTEM_TIMESTAMP_KEYS,
+} from "../../../shared/lib/case-conversion";
 import { validateEntryData } from "../../../shared/lib/entry-validation";
 import { applyFieldDefaults } from "../../../shared/lib/field-defaults";
 import {
@@ -1689,22 +1693,14 @@ export class CollectionMutationService extends BaseService {
       documentLocalized: false,
       localeUnknown: false,
     });
-    for (const key of [
-      "id",
-      "createdAt",
-      "created_at",
-      "updatedAt",
-      "updated_at",
-    ]) {
+    // Every system timestamp spelling, taken from the shared list rather than named here: a list
+    // written out by hand carries only the columns that existed when it was written, so the
+    // first-publication marker was absent from a working-draft save's response document while an
+    // ordinary read of the same entry returned it.
+    for (const key of ["id", ...SYSTEM_TIMESTAMP_KEYS]) {
       if (key in rawDraft) payload[key] = rawDraft[key];
     }
-    for (const key of ["createdAt", "updatedAt"]) {
-      const value = payload[key];
-      if (typeof value === "string") {
-        const parsed = new Date(value);
-        if (!Number.isNaN(parsed.getTime())) payload[key] = parsed;
-      }
-    }
+    rehydrateSystemTimestamps(payload);
     rehydrateSnapshotDates(payload, fields, componentSchemas);
     return payload;
   }
