@@ -153,3 +153,58 @@ describe("a failing logger cannot replace the response", () => {
     ).not.toThrow();
   });
 });
+
+describe("diagnostics never break the response that carries them", () => {
+  it("returns the error response when logContext cannot be serialized", async () => {
+    // `logContext` is whatever a thrower attached, so it can hold a cycle. The
+    // body is serialized inside the error path, so a value that throws there
+    // would reject the request instead of returning the error the handler
+    // built — a diagnostic aid failing worse than the failure it describes.
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("NEXTLY_DEV_DIAGNOSTICS", "1");
+
+    const circular: Record<string, unknown> = { table: "users" };
+    circular.self = circular;
+
+    const handler = withErrorHandler(async (_req: Request) => {
+      throw NextlyError.internal({ logContext: circular });
+    });
+
+    const response = await handler(new Request("https://example.test/api/x"));
+    const parsed = (await response.json()) as {
+      error: Record<string, unknown>;
+    };
+
+    expect(response.status).toBe(500);
+    expect(
+      (parsed.error._devDiagnostics as Record<string, unknown>).logContext
+    ).toBe("[unserializable]");
+  });
+});
+
+describe("expected traffic does not reach the operator log", () => {
+  it("suppresses benign codes", async () => {
+    // A missing row, a rate limit and an unauthenticated probe are expected
+    // traffic. The dispatcher already suppresses them for its own log, and
+    // writing them here would flood the same log through a second door.
+    const { logFlattenedErrors } = await import(
+      "../../hooks/side-effect-warnings"
+    );
+    const written: unknown[] = [];
+
+    logFlattenedErrors(
+      [
+        NextlyError.notFound({}),
+        NextlyError.rateLimited({}),
+        NextlyError.authRequired({}),
+        NextlyError.internal({ logContext: { real: true } }),
+      ],
+      entry => written.push(entry),
+      { requestId: "req-1" }
+    );
+
+    // Only the genuine fault, so the count is the assertion rather than a
+    // sample of it.
+    expect(written).toHaveLength(1);
+  });
+});

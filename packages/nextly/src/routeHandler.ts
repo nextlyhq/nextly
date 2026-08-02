@@ -1497,6 +1497,16 @@ export function createDynamicHandlers(options?: {
         flattenedInRequest = currentFlattenedErrors();
       }
     });
+    // Settled BEFORE logging and put on the response, so the id an operator
+    // reads in the log is one the caller actually received. The response
+    // helpers do not set it for a 200 carrying per-item failures, so without
+    // this the log would carry an id generated here and shown to nobody,
+    // which is the join the diagnostics exist for.
+    const effectiveRequestId =
+      response.headers.get("x-request-id") ?? readOrGenerateRequestId(req);
+    if (!response.headers.has("x-request-id")) {
+      response.headers.set("x-request-id", effectiveRequestId);
+    }
     // Imported here rather than at module scope, matching how this file already
     // reaches the logger, so the route entry point keeps its import graph.
     const { getNextlyLogger: resolveLogger } = await import(
@@ -1506,8 +1516,7 @@ export function createDynamicHandlers(options?: {
       flattenedInRequest,
       entry => resolveLogger().error(entry),
       {
-        requestId:
-          response.headers.get("x-request-id") ?? readOrGenerateRequestId(req),
+        requestId: effectiveRequestId,
         route: new URL(req.url).pathname,
         method: req.method,
       }

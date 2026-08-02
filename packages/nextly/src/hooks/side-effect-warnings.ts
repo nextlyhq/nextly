@@ -194,12 +194,27 @@ export async function collectingWarnings<T>(
  * produced. Losing a log line is recoverable; turning a completed write into a
  * 500 is not.
  */
+/**
+ * Codes an operator does not want a line for.
+ *
+ * A missing row, a rate limit and an unauthenticated probe are expected
+ * traffic, not faults, and the dispatcher already suppresses them for its own
+ * error log. Writing them here would flood the same log through a second door
+ * and undo that policy.
+ */
+const BENIGN_CODES: ReadonlySet<string> = new Set([
+  "NOT_FOUND",
+  "RATE_LIMITED",
+  "AUTH_REQUIRED",
+]);
+
 export function logFlattenedErrors(
   errors: readonly NextlyError[],
   write: (entry: Record<string, unknown>) => void,
   context: { requestId: string; route?: string; method?: string }
 ): void {
   for (const error of errors) {
+    if (BENIGN_CODES.has(String(error.code))) continue;
     try {
       write({
         kind: "flattened-service-error",

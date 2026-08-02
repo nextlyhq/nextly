@@ -97,6 +97,29 @@ const DEFAULT_INTERNAL_MESSAGE = "An unexpected error occurred.";
  * Read per call rather than cached, so a test can exercise both sides and so a
  * process cannot latch the permissive answer from however it happened to start.
  */
+
+/**
+ * A value that is safe to put on a response body, or undefined.
+ *
+ * `logContext` is whatever a thrower attached, so it can hold a cycle, a
+ * BigInt, or anything else `JSON.stringify` refuses. Serializing the response
+ * happens after this, inside the error path, so a value that throws there
+ * would reject the request instead of returning the error the handler built --
+ * turning a diagnostic aid into a failure worse than the one it describes.
+ *
+ * Round-tripped rather than inspected: that is the same operation the response
+ * will perform, so it answers the exact question rather than an approximation
+ * of it.
+ */
+function jsonSafe(value: unknown): unknown {
+  if (value === undefined) return undefined;
+  try {
+    return JSON.parse(JSON.stringify(value)) as unknown;
+  } catch {
+    return "[unserializable]";
+  }
+}
+
 function devDiagnosticsEnabled(): boolean {
   return (
     process.env.NODE_ENV === "development" &&
@@ -112,7 +135,8 @@ function buildDevDiagnostics(
     error.cause instanceof Error ? error.cause.message : undefined;
 
   const detail: Record<string, unknown> = {};
-  if (thrown.logContext !== undefined) detail.logContext = thrown.logContext;
+  const context = jsonSafe(thrown.logContext);
+  if (context !== undefined) detail.logContext = context;
   const thrownCause = causeMessage(thrown);
   if (thrownCause !== undefined) detail.cause = thrownCause;
 
@@ -121,7 +145,9 @@ function buildDevDiagnostics(
   // every unexpected failure look alike.
   const earlier = flattened.map(error => ({
     code: error.code,
-    ...(error.logContext !== undefined ? { logContext: error.logContext } : {}),
+    ...(jsonSafe(error.logContext) !== undefined
+      ? { logContext: jsonSafe(error.logContext) }
+      : {}),
     ...(causeMessage(error) !== undefined
       ? { cause: causeMessage(error) }
       : {}),
@@ -202,12 +228,23 @@ export function withErrorHandler<TArgs extends unknown[]>(
       }
 
       // (3) Log.
-      getNextlyLogger().error({
-        kind: "route-handler-error",
-        ...nextlyErr.toLogJSON(requestId),
-        route,
-        method,
-      });
+      //
+      // Guarded because `logContext` is whatever a thrower attached and the
+      // default logger serializes its payload: a cycle or a BigInt in there
+      // would throw from inside this catch and reject the request, so the
+      // caller would get nothing instead of the error the handler built. The
+      // same reason the hooks below are described as never poisoning the
+      // response.
+      try {
+        getNextlyLogger().error({
+          kind: "route-handler-error",
+          ...nextlyErr.toLogJSON(requestId),
+          route,
+          method,
+        });
+      } catch {
+        // Deliberately swallowed; see above.
+      }
 
       // (4) Fire hooks (per-call before global). Failures are logged but never
       // poison the response.

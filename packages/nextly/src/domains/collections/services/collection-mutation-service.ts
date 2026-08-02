@@ -6693,10 +6693,6 @@ export class CollectionMutationService extends BaseService {
         // a hook's refusal or rate limit as a server fault, and left a boundary
         // nothing to rebuild it from.
         ...(typedErrorEnvelopeFields(error) ?? {}),
-        // A typed error keeps its own status and code. Hardcoding 500 reported
-        // a delete hook's refusal or rate limit as a server fault, and left a
-        // boundary nothing to rebuild it from.
-        ...(typedErrorEnvelopeFields(error) ?? {}),
         eventRecorded,
         revalidationIntent,
         committed: committedWrite,
