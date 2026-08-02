@@ -702,6 +702,35 @@ describe("validation never throws on adversarial input", () => {
     expect(asked).toBe(0);
   });
 
+  it("does not resolve class names on a document a limit already refused", () => {
+    // The node and depth caps are checked BEFORE the byte pass, and return
+    // early, so a flag that only asks about size leaves the expensive per-value
+    // work running on a document already known to be invalid.
+    const classes = Array.from({ length: 5000 }, (_, i) => `c_${i}`);
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        { id: "n1", type: "core/text", version: 1, props: {}, classes },
+        { id: "n2", type: "core/text", version: 1, props: {}, classes },
+      ],
+    });
+    let asked = 0;
+    const issues = validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+      limits: { maxDepth: 12, maxNodes: 1, maxBytes: 2 * 1024 * 1024 },
+      classes: {
+        has: () => {
+          asked += 1;
+          return true;
+        },
+      },
+    });
+    expect(issues.some(i => i.code === "node-count-exceeded")).toBe(true);
+    expect(asked).toBe(0);
+  });
+
   it("bounds the path text unknown class warnings can return", () => {
     // A JSON Pointer repeats every key above it, so a node under a very long
     // slot key copies that key into every warning reported beneath it. Counting

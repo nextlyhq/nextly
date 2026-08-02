@@ -245,9 +245,18 @@ export function validate(
 
   const beforeLimits = issues.length;
   checkLimits(doc, limits, issues);
-  const oversized = issues
+  // Any limit rejection, not the byte one alone. A forest over the node or
+  // depth cap is refused BEFORE its bytes are measured, so asking only about
+  // size would leave the expensive per-value work running on a document already
+  // known to be invalid.
+  const overLimits = issues
     .slice(beforeLimits)
-    .some(issue => issue.code === "document-too-large");
+    .some(
+      issue =>
+        issue.code === "document-too-large" ||
+        issue.code === "node-count-exceeded" ||
+        issue.code === "depth-exceeded"
+    );
 
   const nodeState: NodeCheckState = {
     ctx,
@@ -256,7 +265,7 @@ export function validate(
     unknownSeverity,
     seenIds: new Map<string, string>(),
     seenDomIds: new Map<string, string>(),
-    skipValueParsing: oversized,
+    skipValueParsing: overLimits,
     styleBudget: newStyleIssueBudget(),
   };
 
@@ -730,7 +739,7 @@ function validateClasses(
   issues: ValidationIssue[],
   ctx: ValidationContext,
   budget?: StyleIssueBudget,
-  overByteCap = false
+  overLimits = false
 ): void {
   if (node.classes === undefined) return;
   // Index-based, not `.every` (which skips array holes), so a sparse classes
@@ -755,12 +764,12 @@ function validateClasses(
   }
   const lookup = ctx.classes;
   if (lookup === undefined) return;
-  // A document past its byte cap is already refused, and the shape above is all
-  // that is worth reading of it. Resolving names means handing every class
-  // string to a lookup that hashes it, so a document made of very many known
-  // ids would be read in full after the byte cap said not to read it, and known
-  // ids spend no allowance to stop it.
-  if (overByteCap) return;
+  // A document a limit already refused is not read further, and the shape above
+  // is all that is worth reading of it. Resolving names means handing every
+  // class string to a lookup that hashes it, and a known id spends no allowance
+  // to stop that, so a rejected document made of very many known ids would be
+  // read in full right after a limit said not to read it.
+  if (overLimits) return;
   // A WARNING in both modes, never an error. A class the site no longer defines
   // costs the element that class's styling and nothing else, and a document is
   // data while a class library is site configuration: deleting a class must not

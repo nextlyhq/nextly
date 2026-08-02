@@ -631,13 +631,20 @@ function shapeIssues(
       // variant's issues are reported, because it is the shape the catalog
       // lists first and therefore the one an author most likely intended.
       let best: ValidationIssue[] | undefined;
+      let bestVariant: StyleShape | undefined;
       let bestRejects = true;
       for (const variant of shape.of) {
+        // Tried WITHOUT the budget, because trying is speculative and the
+        // budget is not. Name resolution is charged where the reference is, so
+        // handing each arm the real allowance would bill a value once per arm
+        // and let a discarded arm's truncation marker suppress a later one that
+        // was going to be reported. The winner is re-run below with the budget,
+        // so exactly one arm ever spends anything.
         const issues = shapeIssues(
           variant,
           value,
           path,
-          budget,
+          undefined,
           spent,
           spentBytes,
           tokens
@@ -653,6 +660,7 @@ function shapeIssues(
         const rejects = issues.some(issue => issue.severity === "error");
         if (bestRejects && !rejects) {
           best = issues;
+          bestVariant = variant;
           bestRejects = false;
           continue;
         }
@@ -664,9 +672,21 @@ function shapeIssues(
         const deeper =
           best === undefined ||
           (issues[0]?.path.length ?? 0) > (best[0]?.path.length ?? 0);
-        if (deeper) best = issues;
+        if (deeper) {
+          best = issues;
+          bestVariant = variant;
+        }
       }
-      return best ?? [];
+      if (bestVariant === undefined) return [];
+      return shapeIssues(
+        bestVariant,
+        value,
+        path,
+        budget,
+        spent,
+        spentBytes,
+        tokens
+      );
     }
   }
 }

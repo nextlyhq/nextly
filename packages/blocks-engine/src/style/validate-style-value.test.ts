@@ -158,6 +158,28 @@ describe("the site allowance bounds what name resolution reports", () => {
     ]);
   });
 
+  it("charges a union once, not once per arm it tried", () => {
+    // `lineHeight` is a union whose arms both take a token. Trying an arm is
+    // speculative; spending the allowance is not. Billing per arm would empty
+    // the allowance faster than the document uses it, and a discarded arm's
+    // truncation marker would suppress the one a later reference was going to
+    // get.
+    const budget = withSiteRoom(2);
+    const issues = validateStyleValues(
+      { lineHeight: { $token: "gone" }, color: { $token: "also-gone" } },
+      "/styles",
+      "strict",
+      budget,
+      false,
+      nothingResolves
+    );
+    expect(issues.map(i => i.code)).toEqual(["unknown-token", "unknown-token"]);
+    expect(issues.map(i => i.path)).toEqual([
+      "/styles/lineHeight",
+      "/styles/color",
+    ]);
+  });
+
   it("leaves structural checking untouched once it has stopped", () => {
     // The whole point of a separate allowance: running out of room to talk
     // about names must not cost the checks that decide whether the document is
