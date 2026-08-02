@@ -141,6 +141,29 @@ export function chargeIssueBudget(
   }
 }
 
+/**
+ * A budget that gates like the real one but keeps nothing it spends.
+ *
+ * Trying a union arm is speculative, so what an arm spends must not survive
+ * being discarded. Handing an arm NO budget would do that, and would also
+ * remove the bound that stops it allocating: a composite arm walks every key it
+ * was given, and the allowance is what keeps a document full of unknown keys
+ * from building an issue for each one before anything looks at the result.
+ *
+ * A shallow copy of each allowance keeps both properties at once. The arm reads
+ * the same remaining amounts, so it stops in the same place; every charge and
+ * every truncation flag lands on the copy and goes away with it.
+ */
+export function speculativeBudget(
+  budget: StyleIssueBudget | undefined
+): StyleIssueBudget | undefined {
+  if (budget === undefined) return undefined;
+  return {
+    structural: { ...budget.structural },
+    site: { ...budget.site },
+  };
+}
+
 /** Whether an allowance has spent either of its limits. */
 function allowanceSpent(allowance: IssueAllowance): boolean {
   return allowance.count <= 0 || allowance.pathBytes <= 0;
@@ -634,17 +657,17 @@ function shapeIssues(
       let bestVariant: StyleShape | undefined;
       let bestRejects = true;
       for (const variant of shape.of) {
-        // Tried WITHOUT the budget, because trying is speculative and the
-        // budget is not. Name resolution is charged where the reference is, so
-        // handing each arm the real allowance would bill a value once per arm
-        // and let a discarded arm's truncation marker suppress a later one that
-        // was going to be reported. The winner is re-run below with the budget,
-        // so exactly one arm ever spends anything.
+        // Tried against a COPY of the allowances, because trying is
+        // speculative and spending is not. The copy still gates, so an arm
+        // cannot allocate past the cap; nothing it charges outlives it, so a
+        // value is not billed once per arm and a discarded arm's truncation
+        // marker cannot suppress one a later reference was going to get. The
+        // winner is re-run below against the real budget.
         const issues = shapeIssues(
           variant,
           value,
           path,
-          undefined,
+          speculativeBudget(budget),
           spent,
           spentBytes,
           tokens

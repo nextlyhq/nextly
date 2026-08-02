@@ -6,6 +6,7 @@ import { checkColorValue, checkCssValue, checkUrlValue } from "./css-value";
 import {
   MAX_STYLE_ISSUES,
   newStyleIssueBudget,
+  speculativeBudget,
   validateStyleValues,
 } from "./validate-style-value";
 
@@ -156,6 +157,44 @@ describe("the site allowance bounds what name resolution reports", () => {
       "unknown-token",
       "site-issues-truncated",
     ]);
+  });
+
+  it("gates a speculative arm while keeping nothing it spends", () => {
+    // Both halves matter and they pull in opposite directions. Handing an arm
+    // no allowance stops it billing anything, and also stops it stopping: a
+    // composite arm walks every key it was given and would build an issue for
+    // each one before anything looked at the result. Handing it the real
+    // allowance bounds it and lets a discarded arm spend.
+    //
+    // Tested here rather than through the returned issues because the waste is
+    // transient: the winning arm is re-run against the real budget either way,
+    // so the reported issues are identical and only the work differs.
+    const real = newStyleIssueBudget(5, 100, 3, 50);
+    const speculative = speculativeBudget(real);
+    expect(speculative?.structural.count).toBe(5);
+    expect(speculative?.structural.pathBytes).toBe(100);
+    expect(speculative?.site.count).toBe(3);
+    if (speculative === undefined) throw new Error("expected a budget");
+    speculative.structural.count -= 5;
+    speculative.structural.truncated = true;
+    speculative.site.count -= 3;
+    speculative.site.truncated = true;
+    expect(real.structural.count).toBe(5);
+    expect(real.structural.truncated).toBe(false);
+    expect(real.site.count).toBe(3);
+    expect(real.site.truncated).toBe(false);
+  });
+
+  it("keeps the reported issues bounded whichever arm wins", () => {
+    const corners: Record<string, string> = {};
+    for (let i = 0; i < 5000; i += 1) corners[`corner${i}`] = "1px";
+    const issues = validateStyleValues(
+      { borderRadius: corners },
+      "/styles",
+      "strict",
+      newStyleIssueBudget()
+    );
+    expect(issues.length).toBeLessThanOrEqual(MAX_STYLE_ISSUES + 1);
   });
 
   it("charges a union once, not once per arm it tried", () => {
