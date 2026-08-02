@@ -236,7 +236,7 @@ export interface BlockDefinition<P extends object = Record<string, unknown>>
    * other. Naming it here makes the async contract mean the same thing across
    * the range this package declares.
    */
-  render(args: BlockRenderArgs<P>): ReactNode | Promise<ReactNode>;
+  render(args: BlockRenderArgs<P>): BlockRenderResult;
 }
 
 /**
@@ -299,11 +299,29 @@ export function blockSupports<S extends BlockSupports>(
  */
 export type {
   AnyBlockDefinition,
-  BlockRenderResult,
   InferBlockProps,
   PropSchema,
   SupportDefinition,
 } from "@nextlyhq/blocks-engine";
+
+/**
+ * What a block's `render` returns.
+ *
+ * Declared here rather than re-exported. The engine's own is `unknown`, because
+ * the engine serves any renderer and cannot name an output type; naming it there
+ * would tie a runtime-free package to React. That leaves the re-exported name
+ * useless for the thing an author would reach for it to do — a helper typed
+ * `(args: BlockRenderArgs<P>) => BlockRenderResult` returns `unknown`, which does
+ * not satisfy `BlockDefinition["render"]`, so handing that helper to
+ * `defineBlock` failed to compile.
+ *
+ * The promise is spelled out for the same reason `render` spells it out: React
+ * 19 added promises to `ReactNode` and React 18 did not, and this package
+ * supports both.
+ *
+ * @experimental Carried by the same freeze as `defineBlock`.
+ */
+export type BlockRenderResult = ReactNode | Promise<ReactNode>;
 
 /**
  * The rest of the definition's own vocabulary. Every one of these names a field
@@ -312,12 +330,19 @@ export type {
  * reached by importing the engine directly — which is the one thing this subpath
  * exists to make unnecessary.
  *
+ * `BlockSupportValue` is deliberately NOT among them. The engine's is
+ * `boolean | Record<string, boolean>`, which is what its registry stores from
+ * every source; offered here as authoring vocabulary it would undo the check
+ * this module exists for, since `const spacing: BlockSupportValue = { paddding:
+ * true }` accepts the typo the per-key flag unions refuse. A shared setting for
+ * one key is written as `BlockSupports["spacing"]`, which is checked, and a
+ * whole object goes through `blockSupports()`.
+ *
  * @experimental Carried by the same freeze as `defineBlock`.
  */
 export type {
   BlockEditorMeta,
   BlockExample,
-  BlockSupportValue,
   BlockVariation,
   ComponentPath,
   NodeStyles,

@@ -7,8 +7,8 @@ import type {
   BlockExample,
   BlockRenderArgs,
   BlockRenderContext,
+  BlockRenderResult,
   BlockSupports,
-  BlockSupportValue,
   ComponentPath,
   NodeStyles,
   SlotLock,
@@ -25,9 +25,36 @@ expectTypeOf<SlotLock>().toEqualTypeOf<
   "all" | "insert" | "contentOnly" | false
 >();
 expectTypeOf<ComponentPath>().toEqualTypeOf<string>();
-expectTypeOf<BlockSupportValue>().toEqualTypeOf<
-  boolean | Record<string, boolean>
+// The engine's `BlockSupportValue` is deliberately NOT re-exported here. It is
+// what the registry STORES from every source, so as authoring vocabulary it
+// would undo this module's whole point: a shared setting typed with it accepts
+// a flag name the per-key unions refuse. The checked spellings are these.
+const perKey: BlockSupports["spacing"] = { padding: true };
+void perKey;
+
+// @ts-expect-error "paddding" is not a spacing flag, wherever the value is written.
+const perKeyTypo: BlockSupports["spacing"] = { paddding: true };
+void perKeyTypo;
+
+// What `render` returns, as an author names it. The engine's own is `unknown`,
+// because a runtime-free package cannot name React; re-exported, it could not
+// type the very helper someone would reach for it to type.
+expectTypeOf<BlockRenderResult>().toEqualTypeOf<
+  ReactNode | Promise<ReactNode>
 >();
+
+// The point of naming it: a helper written against it satisfies the definition.
+const helper = (args: BlockRenderArgs<{ text: string }>): BlockRenderResult =>
+  args.props.text;
+const viaHelper = defineBlock<{ text: string }>({
+  name: "test/via-helper",
+  version: 1,
+  description: "Renders through a helper typed with the exported result type.",
+  props: { text: { type: "text" } },
+  example: { props: { text: "hi" } },
+  render: helper,
+});
+void viaHelper;
 
 // A support key is checked while it is being written rather than at boot, and
 // the vocabulary covers the capabilities that have no style group of their own.

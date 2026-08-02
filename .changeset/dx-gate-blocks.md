@@ -42,6 +42,14 @@ typed without every block naming a context type of its own.
 
 Breaking, in an experimental package:
 
+- `BlockSupportValue` is no longer exported from `@nextlyhq/plugin-sdk/blocks`.
+  It is the shape the registry stores from every source, so as authoring
+  vocabulary it accepted a sub-flag name the per-key check refuses. Write a
+  shared setting for one key as `BlockSupports["spacing"]`, or a whole object
+  through `blockSupports()`.
+- `BlockRenderResult` from `@nextlyhq/plugin-sdk/blocks` is now
+  `ReactNode | Promise<ReactNode>` rather than the engine's `unknown`, so a
+  helper typed with it satisfies a block's `render`.
 - `BlockRenderArgs.slots` is replaced by `BlockRenderArgs.renderSlot`.
 - `BlockDefinition.resolve` is removed. Nothing ever called it, so a data-loading
   function written against it silently never ran; blocks read data through `ctx`.

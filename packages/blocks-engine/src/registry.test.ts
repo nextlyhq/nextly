@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, expectTypeOf, it } from "vitest";
 
-import type { BlockDefinition, InferBlockProps } from "./block";
+import type { BlockDefinition, BlockSupports, InferBlockProps } from "./block";
 import type { BlockNode } from "./document";
 import { defineBlock } from "./block";
 import { migrateDocument } from "./migration";
@@ -197,6 +197,32 @@ describe("registration rules", () => {
         block({ name: "core/typo", supports: { spacing: { paddding: true } } }),
       ])
     ).toThrow(/NEXTLY_BLOCK_UNKNOWN_SUPPORT.*paddding/s);
+  });
+
+  it("rejects a non-boolean sub-flag value", () => {
+    // The authoring types never ran for a definition arriving from plain
+    // JavaScript or through the untyped declarations channel, and the style
+    // mapping enables a group only on exactly `true`, so this registers
+    // cleanly and then styles nothing at all.
+    expect(() =>
+      registerBlocks([
+        block({
+          name: "core/flagstring",
+          supports: { spacing: { padding: "yes" } } as unknown as BlockSupports,
+        }),
+      ])
+    ).toThrow(/NEXTLY_BLOCK_INVALID.*padding.*a string/s);
+  });
+
+  it("rejects a support value that is neither boolean nor a flag object", () => {
+    expect(() =>
+      registerBlocks([
+        block({
+          name: "core/supportstring",
+          supports: { spacing: "on" } as unknown as BlockSupports,
+        }),
+      ])
+    ).toThrow(/NEXTLY_BLOCK_INVALID.*spacing.*a string/s);
   });
 
   it("accepts known sub-flags", () => {
