@@ -890,6 +890,54 @@ describe("validation never throws on adversarial input", () => {
     expect(issues.map(issue => issue.code)).toContain("site-issues-truncated");
   });
 
+  it("still checks a name it has already resolved once lookups are spent", () => {
+    // The lookup allowance bounds what the CALLER is asked to do, not what may
+    // be reported. A name this run already resolved is answered from its cache
+    // for nothing, so refusing it would drop a warning that was free to produce
+    // and claim the name went unchecked when it had been checked already.
+    const distinct = MAX_SITE_LOOKUPS + 200;
+    const nodes = [
+      // One node whose class is unknown, seen FIRST so its answer is cached...
+      {
+        id: "known-early",
+        type: "core/box",
+        version: 1,
+        props: {},
+        classes: ["c_missing"],
+      },
+      // ...then enough distinct ids to spend the lookup allowance...
+      ...Array.from({ length: distinct }, (_, index) => ({
+        id: `n${index}`,
+        type: "core/box",
+        version: 1,
+        props: {},
+        classes: [`c_${index}`],
+      })),
+      // ...and the same unknown class again, long after it ran out.
+      {
+        id: "known-late",
+        type: "core/box",
+        version: 1,
+        props: {},
+        classes: ["c_missing"],
+      },
+    ];
+    const issues = validate(
+      invalidDoc({ formatVersion: 1, kind: "page", nodes }),
+      {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        mode: "strict",
+        limits: { ...DEFAULT_LIMITS, maxNodes: distinct + 10 },
+        classes: { has: (id: string) => id !== "c_missing" },
+      }
+    );
+    const unknown = issues.filter(issue => issue.code === "unknown-class");
+    expect(unknown.map(issue => issue.path)).toEqual([
+      "/nodes/0/classes/0",
+      `/nodes/${distinct + 1}/classes/0`,
+    ]);
+  });
+
   it("asks the caller's token lookup once per name for the whole document", () => {
     // The cache belongs to the walk, not to one style envelope. Built per
     // envelope it would reset at every node, state and breakpoint, so a site

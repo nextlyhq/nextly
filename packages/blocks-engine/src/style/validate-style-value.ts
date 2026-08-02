@@ -247,9 +247,7 @@ export function siteAllowanceSpent(
 ): boolean {
   return (
     budget !== undefined &&
-    (budget.siteRemaining <= 0 ||
-      budget.sitePathBytes <= 0 ||
-      budget.siteLookups <= 0)
+    (budget.siteRemaining <= 0 || budget.sitePathBytes <= 0)
   );
 }
 
@@ -284,6 +282,47 @@ function charged(
 ): ValidationIssue[] {
   chargeIssueBudget(budget, [issue]);
   return [issue];
+}
+
+/**
+ * Each memoized lookup's cache, for asking whether a name can be answered
+ * without going back to the caller.
+ *
+ * Keyed by the wrapper rather than held inside it because the question is asked
+ * from the reference site, which has the lookup and not its innards. A `WeakMap`
+ * so a lookup that goes out of scope takes its cache with it.
+ */
+const lookupCaches = new WeakMap<object, ReadonlyMap<string, unknown>>();
+
+/** Record a wrapper's cache so {@link canResolveName} can consult it. */
+export function registerLookupCache(
+  lookup: object,
+  seen: ReadonlyMap<string, unknown>
+): void {
+  lookupCaches.set(lookup, seen);
+}
+
+/**
+ * Whether this run may still resolve one name.
+ *
+ * Three questions, and keeping them apart is the point. The reporting
+ * allowances bound what comes BACK, so spending them stops resolution
+ * altogether. The lookup allowance bounds what the CALLER is asked to do, so
+ * spending it stops only the names that would ask them something new — a name
+ * this run has already resolved is answered from the cache at no cost to
+ * anyone, and refusing it would drop a warning that was free to produce while
+ * claiming the name went unchecked when it had in fact been checked.
+ */
+export function canResolveName(
+  lookup: object | undefined,
+  name: string,
+  budget: ReadyStyleIssueBudget | undefined
+): boolean {
+  if (budget === undefined) return true;
+  if (siteAllowanceSpent(budget)) return false;
+  if (budget.siteLookups > 0) return true;
+  const seen = lookup === undefined ? undefined : lookupCaches.get(lookup);
+  return seen !== undefined && seen.has(name);
 }
 
 /**
@@ -335,6 +374,7 @@ export function memoizeTokenLookup(
     },
   };
   memoizedLookups.add(lookup);
+  registerLookupCache(lookup, seen);
   return lookup;
 }
 
@@ -477,8 +517,10 @@ function leafIssues(
     // slot left, which is not a bound. Asking here is also what makes the
     // marker below truthful — it is reported only when a reference really did
     // go unchecked, never because the next property happened to hold a literal.
-    if (siteAllowanceSpent(budget)) return siteTruncationNotice(budget, path);
     const name = value.$token;
+    if (!canResolveName(tokens, name, budget)) {
+      return siteTruncationNotice(budget, path);
+    }
     const kind = tokens.kindOf(name);
     if (kind === undefined) {
       return charged(budget, {

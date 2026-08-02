@@ -22,8 +22,10 @@ import type { DocumentLimits } from "./limits";
 import { isPlainRecord } from "./plain-record";
 import type { TokenKind } from "./style/catalog-types";
 import {
+  canResolveName,
   chargeIssueBudget,
   memoizeTokenLookup,
+  registerLookupCache,
   newStyleIssueBudget,
   siteAllowanceSpent,
   siteTruncationNotice,
@@ -117,6 +119,7 @@ function memoizeClassLookup(
     },
   };
   memoizedClassLookups.add(lookup);
+  registerLookupCache(lookup, seen);
   return lookup;
 }
 
@@ -834,12 +837,23 @@ function validateClasses(
     // that never block a publish. Spending the structural allowance on them
     // would stop the checks that do decide validity, and the marker for
     // stopping those is an error.
+    // The reporting allowance stops the whole loop: nothing more can be
+    // returned, so there is nothing to be gained by reading on.
     if (siteAllowanceSpent(budget)) {
       issues.push(...siteTruncationNotice(budget, pointer(path, "classes")));
       break;
     }
     const id = node.classes[index];
-    if (typeof id !== "string" || lookup.has(id)) continue;
+    if (typeof id !== "string") continue;
+    // The lookup allowance stops only this NAME, and only when answering it
+    // would ask the caller something new. An id already resolved this run comes
+    // from the cache for nothing, and skipping it would drop a free warning
+    // while claiming the id went unchecked when it had been checked already.
+    if (!canResolveName(lookup, id, budget)) {
+      issues.push(...siteTruncationNotice(budget, pointer(path, "classes")));
+      continue;
+    }
+    if (lookup.has(id)) continue;
     const issue: ValidationIssue = {
       path: pointer(pointer(path, "classes"), index),
       code: "unknown-class",
