@@ -763,6 +763,13 @@ async function bootServices(
     }
   }
 
+  // A handle a caller assigned over `nextly`. The property was a plain data
+  // property before it became lazy, and `TestNextly.nextly` is not declared
+  // readonly, so `handle.nextly = stub` compiles and has to keep working --
+  // a getter without a setter would turn that into a TypeError under the
+  // strict mode ES modules always run in.
+  let nextlyOverride: Nextly | undefined;
+
   return {
     // Resolved on access, not while assembling this object. `getNextly()`
     // registers the `nextlyDirectAPI` container binding as a side effect of
@@ -773,7 +780,10 @@ async function bootServices(
     // the harness was answering the question the test was asking. Deferring
     // leaves the container the shape service registration alone gives it.
     get nextly(): Nextly {
-      return getNextly();
+      return nextlyOverride ?? getNextly();
+    },
+    set nextly(replacement: Nextly) {
+      nextlyOverride = replacement;
     },
     getService,
     hooks: getHookRegistry(),

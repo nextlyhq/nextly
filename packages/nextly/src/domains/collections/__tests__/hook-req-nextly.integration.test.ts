@@ -20,7 +20,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createAdapter } from "../../../database/factory";
 import { container } from "../../../di/container";
 import { registerServices, shutdownServices } from "../../../di/register";
-import { resetNextlyInstance } from "../../../direct-api/nextly";
+import {
+  isNextlyInstantiated,
+  resetNextlyInstance,
+} from "../../../direct-api/nextly";
 import { resetEventBus } from "../../../events/event-bus";
 import { resetFilterRegistry } from "../../../filters";
 import { resetHookRegistry } from "../../../hooks/hook-registry";
@@ -103,21 +106,43 @@ describe("the ordinary test harness leaves the binding to service registration",
     resetAll();
   });
 
-  it("has nextlyDirectAPI bound after createTestNextly, without reading t.nextly", async () => {
+  it("boots without resolving the Direct API, and binds it anyway", async () => {
     await shutdownServices();
     resetAll();
 
-    // The control: nothing in this process has resolved the Direct API, so a
-    // binding found below was made by the boot rather than left behind.
+    // The controls: nothing in this process has resolved the Direct API or
+    // bound it, so neither observation below can be left over from earlier.
+    expect(isNextlyInstantiated()).toBe(false);
     expect(container.has("nextlyDirectAPI")).toBe(false);
 
     current = await createTestNextly({ dialect: "sqlite" });
 
-    // Deliberately does NOT touch `current.nextly`. That property resolves the
-    // Direct API on access, and resolving it registers the binding as a side
-    // effect -- so reading it here would satisfy the assertion by itself and
-    // certify nothing. What is under test is that service registration bound
-    // it, which is what gives a hook its `req.nextly`.
+    // The binding exists, and the harness is not what created it. Checking the
+    // binding alone would not say that: service registration binds it before
+    // the harness assembles its return value, so `container.has(...)` is true
+    // whether the harness resolves the Direct API or not, and a guard reading
+    // only that stays green if the harness goes back to resolving it eagerly.
+    // Whether the singleton was BUILT is the independent observation, because
+    // that is what an eager `getNextly()` does and a lazy property does not.
+    expect(isNextlyInstantiated()).toBe(false);
     expect(container.has("nextlyDirectAPI")).toBe(true);
+
+    // The mirror: reading the property does resolve it, so the assertion above
+    // reflects the boot rather than the Direct API being unreachable.
+    expect(current.nextly).toBeDefined();
+    expect(isNextlyInstantiated()).toBe(true);
+  });
+
+  it("keeps `nextly` assignable, as the declared type allows", async () => {
+    // `TestNextly.nextly` is not readonly, so `handle.nextly = stub` compiles
+    // and did work while the property was a plain data property. A getter with
+    // no setter would make that same code throw under the strict mode ES
+    // modules run in, which is a silent break for any suite that stubs it.
+    current = await createTestNextly({ dialect: "sqlite" });
+
+    const stub = { marker: "stubbed" } as unknown as typeof current.nextly;
+    current.nextly = stub;
+
+    expect(current.nextly).toBe(stub);
   });
 });
