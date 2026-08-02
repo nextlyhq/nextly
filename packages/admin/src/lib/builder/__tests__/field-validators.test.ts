@@ -43,7 +43,7 @@ describe("validateBuilderFields", () => {
     });
   });
 
-  it("returns the missing-component-reference error for a component field with no component", () => {
+  it("returns the missing-reference error for a field-group field with no field group", () => {
     const fields: BuilderField[] = [
       baseField({
         id: "f1",
@@ -55,7 +55,9 @@ describe("validateBuilderFields", () => {
     ];
     const result = validateBuilderFields(fields);
     expect(result.valid).toBe(false);
-    expect(result.errorMessage).toMatch(/Component field "hero" must have/);
+    expect(result.errorMessage).toMatch(
+      /Field "hero" must have a field group selected/
+    );
   });
 
   it("returns the missing-options error for a select field with no options", () => {

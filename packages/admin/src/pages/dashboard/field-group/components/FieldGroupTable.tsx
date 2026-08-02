@@ -445,7 +445,7 @@ export default function FieldGroupTable() {
           collection={undefined}
           onDelete={handleBulkDelete}
           onClear={clearSelection}
-          itemLabel="component"
+          itemLabel="field group"
         />
       )}
 

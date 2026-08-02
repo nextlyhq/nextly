@@ -174,9 +174,9 @@ export const FIELD_TYPE_CATALOG: readonly FieldTypeCatalogEntry[] = [
   },
   {
     type: STORAGE_FORMAT.fieldType,
-    label: "Component",
+    label: "Field Group",
     category: "Structured",
-    hint: "Embed a reusable component",
+    hint: "Embed a reusable field group",
     icon: "Puzzle",
   },
 ];

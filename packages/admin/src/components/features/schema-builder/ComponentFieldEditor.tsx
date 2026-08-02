@@ -172,12 +172,14 @@ export function ComponentFieldEditor({
       <div className="space-y-4">
         <div className="flex items-center gap-2">
           <Icons.Puzzle className="h-4 w-4 text-muted-foreground" />
-          <Label className="text-xs font-medium">Component Configuration</Label>
+          <Label className="text-xs font-medium">
+            Field Group Configuration
+          </Label>
         </div>
         <div className="flex items-center justify-center p-6">
           <Icons.Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
           <span className="ml-2 text-sm text-muted-foreground">
-            Loading components...
+            Loading field groups...
           </span>
         </div>
       </div>
@@ -190,14 +192,16 @@ export function ComponentFieldEditor({
       <div className="space-y-4">
         <div className="flex items-center gap-2">
           <Icons.Puzzle className="h-4 w-4 text-muted-foreground" />
-          <Label className="text-xs font-medium">Component Configuration</Label>
+          <Label className="text-xs font-medium">
+            Field Group Configuration
+          </Label>
         </div>
         {/* PR H feedback 2.2: subtle EditorAlert replaces the loud
             amber empty state. */}
         <EditorAlert>
           <div className="space-y-2">
             <p>
-              No components available. Create a component first to use this
+              No field groups available. Create a field group first to use this
               field type.
             </p>
             <Link
@@ -205,7 +209,7 @@ export function ComponentFieldEditor({
               className="inline-flex items-center gap-1 text-foreground hover:underline"
             >
               <Icons.Plus className="h-3 w-3" />
-              Create component
+              Create field group
             </Link>
           </div>
         </EditorAlert>
@@ -218,7 +222,7 @@ export function ComponentFieldEditor({
       {/* Section Header */}
       <div className="flex items-center gap-2">
         <Icons.Puzzle className="h-4 w-4 text-muted-foreground" />
-        <Label className="text-xs font-medium">Component Configuration</Label>
+        <Label className="text-xs font-medium">Field Group Configuration</Label>
       </div>
 
       {/* Mode Toggle */}
@@ -278,15 +282,15 @@ export function ComponentFieldEditor({
         </div>
         <p className="text-xs text-muted-foreground mt-2">
           {currentMode === "single"
-            ? "Embed one specific component type"
-            : "Allow editors to choose from multiple component types"}
+            ? "Embed one specific field group"
+            : "Allow editors to choose from multiple field groups"}
         </p>
       </div>
 
       {/* Component Selection */}
       <div className="space-y-2 pt-2  border-t border-border">
         <Label className="text-xs font-medium">
-          {currentMode === "single" ? "Component" : "Available Components"}
+          {currentMode === "single" ? "Field Group" : "Available Field Groups"}
         </Label>
 
         {currentMode === "single" ? (
@@ -296,7 +300,7 @@ export function ComponentFieldEditor({
             onValueChange={handleSingleComponentChange}
           >
             <SelectTrigger className="h-8 text-sm">
-              <SelectValue placeholder="Select a component" />
+              <SelectValue placeholder="Select a field group" />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="__none__">

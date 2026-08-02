@@ -283,7 +283,7 @@ function SingleComponentNonRepeatable({
     field.label ||
     (field.componentSchemas?.[field.component!]?.label ??
       field.component ??
-      "Component");
+      "Field Group");
 
   const isSidebar = field.admin?.position === "sidebar";
   const [isOpen, setIsOpen] = useState(true);
@@ -453,7 +453,7 @@ function MultiComponentNonRepeatable({
     setValue(name, null, { shouldDirty: true });
   }, [name, setValue]);
 
-  const label = field.label || "Component";
+  const label = field.label || "Field Group";
 
   return (
     <Card className={cn("", field.admin?.className)}>
@@ -644,8 +644,8 @@ function RepeatableComponent<TFieldValues extends FieldValues = FieldValues>({
   const isSortable = field.admin?.isSortable !== false;
 
   // Labels
-  const singularLabel = field.label || "Component";
-  const pluralLabel = field.label ? `${field.label}s` : "Components";
+  const singularLabel = field.label || "Field Group";
+  const pluralLabel = field.label ? `${field.label}s` : "Field Groups";
 
   return (
     <div className={cn("space-y-3", field.admin?.className)}>
