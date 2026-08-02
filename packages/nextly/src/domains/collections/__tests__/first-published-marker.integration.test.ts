@@ -435,6 +435,56 @@ describe("first_published_at", () => {
     expect(previousMarkers.every(m => m == null)).toBe(true);
   });
 
+  it("records a first publication made in a non-default locale", async () => {
+    // The marker is a property of the DOCUMENT: "has this ever been public in any language". A
+    // translation published on its own is reachable at the address the locales share, so it
+    // establishes the marker. Leaving it null until some later default-locale action would record
+    // a date after the document was already public, which is exactly the question the slug freeze
+    // and redirect capture ask it.
+    //
+    // The non-default-locale write carries its status on the companion, not the main row, so the
+    // main row's own status shows no transition at all — reading the wrong one records nothing.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "posts",
+          status: true,
+          localized: true,
+          fields: [text({ name: "title", localized: true })],
+        }),
+      ],
+      localization: { locales: ["en", "es"], defaultLocale: "en" },
+    });
+    const h = handler(current);
+
+    const created = await h.createEntry(
+      { collectionName: "posts", overrideAccess: true, locale: "en" },
+      { title: "wip", status: "draft" }
+    );
+    const id = (created.data as { id: string }).id;
+    expect((await storedRow(current, id)).first_published_at).toBeFalsy();
+
+    // Publish only the Spanish translation, as a trusted write. The access-controlled variant of
+    // this write reads the companion's prior status instead of the main row's; that selection is
+    // covered by `resolveFirstPublishedStamp`'s unit tests, because reaching it here would need a
+    // user holding a real `publish-posts` grant and the suite has no helper that seeds one.
+    await h.updateEntry(
+      {
+        collectionName: "posts",
+        entryId: id,
+        locale: "es",
+        overrideAccess: true,
+      },
+      { title: "hola", status: "published" }
+    );
+
+    const row = await storedRow(current, id);
+    // The main row is still a draft — only the translation went public — and that is the point:
+    // status and the marker answer different questions.
+    expect(row.status).toBe("draft");
+    expect(row.first_published_at).toBeTruthy();
+  });
+
   it("records a Single's first publication, and reads still work", async () => {
     // This test used to assert the OPPOSITE. A Single's physical table was built by a generator
     // that restated the system columns by hand, so this column reached the runtime schema and not

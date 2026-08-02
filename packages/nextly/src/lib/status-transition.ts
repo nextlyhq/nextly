@@ -114,6 +114,47 @@ export function stripUndefinedStatus<T extends Record<string, unknown>>(
  * the later would win — the row lock the write already takes is what prevents
  * that interleaving, not this function.
  */
+/**
+ * The status pair that describes what a write does to a document's PUBLIC visibility.
+ *
+ * A localized collection can go public in two different places. A write for the default locale
+ * (or a non-localized one) moves the main row's `status`. A write for any other locale has its
+ * status stripped from the main payload and carried on that locale's companion row instead, so
+ * the main row's status shows no movement at all even though a translation just went live.
+ *
+ * The first-publication marker is a property of the DOCUMENT — "has this ever been public in any
+ * language" — because the address it protects is shared across locales. Reading the main row's
+ * status for a non-default-locale write therefore sees no transition and records nothing, and the
+ * marker would later be dated from whenever the default locale happened to publish: after the
+ * document was already reachable.
+ *
+ * Returned as a pair rather than decided inline at the write seam so it can be tested directly:
+ * the branch only executes for an access-controlled write to a non-default locale, which needs a
+ * caller holding a real publish grant.
+ */
+export function selectPublicationTransition(args: {
+  /** True when this write's status lands on a locale companion, not the main row. */
+  writesStatusToCompanion: boolean;
+  /** The main row's committed status. */
+  mainPreviousStatus: string | null | undefined;
+  /** The status this write assigns to the main row. */
+  mainNextStatus: unknown;
+  /** The write locale's committed companion status. */
+  companionPreviousStatus: string | null | undefined;
+  /** The status this write assigns to the companion. */
+  companionNextStatus: unknown;
+}): { previousStatus: string | null | undefined; nextStatus: unknown } {
+  return args.writesStatusToCompanion
+    ? {
+        previousStatus: args.companionPreviousStatus,
+        nextStatus: args.companionNextStatus,
+      }
+    : {
+        previousStatus: args.mainPreviousStatus,
+        nextStatus: args.mainNextStatus,
+      };
+}
+
 export function resolveFirstPublishedStamp(args: {
   /** Whether the collection or single has the draft/publish lifecycle enabled. */
   hasStatus: boolean;

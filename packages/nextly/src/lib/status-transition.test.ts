@@ -9,6 +9,7 @@ import { describe, it, expect } from "vitest";
 import {
   resolveFirstPublishedStamp,
   resolvePublishTransition,
+  selectPublicationTransition,
 } from "./status-transition";
 
 describe("resolvePublishTransition", () => {
@@ -158,5 +159,100 @@ describe("resolveFirstPublishedStamp", () => {
     expect(
       resolveFirstPublishedStamp({ ...base, nextStatus: 1 })
     ).toBeUndefined();
+  });
+});
+
+describe("selectPublicationTransition", () => {
+  const mainDraftToPublished = {
+    mainPreviousStatus: "draft" as string | null,
+    mainNextStatus: "published" as unknown,
+    companionPreviousStatus: "draft" as string | null,
+    companionNextStatus: "published" as unknown,
+  };
+
+  it("reads the main row when the write's status lands there", () => {
+    const t = selectPublicationTransition({
+      ...mainDraftToPublished,
+      writesStatusToCompanion: false,
+      companionPreviousStatus: null,
+      companionNextStatus: undefined,
+    });
+    expect(t).toEqual({ previousStatus: "draft", nextStatus: "published" });
+  });
+
+  it("reads the companion when the write's status lands there", () => {
+    // The case the marker was missing. A non-default-locale write leaves the main row's status
+    // untouched, so reading it sees no transition — and the document going public in that
+    // language would go unrecorded until some later, later-dated default-locale publish.
+    const t = selectPublicationTransition({
+      ...mainDraftToPublished,
+      writesStatusToCompanion: true,
+      mainPreviousStatus: "draft",
+      mainNextStatus: undefined,
+    });
+    expect(t).toEqual({ previousStatus: "draft", nextStatus: "published" });
+  });
+
+  it("does not report a publication when the main row alone moves and the write is per-locale", () => {
+    // Guards the inverse mistake: taking the main row's pair for a companion write would report a
+    // transition the write did not make.
+    const t = selectPublicationTransition({
+      writesStatusToCompanion: true,
+      mainPreviousStatus: "draft",
+      mainNextStatus: "published",
+      companionPreviousStatus: "published",
+      companionNextStatus: "published",
+    });
+    expect(
+      resolveFirstPublishedStamp({
+        hasStatus: true,
+        previousStatus: t.previousStatus,
+        nextStatus: t.nextStatus,
+        existingMarker: null,
+        now: new Date("2026-08-02T10:00:00.000Z"),
+      })
+    ).toBeUndefined();
+  });
+
+  it("feeds a companion draft-to-published straight into a stamp", () => {
+    const t = selectPublicationTransition({
+      writesStatusToCompanion: true,
+      mainPreviousStatus: "draft",
+      mainNextStatus: undefined,
+      companionPreviousStatus: "draft",
+      companionNextStatus: "published",
+    });
+    const now = new Date("2026-08-02T10:00:00.000Z");
+    expect(
+      resolveFirstPublishedStamp({
+        hasStatus: true,
+        previousStatus: t.previousStatus,
+        nextStatus: t.nextStatus,
+        existingMarker: null,
+        now,
+      })
+    ).toBe(now);
+  });
+
+  it("treats a first companion row (no prior status) as a publication", () => {
+    // A locale published before it ever had a companion row has no prior status at all; null is
+    // not "published", so the move still counts.
+    const t = selectPublicationTransition({
+      writesStatusToCompanion: true,
+      mainPreviousStatus: "draft",
+      mainNextStatus: undefined,
+      companionPreviousStatus: null,
+      companionNextStatus: "published",
+    });
+    const now = new Date("2026-08-02T10:00:00.000Z");
+    expect(
+      resolveFirstPublishedStamp({
+        hasStatus: true,
+        previousStatus: t.previousStatus,
+        nextStatus: t.nextStatus,
+        existingMarker: null,
+        now,
+      })
+    ).toBe(now);
   });
 });

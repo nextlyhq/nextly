@@ -42,6 +42,7 @@ import { stripImmutableSystemFields } from "../../../lib/immutable-system-fields
 import {
   resolveFirstPublishedStamp,
   resolvePublishTransition,
+  selectPublicationTransition,
   stripUndefinedStatus,
 } from "../../../lib/status-transition";
 import {
@@ -5412,22 +5413,37 @@ export class CollectionMutationService extends BaseService {
           //
           // Written under the same row lock and in the same statement as the rest of the update,
           // so it cannot disagree with the status it accompanies. Only when the locked row has
-          // none: this dates the FIRST publication, and a later republish must not move it. A
-          // non-default-locale write is excluded for the same reason its status is stripped from
-          // the main payload — it does not change the main row's lifecycle.
-          const updateStamp = isNonDefaultLocaleStatusWrite
-            ? undefined
-            : resolveFirstPublishedStamp({
-                hasStatus: collectionHasStatus,
-                previousStatus:
-                  ((preUpdateRow as { status?: unknown } | undefined)
-                    ?.status as string | undefined) ?? null,
-                nextStatus: intendedStatus,
-                existingMarker: (
-                  preUpdateRow as { first_published_at?: unknown } | undefined
-                )?.first_published_at,
-                now: new Date(),
-              });
+          // none: this dates the FIRST publication, and a later republish must not move it.
+          //
+          // The marker is a property of the DOCUMENT, not of the main row's status column. It
+          // answers "has this ever been public in any language", which is what the slug freeze
+          // and redirect capture need for an address shared across locales. So a write that
+          // publishes only a non-default translation still establishes it: that language is
+          // reachable at the shared address, and leaving the marker null until some later
+          // default-locale action would record a date after the document was already public.
+          //
+          // Which transition to read therefore depends on where this write's status lands. A
+          // non-default-locale write has its status stripped from the main payload and carried on
+          // the companion instead, so the main row's status would show no move at all.
+          const publicationTransition = selectPublicationTransition({
+            writesStatusToCompanion: isNonDefaultLocaleStatusWrite,
+            mainPreviousStatus:
+              ((preUpdateRow as { status?: unknown } | undefined)?.status as
+                | string
+                | undefined) ?? null,
+            mainNextStatus: intendedStatus,
+            companionPreviousStatus: committedLocaleStatus,
+            companionNextStatus: localizedUpdate?.companionData?._status,
+          });
+          const updateStamp = resolveFirstPublishedStamp({
+            hasStatus: collectionHasStatus,
+            previousStatus: publicationTransition.previousStatus,
+            nextStatus: publicationTransition.nextStatus,
+            existingMarker: (
+              preUpdateRow as { first_published_at?: unknown } | undefined
+            )?.first_published_at,
+            now: new Date(),
+          });
           if (updateStamp) {
             updatePayload.firstPublishedAt = updateStamp;
           }
