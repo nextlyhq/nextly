@@ -30,6 +30,7 @@ import { describeValue, pointer } from "../issue-text";
 import { isPlainRecord } from "../plain-record";
 import type { ValidationIssue } from "../validation";
 
+import { escapeIdentifier } from "./css-value";
 import { compileStyleValues, DEFAULT_TOKEN_PREFIX } from "./declarations";
 import type { Declaration } from "./declarations";
 import {
@@ -41,6 +42,8 @@ import { serializeRules } from "./serialize";
 import type { CssRule } from "./serialize";
 import type { StyleIssueBudget } from "./validate-style-value";
 import { newStyleIssueBudget } from "./validate-style-value";
+import { newWarningAllowance, pushBoundedWarning } from "./warning-allowance";
+import type { WarningAllowance } from "./warning-allowance";
 
 /** Everything site-level the compiler needs; the caller loads it. */
 export interface StyleCompileContext {
@@ -92,15 +95,29 @@ export interface CompiledPageCss {
   classes: Map<string, string>;
 }
 
-/** The pseudo-class each stored state compiles to. */
+/**
+ * The pseudo-class each stored state compiles to.
+ *
+ * Wrapped in `:where()`, which matches identically and contributes NOTHING to
+ * specificity. Everything this module emits is anchored at the page root and
+ * meant to be decided by source order alone; a bare `:hover` is worth a class,
+ * so a block type's default hover colour would beat a node's own colour however
+ * late the node's rule came, and a node given its own colour would still change
+ * colour on hover having said nothing about hovering.
+ *
+ * Zeroing them is only half of it: at equal specificity source order decides, so
+ * the order states and breakpoints are emitted in becomes the cascade. See
+ * `envelopeRules`.
+ *
+ * `:focus-visible`, not `:focus`. Styling every focus paints a ring on mouse
+ * users who never asked for one, which is why authors historically removed focus
+ * styling altogether and broke keyboard navigation.
+ */
 const STATE_SELECTORS: Readonly<Record<StyleState, string>> = {
   base: "",
-  hover: ":hover",
-  // `:focus-visible`, not `:focus`. Styling every focus paints a ring on mouse
-  // users who never asked for one, which is why authors historically removed
-  // focus styling altogether and broke keyboard navigation.
-  focus: ":focus-visible",
-  active: ":active",
+  hover: ":where(:hover)",
+  focus: ":where(:focus-visible)",
+  active: ":where(:active)",
 };
 
 /** One breakpoint to emit under, with the at-rule it needs. */
@@ -140,11 +157,16 @@ function breakpointContexts(set: BreakpointSet): BreakpointContext[] {
   // the half a reader still gets after forgiving validation let the document
   // through.
   //
-  // A definition whose `maxWidth` is not a finite number is dropped rather than
-  // treated as unbounded. Unbounded is not a safe reading of a broken bound: it
+  // A definition whose `maxWidth` is not a positive finite number is dropped
+  // rather than treated as unbounded. Unbounded is not a safe reading of a broken bound: it
   // would emit the breakpoint's values unconditionally, applying at every width
   // the author meant to exclude. Dropped, the id is simply not one this site
   // defines, and the values keyed to it are reported as stale like any other.
+  //
+  // Zero and below are as unusable as a NaN and quieter about it. Nothing has a
+  // negative width, so `@media (max-width: -1px)` is a well-formed query that
+  // can never match: kept, its id would count as known, and the styles and
+  // hiding stored under it would go missing with nothing reported at all.
   const rawSet: unknown = set;
   const axisDefs = (axis: "viewport" | "container"): BreakpointDef[] => {
     const defs = isPlainRecord(rawSet) ? rawSet[axis] : undefined;
@@ -153,7 +175,9 @@ function breakpointContexts(set: BreakpointSet): BreakpointContext[] {
       if (!isPlainRecord(def) || typeof def.id !== "string") return false;
       return (
         def.maxWidth === undefined ||
-        (typeof def.maxWidth === "number" && Number.isFinite(def.maxWidth))
+        (typeof def.maxWidth === "number" &&
+          Number.isFinite(def.maxWidth) &&
+          def.maxWidth > 0)
       );
     });
   };
@@ -191,68 +215,41 @@ function breakpointContexts(set: BreakpointSet): BreakpointContext[] {
 /** The breakpoint id meaning "no media query" in a stored style envelope. */
 export const BASE_BREAKPOINT = "base";
 
-/** How many stale-breakpoint warnings one compile reports. */
-const MAX_STALE_BREAKPOINT_WARNINGS = 50;
-
-/** How many bytes of JSON-Pointer those warnings may spend between them. */
-const MAX_STALE_BREAKPOINT_PATH_BYTES = 10_000;
-
 /**
- * What a compile may spend saying that a breakpoint id no longer resolves.
+ * The scope written as a class selector, or nothing when it cannot be one.
  *
- * A stale id costs one warning per place it appears, and every one of those
- * repeats the whole pointer above it — a long ancestor slot key included. A
- * document inside the byte cap can therefore hold enough of them to answer with
- * output far larger than itself, which is the amplification a bound exists to
- * stop.
+ * A scope is what keeps two documents rendered into one DOM apart, and node
+ * classes are unique only WITHIN a document, so losing it is not cosmetic:
+ * their rules cross-apply and each document's page settings reach both roots.
+ * Dropping it therefore has to be LOUD, and only when the value genuinely
+ * cannot be a class.
  *
- * Bounded on its own rather than against the style-issue budget, and the
- * separation is the point. That budget decides what gets WRITTEN: a style map
- * reached after it runs out is refused rather than written unchecked. Charging
- * these warnings to it would let one settings record with many stale ids spend
- * the allowance on diagnostics and take the whole page's CSS down behind them,
- * so renaming a breakpoint would blank every page that referenced it. These
- * cost only their own output.
+ * The value is escaped rather than pattern-matched. A class attribute holds any
+ * whitespace-free token — a UUID starting with a digit, `_region`, `-region` —
+ * and the CSS grammar simply cannot spell some of those raw, which is a question
+ * of writing them correctly, not of whether they are allowed. Refusing them sent
+ * exactly those documents back to the unscoped selector, which is the collision
+ * this exists to prevent.
+ *
+ * Whitespace is the real exclusion: `a b` in a class attribute is two classes,
+ * not one, so no escaping makes it the thing the renderer will have attached.
  */
-interface StaleIdAllowance {
-  remaining: number;
-  pathBytes: number;
-  announced: boolean;
-}
-
-function newStaleIdAllowance(): StaleIdAllowance {
-  return {
-    remaining: MAX_STALE_BREAKPOINT_WARNINGS,
-    pathBytes: MAX_STALE_BREAKPOINT_PATH_BYTES,
-    announced: false,
-  };
-}
-
-/**
- * Report one stale-breakpoint warning, or say once that the rest are not being
- * reported. Silent after that: a word per unreported id would be the
- * amplification restated as an explanation of the bound.
- */
-function pushStaleIdWarning(
-  allowance: StaleIdAllowance,
-  warnings: ValidationIssue[],
-  issue: ValidationIssue
-): void {
-  if (allowance.remaining <= 0 || allowance.pathBytes <= 0) {
-    if (allowance.announced) return;
-    allowance.announced = true;
+function scopeSelector(
+  scope: string | undefined,
+  warnings: ValidationIssue[]
+): string {
+  if (scope === undefined) return "";
+  if (scope === "" || /\s/.test(scope)) {
     warnings.push({
-      path: "",
-      code: "style-issues-truncated",
+      path: "/scope",
+      code: "invalid-scope",
       severity: "warning",
-      message:
-        "More breakpoint ids are referenced than this site defines than are reported here, so some values and visibility settings were left out of the stylesheet without being listed.",
+      message: `"${describeValue(scope)}" cannot be one class, so this document's rules were not scoped and may apply to another document rendered beside it.`,
+      suggestion: "Use a single class token with no whitespace.",
     });
-    return;
+    return "";
   }
-  allowance.remaining -= 1;
-  allowance.pathBytes -= issue.path.length;
-  warnings.push(issue);
+  return `.${escapeIdentifier(scope)}`;
 }
 
 /**
@@ -269,7 +266,7 @@ function unknownBreakpointWarnings(
   basePath: string,
   contexts: readonly BreakpointContext[],
   warnings: ValidationIssue[],
-  allowance: StaleIdAllowance
+  allowance: WarningAllowance
 ): void {
   const known = new Set(contexts.map(context => context.id));
   for (const state of STYLE_STATES) {
@@ -277,7 +274,7 @@ function unknownBreakpointWarnings(
     if (!isPlainRecord(byBreakpoint)) continue;
     for (const id of Object.keys(byBreakpoint).sort()) {
       if (known.has(id)) continue;
-      pushStaleIdWarning(allowance, warnings, {
+      pushBoundedWarning(allowance, warnings, {
         path: pointer(pointer(basePath, state), id),
         code: "unknown-breakpoint",
         severity: "warning",
@@ -296,19 +293,44 @@ function envelopeRules(
   tokenPrefix: string,
   warnings: ValidationIssue[],
   budget: StyleIssueBudget,
-  staleIds: StaleIdAllowance
+  warningAllowance: WarningAllowance
 ): CssRule[] {
   if (!isPlainRecord(styles)) return [];
-  unknownBreakpointWarnings(styles, basePath, contexts, warnings, staleIds);
+  unknownBreakpointWarnings(
+    styles,
+    basePath,
+    contexts,
+    warnings,
+    warningAllowance
+  );
   const rules: CssRule[] = [];
-  for (const context of contexts) {
-    for (const state of STYLE_STATES) {
-      const byBreakpoint = styles[state];
-      if (!isPlainRecord(byBreakpoint)) continue;
+  // State outside, breakpoint inside, and the nesting is the cascade. States
+  // carry no specificity of their own, so what a rule beats is decided by what
+  // comes after it, and each loop order encodes a different rule:
+  //
+  //   breakpoint outer — every state at base, then every state at tablet, so a
+  //   narrower BASE value lands after a wider HOVER value and defeats it. A
+  //   node coloured on hover everywhere and re-coloured at tablet would stop
+  //   showing its hover colour there, having never said anything about it.
+  //
+  //   state outer — every breakpoint of base, then every breakpoint of hover.
+  //   A narrower base still beats a wider base, which is the desktop-first
+  //   model, and a hover value still beats a base value at any width, which is
+  //   what "this is what it looks like while hovered" has to mean.
+  for (const state of STYLE_STATES) {
+    const byBreakpoint = styles[state];
+    if (!isPlainRecord(byBreakpoint)) continue;
+    for (const context of contexts) {
       const values = byBreakpoint[context.id];
       if (!isPlainRecord(values)) continue;
       const path = pointer(pointer(basePath, state), context.id);
-      const compiled = compileStyleValues(values, path, tokenPrefix, budget);
+      const compiled = compileStyleValues(
+        values,
+        path,
+        tokenPrefix,
+        budget,
+        warningAllowance
+      );
       warnings.push(...compiled.warnings);
       // A property that styles something inside the block goes into its own
       // rule. Keeping the exception in the catalog rather than in a branch here
@@ -367,7 +389,7 @@ function visibilityRules(
   contexts: readonly BreakpointContext[],
   basePath: string,
   warnings: ValidationIssue[],
-  staleIds: StaleIdAllowance
+  warningAllowance: WarningAllowance
 ): CssRule[] {
   const devices = node.visibility?.devices;
   if (!isPlainRecord(devices)) return [];
@@ -378,7 +400,7 @@ function visibilityRules(
     // The same promise the style envelope keeps: a breakpoint the site no
     // longer defines leaves a stored `false` that hides nothing, and saying so
     // is the difference between a node that reappears and a mystery.
-    pushStaleIdWarning(staleIds, warnings, {
+    pushBoundedWarning(warningAllowance, warnings, {
       path: pointer(pointer(pointer(basePath, "visibility"), "devices"), id),
       code: "unknown-breakpoint",
       severity: "warning",
@@ -523,16 +545,12 @@ export function compilePageCss(
   // quadratic in its own size.
   const budget = newStyleIssueBudget();
   // Bounded separately from the budget above, so a settings record full of
-  // stale ids costs its own diagnostics and not the page's stylesheet.
-  const staleIds = newStaleIdAllowance();
+  // stale ids — or a document full of malformed token names — costs its own
+  // diagnostics and not the page's stylesheet.
+  const warningAllowance = newWarningAllowance();
   const contexts = breakpointContexts(ctx.breakpoints);
   const tokenPrefix = ctx.tokenPrefix ?? DEFAULT_TOKEN_PREFIX;
-  // A scope is a class the renderer also puts on the mounted root, so it is
-  // held to what a class may contain rather than trusted into a selector.
-  const scope =
-    ctx.scope !== undefined && /^[A-Za-z][A-Za-z0-9_-]*$/.test(ctx.scope)
-      ? `.${ctx.scope}`
-      : "";
+  const scope = scopeSelector(ctx.scope, warnings);
   const pageRoot = `.${PAGE_ROOT_CLASS}${scope}`;
 
   const nodes = documentNodes(doc);
@@ -552,7 +570,7 @@ export function compilePageCss(
       tokenPrefix,
       warnings,
       budget,
-      staleIds
+      warningAllowance
     )
   );
 
@@ -573,7 +591,7 @@ export function compilePageCss(
         tokenPrefix,
         warnings,
         budget,
-        staleIds
+        warningAllowance
       )
     );
   }
@@ -593,11 +611,18 @@ export function compilePageCss(
         tokenPrefix,
         warnings,
         budget,
-        staleIds
+        warningAllowance
       )
     );
     rules.push(
-      ...visibilityRules(node, selector, contexts, path, warnings, staleIds)
+      ...visibilityRules(
+        node,
+        selector,
+        contexts,
+        path,
+        warnings,
+        warningAllowance
+      )
     );
   }
 

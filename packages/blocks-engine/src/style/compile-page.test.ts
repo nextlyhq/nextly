@@ -170,11 +170,14 @@ describe("states", () => {
     expect(out).toBe(
       [
         `.nx-pb-page .${cls} { color: #111 }`,
-        `.nx-pb-page .${cls}:hover { color: #222 }`,
+        // `:where()` matches the same elements and adds no specificity, so what
+        // a state rule beats is decided by where it sits, not by the pseudo-
+        // class it carries.
+        `.nx-pb-page .${cls}:where(:hover) { color: #222 }`,
         // Focus styling follows `:focus-visible`, so a mouse click does not
         // paint a ring the author only meant for keyboard users.
-        `.nx-pb-page .${cls}:focus-visible { color: #333 }`,
-        `.nx-pb-page .${cls}:active { color: #444 }`,
+        `.nx-pb-page .${cls}:where(:focus-visible) { color: #333 }`,
+        `.nx-pb-page .${cls}:where(:active) { color: #444 }`,
       ].join("\n")
     );
   });
@@ -845,6 +848,27 @@ describe("stored breakpoint settings are read as untrusted", () => {
     }
   });
 
+  it("drops a definition whose bound is zero or negative", () => {
+    // Quieter than a NaN and just as unusable: `@media (max-width: -1px)` is a
+    // well-formed query that nothing can ever match, so kept, the id would count
+    // as KNOWN and its styles and hiding would go missing with nothing reported.
+    for (const maxWidth of [0, -1]) {
+      const out = compilePageCss(
+        doc([node("n1", { base: { narrow: { color: "#f00" } } })]),
+        {
+          breakpoints: {
+            viewport: [{ id: "narrow", maxWidth }],
+            container: [],
+          },
+        } as unknown as StyleCompileContext
+      );
+      expect(out.css).not.toContain("#f00");
+      expect(out.warnings.map(issue => issue.code)).toContain(
+        "unknown-breakpoint"
+      );
+    }
+  });
+
   it("drops a definition whose bound is not a finite number", () => {
     // Unbounded is not a safe reading of a broken bound: emitted without its
     // query, the breakpoint's values would apply at every width the author
@@ -910,6 +934,144 @@ describe("warnings about stale breakpoint ids are bounded", () => {
       node("n2", { base: { base: { color: "#0f0" } } }),
     ];
     const out = compilePageCss(doc(nodes), CTX);
+    expect(out.css).toContain("color: #0f0");
+  });
+});
+
+describe("states carry no specificity, so order decides the cascade", () => {
+  it("does not let a block type's state value outrank a node's own value", () => {
+    // The tiers are meant to be decided by source order: a node's value beats
+    // its block type's default because it is emitted after it. A bare `:hover`
+    // is worth a class, so the block's default would win at any distance, and a
+    // node given its own colour would still change colour on hover having said
+    // nothing about hovering.
+    const out = compilePageCss(
+      doc([node("n1", { base: { base: { color: "#0f0" } } })]),
+      {
+        ...CTX,
+        blockBases: { "core/box": { hover: { base: { color: "#f00" } } } },
+      }
+    );
+    // Same specificity on both sides…
+    expect(out.css).not.toMatch(/[^(]:hover/);
+    // …and the node's rule is the later one.
+    expect(out.css.indexOf("#f00")).toBeLessThan(out.css.indexOf("#0f0"));
+  });
+
+  it("keeps a state value above a narrower breakpoint's base value", () => {
+    // The other half of the same decision. Emitted breakpoint-major, the
+    // narrower BASE rule would land after the wider HOVER rule and defeat it, so
+    // a node coloured on hover everywhere and re-coloured at tablet would stop
+    // showing its hover colour there without anyone saying so.
+    const out = css(
+      doc([
+        node("n1", {
+          base: { base: { color: "#111" }, tablet: { color: "#333" } },
+          hover: { base: { color: "#222" } },
+        }),
+      ])
+    );
+    expect(out.indexOf("#111")).toBeLessThan(out.indexOf("#333"));
+    expect(out.indexOf("#333")).toBeLessThan(out.indexOf("#222"));
+  });
+
+  it("still lets a narrower breakpoint beat a wider one within a state", () => {
+    // Desktop-first is unchanged: within one state the narrower value is later.
+    const out = css(
+      doc([
+        node("n1", {
+          hover: { base: { color: "#111" }, tablet: { color: "#222" } },
+        }),
+      ])
+    );
+    expect(out.indexOf("#111")).toBeLessThan(out.indexOf("#222"));
+  });
+});
+
+describe("the compile scope", () => {
+  it("keeps a class token the CSS grammar cannot spell raw", () => {
+    // A class attribute holds any whitespace-free token, and node classes are
+    // unique only WITHIN a document, so dropping the scope is not cosmetic: two
+    // documents in one DOM cross-apply each other's rules. These are valid
+    // classes that simply need escaping.
+    for (const scope of ["7f3a-region", "_region", "-region"]) {
+      const out = compilePageCss(
+        doc([node("n1", { base: { base: { color: "#fff" } } })]),
+        { ...CTX, scope }
+      );
+      expect(out.warnings).toEqual([]);
+      // Present, and never as a bare selector that would match something else.
+      expect(out.css).not.toContain(`.nx-pb-page .${nodeClassName("n1")} {`);
+      expect(out.css).toContain("color: #fff");
+    }
+  });
+
+  it("escapes a leading digit rather than emitting an invalid selector", () => {
+    const out = compilePageCss(
+      doc([node("n1", { base: { base: { color: "#fff" } } })]),
+      { ...CTX, scope: "7f3a" }
+    );
+    expect(out.css).toContain(".nx-pb-page.\\37 f3a");
+  });
+
+  it("says so when a scope cannot be one class", () => {
+    // Whitespace is the real exclusion: `a b` in a class attribute is two
+    // classes, so no escaping makes it what the renderer attached. Losing the
+    // scope silently is what let one document's rules reach another.
+    const out = compilePageCss(
+      doc([node("n1", { base: { base: { color: "#fff" } } })]),
+      { ...CTX, scope: "two words" }
+    );
+    expect(out.warnings.map(issue => issue.code)).toEqual(["invalid-scope"]);
+    expect(out.css).toContain(".nx-pb-page .");
+  });
+});
+
+describe("compiler-only objections are bounded too", () => {
+  it("stops after the allowance when many token names break the grammar", () => {
+    // Validation ACCEPTS a `$token` whose name breaks the grammar: only the
+    // compiler writes that name into a `var()`, so only the compiler objects.
+    // Nothing charges these the style-issue budget, so without a bound of their
+    // own a document repeating one across thousands of maps answers with a
+    // warning for each, every one carrying its full pointer.
+    const nodes = Array.from({ length: 200 }, (_, index) => ({
+      id: `n${index}`,
+      type: "core/box",
+      version: 1,
+      props: {},
+      styles: { base: { base: { color: { $token: "not a token name!" } } } },
+    }));
+    const out = compilePageCss(
+      doc([...(nodes as unknown as BlockNode[])]),
+      CTX
+    );
+    const objections = out.warnings.filter(
+      issue => issue.code === "invalid-style-value"
+    );
+    expect(objections.length).toBeLessThan(200);
+    expect(
+      out.warnings.filter(issue => issue.code === "style-issues-truncated")
+    ).toHaveLength(1);
+  });
+
+  it("does not spend the allowance that decides what is written", () => {
+    // Same separation as the stale ids: these are explanations, and paying for
+    // them out of the write-gating budget would let one malformed token name
+    // blank the rest of the page.
+    const nodes = Array.from({ length: 200 }, (_, index) => ({
+      id: `n${index}`,
+      type: "core/box",
+      version: 1,
+      props: {},
+      styles: { base: { base: { color: { $token: "not a token name!" } } } },
+    }));
+    const out = compilePageCss(
+      doc([
+        ...(nodes as unknown as BlockNode[]),
+        node("last", { base: { base: { color: "#0f0" } } }),
+      ]),
+      CTX
+    );
     expect(out.css).toContain("color: #0f0");
   });
 });

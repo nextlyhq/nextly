@@ -31,6 +31,8 @@ import {
 } from "./css-value";
 import { budgetSpent, validateStyleValues } from "./validate-style-value";
 import type { StyleIssueBudget } from "./validate-style-value";
+import { newWarningAllowance, pushBoundedWarning } from "./warning-allowance";
+import type { WarningAllowance } from "./warning-allowance";
 
 /** One `property: value` pair bound for a rule. */
 export interface Declaration {
@@ -130,6 +132,17 @@ interface Walk {
   placed: PlacedDeclaration[];
   warnings: ValidationIssue[];
   prefix: string;
+  /**
+   * What this compile may still spend explaining values it did not write.
+   *
+   * Shared across the whole walk rather than per map. These objections are the
+   * compiler's own — validation accepts a `$token` whose NAME breaks the
+   * grammar, because only the compiler writes that name into a `var()` — so
+   * nothing charges them the style-issue budget, and a document repeating one
+   * across thousands of maps would answer with a warning for each, every one
+   * carrying its full pointer.
+   */
+  allowance: WarningAllowance;
 }
 
 /** The CSS text for one stored scalar, or nothing when it cannot be written. */
@@ -142,7 +155,9 @@ function scalarText(
   if (isTokenRef(value)) {
     const name = value.$token;
     if (!TOKEN_NAME_RE.test(name)) {
-      walk.warnings.push(
+      pushBoundedWarning(
+        walk.allowance,
+        walk.warnings,
         warning(
           path,
           `"${describeValue(name)}" is not a design-token name, so it was not written.`
@@ -239,7 +254,12 @@ function shapeDeclarations(
       // is the order the catalog lists them in.
       let refused: Walk | undefined;
       for (const variant of shape.of) {
-        const attempt: Walk = { placed: [], warnings: [], prefix: walk.prefix };
+        const attempt: Walk = {
+          placed: [],
+          warnings: [],
+          prefix: walk.prefix,
+          allowance: walk.allowance,
+        };
         shapeDeclarations(variant, value, path, attempt);
         if (attempt.placed.length > 0) {
           walk.placed.push(...attempt.placed);
@@ -307,7 +327,8 @@ export function compileStyleValues(
   values: Readonly<Record<string, unknown>>,
   basePath: string,
   tokenPrefix?: string,
-  budget?: StyleIssueBudget
+  budget?: StyleIssueBudget,
+  suppliedAllowance?: WarningAllowance
 ): CompiledDeclarations {
   // Strict, because this decides what reaches a page: a property this engine
   // does not know is preserved in the document and left out of the stylesheet,
@@ -353,9 +374,21 @@ export function compileStyleValues(
     .map(issue => issue.path);
 
   const safe = safeTokenPrefix(tokenPrefix);
-  const walk: Walk = { placed: [], warnings: [], prefix: safe.prefix };
+  // A direct caller gets a fresh one, so this is bounded however it is reached
+  // rather than only when the page compiler happens to pass its own.
+  const allowance = suppliedAllowance ?? newWarningAllowance();
+  const walk: Walk = {
+    placed: [],
+    warnings: [],
+    prefix: safe.prefix,
+    allowance,
+  };
   if (safe.warning !== undefined) {
-    walk.warnings.push(warning(basePath, safe.warning));
+    pushBoundedWarning(
+      allowance,
+      walk.warnings,
+      warning(basePath, safe.warning)
+    );
   }
   const properties = Object.keys(values)
     .filter(key => Object.hasOwn(values, key))

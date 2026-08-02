@@ -799,6 +799,67 @@ const URL_STRING_FUNCTIONS: ReadonlySet<string> = new Set([
  * A code point outside the Unicode range becomes the replacement character, as
  * the CSS syntax specification requires, rather than throwing.
  */
+/**
+ * One string written as a CSS identifier, escaping whatever cannot appear raw.
+ *
+ * The inverse of {@link decodeIdentifier}, and the same algorithm the DOM
+ * exposes as `CSS.escape` — implemented here because this package imports no
+ * framework and `CSS` is a browser global, and because a stylesheet compiled on
+ * a server has to escape exactly as the browser would parse.
+ *
+ * Written out rather than approximated with a "safe characters only" test. A
+ * class attribute may hold a token the CSS grammar cannot spell raw — a UUID
+ * beginning with a digit, `_region`, `-region` — and refusing those means
+ * refusing valid input, while passing them through unescaped emits a selector
+ * that silently matches something else or nothing.
+ *
+ * Follows CSSOM's "serialize an identifier": a leading digit, and a digit after
+ * a leading dash, are written as a hex escape, because `.1a` and `.-1a` are not
+ * identifiers at all; a lone dash is escaped for the same reason. Control
+ * characters become hex escapes, NULL becomes the replacement character, and
+ * everything from U+0080 up is left alone, since CSS identifiers admit it.
+ */
+export function escapeIdentifier(value: string): string {
+  let out = "";
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    const char = value[index];
+    if (code === 0) {
+      out += "\uFFFD";
+      continue;
+    }
+    if (
+      (code >= 0x1 && code <= 0x1f) ||
+      code === 0x7f ||
+      (index === 0 && code >= 0x30 && code <= 0x39) ||
+      (index === 1 &&
+        code >= 0x30 &&
+        code <= 0x39 &&
+        value.charCodeAt(0) === 0x2d)
+    ) {
+      out += `\\${code.toString(16)} `;
+      continue;
+    }
+    if (index === 0 && code === 0x2d && value.length === 1) {
+      out += `\\${char}`;
+      continue;
+    }
+    if (
+      code >= 0x80 ||
+      code === 0x2d ||
+      code === 0x5f ||
+      (code >= 0x30 && code <= 0x39) ||
+      (code >= 0x41 && code <= 0x5a) ||
+      (code >= 0x61 && code <= 0x7a)
+    ) {
+      out += char;
+      continue;
+    }
+    out += `\\${char}`;
+  }
+  return out;
+}
+
 export function decodeIdentifier(name: string): string {
   if (!name.includes("\\")) return name;
   return name.replace(

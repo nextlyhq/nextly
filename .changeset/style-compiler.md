@@ -34,5 +34,10 @@ compile to `:hover`, `:focus-visible` and `:active`, and both breakpoint axes
 compile to media and container queries. The same document always produces the
 same bytes.
 
+States are emitted inside `:where()` so they add no specificity, and every rule
+is decided by source order instead: a node's own value beats its block type's
+default at every width, and a value set for a state beats a base value set at a
+narrower breakpoint.
+
 A value the validator refuses is left out of the stylesheet and reported rather
 than written, whether or not the caller validated first.
