@@ -164,18 +164,27 @@ const RESERVED_SLUGS_SET: Set<string> = new Set<string>([
   ...SYSTEM_RESOURCES,
 ]);
 
-// The owner column `created_by` is injected as a system column on every
-// collection table (both the snake_case name and its camelCase alias, which
-// snake-cases to the same column). A code-first collection therefore must not
-// declare a top-level field with either name, or its DDL would collide with the
-// injected column and the owner stamp / response strip would consume a user
-// field. Reserved for collections only — singles are a single global row and
-// components embed in JSON, so neither carries this column and both may use the
-// name freely. Nested repeater/group fields are stored inside JSON, not as
-// table columns, so the reservation applies to the top level only.
+// System columns injected onto a collection table, under both the snake_case
+// name and the camelCase alias that snake-cases to the same column. A code-first
+// collection must not declare a top-level field with either name, or its DDL
+// would collide with the injected column and the system's own stamp would
+// consume a user field.
+//
+// `created_by` is the owner column. `first_published_at` records the first
+// transition into published; it is injected only when the draft/publish
+// lifecycle is enabled, but it is reserved unconditionally, because a
+// collection can enable that lifecycle later and the field would collide the
+// moment it did — failing at migration time rather than at config validation,
+// which is much further from the mistake.
+//
+// Components embed in JSON and carry neither column, so they may use both names
+// freely. Nested repeater/group fields are stored inside JSON, not as table
+// columns, so the reservation applies to the top level only.
 const COLLECTION_RESERVED_FIELD_NAMES: Set<string> = new Set([
   "created_by",
   "createdBy",
+  "first_published_at",
+  "firstPublishedAt",
 ]);
 
 // ============================================================
@@ -521,7 +530,7 @@ function validateFields(
     if (typeof name === "string" && COLLECTION_RESERVED_FIELD_NAMES.has(name)) {
       errors.push({
         path: `${path}[${index}].name`,
-        message: `Field name '${name}' is reserved for the system owner column`,
+        message: `Field name '${name}' is reserved for a system column`,
         code: "FIELD_NAME_RESERVED",
       });
     }

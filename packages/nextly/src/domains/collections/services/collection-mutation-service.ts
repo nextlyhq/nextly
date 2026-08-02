@@ -38,8 +38,11 @@ import type { ValidationPublicData } from "../../../errors/public-data";
 import { emitDocumentEvent } from "../../../events/domain-events";
 import { getEventBus } from "../../../events/event-bus";
 import { toSnakeCase } from "../../../lib/case-conversion";
+import { stripImmutableSystemFields } from "../../../lib/immutable-system-fields";
 import {
+  resolveFirstPublishedStamp,
   resolvePublishTransition,
+  selectPublicationTransition,
   stripUndefinedStatus,
 } from "../../../lib/status-transition";
 import {
@@ -276,37 +279,6 @@ function errorToServiceResult<T = unknown>(
     message: mapped.publicMessage,
     data: null,
   };
-}
-
-/**
- * System columns a client must never write: the primary key, the timestamps,
- * and the owner stamp (both the snake_case column name and the camelCase form a
- * client might send). They are not declared fields, so field validation passes
- * them through. Stripping them on BOTH create and update means the service
- * remains authoritative: on create the generated id / stamped `created_by` /
- * timestamps win (a stray `createdBy` alias can't survive the snake-case pass
- * and overwrite the stamp with an attacker-chosen owner), and on update an
- * authorized updater can't transfer a row to another user, forge `created_at`,
- * duplicate `updated_at`, or reassign `id`.
- */
-const IMMUTABLE_SYSTEM_FIELDS = new Set([
-  "id",
-  "created_at",
-  "createdAt",
-  "updated_at",
-  "updatedAt",
-  "created_by",
-  "createdBy",
-]);
-
-function stripImmutableSystemFields(
-  data: Record<string, unknown>
-): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(data)) {
-    if (!IMMUTABLE_SYSTEM_FIELDS.has(key)) out[key] = value;
-  }
-  return out;
 }
 
 /**
@@ -1585,6 +1557,50 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * Whether this document is already reachable by the public, ignoring what the current write is
+   * about to do to one locale.
+   *
+   * The marker records a document's FIRST publication, and a localized document can be public
+   * through its main row or through any one of its translations. A write that publishes a single
+   * locale therefore cannot tell, from its own transition alone, whether the document is becoming
+   * public or already was — and the rows where that matters are the upgraded ones, whose marker is
+   * null because the history was never recorded rather than because they were never public.
+   *
+   * Reads through the transaction's Drizzle handle via the same companion scan the publish path
+   * uses, so there is one way to ask a companion for its per-locale statuses.
+   *
+   * `exceptLocale` is the locale this write is changing: its committed status is the "before" of
+   * the transition being judged, so counting it here would make every publish look like a
+   * republish.
+   */
+  private async isDocumentAlreadyPublic(
+    tx: TransactionContext,
+    collectionName: string,
+    entryId: string,
+    mainRowStatus: string | null | undefined,
+    exceptLocale: string | undefined
+  ): Promise<boolean> {
+    if (mainRowStatus === "published") return true;
+
+    const companion = await this.fileManager.loadCompanionSchema(
+      collectionName,
+      tx.getDrizzle()
+    );
+    if (!companion) return false;
+
+    const statusesByLocale = await readCompanionLocaleStatusAll(
+      tx.getDrizzle<Parameters<typeof readCompanionLocaleStatusAll>[0]>(),
+      companion.table,
+      entryId,
+      cachedCompanionReadiness(this.adapter, companion.companionTableName)
+    );
+    for (const [locale, status] of statusesByLocale) {
+      if (locale !== exceptLocale && status === "published") return true;
+    }
+    return false;
+  }
+
+  /**
    * Assemble the document a draft promotion actually persists: the draft with the
    * caller's scalars overlaid, the caller's single-component patches merged onto
    * the draft's components (a patch wins per sub-field, recursing into nested
@@ -2785,7 +2801,7 @@ export class CollectionMutationService extends BaseService {
         // both snake and camel) so the generated id, stamped owner, and
         // timestamps below are authoritative — a stray `createdBy` alias can't
         // survive to overwrite the owner stamp.
-        ...stripImmutableSystemFields(finalData),
+        ...stripImmutableSystemFields(finalData, "collection"),
         created_at: now,
         updated_at: now,
         // Stamp the row owner with the creating user's id so owner-only access
@@ -2795,6 +2811,21 @@ export class CollectionMutationService extends BaseService {
       const entryData: Record<string, unknown> = {};
       for (const [key, value] of Object.entries(rawEntryData)) {
         entryData[toSnakeCase(key)] = value;
+      }
+
+      // A create has no prior status, so landing on published IS a first publication. Read from
+      // the post-hook `finalData`: a hook that derives `status: "published"`, or a status the
+      // caller could not write itself, must stamp the value actually stored. Taken before the
+      // locale split, which strips `status` from a non-default-locale main payload.
+      const createStamp = resolveFirstPublishedStamp({
+        hasStatus: (collection as { status?: boolean }).status === true,
+        previousStatus: null,
+        nextStatus: finalData.status,
+        existingMarker: null,
+        now,
+      });
+      if (createStamp) {
+        entryData.first_published_at = createStamp;
       }
 
       // Authorize the published state this create will persist, judged on the
@@ -3488,6 +3519,12 @@ export class CollectionMutationService extends BaseService {
       // post-commit transition event reads it. Defaults to the pre-read value so
       // a companion-only (no main status) publish still has a sane fallback.
       let lockedPreviousStatus = previousStatus;
+      // The first-publication marker this publish committed, or undefined when it recorded none.
+      // The event payload, version snapshot and workflow reaction are all built from the
+      // PRE-update row with the new status overlaid, so without carrying this across they would
+      // report the marker absent on the very publication that establishes it. Reset per attempt
+      // by the closure, so a retry after a concurrent winner does not reuse a stale value.
+      let publishFirstPublishedAt: Date | undefined;
       // The per-locale publish transitions recorded to the outbox inside the
       // transaction, replayed to the in-process workflow subscribers after it
       // commits — the durable event and the reaction event must not diverge on
@@ -3508,14 +3545,6 @@ export class CollectionMutationService extends BaseService {
       // for its event payload rather than falling back to the stale pre-read.
       const needsFreshParent = !!versionsConfig?.enabled || hasMainStatus;
 
-      // Bump `updated_at` alongside status so caches / revalidation see the change (a bare
-      // status flip left the timestamp stale). On SQLite the dynamic tables store `updated_at`
-      // as an integer Unix-seconds column (Drizzle `integer` timestamp mode), so `unixepoch()`
-      // keeps the value numeric; `CURRENT_TIMESTAMP` would write a text string and corrupt
-      // decoding/ordering. Postgres/MySQL use the native timestamp default.
-      const nowExpr =
-        this.dialect === "sqlite" ? "unixepoch()" : "CURRENT_TIMESTAMP";
-
       // Retry the whole publish+capture transaction on a version_no allocation
       // race, mirroring updateEntry.
       await withVersionConflictRetry(() =>
@@ -3528,6 +3557,7 @@ export class CollectionMutationService extends BaseService {
           // Reset per attempt because the conflict retry re-runs this closure.
           entryVanished = false;
           lockedPreviousStatus = previousStatus;
+          publishFirstPublishedAt = undefined;
           perLocaleTransitions = [];
           defaultCompanionTransitions = false;
           const lockedRow = await tx.selectOne<Record<string, unknown>>(
@@ -3613,9 +3643,53 @@ export class CollectionMutationService extends BaseService {
           }
 
           if (hasMainStatus) {
-            await tx.execute(
-              `UPDATE ${q(tableName)} SET ${q("status")} = ${ph(1)}, ${q("updated_at")} = ${nowExpr} WHERE ${q("id")} = ${ph(2)}`,
-              ["published", params.entryId]
+            // The marker this publish records, if any. Decided from the row read under the lock
+            // above, so an already-published row records nothing — which matters most for rows
+            // published before this column existed, whose marker is null precisely because their
+            // history was never captured. Dating those today would report a publication that
+            // never happened.
+            const publishNow = new Date();
+            const lockedMarker = (
+              lockedRow as { first_published_at?: unknown } | undefined
+            )?.first_published_at;
+            // Publish-all can find a document in a mixed state: a draft main row alongside a
+            // translation that has been live since before this column existed. The main row's own
+            // transition then reads as a first publication when the document was already
+            // reachable, so the same document-level question is asked here. No locale is excluded
+            // — this write publishes all of them, so any already-published one predates it.
+            const alreadyPublicBeforePublishAll =
+              lockedMarker == null
+                ? await this.isDocumentAlreadyPublic(
+                    tx,
+                    params.collectionName,
+                    params.entryId,
+                    lockedPreviousStatus,
+                    undefined
+                  )
+                : false;
+            publishFirstPublishedAt = resolveFirstPublishedStamp({
+              hasStatus: true,
+              previousStatus: alreadyPublicBeforePublishAll
+                ? "published"
+                : lockedPreviousStatus,
+              nextStatus: "published",
+              existingMarker: lockedMarker,
+              now: publishNow,
+            });
+            // Through the adapter's Drizzle layer rather than an interpolated statement. That
+            // also removes the reason the previous version needed a SQL `now()` expression: a
+            // `Date` bound as a raw parameter stores wrong against SQLite's integer timestamps,
+            // while Drizzle converts it per dialect.
+            await tx.update(
+              tableName,
+              {
+                status: "published",
+                updated_at: publishNow,
+                ...(publishFirstPublishedAt
+                  ? { first_published_at: publishFirstPublishedAt }
+                  : {}),
+              },
+              this.whereEq("id", params.entryId)
             );
           }
           if (companion && companionPublishable) {
@@ -3633,8 +3707,18 @@ export class CollectionMutationService extends BaseService {
             // this transaction holds one (which would deadlock a one-connection
             // pool). Undefined only if the row vanished, which the lock above
             // already rules out.
+            // The marker is overlaid alongside the status for the same reason: it was written by
+            // the UPDATE above and so is not on the pre-image this row is built from. Without it
+            // the publication event and the captured version would both report no first
+            // publication for the write that just established one.
             publishedParentRow = lockedSchemaRow
-              ? { ...lockedSchemaRow, status: "published" }
+              ? {
+                  ...lockedSchemaRow,
+                  status: "published",
+                  ...(publishFirstPublishedAt
+                    ? { first_published_at: publishFirstPublishedAt }
+                    : {}),
+                }
               : undefined;
 
             // Record a version snapshot for the publish: publishing changes the
@@ -4995,9 +5079,11 @@ export class CollectionMutationService extends BaseService {
           componentFieldData = { ...baseComponentFieldData };
           workingDraftDocument = undefined;
           // `let` because promote-on-publish rebinds it from the merged
-          // draft+payload after the working draft is folded in below.
-          let updatePayload = {
-            ...stripImmutableSystemFields(finalData),
+          // draft+payload after the working draft is folded in below. Annotated
+          // rather than inferred: the literal's own shape would refuse the
+          // first-publish stamp appended before the UPDATE is assembled.
+          let updatePayload: Record<string, unknown> = {
+            ...stripImmutableSystemFields(finalData, "collection"),
             updatedAt: new Date(),
           };
 
@@ -5362,7 +5448,7 @@ export class CollectionMutationService extends BaseService {
               componentFieldData = draftParts.componentFieldData;
               manyToManyData = draftParts.manyToManyData;
               updatePayload = {
-                ...stripImmutableSystemFields(finalData),
+                ...stripImmutableSystemFields(finalData, "collection"),
                 updatedAt: updatePayload.updatedAt,
               };
               promotedDraft = true;
@@ -5378,6 +5464,87 @@ export class CollectionMutationService extends BaseService {
             this.dialect === "postgresql"
               ? `$${sqlParams.length}` // length already incremented by push below
               : "?";
+
+          // A row becoming public for the first time records when, once and for good.
+          //
+          // `status` says what a document IS; nothing said what it HAS BEEN, so an unpublish
+          // erased every trace it was ever live while the links, feeds and search results it
+          // accumulated stayed exactly where they were. Anything asking "was this address ever
+          // public" — slug stability, redirect capture — needs a fact that survives that round
+          // trip.
+          //
+          // Written under the same row lock and in the same statement as the rest of the update,
+          // so it cannot disagree with the status it accompanies. Only when the locked row has
+          // none: this dates the FIRST publication, and a later republish must not move it.
+          //
+          // The marker is a property of the DOCUMENT, not of the main row's status column. It
+          // answers "has this ever been public in any language", which is what the slug freeze
+          // and redirect capture need for an address shared across locales. So a write that
+          // publishes only a non-default translation still establishes it: that language is
+          // reachable at the shared address, and leaving the marker null until some later
+          // default-locale action would record a date after the document was already public.
+          //
+          // Which transition to read therefore depends on where this write's status lands. A
+          // non-default-locale write has its status stripped from the main payload and carried on
+          // the companion instead, so the main row's status would show no move at all.
+          // Asked for ANY write that could record a first publication, not only a per-locale one.
+          // A default-locale or non-localized publish can equally be the second way a document
+          // goes public: its main row may be a draft while a translation has been live since
+          // before this column existed. Restricting the question to the per-locale branch left
+          // exactly that case stamping today's date over an unknown history.
+          //
+          // The branch flag is not a proxy for "this write touches a locale", either — it is
+          // forced false for a trusted write, while the localized split still moves the status
+          // onto the companion. Keying the question on it would skip every server-side write.
+          //
+          // Still gated on a stamp being possible at all, which for any one document happens at
+          // most once ever, since every later write is stopped by the marker already being set.
+          // The ordinary publish pays nothing for the read.
+          const intendedPublish =
+            isNonDefaultLocaleStatusWrite ||
+            localizedUpdate?.companionData?._status !== undefined
+              ? localizedUpdate?.companionData?._status === "published"
+              : intendedStatus === "published";
+          const couldRecordFirstPublication =
+            collectionHasStatus &&
+            intendedPublish &&
+            (preUpdateRow as { first_published_at?: unknown } | undefined)
+              ?.first_published_at == null;
+          const documentAlreadyPublic = couldRecordFirstPublication
+            ? await this.isDocumentAlreadyPublic(
+                tx,
+                params.collectionName,
+                params.entryId,
+                ((preUpdateRow as { status?: unknown } | undefined)?.status as
+                  | string
+                  | undefined) ?? null,
+                localizedUpdate?.writeLocale
+              )
+            : false;
+
+          const publicationTransition = selectPublicationTransition({
+            documentAlreadyPublic,
+            writesStatusToCompanion: isNonDefaultLocaleStatusWrite,
+            mainPreviousStatus:
+              ((preUpdateRow as { status?: unknown } | undefined)?.status as
+                | string
+                | undefined) ?? null,
+            mainNextStatus: intendedStatus,
+            companionPreviousStatus: committedLocaleStatus,
+            companionNextStatus: localizedUpdate?.companionData?._status,
+          });
+          const updateStamp = resolveFirstPublishedStamp({
+            hasStatus: collectionHasStatus,
+            previousStatus: publicationTransition.previousStatus,
+            nextStatus: publicationTransition.nextStatus,
+            existingMarker: (
+              preUpdateRow as { first_published_at?: unknown } | undefined
+            )?.first_published_at,
+            now: new Date(),
+          });
+          if (updateStamp) {
+            updatePayload.firstPublishedAt = updateStamp;
+          }
 
           const setClauses = Object.entries(updatePayload)
             .map(([key, val]) => {
@@ -7005,7 +7172,7 @@ export class CollectionMutationService extends BaseService {
         // both snake and camel) so the generated id, stamped owner, and
         // timestamps below are authoritative — a stray `createdBy` alias can't
         // survive to overwrite the owner stamp.
-        ...stripImmutableSystemFields(finalData),
+        ...stripImmutableSystemFields(finalData, "collection"),
         // Snake_case keys: the runtime Drizzle schema names these columns
         // created_at / updated_at / created_by, and the adapter maps by column
         // name. (The prior camelCase createdAt/updatedAt keys here were ignored
@@ -7018,6 +7185,22 @@ export class CollectionMutationService extends BaseService {
         // works zero-config. Null for system/seed creates (no user context).
         created_by: params.user?.id ?? null,
       };
+
+      // A create landing directly on published is a first publication here exactly as it is on
+      // the pooled path. This is a public transaction API and also backs createMany and batch
+      // writes, so a document created as published through it would otherwise carry no marker at
+      // all — the same document created through `createEntry` would.
+      const txCreateStamp = resolveFirstPublishedStamp({
+        hasStatus: (collection as { status?: boolean }).status === true,
+        previousStatus: null,
+        nextStatus: finalData.status,
+        existingMarker: null,
+        now: nowForTxCreate,
+      });
+      if (txCreateStamp) {
+        (entryData as Record<string, unknown>).first_published_at =
+          txCreateStamp;
+      }
 
       // Authorize the published state this create will persist, on the post-hook
       // `finalData`: a hook that derives `status: "published"`, or a status field
@@ -7589,11 +7772,42 @@ export class CollectionMutationService extends BaseService {
         return transitionDenied;
       }
 
+      // The first publication, decided under the lock the transition gate above already took, so
+      // the prior status and the stored marker are the committed ones rather than this
+      // transaction's earlier snapshot. Read only when the write could be a publish at all: a
+      // content-only edit transitions nothing and must not pay for an extra locked read.
+      //
+      // This is a public transaction API and backs batch writes, so a document published through
+      // it would otherwise carry no marker while the same document published through
+      // `updateEntry` would.
+      const nowForTxUpdate = new Date();
+      let txUpdateStamp: Date | undefined;
+      if (
+        (collection as { status?: boolean }).status === true &&
+        finalData.status === "published"
+      ) {
+        const lockedForMarker = await tx.selectOne<Record<string, unknown>>(
+          tableName,
+          { where: this.whereEq("id", params.entryId), forUpdate: true }
+        );
+        txUpdateStamp = resolveFirstPublishedStamp({
+          hasStatus: true,
+          previousStatus:
+            typeof lockedForMarker?.status === "string"
+              ? lockedForMarker.status
+              : null,
+          nextStatus: finalData.status,
+          existingMarker: lockedForMarker?.first_published_at,
+          now: nowForTxUpdate,
+        });
+      }
+
       const [updated] = await tx.update<unknown>(
         tableName,
         {
-          ...stripImmutableSystemFields(finalData),
-          updatedAt: new Date(),
+          ...stripImmutableSystemFields(finalData, "collection"),
+          updatedAt: nowForTxUpdate,
+          ...(txUpdateStamp ? { first_published_at: txUpdateStamp } : {}),
         },
         this.whereEq("id", params.entryId),
         { returning: "*" }
@@ -8450,7 +8664,7 @@ export class CollectionMutationService extends BaseService {
         // both snake and camel) so the generated id, stamped owner, and
         // timestamps below are authoritative — a stray `createdBy` alias can't
         // survive to overwrite the owner stamp.
-        ...stripImmutableSystemFields(finalData),
+        ...stripImmutableSystemFields(finalData, "collection"),
         // Snake_case keys: the runtime Drizzle schema names these columns
         // created_at / updated_at / created_by, and the adapter maps by column
         // name. (The prior camelCase createdAt/updatedAt keys here were ignored
@@ -8463,6 +8677,21 @@ export class CollectionMutationService extends BaseService {
         // works zero-config. Null for system/seed creates (no user context).
         created_by: params.user?.id ?? null,
       };
+
+      // The bulk worker is a separate, streamlined path — the batch service calls it rather than
+      // `createEntryInTransaction` — so it needs the rule too. Leaving it out is how batch writes
+      // came to publish documents that carried no marker while single writes did.
+      const bulkCreateStamp = resolveFirstPublishedStamp({
+        hasStatus: (collection as { status?: boolean }).status === true,
+        previousStatus: null,
+        nextStatus: finalData.status,
+        existingMarker: null,
+        now: nowForTxCreate,
+      });
+      if (bulkCreateStamp) {
+        (entryData as Record<string, unknown>).first_published_at =
+          bulkCreateStamp;
+      }
 
       // The bulk create worker inserts status like any other field, so publishing
       // through it needs `publish-<slug>` the same as a single create — otherwise
@@ -9102,11 +9331,37 @@ export class CollectionMutationService extends BaseService {
         return transitionDenied;
       }
 
+      // Same rule as every other update seam. Read under the lock the transition gate above
+      // already holds, so the prior status and stored marker are the committed ones, and only
+      // when the write could publish at all — a content-only edit must not pay for the read.
+      const nowForBulkUpdate = new Date();
+      let bulkUpdateStamp: Date | undefined;
+      if (
+        (collection as { status?: boolean }).status === true &&
+        finalData.status === "published"
+      ) {
+        const lockedForMarker = await tx.selectOne<Record<string, unknown>>(
+          tableName,
+          { where: this.whereEq("id", entryId), forUpdate: true }
+        );
+        bulkUpdateStamp = resolveFirstPublishedStamp({
+          hasStatus: true,
+          previousStatus:
+            typeof lockedForMarker?.status === "string"
+              ? lockedForMarker.status
+              : null,
+          nextStatus: finalData.status,
+          existingMarker: lockedForMarker?.first_published_at,
+          now: nowForBulkUpdate,
+        });
+      }
+
       const [updated] = await tx.update<unknown>(
         tableName,
         {
-          ...stripImmutableSystemFields(finalData),
-          updatedAt: new Date(),
+          ...stripImmutableSystemFields(finalData, "collection"),
+          updatedAt: nowForBulkUpdate,
+          ...(bulkUpdateStamp ? { first_published_at: bulkUpdateStamp } : {}),
         },
         this.whereEq("id", entryId),
         { returning: "*" }

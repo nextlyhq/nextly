@@ -107,6 +107,12 @@ export const RESERVED_FIELD_NAMES = [
   // a `createdBy` field would otherwise collide with the system owner column.
   "created_by",
   "createdBy",
+  // First transition into published, auto-added when the draft/publish
+  // lifecycle is enabled. Reserved even for entities that have not enabled it,
+  // because enabling it later would otherwise collide at migration time rather
+  // than here, where the name is actually chosen.
+  "first_published_at",
+  "firstPublishedAt",
 ] as const;
 
 export const collectionNameSchema = z

@@ -473,15 +473,35 @@ ${allColumnDefs.join(",\n")}
     // caller can't accidentally strip Draft/Published.
     const wasStatus = options?.wasStatus === true;
     const hasStatus = options?.hasStatus === true;
-    if (!wasStatus && hasStatus) {
-      const statusType = this.dialect === "sqlite" ? "text" : "varchar(20)";
-      statements.push(
-        `ALTER TABLE ${this.quoteIdentifier(tableName)} ADD COLUMN ${this.quoteIdentifier("status")} ${statusType} DEFAULT 'draft' NOT NULL;`
+    if (
+      wasStatus !== hasStatus &&
+      (hasStatus || options?.hasStatus === false)
+    ) {
+      // The columns the lifecycle owns, derived by asking the descriptor for the set with the
+      // lifecycle on and again with it off: whatever only the first has is what enabling adds and
+      // disabling removes. Naming `status` here instead is how the first-publication marker came
+      // to be expected by the runtime schema while this toggle never created it — the runtime
+      // schema reads the same descriptor, so a column added there arrives here for free.
+      const isSingleTable = tableName.startsWith("single_");
+      const forFlag = (flag: boolean) =>
+        getSystemColumnDescriptors(this.dialect, {
+          hasTitleField: false,
+          hasSlugField: false,
+          hasStatus: flag,
+          isSingle: isSingleTable,
+        });
+      const withoutLifecycle = new Set(forFlag(false).map(c => c.name));
+      const lifecycleColumns = forFlag(true).filter(
+        c => !withoutLifecycle.has(c.name)
       );
-    } else if (wasStatus && options?.hasStatus === false) {
-      statements.push(
-        `ALTER TABLE ${this.quoteIdentifier(tableName)} DROP COLUMN ${this.quoteIdentifier("status")};`
-      );
+
+      for (const column of lifecycleColumns) {
+        statements.push(
+          hasStatus
+            ? `ALTER TABLE ${this.quoteIdentifier(tableName)} ADD COLUMN ${renderSystemColumnSql(column, name => this.quoteIdentifier(name))};`
+            : `ALTER TABLE ${this.quoteIdentifier(tableName)} DROP COLUMN ${this.quoteIdentifier(column.name)};`
+        );
+      }
     }
 
     const oldFieldMap = new Map(oldFields.map(f => [f.name, f]));

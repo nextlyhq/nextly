@@ -49,6 +49,26 @@ describe("buildRestorePayload", () => {
     expect(payload).toEqual({ title: "Hello", body: { root: {} } });
   });
 
+  it("does not report the first-publication marker as a dropped field", () => {
+    // A versioned status-enabled document's snapshot carries the marker. It is a system column,
+    // not a user field, so restoring must neither write it back nor count it as lost — a complete
+    // restore reported as partial sends the operator looking for data that was never missing.
+    const markerFields = [{ name: "title", type: "text" }] as FieldConfig[];
+
+    const { payload, droppedFields } = buildRestorePayload(
+      {
+        title: "Hello",
+        firstPublishedAt: "2026-01-01T00:00:00.000Z",
+        first_published_at: "2026-01-01T00:00:00.000Z",
+      },
+      markerFields
+    );
+
+    expect(droppedFields).toEqual([]);
+    expect("firstPublishedAt" in payload).toBe(false);
+    expect("first_published_at" in payload).toBe(false);
+  });
+
   it("drops a field the schema no longer has, and reports it", () => {
     // Validation walks the schema's fields rather than the payload's keys, so
     // it ignores this; the update then names the missing column in raw SQL.
