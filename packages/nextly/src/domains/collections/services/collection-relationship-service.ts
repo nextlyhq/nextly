@@ -103,27 +103,16 @@ interface NestedHookStateBase {
    */
   redactions: ReadAccessRedactions;
   /**
-   * The ORIGINAL related row object for each `relationKey(collection, id)` seen in
-   * the first walk. A source hook can return a CLONE of a related row (a new object
-   * graph the WeakMap cannot key); the authoritative re-walk finds the original
-   * here by id and transfers its removed-field evidence — at the root AND through
-   * every group/repeater below it — onto the clone, so an inverse conditional rule
-   * (a field visible only while a DENIED sibling is absent) cannot fall open on the
-   * clone at any depth. The clone is then re-judged (never a cached verdict): a
-   * replacement's own denied fields are still stripped.
+   * Every related row object the first walk sanitized — each related root AND every
+   * group/repeater row inside it. The authoritative re-walk judges a related subtree
+   * normally only when the root and all its nested rows are still these same objects
+   * (see {@link CollectionRelationshipService.isPristineSubtree}); a source hook that
+   * cloned the root or replaced, appended, or rebuilt any nested row produces new
+   * objects that are absent here, and the whole subtree is failed closed. Keyed by
+   * object identity, so a reshaped copy is simply not a member. A subtree mutated
+   * purely in place keeps the same objects and stays pristine.
    */
-  originalRowById: Map<string, Record<string, unknown>>;
-  /**
-   * Every group/repeater ROW object present inside a related row during the first
-   * walk. A source hook can keep a related root in place (same object, so it is
-   * judged normally) yet REPLACE or APPEND a row inside one of its containers; the
-   * new row carries no evidence, and judging it fresh would let an inverse rule
-   * fall open. Membership here distinguishes an original nested row (mutated in
-   * place, judged with its evidence) from a hook's replacement, which is failed
-   * closed. Keyed by object identity, so a replacement is a new object that is
-   * simply absent.
-   */
-  originalNestedRows: WeakSet<Record<string, unknown>>;
+  pristineOriginals: WeakSet<Record<string, unknown>>;
   /**
    * Every related row the pass reached, in visit order, with what is needed to
    * finish it. These entries drive the finalize step after every hook has run: it
@@ -163,8 +152,7 @@ function createNestedHookState(): NestedHookState {
     fields: new Map(),
     labelFields: new Map(),
     redactions: new WeakMap(),
-    originalRowById: new Map(),
-    originalNestedRows: new WeakSet(),
+    pristineOriginals: new WeakSet(),
     failClosed: new WeakSet(),
     pending: [],
     applyFieldHooks: true,
@@ -3153,8 +3141,7 @@ export class CollectionRelationshipService extends BaseService {
       fields: walkState.fields,
       labelFields: walkState.labelFields,
       redactions: walkState.redactions,
-      originalRowById: walkState.originalRowById,
-      originalNestedRows: walkState.originalNestedRows,
+      pristineOriginals: walkState.pristineOriginals,
       failClosed: walkState.failClosed,
       applyFieldHooks: false,
     };
@@ -3261,124 +3248,75 @@ export class CollectionRelationshipService extends BaseService {
   }
 
   /**
-   * Copy the removed-field evidence of an ORIGINAL related row, and of every row
-   * inside its groups/repeaters, onto a CLONE a source hook returned in its place.
+   * Whether every object in a related row's subtree — the root and every
+   * group/repeater row beneath it — is a first-walk original.
    *
-   * The redaction WeakMap keys evidence by object, so a deep clone loses it at
-   * every level; the id bridge finds the original, and this transfers its subtree
-   * evidence onto the clone so the authoritative re-walk can restore an inverse
-   * conditional's denied sibling throughout the tree, not only at the root, then
-   * re-judge. Containers are reconciled by kind: a GROUP is one object at a fixed
-   * field name, matched by position; a REPEATER is matched by row `id`, and a
-   * clone row whose id is absent from the originals (reordered, id-less, or
-   * fabricated) is failed closed rather than matched by an unstable array index.
+   * A source `afterRead` hook can reshape the response: clone a related root,
+   * replace or append a nested row, or return a container rebuilt as fresh objects.
+   * Redaction evidence and access verdicts are keyed by object identity, so a
+   * reshaped subtree carries no trustworthy provenance — an inverse conditional
+   * rule (a field visible only while a DENIED sibling is absent), or a root rule
+   * that inspects a nested value, would fall open on the reshaped copy. When any
+   * object in the subtree is not a first-walk original, the caller fails the WHOLE
+   * subtree closed. A subtree a hook only mutated IN PLACE (same objects) stays
+   * pristine and is judged normally; the evidence re-judge still catches an
+   * in-place reintroduction of a denied field.
    */
-  private async transferSubtreeEvidence(
-    original: Record<string, unknown>,
-    clone: Record<string, unknown>,
+  private async isPristineSubtree(
+    root: Record<string, unknown>,
     collection: string,
     state: NestedHookState
-  ): Promise<void> {
-    this.copyRowEvidence(original, clone, state);
+  ): Promise<boolean> {
+    if (!state.pristineOriginals.has(root)) return false;
     const fields = await this.fieldsForNestedWalk(collection, state);
-    this.transferContainerEvidence(original, clone, fields, state);
+    return this.areNestedRowsPristine(root, fields, state);
   }
 
-  /** Copy one row's removed-field evidence onto its clone, unless the clone
-   *  already carries evidence of its own. */
-  private copyRowEvidence(
-    original: Record<string, unknown>,
-    clone: Record<string, unknown>,
-    state: NestedHookState
-  ): void {
-    const evidence = state.redactions.get(original);
-    if (evidence && !state.redactions.has(clone)) {
-      state.redactions.set(clone, evidence);
-    }
-  }
-
-  /** The recursive, container-level worker for {@link transferSubtreeEvidence}. */
-  private transferContainerEvidence(
-    original: Record<string, unknown>,
-    clone: Record<string, unknown>,
+  /** Recursive worker for {@link isPristineSubtree}: false as soon as any
+   *  group/repeater row beneath `row` is not a first-walk original. */
+  private areNestedRowsPristine(
+    row: Record<string, unknown>,
     fields: FieldDefinition[],
     state: NestedHookState
-  ): void {
+  ): boolean {
     for (const field of fields) {
       if (!isRepeaterOrGroupField(field) || !field.name) continue;
-      const originalRows = containerRowsOf(original[field.name]);
-      const cloneRows = containerRowsOf(clone[field.name]);
       const inner = getNestedFields(field);
-      // A group is a single object at a fixed field name, so its original and
-      // clone correspond one-to-one with no positional guess.
-      if (isGroupField(field)) {
-        const shared = Math.min(originalRows.length, cloneRows.length);
-        for (let i = 0; i < shared; i++) {
-          this.copyRowEvidence(originalRows[i], cloneRows[i], state);
-          this.transferContainerEvidence(
-            originalRows[i],
-            cloneRows[i],
-            inner,
-            state
-          );
-        }
-        continue;
-      }
-      // A repeater is matched by ROW id, never by array position: a hook can
-      // filter, prepend, or reorder its rows, so index i can name a different
-      // logical row on the clone than on the original — transferring evidence by
-      // index would hand a private row a public row's "allowed" evidence and let
-      // an inverse rule fall open. A clone row whose id is absent from the
-      // originals (a reordered row with no id, or a fabricated one) cannot be
-      // matched, so its whole subtree is failed closed instead of guessed.
-      const byId = new Map<string, Record<string, unknown>>();
-      for (const originalRow of originalRows) {
-        if (typeof originalRow.id === "string") {
-          byId.set(originalRow.id, originalRow);
-        }
-      }
-      for (const cloneRow of cloneRows) {
-        const match =
-          typeof cloneRow.id === "string" ? byId.get(cloneRow.id) : undefined;
-        if (match) {
-          this.copyRowEvidence(match, cloneRow, state);
-          this.transferContainerEvidence(match, cloneRow, inner, state);
-        } else {
-          state.failClosed.add(cloneRow);
-          this.flagContainerRowsFailClosed(cloneRow, inner, state);
-        }
+      for (const child of containerRowsOf(row[field.name])) {
+        if (!state.pristineOriginals.has(child)) return false;
+        if (!this.areNestedRowsPristine(child, inner, state)) return false;
       }
     }
+    return true;
   }
 
   /**
-   * Flag a related-row clone whose redaction provenance cannot be recovered, and
-   * every row inside its groups/repeaters, so the field-access pass denies each
-   * access-controlled field on it (fail-closed).
+   * Fail closed on a related subtree whose provenance the re-walk cannot trust,
+   * denying every access-controlled field on the root and every row beneath it.
    *
-   * A source hook that returns a deep-cloned or reshaped related row (a new object
-   * graph, or one whose id was dropped) breaks the object-keyed evidence the
-   * re-walk needs to keep an inverse conditional rule — a field visible only while
-   * a DENIED sibling is absent — from falling open. When the clone cannot be
-   * matched to its original, denying its access-controlled fields is the only safe
-   * verdict; a hook that instead transforms related rows in place, preserving
-   * their id and array order, is matched and judged normally.
+   * A source hook that returns a reshaped related row — a cloned root, a replaced
+   * or appended nested row, or a container rebuilt as new objects — breaks the
+   * object-keyed evidence and verdicts the re-walk relies on. Rather than reconcile
+   * each reshape variant (which cannot be done reliably for an arbitrarily reshaped
+   * clone, and which an inverse rule or an ancestor rule can defeat), the whole
+   * subtree is denied — the fail-secure default. A hook that instead transforms
+   * related rows IN PLACE, preserving object identity, is judged normally.
    */
   private async flagSubtreeFailClosed(
-    row: Record<string, unknown>,
+    root: Record<string, unknown>,
     collection: string,
     state: NestedHookState
   ): Promise<void> {
-    state.failClosed.add(row);
+    const alreadyFlagged = state.failClosed.has(root);
+    state.failClosed.add(root);
     const fields = await this.fieldsForNestedWalk(collection, state);
-    this.flagContainerRowsFailClosed(row, fields, state);
-    // A well-behaved hook mutates related rows in place; a reshaped or id-less
-    // clone that lands here is an anti-pattern, and silently over-removing its
-    // fields is hard to diagnose. Surface it in development so the author can
-    // switch to in-place mutation, without adding noise to production reads.
-    if (process.env.NODE_ENV !== "production") {
+    this.flagContainerRowsFailClosed(root, fields, state);
+    // Silently over-removing a reshaped row's fields is hard to diagnose; surface
+    // it once per row in development so the author can switch to in-place mutation,
+    // without adding noise to production reads or repeating across re-walk phases.
+    if (!alreadyFlagged && process.env.NODE_ENV !== "production") {
       this.logger.warn(
-        `A related "${collection}" row returned by an afterRead hook could not be matched to its source row (a reshaped or id-less clone); its access-controlled fields were denied. Transform related rows in place and preserve their id to keep field access exact.`
+        `A related "${collection}" row was reshaped by an afterRead hook (a cloned root, or a nested row replaced or appended); its access-controlled fields were denied. Transform related rows in place, preserving object identity, to keep their field access exact.`
       );
     }
   }
@@ -3400,11 +3338,12 @@ export class CollectionRelationshipService extends BaseService {
   }
 
   /**
-   * Record every group/repeater row currently inside a related root (first walk
-   * only), so the re-walk can tell an original nested row — mutated in place, and
-   * judged with its own evidence — from one a source hook replaced or appended.
+   * Record every group/repeater row currently inside a related root as a first-walk
+   * original (first walk only). Together with the root itself (recorded by the
+   * caller), this is what {@link isPristineSubtree} checks to tell a subtree mutated
+   * purely in place from one a source hook cloned, replaced, or appended.
    */
-  private recordOriginalNestedRows(
+  private recordPristineOriginals(
     row: Record<string, unknown>,
     fields: FieldDefinition[],
     state: NestedHookState
@@ -3413,50 +3352,119 @@ export class CollectionRelationshipService extends BaseService {
       if (!isRepeaterOrGroupField(field) || !field.name) continue;
       const inner = getNestedFields(field);
       for (const child of containerRowsOf(row[field.name])) {
-        state.originalNestedRows.add(child);
-        this.recordOriginalNestedRows(child, inner, state);
+        state.pristineOriginals.add(child);
+        this.recordPristineOriginals(child, inner, state);
       }
     }
   }
 
   /**
-   * Fail closed on any group/repeater row inside an IN-PLACE related root that was
-   * not present in the first walk — a source hook replaced or appended it.
+   * Re-apply field access to the related rows already sanitized beneath `entry`,
+   * after `entry`'s own field hooks ran (first walk only).
    *
-   * A hook can keep the related root object identical (so it is judged normally)
-   * yet swap or add a row inside one of its containers. The new row carries no
-   * redaction evidence, and judging it fresh would let an inverse rule — a field
-   * visible only while a DENIED sibling is absent — fall open, because the clone
-   * dropped the sibling. A row still present from the first walk (mutated in place)
-   * keeps its evidence and is judged normally; only the unrecorded ones fail closed.
+   * The post-hook re-descent walks NEW children a hook added but skips ones already
+   * visited. A field hook can instead reintroduce a denied field on an EXISTING
+   * child in place; that child would stay contaminated while `entry` unwinds to its
+   * PARENT, whose hooks could copy the value onto an allowed key the later
+   * sanitization no longer looks at. Re-applying the existing children's access here
+   * — without re-running their hooks — re-strips such reintroductions before `entry`
+   * returns to its parent. The re-walk of the assembled response covers reshaped
+   * rows separately.
    */
-  private async failCloseReplacedNestedRows(
-    root: Record<string, unknown>,
-    collection: string,
-    state: NestedHookState
+  private async reapplyDescendantAccess(
+    entry: Record<string, unknown>,
+    collectionName: string,
+    access: RelatedRowAccess,
+    state: NestedHookState,
+    depth: number
   ): Promise<void> {
-    const fields = await this.fieldsForNestedWalk(collection, state);
-    this.failCloseUnrecordedNestedRows(root, fields, state);
+    if (depth > MAX_RELATIONSHIP_DEPTH) return;
+    const fields = await this.fieldsForNestedWalk(collectionName, state);
+    for (const field of fields) {
+      await this.reapplyFieldValueAccess(
+        entry[field.name],
+        field,
+        access,
+        state,
+        depth
+      );
+    }
   }
 
-  /** Recursive worker for {@link failCloseReplacedNestedRows}: descends into rows
-   *  the first walk recorded, and fails closed (whole subtree) on rows it did not. */
-  private failCloseUnrecordedNestedRows(
-    row: Record<string, unknown>,
-    fields: FieldDefinition[],
-    state: NestedHookState
-  ): void {
-    for (const field of fields) {
-      if (!isRepeaterOrGroupField(field) || !field.name) continue;
-      const inner = getNestedFields(field);
-      for (const child of containerRowsOf(row[field.name])) {
-        if (state.originalNestedRows.has(child)) {
-          this.failCloseUnrecordedNestedRows(child, inner, state);
-        } else {
-          state.failClosed.add(child);
-          this.flagContainerRowsFailClosed(child, inner, state);
+  /** Reach the related rows inside one field value — a relationship directly, or one
+   *  nested in a group/repeater — and re-apply access to each already-visited row,
+   *  recursing into its own relations. See {@link reapplyDescendantAccess}. */
+  private async reapplyFieldValueAccess(
+    value: unknown,
+    field: FieldDefinition,
+    access: RelatedRowAccess,
+    state: NestedHookState,
+    depth: number
+  ): Promise<void> {
+    if (value === null || value === undefined) return;
+    const rows = (Array.isArray(value) ? value : [value]).filter(
+      (row): row is Record<string, unknown> =>
+        typeof row === "object" && row !== null
+    );
+    if (rows.length === 0) return;
+
+    const nested = getNestedFields(field);
+    if (nested.length > 0) {
+      // A container: its rows belong to THIS collection; descend to reach any
+      // relationship inside them.
+      for (const row of rows) {
+        for (const inner of nested) {
+          await this.reapplyFieldValueAccess(
+            row[inner.name],
+            inner,
+            access,
+            state,
+            depth
+          );
         }
       }
+      return;
+    }
+    // An upload points at the built-in media entity, which registers no field rules.
+    if (isUploadField(field)) return;
+
+    for (const row of rows) {
+      const resolved = resolveNestedTarget(row, field);
+      if (!resolved) continue;
+      // Only ALREADY-VISITED children: a new one is handled by the re-descent that
+      // runs the hooks path, and re-applying to it here would be redundant.
+      if (!state.visited.has(resolved.row)) continue;
+      // Deepest first, so a reintroduction nested under this child is re-stripped
+      // before this child's own access re-runs.
+      await this.reapplyDescendantAccess(
+        resolved.row,
+        resolved.collection,
+        access,
+        state,
+        depth + 1
+      );
+      await this.applyRelatedRowReadAccess(
+        resolved.collection,
+        [resolved.row],
+        access,
+        state.redactions,
+        state.failClosed
+      );
+      // Secrets a hook could reintroduce, stripped for the same reason the walk
+      // strips them: unconditional, override included.
+      const targetFields = await this.fieldsForNestedWalk(
+        resolved.collection,
+        state
+      );
+      if (hasPasswordField(targetFields)) {
+        stripPasswordFieldValues(resolved.row, targetFields);
+      }
+      if (isSystemEntity(resolved.collection)) {
+        for (const col of SYSTEM_ENTITY_SECRET_COLUMNS) {
+          delete resolved.row[col];
+        }
+      }
+      stripSystemOwnerField(resolved.row);
     }
   }
 
@@ -3587,6 +3595,18 @@ export class CollectionRelationshipService extends BaseService {
           state,
           depth + 1
         );
+        // Re-apply access to this row's ALREADY-VISITED related descendants. A
+        // field hook above can reintroduce a denied field on an existing child in
+        // place; the re-descent skips it (visited), so without this it stays visible
+        // while this row unwinds to its PARENT, whose hooks could copy it onto an
+        // allowed key the later sanitization no longer looks at.
+        await this.reapplyDescendantAccess(
+          resolved.row,
+          resolved.collection,
+          access,
+          state,
+          depth + 1
+        );
       }
 
       // Apply THIS row's field access now, before returning to its parent —
@@ -3601,53 +3621,29 @@ export class CollectionRelationshipService extends BaseService {
       // recorded in the shared `redactions` so `finalizeRelatedRows` can restore
       // it as evidence and re-judge the row after every hook has run.
       //
-      // Re-establish the provenance of a row the authoritative re-walk reaches
-      // that carries no evidence of its own. A source hook can return a CLONE of
-      // a related row (a new object graph the WeakMap cannot key), and without
-      // the original's removed siblings an inverse conditional rule — a field
-      // visible only while a DENIED sibling is absent — would fall open on the
-      // clone. Only the re-walk runs this (the first walk's rows ARE the
-      // originals, recorded below and judged normally):
-      //  - a clone of a KNOWN original (same id) inherits the original's subtree
-      //    evidence and is re-judged, so a replacement's own denied fields are
-      //    still stripped;
-      //  - a row whose provenance cannot be recovered — no id, or an id never
-      //    seen in the first walk (an unidentifiable or fabricated clone) — has
-      //    its whole subtree failed closed, so every access-controlled field on
-      //    it is denied rather than judged on evidence that cannot be trusted.
-      if (!state.applyFieldHooks) {
-        const id =
-          typeof resolved.row.id === "string" ? resolved.row.id : undefined;
-        const original = id
-          ? state.originalRowById.get(relationKey(resolved.collection, id))
-          : undefined;
-        if (original === resolved.row) {
-          // An in-place ORIGINAL root (same object): judged with its own evidence,
-          // but a source hook may have REPLACED or APPENDED a row inside one of its
-          // groups/repeaters. Such a nested row is a new object with no recorded
-          // evidence, so an inverse rule would fall open on it — fail it closed,
-          // leaving the originals (mutated in place) judged normally.
-          await this.failCloseReplacedNestedRows(
-            resolved.row,
-            resolved.collection,
-            state
-          );
-        } else if (!state.redactions.has(resolved.row)) {
-          if (original) {
-            await this.transferSubtreeEvidence(
-              original,
-              resolved.row,
-              resolved.collection,
-              state
-            );
-          } else {
-            await this.flagSubtreeFailClosed(
-              resolved.row,
-              resolved.collection,
-              state
-            );
-          }
-        }
+      // On the authoritative re-walk (field hooks already ran), a related subtree
+      // is judged normally only if it is PRISTINE — the root and every nested row
+      // are the same objects the first walk recorded. A source hook that cloned the
+      // root, or replaced, appended, or rebuilt any nested row as a new object,
+      // makes the subtree's provenance untrustworthy (object-keyed evidence and
+      // verdicts no longer apply, and an inverse or ancestor rule would fall open on
+      // the reshaped copy), so its whole subtree is failed closed. A subtree mutated
+      // purely in place stays pristine; the evidence re-judge below still catches an
+      // in-place reintroduction of a denied field. The first walk records the
+      // originals (below) and never enters here.
+      if (
+        !state.applyFieldHooks &&
+        !(await this.isPristineSubtree(
+          resolved.row,
+          resolved.collection,
+          state
+        ))
+      ) {
+        await this.flagSubtreeFailClosed(
+          resolved.row,
+          resolved.collection,
+          state
+        );
       }
       await this.applyRelatedRowReadAccess(
         resolved.collection,
@@ -3656,15 +3652,12 @@ export class CollectionRelationshipService extends BaseService {
         state.redactions,
         state.failClosed
       );
-      // Remember the ORIGINAL row object by id, and its current nested container
-      // rows (first walk only), so a later clone can inherit its subtree evidence
-      // and a replaced/appended nested row can be told from one mutated in place.
-      if (state.applyFieldHooks && typeof resolved.row.id === "string") {
-        state.originalRowById.set(
-          relationKey(resolved.collection, resolved.row.id),
-          resolved.row
-        );
-        this.recordOriginalNestedRows(
+      // Record the related root and its current nested rows as first-walk originals
+      // (first walk only), so the re-walk can tell a subtree mutated purely in place
+      // from one a source hook cloned, replaced, or appended.
+      if (state.applyFieldHooks) {
+        state.pristineOriginals.add(resolved.row);
+        this.recordPristineOriginals(
           resolved.row,
           await this.fieldsForNestedWalk(resolved.collection, state),
           state

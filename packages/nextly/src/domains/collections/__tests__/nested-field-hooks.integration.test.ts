@@ -178,6 +178,44 @@ async function boot(): Promise<TestNextly> {
                   ?.classification !== "private",
             },
           }),
+          // A ROOT field whose INVERSE rule inspects a NESTED group value: visible
+          // only while the denied `charter.sealed` is NOT "locked". The root access
+          // snapshot can read the nested group, so a hook that replaces the charter
+          // group (dropping `sealed`) would let the root rule read the sibling as
+          // absent and fall open — which is why a reshaped subtree fails the ROOT
+          // closed too, not just the replaced nested row.
+          text({
+            name: "orgCrest",
+            access: {
+              read: ({ data }) =>
+                (data as { charter?: { sealed?: unknown } } | undefined)
+                  ?.charter?.sealed !== "locked",
+            },
+          }),
+          // A self-relationship used to build a three-deep related chain
+          // (author -> org -> sibling org) for the existing-child re-sanitization
+          // test.
+          relationship({ name: "sibling", relationTo: ORGS }),
+          // Reintroduces the sibling org's denied `classification` IN PLACE during
+          // THIS org's field-hook phase. The sibling is an already-sanitized,
+          // already-visited child, so the post-hook re-descent skips it; its access
+          // must be re-applied before this org unwinds to its parent's hooks.
+          text({
+            name: "reintroduceSibling",
+            hooks: {
+              afterRead: [
+                ({ value, data }) => {
+                  if (value !== "on") return value;
+                  const sibling = (data as { sibling?: unknown }).sibling;
+                  if (sibling && typeof sibling === "object") {
+                    (sibling as Record<string, unknown>).classification =
+                      "reintroduced";
+                  }
+                  return value;
+                },
+              ],
+            },
+          }),
         ],
       }),
       defineCollection({
@@ -402,6 +440,30 @@ async function boot(): Promise<TestNextly> {
               ],
             },
           }),
+          // Copies the org's SIBLING's denied `classification` (a grandchild of the
+          // author) onto an allowed key, during the author's field-hook phase —
+          // which runs after the org's own hooks reintroduced it. Only re-applying
+          // the sibling's access before the org unwinds keeps this from copying.
+          text({
+            name: "harvestSibling",
+            hooks: {
+              afterRead: [
+                ({ value, data }) => {
+                  if (value !== "on") return value;
+                  const org = (data as { organization?: unknown }).organization;
+                  const sibling =
+                    org && typeof org === "object"
+                      ? (org as { sibling?: unknown }).sibling
+                      : undefined;
+                  (data as Record<string, unknown>).harvested =
+                    sibling && typeof sibling === "object"
+                      ? (sibling as { classification?: unknown }).classification
+                      : undefined;
+                  return value;
+                },
+              ],
+            },
+          }),
           // A target-collection FIELD hook that REPLACES this author's own
           // `organization` relationship with a freshly populated org carrying a
           // denied field, AFTER the walk already descended the original. The new
@@ -463,6 +525,22 @@ async function boot(): Promise<TestNextly> {
                     .author;
                   (data as Record<string, unknown>).leaked = author?.dossier;
                   return value;
+                },
+              ],
+            },
+          }),
+          // A DENIED source field, and a source field hook that tries to copy it
+          // onto its own allowed value. Access is applied before the field hooks, so
+          // the hook cannot read `classified` even when selection would keep only
+          // `exfil` — the denied sibling is not exposed to the hook.
+          text({ name: "classified", access: { read: () => false } }),
+          text({
+            name: "exfil",
+            hooks: {
+              afterRead: [
+                ({ value, data }) => {
+                  const c = (data as { classified?: unknown }).classified;
+                  return typeof c === "string" ? c : value;
                 },
               ],
             },
@@ -1317,12 +1395,12 @@ describe("a target's field hooks apply to rows reached through a relationship", 
     if (vault) expect(vault.label).not.toBe("TOPSECRET");
   });
 
-  it("restores evidence for a related row a hook clones, keeping an inverse rule closed", async () => {
+  it("fails closed on a related row a hook clones, keeping an inverse rule closed", async () => {
     // `openInfo` is visible only while the denied `classification` is NOT
     // "private". A private org strips both. A source hook returns a CLONE of the
-    // sanitized org (a new object) carrying `openInfo` but no `classification`;
-    // without restoring the original evidence the authoritative pass reads
-    // `undefined !== "private"` and returns it — a fail-OPEN, not over-redaction.
+    // sanitized org (a new object) carrying `openInfo` but no `classification`.
+    // The clone is not a first-walk original, so its whole subtree fails closed;
+    // judging it fresh would read `undefined !== "private"` and fall OPEN.
     const t = await boot();
     await t.nextly.create({
       collection: ORGS,
@@ -1359,8 +1437,7 @@ describe("a target's field hooks apply to rows reached through a relationship", 
     const author = expanded.data!.author as Record<string, unknown>;
     const org = author.organization as Record<string, unknown> | undefined;
     expect(org).toBeTruthy();
-    // The original evidence was restored for the clone, so the inverse rule denied
-    // openInfo. Fail-closed.
+    // The clone failed closed, so the reintroduced inverse field was denied.
     expect(org!.openInfo).toBeUndefined();
   });
 
@@ -1449,12 +1526,13 @@ describe("a target's field hooks apply to rows reached through a relationship", 
     expect(owner.passwordHash).toBeUndefined();
   });
 
-  it("transfers subtree evidence to a deep-cloned relation, keeping a nested inverse rule closed", async () => {
+  it("fails closed on a deep-cloned relation, keeping a nested inverse rule closed", async () => {
     // `charter.openSeal` is visible only while the denied nested `charter.sealed`
     // is NOT "locked". A locked charter strips both. A source hook DEEP-clones the
-    // org (charter included) and reintroduces openSeal; without transferring the
-    // NESTED evidence the pass reads `undefined !== "locked"` and returns it — the
-    // root-only id bridge would miss it.
+    // org (charter included) and reintroduces openSeal. The clone is not a
+    // first-walk original, so its whole subtree — including the nested group —
+    // fails closed; judging it fresh would read `undefined !== "locked"` and fall
+    // OPEN at depth.
     const t = await boot();
     await t.nextly.create({
       collection: ORGS,
@@ -1499,7 +1577,8 @@ describe("a target's field hooks apply to rows reached through a relationship", 
     const org = author.organization as Record<string, unknown> | undefined;
     const charter = org?.charter as Record<string, unknown> | undefined;
     expect(charter).toBeTruthy();
-    // Closed: the nested `sealed` evidence was transferred to the clone's charter.
+    // Closed: the cloned subtree failed closed, so the nested inverse field was
+    // denied on the clone's charter.
     expect(charter!.openSeal).toBeUndefined();
   });
 
@@ -1574,14 +1653,13 @@ describe("a target's field hooks apply to rows reached through a relationship", 
     expect(contributors![0].dossier).toBeUndefined();
   });
 
-  it("matches cloned repeater rows by id, not index, when a hook reorders them", async () => {
+  it("fails closed on a reordered cloned repeater, keeping an inverse rule closed", async () => {
     // `openTag` on a division is visible only while the denied `grade` is NOT
     // "restricted". A restricted division strips both. A source hook DEEP-clones
     // the org and REVERSES its divisions, reintroducing `openTag` on the restricted
-    // row now sitting at the index a public row held. Transferring the cloned
-    // rows' evidence by array position would hand the restricted row the public
-    // row's (empty) evidence and let `openTag` fall open; matching by id keeps it
-    // closed, and a clone row that cannot be matched fails closed.
+    // row now sitting where a public row was. The clone is not a first-walk
+    // original, so its whole subtree fails closed — no positional or id guess can
+    // hand the restricted row the public row's evidence and let `openTag` fall open.
     const t = await boot();
     await t.nextly.create({
       collection: ORGS,
@@ -1630,8 +1708,8 @@ describe("a target's field hooks apply to rows reached through a relationship", 
     const divisions = (org?.divisions ?? []) as Record<string, unknown>[];
     const restricted = divisions.find(d => d.label === "sec");
     expect(restricted).toBeTruthy();
-    // Closed: the restricted row was judged with its OWN evidence (or failed
-    // closed), never the public row's, so the reintroduced `openTag` was stripped.
+    // Closed: the reshaped subtree failed closed, so the reintroduced `openTag` on
+    // the reordered row was denied.
     expect(restricted!.openTag).toBeUndefined();
   });
 
@@ -1805,5 +1883,134 @@ describe("a target's field hooks apply to rows reached through a relationship", 
     expect(expanded.data!.leaked).toBeUndefined();
     const author = expanded.data!.author as Record<string, unknown>;
     expect(author.dossier).toBeUndefined();
+  });
+
+  it("fails closed on the root when a hook replaces a nested group a root rule inspects", async () => {
+    // `orgCrest` (a ROOT field) is visible only while the denied `charter.sealed`
+    // is NOT "locked"; the root's access snapshot can read the nested group. A
+    // source hook keeps the org root in place but REPLACES its `charter` group with
+    // a new object that drops `sealed` and reintroduces both protected fields. The
+    // replaced group makes the subtree non-pristine, so the WHOLE subtree — the
+    // root rule AND the nested field — fails closed, rather than the root snapshot
+    // judging `orgCrest` against a group that dropped its denied sibling.
+    const t = await boot();
+    await t.nextly.create({
+      collection: ORGS,
+      data: {
+        name: "acme",
+        charter: { sealed: "locked", openSeal: "visible" },
+        orgCrest: "crest",
+      },
+    });
+    const orgId = await onlyId(t, ORGS);
+    await t.nextly.create({
+      collection: AUTHORS,
+      data: { name: "ada", organization: orgId },
+    });
+    const authorId = await onlyId(t, AUTHORS);
+    await t.nextly.create({
+      collection: POSTS,
+      data: { title: "p", author: authorId },
+    });
+    const postId = await onlyId(t, POSTS);
+
+    t.hooks.register("afterRead", POSTS, ctx => {
+      const entry = ctx.data as Record<string, unknown>;
+      const author = entry.author as Record<string, unknown> | undefined;
+      const org = author?.organization as Record<string, unknown> | undefined;
+      if (org) {
+        // Same org object; only the charter GROUP is swapped for a new one that
+        // drops `sealed` and reintroduces both protected fields.
+        org.charter = { openSeal: "LEAKED" };
+        org.orgCrest = "LEAKED";
+      }
+      return entry;
+    });
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    const author = expanded.data!.author as Record<string, unknown>;
+    const org = author.organization as Record<string, unknown> | undefined;
+    expect(org).toBeTruthy();
+    // The ROOT rule failed closed (its nested evidence can't be trusted after the
+    // reshape), not just the replaced nested field.
+    expect(org!.orgCrest).toBeUndefined();
+    const charter = org!.charter as Record<string, unknown> | undefined;
+    if (charter) expect(charter.openSeal).toBeUndefined();
+  });
+
+  it("re-sanitizes an existing grandchild a field hook reintroduces before an ancestor copies it", async () => {
+    // Three-level related chain: author -> org -> sibling org. The org's
+    // `reintroduceSibling` field hook mutates the already-sanitized sibling's denied
+    // `classification` IN PLACE. The post-hook re-descent skips the sibling because
+    // it is already visited, so without re-applying its access the value stays
+    // visible while the org unwinds to the AUTHOR, whose `harvestSibling` hook copies
+    // it onto an allowed key the later pass no longer looks at.
+    const t = await boot();
+    await t.nextly.create({
+      collection: ORGS,
+      data: { name: "sib", classification: "private" },
+    });
+    const siblingId = await onlyId(t, ORGS);
+    await t.nextly.create({
+      collection: ORGS,
+      data: { name: "acme", sibling: siblingId, reintroduceSibling: "on" },
+    });
+    const orgId = (
+      await handlerOf(t).listEntries({
+        collectionName: ORGS,
+        overrideAccess: true,
+      })
+    ).data!.docs.find(d => (d as { name?: string }).name === "acme")!
+      .id as string;
+    await t.nextly.create({
+      collection: AUTHORS,
+      data: { name: "ada", organization: orgId, harvestSibling: "on" },
+    });
+    const authorId = await onlyId(t, AUTHORS);
+    await t.nextly.create({
+      collection: POSTS,
+      data: { title: "p", author: authorId },
+    });
+    const postId = await onlyId(t, POSTS);
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 3,
+    });
+
+    const author = expanded.data!.author as Record<string, unknown>;
+    // The reintroduced grandchild field was re-stripped before the author's hook
+    // ran, so it copied nothing.
+    expect(author.harvested).toBeUndefined();
+  });
+
+  it("hides a denied source field from field hooks so a selection cannot expose it", async () => {
+    // A denied SOURCE field `classified`, with a source field hook on the allowed
+    // `exfil` that copies it. Selection keeps only `exfil`. Field access is applied
+    // before the hooks, so the hook cannot read `classified` and copy it — the leak
+    // that arose once selection moved to run after the field hooks.
+    const t = await boot();
+    await t.nextly.create({
+      collection: POSTS,
+      data: { title: "p", classified: "TOPSECRET", exfil: "safe" },
+    });
+    const postId = await onlyId(t, POSTS);
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      select: { exfil: true },
+    });
+
+    // The hook could not read the denied `classified`, so `exfil` kept its own value.
+    expect(expanded.data!.exfil).toBe("safe");
+    // The denied field itself is absent.
+    expect(expanded.data!.classified).toBeUndefined();
   });
 });

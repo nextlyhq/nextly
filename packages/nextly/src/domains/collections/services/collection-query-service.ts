@@ -69,6 +69,7 @@ import {
 } from "../../../shared/lib/case-conversion";
 import {
   applyFieldReadAccess,
+  type ReadAccessRedactions,
   runFieldHooks,
 } from "../../../shared/lib/field-level-registry";
 import {
@@ -1652,10 +1653,26 @@ export class CollectionQueryService extends BaseService {
 
       // Field-level afterRead hooks + read access (code-first functions
       // resolved via the field-level registry): hooks may transform values;
-      // fields whose access.read denies are stripped from the response. Runs on
-      // the whole rows, before selection, so a masking rule reads the sibling
-      // evidence a projected slice would be missing.
+      // fields whose access.read denies are stripped from the response. Access is
+      // applied BEFORE the hooks and AGAIN after, sharing a redactions store: the
+      // first pass hides a denied source field from the hooks — so a hook on a
+      // selected, allowed field cannot read a denied sibling and copy it onto its
+      // own value (selection now runs last and no longer projects such a sibling out
+      // first) — while restoring each removed value as evidence in the second pass
+      // keeps a conditional rule judging against the whole row and catches a denied
+      // field a hook reintroduced. Runs on the whole rows, before selection.
       for (const entry of finalData as Record<string, unknown>[]) {
+        const sourceRedactions: ReadAccessRedactions = new WeakMap();
+        await applyFieldReadAccess(
+          {
+            kind: "collection",
+            slug: params.collectionName,
+            entry,
+            user: params.user,
+            overrideAccess: params.overrideAccess,
+          },
+          sourceRedactions
+        );
         await runFieldHooks({
           kind: "collection",
           slug: params.collectionName,
@@ -1664,13 +1681,16 @@ export class CollectionQueryService extends BaseService {
           operation: "read",
           user: params.user,
         });
-        await applyFieldReadAccess({
-          kind: "collection",
-          slug: params.collectionName,
-          entry,
-          user: params.user,
-          overrideAccess: params.overrideAccess,
-        });
+        await applyFieldReadAccess(
+          {
+            kind: "collection",
+            slug: params.collectionName,
+            entry,
+            user: params.user,
+            overrideAccess: params.overrideAccess,
+          },
+          sourceRedactions
+        );
       }
 
       // Authoritative related-row sanitization: re-apply each related row's OWN
@@ -2898,9 +2918,23 @@ export class CollectionQueryService extends BaseService {
         detailNestedState
       );
 
-      // Field-level afterRead hooks + read access — same semantics as the
-      // list path above. On the whole row, before selection, so a masking rule
-      // reads the sibling evidence a projected slice would be missing.
+      // Field-level afterRead hooks + read access — same semantics as the list
+      // path above: access is applied BEFORE the hooks and AGAIN after, sharing a
+      // redactions store, so a denied source field is hidden from the hooks (a hook
+      // cannot copy a denied sibling onto an allowed key selection now projects
+      // last) while a conditional rule still judges against the whole row and a
+      // hook-reintroduced denied field is caught.
+      const detailSourceRedactions: ReadAccessRedactions = new WeakMap();
+      await applyFieldReadAccess(
+        {
+          kind: "collection",
+          slug: params.collectionName,
+          entry: finalData,
+          user: params.user,
+          overrideAccess: params.overrideAccess,
+        },
+        detailSourceRedactions
+      );
       await runFieldHooks({
         kind: "collection",
         slug: params.collectionName,
@@ -2909,13 +2943,16 @@ export class CollectionQueryService extends BaseService {
         operation: "read",
         user: params.user,
       });
-      await applyFieldReadAccess({
-        kind: "collection",
-        slug: params.collectionName,
-        entry: finalData,
-        user: params.user,
-        overrideAccess: params.overrideAccess,
-      });
+      await applyFieldReadAccess(
+        {
+          kind: "collection",
+          slug: params.collectionName,
+          entry: finalData,
+          user: params.user,
+          overrideAccess: params.overrideAccess,
+        },
+        detailSourceRedactions
+      );
 
       // Authoritative related-row sanitization over the assembled response,
       // after EVERY source afterRead hook phase above (code, stored, and
