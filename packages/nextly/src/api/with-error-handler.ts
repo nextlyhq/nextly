@@ -84,6 +84,26 @@ const DEFAULT_INTERNAL_MESSAGE = "An unexpected error occurred.";
  * Returns undefined when there is nothing to add, so an ordinary development
  * error response is the same shape a production one is.
  */
+
+/**
+ * Whether an error response may carry the detail the public shape withholds.
+ *
+ * Two signals, both required. `NODE_ENV` is not sufficient on its own because
+ * this package is published pre-built and app builds keep it external, so the
+ * check runs at runtime and a misconfigured production deployment would
+ * satisfy it. `NEXTLY_DEV_DIAGNOSTICS` is named for exactly one purpose, so
+ * nothing sets it incidentally.
+ *
+ * Read per call rather than cached, so a test can exercise both sides and so a
+ * process cannot latch the permissive answer from however it happened to start.
+ */
+function devDiagnosticsEnabled(): boolean {
+  return (
+    process.env.NODE_ENV === "development" &&
+    process.env.NEXTLY_DEV_DIAGNOSTICS === "1"
+  );
+}
+
 function buildDevDiagnostics(
   thrown: NextlyError,
   flattened: readonly NextlyError[]
@@ -233,18 +253,23 @@ export function withErrorHandler<TArgs extends unknown[]>(
       ) {
         responseJson.message = internalMessage;
       }
-      // Development-only diagnostics.
+      // Development-only diagnostics, gated on TWO independent signals.
       //
-      // Gated on `NODE_ENV`, which the bundler replaces at BUILD time, so a
-      // production bundle cannot be talked into this branch: not by a header,
-      // a query parameter, or a role. That matters more than the convenience
-      // it buys -- this is exactly the detail the public shape withholds, so a
-      // gate that could flip at runtime would be a disclosure bug.
+      // `nextly` ships as a pre-built package and app builds keep it external,
+      // so nothing rewrites this file: `NODE_ENV` is read at runtime, and a
+      // production deployment started with the wrong value would otherwise
+      // disclose the detail the public shape exists to withhold. So the gate
+      // also requires an explicitly named opt-in that nothing sets by
+      // accident, and neither signal alone is enough.
+      //
+      // Same shape as the dev auto-login, which is the more dangerous feature
+      // of the two and is already guarded this way: an explicit opt-in plus a
+      // production block, rather than an environment name on its own.
       //
       // Carries the thrown error's own context and anything the envelope
       // flattened on the way here, which is what an author cannot otherwise
       // see without reading the server log.
-      if (process.env.NODE_ENV === "development") {
+      if (devDiagnosticsEnabled()) {
         const devDetail = buildDevDiagnostics(nextlyErr, flattenedInRequest);
         if (devDetail) {
           (responseJson as Record<string, unknown>)._devDiagnostics = devDetail;

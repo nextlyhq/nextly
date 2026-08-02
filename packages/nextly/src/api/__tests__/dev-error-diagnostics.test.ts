@@ -35,10 +35,19 @@ function throwingHandler() {
   });
 }
 
-async function bodyOf(env: string): Promise<Record<string, unknown>> {
+/**
+ * `optIn` takes the literal value, with no default: passing `undefined` to a
+ * defaulted parameter selects the default, which silently sets the opt-in the
+ * caller meant to withhold.
+ */
+async function bodyOf(
+  env: string,
+  optIn: string
+): Promise<Record<string, unknown>> {
   // `vi.stubEnv` rather than assigning: `NODE_ENV` is declared read-only,
   // and the alternative is a cast that would also silence a real mistake.
   vi.stubEnv("NODE_ENV", env);
+  vi.stubEnv("NEXTLY_DEV_DIAGNOSTICS", optIn);
   const response = await throwingHandler()(
     new Request("https://example.test/api/notes")
   );
@@ -48,7 +57,7 @@ async function bodyOf(env: string): Promise<Record<string, unknown>> {
 
 describe("development-only error diagnostics", () => {
   it("withholds the detail under production", async () => {
-    const error = await bodyOf("production");
+    const error = await bodyOf("production", "1");
 
     expect(error._devDiagnostics).toBeUndefined();
     const serialized = JSON.stringify(error);
@@ -57,7 +66,7 @@ describe("development-only error diagnostics", () => {
   });
 
   it("includes it under development", async () => {
-    const error = await bodyOf("development");
+    const error = await bodyOf("development", "1");
 
     expect(error._devDiagnostics).toMatchObject({
       logContext: { userId: "u-42", table: "users" },
@@ -65,11 +74,31 @@ describe("development-only error diagnostics", () => {
     });
   });
 
+  it("withholds it in development without the explicit opt-in", async () => {
+    // The second signal exists because this package is published pre-built and
+    // stays external to app builds, so `NODE_ENV` is a runtime value a
+    // production deployment can carry by mistake. One signal must not be
+    // enough.
+    const error = await bodyOf("development", "");
+
+    expect(error._devDiagnostics).toBeUndefined();
+    expect(JSON.stringify(error)).not.toContain("u-42");
+  });
+
+  it("withholds it in production even when the opt-in is set", async () => {
+    // The mirror: the opt-in must not be a way to turn the detail on in
+    // production, or it becomes the disclosure route rather than a guard.
+    const error = await bodyOf("production", "1");
+
+    expect(error._devDiagnostics).toBeUndefined();
+    expect(JSON.stringify(error)).not.toContain("users_email_idx");
+  });
+
   it("keeps the public fields identical in both", async () => {
     // The gate must ADD a field, never change what a caller already reads, or
     // an author would be debugging a response the client never sees.
-    const prod = await bodyOf("production");
-    const dev = await bodyOf("development");
+    const prod = await bodyOf("production", "1");
+    const dev = await bodyOf("development", "1");
 
     expect(dev.code).toBe(prod.code);
     expect(dev.message).toBe(prod.message);
