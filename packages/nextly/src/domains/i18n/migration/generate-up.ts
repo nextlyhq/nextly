@@ -21,8 +21,18 @@ function buildCompanionCreateStatement(spec: CompanionMigrationSpec): string {
   const statusDef = spec.status
     ? `  ${q("_status", dialect)} VARCHAR(20) NOT NULL DEFAULT '${COMPANION_DEFAULT_STATUS}',\n`
     : "";
+  // 🔴 `IF NOT EXISTS`, because this statement reaches a database that very often already has the
+  // table. `ensureCompanionTable` runs at boot and on every `db:sync`, so any project that ran the
+  // dev server before graduating to migrations arrives here with the companion already present —
+  // and the file this statement lands in is applied verbatim, statement by statement, with no
+  // enclosing transaction and no drift check. Without the guard `migrate` dies on the first
+  // companion file having already applied the ones before it.
+  //
+  // Honest here rather than papering over a collision: a companion's shape is fully determined by
+  // its entity's localized fields, so a table under this name IS this table. That is not true of
+  // tables in general, which is why the guard is stated here and not adopted as a habit.
   return (
-    `CREATE TABLE ${q(companionTable, dialect)} (\n` +
+    `CREATE TABLE IF NOT EXISTS ${q(companionTable, dialect)} (\n` +
     `  ${q("_parent", dialect)} ${parentIdType} NOT NULL,\n` +
     `  ${q("_locale", dialect)} VARCHAR(20) NOT NULL,\n` +
     statusDef +
@@ -30,6 +40,37 @@ function buildCompanionCreateStatement(spec: CompanionMigrationSpec): string {
     `  PRIMARY KEY (${q("_parent", dialect)}, ${q("_locale", dialect)}),\n` +
     `  FOREIGN KEY (${q("_parent", dialect)}) REFERENCES ${q(mainTable, dialect)} (${q("id", dialect)}) ON DELETE CASCADE\n` +
     `)`
+  );
+}
+
+/**
+ * The `WHERE NOT EXISTS` that makes the seed safe to run more than once.
+ *
+ * 🔴 The seed is an `INSERT ... SELECT` into a table whose primary key is
+ * `(_parent, _locale)`, so running it twice collides. That is not hypothetical: the file it lands
+ * in is applied statement by statement with no enclosing transaction, and MySQL commits DDL
+ * implicitly regardless — so a failure anywhere in the file leaves the earlier statements committed
+ * and the file recorded as *not* applied. The operator's only recovery is to run `migrate` again,
+ * which replays the seed. Guarding it is what turns "work out by hand which statements landed" into
+ * "run it again".
+ *
+ * Expressed here, at generation, rather than bolted onto the statement by whoever executes it. Both
+ * consumers reach this through {@link buildLocalizationUpStatements} — the emitted migration file
+ * and the runtime resume in `companion-io` — and a guard applied by only one of them is how the two
+ * paths came to disagree about idempotency in the first place.
+ *
+ * Row-level rather than table-level on purpose: a *partially* seeded companion keeps the rows it
+ * already has and gains only the ones it is missing, which is exactly the state an interrupted copy
+ * leaves behind.
+ */
+function buildSeedGuard(spec: CompanionMigrationSpec): string {
+  const { dialect, mainTable, companionTable, defaultLocale } = spec;
+  const comp = q(companionTable, dialect);
+  const main = q(mainTable, dialect);
+  return (
+    ` WHERE NOT EXISTS (SELECT 1 FROM ${comp} ` +
+    `WHERE ${comp}.${q("_parent", dialect)} = ${main}.${q("id", dialect)} ` +
+    `AND ${comp}.${q("_locale", dialect)} = ${lit(defaultLocale)})`
   );
 }
 
@@ -146,7 +187,8 @@ export function buildLocalizationUpStatements(
           `INSERT INTO ${q(companionTable, dialect)} ` +
             `(${q("_parent", dialect)}, ${q("_locale", dialect)}${statusInsertCol}${onMainCols}) ` +
             `SELECT ${q("id", dialect)}, ${lit(defaultLocale)}${statusSelectCol}${onMainCols} ` +
-            `FROM ${q(mainTable, dialect)}`,
+            `FROM ${q(mainTable, dialect)}` +
+            buildSeedGuard(spec),
         ]
       : [];
 
