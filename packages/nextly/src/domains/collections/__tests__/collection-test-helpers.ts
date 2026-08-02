@@ -244,11 +244,20 @@ export function createMockRelationshipService(): MockRecord {
     // whole listing has been walked, so a double carrying only the first half
     // certifies a path that throws for real.
     finalizeRelatedRows: vi.fn().mockResolvedValue(undefined),
+    // The authoritative re-sanitization the read paths run over the assembled
+    // response after every source hook. Both list and detail paths now call it on
+    // every successful read, so a double without it certifies a path that throws.
+    resanitizeAssembledRows: vi.fn().mockResolvedValue(undefined),
     createNestedHookState: vi.fn().mockImplementation(() => ({
       visited: new Set(),
       fields: new Map(),
       labelFields: new Map(),
+      redactions: new WeakMap(),
+      originalRowById: new Map(),
+      originalNestedRows: new WeakSet(),
+      failClosed: new WeakSet(),
       pending: [],
+      applyFieldHooks: true,
     })),
     insertManyToManyRelations: vi.fn().mockResolvedValue(undefined),
     deleteManyToManyRelations: vi.fn().mockResolvedValue(undefined),

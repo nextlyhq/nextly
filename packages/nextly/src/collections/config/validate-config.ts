@@ -25,6 +25,7 @@
  */
 
 import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
+import { reservedSystemFieldNames } from "../../lib/system-columns";
 import { SYSTEM_RESOURCES } from "../../schemas/_zod/rbac";
 import {
   type BaseValidationError,
@@ -180,12 +181,9 @@ const RESERVED_SLUGS_SET: Set<string> = new Set<string>([
 // Components embed in JSON and carry neither column, so they may use both names
 // freely. Nested repeater/group fields are stored inside JSON, not as table
 // columns, so the reservation applies to the top level only.
-const COLLECTION_RESERVED_FIELD_NAMES: Set<string> = new Set([
-  "created_by",
-  "createdBy",
-  "first_published_at",
-  "firstPublishedAt",
-]);
+const COLLECTION_RESERVED_FIELD_NAMES: ReadonlySet<string> = new Set(
+  reservedSystemFieldNames("collectionConfig")
+);
 
 // ============================================================
 // Index Validation (collection-specific)
