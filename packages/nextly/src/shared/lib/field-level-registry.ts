@@ -364,6 +364,12 @@ export async function applyFieldWriteAccess(opts: {
  * read — judged against, while the current values of everything a hook touched
  * are seen and re-judged.
  *
+ * A restored value is EVIDENCE only, never response data: it is one the caller
+ * was denied and the post-hook row did not itself supply, so it is removed again
+ * once every snapshot that needed it has been taken. Otherwise a hook that flips
+ * a field's CONDITION from deny to allow (say, a sibling `tier`) without
+ * reintroducing the value would resurrect the value the first pass removed.
+ *
  * The restore runs over the WHOLE subtree before any level's snapshot is taken,
  * because the evidence a rule reads is not always a sibling: an outer field's
  * rule can depend on a value inside a nested group or repeater the first pass
@@ -381,11 +387,22 @@ export type ReadAccessRedactions = WeakMap<
   Record<string, unknown>
 >;
 
+/** One value a pass put back purely as evidence: the row it was written onto and
+ *  the key, so it can be removed again once the snapshots that needed it are
+ *  taken. */
+interface RestoredEvidence {
+  row: Record<string, unknown>;
+  name: string;
+}
+
 /**
  * Restore, throughout the subtree rooted at `entry`, the values a prior pass
  * removed from each row — unless a hook has since set the key, so a hook's own
  * value stands. Runs once before any snapshot is taken, so a rule at any level is
- * judged against the evidence a single direct read would see.
+ * judged against the evidence a single direct read would see. Every value it puts
+ * back is recorded in `restored`, because it is EVIDENCE, not response data: the
+ * caller was denied it and the post-hook row did not supply it, so it must be
+ * removed again once the snapshots are taken (see {@link applyFieldReadAccess}).
  *
  * The restore has to span the whole subtree, not just the current row: an outer
  * field's rule can read a value that lives in a nested group or repeater a prior
@@ -396,12 +413,16 @@ export type ReadAccessRedactions = WeakMap<
 function restoreReadAccessEvidence(
   entry: Record<string, unknown>,
   fns: Record<string, FieldFunctions>,
-  redactions: ReadAccessRedactions
+  redactions: ReadAccessRedactions,
+  restored: RestoredEvidence[]
 ): void {
   const priorlyRemoved = redactions.get(entry);
   if (priorlyRemoved) {
     for (const [name, value] of Object.entries(priorlyRemoved)) {
-      if (!(name in entry)) entry[name] = value;
+      if (!(name in entry)) {
+        entry[name] = value;
+        restored.push({ row: entry, name });
+      }
     }
   }
   for (const [name, fieldFns] of Object.entries(fns)) {
@@ -409,7 +430,7 @@ function restoreReadAccessEvidence(
     const container = openNestedContainer(entry[name]);
     if (!container) continue;
     for (const row of container.rows) {
-      restoreReadAccessEvidence(row, fieldFns.fields, redactions);
+      restoreReadAccessEvidence(row, fieldFns.fields, redactions, restored);
     }
     entry[name] = container.serialize();
   }
@@ -505,7 +526,8 @@ export async function applyFieldReadAccess(
   // so an outer rule reading a value nested in a group or repeater is judged
   // against the same content a single direct read would (a no-op on the first
   // pass, whose store is empty). The judge below re-removes what stays denied.
-  restoreReadAccessEvidence(opts.entry, fns, store);
+  const restored: RestoredEvidence[] = [];
+  restoreReadAccessEvidence(opts.entry, fns, store, restored);
   await applyReadAccessRec(
     opts.entry,
     fns,
@@ -515,6 +537,13 @@ export async function applyFieldReadAccess(
     },
     store
   );
+  // A restored value existed only to feed the snapshots above. The caller was
+  // denied it and the post-hook row did not supply it, so it must not appear in
+  // the response even when the current pass judged it allowed — a hook that
+  // flipped the field's CONDITION from deny to allow (say, a sibling `tier`)
+  // without reintroducing the value must not resurrect the value the first pass
+  // removed. Removed after every snapshot is taken, so re-judging still saw it.
+  for (const { row, name } of restored) delete row[name];
 }
 
 /** Recursive worker for hooks. Transforms values in registration order. */

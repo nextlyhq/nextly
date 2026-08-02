@@ -299,6 +299,32 @@ async function boot(): Promise<TestNextly> {
               ],
             },
           }),
+          // Flips the org's first division to public WITHOUT setting `code`. The
+          // first pass removed `code` for the private division; the second pass
+          // restores it only as evidence to re-judge the row, so the restored
+          // value must not ride out in the response just because the flipped
+          // condition now allows the field — the hook never supplied `code`.
+          text({
+            name: "tierflip",
+            hooks: {
+              afterRead: [
+                ({ value, data }) => {
+                  if (value !== "on") return value;
+                  const org = (data as { organization?: unknown }).organization;
+                  const divisions =
+                    org && typeof org === "object"
+                      ? (org as { divisions?: unknown }).divisions
+                      : undefined;
+                  const first =
+                    Array.isArray(divisions) && divisions[0]
+                      ? (divisions[0] as Record<string, unknown>)
+                      : undefined;
+                  if (first) first.tier = "public";
+                  return value;
+                },
+              ],
+            },
+          }),
         ],
       }),
       defineCollection({
@@ -865,6 +891,49 @@ describe("a target's field hooks apply to rows reached through a relationship", 
     // The mutation landed (now private)...
     expect(divisions[0]?.tier).toBe("private");
     // ...and the `code` the hook wrote is denied for a private division.
+    expect(divisions[0]?.code).toBeUndefined();
+  });
+
+  it("withholds a denied field a hook only unlocks by flipping its condition", async () => {
+    // The first pass removes the private division's denied `code`. A parent hook
+    // then flips only `tier` to public, never supplying `code`. The second pass
+    // restores `code` so it can re-judge the row against the same evidence a
+    // direct read would, but that restored value is the one the caller was denied
+    // and the hook never reintroduced — it must be withheld again rather than
+    // returned just because the flipped condition now allows the field.
+    const t = await boot();
+    await t.nextly.create({
+      collection: ORGS,
+      data: {
+        name: "acme",
+        divisions: [{ label: "d", tier: "private", code: "SECRET" }],
+      },
+    });
+    const orgId = await onlyId(t, ORGS);
+    await t.nextly.create({
+      collection: AUTHORS,
+      data: { name: "ada", organization: orgId, tierflip: "on" },
+    });
+    const authorId = await onlyId(t, AUTHORS);
+    await t.nextly.create({
+      collection: POSTS,
+      data: { title: "p", author: authorId },
+    });
+    const postId = await onlyId(t, POSTS);
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    const author = expanded.data!.author as Record<string, unknown>;
+    const org = author.organization as Record<string, unknown> | undefined;
+    const divisions = (org?.divisions ?? []) as Record<string, unknown>[];
+    // The hook's flip landed...
+    expect(divisions[0]?.tier).toBe("public");
+    // ...but the denied `code`, restored only as evidence and never supplied by
+    // the hook, does not ride out in the response.
     expect(divisions[0]?.code).toBeUndefined();
   });
 
