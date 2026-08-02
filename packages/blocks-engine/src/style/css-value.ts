@@ -267,8 +267,19 @@ function attrProducesDimension(
   // exactly as the same value would written out.
   const fallback = args[1];
   if (fallback !== undefined) {
-    const rejection = alternationRejection(fallback, NO_KEYWORDS, limits);
-    if (rejection !== null) return false;
+    // The fallback replaces the whole reference, so it is read as a standalone
+    // value and not as an arithmetic expression: bare operators are illegal
+    // here exactly as they are where the property is written out directly.
+    for (const term of fallback) {
+      if (
+        standaloneTermRejection(term, NO_KEYWORDS, {
+          ...limits,
+          allowNumber: false,
+        }) !== null
+      ) {
+        return false;
+      }
+    }
   }
   const declared = first[1];
   if (declared === undefined) return false;
@@ -1117,6 +1128,42 @@ export interface DimensionRules {
   allowNumber?: boolean;
 }
 
+/**
+ * Whether one term of a STANDALONE value is a measurement.
+ *
+ * A standalone value is what a property receives directly: `16px`, `auto`,
+ * `calc(1px + 2px)`. Arithmetic lives inside a math function and nowhere else,
+ * so a bare operator here means the browser discards the declaration.
+ *
+ * Shared with the `attr()` fallback, which is a standalone value too — it is
+ * substituted whole when the attribute is missing, so `attr(data-x px, 1px + 2)`
+ * hands the property `1px + 2` and it is refused for the same reason a
+ * written-out `1px + 2` is. Reading the fallback as an arithmetic expression
+ * instead accepted exactly what the browser throws away.
+ */
+function standaloneTermRejection(
+  node: CssNode,
+  keywords: ReadonlySet<string>,
+  rules: MeasurementLimits & { allowNumber: boolean }
+): CssValueRejection | null {
+  const { allowNumber, ...limits } = rules;
+  // No length property takes an operator at the top level. Corner radii are
+  // expressed per corner instead, which is also the only form that flips with
+  // writing direction.
+  if (node.type === "Operator") return "not-a-length";
+  const rejection = measurementRejection(node, false, keywords, limits);
+  if (rejection !== null) return rejection;
+  // The structural check above says the term is WELL FORMED. What it works out
+  // to is a separate question, asked once over the whole expression so that
+  // nesting and operator precedence are both visible.
+  if (node.type !== "Function") return null;
+  const type = numericType([node], "length");
+  if (type === "invalid") return "not-a-length";
+  return type !== "unknown" && !typeIsMeasurement(type, allowNumber)
+    ? "not-a-length"
+    : null;
+}
+
 export function checkDimensionValue(
   value: string,
   rules: DimensionRules = {}
@@ -1138,26 +1185,13 @@ export function checkDimensionValue(
   let parts = 0;
   let cssWideKeyword = false;
   for (const child of ast.children) {
-    // No length property takes an operator at the top level. Corner radii are
-    // expressed per corner instead, which is also the only form that flips with
-    // writing direction.
-    if (child.type === "Operator") return "not-a-length";
-    const childRejection = measurementRejection(child, false, allowed, {
+    const childRejection = standaloneTermRejection(child, allowed, {
       allowNegative,
       allowPercentage,
       functions: allowedFunctions,
+      allowNumber,
     });
     if (childRejection !== null) return childRejection;
-    // The structural checks above say the value is WELL FORMED. What it works
-    // out to is a separate question, asked once over the whole expression so
-    // that nesting and operator precedence are both visible.
-    if (child.type === "Function") {
-      const type = numericType([child], "length");
-      if (type === "invalid") return "not-a-length";
-      if (type !== "unknown" && !typeIsMeasurement(type, allowNumber)) {
-        return "not-a-length";
-      }
-    }
     if (child.type === "Identifier" && isCssWideKeyword(identifierOf(child))) {
       cssWideKeyword = true;
     }

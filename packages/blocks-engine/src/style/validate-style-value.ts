@@ -359,7 +359,8 @@ function partIssues(
   path: string,
   partLabel: string,
   budget?: StyleIssueBudget,
-  spent = 0
+  spent = 0,
+  spentBytes = 0
 ): ValidationIssue[] {
   if (!isPlainRecord(value)) {
     return [
@@ -371,6 +372,12 @@ function partIssues(
     ];
   }
   const issues: ValidationIssue[] = [];
+  // Path text this level has produced. Tracked here and compared against the
+  // run's allowance for exactly the reason the count is: the run is charged
+  // when this walk RETURNS, so a loop that only asked the budget would build
+  // every issue it can first. One long key above a composite is enough for
+  // that to be hundreds of megabytes from a document inside the byte cap.
+  let bytes = 0;
   // Enumerated lazily rather than through `Object.entries`, which would build a
   // pair for every key before the budget below sees the first one — the budget
   // is meant to bound the work, not only the issues it reports.
@@ -384,7 +391,9 @@ function partIssues(
     // allowance again, so a value one level deeper reported past the cap.
     if (
       budget !== undefined &&
-      (budgetSpent(budget) || spent + issues.length >= budget.remaining)
+      (budgetSpent(budget) ||
+        spent + issues.length >= budget.remaining ||
+        spentBytes + bytes >= budget.pathBytes)
     ) {
       issues.push(...truncationNotice(budget, path));
       break;
@@ -396,24 +405,25 @@ function partIssues(
     const partValue = value[key];
     const partShape = Object.hasOwn(parts, key) ? parts[key] : undefined;
     if (partShape === undefined) {
-      issues.push(
-        invalid(
-          pointer(path, key),
-          `"${describeValue(key)}" is not a known ${partLabel}.`,
-          `Use one of: ${Object.keys(parts).join(", ")}.`
-        )
+      const unknownField = invalid(
+        pointer(path, key),
+        `"${describeValue(key)}" is not a known ${partLabel}.`,
+        `Use one of: ${Object.keys(parts).join(", ")}.`
       );
+      bytes += unknownField.path.length;
+      issues.push(unknownField);
       continue;
     }
-    issues.push(
-      ...shapeIssues(
-        partShape,
-        partValue,
-        pointer(path, key),
-        budget,
-        spent + issues.length
-      )
+    const nested = shapeIssues(
+      partShape,
+      partValue,
+      pointer(path, key),
+      budget,
+      spent + issues.length,
+      spentBytes + bytes
     );
+    for (const issue of nested) bytes += issue.path.length;
+    issues.push(...nested);
   }
   return issues;
 }
@@ -424,16 +434,41 @@ function shapeIssues(
   value: unknown,
   path: string,
   budget?: StyleIssueBudget,
-  spent = 0
+  spent = 0,
+  spentBytes = 0
 ): ValidationIssue[] {
   if (isStyleLeaf(shape)) return leafIssues(shape, value, path);
   switch (shape.kind) {
     case "logicalSides":
-      return partIssues(shape.sides, value, path, "side", budget, spent);
+      return partIssues(
+        shape.sides,
+        value,
+        path,
+        "side",
+        budget,
+        spent,
+        spentBytes
+      );
     case "logicalCorners":
-      return partIssues(shape.corners, value, path, "corner", budget, spent);
+      return partIssues(
+        shape.corners,
+        value,
+        path,
+        "corner",
+        budget,
+        spent,
+        spentBytes
+      );
     case "object":
-      return partIssues(shape.fields, value, path, "field", budget, spent);
+      return partIssues(
+        shape.fields,
+        value,
+        path,
+        "field",
+        budget,
+        spent,
+        spentBytes
+      );
     case "union": {
       // A union accepts the value if any variant does. Variants are tried in
       // order and the first clean one wins; when none accepts, the first
@@ -441,7 +476,14 @@ function shapeIssues(
       // lists first and therefore the one an author most likely intended.
       let best: ValidationIssue[] | undefined;
       for (const variant of shape.of) {
-        const issues = shapeIssues(variant, value, path, budget, spent);
+        const issues = shapeIssues(
+          variant,
+          value,
+          path,
+          budget,
+          spent,
+          spentBytes
+        );
         if (issues.length === 0) return [];
         // Prefer whichever variant the value structurally resembles: its issues
         // point at the offending leaf, while a mismatched variant only reports
