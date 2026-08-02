@@ -628,9 +628,9 @@ describe("validation never throws on adversarial input", () => {
     });
     const base = { breakpoints: FIXTURE_BREAKPOINTS, mode: "strict" as const };
 
-    // Without a class library there is nothing to be wrong about. This is the
-    // anti-D3 property: defining a site's first class must not invalidate
-    // every document that already lists one.
+    // Without a class library there is nothing to be wrong about: defining a
+    // site's first class must not invalidate every document that already
+    // lists one.
     expect(validate(doc, base).filter(i => i.code === "unknown-class")).toEqual(
       []
     );
@@ -644,6 +644,25 @@ describe("validation never throws on adversarial input", () => {
     // Warning even in strict mode: a class the site dropped costs the element
     // that styling, and must not make the document unpublishable.
     expect(withSite[0]?.severity).toBe("warning");
+  });
+
+  it("bounds how many unknown class warnings one node can produce", () => {
+    // A node may list as many ids as a document has room for, and each unknown
+    // one costs a lookup and an allocated issue. Without a bound a small
+    // document turns into a very large report.
+    const classes = Array.from({ length: 5000 }, (_, i) => `c_missing_${i}`);
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "n1", type: "core/text", version: 1, props: {}, classes }],
+    });
+    const issues = validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+      classes: { has: () => false },
+    }).filter(i => i.code === "unknown-class");
+    expect(issues.length).toBeLessThanOrEqual(MAX_STYLE_ISSUES);
+    expect(issues.length).toBeGreaterThan(0);
   });
 
   it("reports a realistic document the same way with and without a site", () => {

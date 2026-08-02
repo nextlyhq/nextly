@@ -626,7 +626,7 @@ function validateNode(
   }
 
   validateSlots(node, path, state);
-  validateClasses(node, path, issues, state.ctx);
+  validateClasses(node, path, issues, state.ctx, state.styleBudget);
   validateAttributes(node, path, issues);
   validateStyles(node, path, state);
   validateVisibility(node, path, state);
@@ -715,7 +715,8 @@ function validateClasses(
   node: BlockNode,
   path: string,
   issues: ValidationIssue[],
-  ctx: ValidationContext
+  ctx: ValidationContext,
+  budget?: StyleIssueBudget
 ): void {
   if (node.classes === undefined) return;
   // Index-based, not `.every` (which skips array holes), so a sparse classes
@@ -745,8 +746,14 @@ function validateClasses(
   // data while a class library is site configuration: deleting a class must not
   // make every document that used it unpublishable.
   for (let index = 0; index < node.classes.length; index += 1) {
+    // A node may list as many class ids as a document has room for, and each
+    // unknown one costs a lookup and an allocated issue. Bounded by the same
+    // budget the style walk spends, so one node cannot turn a small document
+    // into a large report.
+    if (budget !== undefined && budget.remaining <= 0) break;
     const id = node.classes[index];
     if (typeof id !== "string" || lookup.has(id)) continue;
+    if (budget !== undefined) budget.remaining -= 1;
     issues.push({
       path: pointer(pointer(path, "classes"), index),
       code: "unknown-class",

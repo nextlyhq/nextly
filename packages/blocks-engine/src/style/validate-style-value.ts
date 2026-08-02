@@ -509,12 +509,28 @@ function shapeIssues(
       // variant's issues are reported, because it is the shape the catalog
       // lists first and therefore the one an author most likely intended.
       let best: ValidationIssue[] | undefined;
+      let bestRejects = true;
       for (const variant of shape.of) {
         const issues = shapeIssues(variant, value, path, budget, spent, tokens);
         if (issues.length === 0) return [];
-        // Prefer whichever variant the value structurally resembles: its issues
-        // point at the offending leaf, while a mismatched variant only reports
-        // that the whole value has the wrong shape.
+        // A variant that reports only warnings has ACCEPTED the value and
+        // remarked on it. One that reports an error has refused it. Ranking by
+        // path depth alone cannot tell those apart, so a value the catalog
+        // lists two ways — a keyword or a number — could be refused by the arm
+        // that structurally forbids it while the other arm merely warned, and
+        // the refusal would win on a tie. That would turn an advisory note into
+        // something that blocks a publish.
+        const rejects = issues.some(issue => issue.severity === "error");
+        if (bestRejects && !rejects) {
+          best = issues;
+          bestRejects = false;
+          continue;
+        }
+        if (rejects !== bestRejects) continue;
+        // Within the same verdict, prefer whichever variant the value
+        // structurally resembles: its issues point at the offending leaf, while
+        // a mismatched variant only reports that the whole value is the wrong
+        // shape.
         const deeper =
           best === undefined ||
           (issues[0]?.path.length ?? 0) > (best[0]?.path.length ?? 0);

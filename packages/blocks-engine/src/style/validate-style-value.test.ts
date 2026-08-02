@@ -31,10 +31,9 @@ describe("a design token reference is checked against the site", () => {
     validateStyleValues(values, "/styles", "strict", undefined, false, ctx);
 
   it("says nothing at all when no site context was supplied", () => {
-    // The property the whole decision rests on. A check that fires only once a
-    // lookup appears would mean defining a site's FIRST token invalidates every
-    // other reference already in storage, which is the trap Plan 01 D3 was
-    // overturned for. Not being given the data means not answering.
+    // A check that fires only once a lookup appears would mean defining a
+    // site's FIRST token invalidates every other reference already in storage.
+    // Not being given the data means not answering.
     expect(strict({ color: { $token: "nope.nothing" } })).toEqual([]);
     expect(strict({ color: { $token: "color.primary" } })).toEqual([]);
   });
@@ -69,6 +68,18 @@ describe("a design token reference is checked against the site", () => {
     const issues = strict({ display: { $token: "color.primary" } }, tokens);
     expect(issues[0]?.code).toBe("token-not-allowed");
     expect(issues[0]?.severity).toBe("error");
+  });
+
+  it("stays a warning where the catalog lists the value two ways", () => {
+    // `fontWeight` is a keyword OR a number. The keyword arm forbids tokens
+    // outright and reports an error; the number arm accepts one and reports the
+    // unresolved name as a warning. Both land on the same path, so a selection
+    // that ranked them only by depth would return the refusal and block a
+    // publish over a value the site can simply define.
+    const issues = strict({ fontWeight: { $token: "weight.bold" } }, tokens);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.code).toBe("unknown-token");
+    expect(issues[0]?.severity).toBe("warning");
   });
 
   it("reaches a token nested inside a composite", () => {

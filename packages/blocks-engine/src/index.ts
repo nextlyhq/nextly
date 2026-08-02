@@ -69,8 +69,10 @@ export type { NodeLocation, TreePosition } from "./tree";
 export { validate, ISSUE_CODES } from "./validation";
 export type {
   BlockTypeLookup,
+  ClassLookup,
   IssueCode,
   IssueSeverity,
+  TokenLookup,
   ValidationContext,
   ValidationIssue,
   ValidationMode,
