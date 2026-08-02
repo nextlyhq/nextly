@@ -13,6 +13,7 @@ import type { AnyBlockDefinition, BlockSupports } from "./block";
 import { COMPONENT_INSTANCE_TYPE } from "./document";
 import type { MigrationSource } from "./migration";
 import { MAX_MIGRATION_STEPS, findMigrationGaps } from "./migration";
+import { styleSupportDefinitions } from "./style/supports-map";
 import type { BlockTypeLookup } from "./validation";
 
 /**
@@ -41,27 +42,19 @@ interface RegistryEntry {
   source: string;
 }
 
-/** Style capabilities available to every app before any extension. */
+/**
+ * Style capabilities available to every app before any extension.
+ *
+ * The style groups are derived from the style-property catalog rather than
+ * listed again here: a support key and a catalog group are the same thing, and
+ * a support's sub-flags are exactly the flags its group's properties declare.
+ * Deriving them means adding a property, a group, or a flag extends what blocks
+ * may declare in the same edit, with no second list that can fall behind.
+ */
 const BUILT_IN_SUPPORTS: SupportDefinition[] = [
-  {
-    key: "spacing",
-    label: "Spacing",
-    flags: ["margin", "padding", "blockGap"],
-  },
-  { key: "layout", label: "Layout" },
-  { key: "dimensions", label: "Dimensions" },
-  { key: "typography", label: "Typography" },
-  { key: "color", label: "Color", flags: ["text", "background", "link"] },
-  { key: "background", label: "Background", flags: ["image", "gradient"] },
-  {
-    key: "border",
-    label: "Border",
-    flags: ["width", "style", "color", "radius"],
-  },
-  { key: "shadow", label: "Shadow" },
-  { key: "effects", label: "Effects" },
-  { key: "position", label: "Position" },
-  { key: "container", label: "Container queries" },
+  ...styleSupportDefinitions(),
+  // Custom CSS gates a capability rather than a set of style properties, so it
+  // has no catalog group and is declared directly.
   { key: "customCss", label: "Custom CSS" },
 ];
 

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { DOCUMENT_KINDS } from "./document";
 import type { BlockDocument, BreakpointSet } from "./document";
 import { documentBytes } from "./limits";
+import { MAX_STYLE_ISSUES } from "./style/validate-style-value";
 import {
   FIXTURE_BREAKPOINTS,
   VALIDATION_FIXTURES,
@@ -36,6 +37,128 @@ function resolvePointer(root: unknown, path: string): unknown {
   }
   return current;
 }
+
+describe("style values reach the catalog through validate()", () => {
+  function docWithStyles(styles: unknown): BlockDocument {
+    return invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/box",
+          version: 1,
+          props: {},
+          styles: { base: { base: styles } },
+        },
+      ],
+    });
+  }
+
+  it("reports an unknown style property", () => {
+    const issues = validate(docWithStyles({ nope: "1px" }), {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+    });
+    const issue = issues.find(i => i.code === "unknown-style-property");
+    expect(issue?.path).toBe("/nodes/0/styles/base/base/nope");
+  });
+
+  it("reports a value that does not match its property's shape", () => {
+    const issues = validate(docWithStyles({ textAlign: "left" }), {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+    });
+    expect(issues.map(i => i.code)).toContain("invalid-style-value");
+  });
+
+  it("reports an unsafe value before it could reach a stylesheet", () => {
+    const issues = validate(
+      docWithStyles({ backgroundGradient: 'url("javascript:alert(1)")' }),
+      { breakpoints: FIXTURE_BREAKPOINTS, mode: "strict" }
+    );
+    const issue = issues.find(i => i.code === "invalid-style-value");
+    expect(issue?.path).toBe("/nodes/0/styles/base/base/backgroundGradient");
+  });
+
+  it("accepts a well-formed style block", () => {
+    const issues = validate(
+      docWithStyles({
+        padding: { blockStart: "2rem" },
+        color: { $token: "color.primary" },
+        textAlign: "start",
+      }),
+      { breakpoints: FIXTURE_BREAKPOINTS, mode: "strict" }
+    );
+    expect(issues).toEqual([]);
+  });
+
+  it("downgrades an unknown property to a warning when forgiving", () => {
+    const issues = validate(docWithStyles({ nope: "1px" }), {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "forgiving",
+    });
+    const issue = issues.find(i => i.code === "unknown-style-property");
+    expect(issue?.severity).toBe("warning");
+  });
+});
+
+describe("style validation through validate() is bounded", () => {
+  it("stops at the budget instead of building an issue for every key", () => {
+    // The budget only helps if `validate()` actually passes it: exercised here
+    // through the real document path rather than by calling the style
+    // validator directly.
+    const styles: Record<string, string> = {};
+    for (let index = 0; index < 5000; index += 1) styles[`k${index}`] = "1px";
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/box",
+          version: 1,
+          props: {},
+          styles: { base: { base: styles } },
+        },
+      ],
+    });
+    const issues = validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+    });
+    expect(issues.length).toBeLessThan(500);
+    expect(issues.some(issue => issue.code === "style-issues-truncated")).toBe(
+      true
+    );
+  });
+});
+
+describe("the style budget covers the envelope's own keys", () => {
+  it("bounds a document carrying very many unknown style states", () => {
+    // The keys of the envelope are as unbounded as the values inside it, so a
+    // budget applied only at the property level leaves this path open.
+    const states: Record<string, unknown> = {};
+    for (let index = 0; index < 5000; index += 1) {
+      states[`state${index}`] = { base: {} };
+    }
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        { id: "n1", type: "core/box", version: 1, props: {}, styles: states },
+      ],
+    });
+    const issues = validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+    });
+    expect(issues.length).toBeLessThan(500);
+    expect(issues.some(issue => issue.code === "style-issues-truncated")).toBe(
+      true
+    );
+  });
+});
 
 describe("validation leaves the document alone", () => {
   it("does not mangle or drop hostile prop content", () => {
@@ -852,5 +975,356 @@ describe("the document-kind vocabulary", () => {
         `no fixture validates a ${kind} document`
       ).toBe(true);
     }
+  });
+});
+
+describe("a malformed style envelope charges the budget like anything else", () => {
+  it("bounds a document whose breakpoints each hold a non-object", () => {
+    // A cap is only as tight as the fraction of issue kinds that remember to
+    // pay it: an uncharged push lets the walk run past the limit by however
+    // many of those it emits.
+    const byBreakpoint: Record<string, unknown> = {};
+    for (let index = 0; index < 5000; index += 1) {
+      byBreakpoint[`bp${index}`] = "not an object";
+    }
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/box",
+          version: 1,
+          props: {},
+          styles: { base: byBreakpoint },
+        },
+      ],
+    });
+    const issues = validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+    });
+    expect(issues.length).toBeLessThan(300);
+    expect(issues.some(issue => issue.code === "style-issues-truncated")).toBe(
+      true
+    );
+  });
+});
+
+describe("style keys inherited from a prototype", () => {
+  function docWithRawStyles(styles: unknown): BlockDocument {
+    return invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "n1", type: "core/box", version: 1, props: {}, styles }],
+    });
+  }
+
+  function codesFor(styles: unknown): string[] {
+    return validate(docWithRawStyles(styles), {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+    }).map(issue => issue.code);
+  }
+
+  it("are refused along with the object carrying them", () => {
+    // A document is JSON, and this object is not a JSON value: what would be
+    // stored is the own keys alone. Saying so is better than validating the
+    // own keys and dropping the rest in silence.
+    const styles = Object.create({
+      hover: { base: { nope: "1px" } },
+    }) as Record<string, unknown>;
+    styles.base = { base: { display: "block" } };
+    expect(codesFor(styles)).toEqual(["invalid-style-values"]);
+  });
+
+  it("are refused at the breakpoint level too", () => {
+    // The inherited key has to differ from the own one, or it is shadowed and
+    // never enumerated separately, which would prove nothing.
+    const byBreakpoint = Object.create({
+      tablet: { nope: "1px" },
+    }) as Record<string, unknown>;
+    byBreakpoint.base = { display: "block" };
+    expect(codesFor({ base: byBreakpoint })).toEqual(["invalid-style-values"]);
+  });
+
+  it("are not read off a polluted Object.prototype", () => {
+    // The threat a plain object cannot be refused out of: every object built
+    // from JSON inherits from Object.prototype, so polluting it would make
+    // every document appear to declare a state it never stored. The own-key
+    // walk is what holds here, not the shape check.
+    const polluted = Object.prototype as unknown as Record<string, unknown>;
+    polluted.hover = { base: { nope: "1px" } };
+    try {
+      expect(codesFor({ base: { base: { display: "block" } } })).toEqual([]);
+    } finally {
+      delete polluted.hover;
+    }
+  });
+});
+
+describe("a malformed styles field is charged to the budget", () => {
+  it("bounds a document where every node has a non-object styles", () => {
+    // One issue per node is bounded only by the node count, and the cap is
+    // document-wide; without charging it a large forest reports thousands of
+    // style issues and never says it stopped.
+    const nodes = Array.from({ length: 500 }, (_, index) => ({
+      id: `n${index}`,
+      type: "core/box",
+      version: 1,
+      props: {},
+      styles: "not an object",
+    }));
+    const issues = validate(
+      invalidDoc({ formatVersion: 1, kind: "page", nodes }),
+      {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        mode: "strict",
+      }
+    );
+    expect(issues.length).toBeLessThan(300);
+    expect(issues.some(issue => issue.code === "style-issues-truncated")).toBe(
+      true
+    );
+  });
+});
+
+describe("two chargeable findings on one breakpoint", () => {
+  it("does not let the second push past the cap", () => {
+    // Every breakpoint here is both unknown AND holds a non-object, so each
+    // iteration charges twice. The unknown state ahead of them is what makes
+    // the remaining budget ODD: charging two at a time from an even cap lands
+    // exactly on zero at an iteration boundary and never overruns, so without
+    // it this would pass whether the check between them exists or not.
+    const byBreakpoint: Record<string, unknown> = {};
+    for (let index = 0; index < 400; index += 1) {
+      byBreakpoint[`bp${index}`] = "not an object";
+    }
+    const issues = validate(
+      invalidDoc({
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: "n1",
+            type: "core/box",
+            version: 1,
+            props: {},
+            styles: { nope: { base: {} }, base: byBreakpoint },
+          },
+        ],
+      }),
+      { breakpoints: FIXTURE_BREAKPOINTS, mode: "strict" }
+    );
+    const styleIssues = issues.filter(
+      issue => issue.code !== "style-issues-truncated"
+    );
+    expect(styleIssues.length).toBeLessThanOrEqual(MAX_STYLE_ISSUES);
+    expect(issues.some(issue => issue.code === "style-issues-truncated")).toBe(
+      true
+    );
+  });
+});
+
+describe("the truncation marker means work was actually skipped", () => {
+  function docWithBreakpoints(count: number, values: unknown): BlockDocument {
+    const byBreakpoint: Record<string, unknown> = {};
+    for (let index = 0; index < count; index += 1) {
+      byBreakpoint[`bp${index}`] = values;
+    }
+    return invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/box",
+          version: 1,
+          props: {},
+          styles: { base: byBreakpoint },
+        },
+      ],
+    });
+  }
+
+  it("is absent when the last slot went on a breakpoint holding nothing", () => {
+    // The marker is an ERROR, so claiming a document went unchecked when every
+    // value was read rejects it for having been fully validated.
+    const issues = validate(docWithBreakpoints(MAX_STYLE_ISSUES, {}), {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "forgiving",
+    });
+    expect(issues).toHaveLength(MAX_STYLE_ISSUES);
+    expect(issues.filter(issue => issue.severity === "error")).toEqual([]);
+  });
+
+  it("is still emitted when values really do remain unread", () => {
+    const issues = validate(docWithBreakpoints(400, { color: "#fff" }), {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "forgiving",
+    });
+    expect(issues.some(issue => issue.code === "style-issues-truncated")).toBe(
+      true
+    );
+  });
+
+  it("is emitted when the last slot goes on the LAST breakpoint, if it holds values", () => {
+    // Exactly one breakpoint per slot, so the budget runs out on the final
+    // entry and there is no next iteration to notice. Its values go unread, so
+    // the marker is owed even though nothing follows.
+    const issues = validate(
+      docWithBreakpoints(MAX_STYLE_ISSUES, { color: "#fff" }),
+      { breakpoints: FIXTURE_BREAKPOINTS, mode: "forgiving" }
+    );
+    expect(issues.some(issue => issue.code === "style-issues-truncated")).toBe(
+      true
+    );
+  });
+});
+
+describe("an empty breakpoint reached after the budget ran out", () => {
+  it("does not claim the document went unchecked", () => {
+    // The exemption belongs at both checks: this entry is reached at the top
+    // of the loop rather than after a charge, and skipping it costs nothing
+    // either way because it holds no values.
+    const byBreakpoint: Record<string, unknown> = {};
+    for (let index = 0; index < MAX_STYLE_ISSUES; index += 1) {
+      byBreakpoint[`bp${index}`] = {};
+    }
+    byBreakpoint.base = {};
+    const issues = validate(
+      invalidDoc({
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: "n1",
+            type: "core/box",
+            version: 1,
+            props: {},
+            styles: { base: byBreakpoint },
+          },
+        ],
+      }),
+      { breakpoints: FIXTURE_BREAKPOINTS, mode: "forgiving" }
+    );
+    expect(issues.filter(issue => issue.severity === "error")).toEqual([]);
+  });
+});
+
+describe("what the budget stops, and what it lets through", () => {
+  function docWithStyles(styles: unknown): BlockDocument {
+    return invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "n1", type: "core/box", version: 1, props: {}, styles }],
+    });
+  }
+
+  it("does not truncate a later state whose breakpoints hold nothing", () => {
+    const byBreakpoint: Record<string, unknown> = {};
+    for (let index = 0; index < MAX_STYLE_ISSUES; index += 1) {
+      byBreakpoint[`x${index}`] = {};
+    }
+    const issues = validate(
+      docWithStyles({ base: byBreakpoint, hover: { base: {} } }),
+      { breakpoints: FIXTURE_BREAKPOINTS, mode: "forgiving" }
+    );
+    expect(issues.filter(issue => issue.severity === "error")).toEqual([]);
+  });
+
+  it("still caps unknown breakpoints, whose warning is itself an issue", () => {
+    // An empty map means no VALUES to check, but an unknown id still reports
+    // itself, so exempting these would let the walk emit past the cap.
+    const byBreakpoint: Record<string, unknown> = {};
+    for (let index = 0; index < 500; index += 1) {
+      byBreakpoint[`y${index}`] = {};
+    }
+    const issues = validate(docWithStyles({ base: byBreakpoint }), {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "forgiving",
+    });
+    expect(issues.length).toBeLessThan(300);
+    expect(issues.some(issue => issue.code === "style-issues-truncated")).toBe(
+      true
+    );
+  });
+});
+
+describe("a document past the byte cap stops paying to read its values", () => {
+  function styledNodes(count: number, terms: number) {
+    return Array.from({ length: count }, (_, index) => ({
+      id: `n${index}`,
+      type: "core/box",
+      version: 1,
+      props: {},
+      styles: {
+        base: {
+          base: {
+            fontFamily: Array.from({ length: terms }, (_, t) => `f${t}`).join(
+              ", "
+            ),
+          },
+        },
+      },
+    }));
+  }
+
+  it("reports the size and stops parsing every value", () => {
+    // The document is rejected whatever those values say, and parsing each one
+    // builds an AST apiece, so the byte cap would otherwise bound the document
+    // without bounding the work spent reading it.
+    const issues = validate(
+      invalidDoc({
+        formatVersion: 1,
+        kind: "page",
+        nodes: styledNodes(1200, 700),
+      }),
+      { breakpoints: FIXTURE_BREAKPOINTS, mode: "strict" }
+    );
+    expect(issues.some(issue => issue.code === "document-too-large")).toBe(
+      true
+    );
+  });
+
+  it("does not report on values it declined to read", () => {
+    // The trade this makes: a document past the cap is told it is too large
+    // and not also told what its values say, because reading them is the cost
+    // being avoided and the document is rejected either way.
+    const nodes = styledNodes(1200, 700);
+    const first = nodes[0];
+    if (first !== undefined) {
+      first.styles = { base: { base: { width: "red" } } };
+    }
+    const issues = validate(
+      invalidDoc({ formatVersion: 1, kind: "page", nodes }),
+      { breakpoints: FIXTURE_BREAKPOINTS, mode: "strict" }
+    );
+    expect(issues.some(issue => issue.code === "document-too-large")).toBe(
+      true
+    );
+    expect(issues.map(issue => issue.code)).not.toContain(
+      "invalid-style-value"
+    );
+  });
+
+  it("still reads every value in a document within the cap", () => {
+    const issues = validate(
+      invalidDoc({
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: "n1",
+            type: "core/box",
+            version: 1,
+            props: {},
+            styles: { base: { base: { width: "red" } } },
+          },
+        ],
+      }),
+      { breakpoints: FIXTURE_BREAKPOINTS, mode: "strict" }
+    );
+    expect(issues.map(issue => issue.code)).toContain("invalid-style-value");
   });
 });

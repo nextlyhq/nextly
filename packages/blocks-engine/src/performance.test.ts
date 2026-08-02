@@ -37,28 +37,50 @@ import { validate } from "./validation";
  */
 
 /**
- * Fastest wall-clock time, in milliseconds, of `runs` rounds that each execute
- * the operation `ITERATIONS_PER_ROUND` times.
+ * How long one measured round should take.
  *
- * The repetition is what makes the number trustworthy: one pass over a thousand
- * nodes takes a couple of milliseconds, close enough to timer granularity that
- * scheduler noise shows up as a large percentage. Repeating inside the timed
- * region moves the measurement into tens of milliseconds without changing the
- * ratio being asserted.
+ * The repetition is what makes a number trustworthy: a single pass can be close
+ * enough to the noise floor that scheduler and collector timing show up as a
+ * large percentage. A FIXED pass count does not deliver that, because the
+ * operations here differ by about seventy times in cost — ten passes of
+ * validation take around 100 ms while ten passes of migration take 1.5 ms, and
+ * at that size migration's ratio wandered between 4.25x and 4.79x locally and
+ * past the limit on a CI runner, failing unchanged code.
+ *
+ * Choosing the count from a trial pass puts every operation in the same range
+ * on whatever machine is running it. Measured at roughly this target, the
+ * migration spread falls from 0.54 to 0.07 and lands on the same 4.1x the
+ * validation walk reports.
  */
-const ITERATIONS_PER_ROUND = 10;
+const TARGET_ROUND_MS = 25;
 
-/** Wall-clock time of one round: `ITERATIONS_PER_ROUND` passes of the operation. */
-function timeRound(operation: () => void): number {
+/** Bounds on the chosen count, so a mis-timed trial cannot run away. */
+const MIN_PASSES = 10;
+const MAX_PASSES = 2000;
+
+/** How many passes of an operation add up to about one target round. */
+function passesFor(operation: () => void): number {
   const started = performance.now();
-  for (let pass = 0; pass < ITERATIONS_PER_ROUND; pass += 1) operation();
+  operation();
+  const elapsed = performance.now() - started;
+  if (elapsed <= 0) return MAX_PASSES;
+  return Math.min(
+    MAX_PASSES,
+    Math.max(MIN_PASSES, Math.ceil(TARGET_ROUND_MS / elapsed))
+  );
+}
+
+/** Wall-clock time of one round: `passes` executions of the operation. */
+function timeRound(operation: () => void, passes: number): number {
+  const started = performance.now();
+  for (let pass = 0; pass < passes; pass += 1) operation();
   return performance.now() - started;
 }
 
-function fastest(runs: number, operation: () => void): number {
+function fastest(runs: number, operation: () => void, passes: number): number {
   let best = Number.POSITIVE_INFINITY;
   for (let run = 0; run < runs; run += 1) {
-    best = Math.min(best, timeRound(operation));
+    best = Math.min(best, timeRound(operation, passes));
   }
   return best;
 }
@@ -79,11 +101,14 @@ function fastestPair(
   first: () => void,
   second: () => void
 ): { first: number; second: number } {
+  // One count for both sides, taken from the cheaper one: a ratio between
+  // rounds of different lengths would measure the counts, not the code.
+  const passes = passesFor(first);
   let bestFirst = Number.POSITIVE_INFINITY;
   let bestSecond = Number.POSITIVE_INFINITY;
   for (let run = 0; run < runs; run += 1) {
-    bestFirst = Math.min(bestFirst, timeRound(first));
-    bestSecond = Math.min(bestSecond, timeRound(second));
+    bestFirst = Math.min(bestFirst, timeRound(first, passes));
+    bestSecond = Math.min(bestSecond, timeRound(second, passes));
   }
   return { first: bestFirst, second: bestSecond };
 }
@@ -104,15 +129,26 @@ const LARGE_NODES = 4000;
  * the gate runs in, not by the cleanest. Measured over repeated runs:
  *
  * | shape                            | developer machine | CI runner |
- * | unchanged code                   | 4.05x–4.16x       | 6.36x–6.77x |
- * | quadratic in the id-tracking step| 6.96x–7.08x       | — |
- * | quadratic dominating the walk    | 10.16x            | — |
+ * | unchanged code                   | 4.03x–4.18x       | 6.36x–6.77x |
+ * | quadratic in the id-tracking step| 5.81x             | — |
  *
  * The CI band is what makes anything under 8 unusable: a limit of 6 sits below
  * where unchanged code already lands there, so it fails clean work, and a gate
- * that cries wolf gets muted. 8 clears the CI band and still catches a
- * regression that dominates the walk in either environment — a partial one is
- * knowingly out of reach, and the benchmark report is what covers it.
+ * that cries wolf gets muted.
+ *
+ * What that costs is worth stating rather than discovering later. A ratio is
+ * diluted by however much linear work surrounds the regression, so the same
+ * injected quadratic measured 9.24x against the bare tree walk and 5.81x once
+ * the per-node style walk was added — under the 8 the CI band forces. This gate
+ * therefore catches a regression that DOMINATES an operation, not one that
+ * merely doubles it, and the closer an operation gets to its own noise the
+ * truer that becomes. The absolute numbers in the benchmark report are what
+ * show a doubling.
+ *
+ * The developer band above is what it is BECAUSE the pass count is chosen per
+ * operation. With a fixed count the migration walk measured 4.25x–4.79x here
+ * and 8.64x on a runner, which failed unchanged code: its round was a tenth the
+ * length of the validation walk's and correspondingly noisier, not slower.
  */
 const MAX_GROWTH_FACTOR = 8;
 
@@ -164,14 +200,11 @@ describe("validation scales linearly with document size", () => {
     "stays far inside the ceiling on the thousand-node page",
     () => {
       const doc = thousandNodePage();
-      const perRound = fastest(
-        3,
-        () =>
-          void validate(doc, { breakpoints: SCALE_BREAKPOINTS, mode: "strict" })
-      );
-      expect(perRound / ITERATIONS_PER_ROUND).toBeLessThan(
-        CATASTROPHE_CEILING_MS
-      );
+      const run = (): void =>
+        void validate(doc, { breakpoints: SCALE_BREAKPOINTS, mode: "strict" });
+      const passes = passesFor(run);
+      const perRound = fastest(3, run, passes);
+      expect(perRound / passes).toBeLessThan(CATASTROPHE_CEILING_MS);
     },
     MEASUREMENT_TIMEOUT_MS
   );
@@ -246,11 +279,11 @@ describe("the two sides of a ratio are measured together", () => {
       () => order.push("large")
     );
     expect(order.indexOf("large")).toBeLessThan(order.lastIndexOf("small"));
-    expect(order.filter(side => side === "small")).toHaveLength(
-      3 * ITERATIONS_PER_ROUND
-    );
-    expect(order.filter(side => side === "large")).toHaveLength(
-      3 * ITERATIONS_PER_ROUND
-    );
+    // Both sides get the same number of MEASURED passes, whatever count was
+    // chosen; the one extra on the first side is the trial that chose it.
+    const smalls = order.filter(side => side === "small").length;
+    const larges = order.filter(side => side === "large").length;
+    expect(smalls - 1).toBe(larges);
+    expect(larges).toBeGreaterThanOrEqual(3 * MIN_PASSES);
   });
 });
