@@ -54,6 +54,7 @@ export type ReservationSurface =
   | "builder"
   | "collectionConfig"
   | "singleConfig"
+  | "fieldGroupConfig"
   | "uiSchema";
 
 /**
@@ -62,10 +63,10 @@ export type ReservationSurface =
  * A property of the surface rather than of the column: it depends on what that validator's payload
  * can express, not on what the column is.
  *
- * `uiSchema` validates field payloads for collections, singles AND components, and a component
- * keeps its values in tables of its own whose system columns are not described here. Refusing the
- * camelCase spelling there could reject a component field that is legal today, so it stays as
- * narrow as it is until those tables are declared too.
+ * Every surface refuses both, because every table these validate — a collection, a single, and a
+ * component in its own `comp_` table — carries the columns under their physical names, and a field
+ * whose camelCase name snake-cases onto one is emitted into the same `CREATE TABLE` as the injected
+ * column. The statement is then rejected, so the payload could never have produced a working table.
  */
 const RESERVATION_SPELLINGS: Readonly<
   Record<ReservationSurface, "both" | "columnOnly">
@@ -73,7 +74,8 @@ const RESERVATION_SPELLINGS: Readonly<
   builder: "both",
   collectionConfig: "both",
   singleConfig: "both",
-  uiSchema: "columnOnly",
+  fieldGroupConfig: "both",
+  uiSchema: "both",
 };
 
 /**
@@ -194,7 +196,7 @@ export const SYSTEM_COLUMNS: readonly SystemColumnDeclaration[] = [
     writableByClient: false,
     publishedUnderCamelName: false,
     strippedFromResponses: false,
-    reservedIn: ["builder", "uiSchema"],
+    reservedIn: ["builder", "fieldGroupConfig", "uiSchema"],
     shape: {
       postgresql: { kind: "text", nullable: false, primaryKey: true },
       mysql: {
@@ -249,7 +251,7 @@ export const SYSTEM_COLUMNS: readonly SystemColumnDeclaration[] = [
     writableByClient: false,
     publishedUnderCamelName: true,
     strippedFromResponses: false,
-    reservedIn: ["builder", "uiSchema"],
+    reservedIn: ["builder", "fieldGroupConfig", "uiSchema"],
     shape: {
       postgresql: {
         kind: "timestamp",
@@ -268,7 +270,7 @@ export const SYSTEM_COLUMNS: readonly SystemColumnDeclaration[] = [
     writableByClient: false,
     publishedUnderCamelName: true,
     strippedFromResponses: false,
-    reservedIn: ["builder", "uiSchema"],
+    reservedIn: ["builder", "fieldGroupConfig", "uiSchema"],
     shape: {
       postgresql: {
         kind: "timestamp",
