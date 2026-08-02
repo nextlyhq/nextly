@@ -96,7 +96,8 @@ const memoizedClassLookups = new WeakSet<ClassLookup>();
  * otherwise ask a hundred thousand times to report nothing at all.
  */
 function memoizeClassLookup(
-  classes: ClassLookup | undefined
+  classes: ClassLookup | undefined,
+  budget?: ReadyStyleIssueBudget
 ): ClassLookup | undefined {
   if (classes === undefined) return undefined;
   if (memoizedClassLookups.has(classes)) return classes;
@@ -105,6 +106,11 @@ function memoizeClassLookup(
     has(id: string): boolean {
       const cached = seen.get(id);
       if (cached !== undefined) return cached;
+      // Charged for what the caller was really asked, as the token lookup is: a
+      // repeated id is answered from this cache, and only a new one costs them
+      // anything. Distinct ids are what memoizing cannot collapse, and a known
+      // one is not a finding, so nothing else counts them.
+      if (budget !== undefined) budget.siteLookups -= 1;
       const known = classes.has(id);
       seen.set(id, known);
       return known;
@@ -290,6 +296,7 @@ export function validate(
         issue.code === "depth-exceeded"
     );
 
+  const styleBudget = newStyleIssueBudget();
   const nodeState: NodeCheckState = {
     // Both site lookups are wrapped once here rather than per node or per style
     // envelope, so a name repeated across the document costs the caller one
@@ -298,8 +305,8 @@ export function validate(
     // that stops the rest of the per-value work.
     ctx: {
       ...ctx,
-      tokens: memoizeTokenLookup(ctx.tokens),
-      classes: memoizeClassLookup(ctx.classes),
+      tokens: memoizeTokenLookup(ctx.tokens, styleBudget),
+      classes: memoizeClassLookup(ctx.classes, styleBudget),
     },
     issues,
     knownBreakpoints,
@@ -307,7 +314,7 @@ export function validate(
     seenIds: new Map<string, string>(),
     seenDomIds: new Map<string, string>(),
     skipValueParsing: overLimits,
-    styleBudget: newStyleIssueBudget(),
+    styleBudget,
   };
 
   // Document-level styles use the same envelope as node styles but have no

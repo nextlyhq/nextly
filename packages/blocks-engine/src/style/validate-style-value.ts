@@ -86,6 +86,18 @@ export interface StyleIssueBudget {
   sitePathBytes?: number;
   /** Whether this run has already said name resolution stopped early. */
   siteTruncated?: boolean;
+  /**
+   * How many more times this run may ask the caller's lookups anything.
+   *
+   * A separate dimension because the two above do not bound this one. Both are
+   * charged for what is REPORTED, and a name that resolves is not a finding, so
+   * a document referencing thousands of DISTINCT names the site really defines
+   * spends neither allowance while asking caller-supplied code once per name.
+   * Memoizing collapses repeats and cannot collapse distinct names, so the
+   * count is bounded only by the document's byte cap — thousands of calls, and
+   * a cache retaining every answer, to return no issues at all.
+   */
+  siteLookups?: number;
 }
 
 /**
@@ -115,6 +127,16 @@ export const MAX_SITE_ISSUES = 200;
 export const MAX_SITE_ISSUE_PATH_BYTES = 50_000;
 
 /**
+ * The default number of times one run may ask the caller's lookups anything.
+ *
+ * Counted per DISTINCT name, since repeats are answered from the run's cache.
+ * Far above any real site — a token table or class library is tens to hundreds
+ * of entries, not ten thousand — and low enough that a document cannot turn its
+ * byte cap into an unbounded amount of someone else's work.
+ */
+export const MAX_SITE_LOOKUPS = 10_000;
+
+/**
  * The diagnostics that ask about the SITE rather than about the document. Each
  * one resolves against a table the caller supplies, so the same document
  * produces it or not depending on configuration the document does not contain.
@@ -136,7 +158,8 @@ export function newStyleIssueBudget(
   remaining: number = MAX_STYLE_ISSUES,
   pathBytes: number = MAX_STYLE_ISSUE_PATH_BYTES,
   siteRemaining: number = MAX_SITE_ISSUES,
-  sitePathBytes: number = MAX_SITE_ISSUE_PATH_BYTES
+  sitePathBytes: number = MAX_SITE_ISSUE_PATH_BYTES,
+  siteLookups: number = MAX_SITE_LOOKUPS
 ): ReadyStyleIssueBudget {
   return {
     remaining,
@@ -145,6 +168,7 @@ export function newStyleIssueBudget(
     siteRemaining,
     sitePathBytes,
     siteTruncated: false,
+    siteLookups,
   };
 }
 
@@ -167,6 +191,9 @@ export function normalizeStyleIssueBudget(
     budget.sitePathBytes = MAX_SITE_ISSUE_PATH_BYTES;
   }
   if (typeof budget.siteTruncated !== "boolean") budget.siteTruncated = false;
+  if (typeof budget.siteLookups !== "number") {
+    budget.siteLookups = MAX_SITE_LOOKUPS;
+  }
   // Every allowance is present now, which is what the walk below requires.
   return budget as ReadyStyleIssueBudget;
 }
@@ -220,7 +247,9 @@ export function siteAllowanceSpent(
 ): boolean {
   return (
     budget !== undefined &&
-    (budget.siteRemaining <= 0 || budget.sitePathBytes <= 0)
+    (budget.siteRemaining <= 0 ||
+      budget.sitePathBytes <= 0 ||
+      budget.siteLookups <= 0)
   );
 }
 
@@ -286,7 +315,8 @@ const memoizedLookups = new WeakSet<TokenLookup>();
  * that resolves is not an issue and so is never charged the issue allowance.
  */
 export function memoizeTokenLookup(
-  tokens: TokenLookup | undefined
+  tokens: TokenLookup | undefined,
+  budget?: ReadyStyleIssueBudget
 ): TokenLookup | undefined {
   if (tokens === undefined) return undefined;
   if (memoizedLookups.has(tokens)) return tokens;
@@ -295,6 +325,10 @@ export function memoizeTokenLookup(
     kindOf(name: string): TokenKind | undefined {
       const cached = seen.get(name);
       if (cached !== undefined || seen.has(name)) return cached;
+      // Charged here rather than at the reference, so the count is of what the
+      // caller was really asked. A repeated name is answered from this cache
+      // and costs nothing; only a name never seen before reaches their code.
+      if (budget !== undefined) budget.siteLookups -= 1;
       const kind = tokens.kindOf(name);
       seen.set(name, kind);
       return kind;
@@ -883,7 +917,7 @@ export function validateStyleValues(
   // caller may hand back an object that predates the site allowance. Filling it
   // in beats reading a missing number: validation reports, it does not throw.
   const budget = normalizeStyleIssueBudget(suppliedBudget);
-  const tokens = memoizeTokenLookup(suppliedTokens);
+  const tokens = memoizeTokenLookup(suppliedTokens, budget);
   const issues: ValidationIssue[] = [];
   // Lazily enumerated for the same reason the composite walk is: a style map
   // with a hundred thousand keys would otherwise be materialised in full before

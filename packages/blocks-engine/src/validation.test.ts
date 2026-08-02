@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import { DOCUMENT_KINDS } from "./document";
 import type { BlockDocument, BreakpointSet } from "./document";
-import { documentBytes } from "./limits";
+import { DEFAULT_LIMITS, documentBytes } from "./limits";
 import {
+  MAX_SITE_LOOKUPS,
   MAX_SITE_ISSUES,
   MAX_SITE_ISSUE_PATH_BYTES,
   MAX_STYLE_ISSUES,
@@ -853,6 +854,40 @@ describe("validation never throws on adversarial input", () => {
     );
     expect(issues).toEqual([]);
     expect(asked.sort()).toEqual(["c_card", "c_wide"]);
+  });
+
+  it("stops asking the caller's lookups after the lookup allowance", () => {
+    // The two site allowances are charged for what is REPORTED, and a name that
+    // RESOLVES is not a finding, so neither of them counts this. Memoizing
+    // collapses repeats and cannot collapse distinct names, which leaves the
+    // number of calls into caller-supplied code bounded only by the byte cap.
+    const distinct = MAX_SITE_LOOKUPS + 500;
+    const nodes = Array.from({ length: distinct }, (_, index) => ({
+      id: `n${index}`,
+      type: "core/box",
+      version: 1,
+      props: {},
+      classes: [`c_${index}`],
+    }));
+    let asked = 0;
+    const issues = validate(
+      invalidDoc({ formatVersion: 1, kind: "page", nodes }),
+      {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        mode: "strict",
+        limits: { ...DEFAULT_LIMITS, maxNodes: distinct + 10 },
+        classes: {
+          has: () => {
+            asked += 1;
+            return true;
+          },
+        },
+      }
+    );
+    expect(asked).toBeLessThanOrEqual(MAX_SITE_LOOKUPS);
+    // And it says so, rather than going quiet: what went unchecked is whether
+    // those names resolve, which is exactly what this marker means.
+    expect(issues.map(issue => issue.code)).toContain("site-issues-truncated");
   });
 
   it("asks the caller's token lookup once per name for the whole document", () => {
