@@ -234,17 +234,22 @@ Four things are checked on every value that reaches the stylesheet:
    discards.
 
    Inside a length, a math expression is typed with the algebra CSS Values and
-   Units 4 defines: multiplication adds exponents, division subtracts them, and
-   addition requires both sides to agree. So `calc(1px * 1px)` is an area,
-   `calc(1px / 1px)` is a number, `calc(1px + 2)` mixes kinds, and none of the
-   three is a width. The type is computed over the whole expression, so nesting
-   and operator precedence are both accounted for.
+   Units 4 defines: division subtracts exponents, addition requires both sides
+   to agree, and scaling is multiplying by a number — `1px * 1px` is an area,
+   which CSS has nowhere to put. So `calc(1px / 1px)` is a number,
+   `calc(1px + 2)` mixes kinds, and neither is a width. The type is computed
+   over the whole expression, so nesting and operator precedence are both
+   accounted for, and each product is judged as it forms: `calc(1px * 1px / 1px)`
+   is refused for the area in the middle, which the final type no longer shows.
+
+   A percentage carries the **percent hint** of the property it is written on.
+   On every property here that is a length, so `calc(1px + 50%)` adds two
+   lengths and `calc(10% + 1)` adds a length to a number and is refused.
 
    **Anything the expression cannot see through makes the whole of it
    unreadable rather than partly readable.** What `var()`, `env()`, `attr()` and
    `anchor-size()` resolve to is not knowable here, so an expression containing
-   one is accepted whatever else it holds. A percentage is the same case: what
-   it resolves against is a property's business, not the expression's.
+   one is accepted whatever else it holds.
 
 4. **Size and nesting depth.** Parsing a value is recursive and allocates a node
    per token, so both shapes of an oversized value are bounded: anything nested

@@ -528,28 +528,25 @@ function timesType(
   return product;
 }
 
-/**
- * The type two added quantities share.
- *
- * A percentage resolves against whatever it sits beside, and which quantity
- * that is depends on the property rather than on the expression, so a sum
- * involving one abstains instead of deciding here.
- */
+/** The type two added quantities share. Adding unlike quantities is invalid. */
 function addedType(a: NumericType, b: NumericType): TypeResult {
-  if (sameType(a, b)) return a;
-  if (a.get("percent") !== undefined || b.get("percent") !== undefined) {
-    return "unknown";
-  }
-  return "invalid";
+  return sameType(a, b) ? a : "invalid";
 }
 
-/** The type of one term, which may itself be a group or a function. */
-function termType(node: CssNode): TypeResult {
+/**
+ * The type of one term, which may itself be a group or a function.
+ *
+ * `percentBase` is the percent hint: a percentage is not a kind of its own but
+ * a share of whatever the property resolves it against, which on every leaf
+ * here is a length. Carrying the hint rather than treating a percentage as
+ * incomparable is what lets `calc(10% + 1)` be seen as a length plus a number.
+ */
+function termType(node: CssNode, percentBase: string): TypeResult {
   switch (node.type) {
     case "Number":
       return NUMBER_TYPE;
     case "Percentage":
-      return new Map([["percent", 1]]);
+      return new Map([[percentBase, 1]]);
     case "Dimension": {
       const base = unitCategory(unitOf(node));
       return base === null ? "unknown" : new Map([[base, 1]]);
@@ -559,19 +556,22 @@ function termType(node: CssNode): TypeResult {
       // else here is a keyword rather than a quantity.
       return CALC_CONSTANTS.has(identifierOf(node)) ? NUMBER_TYPE : "unknown";
     case "Parentheses":
-      return numericType([...node.children]);
+      return numericType([...node.children], percentBase);
     case "Function":
-      return callType(node);
+      return callType(node, percentBase);
     default:
       return "unknown";
   }
 }
 
 /** The type a function call produces. */
-function callType(node: {
-  name: string;
-  children: Iterable<CssNode>;
-}): TypeResult {
+function callType(
+  node: {
+    name: string;
+    children: Iterable<CssNode>;
+  },
+  percentBase: string
+): TypeResult {
   const name = identifierOf(node);
   // These report a ratio, a sign or an exponent, all of them bare numbers.
   if (NUMBER_FUNCTIONS.has(name)) return NUMBER_TYPE;
@@ -583,7 +583,7 @@ function callType(node: {
   // produce whatever type those operands agree on.
   let agreed: NumericType | undefined;
   for (const operand of mathOperands(name, splitArguments(node.children))) {
-    const type = numericType(operand);
+    const type = numericType(operand, percentBase);
     if (type === "invalid" || type === "unknown") return type;
     if (agreed === undefined) {
       agreed = type;
@@ -608,7 +608,10 @@ function callType(node: {
  * than partly readable, which keeps a guess from being assembled out of the
  * parts that happened to be literals.
  */
-function numericType(terms: readonly CssNode[]): TypeResult {
+function numericType(
+  terms: readonly CssNode[],
+  percentBase: string
+): TypeResult {
   if (terms.length === 0 || terms.length % 2 === 0) return "unknown";
   const operands: TypeResult[] = [];
   const symbols: string[] = [];
@@ -616,7 +619,7 @@ function numericType(terms: readonly CssNode[]): TypeResult {
     const term = terms[index];
     if (term === undefined) return "unknown";
     if (index % 2 === 0) {
-      operands.push(termType(term));
+      operands.push(termType(term, percentBase));
       continue;
     }
     if (term.type !== "Operator") return "unknown";
@@ -634,6 +637,12 @@ function numericType(terms: readonly CssNode[]): TypeResult {
     const left = summands[summands.length - 1];
     if (right === undefined || left === undefined) return "unknown";
     if (symbol === "*" || symbol === "/") {
+      // Scaling a quantity is multiplying it by a number: `1px * 1px` is an
+      // area and CSS has nowhere to put one. Asked of each product as it
+      // forms, because a later division can cancel the area back down to a
+      // length and the final type alone would not show it ever existed.
+      // Division is not symmetric with it — `1px / 1px` is a plain ratio.
+      if (symbol === "*" && left.size > 0 && right.size > 0) return "invalid";
       summands[summands.length - 1] = timesType(left, right, symbol === "/");
       continue;
     }
@@ -1092,7 +1101,7 @@ export function checkDimensionValue(
     // out to is a separate question, asked once over the whole expression so
     // that nesting and operator precedence are both visible.
     if (child.type === "Function") {
-      const type = numericType([child]);
+      const type = numericType([child], "length");
       if (type === "invalid") return "not-a-length";
       if (type !== "unknown" && !typeIsMeasurement(type, allowNumber)) {
         return "not-a-length";
@@ -1220,8 +1229,8 @@ function measurementRejection(
         // Two operands of one function have to be the same kind of quantity.
         // Anything not readable answers nothing and abstains.
         if (angleArgs.length === 2) {
-          const first = numericType(angleArgs[0] ?? []);
-          const second = numericType(angleArgs[1] ?? []);
+          const first = numericType(angleArgs[0] ?? [], "length");
+          const second = numericType(angleArgs[1] ?? [], "length");
           if (first === "invalid" || second === "invalid")
             return "not-a-length";
           if (

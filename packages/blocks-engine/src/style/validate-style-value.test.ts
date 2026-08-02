@@ -2009,7 +2009,6 @@ describe("two operands of one function are the same kind of quantity", () => {
   it("refuses a pair that measures different things", () => {
     for (const value of [
       "calc(sin(atan2(1px, 1s)) * 10px)",
-      "calc(sin(atan2(1px, 50%)) * 10px)",
       "calc(sin(atan2(1px, 1)) * 10px)",
       "calc(sin(atan2(1deg, 1px)) * 10px)",
     ]) {
@@ -2021,6 +2020,8 @@ describe("two operands of one function are the same kind of quantity", () => {
     expect(codes({ width: "calc(sin(atan2(1px, 1em)) * 10px)" })).toEqual([]);
     expect(codes({ width: "calc(sin(atan2(1s, 1ms)) * 10px)" })).toEqual([]);
     expect(codes({ width: "calc(sin(atan2(1, 1)) * 10px)" })).toEqual([]);
+    // A percentage on a length property IS a length, so this pair agrees.
+    expect(codes({ width: "calc(sin(atan2(1px, 50%)) * 10px)" })).toEqual([]);
   });
 
   it("asks nothing when either side is not a literal", () => {
@@ -2511,12 +2512,34 @@ describe("an expression of bare numbers is a number", () => {
     expect(codes({ width: "calc(max(1px, 2px) + 1em)" })).toEqual([]);
   });
 
-  it("abstains when a nested function's own operands disagree", () => {
-    // A percentage resolves to the length beside it, so the function is a
-    // length; reading the operands as disagreeing is what keeps this out of
-    // the comparison rather than refusing it.
-    expect(codes({ width: "calc(min(1px, 50%) * 1px)" })).toEqual([]);
+  it("abstains when a nested function holds something unreadable", () => {
     expect(codes({ width: "calc(min(1px, var(--x)) + 1)" })).toEqual([]);
+    expect(codes({ width: "calc(max(1em, var(--x)) * 2px)" })).toEqual([]);
+  });
+
+  it("counts a percentage as the quantity the property resolves it against", () => {
+    // On a length property a percentage IS a length, so it agrees with one in
+    // a sum and makes an area when multiplied by one.
+    expect(codes({ width: "calc(1px + 50%)" })).toEqual([]);
+    expect(codes({ width: "calc(min(1px, 50%) * 1px)" })).toEqual([
+      "invalid-style-value",
+    ]);
+    expect(codes({ width: "calc(10% + 1)" })).toEqual(["invalid-style-value"]);
+    expect(codes({ width: "min(10%, 1)" })).toEqual(["invalid-style-value"]);
+    expect(codes({ width: "clamp(10%, 1, 20%)" })).toEqual([
+      "invalid-style-value",
+    ]);
+  });
+
+  it("refuses a product of two quantities even when a division undoes it", () => {
+    // Scaling is multiplying by a number. The area in the middle here is
+    // cancelled by the division, so only checking the final type misses it.
+    expect(codes({ width: "calc(1px * 1px / 1px)" })).toEqual([
+      "invalid-style-value",
+    ]);
+    expect(codes({ width: "calc(1px * 2 / 4)" })).toEqual([]);
+    // Division is not symmetric with multiplication: a ratio is a number.
+    expect(codes({ lineHeight: "calc(10px / 2px)" })).toEqual([]);
   });
 
   it("reads past a rounding strategy to the operands", () => {
