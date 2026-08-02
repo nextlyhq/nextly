@@ -498,6 +498,28 @@ function literalCategory(terms: readonly CssNode[]): string | null {
 }
 
 /**
+ * The operands of a math function: its arguments, with a leading strategy
+ * keyword dropped.
+ *
+ * `round()` takes an optional rounding strategy as an argument of its own. It
+ * is neither a quantity to compare against the others nor a term that changes
+ * what the function produces, so every caller that reads the operands has to
+ * skip it. One function for all of them, so they cannot disagree about which
+ * arguments those are.
+ */
+function mathOperands(name: string, args: CssNode[][]): CssNode[][] {
+  const ownIdentifiers = FUNCTION_IDENTIFIERS.get(name) ?? NO_KEYWORDS;
+  const leading = args[0];
+  const strategy =
+    args.length > 1 &&
+    leading !== undefined &&
+    leading.length === 1 &&
+    leading[0]?.type === "Identifier" &&
+    ownIdentifiers.has(identifierOf(leading[0]));
+  return strategy ? args.slice(1) : args;
+}
+
+/**
  * Whether a math expression is built only out of bare numbers, and so is one.
  *
  * The math functions carry the kind of their operands through, and the
@@ -527,7 +549,9 @@ function resolvesToNumber(node: CssNode): boolean {
       // of which are bare numbers whatever they were given.
       if (NUMBER_FUNCTIONS.has(name)) return true;
       if (!MATH_FUNCTIONS.has(name)) return false;
-      return splitArguments(node.children).every(everyOperandIsNumber);
+      return mathOperands(name, splitArguments(node.children)).every(
+        everyOperandIsNumber
+      );
     }
     default:
       return false;
@@ -1079,18 +1103,9 @@ function measurementRejection(
         return referenceNamesSomething(node) ? null : "not-a-length";
       }
       if (!MATH_FUNCTIONS.has(name)) return null;
-      const ownIdentifiers = FUNCTION_IDENTIFIERS.get(name) ?? NO_KEYWORDS;
-      const args = splitArguments(node.children);
       // A rounding strategy is a leading argument of its own, not something
       // that may appear among the operands: `round(1px, up)` is discarded.
-      const leading = args[0];
-      const strategy =
-        args.length > 1 &&
-        leading !== undefined &&
-        leading.length === 1 &&
-        leading[0]?.type === "Identifier" &&
-        ownIdentifiers.has(identifierOf(leading[0]));
-      const operands = strategy ? args.slice(1) : args;
+      const operands = mathOperands(name, splitArguments(node.children));
       // Present for every math function, since the set is the map's own keys.
       const arity = MATH_FUNCTION_ARITY.get(name) ?? null;
       if (arity !== null && !arity.includes(operands.length)) {

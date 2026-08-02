@@ -85,6 +85,14 @@ Where a group lists flags, the object form opts in precisely:
 lines. Properties with no flag are reachable only through the `true` form, which
 is how a group states that it offers nothing finer than all-or-nothing.
 
+`supports` decides what an EDITOR offers and what a block promises to render.
+Document validation does not enforce it: it checks a property against the
+catalog, not against the block that owns the node. Validation is given a block
+lookup that answers whether a type is registered and nothing more, so a block's
+declaration is not reachable there. Enforcing it would also mean a block
+narrowing its `supports` invalidates every stored document that styled through
+the wider declaration, which is a migration rather than a check.
+
 ## The properties
 
 ### spacing

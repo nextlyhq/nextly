@@ -2444,12 +2444,25 @@ describe("an expression of bare numbers is a number", () => {
     }
   });
 
+  it("reads past a rounding strategy to the operands", () => {
+    // `round(up, 1, 2)` is two numeric operands and a strategy, so it produces
+    // a number. Counting the strategy as an operand would make it three
+    // arguments, which the arity check refuses for its own reason and which
+    // would hide whether the operands were read at all.
+    expect(codes({ width: "round(up, 1, 2)" })).toEqual([
+      "invalid-style-value",
+    ]);
+    // The same stripping is what keeps the length form storable.
+    expect(codes({ width: "round(up, 10px, 1px)" })).toEqual([]);
+  });
+
   it("abstains wherever an operand is not a literal", () => {
     // A reference could resolve to anything, and reading the division would
     // need the result model this deliberately does without.
     expect(codes({ width: "calc(var(--x))" })).toEqual([]);
     expect(codes({ width: "calc(1px / 1px)" })).toEqual([]);
-    expect(codes({ width: "round(up, 1, 2)" })).toEqual([]);
+    // Dropping the strategy does not make the rest readable on its own.
+    expect(codes({ width: "round(up, var(--x), 2)" })).toEqual([]);
   });
 
   it("keeps it where a bare number is the preferred spelling", () => {
