@@ -38,6 +38,7 @@ interface DimensionOptions {
   allowNegative?: boolean;
   allowPercentage?: boolean;
   functions?: readonly string[];
+  allowNumber?: boolean;
 }
 
 function dimension(
@@ -53,6 +54,7 @@ function dimension(
     allowNegative: options.allowNegative ?? false,
     allowPercentage: options.allowPercentage ?? false,
     functions: options.functions ?? [],
+    allowNumber: options.allowNumber ?? false,
   };
 }
 
@@ -585,6 +587,10 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
         dimension("line-height", {
           keywords: ["normal"],
           allowPercentage: true,
+          // The number leaf takes a stored number; a number written as an
+          // expression arrives as a string and reaches this leaf instead, and
+          // `line-height: calc(2)` is a value the browser honours.
+          allowNumber: true,
         }),
       ],
     },

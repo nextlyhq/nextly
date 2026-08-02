@@ -148,6 +148,13 @@ export interface DimensionLeaf extends StyleLeafBase {
    * honours it on `width` and discards it on `gap` or a corner radius.
    */
   functions?: readonly string[];
+  /**
+   * Whether a bare number is a measurement here. True only on `line-height`,
+   * where a unitless value is the preferred spelling; everywhere else a number
+   * emits a declaration the browser discards, so an expression resolving to one
+   * is refused.
+   */
+  allowNumber?: boolean;
 }
 
 /** A unitless number, optionally bounded. */

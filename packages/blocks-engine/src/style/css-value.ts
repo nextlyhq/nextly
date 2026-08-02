@@ -497,6 +497,55 @@ function literalCategory(terms: readonly CssNode[]): string | null {
   return null;
 }
 
+/**
+ * Whether a math expression is built only out of bare numbers, and so is one.
+ *
+ * The math functions carry the kind of their operands through, and the
+ * arithmetic operators do too when every operand is a number, so an expression
+ * whose every leaf is a plain number is a number however deeply it nests. That
+ * makes `width: "calc(1)"` a declaration the browser discards.
+ *
+ * This asks what was WRITTEN, not what the expression computes: a measurement,
+ * a percentage, or any reference anywhere inside answers `false`. So
+ * `calc(1px / 1px)` is left alone even though it is also a number, and a
+ * property that takes a bare number keeps its expressions by declaring so
+ * rather than by this guessing which property it is looking at.
+ */
+function resolvesToNumber(node: CssNode): boolean {
+  switch (node.type) {
+    case "Number":
+      return true;
+    case "Identifier":
+      // The numeric constants a math expression may name; `auto` and friends
+      // are whole values rather than operands and never reach here.
+      return CALC_CONSTANTS.has(identifierOf(node));
+    case "Parentheses":
+      return everyOperandIsNumber([...node.children]);
+    case "Function": {
+      const name = identifierOf(node);
+      // Every function in this set reports a ratio, a sign or an exponent, all
+      // of which are bare numbers whatever they were given.
+      if (NUMBER_FUNCTIONS.has(name)) return true;
+      if (!MATH_FUNCTIONS.has(name)) return false;
+      return splitArguments(node.children).every(everyOperandIsNumber);
+    }
+    default:
+      return false;
+  }
+}
+
+/**
+ * Whether every operand of one arithmetic expression is a number. Operators are
+ * skipped: with numbers on both sides all four of them yield a number. An
+ * unrecognised term, such as a rounding strategy, answers `false` and the
+ * expression is left alone.
+ */
+function everyOperandIsNumber(terms: readonly CssNode[]): boolean {
+  return terms.every(
+    term => term.type === "Operator" || resolvesToNumber(term)
+  );
+}
+
 /** Units that measure an angle. */
 const ANGLE_UNITS: ReadonlySet<string> = new Set([
   "deg",
@@ -573,6 +622,31 @@ export function decodeIdentifier(name: string): string {
 /** An identifier as CSS reads it, folded for comparison. */
 function identifierOf(node: { name: string }): string {
   return asciiLower(decodeIdentifier(node.name));
+}
+
+/**
+ * Whether a `var()` or `env()` carries the name it exists to reference.
+ *
+ * The fallback stays unread — what a custom property resolves to is not
+ * knowable here — but the head is not optional: `var()` names a custom property
+ * and `env()` an environment variable, so a reference with no name resolves to
+ * nothing and the browser discards the declaration around it. A custom property
+ * name is case-sensitive, so only the leading dashes are read and the spelling
+ * is left alone.
+ *
+ * One function for every leaf that accepts these, because a rule about what a
+ * reference must carry is the same rule whether a length or a colour is being
+ * referenced.
+ */
+function referenceNamesSomething(node: {
+  name: string;
+  children: Iterable<CssNode>;
+}): boolean {
+  const head = splitArguments(node.children)[0]?.[0];
+  if (head?.type !== "Identifier") return false;
+  return (
+    identifierOf(node) !== "var" || decodeIdentifier(head.name).startsWith("--")
+  );
 }
 
 /**
@@ -805,6 +879,13 @@ export interface DimensionRules {
   allowPercentage?: boolean;
   /** Functions this property accepts beyond the universally legal ones. */
   functions?: readonly string[];
+  /**
+   * Whether a bare number is a value here, as it is on `line-height`. Declared
+   * per property because a number satisfies almost none of them: `width: 1`
+   * paints nothing, so an expression that resolves to one is refused unless the
+   * property says otherwise.
+   */
+  allowNumber?: boolean;
 }
 
 export function checkDimensionValue(
@@ -817,6 +898,7 @@ export function checkDimensionValue(
     allowNegative = false,
     allowPercentage = false,
     functions = [],
+    allowNumber = false,
   } = rules;
   const rejection = checkCssValue(value);
   if (rejection !== null) return rejection;
@@ -837,6 +919,12 @@ export function checkDimensionValue(
       functions: allowedFunctions,
     });
     if (childRejection !== null) return childRejection;
+    // Reaching here means the operands agree with each other; what they add up
+    // to is a separate question, and one that is answerable when every one of
+    // them is a literal number.
+    if (!allowNumber && child.type === "Function" && resolvesToNumber(child)) {
+      return "not-a-length";
+    }
     if (child.type === "Identifier" && isCssWideKeyword(identifierOf(child))) {
       cssWideKeyword = true;
     }
@@ -988,15 +1076,7 @@ function measurementRejection(
         return null;
       }
       if (name === "var" || name === "env") {
-        // The fallback stays unread, but the head is required: `var()` names a
-        // custom property and `env()` an environment variable, and a function
-        // missing its name produces nothing at all.
-        const head = splitArguments(node.children)[0]?.[0];
-        if (head?.type !== "Identifier") return "not-a-length";
-        if (name === "var" && !decodeIdentifier(head.name).startsWith("--")) {
-          return "not-a-length";
-        }
-        return null;
+        return referenceNamesSomething(node) ? null : "not-a-length";
       }
       if (!MATH_FUNCTIONS.has(name)) return null;
       const ownIdentifiers = FUNCTION_IDENTIFIERS.get(name) ?? NO_KEYWORDS;
@@ -1245,8 +1325,16 @@ export function checkColorValue(value: string): CssValueRejection | null {
         ? null
         : "not-a-color";
     }
-    case "Function":
-      return COLOR_FUNCTIONS.has(identifierOf(node)) ? null : "not-a-color";
+    case "Function": {
+      const name = identifierOf(node);
+      if (!COLOR_FUNCTIONS.has(name)) return "not-a-color";
+      // A reference is allowlisted for what it may resolve to, not for the name
+      // alone: it still has to name something to resolve.
+      if (name === "var" || name === "env") {
+        return referenceNamesSomething(node) ? null : "not-a-color";
+      }
+      return null;
+    }
     default:
       return "not-a-color";
   }

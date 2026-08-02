@@ -281,6 +281,7 @@ function leafIssues(
         allowNegative: leaf.allowNegative,
         allowPercentage: leaf.allowPercentage,
         functions: leaf.functions,
+        allowNumber: leaf.allowNumber,
       });
       return rejection === null ? [] : rejected(path, value, rejection);
     }

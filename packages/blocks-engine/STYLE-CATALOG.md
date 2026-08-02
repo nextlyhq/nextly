@@ -39,9 +39,11 @@ vertical writing modes, which the catalog can add later without a migration.
   `auto` or `max-content` **where that property accepts one**, or the number `0`.
   Keywords are per property, because they are not interchangeable: `margin: auto`
   centres a box while `padding: auto` means nothing. Values that are valid CSS
-  but measure nothing are refused, including `"10"`, `"red"`, and units that
-  measure something else such as `"20deg"` or `"2s"` — they would emit a
-  declaration the browser discards. A few properties take more than
+  but measure nothing are refused, including `"10"`, `"red"`, units that
+  measure something else such as `"20deg"` or `"2s"`, and an expression built
+  only out of bare numbers such as `"calc(1)"` — they would emit a
+  declaration the browser discards. `line-height` is the one property where a
+  bare number IS the measurement, and it says so. A few properties take more than
   one measurement — `gap` takes a row and a column — but most take exactly one,
   and a corner radius is expressed per corner rather than as a shorthand.
 - **number** — a unitless number, bounded where the property has natural limits.

@@ -2402,4 +2402,62 @@ describe("a deferred value still needs its name", () => {
     expect(codes({ width: "var(--x, 1px)" })).toEqual([]);
     expect(codes({ width: "env(safe-area-inset-top)" })).toEqual([]);
   });
+
+  it("asks the same of a colour, which took the name for proof", () => {
+    expect(codes({ color: "var(red)" })).toEqual(["invalid-style-value"]);
+    expect(codes({ color: "env()" })).toEqual(["invalid-style-value"]);
+    expect(codes({ backgroundColor: "var(red)" })).toEqual([
+      "invalid-style-value",
+    ]);
+    expect(codes({ color: "var(--brand)" })).toEqual([]);
+    expect(codes({ color: "var(--brand, red)" })).toEqual([]);
+    expect(codes({ color: "env(safe-area-inset-top)" })).toEqual([]);
+  });
+});
+
+describe("an expression of bare numbers is a number", () => {
+  it("refuses one where a measurement is wanted", () => {
+    for (const value of [
+      "calc(1)",
+      "min(1, 2)",
+      "calc(sqrt(4))",
+      "calc(1 + 2)",
+      "clamp(1, 2, 3)",
+      "calc((1 + 2) * 3)",
+      "calc(pi)",
+      "max(sign(1), 2)",
+    ]) {
+      expect(codes({ width: value }), value).toEqual(["invalid-style-value"]);
+    }
+  });
+
+  it("keeps every expression that carries a measurement", () => {
+    for (const value of [
+      "calc(1px)",
+      "min(1px, 2px)",
+      "calc(2 * 1px)",
+      "calc(1px / 2)",
+      "calc(100% - 1px)",
+      "clamp(1rem, 5vw, 3rem)",
+    ]) {
+      expect(codes({ width: value }), value).toEqual([]);
+    }
+  });
+
+  it("abstains wherever an operand is not a literal", () => {
+    // A reference could resolve to anything, and reading the division would
+    // need the result model this deliberately does without.
+    expect(codes({ width: "calc(var(--x))" })).toEqual([]);
+    expect(codes({ width: "calc(1px / 1px)" })).toEqual([]);
+    expect(codes({ width: "round(up, 1, 2)" })).toEqual([]);
+  });
+
+  it("keeps it where a bare number is the preferred spelling", () => {
+    // `line-height` is the one property whose dimension leaf takes a number,
+    // and an expression is the only way to store one as a string.
+    expect(codes({ lineHeight: "calc(2)" })).toEqual([]);
+    expect(codes({ lineHeight: "calc(1 + 0.5)" })).toEqual([]);
+    expect(codes({ lineHeight: "1.5rem" })).toEqual([]);
+    expect(codes({ lineHeight: 1.5 })).toEqual([]);
+  });
 });
