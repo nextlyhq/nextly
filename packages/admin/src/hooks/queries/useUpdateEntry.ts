@@ -316,9 +316,19 @@ export function useUpdateEntry<
       // Keyed by the same `localeKey` the read uses; merged over the cached entry
       // so any view-only fields the response omits survive.
       if (optimistic) {
-        queryClient.setQueryData<T>(localeKey, old =>
-          old ? { ...old, ...data } : data
-        );
+        queryClient.setQueryData<T>(localeKey, old => {
+          const merged = old ? { ...old, ...data } : data;
+          // `_isWorkingDraft` is a synthetic flag the server sets only on a
+          // working-draft overlay read; a publish/unpublish response returns the
+          // live document WITHOUT it. Derive it from this response so a stale
+          // cached `true` cannot survive the spread and keep the Changed state
+          // (and Publish/Discard controls) on screen after the sidecar is gone.
+          return {
+            ...merged,
+            _isWorkingDraft:
+              (data as { _isWorkingDraft?: boolean })._isWorkingDraft === true,
+          };
+        });
       }
 
       // Invalidate entry list queries for this collection

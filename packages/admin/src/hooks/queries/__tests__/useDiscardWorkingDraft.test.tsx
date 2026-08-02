@@ -87,4 +87,39 @@ describe("useDiscardWorkingDraft", () => {
       "Failed to discard working draft: nope"
     );
   });
+
+  it("seeds the returned live row into the detail cache and clears the draft flag", async () => {
+    const client = makeClient();
+    // What the editor read: the pending working draft (Changed state).
+    const key = entryKeys.detailScoped("posts", "e1", {
+      locale: undefined,
+      fallbackLocale: undefined,
+      translationStatus: false,
+      draft: true,
+    });
+    client.setQueryData(key, {
+      id: "e1",
+      status: "published",
+      title: "draft-title",
+      _isWorkingDraft: true,
+    });
+    discardSpy.mockResolvedValue({
+      message: "Working draft discarded.",
+      item: { id: "e1", status: "published", title: "live-title" },
+    });
+
+    const { result } = renderHook(
+      () => useDiscardWorkingDraft({ collectionSlug: "posts", entryId: "e1" }),
+      { wrapper: makeWrapper(client) }
+    );
+
+    await result.current.mutateAsync();
+
+    // The live row replaced the draft and Changed cleared, without waiting on a
+    // refetch — so a slow/failed refetch or a remount cannot restore the draft.
+    expect(client.getQueryData(key)).toMatchObject({
+      title: "live-title",
+      _isWorkingDraft: false,
+    });
+  });
 });

@@ -86,4 +86,46 @@ describe("useUpdateEntry", () => {
       title: "new",
     });
   });
+
+  it("clears a stale _isWorkingDraft when the response omits it (publish)", async () => {
+    const client = makeClient();
+    const key = entryKeys.detailScoped("posts", "e1", {
+      locale: undefined,
+      fallbackLocale: undefined,
+      translationStatus: false,
+      draft: true,
+    });
+    // Cached as a pending working draft (Changed state on screen).
+    client.setQueryData(key, {
+      id: "e1",
+      status: "draft",
+      title: "old",
+      _isWorkingDraft: true,
+    });
+    // Publishing returns the live document WITHOUT the synthetic flag.
+    updateSpy.mockResolvedValue({
+      id: "e1",
+      status: "published",
+      title: "new",
+    });
+
+    const { result } = renderHook(
+      () =>
+        useUpdateEntry({
+          collectionSlug: "posts",
+          entryId: "e1",
+          draft: true,
+          showToast: false,
+        }),
+      { wrapper: makeWrapper(client) }
+    );
+
+    await result.current.mutateAsync({ status: "published" });
+
+    // The stale `true` did not survive the spread — Changed clears at once.
+    expect(client.getQueryData(key)).toMatchObject({
+      _isWorkingDraft: false,
+      status: "published",
+    });
+  });
 });
