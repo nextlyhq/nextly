@@ -148,6 +148,7 @@ function breakpointContexts(set: BreakpointSet): BreakpointContext[] {
     if (def.id === BASE_BREAKPOINT) continue;
     contexts.push({
       id: def.id,
+      maxWidth: def.maxWidth,
       // A container axis always emits a container query, the widest one
       // included. Left unconditional, the container's own base values would
       // apply to a node with no query-container ancestor at all, and would
@@ -288,7 +289,7 @@ function visibilityRules(
     // longer defines leaves a stored `false` that hides nothing, and saying so
     // is the difference between a node that reappears and a mystery.
     warnings.push({
-      path: pointer(pointer(basePath, "visibility"), "devices"),
+      path: pointer(pointer(pointer(basePath, "visibility"), "devices"), id),
       code: "unknown-breakpoint",
       severity: "warning",
       message: `Breakpoint "${describeValue(id)}" is not defined for this site, so this visibility setting was not applied.`,

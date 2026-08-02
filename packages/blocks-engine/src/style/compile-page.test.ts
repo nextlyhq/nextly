@@ -395,6 +395,48 @@ describe("visibility", () => {
     );
   });
 
+  it("bounds a container band the way it bounds a viewport one", () => {
+    // The container branch dropped its width, so a container band had no lower
+    // bound to end at and the node stayed hidden below the breakpoint that
+    // showed it again.
+    const cls = nodeClassName("n1");
+    const out = css(
+      doc([
+        node("n1", undefined, {
+          visibility: { devices: { "card-base": false, "card-narrow": true } },
+        }),
+      ])
+    );
+    expect(out).toBe(
+      [
+        `@container (width > 320px) {`,
+        `  .nx-pb-page .${cls}.${cls} { display: none }`,
+        `}`,
+      ].join("\n")
+    );
+  });
+
+  it("points a stale visibility warning at the setting it is about", () => {
+    // Two stale ids sharing one pointer means a consumer cannot say which
+    // setting was dropped, or highlight it.
+    const result = compilePageCss(
+      doc([
+        node("n1", undefined, {
+          visibility: { devices: { retired: false, alsoGone: false } },
+        }),
+      ]),
+      CTX
+    );
+    expect(
+      result.warnings
+        .filter(w => w.code === "unknown-breakpoint")
+        .map(w => w.path)
+    ).toEqual([
+      "/nodes/0/visibility/devices/alsoGone",
+      "/nodes/0/visibility/devices/retired",
+    ]);
+  });
+
   it("treats the two axes separately", () => {
     // A container breakpoint neither inherits from nor cancels a viewport one:
     // they ask about different boxes.
@@ -729,6 +771,30 @@ describe("diagnostics are bounded across the whole compile", () => {
     const bytes = result.warnings.reduce((sum, w) => sum + w.path.length, 0);
     expect(bytes).toBeLessThanOrEqual(MAX_STYLE_ISSUE_PATH_BYTES + 100_000);
     expect(result.warnings.length).toBeLessThanOrEqual(MAX_STYLE_ISSUES + 2);
+  });
+});
+
+describe("the compiler fails closed", () => {
+  it("writes nothing from a map it could not check", () => {
+    // Sharing one allowance across the compile means an exhausted budget
+    // reports nothing, and this decides what to write from what validation
+    // reported. A map reached after the cap would come back clean and be
+    // written unchecked, so a stored value can close its own declaration and
+    // open a rule of its own.
+    const junk: Record<string, unknown> = {};
+    for (let i = 0; i < 260; i += 1) junk[`madeUp${i}`] = "1px";
+    const result = compilePageCss(
+      doc([
+        node("a", { base: { base: junk } }),
+        node("b", { base: { base: junk } }),
+        node("z", {
+          base: { base: { color: "red; } .owned { display: block" } },
+        }),
+      ]),
+      CTX
+    );
+    expect(result.css).not.toContain(".owned");
+    expect(result.css).not.toContain("red;");
   });
 });
 

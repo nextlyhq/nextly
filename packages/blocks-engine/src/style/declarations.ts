@@ -29,7 +29,7 @@ import {
   isCssWideKeyword,
   trimCssWhitespace,
 } from "./css-value";
-import { validateStyleValues } from "./validate-style-value";
+import { budgetSpent, validateStyleValues } from "./validate-style-value";
 import type { StyleIssueBudget } from "./validate-style-value";
 
 /** One `property: value` pair bound for a rule. */
@@ -307,7 +307,38 @@ export function compileStyleValues(
   // starts fresh, so a document with a long slot key and many bad properties
   // produces diagnostics quadratic in its own size — the amplification the
   // allowance exists to stop, reintroduced by resetting it.
+  //
+  // Sharing it brings an obligation with it. This decides what to write from
+  // what validation REPORTED, and an exhausted budget reports nothing: a map
+  // reached after the allowance ran out would come back clean and be written
+  // unchecked, which is how a value like `red; } .owned { display: block` would
+  // reach a page as a rule of its own. So an exhausted budget refuses the whole
+  // map. Nothing here was checked, so nothing here is written.
+  const spentBefore = budget !== undefined && budgetSpent(budget);
   const issues = validateStyleValues(values, basePath, "strict", budget);
+  const stopped =
+    spentBefore ||
+    (budget !== undefined && budgetSpent(budget)) ||
+    issues.some(issue => issue.code === "style-issues-truncated");
+  if (stopped) {
+    return {
+      declarations: [],
+      // Silent once the run has already said it stopped. A word per refused map
+      // would repeat this map's whole pointer for every map after the cap, which
+      // is the amplification the allowance exists to prevent, restated as an
+      // explanation of the allowance.
+      warnings:
+        issues.length === 0
+          ? []
+          : [
+              ...issues,
+              warning(
+                basePath,
+                "These styles were not written, because checking stopped before they could be read."
+              ),
+            ],
+    };
+  }
   const refused = issues
     .filter(issue => issue.severity === "error")
     .map(issue => issue.path);
