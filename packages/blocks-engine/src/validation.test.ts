@@ -826,6 +826,35 @@ describe("validation never throws on adversarial input", () => {
     ]);
   });
 
+  it("asks the caller's class lookup once per id for the whole document", () => {
+    // The same reasoning as the token cache: a KNOWN id produces no issue, so
+    // nothing charges it, and a document applying a handful of site classes
+    // across thousands of nodes would ask once per occurrence to report nothing.
+    const nodes = Array.from({ length: 25 }, (_, index) => ({
+      id: `n${index}`,
+      type: "core/box",
+      version: 1,
+      props: {},
+      classes: ["c_card", "c_wide"],
+    }));
+    const asked: string[] = [];
+    const issues = validate(
+      invalidDoc({ formatVersion: 1, kind: "page", nodes }),
+      {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        mode: "strict",
+        classes: {
+          has: (id: string) => {
+            asked.push(id);
+            return true;
+          },
+        },
+      }
+    );
+    expect(issues).toEqual([]);
+    expect(asked.sort()).toEqual(["c_card", "c_wide"]);
+  });
+
   it("asks the caller's token lookup once per name for the whole document", () => {
     // The cache belongs to the walk, not to one style envelope. Built per
     // envelope it would reset at every node, state and breakpoint, so a site

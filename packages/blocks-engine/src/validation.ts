@@ -83,6 +83,37 @@ export interface ClassLookup {
   has(id: string): boolean;
 }
 
+/** Wrappers made here, so one is never wrapped twice. */
+const memoizedClassLookups = new WeakSet<ClassLookup>();
+
+/**
+ * A class lookup that asks the caller's at most once per id.
+ *
+ * The same reasoning as the token lookup: `has` is caller-supplied and may be
+ * expensive, an id repeats freely across a document, and a KNOWN id produces no
+ * issue and so is never charged the allowance that bounds everything else. A
+ * document applying twenty site classes across five thousand nodes would
+ * otherwise ask a hundred thousand times to report nothing at all.
+ */
+function memoizeClassLookup(
+  classes: ClassLookup | undefined
+): ClassLookup | undefined {
+  if (classes === undefined) return undefined;
+  if (memoizedClassLookups.has(classes)) return classes;
+  const seen = new Map<string, boolean>();
+  const lookup: ClassLookup = {
+    has(id: string): boolean {
+      const cached = seen.get(id);
+      if (cached !== undefined) return cached;
+      const known = classes.has(id);
+      seen.set(id, known);
+      return known;
+    },
+  };
+  memoizedClassLookups.add(lookup);
+  return lookup;
+}
+
 /**
  * Everything validation needs beyond the document itself. The engine never
  * reads storage: the caller supplies the site breakpoints and mode, and
@@ -158,7 +189,7 @@ export const ISSUE_CODES = {
   "style-issues-truncated":
     "More style problems were found than the validation reports.",
   "site-issues-truncated":
-    "More unresolved token and class names were found than the validation reports.",
+    "Some token and class names were not checked against the site, so any that do not resolve are not reported.",
 } as const;
 
 /** A stable validation issue code. */
@@ -260,12 +291,16 @@ export function validate(
     );
 
   const nodeState: NodeCheckState = {
-    // The token lookup is wrapped once here rather than per style envelope, so
-    // a name repeated across nodes, states and breakpoints costs the caller one
+    // Both site lookups are wrapped once here rather than per node or per style
+    // envelope, so a name repeated across the document costs the caller one
     // answer for the whole walk. Nothing else bounds that repetition: a name
-    // that resolves produces no issue, so it is never charged the allowance
+    // that RESOLVES produces no issue, so it is never charged the allowance
     // that stops the rest of the per-value work.
-    ctx: { ...ctx, tokens: memoizeTokenLookup(ctx.tokens) },
+    ctx: {
+      ...ctx,
+      tokens: memoizeTokenLookup(ctx.tokens),
+      classes: memoizeClassLookup(ctx.classes),
+    },
     issues,
     knownBreakpoints,
     unknownSeverity,
