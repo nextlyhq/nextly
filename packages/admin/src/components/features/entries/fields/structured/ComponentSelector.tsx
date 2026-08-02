@@ -340,7 +340,7 @@ export function ComponentSelector({
         {searchQuery && filteredCount !== totalCount && (
           <div className="flex items-center gap-2">
             <Badge variant="default" className="text-xs">
-              {filteredCount} of {totalCount} components
+              {filteredCount} of {totalCount} field groups
             </Badge>
           </div>
         )}

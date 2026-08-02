@@ -367,7 +367,7 @@ export function ComponentFieldEditor({
             </Badge>
             {(!components || components.length === 0) && (
               <span className="text-xs text-muted-foreground">
-                Select at least one component
+                Select at least one field group
               </span>
             )}
           </div>
