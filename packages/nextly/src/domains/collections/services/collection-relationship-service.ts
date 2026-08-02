@@ -41,6 +41,7 @@ import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import {
   applyFieldReadAccess,
+  type FailClosedRows,
   runFieldHooks,
   type ReadAccessRedactions,
 } from "../../../shared/lib/field-level-registry";
@@ -124,6 +125,15 @@ interface NestedHookStateBase {
     field: FieldDefinition;
   }>;
   /**
+   * Related-row clones whose redaction provenance the re-walk could not recover
+   * (a reshaped or id-less clone a source hook returned in place of the original,
+   * or a repeater row it reordered without a matchable id). Shared across the
+   * read like `redactions`; each flagged row has every access-controlled field
+   * denied when access is re-applied, the fail-secure default for a clone that
+   * cannot be matched to the row whose evidence would judge it correctly.
+   */
+  failClosed: FailClosedRows;
+  /**
    * Whether the walk runs each related row's `afterRead` field hooks. True for
    * the first walk; false for the authoritative re-walk of the ASSEMBLED response
    * (see {@link CollectionRelationshipService.resanitizeAssembledRows}), which
@@ -143,6 +153,7 @@ function createNestedHookState(): NestedHookState {
     labelFields: new Map(),
     redactions: new WeakMap(),
     originalRowById: new Map(),
+    failClosed: new WeakSet(),
     pending: [],
     applyFieldHooks: true,
   };
@@ -3076,7 +3087,8 @@ export class CollectionRelationshipService extends BaseService {
         collection,
         [row],
         access,
-        state.redactions
+        state.redactions,
+        state.failClosed
       );
     }
     for (const { row, collection, field } of state.pending) {
@@ -3130,6 +3142,7 @@ export class CollectionRelationshipService extends BaseService {
       labelFields: walkState.labelFields,
       redactions: walkState.redactions,
       originalRowById: walkState.originalRowById,
+      failClosed: walkState.failClosed,
       applyFieldHooks: false,
     };
     for (const entry of entries) {
@@ -3243,12 +3256,22 @@ export class CollectionRelationshipService extends BaseService {
     collection: string,
     state: NestedHookState
   ): Promise<void> {
-    const rootEvidence = state.redactions.get(original);
-    if (rootEvidence && !state.redactions.has(clone)) {
-      state.redactions.set(clone, rootEvidence);
-    }
+    this.copyRowEvidence(original, clone, state);
     const fields = await this.fieldsForNestedWalk(collection, state);
     this.transferContainerEvidence(original, clone, fields, state);
+  }
+
+  /** Copy one row's removed-field evidence onto its clone, unless the clone
+   *  already carries evidence of its own. */
+  private copyRowEvidence(
+    original: Record<string, unknown>,
+    clone: Record<string, unknown>,
+    state: NestedHookState
+  ): void {
+    const evidence = state.redactions.get(original);
+    if (evidence && !state.redactions.has(clone)) {
+      state.redactions.set(clone, evidence);
+    }
   }
 
   /** The recursive, container-level worker for {@link transferSubtreeEvidence}. */
@@ -3263,18 +3286,92 @@ export class CollectionRelationshipService extends BaseService {
       const originalRows = containerRowsOf(original[field.name]);
       const cloneRows = containerRowsOf(clone[field.name]);
       const inner = getNestedFields(field);
-      const shared = Math.min(originalRows.length, cloneRows.length);
-      for (let i = 0; i < shared; i++) {
-        const evidence = state.redactions.get(originalRows[i]);
-        if (evidence && !state.redactions.has(cloneRows[i])) {
-          state.redactions.set(cloneRows[i], evidence);
+      // A group is a single object at a fixed field name, so its original and
+      // clone correspond one-to-one with no positional guess.
+      if (isGroupField(field)) {
+        const shared = Math.min(originalRows.length, cloneRows.length);
+        for (let i = 0; i < shared; i++) {
+          this.copyRowEvidence(originalRows[i], cloneRows[i], state);
+          this.transferContainerEvidence(
+            originalRows[i],
+            cloneRows[i],
+            inner,
+            state
+          );
         }
-        this.transferContainerEvidence(
-          originalRows[i],
-          cloneRows[i],
-          inner,
-          state
-        );
+        continue;
+      }
+      // A repeater is matched by ROW id, never by array position: a hook can
+      // filter, prepend, or reorder its rows, so index i can name a different
+      // logical row on the clone than on the original — transferring evidence by
+      // index would hand a private row a public row's "allowed" evidence and let
+      // an inverse rule fall open. A clone row whose id is absent from the
+      // originals (a reordered row with no id, or a fabricated one) cannot be
+      // matched, so its whole subtree is failed closed instead of guessed.
+      const byId = new Map<string, Record<string, unknown>>();
+      for (const originalRow of originalRows) {
+        if (typeof originalRow.id === "string") {
+          byId.set(originalRow.id, originalRow);
+        }
+      }
+      for (const cloneRow of cloneRows) {
+        const match =
+          typeof cloneRow.id === "string" ? byId.get(cloneRow.id) : undefined;
+        if (match) {
+          this.copyRowEvidence(match, cloneRow, state);
+          this.transferContainerEvidence(match, cloneRow, inner, state);
+        } else {
+          state.failClosed.add(cloneRow);
+          this.flagContainerRowsFailClosed(cloneRow, inner, state);
+        }
+      }
+    }
+  }
+
+  /**
+   * Flag a related-row clone whose redaction provenance cannot be recovered, and
+   * every row inside its groups/repeaters, so the field-access pass denies each
+   * access-controlled field on it (fail-closed).
+   *
+   * A source hook that returns a deep-cloned or reshaped related row (a new object
+   * graph, or one whose id was dropped) breaks the object-keyed evidence the
+   * re-walk needs to keep an inverse conditional rule — a field visible only while
+   * a DENIED sibling is absent — from falling open. When the clone cannot be
+   * matched to its original, denying its access-controlled fields is the only safe
+   * verdict; a hook that instead transforms related rows in place, preserving
+   * their id and array order, is matched and judged normally.
+   */
+  private async flagSubtreeFailClosed(
+    row: Record<string, unknown>,
+    collection: string,
+    state: NestedHookState
+  ): Promise<void> {
+    state.failClosed.add(row);
+    const fields = await this.fieldsForNestedWalk(collection, state);
+    this.flagContainerRowsFailClosed(row, fields, state);
+    // A well-behaved hook mutates related rows in place; a reshaped or id-less
+    // clone that lands here is an anti-pattern, and silently over-removing its
+    // fields is hard to diagnose. Surface it in development so the author can
+    // switch to in-place mutation, without adding noise to production reads.
+    if (process.env.NODE_ENV !== "production") {
+      this.logger.warn(
+        `A related "${collection}" row returned by an afterRead hook could not be matched to its source row (a reshaped or id-less clone); its access-controlled fields were denied. Transform related rows in place and preserve their id to keep field access exact.`
+      );
+    }
+  }
+
+  /** Recursively flag every group/repeater row beneath `row` fail-closed. */
+  private flagContainerRowsFailClosed(
+    row: Record<string, unknown>,
+    fields: FieldDefinition[],
+    state: NestedHookState
+  ): void {
+    for (const field of fields) {
+      if (!isRepeaterOrGroupField(field) || !field.name) continue;
+      const inner = getNestedFields(field);
+      for (const child of containerRowsOf(row[field.name])) {
+        state.failClosed.add(child);
+        this.flagContainerRowsFailClosed(child, inner, state);
       }
     }
   }
@@ -3420,22 +3517,38 @@ export class CollectionRelationshipService extends BaseService {
       // recorded in the shared `redactions` so `finalizeRelatedRows` can restore
       // it as evidence and re-judge the row after every hook has run.
       //
-      // Transfer evidence from the ORIGINAL row (by id) when the WeakMap has none
-      // for this one: a source hook can return a CLONE (a new object graph the
-      // WeakMap cannot key), and without the original's removed siblings an inverse
-      // conditional rule — a field visible only while a DENIED sibling is absent —
-      // would fall open on the clone. Transferred through the whole subtree, then
-      // re-judged below (a replacement's own denied fields are still stripped).
-      if (
-        !state.redactions.has(resolved.row) &&
-        typeof resolved.row.id === "string"
-      ) {
-        const original = state.originalRowById.get(
-          relationKey(resolved.collection, resolved.row.id)
-        );
-        if (original && original !== resolved.row) {
+      // Re-establish the provenance of a row the authoritative re-walk reaches
+      // that carries no evidence of its own. A source hook can return a CLONE of
+      // a related row (a new object graph the WeakMap cannot key), and without
+      // the original's removed siblings an inverse conditional rule — a field
+      // visible only while a DENIED sibling is absent — would fall open on the
+      // clone. Only the re-walk runs this (the first walk's rows ARE the
+      // originals, recorded below and judged normally):
+      //  - a clone of a KNOWN original (same id) inherits the original's subtree
+      //    evidence and is re-judged, so a replacement's own denied fields are
+      //    still stripped;
+      //  - a row whose provenance cannot be recovered — no id, or an id never
+      //    seen in the first walk (an unidentifiable or fabricated clone) — has
+      //    its whole subtree failed closed, so every access-controlled field on
+      //    it is denied rather than judged on evidence that cannot be trusted.
+      if (!state.applyFieldHooks && !state.redactions.has(resolved.row)) {
+        const id =
+          typeof resolved.row.id === "string" ? resolved.row.id : undefined;
+        const original = id
+          ? state.originalRowById.get(relationKey(resolved.collection, id))
+          : undefined;
+        if (original === resolved.row) {
+          // The row IS the first-walk original; nothing was redacted from it, so
+          // there is no evidence to transfer and no provenance gap — judged below.
+        } else if (original) {
           await this.transferSubtreeEvidence(
             original,
+            resolved.row,
+            resolved.collection,
+            state
+          );
+        } else {
+          await this.flagSubtreeFailClosed(
             resolved.row,
             resolved.collection,
             state
@@ -3446,7 +3559,8 @@ export class CollectionRelationshipService extends BaseService {
         resolved.collection,
         [resolved.row],
         access,
-        state.redactions
+        state.redactions,
+        state.failClosed
       );
       // Remember the ORIGINAL row object by id (first walk only), so a later clone
       // of it can inherit its subtree evidence.
@@ -3568,13 +3682,16 @@ export class CollectionRelationshipService extends BaseService {
     targetCollection: string,
     rows: Record<string, unknown>[],
     access: RelatedRowAccess,
-    redactions?: ReadAccessRedactions
+    redactions?: ReadAccessRedactions,
+    failClosed?: FailClosedRows
   ): Promise<void> {
     if (!access.enforceFieldAccess || access.overrideAccess) return;
     // Share `redactions` across the two passes: the second (after hooks) restores
     // what the first removed from each row as evidence and re-judges the current
     // content, so a denied field a hook reintroduced or a row it changed is
-    // caught while an unchanged verdict stays put.
+    // caught while an unchanged verdict stays put. `failClosed` carries the rows
+    // whose provenance the re-walk could not recover, so their access-controlled
+    // fields are denied outright.
     for (const row of rows) {
       await applyFieldReadAccess(
         {
@@ -3584,7 +3701,8 @@ export class CollectionRelationshipService extends BaseService {
           user: access.user,
           overrideAccess: false,
         },
-        redactions
+        redactions,
+        failClosed
       );
     }
   }

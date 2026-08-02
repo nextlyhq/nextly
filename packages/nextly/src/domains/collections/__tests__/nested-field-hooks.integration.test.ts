@@ -113,6 +113,21 @@ async function boot(): Promise<TestNextly> {
                     (data as { tier?: unknown } | undefined)?.tier === "public",
                 },
               }),
+              // A denied field on the repeater ROW, and an INVERSE sibling visible
+              // only while `grade` is NOT "restricted". A restricted division
+              // strips both. A hook that deep-clones the org and REORDERS this
+              // repeater must not let the restricted row inherit a public row's
+              // evidence by array position and fall open: repeater rows are matched
+              // by id, not index, and an unmatchable clone row fails closed.
+              text({ name: "grade", access: { read: () => false } }),
+              text({
+                name: "openTag",
+                access: {
+                  read: ({ data }) =>
+                    (data as { grade?: unknown } | undefined)?.grade !==
+                    "restricted",
+                },
+              }),
             ],
           }),
           // A group holding a denied field, beside a top-level sibling whose
@@ -1539,5 +1554,115 @@ describe("a target's field hooks apply to rows reached through a relationship", 
     expect(Array.isArray(contributors)).toBe(true);
     expect(contributors![0]).toBeTruthy();
     expect(contributors![0].dossier).toBeUndefined();
+  });
+
+  it("matches cloned repeater rows by id, not index, when a hook reorders them", async () => {
+    // `openTag` on a division is visible only while the denied `grade` is NOT
+    // "restricted". A restricted division strips both. A source hook DEEP-clones
+    // the org and REVERSES its divisions, reintroducing `openTag` on the restricted
+    // row now sitting at the index a public row held. Transferring the cloned
+    // rows' evidence by array position would hand the restricted row the public
+    // row's (empty) evidence and let `openTag` fall open; matching by id keeps it
+    // closed, and a clone row that cannot be matched fails closed.
+    const t = await boot();
+    await t.nextly.create({
+      collection: ORGS,
+      data: {
+        name: "acme",
+        divisions: [
+          { label: "pub", grade: "open" },
+          { label: "sec", grade: "restricted", openTag: "topsecret" },
+        ],
+      },
+    });
+    const orgId = await onlyId(t, ORGS);
+    await t.nextly.create({
+      collection: AUTHORS,
+      data: { name: "ada", organization: orgId },
+    });
+    const authorId = await onlyId(t, AUTHORS);
+    await t.nextly.create({
+      collection: POSTS,
+      data: { title: "p", author: authorId },
+    });
+    const postId = await onlyId(t, POSTS);
+
+    t.hooks.register("afterRead", POSTS, ctx => {
+      const entry = ctx.data as Record<string, unknown>;
+      const author = entry.author as Record<string, unknown> | undefined;
+      const org = author?.organization as Record<string, unknown> | undefined;
+      const divisions = org?.divisions as Record<string, unknown>[] | undefined;
+      if (author && org && Array.isArray(divisions)) {
+        const reordered = [...divisions].reverse().map(d => ({ ...d }));
+        const restricted = reordered.find(d => d.label === "sec");
+        if (restricted) restricted.openTag = "LEAKED";
+        author.organization = { ...org, divisions: reordered };
+      }
+      return entry;
+    });
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    const author = expanded.data!.author as Record<string, unknown>;
+    const org = author.organization as Record<string, unknown> | undefined;
+    const divisions = (org?.divisions ?? []) as Record<string, unknown>[];
+    const restricted = divisions.find(d => d.label === "sec");
+    expect(restricted).toBeTruthy();
+    // Closed: the restricted row was judged with its OWN evidence (or failed
+    // closed), never the public row's, so the reintroduced `openTag` was stripped.
+    expect(restricted!.openTag).toBeUndefined();
+  });
+
+  it("fails closed on a related-row clone that omits its id", async () => {
+    // `openInfo` is visible only while the denied `classification` is NOT
+    // "private". A private org strips both. A source hook returns a CLONE of the
+    // sanitized org that carries `openInfo` but DROPS its id, so it cannot be
+    // matched to the original whose evidence would keep the inverse rule closed.
+    // Its provenance is unrecoverable, so its access-controlled fields are denied.
+    const t = await boot();
+    await t.nextly.create({
+      collection: ORGS,
+      data: { name: "acme", classification: "private" },
+    });
+    const orgId = await onlyId(t, ORGS);
+    await t.nextly.create({
+      collection: AUTHORS,
+      data: { name: "ada", organization: orgId },
+    });
+    const authorId = await onlyId(t, AUTHORS);
+    await t.nextly.create({
+      collection: POSTS,
+      data: { title: "p", author: authorId },
+    });
+    const postId = await onlyId(t, POSTS);
+
+    t.hooks.register("afterRead", POSTS, ctx => {
+      const entry = ctx.data as Record<string, unknown>;
+      const author = entry.author as Record<string, unknown> | undefined;
+      const org = author?.organization as Record<string, unknown> | undefined;
+      if (author && org) {
+        const clone: Record<string, unknown> = { ...org, openInfo: "LEAKED" };
+        delete clone.id;
+        author.organization = clone;
+      }
+      return entry;
+    });
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    const author = expanded.data!.author as Record<string, unknown>;
+    const org = author.organization as Record<string, unknown> | undefined;
+    expect(org).toBeTruthy();
+    // Fail-closed: an id-less clone cannot be matched, so the reintroduced
+    // `openInfo` was denied along with the org's other access-controlled fields.
+    expect(org!.openInfo).toBeUndefined();
   });
 });

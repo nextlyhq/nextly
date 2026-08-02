@@ -254,6 +254,7 @@ export function createMockRelationshipService(): MockRecord {
       labelFields: new Map(),
       redactions: new WeakMap(),
       originalRowById: new Map(),
+      failClosed: new WeakSet(),
       pending: [],
       applyFieldHooks: true,
     })),
