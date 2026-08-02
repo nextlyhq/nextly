@@ -449,6 +449,24 @@ async function boot(): Promise<TestNextly> {
               ],
             },
           }),
+          // A field-level (last-phase) hook that copies the related author's
+          // denied `dossier` onto an allowed source key. A code or stored hook
+          // that reintroduces `dossier` on the author must be re-sanitized before
+          // this phase runs, or the copy escapes the field-access system.
+          text({
+            name: "harvest",
+            hooks: {
+              afterRead: [
+                ({ value, data }) => {
+                  if (value !== "on") return value;
+                  const author = (data as { author?: { dossier?: unknown } })
+                    .author;
+                  (data as Record<string, unknown>).leaked = author?.dossier;
+                  return value;
+                },
+              ],
+            },
+          }),
           // The blog template's shape: a relationship to the built-in users
           // entity, which has no dynamic-collection record.
           relationship({ name: "owner", relationTo: "users" }),
@@ -1664,5 +1682,128 @@ describe("a target's field hooks apply to rows reached through a relationship", 
     // Fail-closed: an id-less clone cannot be matched, so the reintroduced
     // `openInfo` was denied along with the org's other access-controlled fields.
     expect(org!.openInfo).toBeUndefined();
+  });
+
+  it("decodes a relationship a hook returns as JSON with leading whitespace", async () => {
+    // A populated relationship serialized to JSON can arrive with leading
+    // whitespace (a pretty-printed hook return). The container guard detects it by
+    // the first non-whitespace character; otherwise the walk leaves it a string
+    // and the denied `dossier` inside reaches the response unsanitized.
+    const t = await boot();
+    await t.nextly.create({ collection: AUTHORS, data: { name: "c" } });
+    const contributorId = await onlyId(t, AUTHORS);
+    await t.nextly.create({ collection: POSTS, data: { title: "p" } });
+    const postId = await onlyId(t, POSTS);
+
+    t.hooks.register("afterRead", POSTS, ctx => {
+      const entry = ctx.data as Record<string, unknown>;
+      entry.contributors =
+        "\n  " +
+        JSON.stringify([{ id: contributorId, name: "c", dossier: "LEAKED" }]);
+      return entry;
+    });
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    const contributors = expanded.data!.contributors as
+      | Record<string, unknown>[]
+      | undefined;
+    expect(Array.isArray(contributors)).toBe(true);
+    expect(contributors![0].dossier).toBeUndefined();
+  });
+
+  it("fails closed on a nested row a hook replaces in place under an unchanged root", async () => {
+    // A source hook keeps the related root object identical but REPLACES a row
+    // inside its repeater, reintroducing an inverse-conditional field on the new
+    // row. The root's identity does not prove the nested row's provenance: the
+    // replacement carries no evidence, so it fails closed rather than judging the
+    // inverse field against a row that dropped its denied sibling.
+    const t = await boot();
+    await t.nextly.create({
+      collection: ORGS,
+      data: {
+        name: "acme",
+        divisions: [{ label: "d", grade: "restricted", openTag: "topsecret" }],
+      },
+    });
+    const orgId = await onlyId(t, ORGS);
+    await t.nextly.create({
+      collection: AUTHORS,
+      data: { name: "ada", organization: orgId },
+    });
+    const authorId = await onlyId(t, AUTHORS);
+    await t.nextly.create({
+      collection: POSTS,
+      data: { title: "p", author: authorId },
+    });
+    const postId = await onlyId(t, POSTS);
+
+    t.hooks.register("afterRead", POSTS, ctx => {
+      const entry = ctx.data as Record<string, unknown>;
+      const author = entry.author as Record<string, unknown> | undefined;
+      const org = author?.organization as Record<string, unknown> | undefined;
+      const divisions = org?.divisions as Record<string, unknown>[] | undefined;
+      if (Array.isArray(divisions) && divisions.length > 0) {
+        // Same org object, same divisions array — only the row is swapped.
+        divisions[0] = { label: "d", openTag: "LEAKED" };
+      }
+      return entry;
+    });
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    const author = expanded.data!.author as Record<string, unknown>;
+    const org = author.organization as Record<string, unknown> | undefined;
+    const divisions = (org?.divisions ?? []) as Record<string, unknown>[];
+    expect(divisions[0]?.label).toBe("d");
+    // Fail-closed: the replaced nested row carries no evidence, so its inverse
+    // field is denied.
+    expect(divisions[0]?.openTag).toBeUndefined();
+  });
+
+  it("re-sanitizes a related row a code hook reshapes before a later field hook reads it", async () => {
+    // A code (entity-level) afterRead hook reintroduces a denied field on a
+    // related row; a LATER field-level hook copies it onto an allowed source key.
+    // The authoritative pass runs after EACH source phase, so the denied field is
+    // stripped after the code hook and before the field hook can read it.
+    const t = await boot();
+    await t.nextly.create({ collection: ORGS, data: { name: "acme" } });
+    const orgId = await onlyId(t, ORGS);
+    await t.nextly.create({
+      collection: AUTHORS,
+      data: { name: "ada", organization: orgId, dossier: "SECRET" },
+    });
+    const authorId = await onlyId(t, AUTHORS);
+    await t.nextly.create({
+      collection: POSTS,
+      data: { title: "p", author: authorId, harvest: "on" },
+    });
+    const postId = await onlyId(t, POSTS);
+
+    t.hooks.register("afterRead", POSTS, ctx => {
+      const entry = ctx.data as Record<string, unknown>;
+      const author = entry.author as Record<string, unknown> | undefined;
+      if (author) author.dossier = "SECRET";
+      return entry;
+    });
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    // The field hook was handed a sanitized author, so it copied nothing.
+    expect(expanded.data!.leaked).toBeUndefined();
+    const author = expanded.data!.author as Record<string, unknown>;
+    expect(author.dossier).toBeUndefined();
   });
 });

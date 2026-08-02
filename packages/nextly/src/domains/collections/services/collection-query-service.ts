@@ -1598,6 +1598,18 @@ export class CollectionQueryService extends BaseService {
       const dataAfterCodeHooks = (transformedData ??
         expandedEntries) as unknown[];
 
+      // A code hook may have RETURNED a reshaped related row carrying a denied
+      // field; sanitize now, before the stored and field-level hooks run, so one
+      // of them cannot read that field and copy it onto an allowed source key the
+      // final pass no longer looks at. The authoritative pass is idempotent over
+      // the shared walk state, so running it after each source phase is safe.
+      await this.relationshipService.resanitizeAssembledRows(
+        dataAfterCodeHooks as Record<string, unknown>[],
+        params.collectionName,
+        nestedAccess,
+        nestedHookState
+      );
+
       // Execute stored afterRead hooks (UI-configured)
       const storedAfterResult =
         await this.hookService.storedHookExecutor.execute(
@@ -1628,6 +1640,15 @@ export class CollectionQueryService extends BaseService {
           stripPasswordFieldValues(entry, fields);
         }
       }
+
+      // A stored hook may likewise have reintroduced a denied related field;
+      // sanitize before the field-level hooks read the assembled document.
+      await this.relationshipService.resanitizeAssembledRows(
+        finalData as Record<string, unknown>[],
+        params.collectionName,
+        nestedAccess,
+        nestedHookState
+      );
 
       // Field-level afterRead hooks + read access (code-first functions
       // resolved via the field-level registry): hooks may transform values;
@@ -2826,6 +2847,17 @@ export class CollectionQueryService extends BaseService {
       );
       const dataAfterCodeHooks = transformedData ?? expandedEntry;
 
+      // A code hook may have RETURNED a reshaped related row carrying a denied
+      // field; sanitize now, before the stored and field-level hooks run, so one
+      // of them cannot read that field and copy it onto an allowed source key the
+      // final pass no longer looks at. Idempotent over the shared walk state.
+      await this.relationshipService.resanitizeAssembledRows(
+        [dataAfterCodeHooks],
+        params.collectionName,
+        detailNestedAccess,
+        detailNestedState
+      );
+
       // Execute stored afterRead hooks (UI-configured)
       const storedAfterResult =
         await this.hookService.storedHookExecutor.execute(
@@ -2856,6 +2888,15 @@ export class CollectionQueryService extends BaseService {
       }
       // Same defense in depth for the owner column.
       stripSystemOwnerField(finalData);
+
+      // A stored hook may likewise have reintroduced a denied related field;
+      // sanitize before the field-level hooks read the assembled document.
+      await this.relationshipService.resanitizeAssembledRows(
+        [finalData],
+        params.collectionName,
+        detailNestedAccess,
+        detailNestedState
+      );
 
       // Field-level afterRead hooks + read access — same semantics as the
       // list path above. On the whole row, before selection, so a masking rule
