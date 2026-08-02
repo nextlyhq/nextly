@@ -65,6 +65,19 @@ export interface HookWarning {
   entryId?: string;
 }
 
+/**
+ * The persisted row's id, when the data a post-commit phase was handed carries
+ * one.
+ *
+ * Shared by every producer of a failure, so they cannot disagree about whether
+ * a warning names its row. Reads defensively: a handler may have replaced the
+ * document before this phase, and a wrong id is worse than none.
+ */
+export function entryIdFromHookData(data: unknown): string | undefined {
+  const id = (data as { id?: unknown } | undefined)?.id;
+  return typeof id === "string" ? id : undefined;
+}
+
 /** Reduce a failure to what may cross a public boundary. */
 export function toHookWarning(failure: SideEffectHookFailure): HookWarning {
   return {

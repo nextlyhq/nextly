@@ -29,7 +29,10 @@
 import { NextlyError } from "../../errors/nextly-error";
 import { normalizeHookError } from "../../hooks/normalize-hook-error";
 import { singleHookNamespace } from "../../hooks/register-single-hooks";
-import { recordSideEffectWarning } from "../../hooks/side-effect-warnings";
+import {
+  entryIdFromHookData,
+  recordSideEffectWarning,
+} from "../../hooks/side-effect-warnings";
 import type { FieldHookHandler } from "../../hooks/types";
 
 import { detachData } from "./detach";
@@ -476,9 +479,11 @@ async function runFieldHooksRec(
             `Field hook "afterChange" failed for "${registryKey}.${name}" after the write committed:`,
             normalized
           );
+          const entryId = entryIdFromHookData(data);
           recordSideEffectWarning({
             phase: committedPhase,
             collection: registryKey,
+            ...(entryId ? { entryId } : {}),
             error: NextlyError.is(normalized)
               ? normalized
               : NextlyError.internal({

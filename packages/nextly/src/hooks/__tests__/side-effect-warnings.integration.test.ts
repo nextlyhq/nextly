@@ -261,6 +261,11 @@ describe("a field-level afterChange failure does not fail the write", () => {
     expect(created.warnings?.[0]).toMatchObject({
       phase: "afterCreate",
       collection: "notes",
+      // Named by the same row id an entity-level handler's warning carries.
+      // Three independent producers build these failures, and a caller cannot
+      // tell which produced one, so all three have to name the row or the
+      // field is unreliable.
+      entryId: (created.item as { id: string }).id,
     });
     expect(JSON.stringify(created.warnings)).not.toContain("field-secret");
   });

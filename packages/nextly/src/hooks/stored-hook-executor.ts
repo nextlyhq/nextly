@@ -32,7 +32,10 @@ import { isSideEffectHookType } from "./hook-registry";
 import { normalizeHookError } from "./normalize-hook-error";
 import type { PrebuiltHookContext } from "./prebuilt";
 import { getPrebuiltHook, mapHookType } from "./prebuilt";
-import { recordSideEffectWarning } from "./side-effect-warnings";
+import {
+  entryIdFromHookData,
+  recordSideEffectWarning,
+} from "./side-effect-warnings";
 import type { HookType } from "./types";
 
 /**
@@ -251,9 +254,11 @@ export class StoredHookExecutor {
           `Stored hook "${storedHook.hookId}" failed for "${context.collection}" after the write committed:`,
           normalized
         );
+        const entryId = entryIdFromHookData(context.data);
         const failure: SideEffectHookFailure = {
           phase: hookType,
           collection: context.collection,
+          ...(entryId ? { entryId } : {}),
           error: NextlyError.is(normalized)
             ? normalized
             : NextlyError.internal({

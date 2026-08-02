@@ -11,7 +11,10 @@
 import { NextlyError } from "../errors/nextly-error";
 
 import { normalizeHookError } from "./normalize-hook-error";
-import { recordSideEffectWarning } from "./side-effect-warnings";
+import {
+  entryIdFromHookData,
+  recordSideEffectWarning,
+} from "./side-effect-warnings";
 import { HOOK_TYPES } from "./types";
 import type {
   BeforeOperationArgs,
@@ -808,13 +811,7 @@ export class HookRegistry {
         // `normalizeHookError` rethrows a typed error untouched and wraps an
         // untyped one, so this is a NextlyError in practice; the guard is what
         // makes that a fact rather than an assumption.
-        // Post-commit phases see the persisted row, so its id is on the data
-        // they were handed. Read defensively: a handler may have replaced the
-        // document with something else before this phase.
-        const entryId =
-          typeof (context.data as { id?: unknown } | undefined)?.id === "string"
-            ? (context.data as { id: string }).id
-            : undefined;
+        const entryId = entryIdFromHookData(context.data);
         const failure: SideEffectHookFailure = {
           phase: hookType,
           collection: context.collection,
