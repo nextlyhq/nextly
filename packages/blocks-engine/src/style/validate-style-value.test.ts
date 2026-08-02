@@ -114,6 +114,44 @@ describe("a union says which kinds it really accepts", () => {
   });
 });
 
+describe("the union token shortcut respects the checks around it", () => {
+  it("refuses a malformed reference rather than warning about its kind", () => {
+    // A reference stands in for the whole value, so anything beside `$token` is
+    // data a reader discards in silence. Taking the kind shortcut first would
+    // let that through with a warning where the leaf refuses it outright.
+    const issues = validateStyleValues(
+      { lineHeight: { $token: "x", extra: true } },
+      "/styles",
+      "strict",
+      undefined,
+      false,
+      { kindOf: () => "color" as const }
+    );
+    expect(issues.map(i => i.severity)).toEqual(["error"]);
+  });
+
+  it("does not call the lookup once name checking has stopped", () => {
+    // `kindOf` is the caller's code. A run that has already said it stopped
+    // checking names must stop calling it, not call it and discard the answer.
+    let asked = 0;
+    const budget = newStyleIssueBudget(200, 50_000, 0);
+    validateStyleValues(
+      { lineHeight: { $token: "x" } },
+      "/styles",
+      "strict",
+      budget,
+      false,
+      {
+        kindOf: () => {
+          asked += 1;
+          return "color" as const;
+        },
+      }
+    );
+    expect(asked).toBe(0);
+  });
+});
+
 describe("a budget that predates the site allowance", () => {
   it("bounds name resolution it never knew it had", () => {
     // The structural half of this shape has been public since it shipped, so a

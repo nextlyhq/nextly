@@ -8,6 +8,7 @@
  * composite.
  */
 import { isTokenRef } from "../document";
+import type { TokenRef } from "../document";
 import { describeValue, pointer } from "../issue-text";
 import { isPlainRecord } from "../plain-record";
 import type {
@@ -536,6 +537,19 @@ function leafIssues(
 }
 
 /**
+ * Whether a token reference carries anything besides `$token`.
+ *
+ * Checked before the union shortcut below rather than left to the leaf that
+ * would eventually run. A reference stands in for the whole value, so anything
+ * beside `$token` is data a reader discards in silence, and taking the shortcut
+ * first would let a malformed reference through with a warning where the leaf
+ * would have refused it.
+ */
+function extraTokenKeys(value: TokenRef): boolean {
+  return Object.keys(value).some(key => key !== "$token");
+}
+
+/**
  * Every token kind any arm of a union accepts.
  *
  * A union accepts a token the moment one arm does, so the kinds it accepts are
@@ -693,14 +707,18 @@ function shapeIssues(
       // OR a dimension token, and a colour token there would be told the
       // property takes only numbers, steering the author away from a spelling
       // that works.
-      if (isTokenRef(value) && tokens !== undefined) {
+      // The allowance is asked BEFORE the lookup, not after: `kindOf` is the
+      // caller's code and may be expensive, and a run that has already said
+      // name checking stopped must stop calling it rather than call it and
+      // discard the answer.
+      if (isTokenRef(value) && tokens !== undefined && !extraTokenKeys(value)) {
         const kinds = unionTokenKinds(shape);
         if (kinds.length > 0) {
+          if (siteAllowanceSpent(budget)) {
+            return siteTruncationNotice(budget, path);
+          }
           const kind = tokens.kindOf(value.$token);
           if (kind !== undefined && !kinds.includes(kind)) {
-            if (siteAllowanceSpent(budget)) {
-              return siteTruncationNotice(budget, path);
-            }
             return charged(budget, {
               path,
               code: "token-kind-mismatch",
