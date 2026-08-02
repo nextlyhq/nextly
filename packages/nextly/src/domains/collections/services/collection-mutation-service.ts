@@ -3513,6 +3513,12 @@ export class CollectionMutationService extends BaseService {
       // post-commit transition event reads it. Defaults to the pre-read value so
       // a companion-only (no main status) publish still has a sane fallback.
       let lockedPreviousStatus = previousStatus;
+      // The first-publication marker this publish committed, or undefined when it recorded none.
+      // The event payload, version snapshot and workflow reaction are all built from the
+      // PRE-update row with the new status overlaid, so without carrying this across they would
+      // report the marker absent on the very publication that establishes it. Reset per attempt
+      // by the closure, so a retry after a concurrent winner does not reuse a stale value.
+      let publishFirstPublishedAt: Date | undefined;
       // The per-locale publish transitions recorded to the outbox inside the
       // transaction, replayed to the in-process workflow subscribers after it
       // commits — the durable event and the reaction event must not diverge on
@@ -3533,14 +3539,6 @@ export class CollectionMutationService extends BaseService {
       // for its event payload rather than falling back to the stale pre-read.
       const needsFreshParent = !!versionsConfig?.enabled || hasMainStatus;
 
-      // Bump `updated_at` alongside status so caches / revalidation see the change (a bare
-      // status flip left the timestamp stale). On SQLite the dynamic tables store `updated_at`
-      // as an integer Unix-seconds column (Drizzle `integer` timestamp mode), so `unixepoch()`
-      // keeps the value numeric; `CURRENT_TIMESTAMP` would write a text string and corrupt
-      // decoding/ordering. Postgres/MySQL use the native timestamp default.
-      const nowExpr =
-        this.dialect === "sqlite" ? "unixepoch()" : "CURRENT_TIMESTAMP";
-
       // Retry the whole publish+capture transaction on a version_no allocation
       // race, mirroring updateEntry.
       await withVersionConflictRetry(() =>
@@ -3553,6 +3551,7 @@ export class CollectionMutationService extends BaseService {
           // Reset per attempt because the conflict retry re-runs this closure.
           entryVanished = false;
           lockedPreviousStatus = previousStatus;
+          publishFirstPublishedAt = undefined;
           perLocaleTransitions = [];
           defaultCompanionTransitions = false;
           const lockedRow = await tx.selectOne<Record<string, unknown>>(
@@ -3638,26 +3637,35 @@ export class CollectionMutationService extends BaseService {
           }
 
           if (hasMainStatus) {
-            // Only when this call actually moves the row into published. A row that is already
-            // published is not having a first publication now, and stamping one would be worst
-            // for the rows it would hit: those published before this column existed, whose marker
-            // is null precisely because their history was never recorded. Dating them today
-            // reports a publication that did not happen, which is the one thing a null was
-            // supposed to avoid claiming.
-            //
-            // `COALESCE` still, for the transition case: it dates the FIRST publication, and
-            // expressing "only if absent" in the statement keeps that true of concurrent
-            // publishes. `nowExpr` keeps it dialect-correct without round-tripping a Date through
-            // a raw parameter.
-            const marksFirstPublication =
-              resolvePublishTransition(lockedPreviousStatus, "published") ===
-              "publish";
-            const markerAssignment = marksFirstPublication
-              ? `, ${q("first_published_at")} = COALESCE(${q("first_published_at")}, ${nowExpr})`
-              : "";
-            await tx.execute(
-              `UPDATE ${q(tableName)} SET ${q("status")} = ${ph(1)}, ${q("updated_at")} = ${nowExpr}${markerAssignment} WHERE ${q("id")} = ${ph(2)}`,
-              ["published", params.entryId]
+            // The marker this publish records, if any. Decided from the row read under the lock
+            // above, so an already-published row records nothing — which matters most for rows
+            // published before this column existed, whose marker is null precisely because their
+            // history was never captured. Dating those today would report a publication that
+            // never happened.
+            const publishNow = new Date();
+            publishFirstPublishedAt = resolveFirstPublishedStamp({
+              hasStatus: true,
+              previousStatus: lockedPreviousStatus,
+              nextStatus: "published",
+              existingMarker: (
+                lockedRow as { first_published_at?: unknown } | undefined
+              )?.first_published_at,
+              now: publishNow,
+            });
+            // Through the adapter's Drizzle layer rather than an interpolated statement. That
+            // also removes the reason the previous version needed a SQL `now()` expression: a
+            // `Date` bound as a raw parameter stores wrong against SQLite's integer timestamps,
+            // while Drizzle converts it per dialect.
+            await tx.update(
+              tableName,
+              {
+                status: "published",
+                updated_at: publishNow,
+                ...(publishFirstPublishedAt
+                  ? { first_published_at: publishFirstPublishedAt }
+                  : {}),
+              },
+              this.whereEq("id", params.entryId)
             );
           }
           if (companion && companionPublishable) {
@@ -3675,8 +3683,18 @@ export class CollectionMutationService extends BaseService {
             // this transaction holds one (which would deadlock a one-connection
             // pool). Undefined only if the row vanished, which the lock above
             // already rules out.
+            // The marker is overlaid alongside the status for the same reason: it was written by
+            // the UPDATE above and so is not on the pre-image this row is built from. Without it
+            // the publication event and the captured version would both report no first
+            // publication for the write that just established one.
             publishedParentRow = lockedSchemaRow
-              ? { ...lockedSchemaRow, status: "published" }
+              ? {
+                  ...lockedSchemaRow,
+                  status: "published",
+                  ...(publishFirstPublishedAt
+                    ? { first_published_at: publishFirstPublishedAt }
+                    : {}),
+                }
               : undefined;
 
             // Record a version snapshot for the publish: publishing changes the

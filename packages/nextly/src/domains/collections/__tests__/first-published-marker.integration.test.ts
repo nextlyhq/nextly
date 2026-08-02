@@ -42,6 +42,12 @@ function txEntries(t: TestNextly) {
   return t.getService("collectionsHandler").getEntryService();
 }
 
+/** Narrow an unknown payload branch before indexing it, so a shape change surfaces as a failed
+ *  assertion rather than an `undefined` that quietly satisfies the test. */
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null;
+}
+
 /** Rows read straight from the physical table, so the assertion sees the column itself rather
  *  than whatever the read shape chooses to project. */
 async function tableRows(
@@ -371,6 +377,60 @@ describe("first_published_at", () => {
     expect(String((await storedRow(current, id)).first_published_at)).toBe(
       before
     );
+  });
+
+  it("reports the marker on the publish-all event that establishes it", async () => {
+    // The event payload, the version snapshot and the workflow reaction are all built from the
+    // PRE-update row with the new status overlaid, because publishing otherwise changes nothing
+    // else. The marker is the exception: it IS written by that update, so without carrying it
+    // across, the one event that announces a first publication reports no first publication.
+    current = await createTestNextly({ collections: [posts()] });
+    const h = handler(current);
+
+    const created = await h.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "wip", status: "draft" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    await h.publishAllLocales({
+      collectionName: "posts",
+      entryId: id,
+      overrideAccess: true,
+    });
+    await current.events.settle();
+
+    const rows =
+      await current.adapter.select<Record<string, unknown>>("nextly_events");
+    const published = rows.filter(r => r.type === "entry.published");
+    expect(published.length).toBeGreaterThan(0);
+
+    // Asserting the VALUE, not the presence of the key. The pre-image row carries
+    // `first_published_at: null`, so the key is in the payload either way — a substring or
+    // `in` check passes with the overlay removed and proves nothing.
+    const markers = published.map(row => {
+      const raw = row.payload;
+      const payload =
+        typeof raw === "string"
+          ? (JSON.parse(raw) as Record<string, unknown>)
+          : ((raw ?? {}) as Record<string, unknown>);
+      const data = payload.data;
+      return isRecord(data) ? data.first_published_at : undefined;
+    });
+    expect(markers.some(m => m != null)).toBe(true);
+
+    // And the pre-image must still say it was absent: the event describes a transition, so a
+    // `previous` that already carried the marker would report no change.
+    const previousMarkers = published.map(row => {
+      const raw = row.payload;
+      const payload =
+        typeof raw === "string"
+          ? (JSON.parse(raw) as Record<string, unknown>)
+          : ((raw ?? {}) as Record<string, unknown>);
+      const previous = payload.previous;
+      return isRecord(previous) ? previous.first_published_at : undefined;
+    });
+    expect(previousMarkers.every(m => m == null)).toBe(true);
   });
 
   it("records a Single's first publication, and reads still work", async () => {
