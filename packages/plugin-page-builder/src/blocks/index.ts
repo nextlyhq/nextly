@@ -21,3 +21,22 @@ export {
   PAGE_BUILDER_PLUGIN,
 } from "./registration-service";
 export type { BlockRegistrationService } from "./registration-service";
+
+/**
+ * What a page render provides to every block.
+ *
+ * An app names this as its block render context in one line of its own source,
+ * which is what makes `ctx.data` typed for blocks it writes:
+ *
+ * ```ts
+ * declare module "@nextlyhq/plugin-sdk/blocks" {
+ *   interface BlockRenderContext extends PageContext {}
+ * }
+ * ```
+ */
+export type {
+  DataProvider,
+  FindArgs,
+  PageContext,
+  QueryBudget,
+} from "./context";
