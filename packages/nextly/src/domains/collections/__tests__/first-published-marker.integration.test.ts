@@ -524,6 +524,58 @@ describe("first_published_at", () => {
     }
   });
 
+  it("leaves a legacy already-public document unmarked when a translation publishes", async () => {
+    // The row this protects: published before this column existed, so its marker is null because
+    // the history was never recorded, not because it was never public. Publishing a translation
+    // afterwards must not date its first publication from today — the per-locale transition sees
+    // that one locale going live and cannot tell it apart from the document becoming public.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "fpmlegacy",
+          status: true,
+          localized: true,
+          fields: [text({ name: "title", localized: true })],
+        }),
+      ],
+      localization: { locales: ["en", "es"], defaultLocale: "en" },
+    });
+    const h = handler(current);
+
+    const created = await h.createEntry(
+      { collectionName: "fpmlegacy", overrideAccess: true, locale: "en" },
+      { title: "live", status: "published" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    // Clear the marker to reproduce an upgraded row: already public, no recorded history.
+    await current.adapter.update(
+      "dc_fpmlegacy",
+      { first_published_at: null },
+      { and: [{ column: "id", op: "=", value: id }] }
+    );
+    const rows =
+      await current.adapter.select<Record<string, unknown>>("dc_fpmlegacy");
+    const legacy = rows.find(r => r.id === id) ?? {};
+    expect(legacy.status).toBe("published");
+    expect(legacy.first_published_at).toBeFalsy();
+
+    await h.updateEntry(
+      {
+        collectionName: "fpmlegacy",
+        entryId: id,
+        locale: "es",
+        overrideAccess: true,
+      },
+      { title: "hola", status: "published" }
+    );
+
+    const after = (
+      await current.adapter.select<Record<string, unknown>>("dc_fpmlegacy")
+    ).find(r => r.id === id);
+    expect(after?.first_published_at).toBeFalsy();
+  });
+
   it("records a Single's first publication, and reads still work", async () => {
     // This test used to assert the OPPOSITE. A Single's physical table was built by a generator
     // that restated the system columns by hand, so this column reached the runtime schema and not
@@ -564,6 +616,32 @@ describe("first_published_at", () => {
     // inspecting the table.
     const read = await singles.get("fpmbanner", { overrideAccess: true });
     expect(read).toBeTruthy();
+  });
+
+  it("keeps a Single's own field named created_by", async () => {
+    // A single has no owner column — its system columns are id, title, slug, the timestamps,
+    // status and the marker — so `created_by` is an ordinary field name a single may declare.
+    // Reserving it on singles because collections reserve it would silently discard the user's
+    // own column on every update, which is why the reserved set follows the column rather than
+    // being shared wholesale.
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "fpmowner",
+          fields: [text({ name: "title" }), text({ name: "created_by" })],
+        }),
+      ],
+    });
+    const singles = current.getService("singleEntryService");
+
+    await singles.update(
+      "fpmowner",
+      { title: "hi", created_by: "written by the user" },
+      { overrideAccess: true }
+    );
+
+    const row = (await tableRows(current, "single_fpmowner"))[0] ?? {};
+    expect(row.created_by).toBe("written by the user");
   });
 
   it("ignores a marker supplied by the client on a Single", async () => {

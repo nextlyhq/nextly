@@ -256,3 +256,74 @@ describe("selectPublicationTransition", () => {
     ).toBe(now);
   });
 });
+
+describe("selectPublicationTransition — already-public documents", () => {
+  const now = new Date("2026-08-02T10:00:00.000Z");
+  const stampFor = (t: {
+    previousStatus: string | null | undefined;
+    nextStatus: unknown;
+  }) =>
+    resolveFirstPublishedStamp({
+      hasStatus: true,
+      previousStatus: t.previousStatus,
+      nextStatus: t.nextStatus,
+      existingMarker: null,
+      now,
+    });
+
+  it("records nothing when the main row is already public", () => {
+    // The upgraded row: already published, marker null because the history was never recorded.
+    // Publishing a translation afterwards must not date its first publication from today.
+    const t = selectPublicationTransition({
+      writesStatusToCompanion: true,
+      mainPreviousStatus: "published",
+      mainNextStatus: undefined,
+      companionPreviousStatus: "draft",
+      companionNextStatus: "published",
+      documentAlreadyPublic: true,
+    });
+    expect(stampFor(t)).toBeUndefined();
+  });
+
+  it("records nothing when another locale is already public", () => {
+    // Same reasoning through a different route: some other translation is already live, so the
+    // document was reachable before this write.
+    const t = selectPublicationTransition({
+      writesStatusToCompanion: true,
+      mainPreviousStatus: "draft",
+      mainNextStatus: undefined,
+      companionPreviousStatus: "draft",
+      companionNextStatus: "published",
+      documentAlreadyPublic: true,
+    });
+    expect(stampFor(t)).toBeUndefined();
+  });
+
+  it("still records when nothing else was public", () => {
+    // The flag must not suppress the case it exists to disambiguate: a genuinely first
+    // publication made through a translation.
+    const t = selectPublicationTransition({
+      writesStatusToCompanion: true,
+      mainPreviousStatus: "draft",
+      mainNextStatus: undefined,
+      companionPreviousStatus: "draft",
+      companionNextStatus: "published",
+      documentAlreadyPublic: false,
+    });
+    expect(stampFor(t)).toBe(now);
+  });
+
+  it("ignores the flag for a main-row write", () => {
+    // A default-locale or non-localized write is judged on the main row's own transition; an
+    // already-published main row cannot publish again, which the shared rule already handles.
+    const t = selectPublicationTransition({
+      writesStatusToCompanion: false,
+      mainPreviousStatus: "draft",
+      mainNextStatus: "published",
+      companionPreviousStatus: "published",
+      companionNextStatus: "published",
+      documentAlreadyPublic: true,
+    });
+    expect(stampFor(t)).toBe(now);
+  });
+});

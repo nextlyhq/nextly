@@ -1557,6 +1557,34 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * Whether any locale OTHER than `exceptLocale` currently has this document published.
+   *
+   * Answers a document-level question the per-locale status cannot: publishing one translation
+   * makes a document public only if no other part of it already was. Reads by table name through
+   * the transaction, mirroring `readCompanionStatus`, because the companion table is created
+   * dynamically and has no Drizzle object on this path.
+   */
+  private async hasOtherPublishedLocale(
+    tx: TransactionContext,
+    companionTableName: string,
+    entryId: string,
+    exceptLocale: string
+  ): Promise<boolean> {
+    const isMysqlDialect = this.dialect === "mysql";
+    const quote = (id: string) => (isMysqlDialect ? `\`${id}\`` : `"${id}"`);
+    const placeholder = (i: number) =>
+      this.dialect === "postgresql" ? `$${i}` : "?";
+    const rows = await tx.execute<{ _locale?: unknown }>(
+      `SELECT ${quote("_locale")} FROM ${quote(companionTableName)} ` +
+        `WHERE ${quote("_parent")} = ${placeholder(1)} ` +
+        `AND ${quote("_status")} = ${placeholder(2)} ` +
+        `AND ${quote("_locale")} <> ${placeholder(3)} LIMIT 1`,
+      [entryId, "published", exceptLocale]
+    );
+    return rows.length > 0;
+  }
+
+  /**
    * Assemble the document a draft promotion actually persists: the draft with the
    * caller's scalars overlaid, the caller's single-component patches merged onto
    * the draft's components (a patch wins per sub-field, recursing into nested
@@ -2757,7 +2785,7 @@ export class CollectionMutationService extends BaseService {
         // both snake and camel) so the generated id, stamped owner, and
         // timestamps below are authoritative — a stray `createdBy` alias can't
         // survive to overwrite the owner stamp.
-        ...stripImmutableSystemFields(finalData),
+        ...stripImmutableSystemFields(finalData, "collection"),
         created_at: now,
         updated_at: now,
         // Stamp the row owner with the creating user's id so owner-only access
@@ -5021,7 +5049,7 @@ export class CollectionMutationService extends BaseService {
           // rather than inferred: the literal's own shape would refuse the
           // first-publish stamp appended before the UPDATE is assembled.
           let updatePayload: Record<string, unknown> = {
-            ...stripImmutableSystemFields(finalData),
+            ...stripImmutableSystemFields(finalData, "collection"),
             updatedAt: new Date(),
           };
 
@@ -5386,7 +5414,7 @@ export class CollectionMutationService extends BaseService {
               componentFieldData = draftParts.componentFieldData;
               manyToManyData = draftParts.manyToManyData;
               updatePayload = {
-                ...stripImmutableSystemFields(finalData),
+                ...stripImmutableSystemFields(finalData, "collection"),
                 updatedAt: updatePayload.updatedAt,
               };
               promotedDraft = true;
@@ -5425,7 +5453,30 @@ export class CollectionMutationService extends BaseService {
           // Which transition to read therefore depends on where this write's status lands. A
           // non-default-locale write has its status stripped from the main payload and carried on
           // the companion instead, so the main row's status would show no move at all.
+          // Only asked when a per-locale write could otherwise record a first publication, which
+          // for any one document happens at most once ever — every later write is stopped by the
+          // marker already being set. So the common publish pays nothing for this read.
+          const couldRecordFirstPublication =
+            collectionHasStatus &&
+            isNonDefaultLocaleStatusWrite &&
+            (preUpdateRow as { first_published_at?: unknown } | undefined)
+              ?.first_published_at == null &&
+            localizedUpdate?.companionData?._status === "published";
+          const documentAlreadyPublic = couldRecordFirstPublication
+            ? ((preUpdateRow as { status?: unknown } | undefined)?.status as
+                | string
+                | undefined) === "published" ||
+              (localizedUpdate?.hasStatus === true &&
+                (await this.hasOtherPublishedLocale(
+                  tx,
+                  localizedUpdate.companionTableName,
+                  params.entryId,
+                  localizedUpdate.writeLocale
+                )))
+            : false;
+
           const publicationTransition = selectPublicationTransition({
+            documentAlreadyPublic,
             writesStatusToCompanion: isNonDefaultLocaleStatusWrite,
             mainPreviousStatus:
               ((preUpdateRow as { status?: unknown } | undefined)?.status as
@@ -7074,7 +7125,7 @@ export class CollectionMutationService extends BaseService {
         // both snake and camel) so the generated id, stamped owner, and
         // timestamps below are authoritative — a stray `createdBy` alias can't
         // survive to overwrite the owner stamp.
-        ...stripImmutableSystemFields(finalData),
+        ...stripImmutableSystemFields(finalData, "collection"),
         // Snake_case keys: the runtime Drizzle schema names these columns
         // created_at / updated_at / created_by, and the adapter maps by column
         // name. (The prior camelCase createdAt/updatedAt keys here were ignored
@@ -7707,7 +7758,7 @@ export class CollectionMutationService extends BaseService {
       const [updated] = await tx.update<unknown>(
         tableName,
         {
-          ...stripImmutableSystemFields(finalData),
+          ...stripImmutableSystemFields(finalData, "collection"),
           updatedAt: nowForTxUpdate,
           ...(txUpdateStamp ? { first_published_at: txUpdateStamp } : {}),
         },
@@ -8566,7 +8617,7 @@ export class CollectionMutationService extends BaseService {
         // both snake and camel) so the generated id, stamped owner, and
         // timestamps below are authoritative — a stray `createdBy` alias can't
         // survive to overwrite the owner stamp.
-        ...stripImmutableSystemFields(finalData),
+        ...stripImmutableSystemFields(finalData, "collection"),
         // Snake_case keys: the runtime Drizzle schema names these columns
         // created_at / updated_at / created_by, and the adapter maps by column
         // name. (The prior camelCase createdAt/updatedAt keys here were ignored
@@ -9221,7 +9272,7 @@ export class CollectionMutationService extends BaseService {
       const [updated] = await tx.update<unknown>(
         tableName,
         {
-          ...stripImmutableSystemFields(finalData),
+          ...stripImmutableSystemFields(finalData, "collection"),
           updatedAt: new Date(),
         },
         this.whereEq("id", entryId),

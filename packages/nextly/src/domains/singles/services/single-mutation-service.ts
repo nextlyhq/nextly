@@ -877,7 +877,8 @@ export class SingleMutationService extends BaseService {
       // and the marker is meant to be set once, so a caller able to supply it could date a
       // publication that never happened or overwrite a real one.
       const snakeCaseData = stripImmutableSystemFields(
-        keysToSnakeCase(serializedData) as Record<string, unknown>
+        keysToSnakeCase(serializedData) as Record<string, unknown>,
+        "single"
       );
       // Commit the scalar update, the component subtree writes, the companion
       // upsert, AND the version snapshot atomically so any failure rolls back the

@@ -62,7 +62,10 @@ import type {
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
-import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
+import {
+  convertTimestampsToCamelCase,
+  SYSTEM_TIMESTAMP_KEYS,
+} from "../../../shared/lib/case-conversion";
 import {
   applyFieldReadAccess,
   runFieldHooks,
@@ -2646,13 +2649,10 @@ export class CollectionQueryService extends BaseService {
               localeUnknown: false,
             }
           );
-          for (const key of [
-            "id",
-            "createdAt",
-            "created_at",
-            "updatedAt",
-            "updated_at",
-          ]) {
+          // Every system timestamp spelling, taken from the shared list rather than named here.
+          // Naming them is why the first-publication marker was pruned from this view while an
+          // ordinary read of the same document returned it.
+          for (const key of ["id", ...SYSTEM_TIMESTAMP_KEYS]) {
             if (key in rawSnapshot) shapedDraft[key] = rawSnapshot[key];
           }
           let draftEntry = shapedDraft;
@@ -3288,18 +3288,14 @@ export class CollectionQueryService extends BaseService {
       result.id = entry.id;
     }
 
-    // Always include timestamps for consistency across responses
-    if (entry.created_at !== undefined) {
-      result.created_at = entry.created_at;
-    }
-    if (entry.updated_at !== undefined) {
-      result.updated_at = entry.updated_at;
-    }
-    if (entry.createdAt !== undefined) {
-      result.createdAt = entry.createdAt;
-    }
-    if (entry.updatedAt !== undefined) {
-      result.updatedAt = entry.updatedAt;
+    // Always include the system timestamps, for consistency across responses. Taken from the
+    // shared list rather than named one by one: this ran BEFORE camelCase conversion and knew
+    // only the original two, so a selected read dropped the first-publication marker even when
+    // the caller asked for it by name.
+    for (const key of SYSTEM_TIMESTAMP_KEYS) {
+      if (entry[key] !== undefined) {
+        result[key] = entry[key];
+      }
     }
 
     for (const fieldPath of selectedFields) {

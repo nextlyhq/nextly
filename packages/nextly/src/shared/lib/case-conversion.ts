@@ -137,11 +137,22 @@ export function keysToSnakeCase(obj: unknown): unknown {
  * that returned it. That is what happened to `first_published_at`: create responses carried
  * `firstPublishedAt` while list and detail reads returned the raw column name.
  */
-const TIMESTAMP_COLUMN_NAMES: ReadonlyArray<readonly [string, string]> = [
-  ["created_at", "createdAt"],
-  ["updated_at", "updatedAt"],
-  ["first_published_at", "firstPublishedAt"],
-];
+export const TIMESTAMP_COLUMN_NAMES: ReadonlyArray<readonly [string, string]> =
+  [
+    ["created_at", "createdAt"],
+    ["updated_at", "updatedAt"],
+    ["first_published_at", "firstPublishedAt"],
+  ];
+
+/**
+ * Every spelling of every system timestamp, both the physical column and the API name.
+ *
+ * Exported for the response shapers that decide which system keys to carry through a projection.
+ * They listed the two they knew about, which is why a third was pruned from selected reads and
+ * working-draft views while ordinary reads returned it.
+ */
+export const SYSTEM_TIMESTAMP_KEYS: readonly string[] =
+  TIMESTAMP_COLUMN_NAMES.flat();
 
 /**
  * Convert the DB timestamp columns on a row object into their camelCase API form and remove the

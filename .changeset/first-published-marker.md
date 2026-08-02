@@ -22,10 +22,14 @@
 "@nextlyhq/tsconfig": patch
 ---
 
-Collections with Draft/Published now record when an entry first went live, in a new `firstPublishedAt` timestamp.
+Collections and singles with Draft/Published now record when a document first went live, in a new `firstPublishedAt` timestamp.
 
 Until now a row only said what it IS. Unpublishing sent it back to draft and erased every trace it had ever been public, even though the inbound links, feeds and search results it collected while live were still out there. Anything that needs to ask "was this address ever public" had nothing to read.
 
 The value is set once, on the first transition into published, and never changes afterwards: it is the date of the first publication, not the most recent one. It survives an unpublish, and it stays empty for an entry that has only ever been a draft. Entries that already existed keep an empty value, because whether they were once published was never recorded and cannot be recovered after the fact.
 
-Collections without Draft/Published do not get the column: they have no unpublished state, so there is no transition to record. Singles do not get it yet either.
+Collections and singles without Draft/Published do not get the column: they have no unpublished state, so there is no transition to record.
+
+For a collection translated into several languages, the value answers whether the document has been public in any language, since every translation shares one address. Publishing a single translation therefore records it.
+
+The value is set by Nextly alone. A `firstPublishedAt` sent in a create or update request is ignored, so the recorded date is always one that actually happened.

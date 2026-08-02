@@ -143,16 +143,32 @@ export function selectPublicationTransition(args: {
   companionPreviousStatus: string | null | undefined;
   /** The status this write assigns to the companion. */
   companionNextStatus: unknown;
+  /**
+   * Whether the document is ALREADY reachable by some route this write does not touch — its main
+   * row, or another locale.
+   *
+   * Only consulted for a per-locale write, and it is what stops a translation going live from
+   * being read as the document becoming public. It matters most for rows published before the
+   * marker column existed: their marker is null because the history was never recorded, not
+   * because they were never public, and without this the next translation anyone publishes would
+   * date their first publication from today.
+   */
+  documentAlreadyPublic?: boolean;
 }): { previousStatus: string | null | undefined; nextStatus: unknown } {
-  return args.writesStatusToCompanion
-    ? {
-        previousStatus: args.companionPreviousStatus,
-        nextStatus: args.companionNextStatus,
-      }
-    : {
-        previousStatus: args.mainPreviousStatus,
-        nextStatus: args.mainNextStatus,
-      };
+  if (!args.writesStatusToCompanion) {
+    return {
+      previousStatus: args.mainPreviousStatus,
+      nextStatus: args.mainNextStatus,
+    };
+  }
+  return {
+    // Reported as already published rather than by a separate flag, so the one rule that decides
+    // what a publication is stays the only place that decides it.
+    previousStatus: args.documentAlreadyPublic
+      ? "published"
+      : args.companionPreviousStatus,
+    nextStatus: args.companionNextStatus,
+  };
 }
 
 export function resolveFirstPublishedStamp(args: {
