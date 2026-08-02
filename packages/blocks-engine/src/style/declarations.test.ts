@@ -56,3 +56,30 @@ describe("a url is written as a quoted CSS string", () => {
     expect(declarations[0]?.value).toBe('url("/a.png")');
   });
 });
+
+describe("a union that writes nothing still explains itself", () => {
+  it("keeps the objection of the arm that matched, not of the first tried", () => {
+    // `borderRadius` is one scalar OR four named corners, and the two arms are
+    // structurally disjoint: handed an object, the scalar arm places nothing and
+    // says nothing, because an object is not a value it could have read. Only
+    // the corner arm can object, so keeping the first arm's silence would return
+    // neither the declaration nor the reason it is missing.
+    const out = compileStyleValues(
+      { borderRadius: { startStart: { $token: "not a token name!" } } },
+      "/styles"
+    );
+    expect(out.declarations).toEqual([]);
+    expect(out.warnings.length).toBeGreaterThan(0);
+    expect(out.warnings.map(issue => issue.path).join(" ")).toContain(
+      "borderRadius"
+    );
+  });
+
+  it("still keeps the FIRST objection when more than one arm can object", () => {
+    // Two arms that can both read the value is the other shape of the same
+    // union, and there the first objection is the one that explains it.
+    const out = compileStyleValues({ borderRadius: "not a length" }, "/styles");
+    expect(out.declarations).toEqual([]);
+    expect(out.warnings.length).toBeGreaterThan(0);
+  });
+});

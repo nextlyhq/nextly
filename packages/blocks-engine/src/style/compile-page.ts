@@ -133,7 +133,31 @@ function breakpointContexts(set: BreakpointSet): BreakpointContext[] {
   ];
   const widthDescending = (a: BreakpointDef, b: BreakpointDef): number =>
     (b.maxWidth ?? Infinity) - (a.maxWidth ?? Infinity);
-  for (const def of [...set.viewport].sort(widthDescending)) {
+  // The breakpoint set comes from stored settings, so it is read the way
+  // validation reads it: as untrusted. A null axis or a malformed definition is
+  // skipped rather than dereferenced, because throwing here would take down
+  // every page on the site over one corrupt settings record, and rendering is
+  // the half a reader still gets after forgiving validation let the document
+  // through.
+  //
+  // A definition whose `maxWidth` is not a finite number is dropped rather than
+  // treated as unbounded. Unbounded is not a safe reading of a broken bound: it
+  // would emit the breakpoint's values unconditionally, applying at every width
+  // the author meant to exclude. Dropped, the id is simply not one this site
+  // defines, and the values keyed to it are reported as stale like any other.
+  const rawSet: unknown = set;
+  const axisDefs = (axis: "viewport" | "container"): BreakpointDef[] => {
+    const defs = isPlainRecord(rawSet) ? rawSet[axis] : undefined;
+    if (!Array.isArray(defs)) return [];
+    return defs.filter((def: unknown): def is BreakpointDef => {
+      if (!isPlainRecord(def) || typeof def.id !== "string") return false;
+      return (
+        def.maxWidth === undefined ||
+        (typeof def.maxWidth === "number" && Number.isFinite(def.maxWidth))
+      );
+    });
+  };
+  for (const def of axisDefs("viewport").sort(widthDescending)) {
     if (def.id === BASE_BREAKPOINT) continue;
     contexts.push({
       id: def.id,
@@ -144,7 +168,7 @@ function breakpointContexts(set: BreakpointSet): BreakpointContext[] {
         : { atRule: `@media (max-width: ${def.maxWidth}px)` }),
     });
   }
-  for (const def of [...set.container].sort(widthDescending)) {
+  for (const def of axisDefs("container").sort(widthDescending)) {
     if (def.id === BASE_BREAKPOINT) continue;
     contexts.push({
       id: def.id,
@@ -167,6 +191,70 @@ function breakpointContexts(set: BreakpointSet): BreakpointContext[] {
 /** The breakpoint id meaning "no media query" in a stored style envelope. */
 export const BASE_BREAKPOINT = "base";
 
+/** How many stale-breakpoint warnings one compile reports. */
+const MAX_STALE_BREAKPOINT_WARNINGS = 50;
+
+/** How many bytes of JSON-Pointer those warnings may spend between them. */
+const MAX_STALE_BREAKPOINT_PATH_BYTES = 10_000;
+
+/**
+ * What a compile may spend saying that a breakpoint id no longer resolves.
+ *
+ * A stale id costs one warning per place it appears, and every one of those
+ * repeats the whole pointer above it — a long ancestor slot key included. A
+ * document inside the byte cap can therefore hold enough of them to answer with
+ * output far larger than itself, which is the amplification a bound exists to
+ * stop.
+ *
+ * Bounded on its own rather than against the style-issue budget, and the
+ * separation is the point. That budget decides what gets WRITTEN: a style map
+ * reached after it runs out is refused rather than written unchecked. Charging
+ * these warnings to it would let one settings record with many stale ids spend
+ * the allowance on diagnostics and take the whole page's CSS down behind them,
+ * so renaming a breakpoint would blank every page that referenced it. These
+ * cost only their own output.
+ */
+interface StaleIdAllowance {
+  remaining: number;
+  pathBytes: number;
+  announced: boolean;
+}
+
+function newStaleIdAllowance(): StaleIdAllowance {
+  return {
+    remaining: MAX_STALE_BREAKPOINT_WARNINGS,
+    pathBytes: MAX_STALE_BREAKPOINT_PATH_BYTES,
+    announced: false,
+  };
+}
+
+/**
+ * Report one stale-breakpoint warning, or say once that the rest are not being
+ * reported. Silent after that: a word per unreported id would be the
+ * amplification restated as an explanation of the bound.
+ */
+function pushStaleIdWarning(
+  allowance: StaleIdAllowance,
+  warnings: ValidationIssue[],
+  issue: ValidationIssue
+): void {
+  if (allowance.remaining <= 0 || allowance.pathBytes <= 0) {
+    if (allowance.announced) return;
+    allowance.announced = true;
+    warnings.push({
+      path: "",
+      code: "style-issues-truncated",
+      severity: "warning",
+      message:
+        "More breakpoint ids are referenced than this site defines than are reported here, so some values and visibility settings were left out of the stylesheet without being listed.",
+    });
+    return;
+  }
+  allowance.remaining -= 1;
+  allowance.pathBytes -= issue.path.length;
+  warnings.push(issue);
+}
+
 /**
  * Warn for style values keyed to a breakpoint the site does not define.
  *
@@ -179,16 +267,17 @@ export const BASE_BREAKPOINT = "base";
 function unknownBreakpointWarnings(
   styles: NodeStyles,
   basePath: string,
-  contexts: readonly BreakpointContext[]
-): ValidationIssue[] {
+  contexts: readonly BreakpointContext[],
+  warnings: ValidationIssue[],
+  allowance: StaleIdAllowance
+): void {
   const known = new Set(contexts.map(context => context.id));
-  const issues: ValidationIssue[] = [];
   for (const state of STYLE_STATES) {
     const byBreakpoint = styles[state];
     if (!isPlainRecord(byBreakpoint)) continue;
     for (const id of Object.keys(byBreakpoint).sort()) {
       if (known.has(id)) continue;
-      issues.push({
+      pushStaleIdWarning(allowance, warnings, {
         path: pointer(pointer(basePath, state), id),
         code: "unknown-breakpoint",
         severity: "warning",
@@ -196,7 +285,6 @@ function unknownBreakpointWarnings(
       });
     }
   }
-  return issues;
 }
 
 /** Compile one styles envelope into rules under one selector. */
@@ -207,10 +295,11 @@ function envelopeRules(
   contexts: readonly BreakpointContext[],
   tokenPrefix: string,
   warnings: ValidationIssue[],
-  budget: StyleIssueBudget
+  budget: StyleIssueBudget,
+  staleIds: StaleIdAllowance
 ): CssRule[] {
   if (!isPlainRecord(styles)) return [];
-  warnings.push(...unknownBreakpointWarnings(styles, basePath, contexts));
+  unknownBreakpointWarnings(styles, basePath, contexts, warnings, staleIds);
   const rules: CssRule[] = [];
   for (const context of contexts) {
     for (const state of STYLE_STATES) {
@@ -277,7 +366,8 @@ function visibilityRules(
   selector: string,
   contexts: readonly BreakpointContext[],
   basePath: string,
-  warnings: ValidationIssue[]
+  warnings: ValidationIssue[],
+  staleIds: StaleIdAllowance
 ): CssRule[] {
   const devices = node.visibility?.devices;
   if (!isPlainRecord(devices)) return [];
@@ -288,7 +378,7 @@ function visibilityRules(
     // The same promise the style envelope keeps: a breakpoint the site no
     // longer defines leaves a stored `false` that hides nothing, and saying so
     // is the difference between a node that reappears and a mystery.
-    warnings.push({
+    pushStaleIdWarning(staleIds, warnings, {
       path: pointer(pointer(pointer(basePath, "visibility"), "devices"), id),
       code: "unknown-breakpoint",
       severity: "warning",
@@ -432,6 +522,9 @@ export function compilePageCss(
   // document with a long slot key and many bad values would answer with output
   // quadratic in its own size.
   const budget = newStyleIssueBudget();
+  // Bounded separately from the budget above, so a settings record full of
+  // stale ids costs its own diagnostics and not the page's stylesheet.
+  const staleIds = newStaleIdAllowance();
   const contexts = breakpointContexts(ctx.breakpoints);
   const tokenPrefix = ctx.tokenPrefix ?? DEFAULT_TOKEN_PREFIX;
   // A scope is a class the renderer also puts on the mounted root, so it is
@@ -458,7 +551,8 @@ export function compilePageCss(
       contexts,
       tokenPrefix,
       warnings,
-      budget
+      budget,
+      staleIds
     )
   );
 
@@ -478,7 +572,8 @@ export function compilePageCss(
         contexts,
         tokenPrefix,
         warnings,
-        budget
+        budget,
+        staleIds
       )
     );
   }
@@ -497,10 +592,13 @@ export function compilePageCss(
         contexts,
         tokenPrefix,
         warnings,
-        budget
+        budget,
+        staleIds
       )
     );
-    rules.push(...visibilityRules(node, selector, contexts, path, warnings));
+    rules.push(
+      ...visibilityRules(node, selector, contexts, path, warnings, staleIds)
+    );
   }
 
   return { css: serializeRules(rules), warnings, classes };

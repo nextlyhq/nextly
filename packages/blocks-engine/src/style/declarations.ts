@@ -246,9 +246,18 @@ function shapeDeclarations(
           walk.warnings.push(...attempt.warnings);
           return;
         }
-        refused ??= attempt;
+        // The first arm that OBJECTED, not merely the first arm tried. Arms of
+        // a structurally disjoint union cannot all object: `borderRadius` is
+        // one scalar or four named corners, and handed an object the scalar arm
+        // places nothing and says nothing, because an object is not a value it
+        // could have read. Keeping that silence would discard the corner arm's
+        // reason and return neither the declaration nor the explanation this
+        // result promises.
+        if (refused === undefined || refused.warnings.length === 0) {
+          refused = attempt;
+        }
       }
-      // No arm wrote anything. Whatever the first one objected to is why, and
+      // No arm wrote anything. Whatever the first objecting one said is why, and
       // dropping it would leave a value missing from the stylesheet with
       // nothing anywhere saying so — which is the one thing these warnings
       // exist to prevent.

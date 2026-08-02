@@ -823,3 +823,93 @@ describe("an empty document", () => {
     expect(css(doc([node("n1", { base: { base: {} } })]))).toBe("");
   });
 });
+
+describe("stored breakpoint settings are read as untrusted", () => {
+  it("compiles a page when an axis is missing or malformed", () => {
+    // Settings come from storage, and forgiving validation lets a document
+    // through for a reader to still see. Throwing here would take every page on
+    // the site down over one corrupt settings record.
+    const document = doc([node("n1", { base: { base: { color: "#fff" } } })]);
+    const shapes: unknown[] = [
+      null,
+      {},
+      { viewport: null, container: undefined },
+      { viewport: "wide", container: 7 },
+      { viewport: [null, { id: "tablet", maxWidth: 900 }], container: [] },
+    ];
+    for (const breakpoints of shapes) {
+      const out = compilePageCss(document, {
+        breakpoints,
+      } as unknown as StyleCompileContext);
+      expect(out.css).toContain("color: #fff");
+    }
+  });
+
+  it("drops a definition whose bound is not a finite number", () => {
+    // Unbounded is not a safe reading of a broken bound: emitted without its
+    // query, the breakpoint's values would apply at every width the author
+    // meant to exclude. Dropped, its values are reported like any stale id.
+    const out = compilePageCss(
+      doc([node("n1", { base: { broken: { color: "#f00" } } })]),
+      {
+        breakpoints: {
+          viewport: [{ id: "broken", maxWidth: Number.NaN }],
+          container: [],
+        },
+      } as unknown as StyleCompileContext
+    );
+    expect(out.css).not.toContain("#f00");
+    expect(out.css).not.toContain("NaN");
+    expect(out.warnings.map(issue => issue.code)).toContain(
+      "unknown-breakpoint"
+    );
+  });
+});
+
+describe("warnings about stale breakpoint ids are bounded", () => {
+  /** A document keying values and visibility to `count` undefined ids. */
+  function staleDoc(count: number, keyLength = 1): BlockDocument {
+    const ids = Array.from(
+      { length: count },
+      (_, index) => `stale-${"k".repeat(keyLength)}-${index}`
+    );
+    return doc([
+      node(
+        "n1",
+        { base: Object.fromEntries(ids.map(id => [id, { color: "#fff" }])) },
+        {
+          visibility: {
+            devices: Object.fromEntries(ids.map(id => [id, false])),
+          },
+        }
+      ),
+    ]);
+  }
+
+  it("stops after its own allowance and says so once", () => {
+    // A stale id costs one warning wherever it appears, and each repeats the
+    // whole pointer above it, so a document inside the byte cap can answer with
+    // output far larger than itself.
+    const out = compilePageCss(staleDoc(400), CTX);
+    const stale = out.warnings.filter(
+      issue => issue.code === "unknown-breakpoint"
+    );
+    expect(stale.length).toBeLessThan(400);
+    expect(
+      out.warnings.filter(issue => issue.code === "style-issues-truncated")
+    ).toHaveLength(1);
+  });
+
+  it("does not spend the allowance that decides what is written", () => {
+    // The style-issue budget gates WRITING: a map reached after it runs out is
+    // refused rather than written unchecked. Charging these warnings to it would
+    // let renaming one breakpoint blank every page that still referenced it.
+    const stale = staleDoc(400);
+    const nodes = [
+      ...(stale.nodes as BlockNode[]),
+      node("n2", { base: { base: { color: "#0f0" } } }),
+    ];
+    const out = compilePageCss(doc(nodes), CTX);
+    expect(out.css).toContain("color: #0f0");
+  });
+});
