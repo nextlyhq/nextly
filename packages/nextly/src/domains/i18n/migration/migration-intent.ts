@@ -153,10 +153,33 @@ const COLUMN_KINDS = new Set([
   "fkSingle",
 ]);
 
+/**
+ * A column dimension: absent, or a whole number in range.
+ *
+ * Checked as an integer rather than merely as a number because these reach DDL as
+ * `VARCHAR(n)` / `DECIMAL(p,s)`. A string, a fraction or a negative would be rendered into the
+ * statement as written, so a header that says `"precision": "20"` has to be refused here rather
+ * than interpolated later. `scale` may legitimately be zero; a length or precision may not.
+ */
+function isDimension(value: unknown, allowZero: boolean): boolean {
+  if (value === undefined) return true;
+  return (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    (allowZero ? value >= 0 : value > 0)
+  );
+}
+
 function isColumnShape(value: unknown): boolean {
   if (typeof value !== "object" || value === null) return false;
   const c = value as Record<string, unknown>;
-  return typeof c.name === "string" && COLUMN_KINDS.has(c.kind as string);
+  return (
+    typeof c.name === "string" &&
+    COLUMN_KINDS.has(c.kind as string) &&
+    isDimension(c.length, false) &&
+    isDimension(c.precision, false) &&
+    isDimension(c.scale, true)
+  );
 }
 
 /**

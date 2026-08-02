@@ -20,6 +20,15 @@ export interface CompanionMigrationPlan {
   kind: "enable" | "create-only" | "disable" | "none";
   upSql: string;
   downSql: string;
+  /**
+   * The spec the SQL above was actually built from, which is not always the one passed in.
+   *
+   * An ENABLE narrows `columnsOnMain` to the subset the previous main table really carried, and the
+   * statements follow that subset. Anything recording what this migration is for has to record the
+   * narrowed spec: the wider one says every localized column was on main, so a reader acting on it
+   * would seed from, or drop, a column that never existed there.
+   */
+  spec: CompanionMigrationSpec;
 }
 
 export interface PlanCompanionArgs {
@@ -58,7 +67,7 @@ export function planCompanionMigration(
   // because "the main table gained columns" is also what a plain field-add looks like.
   if (!localized) {
     if (args.previouslyLocalized !== true) {
-      return { kind: "none", upSql: "", downSql: "" };
+      return { kind: "none", upSql: "", downSql: "", spec };
     }
     return {
       // UP restores the default locale onto main, archives non-default translations into
@@ -66,11 +75,12 @@ export function planCompanionMigration(
       kind: "disable",
       upSql: buildLocalizationDownSql(spec),
       downSql: buildLocalizationUpSql(spec),
+      spec,
     };
   }
 
   if (companionExisted) {
-    return { kind: "none", upSql: "", downSql: "" };
+    return { kind: "none", upSql: "", downSql: "", spec };
   }
 
   const prev = new Set(prevMainColumnNames);
@@ -93,6 +103,8 @@ export function planCompanionMigration(
       kind: "enable",
       upSql: buildLocalizationUpSql(enableSpec),
       downSql: buildLocalizationDownSql(enableSpec),
+      // The narrowed one, matching the statements above rather than the caller's wider input.
+      spec: enableSpec,
     };
   }
 
@@ -103,5 +115,6 @@ export function planCompanionMigration(
     upSql: buildCompanionCreateOnlySql(spec, { emittedToFile: true }),
     // Reverse of a bare CREATE is a DROP TABLE (no data to restore — main never had it).
     downSql: `DROP TABLE ${spec.dialect === "mysql" ? `\`${spec.companionTable}\`` : `"${spec.companionTable}"`};`,
+    spec,
   };
 }

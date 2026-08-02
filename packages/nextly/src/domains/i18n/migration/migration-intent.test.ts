@@ -310,3 +310,63 @@ describe("version skew is reported before shape", () => {
     }
   });
 });
+
+// These reach DDL as VARCHAR(n) / DECIMAL(p,s), so a value that is not a whole number in range
+// would be rendered into the statement as written.
+describe("column dimensions are validated, not merely carried", () => {
+  const withColumn = (column: Record<string, unknown>): string =>
+    fileWith(
+      `${LOCALIZATION_INTENT_HEADER} ${JSON.stringify({
+        version: 1,
+        kind: "enable",
+        entity: "collection",
+        spec: {
+          dialect: "postgresql",
+          collection: "posts",
+          mainTable: "dc_posts",
+          companionTable: "dc_posts_locales",
+          defaultLocale: "en",
+          parentIdType: "TEXT",
+          columns: [column],
+        },
+      })}`
+    );
+
+  it("accepts whole-number dimensions and a zero scale", () => {
+    expect(
+      parseLocalizationIntent(
+        withColumn({ name: "price", kind: "decimal", precision: 18, scale: 0 }),
+        "ok.sql"
+      )?.spec.columns[0]
+    ).toEqual({ name: "price", kind: "decimal", precision: 18, scale: 0 });
+    expect(
+      parseLocalizationIntent(
+        withColumn({ name: "title", kind: "text" }),
+        "ok.sql"
+      )
+    ).not.toBeNull();
+  });
+
+  const bad: [string, Record<string, unknown>][] = [
+    [
+      "a numeric string precision",
+      { name: "p", kind: "decimal", precision: "20" },
+    ],
+    ["a fractional precision", { name: "p", kind: "decimal", precision: 1.5 }],
+    ["a negative scale", { name: "p", kind: "decimal", scale: -1 }],
+    ["a zero length", { name: "t", kind: "text", length: 0 }],
+    ["a non-finite length", { name: "t", kind: "text", length: 1e999 }],
+  ];
+  for (const [label, column] of bad) {
+    it(`refuses ${label}`, () => {
+      try {
+        parseLocalizationIntent(withColumn(column), "bad.sql");
+        expect.unreachable("expected a refusal");
+      } catch (error) {
+        expect(
+          NextlyError.is(error) ? error.logContext?.reason : undefined
+        ).toBe("localization_intent_malformed");
+      }
+    });
+  }
+});

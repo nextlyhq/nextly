@@ -497,3 +497,76 @@ describe("generateMigration — the companion records which kind of entity it is
     });
   }
 });
+
+// 🔴 An ENABLE narrows `columnsOnMain` to the subset the previous main table really carried, and
+// its statements follow that subset. The recorded intent has to describe the same subset: an absent
+// `columnsOnMain` means "all of them", so a reader acting on the wider spec would seed from, or
+// drop, a column that was never on main and fail with "no such column".
+describe("generateMigration — the recorded intent matches the emitted statements", () => {
+  let migrationsDir: string;
+
+  beforeEach(async () => {
+    migrationsDir = await mkdtemp(join(tmpdir(), "nextly-i18n-subset-"));
+  });
+
+  it("records only the columns the previous main table actually held", async () => {
+    const metaDir = resolve(migrationsDir, "meta");
+    // Previous state: `body` on main and not yet localized. `subtitle` does not exist at all.
+    await writeSnapshot(
+      metaDir,
+      "20260101_000000_base",
+      {
+        tables: [
+          {
+            name: "dc_docs",
+            columns: [
+              { name: "id", type: "text", nullable: false, primaryKey: true },
+              { name: "body", type: "text", nullable: true },
+            ],
+            indexes: [],
+          },
+        ],
+      },
+      "-- UP\nSELECT 1;\n"
+    );
+
+    // The same edit localizes the collection AND adds a second localized field.
+    await generateMigration({
+      name: "localize_docs",
+      dialect: "sqlite",
+      migrationsDir,
+      defaultLocale: "en",
+      now: NOW,
+      collections: [
+        {
+          slug: "docs",
+          tableName: "dc_docs",
+          localized: true,
+          fields: [
+            { name: "body", type: "longText", localized: true },
+            { name: "subtitle", type: "text", localized: true },
+          ],
+        },
+      ],
+      singles: [],
+      components: [],
+    });
+
+    const file = await findCompanionFile(migrationsDir, "docs");
+    expect(file).toBeDefined();
+    const content = await readFile(resolve(migrationsDir, file!), "utf-8");
+    const intent = parseLocalizationIntent(content, file!);
+
+    expect(intent?.kind).toBe("enable");
+    // The companion still gets both columns...
+    expect(intent?.spec.columns.map(c => c.name).sort()).toEqual([
+      "body",
+      "subtitle",
+    ]);
+    // ...but only `body` was ever on main, so only it may be seeded from or dropped.
+    expect(intent?.spec.columnsOnMain).toEqual(["body"]);
+    // The statements agree: the drop names body and never subtitle.
+    expect(content).toContain('DROP COLUMN "body"');
+    expect(content).not.toContain('DROP COLUMN "subtitle"');
+  });
+});

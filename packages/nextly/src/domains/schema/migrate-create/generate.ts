@@ -290,8 +290,10 @@ export async function generateMigration(
   //      file so `nextly migrate` restores the column before the main migration indexes it.
   const disablePlans = companionPlans.filter(p => p.plan.kind === "disable");
   const forwardPlans = companionPlans.filter(p => p.plan.kind !== "disable");
-  disablePlans.forEach(({ spec, plan, entity }, i) => {
-    writeCompanionMigrationFile(args.migrationsDir, spec, {
+  // `plan.spec` rather than the entry's: an ENABLE narrows `columnsOnMain` to what the previous
+  // main table really held, and the header has to describe the statements that were emitted.
+  disablePlans.forEach(({ plan, entity }, i) => {
+    writeCompanionMigrationFile(args.migrationsDir, plan.spec, {
       kind: "disable",
       entity,
       upSql: plan.upSql,
@@ -299,8 +301,8 @@ export async function generateMigration(
       now: new Date(now.getTime() - (disablePlans.length - i)),
     });
   });
-  forwardPlans.forEach(({ spec, plan, entity }, i) => {
-    writeCompanionMigrationFile(args.migrationsDir, spec, {
+  forwardPlans.forEach(({ plan, entity }, i) => {
+    writeCompanionMigrationFile(args.migrationsDir, plan.spec, {
       // `none` plans are filtered out by the planner, so the kind is always writable here.
       kind: plan.kind === "none" ? "create-only" : plan.kind,
       entity,
