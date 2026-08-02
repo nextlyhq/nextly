@@ -26,13 +26,9 @@
  */
 
 import { RESERVED_SLUGS } from "../../collections/config/validate-config";
-import {
-  isDataField,
-  isFieldGroupField,
-} from "../../collections/fields/guards";
+import { isFieldGroupField } from "../../collections/fields/guards";
 import type { FieldConfig } from "../../collections/fields/types";
 import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
-import { isPluginDataField } from "../../domains/schema/services/plugin-codegen";
 import { NextlyError } from "../../errors";
 import {
   isReservedSystemColumn,
@@ -333,18 +329,34 @@ function validateFields(
   // column through the generator's own conversion: `createdAt` and `CreatedAt` both arrive at
   // `created_at`, and a set of literal spellings can only ever hold the ones somebody listed.
   //
-  // Only fields that actually emit a column are checked. A field group referencing another group
-  // keeps its data in the referenced table and the generator emits nothing for it, so its name
-  // never reaches a column and refusing it would reject a configuration that works.
+  // A reference to another field group is the ONE field known to emit no column: its data lives in
+  // the table it points at. Every other field is checked, including a contributed type whose
+  // registration has not happened yet — `defineFieldGroup` runs before the plugin registry is
+  // populated, so asking whether such a field emits a column answers "no" for one that will. The
+  // check is therefore written to fail closed: refusing a name that turns out to emit nothing costs
+  // an author a name they had no reason to want, while skipping one that does emit a column costs
+  // a table that cannot be created at all.
   fields.forEach((field, index) => {
     if (!field || typeof field !== "object") return;
-    const candidate = field as FieldConfig;
-    if (!isDataField(candidate) && !isPluginDataField(candidate)) return;
-    if (isFieldGroupField(candidate)) return;
-
     const name = (field as Record<string, unknown>).name;
     if (typeof name !== "string") return;
     const column = toPhysicalColumnName(name);
+
+    if (isFieldGroupField(field as FieldConfig)) {
+      // No column, but the value still travels on the instance payload, and that payload uses
+      // `id` for the instance's own identity: a read seeds it from the row and a repeatable write
+      // decides insert-or-update by it. A reference stored under the same key would displace the
+      // identity, so existing instances would be read as new ones and the originals deleted.
+      if (column === "id") {
+        errors.push({
+          path: `${path}[${index}].name`,
+          message: `Field name '${name}' is reserved: a field group instance uses 'id' for its own identity`,
+          code: "FIELD_NAME_RESERVED",
+        });
+      }
+      return;
+    }
+
     if (isReservedSystemColumn(column, "fieldGroupConfig")) {
       errors.push({
         path: `${path}[${index}].name`,

@@ -367,6 +367,42 @@ describe("the validators actually refuse what the projection lists", () => {
     }
   });
 
+  it("refuses a colliding name on a type it cannot classify yet", () => {
+    // `defineFieldGroup` runs before plugin field types are registered, so a contributed type
+    // looks like nothing the guards recognise. Gating the check on "does this emit a column" would
+    // answer no for a field that will, and the collision would surface as DDL the database
+    // refuses. The check fails closed instead.
+    for (const name of ["createdAt", "CreatedAt", "id"]) {
+      const result = validateFieldGroupConfig({
+        slug: "probe",
+        fields: [{ name, type: "somePluginType" }],
+      } as unknown as FieldGroupConfig);
+      const reserved = (result.errors ?? []).filter(
+        e => e.code === "FIELD_NAME_RESERVED"
+      );
+
+      expect({ [name]: reserved.length }).toEqual({ [name]: 1 });
+    }
+  });
+
+  it("keeps id reserved on a reference, whose payload needs it for identity", () => {
+    // A reference emits no column, but its value rides on the instance payload, and that payload
+    // uses `id` for the instance's own identity: the read seeds it from the row, and a repeatable
+    // write decides insert-or-update by it. A reference stored under the same key would displace
+    // the identity, so existing instances would read as new and the originals be removed.
+    for (const name of ["id", "Id"]) {
+      const result = validateFieldGroupConfig({
+        slug: "probe",
+        fields: [{ name, type: "component", component: "child" }],
+      } as unknown as FieldGroupConfig);
+      const reserved = (result.errors ?? []).filter(
+        e => e.code === "FIELD_NAME_RESERVED"
+      );
+
+      expect({ [name]: reserved.length }).toEqual({ [name]: 1 });
+    }
+  });
+
   it("allows a field group reference to take any name", () => {
     // A reference keeps its data in the table it points at and the generator emits no column for
     // it, so its name never reaches one. Refusing it would reject a configuration that works and,
@@ -375,7 +411,7 @@ describe("the validators actually refuse what the projection lists", () => {
     // The type token is `component`, which IS a data field — so the guard that skips non-column
     // fields does not cover it and the reference check is doing real work here. Written with the
     // wrong token this assertion passes for the wrong reason, because no branch is reached at all.
-    for (const name of ["id", "createdAt", "CreatedAt", "updatedAt"]) {
+    for (const name of ["createdAt", "CreatedAt", "updatedAt", "headline"]) {
       const field = { name, type: "component", component: "child" };
       const result = validateFieldGroupConfig({
         slug: "probe",

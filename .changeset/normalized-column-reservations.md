@@ -24,8 +24,11 @@
 
 Catch every spelling of a Field Group field name that collides with one of its table's system
 columns, not only the two that were listed. `CreatedAt` reaches the same `created_at` column as
-`createdAt` does, and was accepted. Names are now compared as the column they become.
+`createdAt` does, and was accepted. Names are now compared as the column they become, so a field
+declared with a plugin-contributed type is checked too — its type registers after the config is
+read, and it was previously skipped.
 
-A Field Group field that references another Field Group may take any name again. Those keep their
-data in the referenced table and produce no column of their own, so the previous check refused
-configurations that work — and, because it runs at startup, could stop an application booting.
+A Field Group field that references another Field Group may take any name except `id`. Those keep
+their data in the referenced table and produce no column of their own, so the previous check
+refused configurations that work. `id` stays reserved because an instance uses it for its own
+identity.
