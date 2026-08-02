@@ -25,7 +25,11 @@ import {
 import { setInitializedPlugins } from "../../plugins/initialized-plugins";
 import { createPluginContext } from "../../plugins/plugin-context";
 
-import type { NextlySchemaSnapshot } from "../../domains/schema/pipeline/diff/types";
+import type { BuildDesiredTableOptions } from "../../domains/schema/pipeline/diff/build-from-fields";
+import type {
+  ColumnSpec,
+  NextlySchemaSnapshot,
+} from "../../domains/schema/pipeline/diff/types";
 import type { PromptDispatcher } from "../../domains/schema/pipeline/pushschema-pipeline-interfaces";
 
 // vi.hoisted lets mock factories see these spies.
@@ -207,17 +211,28 @@ describe("reloadNextlyConfig", () => {
     });
   }
 
-  // SQLite reserved-column live state (matches buildReservedColumns output
-  // in build-from-fields.ts) so the diff doesn't see id/title/slug/
-  // created_at/updated_at as differences. Note: title/slug are NOT NULL
-  // when not user-defined; created_at/updated_at are nullable in the spec.
-  const SQLITE_RESERVED = [
-    { name: "id", type: "text", nullable: false },
-    { name: "title", type: "text", nullable: false },
-    { name: "slug", type: "text", nullable: false },
-    { name: "created_at", type: "integer", nullable: true },
-    { name: "updated_at", type: "integer", nullable: true },
-  ];
+  // The live-database state a diff in this file starts from: the system
+  // columns the schema builder injects for a table carrying no user fields.
+  // Asked of `buildDesiredTableFromFields` with an empty field list, so it is
+  // produced by the same builder the reload feeds its desired side from and
+  // the two agree on the system columns by construction. A diff then reports
+  // only the delta a test deliberately set up.
+  //
+  // Derived rather than written out because a written-out list cannot track
+  // the builder: a new system column, or a default added to an existing one,
+  // makes every fixture in the file disagree with the desired side, and that
+  // disagreement surfaces as spurious operations on unrelated tests rather
+  // than as a failure naming its cause.
+  //
+  // The table name is load-bearing — singles (`single_` prefix) get no owner
+  // column — so the fixture is asked per table rather than shared.
+  function reservedColumns(
+    tableName: string,
+    options: BuildDesiredTableOptions = {}
+  ): ColumnSpec[] {
+    return buildDesiredTableFromFields(tableName, [], "sqlite", options)
+      .columns;
+  }
 
   // Build a single-table NextlySchemaSnapshot for the introspect mock.
   // Multi-table snapshots use buildSnapshot() below.
@@ -334,8 +349,8 @@ describe("reloadNextlyConfig", () => {
     });
     introspectSpy.mockResolvedValue(
       buildSnapshot([
-        { name: "dc_posts", columns: SQLITE_RESERVED },
-        { name: "dc_users", columns: SQLITE_RESERVED },
+        { name: "dc_posts", columns: reservedColumns("dc_posts") },
+        { name: "dc_users", columns: reservedColumns("dc_users") },
       ])
     );
 
@@ -359,7 +374,9 @@ describe("reloadNextlyConfig", () => {
         ],
       },
     });
-    introspectSpy.mockResolvedValue(liveSnapshot("dc_posts", SQLITE_RESERVED));
+    introspectSpy.mockResolvedValue(
+      liveSnapshot("dc_posts", reservedColumns("dc_posts"))
+    );
 
     const { reloadNextlyConfig } = await import("../reload-config");
     await reloadNextlyConfig({ resolver: buildResolver() });
@@ -553,7 +570,7 @@ describe("reloadNextlyConfig", () => {
     // -> rename candidate -> gate lets it through.
     introspectSpy.mockResolvedValue(
       liveSnapshot("dc_posts", [
-        ...SQLITE_RESERVED,
+        ...reservedColumns("dc_posts"),
         { name: "body", type: "text", nullable: true },
       ])
     );
@@ -583,7 +600,7 @@ describe("reloadNextlyConfig", () => {
     });
     introspectSpy.mockResolvedValue(
       liveSnapshot("dc_users", [
-        ...SQLITE_RESERVED,
+        ...reservedColumns("dc_users"),
         { name: "phone", type: "text", nullable: true },
       ])
     );
@@ -617,7 +634,7 @@ describe("reloadNextlyConfig", () => {
     });
     introspectSpy.mockResolvedValue(
       liveSnapshot("dc_users", [
-        ...SQLITE_RESERVED,
+        ...reservedColumns("dc_users"),
         { name: "phone", type: "text", nullable: true },
         { name: "fax", type: "text", nullable: true },
       ])
@@ -636,16 +653,17 @@ describe("reloadNextlyConfig", () => {
           {
             slug: "posts",
             tableName: "dc_posts",
-            // `boolean` maps to SQLite `integer` token in build-from-fields,
-            // which differs from the live `text` -> change_column_type op.
-            fields: [{ name: "active", type: "boolean" }],
+            // `checkbox` is the field type that classifies as a boolean
+            // column, which renders as the SQLite `integer` token and so
+            // differs from the live `text` -> change_column_type op.
+            fields: [{ name: "active", type: "checkbox" }],
           },
         ],
       },
     });
     introspectSpy.mockResolvedValue(
       liveSnapshot("dc_posts", [
-        ...SQLITE_RESERVED,
+        ...reservedColumns("dc_posts"),
         { name: "active", type: "text", nullable: true },
       ])
     );
@@ -678,7 +696,7 @@ describe("reloadNextlyConfig", () => {
     });
     introspectSpy.mockResolvedValue(
       liveSnapshot("dc_posts", [
-        ...SQLITE_RESERVED,
+        ...reservedColumns("dc_posts"),
         { name: "body", type: "text", nullable: true },
         { name: "tagline", type: "text", nullable: true },
         { name: "byline", type: "text", nullable: true },
@@ -706,7 +724,7 @@ describe("reloadNextlyConfig", () => {
     // Live state already matches desired -> no operations.
     introspectSpy.mockResolvedValue(
       liveSnapshot("dc_posts", [
-        ...SQLITE_RESERVED,
+        ...reservedColumns("dc_posts"),
         { name: "body", type: "text", nullable: true },
       ])
     );
@@ -763,7 +781,9 @@ describe("reloadNextlyConfig", () => {
         ],
       },
     });
-    introspectSpy.mockResolvedValue(liveSnapshot("dc_posts", SQLITE_RESERVED));
+    introspectSpy.mockResolvedValue(
+      liveSnapshot("dc_posts", reservedColumns("dc_posts"))
+    );
     pipelineApplySpy.mockResolvedValue({
       success: false,
       statementsExecuted: 0,
@@ -796,7 +816,7 @@ describe("reloadNextlyConfig", () => {
     // pipeline runs, dispatcher would prompt, but sim a non-TTY result.
     introspectSpy.mockResolvedValue(
       liveSnapshot("dc_posts", [
-        ...SQLITE_RESERVED,
+        ...reservedColumns("dc_posts"),
         { name: "body", type: "text", nullable: true },
       ])
     );
@@ -838,7 +858,9 @@ describe("reloadNextlyConfig", () => {
         ],
       },
     });
-    introspectSpy.mockResolvedValue(liveSnapshot("dc_posts", SQLITE_RESERVED));
+    introspectSpy.mockResolvedValue(
+      liveSnapshot("dc_posts", reservedColumns("dc_posts"))
+    );
 
     const fakeDispatcher: PromptDispatcher = {
       dispatch: () =>
@@ -877,8 +899,8 @@ describe("reloadNextlyConfig", () => {
       });
       introspectSpy.mockResolvedValue(
         buildSnapshot([
-          { name: "comp_hero", columns: SQLITE_RESERVED },
-          { name: "comp_seo_meta", columns: SQLITE_RESERVED },
+          { name: "comp_hero", columns: reservedColumns("comp_hero") },
+          { name: "comp_seo_meta", columns: reservedColumns("comp_seo_meta") },
         ])
       );
 
@@ -902,7 +924,9 @@ describe("reloadNextlyConfig", () => {
         },
       });
       introspectSpy.mockResolvedValue(
-        buildSnapshot([{ name: "comp_seo_meta", columns: SQLITE_RESERVED }])
+        buildSnapshot([
+          { name: "comp_seo_meta", columns: reservedColumns("comp_seo_meta") },
+        ])
       );
 
       const { reloadNextlyConfig } = await import("../reload-config");
@@ -925,7 +949,9 @@ describe("reloadNextlyConfig", () => {
       });
       // Live table exists with only reserved columns — subtitle is a new add.
       introspectSpy.mockResolvedValue(
-        buildSnapshot([{ name: "comp_hero", columns: SQLITE_RESERVED }])
+        buildSnapshot([
+          { name: "comp_hero", columns: reservedColumns("comp_hero") },
+        ])
       );
 
       const { reloadNextlyConfig } = await import("../reload-config");
@@ -959,7 +985,12 @@ describe("reloadNextlyConfig", () => {
       // change: hasChanges flips true and the refresh block re-registers the
       // runtime descriptor (the code path that used the wrong generator).
       introspectSpy.mockResolvedValue(
-        buildSnapshot([{ name: "comp_meta_data", columns: SQLITE_RESERVED }])
+        buildSnapshot([
+          {
+            name: "comp_meta_data",
+            columns: reservedColumns("comp_meta_data"),
+          },
+        ])
       );
 
       const resolver = buildResolver();
@@ -1000,7 +1031,7 @@ describe("reloadNextlyConfig", () => {
           {
             name: "comp_hero",
             columns: [
-              ...SQLITE_RESERVED,
+              ...reservedColumns("comp_hero"),
               { name: "headline", type: "text", nullable: true },
             ],
           },
@@ -1030,7 +1061,9 @@ describe("reloadNextlyConfig", () => {
         },
       });
       introspectSpy.mockResolvedValue(
-        buildSnapshot([{ name: "comp_hero", columns: SQLITE_RESERVED }])
+        buildSnapshot([
+          { name: "comp_hero", columns: reservedColumns("comp_hero") },
+        ])
       );
 
       const resolver = buildResolver();
@@ -1053,7 +1086,9 @@ describe("reloadNextlyConfig", () => {
         },
       });
       introspectSpy.mockResolvedValue(
-        buildSnapshot([{ name: "comp_hero", columns: SQLITE_RESERVED }])
+        buildSnapshot([
+          { name: "comp_hero", columns: reservedColumns("comp_hero") },
+        ])
       );
 
       const resolver = buildResolver();
@@ -1080,7 +1115,7 @@ describe("reloadNextlyConfig", () => {
           {
             name: "comp_hero",
             columns: [
-              ...SQLITE_RESERVED,
+              ...reservedColumns("comp_hero"),
               { name: "title", type: "text", nullable: true },
             ],
           },
@@ -1153,8 +1188,8 @@ describe("reloadNextlyConfig", () => {
       });
       introspectSpy.mockResolvedValue(
         buildSnapshot([
-          { name: "dc_posts", columns: SQLITE_RESERVED },
-          { name: "dc_leads", columns: SQLITE_RESERVED },
+          { name: "dc_posts", columns: reservedColumns("dc_posts") },
+          { name: "dc_leads", columns: reservedColumns("dc_leads") },
         ])
       );
 
@@ -1198,8 +1233,8 @@ describe("reloadNextlyConfig", () => {
       });
       introspectSpy.mockResolvedValue(
         buildSnapshot([
-          { name: "dc_posts", columns: SQLITE_RESERVED },
-          { name: "dc_audit_log", columns: SQLITE_RESERVED },
+          { name: "dc_posts", columns: reservedColumns("dc_posts") },
+          { name: "dc_audit_log", columns: reservedColumns("dc_audit_log") },
         ])
       );
 
@@ -1302,7 +1337,7 @@ describe("reloadNextlyConfig", () => {
     function settleIntrospect() {
       introspectSpy.mockResolvedValue(
         liveSnapshot(TABLE, [
-          ...SQLITE_RESERVED,
+          ...reservedColumns(TABLE),
           { name: "body", type: "text", nullable: true },
         ])
       );
@@ -2080,7 +2115,7 @@ describe("reloadNextlyConfig", () => {
         });
       });
       introspectSpy.mockResolvedValue(
-        liveSnapshot(TABLE, [...SQLITE_RESERVED])
+        liveSnapshot(TABLE, reservedColumns(TABLE))
       );
       loadConfigSpy.mockResolvedValue({
         config: {
