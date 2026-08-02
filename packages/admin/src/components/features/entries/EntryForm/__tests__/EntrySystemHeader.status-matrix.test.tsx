@@ -42,7 +42,7 @@ interface HarnessProps {
     _isWorkingDraft?: boolean;
   } | null;
   isDirty?: boolean;
-  onDiscardWorkingDraft?: () => void;
+  onDiscardWorkingDraft?: () => void | Promise<void>;
 }
 
 function Harness({
@@ -269,6 +269,32 @@ describe("EntrySystemHeader — discard working draft menu", () => {
     await user.click(screen.getByRole("button", { name: /more actions/i }));
     expect(
       screen.getByRole("menuitem", { name: /discard draft/i })
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the confirm dialog open when the discard fails, for a retry", async () => {
+    // The discard handler rejects on failure, and the header closes the dialog
+    // only on success — so a failed destructive request keeps its confirmation
+    // (and the error toast from the mutation explains what went wrong).
+    const onDiscardWorkingDraft = vi.fn().mockRejectedValue(new Error("nope"));
+    const user = userEvent.setup();
+    render(
+      <Harness
+        mode="edit"
+        draftsEnabled
+        entry={{ id: "x", status: "published", _isWorkingDraft: true }}
+        onDiscardWorkingDraft={onDiscardWorkingDraft}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: /more actions/i }));
+    await user.click(screen.getByRole("menuitem", { name: /discard draft/i }));
+    await user.click(screen.getByRole("button", { name: /^Discard draft$/ }));
+
+    expect(onDiscardWorkingDraft).toHaveBeenCalledOnce();
+    // Still open: the rejection was caught and the dialog was not closed.
+    expect(
+      await screen.findByRole("alertdialog", { name: /discard draft for/i })
     ).toBeInTheDocument();
   });
 });

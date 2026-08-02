@@ -305,9 +305,9 @@ export interface UseEntryFormReturn {
   /** Handle entry deletion (edit mode only) */
   handleDelete: () => void;
   /** Discard the pending working draft (draft/published split), reverting the
-   *  editor to the live published row. No-op outside edit mode. Resolves when the
-   *  discard settles, so the confirm dialog can stay open (showing its progress)
-   *  until then. */
+   *  editor to the live published row. No-op outside edit mode. Resolves once the
+   *  discard succeeds and REJECTS if it fails, so the confirm dialog can show its
+   *  progress until then and stay open for a retry on failure. */
   handleDiscardWorkingDraft: () => Promise<void>;
   /** Handle form cancellation */
   handleCancel: () => void;
@@ -770,6 +770,10 @@ export function useEntryForm({
     } catch (error) {
       console.error("Discard working draft error:", error);
       onError?.(error);
+      // Rethrow after surfacing the error so the confirm dialog, which awaits
+      // this, stays open on failure and keeps its retry context rather than
+      // closing as it does on success.
+      throw error;
     }
   }, [mode, entry?.id, discardMutation, form, fields, onError]);
 
