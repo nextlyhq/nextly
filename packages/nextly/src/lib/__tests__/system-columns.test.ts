@@ -7,10 +7,13 @@
 import { getColumns } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 
+import type { FieldConfig } from "../../collections/fields/types";
 import { fieldNameSchema } from "../../domains/dynamic-collections/services/dynamic-collection-validation-service";
+import { FieldGroupSchemaService } from "../../domains/field-groups/services/field-group-schema-service";
 import { getSystemColumnDescriptors } from "../../domains/schema/services/field-column-descriptor";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import { SYSTEM_SCHEMA_VERSION } from "../../domains/schema/services/schema-hash";
+import { uiSchemaFieldSchema } from "../../schemas/_zod/ui-schema";
 
 import {
   immutableSystemFieldsFor,
@@ -138,12 +141,85 @@ describe("reservation projections", () => {
     );
   });
 
-  it("refuses only the physical spelling in the UI field-payload schema", () => {
-    // That surface also validates component fields, whose tables are not declared here, so it
-    // stays exactly as narrow as it was.
+  it("refuses both spellings of the universal columns in the UI field-payload schema", () => {
+    // The narrowest surface, because it also validates component fields and a component's table
+    // carries only these three. It carries them under the same physical names, though, so the
+    // camelCase spelling collides there exactly as it does on a collection.
     expect(sorted(reservedSystemFieldNames("uiSchema"))).toEqual(
-      sorted(["id", "created_at", "updated_at"])
+      sorted(["id", "created_at", "createdAt", "updated_at", "updatedAt"])
     );
+  });
+});
+
+describe("component tables, which are declared elsewhere on purpose", () => {
+  // A component keeps its values in a `comp_` table of its own, built by its own generator. Those
+  // tables are NOT projections of these declarations, and this records why so the question does
+  // not have to be answered again from the DDL:
+  //
+  //   - they carry three of the declared columns — id, created_at, updated_at — and none of the
+  //     rest: no title, slug, status, owner or publication marker;
+  //   - their timestamps are NOT NULL, where a collection's are nullable with the same default;
+  //   - their timestamps are emitted AFTER the author's fields, where a collection's come before;
+  //   - they carry five structural columns of their own (parent id, parent table, parent field,
+  //     order, type) that no other entity has.
+  //
+  // Two of those are shape differences and one is an ordering difference, so folding them into the
+  // declarations would mean per-entity overrides of both — a heavier model for one entity whose
+  // majority of columns still would not fit. What matters instead is that the columns they DO
+  // share cannot drift apart unnoticed, which is what these assert.
+
+  const componentDdl = (dialect: SystemColumnDialect): string =>
+    new FieldGroupSchemaService(dialect).generateMigrationSQL("comp_probe", [
+      { name: "headline", type: "text" } as FieldConfig,
+    ]);
+
+  /** MySQL quotes identifiers with backticks; the other two use double quotes. */
+  const quoted = (dialect: SystemColumnDialect, name: string): string =>
+    dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+
+  it("still carries every shared column under its declared name", () => {
+    // A rename in the declarations that the component generator does not follow would leave a
+    // component's rows describing themselves with a name nothing else uses.
+    const shared = ["id", "created_at", "updated_at"];
+    for (const dialect of [
+      "postgresql",
+      "mysql",
+      "sqlite",
+    ] as SystemColumnDialect[]) {
+      const ddl = componentDdl(dialect);
+      for (const name of shared) {
+        expect({
+          [`${dialect}.${name}`]: ddl.includes(quoted(dialect, name)),
+        }).toEqual({ [`${dialect}.${name}`]: true });
+      }
+    }
+    // And the names are the declared ones, not a copy that has drifted from them.
+    for (const name of shared) {
+      expect({ [name]: SYSTEM_COLUMNS.some(c => c.name === name) }).toEqual({
+        [name]: true,
+      });
+    }
+  });
+
+  it("carries none of the columns that belong to an entity with a lifecycle", () => {
+    // A component has no draft/published state and no owner, so a marker or owner column appearing
+    // in its table would mean a projection had started including it by accident.
+    const ddl = componentDdl("postgresql");
+    for (const name of ["status", "first_published_at", "created_by", "slug"]) {
+      expect({ [name]: ddl.includes(`"${name}"`) }).toEqual({ [name]: false });
+    }
+  });
+
+  it("would emit a duplicate column for a field named like a shared one", () => {
+    // The reason the UI field-payload schema refuses both spellings. `createdAt` snake-cases onto
+    // the injected `created_at` and both are emitted, which the database rejects — so the payload
+    // could never have produced a working table, and refusing the name loses nothing.
+    const ddl = new FieldGroupSchemaService("postgresql").generateMigrationSQL(
+      "comp_probe",
+      [{ name: "createdAt", type: "text" } as FieldConfig]
+    );
+
+    expect(ddl.match(/"created_at"/g)?.length).toBe(2);
   });
 });
 
@@ -163,6 +239,23 @@ describe("the validators actually refuse what the projection lists", () => {
   it("still accepts an ordinary field name", () => {
     // The mirror, so the case above cannot be satisfied by a validator that refuses everything.
     expect(fieldNameSchema.safeParse("headline").success).toBe(true);
+  });
+
+  it("refuses every projected name in the UI field-payload schema", () => {
+    // The surface that validates a component's fields as well as a collection's. Asserted through
+    // the schema rather than the projection, because a set nobody consults would satisfy the
+    // pinned test above and still let the payload through.
+    for (const name of reservedSystemFieldNames("uiSchema")) {
+      const parsed = uiSchemaFieldSchema.safeParse({ name, type: "text" });
+      expect({ [name]: parsed.success }).toEqual({ [name]: false });
+    }
+  });
+
+  it("accepts an ordinary field name in the UI field-payload schema", () => {
+    // The mirror, so the case above cannot pass because the payload shape is wrong.
+    expect(
+      uiSchemaFieldSchema.safeParse({ name: "headline", type: "text" }).success
+    ).toBe(true);
   });
 
   it("refuses the camelCase spelling of a timestamp column", () => {
