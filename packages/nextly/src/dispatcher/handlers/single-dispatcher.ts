@@ -63,7 +63,6 @@ import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detect
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import { isIdempotencyError } from "../../domains/schema/pipeline/sql-statement-utils";
 import type { DesiredSingle } from "../../domains/schema/pipeline/types";
-import { withDeclaredTextWidth } from "../../domains/schema/services/builder-text-width";
 import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
@@ -607,14 +606,6 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       if (!b?.fields || !Array.isArray(b.fields))
         throw new Error("Single fields array is required");
 
-      // Settled once, in place, so the table that gets built, the hash that gets stored and the
-      // shape a later diff compares against all read the same answer. Converted the way every other
-      // read of this payload converts it: the handler annotates it as `FieldConfig`, but what the
-      // Builder sends is the Builder shape.
-      b.fields = withDeclaredTextWidth(
-        b.fields as unknown as FieldDefinition[]
-      ) as unknown as typeof b.fields;
-
       // This create path persists and runs DDL without the schema
       // preview/apply handlers. It keeps its own field rules, but nothing here
       // can judge a plugin type's own options, so an unsatisfiable declaration
@@ -656,6 +647,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             adapter,
             dialect: adapter.getCapabilities().dialect,
             slug: b.slug,
+            kind: "single",
             apply: desired => {
               desired.singles[b.slug!] = {
                 slug: b.slug!,
@@ -1151,13 +1143,6 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       let migrationStatus = existing.migrationStatus;
 
       if (b.fields !== undefined) {
-        // Settled before the fields are both stored and diffed. On this path it also states what an
-        // already-created table holds: a Builder text column with no declared width is unbounded,
-        // so saying so is what keeps a save from reading that column as a change.
-        b.fields = withDeclaredTextWidth(
-          b.fields as unknown as FieldDefinition[]
-        ) as unknown as typeof b.fields;
-
         // Same rules as the ui-schema.json mirror (see api/fields-payload).
         assertValidFieldsPayload(b.fields);
         updateData.fields = b.fields;
@@ -1169,16 +1154,14 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // optionally, matching how the execution below reads it.
         const tableName = existing.tableName;
 
-        // Normalize field lists for ALTER TABLE comparison. The physical
-        // table always has system columns (title, slug, updatedAt) added
-        // by generateMigrationSQL, but stored field definitions may not
-        // include them. We ensure both old and new lists include these
-        // so the diff doesn't try to ADD COLUMN for columns that already
-        // exist in the physical table.
-        const systemFields: FieldDefinition[] = [
-          { name: "title", type: "text", required: true },
-          { name: "slug", type: "text", required: true },
-        ];
+        // The system columns are NOT restated here. They were, back when the generator this path
+        // used did not inject them and the diff would otherwise have tried to add columns the table
+        // already had. The shared pipeline injects id, created_at and updated_at itself, and
+        // title/slug unless a user field claims those names, so restating them describes the same
+        // physical column twice: the appended user definition wins the name map and carries neither
+        // the system default nor the system nullability, and a rebuild hands Drizzle a duplicate
+        // column name. The create path above never restated them, so dropping them here also makes
+        // the two paths describe a single the same way.
 
         // i18n: when the single is localized (in either state), translatable columns live on the
         // companion, never the main table — drop them from the ALTER input so the main-table diff
@@ -1197,17 +1180,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // registry row can no longer produce an alter against a shape that was never there.
 
         const newFieldsRaw = b.fields as unknown as FieldDefinition[];
-        const newFieldsForAlter = omitLocalized(newFieldsRaw);
-        const newFieldNames = new Set(newFieldsForAlter.map(f => f.name));
-        const normalizedNewFields: FieldDefinition[] = [
-          ...systemFields.filter(sf => !newFieldNames.has(sf.name)),
-          ...newFieldsForAlter,
-          {
-            name: "updatedAt",
-            type: "date",
-            required: false,
-          },
-        ];
+        const normalizedNewFields: FieldDefinition[] =
+          omitLocalized(newFieldsRaw);
 
         // Forward status flags so the alter migration can ADD/DROP the
         // `status` column when the user toggles Draft/Published. `existing`
@@ -1230,6 +1204,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
               adapter,
               dialect: adapter.getCapabilities().dialect,
               slug,
+              kind: "single",
               apply: desired => {
                 desired.singles[slug] = {
                   slug,
@@ -1320,13 +1295,24 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             );
           }
         } catch (migrationError) {
-          migrationStatus = "failed";
           const message =
             migrationError instanceof Error
               ? migrationError.message
               : String(migrationError);
           // Reported through the journal row and the notifier by the pipeline now.
           console.error("[Singles] Migration execution failed:", message);
+          // Refused rather than recorded. The field changes are already staged into `updateData`,
+          // so returning here would store definitions describing columns the table does not have —
+          // and the next save would then diff against a shape that was never applied. This endpoint
+          // carries no way to resolve a rename prompt, so a refusal is a real outcome rather than a
+          // remote one, and the caller has to learn the change did not happen.
+          throw NextlyError.internal({
+            logContext: {
+              reason: "single_schema_apply_failed",
+              slug,
+              detail: message,
+            },
+          });
         }
 
         updateData.migrationStatus = migrationStatus;

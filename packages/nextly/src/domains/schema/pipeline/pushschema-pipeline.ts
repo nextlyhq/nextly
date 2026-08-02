@@ -372,10 +372,14 @@ export function computeJournalSummaryFromOperations(
 // Pure helper. Test seam: exported.
 export function computeJournalScope(
   source: "ui" | "code",
-  uiTargetSlug: string | undefined
+  uiTargetSlug: string | undefined,
+  // Defaulted to `collection` so the many existing UI callers that target one keep their scope
+  // without restating it. A single or field group must say so: recording either as a collection
+  // hid its migrations from every scope-filtered audit query.
+  uiTargetKind: "collection" | "single" | "component" = "collection"
 ): MigrationJournalScope {
   if (source === "ui" && uiTargetSlug) {
-    return { kind: "collection", slug: uiTargetSlug };
+    return { kind: uiTargetKind, slug: uiTargetSlug };
   }
   return { kind: "global" };
 }
@@ -484,7 +488,7 @@ function toNotificationScope(scope: MigrationJournalScope): MigrationScope {
       ? { kind: "global", slug: scope.slug }
       : { kind: "global" };
   }
-  // collection | single — both require a slug per
+  // collection | single | component — all three require a slug per
   // MigrationJournalScope's contract (asserted at the type-system
   // level because slug is optional only for fresh-push/global).
   return scope.slug
@@ -512,9 +516,15 @@ export class PushSchemaPipeline {
     // slug: <user's collection> }`. HMR/code-first applies omit it
     // and get tagged as global.
     uiTargetSlug?: string;
+    /** Which entity kind `uiTargetSlug` names, so the journal row records it accurately. */
+    uiTargetKind?: "collection" | "single" | "component";
   }): Promise<PipelineResult> {
     const { desired, db, dialect, source, promptChannel, databaseName } = args;
-    const scope = computeJournalScope(source, args.uiTargetSlug);
+    const scope = computeJournalScope(
+      source,
+      args.uiTargetSlug,
+      args.uiTargetKind
+    );
     // F10 PR 3: track wall-clock for the notification event. The
     // journal already computes its own duration; we duplicate here so
     // the notification event surfaces duration even when the journal

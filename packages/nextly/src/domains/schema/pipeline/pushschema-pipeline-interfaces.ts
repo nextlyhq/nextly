@@ -112,7 +112,9 @@ export interface PreCleanupExecutor {
 // NotificationCenter can render meaningful audit rows. Plan C1 maps this onto
 // `SchemaEventScopeKind` from `schemas/schema-events/types.ts`.
 export interface MigrationJournalScope {
-  kind: "collection" | "single" | "global" | "fresh-push";
+  // `component` is carried because a field group is one of the entity kinds a UI apply can target,
+  // and recording it as a collection made scope-filtered history unable to find it.
+  kind: "collection" | "single" | "component" | "global" | "fresh-push";
   slug?: string;
 }
 

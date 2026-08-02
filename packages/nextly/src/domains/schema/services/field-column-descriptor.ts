@@ -152,10 +152,7 @@ export function getColumnDescriptor(
         }
       : undefined;
 
-  // Resolved before the type is rendered, because on MySQL the width IS part of the type: a
-  // bounded column declaring 500 renders `varchar(500)`, and computing the length afterwards
-  // left every one of them rendering the default 255 instead.
-  const length = lengthForKind(kind, field);
+  const length = lengthForKind(kind);
 
   const dialectType = renderDialectType(kind, dialect, {
     length,
@@ -346,21 +343,14 @@ function renderDialectType(
  * Returns the length for kinds that carry one. Used by both the
  * dialect-token rendering and the runtime Drizzle builder.
  */
-function lengthForKind(
-  kind: ColumnKind,
-  field: FieldDefinition
-): number | undefined {
-  if (kind === "text" || kind === "varchar") {
-    // A width the field declares is the author's answer and outranks the fallback. Both generators
-    // this descriptor replaces rendered it, so ignoring it here would silently cut a column sized
-    // at 500 down to 255 on MySQL.
-    //
-    // Widths are invisible to the convergence diff — `normalize-type.ts` strips the modifier before
-    // comparing, because the live introspector reads a type name that never carries one. So
-    // honouring a declared width changes what a NEW column is created as without making any
-    // existing column read as drift.
-    return field.length ?? field.validation?.maxLength ?? 255;
-  }
+function lengthForKind(kind: ColumnKind): number | undefined {
+  // A width the field declares is deliberately NOT read here. `normalize-type.ts` strips the
+  // modifier before the diff compares, so a bounded column's width is invisible to convergence:
+  // rendering a declared width would size a column correctly on creation and then silently ignore
+  // every later edit to it, leaving writes to fail against a column the stored limit says is wide
+  // enough. Resizing needs the diff to compare widths first.
+  if (kind === "text") return 255;
+  if (kind === "varchar") return 255;
   if (kind === "fkSingle") return 36;
   return undefined;
 }

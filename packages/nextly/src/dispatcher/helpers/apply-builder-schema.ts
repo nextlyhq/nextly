@@ -12,6 +12,7 @@ import {
 } from "../../domains/schema/pipeline/pushschema-pipeline-stubs";
 import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector";
 import type { DesiredSchema } from "../../domains/schema/pipeline/types";
+import { resolveBuilderTextWidths } from "../../domains/schema/services/builder-text-width";
 import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
 import { NextlyError } from "../../errors";
 import { getProductionNotifier } from "../../runtime/notifications/index";
@@ -37,6 +38,8 @@ export interface ApplyBuilderSchemaArgs extends BuilderPromptResolutions {
   dialect: SupportedDialect;
   /** Scopes the journal row to the entity the operator acted on. */
   slug: string;
+  /** Which entity kind `slug` names, so the journal row is findable under the scope it belongs to. */
+  kind: "collection" | "single" | "component";
   /**
    * States this entity's desired shape on the schema the diff will run against.
    *
@@ -61,11 +64,18 @@ export interface ApplyBuilderSchemaArgs extends BuilderPromptResolutions {
 export async function applyBuilderSchema(
   args: ApplyBuilderSchemaArgs
 ): Promise<void> {
-  const { adapter, dialect, slug } = args;
+  const { adapter, dialect, slug, kind } = args;
   const db = adapter.getDrizzle();
 
   const desired = await buildFullDesiredSchema();
   args.apply(desired);
+
+  // After the caller states its entity, so the entity being saved is covered too, and over the whole
+  // schema rather than one entry: the pipeline diffs EVERY managed table, so an entity nobody is
+  // editing still has its columns compared. Resolving only the target's widths would let a save
+  // describe a sibling's unbounded text column as bounded and narrow a table the operator never
+  // touched.
+  resolveBuilderTextWidths(desired);
 
   const pipeline = new PushSchemaPipeline({
     executor: new DrizzleStatementExecutor(dialect, db),
@@ -97,6 +107,7 @@ export async function applyBuilderSchema(
         ? extractDatabaseNameFromUrl(process.env.DATABASE_URL)
         : undefined,
     uiTargetSlug: slug,
+    uiTargetKind: kind,
   });
 
   if (!result.success) {
