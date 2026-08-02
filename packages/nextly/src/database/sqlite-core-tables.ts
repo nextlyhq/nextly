@@ -174,34 +174,6 @@ export function generateSqliteCoreTableStatements(): string[] {
       "expires_at" INTEGER NOT NULL,
       "created_at" INTEGER NOT NULL DEFAULT (unixepoch())
     )`,
-    // Dashboard activity trail. Columns match schemas/audit/sqlite.ts. Present
-    // here because deleting a user erases that user's identity from these rows
-    // inside the delete transaction, so a database created by this fallback
-    // could not delete a user at all without the table. `user_id` carries no
-    // foreign key on purpose: the entries have to outlive the account that
-    // produced them, or the audit trail is erasable by its own subject. The
-    // indexes are created alongside the table because getCoreSchema's TableSpec
-    // does not track indexes, so a later reconcile would consider a
-    // fallback-created table in sync and never add them.
-    `CREATE TABLE IF NOT EXISTS "activity_log" (
-      "id" TEXT PRIMARY KEY,
-      "user_id" TEXT NOT NULL,
-      "user_name" TEXT,
-      "user_email" TEXT,
-      "action" TEXT NOT NULL,
-      "collection" TEXT NOT NULL,
-      "entry_id" TEXT,
-      "entry_title" TEXT,
-      "metadata" TEXT,
-      "created_at" INTEGER NOT NULL,
-      "actor_deleted_at" INTEGER
-    )`,
-    `CREATE INDEX IF NOT EXISTS "idx_activity_log_created_at"
-      ON "activity_log" ("created_at")`,
-    `CREATE INDEX IF NOT EXISTS "idx_activity_log_collection"
-      ON "activity_log" ("collection", "created_at")`,
-    `CREATE INDEX IF NOT EXISTS "idx_activity_log_user_id"
-      ON "activity_log" ("user_id", "created_at")`,
     `CREATE TABLE IF NOT EXISTS "content_schema_events" (
       "id" INTEGER PRIMARY KEY AUTOINCREMENT,
       "op" TEXT NOT NULL,

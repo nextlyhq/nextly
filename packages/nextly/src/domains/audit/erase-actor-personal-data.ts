@@ -17,7 +17,15 @@
  * @module domains/audit/erase-actor-personal-data
  */
 
-import { eq, type Column, type Table } from "drizzle-orm";
+import {
+  and,
+  eq,
+  isNotNull,
+  isNull,
+  or,
+  type Column,
+  type Table,
+} from "drizzle-orm";
 
 /**
  * The Drizzle surface this needs: one scoped UPDATE.
@@ -34,7 +42,12 @@ export interface ErasureCapableDb {
 
 /** The audit tables an erasure touches, as the dialect bundle exposes them. */
 export interface ErasableAuditTables {
-  activityLog: Table & { userId: Column };
+  activityLog: Table & {
+    userId: Column;
+    userName: Column;
+    userEmail: Column;
+    actorDeletedAt: Column;
+  };
 }
 
 /**
@@ -60,8 +73,9 @@ export async function eraseActorPersonalData(
   userId: string,
   erasedAt: Date
 ): Promise<void> {
+  const { activityLog } = tables;
   await db
-    .update(tables.activityLog)
+    .update(activityLog)
     .set({
       // NULL is the erased state. `actorDeletedAt` is what distinguishes it
       // from a row that simply never carried a name, and it records when the
@@ -70,5 +84,20 @@ export async function eraseActorPersonalData(
       userEmail: null,
       actorDeletedAt: erasedAt,
     })
-    .where(eq(tables.activityLog.userId, userId));
+    .where(
+      and(
+        eq(activityLog.userId, userId),
+        // Rows already erased are left exactly as they are. This runs more than
+        // once per deletion — once inside the transaction and once after it
+        // commits, to catch an entry that landed in between — and without this
+        // the second pass would rewrite an actor's whole retained history, lock
+        // it again, and move every stamp forward to a later time than the
+        // erasure it actually records.
+        or(
+          isNotNull(activityLog.userName),
+          isNotNull(activityLog.userEmail),
+          isNull(activityLog.actorDeletedAt)
+        )
+      )
+    );
 }

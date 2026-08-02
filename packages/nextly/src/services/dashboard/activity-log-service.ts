@@ -14,7 +14,7 @@ import { randomUUID } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SqlParam } from "@nextlyhq/adapter-drizzle/types";
-import { and, eq, sql, type Column, type Table } from "drizzle-orm";
+import { sql, type Column, type Table } from "drizzle-orm";
 
 import { toDbError } from "../../database/errors";
 // PR 4 migration: switched from ServiceError.fromDatabaseError to
@@ -95,15 +95,28 @@ const TABLE = "activity_log";
  */
 interface ActivityWriteDb {
   insert(table: unknown): { values(data: unknown): Promise<unknown> };
-  update(table: unknown): {
-    set(data: unknown): { where(condition: unknown): Promise<unknown> };
-  };
 }
 
 /** The two tables an activity write reads and writes. */
 interface ActivityWriteTables {
-  activityLog: Table & { id: Column };
+  activityLog: Table & { actorDeletedAt: Column };
   users: Table & { id: Column };
+}
+
+/**
+ * One query filter, in both the spellings its two consumers need.
+ *
+ * `adapter.select` resolves a name against the Drizzle table and therefore
+ * wants the schema property; the count query writes SQL and wants the physical
+ * column. They are carried together so a filter cannot be added in one
+ * spelling and used in the other.
+ */
+interface ActivityFilter {
+  /** The Drizzle schema property, for `adapter.select`. */
+  property: string;
+  /** The physical column, for the count query's SQL. */
+  column: string;
+  value: SqlParam;
 }
 
 /**
@@ -127,23 +140,20 @@ export class ActivityLogService extends BaseService {
   /**
    * Record an activity log entry.
    *
-   * Written first and erased second, rather than checked first and written
-   * second. The order is what makes this safe against a deletion running
-   * concurrently, on every dialect and with no lock or transaction:
+   * ONE statement, which is what makes the identity it stores correct even
+   * when the author is being deleted at the same moment. The row and the
+   * decision about whose name it may carry are written together, so there is
+   * no interval in which a durable row holds an identity that a second
+   * statement was still going to remove — a failure or a crash cannot leave
+   * that state behind, because the alternative to the whole statement is no
+   * row at all.
    *
-   *   - if the entry commits BEFORE the deletion's own erasure runs, that
-   *     erasure covers it;
-   *   - if it commits after, this UPDATE erases it — unless the deletion has
-   *     not committed yet, in which case the account is still visible here;
-   *   - and in exactly that remaining case the entry existed before the
-   *     deletion committed, so `deleteUser`'s post-commit sweep reaches it.
-   *
-   * The three windows cannot all be missed at once: the second requires the
-   * entry to predate the commit and the third requires it to postdate the
-   * sweep, which runs after the commit. A check-then-insert has no such
-   * property — the account can be deleted in the gap between the two
-   * statements, which is why the identity is decided by a statement that runs
-   * after the row exists rather than before.
+   * Against a deletion that has not committed yet, the subquery still sees the
+   * account and the identity is stored. That entry necessarily predates the
+   * commit, which is exactly the case `deleteUser`'s post-commit sweep exists
+   * to cover; an entry written after the commit is erased here instead. The
+   * two windows are complementary, so neither ordering leaves an identity
+   * behind.
    *
    * Errors are caught and logged but never propagated — activity logging must
    * never break a content operation.
@@ -152,36 +162,27 @@ export class ActivityLogService extends BaseService {
     try {
       const { activityLog, users } = this.tables as ActivityWriteTables;
       const db = this.db as ActivityWriteDb;
-      const id = randomUUID();
       const now = new Date();
 
+      const actorIsGone = sql`NOT EXISTS (SELECT 1 FROM ${users} WHERE ${users.id} = ${input.userId})`;
+      // Encoded through the column itself rather than by hand: the stamp is an
+      // epoch integer on SQLite and a datetime elsewhere, and an SQL fragment
+      // bypasses the mapping Drizzle would otherwise apply to a plain value.
+      const erasedAt = activityLog.actorDeletedAt.mapToDriverValue(now);
+
       await db.insert(activityLog).values({
-        id,
+        id: randomUUID(),
         userId: input.userId,
-        userName: input.userName,
-        userEmail: input.userEmail,
+        userName: sql`CASE WHEN ${actorIsGone} THEN NULL ELSE ${input.userName} END`,
+        userEmail: sql`CASE WHEN ${actorIsGone} THEN NULL ELSE ${input.userEmail} END`,
+        actorDeletedAt: sql`CASE WHEN ${actorIsGone} THEN ${erasedAt} ELSE NULL END`,
         action: input.action,
         collection: input.collection,
         entryId: input.entryId ?? null,
         entryTitle: input.entryTitle ?? null,
         metadata: input.metadata ? JSON.stringify(input.metadata) : null,
         createdAt: now,
-        actorDeletedAt: null,
       });
-
-      // Matches nothing in the ordinary case — the author exists, so the
-      // subquery is satisfied and the row is left alone. It costs one primary
-      // key lookup and one index probe, on a write that is already off the
-      // request path.
-      await db
-        .update(activityLog)
-        .set({ userName: null, userEmail: null, actorDeletedAt: now })
-        .where(
-          and(
-            eq(activityLog.id, id),
-            sql`NOT EXISTS (SELECT 1 FROM ${users} WHERE ${users.id} = ${input.userId})`
-          )
-        );
     } catch (error) {
       this.logger.error("Failed to log activity", {
         error: error instanceof Error ? error.message : String(error),
@@ -208,32 +209,43 @@ export class ActivityLogService extends BaseService {
     const offset = options?.offset ?? 0;
 
     try {
-      const conditions: Array<{
-        column: string;
-        op: "=";
-        value: SqlParam;
-      }> = [];
+      // Each filter carries BOTH spellings because its two consumers disagree
+      // by nature: `adapter.select` resolves names against the Drizzle table,
+      // so it needs the schema property, while the count below writes SQL and
+      // needs the physical column. Deriving both from one entry is what stops
+      // them drifting apart — naming the column for the select silently
+      // dropped the ordering and made a filtered query fail outright.
+      const filters: ActivityFilter[] = [];
 
       if (options?.collection) {
-        conditions.push({
+        filters.push({
+          property: "collection",
           column: "collection",
-          op: "=",
           value: options.collection,
         });
       }
       if (options?.userId) {
-        conditions.push({
+        filters.push({
+          property: "userId",
           column: "user_id",
-          op: "=",
           value: options.userId,
         });
       }
 
-      const where = conditions.length > 0 ? { and: conditions } : undefined;
+      const where =
+        filters.length > 0
+          ? {
+              and: filters.map(f => ({
+                column: f.property,
+                op: "=" as const,
+                value: f.value,
+              })),
+            }
+          : undefined;
 
       const rows = await this.adapter.select<Record<string, unknown>>(TABLE, {
         where,
-        orderBy: [{ column: "created_at", direction: "desc" }],
+        orderBy: [{ column: "createdAt", direction: "desc" }],
         limit: limit + 1,
         offset,
       });
@@ -241,7 +253,7 @@ export class ActivityLogService extends BaseService {
       const hasMore = rows.length > limit;
       const entries = (hasMore ? rows.slice(0, limit) : rows).map(this.mapRow);
 
-      const total = await this.countActivities(where);
+      const total = await this.countActivities(filters);
 
       return { activities: entries, total, hasMore };
     } catch (error) {
@@ -290,15 +302,13 @@ export class ActivityLogService extends BaseService {
     }
   }
 
-  private async countActivities(where?: {
-    and: Array<{ column: string; op: "="; value: SqlParam }>;
-  }): Promise<number> {
+  private async countActivities(filters: ActivityFilter[]): Promise<number> {
     try {
       let sql = `SELECT COUNT(*) as count FROM ${TABLE}`;
       const params: SqlParam[] = [];
 
-      if (where && where.and.length > 0) {
-        const clauses = where.and.map((c, i) => {
+      if (filters.length > 0) {
+        const clauses = filters.map((c, i) => {
           params.push(c.value);
           // Use positional placeholders for PG ($1, $2) and ? for MySQL/SQLite
           return this.dialect === "postgresql"
@@ -331,29 +341,35 @@ export class ActivityLogService extends BaseService {
       }
     }
 
+    // Keyed by the Drizzle SCHEMA PROPERTY, not the column: `adapter.select`
+    // runs `db.select().from(table)` and throws outright when the table is not
+    // in the registry, so there is no raw-SQL path that would return
+    // `user_name`. Reading the column spelling yielded undefined for every
+    // field and surfaced as the string "undefined" in the feed.
+    const createdAt = row.createdAt;
+    const actorDeletedAt = row.actorDeletedAt;
+
     return {
       id: String(row.id),
-      userId: String(row.user_id),
+      userId: String(row.userId),
       // Through the same narrowing as the other nullable columns: an erased
       // row holds SQL NULL here, and `String(null)` would surface the literal
       // text "null" as the actor's name.
-      userName: toNullableString(row.user_name),
-      userEmail: toNullableString(row.user_email),
+      userName: toNullableString(row.userName),
+      userEmail: toNullableString(row.userEmail),
       action: String(row.action) as ActivityLogAction,
       collection: String(row.collection),
       // Type-narrow before stringification so we don't fall through to
       // Object#toString for non-primitive driver values.
-      entryId: toNullableString(row.entry_id),
-      entryTitle: toNullableString(row.entry_title),
+      entryId: toNullableString(row.entryId),
+      entryTitle: toNullableString(row.entryTitle),
       metadata,
       createdAt:
-        row.created_at instanceof Date
-          ? row.created_at.toISOString()
-          : String(row.created_at),
+        createdAt instanceof Date ? createdAt.toISOString() : String(createdAt),
       actorDeletedAt:
-        row.actor_deleted_at instanceof Date
-          ? row.actor_deleted_at.toISOString()
-          : toNullableString(row.actor_deleted_at),
+        actorDeletedAt instanceof Date
+          ? actorDeletedAt.toISOString()
+          : toNullableString(actorDeletedAt),
     };
   };
 }

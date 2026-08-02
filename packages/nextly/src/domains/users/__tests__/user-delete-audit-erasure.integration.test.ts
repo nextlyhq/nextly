@@ -21,6 +21,7 @@ import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { getDialectTables } from "../../../database/index";
+import { eraseActorPersonalData } from "../../audit/erase-actor-personal-data";
 import { getSQLiteDrizzleKit } from "../../../database/drizzle-kit-lazy";
 import { SchemaRegistry } from "../../../database/schema-registry";
 import { splitStatements } from "../../../domains/schema/pipeline/sql-statement-utils";
@@ -230,6 +231,136 @@ describe("deleting a user erases them from the activity log without erasing the 
     expect(rows[0].user_name).toBeNull();
     expect(rows[0].user_email).toBeNull();
     expect(rows[0].actor_deleted_at).not.toBeNull();
+  });
+
+  it("reports the erased state through the query API the admin reads", async () => {
+    // The raw-SQL assertions above prove what is STORED. They say nothing
+    // about what `getRecentActivity` returns, and the adapter keys rows by the
+    // Drizzle property (`actorDeletedAt`) whenever a table object resolves and
+    // by the column (`actor_deleted_at`) when it falls back to raw SQL. Reading
+    // one spelling only reports every erased row as live, and the admin then
+    // renders a blank actor instead of the deleted-user placeholder.
+    const author = await users.createLocalUser({
+      email: "erasure-readpath@test.local",
+      name: "Read Path",
+      password: "TestPassword123!",
+      isActive: true,
+    });
+    await activity.logActivity({
+      userId: String(author.id),
+      userName: "Read Path",
+      userEmail: "erasure-readpath@test.local",
+      action: "create",
+      collection: "readpath_posts",
+      entryTitle: "Before Deletion",
+    });
+
+    const live = await activity.getRecentActivity({
+      userId: String(author.id),
+    });
+    expect(live.activities).toHaveLength(1);
+    // The premise: every field the admin renders survives the mapping.
+    expect(live.activities[0].userId).toBe(String(author.id));
+    expect(live.activities[0].userName).toBe("Read Path");
+    expect(live.activities[0].createdAt).not.toBe("undefined");
+    expect(live.activities[0].actorDeletedAt).toBeNull();
+
+    await users.deleteUser(author.id);
+
+    const erased = await activity.getRecentActivity({
+      userId: String(author.id),
+    });
+    expect(erased.activities).toHaveLength(1);
+    expect(erased.activities[0].userName).toBeNull();
+    expect(erased.activities[0].userEmail).toBeNull();
+    // The field the admin branches on to render "[deleted user · …]".
+    expect(erased.activities[0].actorDeletedAt).not.toBeNull();
+  });
+
+  it("returns the feed newest first", async () => {
+    // The ordering spec names a column too, and a name the Drizzle table does
+    // not have is silently DROPPED rather than rejected — so "recent activity"
+    // came back in arbitrary order while every other assertion still passed.
+    const author = await users.createLocalUser({
+      email: "erasure-order@test.local",
+      name: "Orderly",
+      password: "TestPassword123!",
+      isActive: true,
+    });
+    for (const title of ["older", "newer"]) {
+      await activity.logActivity({
+        userId: String(author.id),
+        userName: "Orderly",
+        userEmail: "erasure-order@test.local",
+        action: "create",
+        collection: "order_posts",
+        entryTitle: title,
+      });
+    }
+    // Stamped explicitly: two writes in the same second would tie, and a tie
+    // cannot distinguish a working ORDER BY from a dropped one.
+    await adapter.executeQuery(
+      "UPDATE activity_log SET created_at = ? WHERE entry_title = ?",
+      [1000, "older"]
+    );
+    await adapter.executeQuery(
+      "UPDATE activity_log SET created_at = ? WHERE entry_title = ?",
+      [2000, "newer"]
+    );
+
+    const feed = await activity.getRecentActivity({
+      userId: String(author.id),
+    });
+    expect(feed.activities.map(a => a.entryTitle)).toEqual(["newer", "older"]);
+    // The count query reads the same filter through its own spelling.
+    expect(feed.total).toBe(2);
+  });
+
+  it("does not rewrite entries the erasure already handled", async () => {
+    // The erasure runs twice per deletion: once inside the transaction and
+    // once after it commits, to catch an entry that landed in between. Calling
+    // it directly is what makes the second pass observable — a repeated
+    // `deleteUser` throws NOT_FOUND before ever reaching the sweep, so a test
+    // written that way passes whether the predicate is there or not.
+    const author = await users.createLocalUser({
+      email: "erasure-stamp@test.local",
+      name: "Stamped",
+      password: "TestPassword123!",
+      isActive: true,
+    });
+    await activity.logActivity({
+      userId: String(author.id),
+      userName: "Stamped",
+      userEmail: "erasure-stamp@test.local",
+      action: "create",
+      collection: "stamp_posts",
+    });
+
+    await users.deleteUser(author.id);
+    const erased = (await rowsFor(author.id))[0];
+    expect(erased.user_name).toBeNull();
+    expect(erased.actor_deleted_at).not.toBeNull();
+
+    // A recognisable stamp, far enough in the past that a pass which rewrites
+    // the row cannot land on the same value.
+    await adapter.executeQuery(
+      "UPDATE activity_log SET actor_deleted_at = ? WHERE user_id = ?",
+      [1000, String(author.id)]
+    );
+
+    await eraseActorPersonalData(
+      adapter.getDrizzle() as Parameters<typeof eraseActorPersonalData>[0],
+      getDialectTables("sqlite") as Parameters<
+        typeof eraseActorPersonalData
+      >[1],
+      String(author.id),
+      new Date()
+    );
+
+    // Untouched: the row records when the identity was actually erased, not
+    // when some later sweep happened to run over it again.
+    const afterSweep = (await rowsFor(author.id))[0];
+    expect(afterSweep.actor_deleted_at).toBe(1000);
   });
 
   it("leaves every other actor's entries untouched", async () => {
