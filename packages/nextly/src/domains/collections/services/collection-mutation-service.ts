@@ -265,6 +265,9 @@ function errorToServiceResult<T = unknown>(
   // `this.dialect` from BaseService. Normalising raw driver errors first
   // is what keeps unique/fk violations from collapsing to INTERNAL_ERROR.
   const mapped = NextlyError.fromDatabaseError(toDbError(dialect, error));
+  // The mapping is where a unique or FK violation gains the context that says
+  // WHICH constraint; the envelope below drops it, so it is kept here too.
+  recordFlattenedError(mapped);
   if (mapped.code === "INTERNAL_ERROR") {
     return {
       success: false,

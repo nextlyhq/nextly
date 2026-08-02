@@ -5,6 +5,8 @@
  * @module errors/from-service-envelope
  */
 
+import { recordFlattenedError } from "../hooks/side-effect-warnings";
+
 import { NEXTLY_ERROR_STATUS } from "./error-codes";
 import { NextlyError } from "./nextly-error";
 import type { PublicData } from "./public-data";
@@ -170,6 +172,10 @@ export function typedErrorEnvelopeFields(
   "code" | "statusCode" | "message" | "messageKey" | "publicData"
 > | null {
   if (!NextlyError.is(error)) return null;
+  // Kept for the operator before the detail is dropped. This function IS the
+  // flattening for every path that uses it, so recording here covers them all
+  // rather than each call site remembering to.
+  recordFlattenedError(error);
   return {
     code: String(error.code),
     statusCode: error.statusCode,

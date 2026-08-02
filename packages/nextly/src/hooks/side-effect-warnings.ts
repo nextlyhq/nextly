@@ -184,3 +184,31 @@ export async function collectingWarnings<T>(
     ? { result, warnings: failures.map(toHookWarning) }
     : { result };
 }
+
+/**
+ * Write a request's flattened-error diagnostics to the operator log.
+ *
+ * Shared by every request boundary so they cannot disagree about the shape or
+ * about the guard. Failures writing them are swallowed: this is observability,
+ * and a logger that throws must not replace a response the handler already
+ * produced. Losing a log line is recoverable; turning a completed write into a
+ * 500 is not.
+ */
+export function logFlattenedErrors(
+  errors: readonly NextlyError[],
+  write: (entry: Record<string, unknown>) => void,
+  context: { requestId: string; route?: string; method?: string }
+): void {
+  for (const error of errors) {
+    try {
+      write({
+        kind: "flattened-service-error",
+        ...error.toLogJSON(context.requestId),
+        ...(context.route !== undefined ? { route: context.route } : {}),
+        ...(context.method !== undefined ? { method: context.method } : {}),
+      });
+    } catch {
+      // Deliberately swallowed; see above.
+    }
+  }
+}

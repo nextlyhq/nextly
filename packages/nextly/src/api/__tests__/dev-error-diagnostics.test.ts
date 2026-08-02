@@ -13,7 +13,12 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { typedErrorEnvelopeFields } from "../../errors/from-service-envelope";
 import { NextlyError } from "../../errors/nextly-error";
+import {
+  currentFlattenedErrors,
+  withSideEffectWarnings,
+} from "../../hooks/side-effect-warnings";
 import { withErrorHandler } from "../with-error-handler";
 
 afterEach(() => {
@@ -68,5 +73,54 @@ describe("development-only error diagnostics", () => {
 
     expect(dev.code).toBe(prod.code);
     expect(dev.message).toBe(prod.message);
+  });
+});
+
+describe("diagnostics survive every flattening path", () => {
+  it("records from typedErrorEnvelopeFields", async () => {
+    // That function IS the flattening for the paths that use it, so it records
+    // rather than each of its call sites remembering to.
+    const { result } = await withSideEffectWarnings(async () => {
+      typedErrorEnvelopeFields(
+        NextlyError.conflict({ logContext: { constraint: "posts_slug_key" } })
+      );
+      return currentFlattenedErrors();
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.logContext).toMatchObject({
+      constraint: "posts_slug_key",
+    });
+  });
+
+  it("records nothing for a value that is not a typed error", async () => {
+    // The control: it returns null for those, and recording one would put a
+    // fabricated entry in the operator log.
+    const { result } = await withSideEffectWarnings(async () => {
+      typedErrorEnvelopeFields(new Error("plain"));
+      return currentFlattenedErrors();
+    });
+
+    expect(result).toHaveLength(0);
+  });
+});
+
+describe("a failing logger cannot replace the response", () => {
+  it("returns the handler's response when writing diagnostics throws", async () => {
+    // Observability must not poison the result. Losing a log line is
+    // recoverable; turning a completed write into a 500 is not.
+    const { logFlattenedErrors } = await import(
+      "../../hooks/side-effect-warnings"
+    );
+
+    expect(() =>
+      logFlattenedErrors(
+        [NextlyError.internal({ logContext: { a: 1 } })],
+        () => {
+          throw new Error("logger exploded");
+        },
+        { requestId: "req-1" }
+      )
+    ).not.toThrow();
   });
 });

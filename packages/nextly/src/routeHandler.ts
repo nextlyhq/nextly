@@ -78,7 +78,11 @@ import { readAccessTokenCookie } from "./auth/cookies/access-token-cookie";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
 import { container } from "./di/container";
 import { NextlyError } from "./errors/nextly-error";
-import { withSideEffectWarnings } from "./hooks/side-effect-warnings";
+import {
+  currentFlattenedErrors,
+  logFlattenedErrors,
+  withSideEffectWarnings,
+} from "./hooks/side-effect-warnings";
 import { withTimezoneFormatting } from "./lib/date-formatting";
 import { createCorsMiddleware } from "./middleware/cors";
 import { createRateLimiter } from "./middleware/rate-limit";
@@ -1480,7 +1484,34 @@ export function createDynamicHandlers(options?: {
     // from inside it, so nothing between here and them has to carry the
     // failures; a request whose hooks all succeed collects an empty array and
     // its body is unchanged.
-    const { result: response } = await withSideEffectWarnings(() => handler());
+    // Captured inside the scope, which closes when this returns. The dynamic
+    // routes do not pass through `withErrorHandler`, so without this the
+    // detail an envelope flattened on the ordinary `/api/...` surface reaches
+    // the log only as the boundary's reconstruction, with neither the cause
+    // nor the context the thrower attached.
+    let flattenedInRequest: NextlyError[] = [];
+    const { result: response } = await withSideEffectWarnings(async () => {
+      try {
+        return await handler();
+      } finally {
+        flattenedInRequest = currentFlattenedErrors();
+      }
+    });
+    // Imported here rather than at module scope, matching how this file already
+    // reaches the logger, so the route entry point keeps its import graph.
+    const { getNextlyLogger: resolveLogger } = await import(
+      "./observability/logger"
+    );
+    logFlattenedErrors(
+      flattenedInRequest,
+      entry => resolveLogger().error(entry),
+      {
+        requestId:
+          response.headers.get("x-request-id") ?? readOrGenerateRequestId(req),
+        route: new URL(req.url).pathname,
+        method: req.method,
+      }
+    );
     const formattedResponse = await applyGlobalDateFormatting(response, req);
     const corsResponse = cors.applyHeaders(req, formattedResponse);
     return applySecurityHeaders(corsResponse);

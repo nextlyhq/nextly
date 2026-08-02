@@ -22,6 +22,7 @@ import { isDbError } from "../database/errors";
 import { NextlyError } from "../errors/nextly-error";
 import {
   currentFlattenedErrors,
+  logFlattenedErrors,
   withSideEffectWarnings,
 } from "../hooks/side-effect-warnings";
 import { getNextlyLogger } from "../observability/logger";
@@ -146,23 +147,12 @@ export function withErrorHandler<TArgs extends unknown[]>(
         try {
           return await handler(...args);
         } finally {
-          // Inside the scope on purpose: it closes when this returns, and the
-          // catch below runs after that. In a `finally` because a request that
-          // flattened an error and then threw is exactly the one whose detail
-          // an operator needs.
-          //
-          // Joined to the response by `requestId`, which the public envelope
-          // already carries, so an operator correlates them without any of the
-          // detail being disclosed.
+          // Captured, not logged, and inside the scope because it closes when
+          // this returns. In a `finally` because a request that flattened an
+          // error and then threw is exactly the one whose detail an operator
+          // needs. Writing them happens once the response is final, so the id
+          // in the log is the one the caller actually receives.
           flattenedInRequest = currentFlattenedErrors();
-          for (const flattened of flattenedInRequest) {
-            getNextlyLogger().error({
-              kind: "flattened-service-error",
-              ...flattened.toLogJSON(requestId),
-              route,
-              method,
-            });
-          }
         }
       }));
     } catch (err) {
@@ -285,6 +275,27 @@ export function withErrorHandler<TArgs extends unknown[]>(
     if (!response.headers.has("x-request-id")) {
       response.headers.set("x-request-id", requestId);
     }
+
+    // Written here rather than where they were collected, for two reasons.
+    //
+    // The id: a handler may put its own `X-Request-Id` on the response, which
+    // is preserved above. Logging the request-derived one would hand the
+    // operator an id the caller never saw, defeating the join this exists for,
+    // so the effective one is read back off the response.
+    //
+    // The guard: this is observability, and a logger that throws — a custom
+    // one, or the default meeting a circular `logContext` — must not replace a
+    // response the handler already produced. Losing a log line is recoverable;
+    // turning a successful write into a 500 is not.
+    logFlattenedErrors(
+      flattenedInRequest,
+      entry => getNextlyLogger().error(entry),
+      {
+        requestId: response.headers.get("x-request-id") ?? requestId,
+        route,
+        method,
+      }
+    );
     return response;
   };
 }
