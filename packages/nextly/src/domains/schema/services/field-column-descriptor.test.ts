@@ -126,3 +126,52 @@ describe("getColumnDescriptor: number storage", () => {
     }
   });
 });
+
+// Free text is the one field type whose width is not settled by what it holds. On MySQL the two
+// renderings are 255 characters apart, so a field that knows it is unbounded has to be able to say
+// so rather than discover the ceiling when an editor's paste is rejected by the database.
+describe("a text field may state its own width", () => {
+  const textField = (variant?: "short" | "long") =>
+    ({
+      name: "body",
+      type: "text",
+      ...(variant ? { options: { variant } } : {}),
+    }) as never;
+
+  it("renders the wide type on every dialect when the field says it is long", () => {
+    expect(getColumnDescriptor(textField("long"), "mysql")?.kind).toBe(
+      "longText"
+    );
+    expect(getColumnDescriptor(textField("long"), "postgresql")?.kind).toBe(
+      "longText"
+    );
+    expect(getColumnDescriptor(textField("long"), "sqlite")?.kind).toBe(
+      "longText"
+    );
+  });
+
+  // 🔴 Absent, the answer must not move. Every table already created through this path has the
+  // narrow kind, and changing it would make each of them read as drift on the next diff.
+  it("keeps the existing kind when the field says nothing", () => {
+    for (const dialect of ["postgresql", "mysql", "sqlite"] as const) {
+      expect(getColumnDescriptor(textField(), dialect)?.kind).toBe("text");
+    }
+  });
+
+  it("keeps the existing kind when the field says it is short", () => {
+    expect(getColumnDescriptor(textField("short"), "mysql")?.kind).toBe("text");
+  });
+
+  // The signal belongs to free text alone. These are bounded by what they store, and widening them
+  // would cost MySQL the index it can build on a varchar.
+  it("ignores the signal on types whose width their content settles", () => {
+    for (const type of ["email", "password", "select", "radio"]) {
+      const field = {
+        name: "f",
+        type,
+        options: { variant: "long" },
+      } as never;
+      expect(getColumnDescriptor(field, "mysql")?.kind).toBe("text");
+    }
+  });
+});

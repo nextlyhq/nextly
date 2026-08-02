@@ -179,6 +179,15 @@ export function getColumnDescriptor(
 function classifyFieldKind(field: FieldDefinition): ColumnKind {
   switch (field.type) {
     case "text":
+      // A text field may state its own width, and only this type may: an email, a password and a
+      // select value are bounded by what they hold, while free text is bounded by nothing.
+      //
+      // Absent, the answer stays what it has always been for this path. The signal exists so a
+      // caller that KNOWS the field is unbounded can say so instead of discovering the ceiling
+      // when a paste is rejected — on MySQL the two render 255 characters apart.
+      if (field.options?.variant === "long") return "longText";
+      return "text";
+
     case "email":
     case "password":
     case "select":
