@@ -27,6 +27,7 @@ const ORGS = "nestedhook_orgs";
 const AUTHORS = "nestedhook_authors";
 const POSTS = "nestedhook_posts";
 const VAULTS = "nestedhook_vaults";
+const BADGES = "nestedhook_badges";
 
 // How many times the target's token hook ran, for the selection test.
 let tokenHookRuns = 0;
@@ -70,6 +71,24 @@ async function boot(): Promise<TestNextly> {
         slug: VAULTS,
         access: { read: () => true, create: () => true, update: () => true },
         fields: [text({ name: "codename", access: { read: () => false } })],
+      }),
+      // A related collection whose display label comes from a CONDITIONAL field:
+      // `caption` is visible only while `hidden` is not "on". A parent hook can seal
+      // a badge after it was labelled, flipping the label field to denied — the
+      // reapply pass must then rebuild the label so it cannot carry the denied value.
+      defineCollection({
+        slug: BADGES,
+        access: { read: () => true, create: () => true, update: () => true },
+        fields: [
+          text({
+            name: "caption",
+            access: {
+              read: ({ data }) =>
+                (data as { hidden?: unknown } | undefined)?.hidden !== "on",
+            },
+          }),
+          text({ name: "hidden" }),
+        ],
       }),
       defineCollection({
         slug: ORGS,
@@ -192,10 +211,43 @@ async function boot(): Promise<TestNextly> {
                   ?.charter?.sealed !== "locked",
             },
           }),
+          // A ROOT field whose INVERSE rule inspects the divisions REPEATER: visible
+          // only while NO division is "restricted". A hook that REMOVES the
+          // restricted division (a topology change the pristine check must catch)
+          // and reintroduces this field would otherwise let it fall open.
+          text({
+            name: "orgRoster",
+            access: {
+              read: ({ data }) => {
+                const divs = (data as { divisions?: unknown }).divisions;
+                const arr = Array.isArray(divs) ? divs : [];
+                return !arr.some(
+                  d => (d as { grade?: unknown } | null)?.grade === "restricted"
+                );
+              },
+            },
+          }),
           // A self-relationship used to build a three-deep related chain
           // (author -> org -> sibling org) for the existing-child re-sanitization
           // test.
           relationship({ name: "sibling", relationTo: ORGS }),
+          // A badge whose label is conditional; `sealBadge` flips it to denied.
+          relationship({ name: "badge", relationTo: BADGES }),
+          text({
+            name: "sealBadge",
+            hooks: {
+              afterRead: [
+                ({ value, data }) => {
+                  if (value !== "on") return value;
+                  const badge = (data as { badge?: unknown }).badge;
+                  if (badge && typeof badge === "object") {
+                    (badge as Record<string, unknown>).hidden = "on";
+                  }
+                  return value;
+                },
+              ],
+            },
+          }),
           // Reintroduces the sibling org's denied `classification` IN PLACE during
           // THIS org's field-hook phase. The sibling is an already-sanitized,
           // already-visited child, so the post-hook re-descent skips it; its access
@@ -436,6 +488,30 @@ async function boot(): Promise<TestNextly> {
                   if (value !== "on") return value;
                   const vault = (data as { vault?: { label?: unknown } }).vault;
                   return typeof vault?.label === "string" ? vault.label : value;
+                },
+              ],
+            },
+          }),
+          // Copies the org's BADGE's derived `label` (a grandchild of the author)
+          // onto an allowed key, during the author's field-hook phase. If the org's
+          // `sealBadge` hook flipped the badge's label field to denied and the reapply
+          // did not rebuild the label, this would exfiltrate the denied caption.
+          text({
+            name: "harvestBadgeLabel",
+            hooks: {
+              afterRead: [
+                ({ value, data }) => {
+                  if (value !== "on") return value;
+                  const org = (data as { organization?: unknown }).organization;
+                  const badge =
+                    org && typeof org === "object"
+                      ? (org as { badge?: unknown }).badge
+                      : undefined;
+                  (data as Record<string, unknown>).badgeLabel =
+                    badge && typeof badge === "object"
+                      ? (badge as { label?: unknown }).label
+                      : undefined;
+                  return value;
                 },
               ],
             },
@@ -1988,6 +2064,104 @@ describe("a target's field hooks apply to rows reached through a relationship", 
     // The reintroduced grandchild field was re-stripped before the author's hook
     // ran, so it copied nothing.
     expect(author.harvested).toBeUndefined();
+  });
+
+  it("fails closed when a hook removes a nested row a root rule inspects", async () => {
+    // `orgRoster` (a ROOT field) is visible only while NO division is "restricted".
+    // Originally a restricted division denies it. A source hook keeps the org root
+    // in place but REMOVES the restricted division from the repeater and reintroduces
+    // `orgRoster`. Its access snapshot would then see no restricted division and
+    // allow the reintroduced value — but the removed row is a topology change, so the
+    // subtree is no longer pristine and fails closed.
+    const t = await boot();
+    await t.nextly.create({
+      collection: ORGS,
+      data: {
+        name: "acme",
+        divisions: [
+          { label: "pub", grade: "open" },
+          { label: "sec", grade: "restricted" },
+        ],
+      },
+    });
+    const orgId = await onlyId(t, ORGS);
+    await t.nextly.create({
+      collection: AUTHORS,
+      data: { name: "ada", organization: orgId },
+    });
+    const authorId = await onlyId(t, AUTHORS);
+    await t.nextly.create({
+      collection: POSTS,
+      data: { title: "p", author: authorId },
+    });
+    const postId = await onlyId(t, POSTS);
+
+    t.hooks.register("afterRead", POSTS, ctx => {
+      const entry = ctx.data as Record<string, unknown>;
+      const author = entry.author as Record<string, unknown> | undefined;
+      const org = author?.organization as Record<string, unknown> | undefined;
+      const divisions = org?.divisions as Record<string, unknown>[] | undefined;
+      if (org && Array.isArray(divisions)) {
+        // Same org object; drop the restricted division and reintroduce the field.
+        org.divisions = divisions.filter(d => d.label !== "sec");
+        org.orgRoster = "LEAKED";
+      }
+      return entry;
+    });
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    const author = expanded.data!.author as Record<string, unknown>;
+    const org = author.organization as Record<string, unknown> | undefined;
+    expect(org).toBeTruthy();
+    // Failed closed: removing a nested row the root rule inspects is a topology
+    // change, so the reintroduced `orgRoster` was denied.
+    expect(org!.orgRoster).toBeUndefined();
+  });
+
+  it("rebuilds an existing child's label after reapplying access so an ancestor cannot copy it", async () => {
+    // Three-level chain: author -> org -> badge. The badge's label comes from its
+    // conditional `caption`. The org's `sealBadge` field hook flips the badge's
+    // `hidden` so `caption` becomes denied AFTER the badge was labelled. The reapply
+    // pass strips `caption`; unless it also rebuilds the label, the synthetic
+    // `badge.label` still carries the denied caption, and the author's
+    // `harvestBadgeLabel` hook copies it onto an allowed key.
+    const t = await boot();
+    await t.nextly.create({
+      collection: BADGES,
+      data: { caption: "TOPSECRET" },
+    });
+    const badgeId = await onlyId(t, BADGES);
+    await t.nextly.create({
+      collection: ORGS,
+      data: { name: "acme", badge: badgeId, sealBadge: "on" },
+    });
+    const orgId = await onlyId(t, ORGS);
+    await t.nextly.create({
+      collection: AUTHORS,
+      data: { name: "ada", organization: orgId, harvestBadgeLabel: "on" },
+    });
+    const authorId = await onlyId(t, AUTHORS);
+    await t.nextly.create({
+      collection: POSTS,
+      data: { title: "p", author: authorId },
+    });
+    const postId = await onlyId(t, POSTS);
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 3,
+    });
+
+    const author = expanded.data!.author as Record<string, unknown>;
+    // The badge's label was rebuilt after its caption was denied, so the copy is
+    // not the secret caption.
+    expect(author.badgeLabel).not.toBe("TOPSECRET");
   });
 
   it("hides a denied source field from field hooks so a selection cannot expose it", async () => {

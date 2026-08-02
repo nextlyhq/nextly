@@ -114,6 +114,17 @@ interface NestedHookStateBase {
    */
   pristineOriginals: WeakSet<Record<string, unknown>>;
   /**
+   * The STRUCTURAL children each first-walk row held, keyed by the row object: for
+   * every container (group/repeater) and relationship field, the ordered list of
+   * child objects it pointed at. Membership in {@link pristineOriginals} proves each
+   * PRESENT child is an original, but not that the topology is unchanged; comparing
+   * against this catches a child a hook REMOVED, filtered, reordered, or a nested
+   * relationship it REPLACED — any of which a rule on the outer row can inspect and
+   * fall open on. A row is pristine only when its current structural children match
+   * this snapshot exactly.
+   */
+  originalStructure: WeakMap<Record<string, unknown>, Map<string, unknown[]>>;
+  /**
    * Every related row the pass reached, in visit order, with what is needed to
    * finish it. These entries drive the finalize step after every hook has run: it
    * re-applies access to each row (see `redactions`), then rebuilds labels last
@@ -153,6 +164,7 @@ function createNestedHookState(): NestedHookState {
     labelFields: new Map(),
     redactions: new WeakMap(),
     pristineOriginals: new WeakSet(),
+    originalStructure: new WeakMap(),
     failClosed: new WeakSet(),
     pending: [],
     applyFieldHooks: true,
@@ -3142,6 +3154,7 @@ export class CollectionRelationshipService extends BaseService {
       labelFields: walkState.labelFields,
       redactions: walkState.redactions,
       pristineOriginals: walkState.pristineOriginals,
+      originalStructure: walkState.originalStructure,
       failClosed: walkState.failClosed,
       applyFieldHooks: false,
     };
@@ -3269,11 +3282,13 @@ export class CollectionRelationshipService extends BaseService {
   ): Promise<boolean> {
     if (!state.pristineOriginals.has(root)) return false;
     const fields = await this.fieldsForNestedWalk(collection, state);
+    if (!this.structureUnchanged(root, fields, state)) return false;
     return this.areNestedRowsPristine(root, fields, state);
   }
 
   /** Recursive worker for {@link isPristineSubtree}: false as soon as any
-   *  group/repeater row beneath `row` is not a first-walk original. */
+   *  group/repeater row beneath `row` is not a first-walk original OR the row's
+   *  structural children (nested rows and relationship targets) changed. */
   private areNestedRowsPristine(
     row: Record<string, unknown>,
     fields: FieldDefinition[],
@@ -3284,10 +3299,77 @@ export class CollectionRelationshipService extends BaseService {
       const inner = getNestedFields(field);
       for (const child of containerRowsOf(row[field.name])) {
         if (!state.pristineOriginals.has(child)) return false;
+        if (!this.structureUnchanged(child, inner, state)) return false;
         if (!this.areNestedRowsPristine(child, inner, state)) return false;
       }
     }
     return true;
+  }
+
+  /**
+   * Whether a row's STRUCTURAL children still match what the first walk recorded:
+   * the same container (group/repeater) rows and relationship targets, in the same
+   * order and count. Membership of the present rows in `pristineOriginals` proves
+   * none was replaced with a NEW object, but not that none was REMOVED, filtered,
+   * reordered, or that a nested relationship was swapped — topology a rule on this
+   * row can inspect and fall open on. Comparing the recorded snapshot catches those.
+   */
+  private structureUnchanged(
+    row: Record<string, unknown>,
+    fields: FieldDefinition[],
+    state: NestedHookState
+  ): boolean {
+    const recorded = state.originalStructure.get(row);
+    // No snapshot means the row was not recorded in the first walk (a clone or a
+    // fabricated row); treat it as changed so it fails closed.
+    if (!recorded) return false;
+    const current = this.structuralChildrenOf(row, fields);
+    if (current.size !== recorded.size) return false;
+    for (const [name, currentChildren] of current) {
+      const recordedChildren = recorded.get(name);
+      if (
+        !recordedChildren ||
+        recordedChildren.length !== currentChildren.length
+      ) {
+        return false;
+      }
+      for (let i = 0; i < currentChildren.length; i++) {
+        // Identity for objects, value for a bare id string — either differing
+        // means the hook changed which child this field points at.
+        if (currentChildren[i] !== recordedChildren[i]) return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * A row's structural children by field: the ordered container rows for each
+   * group/repeater, and the ordered value elements for each relationship (populated
+   * objects by identity, a bare id by value). Uploads and scalars are omitted — they
+   * carry no nested rows a topology change could hide evidence in.
+   */
+  private structuralChildrenOf(
+    row: Record<string, unknown>,
+    fields: FieldDefinition[]
+  ): Map<string, unknown[]> {
+    const structure = new Map<string, unknown[]>();
+    for (const field of fields) {
+      if (!field.name) continue;
+      if (isRepeaterOrGroupField(field)) {
+        structure.set(field.name, containerRowsOf(row[field.name]));
+      } else if (isRelationshipField(field)) {
+        const value = row[field.name];
+        structure.set(
+          field.name,
+          value === null || value === undefined
+            ? []
+            : Array.isArray(value)
+              ? [...value]
+              : [value]
+        );
+      }
+    }
+    return structure;
   }
 
   /**
@@ -3338,16 +3420,18 @@ export class CollectionRelationshipService extends BaseService {
   }
 
   /**
-   * Record every group/repeater row currently inside a related root as a first-walk
-   * original (first walk only). Together with the root itself (recorded by the
-   * caller), this is what {@link isPristineSubtree} checks to tell a subtree mutated
-   * purely in place from one a source hook cloned, replaced, or appended.
+   * Record a related row's structural snapshot and every group/repeater row inside
+   * it as first-walk originals (first walk only). Together with the root itself
+   * (added to `pristineOriginals` by the caller), this is what
+   * {@link isPristineSubtree} checks to tell a subtree mutated purely in place from
+   * one a source hook cloned, replaced, appended, removed from, or reordered.
    */
   private recordPristineOriginals(
     row: Record<string, unknown>,
     fields: FieldDefinition[],
     state: NestedHookState
   ): void {
+    state.originalStructure.set(row, this.structuralChildrenOf(row, fields));
     for (const field of fields) {
       if (!isRepeaterOrGroupField(field) || !field.name) continue;
       const inner = getNestedFields(field);
@@ -3465,6 +3549,17 @@ export class CollectionRelationshipService extends BaseService {
         }
       }
       stripSystemOwnerField(resolved.row);
+      // Rebuild the label from what survived, as the walk does before returning to a
+      // parent: a field hook can mutate an existing child so its label field flips
+      // from allowed to denied, and this access pass removes the field but leaves the
+      // synthetic `label` built earlier — which a parent hook could copy off
+      // `child.label` before the finalize pass rebuilds labels.
+      await this.refreshRelatedRowLabel(
+        resolved.row,
+        field,
+        { collection: resolved.collection },
+        state
+      );
     }
   }
 
