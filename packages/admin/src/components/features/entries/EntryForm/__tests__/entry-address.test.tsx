@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import {
   anyLocalePublished,
   effectiveEntryStatus,
+  everPublishedOnRecord,
   useHasPublicAddress,
   type PublicAddressArgs,
 } from "../entry-address";
@@ -142,6 +143,39 @@ describe("anyLocalePublished", () => {
     // so trusting it would call an entry unpublished while another language is live and hand its
     // shared slug back to the generator. Losing auto-slug convenience is the cheaper mistake.
     expect(anyLocalePublished(entry({ status: "draft" }), true)).toBe(true);
+  });
+});
+
+describe("everPublishedOnRecord", () => {
+  it("reads the serialized timestamp an API response carries", () => {
+    expect(
+      everPublishedOnRecord(entry({ firstPublishedAt: "2026-02-01T10:00:00Z" }))
+    ).toBe(true);
+  });
+
+  it("reads the Date a hook-shaped document carries", () => {
+    expect(
+      everPublishedOnRecord(entry({ firstPublishedAt: new Date("2026-02-01") }))
+    ).toBe(true);
+  });
+
+  it("is false for a row that predates the column", () => {
+    // The column is nullable and null for every entry written before it existed, so an absent
+    // marker means "not known to have been published" and must not assert anything.
+    expect(everPublishedOnRecord(entry({ firstPublishedAt: null }))).toBe(
+      false
+    );
+    expect(everPublishedOnRecord(entry())).toBe(false);
+    expect(everPublishedOnRecord(null)).toBe(false);
+  });
+
+  it("does not treat an unparseable value as a publication", () => {
+    // An empty string and an invalid date are not timestamps. Accepting either would freeze a slug
+    // on the strength of a malformed field.
+    expect(everPublishedOnRecord(entry({ firstPublishedAt: "" }))).toBe(false);
+    expect(
+      everPublishedOnRecord(entry({ firstPublishedAt: new Date("nonsense") }))
+    ).toBe(false);
   });
 });
 
@@ -345,5 +379,67 @@ describe("useHasPublicAddress", () => {
     rerender(perLocale({ entry: entry(EN_LIVE_DE_DRAFT), locale: "de" }));
 
     expect(result.current).toBe(false);
+  });
+
+  it("freezes a shared slug on a fresh mount when the row records a publication", () => {
+    // The sequence the session latch cannot see: publish, unpublish, RELOAD, retitle. The reload
+    // discards the latch, so before the row recorded anything this remounted editor believed it was
+    // looking at an entry that had never been public and handed its URL back to the generator.
+    const { result } = render(
+      shared({
+        entry: entry({
+          status: "draft",
+          firstPublishedAt: "2026-02-01T10:00:00Z",
+        }),
+      })
+    );
+
+    expect(result.current).toBe(true);
+  });
+
+  it("leaves a localized slug free even when the entry has been public elsewhere", () => {
+    // The marker lives on the main row, so it answers "public in SOME language". A slug the author
+    // opted into localizing is genuinely per-language: German's own address has never been served,
+    // and freezing it because English once was would take away auto-slug for no reason.
+    const { result } = render(
+      perLocale({
+        entry: entry({
+          ...EN_LIVE_DE_DRAFT,
+          firstPublishedAt: "2026-02-01T10:00:00Z",
+        }),
+        locale: "de",
+      })
+    );
+
+    expect(result.current).toBe(false);
+  });
+
+  it("is unchanged for a draft whose row records no publication", () => {
+    // The marker may only ever ADD freezing. An entry that has genuinely never been published, and
+    // every row written before the column existed, must behave exactly as they did before.
+    const { result } = render(
+      shared({ entry: entry({ status: "draft", firstPublishedAt: null }) })
+    );
+
+    expect(result.current).toBe(false);
+  });
+
+  it("keeps the freeze when a later response omits the marker", () => {
+    // Not every response shape carries every system column, and one that drops the key must not be
+    // read as a row that was never published — that would unfreeze a live URL mid-edit. The marker
+    // is a committed server value rather than an optimistic one, so it is latched on sight.
+    const { result, rerender } = render(
+      shared({
+        entry: entry({
+          status: "draft",
+          firstPublishedAt: "2026-02-01T10:00:00Z",
+        }),
+      })
+    );
+    expect(result.current).toBe(true);
+
+    rerender(shared({ entry: entry({ status: "draft" }) }));
+
+    expect(result.current).toBe(true);
   });
 });

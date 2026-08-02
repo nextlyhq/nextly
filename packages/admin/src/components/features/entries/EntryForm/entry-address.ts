@@ -123,6 +123,27 @@ export function anyLocalePublished(
   return entry?.status === "published";
 }
 
+/**
+ * Whether the row records that this entry has been public at some point.
+ *
+ * `firstPublishedAt` is stamped once, on the first transition into published, and never cleared —
+ * so unlike `status` it survives an unpublish, and unlike the latch below it survives a reload.
+ * It lives on the main row, which makes it an ENTRY-level fact: "public in some language", not
+ * "public in this one".
+ *
+ * The column is nullable and null for every row that predates it, so a missing marker means "not
+ * known to have been published" rather than "never published" — which is why it may only ever add
+ * to the answer. Both the serialized string an API response carries and the `Date` a hook-shaped
+ * document carries are accepted; an empty string is not a timestamp.
+ */
+export function everPublishedOnRecord(
+  entry: EntryData | null | undefined
+): boolean {
+  const marker = entry?.firstPublishedAt;
+  if (marker instanceof Date) return !Number.isNaN(marker.getTime());
+  return typeof marker === "string" && marker.length > 0;
+}
+
 export interface PublicAddressArgs {
   /** Create forms have no address yet; only a persisted entry can have one. */
   mode: "create" | "edit";
@@ -168,7 +189,7 @@ export interface PublicAddressArgs {
 /**
  * Whether this entry's slug is already a public address.
  *
- * Three things make it one, and each covers a case the others miss:
+ * Four things make it one, and each covers a case the others miss:
  *
  * - **No Draft/Published lifecycle.** A collection without status has no unpublished state: saving
  *   an entry makes it readable. Asking whether such an entry is "published" can only ever answer
@@ -176,6 +197,8 @@ export interface PublicAddressArgs {
  * - **Published where this slug is served.** For a slug the author localized, that is the language
  *   in view. For the default shared slug it is ANY language, because they all resolve through the
  *   one field.
+ * - **Recorded as having been published before.** The row's own `firstPublishedAt` outlives the
+ *   session, so an entry unpublished, reloaded and then retitled is still recognised.
  * - **Published at any point while this editor has been open.** Unpublishing returns the row to
  *   draft, but the links, feeds and search results that accumulated while it was live do not go
  *   away, so republishing under a title-derived slug would silently move it.
@@ -185,10 +208,16 @@ export interface PublicAddressArgs {
  * language, or navigating away and back, does not discard what was already observed. A single slot
  * loses the first address the moment a second one is looked at.
  *
- * The latch is still bounded by the editing session, because nothing durable records that an entry
- * was once published: there is no first-published timestamp on the row. An entry unpublished,
- * reloaded, and then retitled still tracks. Closing that needs a persisted marker in core rather
- * than a longer-lived ref here.
+ * The recorded marker is consulted only for a SHARED slug. It answers "this entry has been public
+ * in some language", which is exactly right when one field serves every language's URL and too
+ * coarse when it does not: for a slug the author opted into localizing it would freeze a
+ * translation whose own address has never been public. Per-language durability would need the
+ * marker on the companion rows; until then the opt-in case keeps the session latch it has now.
+ *
+ * The four terms are combined by OR alone, so each can only ever ADD freezing. That is what makes
+ * partial coverage safe in both directions: a row written before the marker existed, or by a write
+ * path that does not stamp it yet, falls back to exactly today's behaviour instead of unfreezing a
+ * URL that is live.
  */
 export function useHasPublicAddress({
   mode,
@@ -214,8 +243,14 @@ export function useHasPublicAddress({
   const liveNow = slugLocalized
     ? effectiveEntryStatus(entry, locale) === "published"
     : anyLocalePublished(entry, collectionLocalized);
+  // An entry-level fact answers for an entry-level address only. See the note above on why a slug
+  // the author localized is left to the latch.
+  const publishedOnRecord = !slugLocalized && everPublishedOnRecord(entry);
   // Freeze on the pending state, but only REMEMBER it once the write has settled — the cache may
-  // still be holding an optimistic publish that is about to be rolled back.
+  // still be holding an optimistic publish that is about to be rolled back. The recorded marker
+  // needs no such wait: it is a value the server has already committed, so it is latched at once
+  // and a later response that omits the key cannot unfreeze the address.
   if (liveNow && !mutationPending) seenRef.current.add(addressKey);
-  return liveNow || seenRef.current.has(addressKey);
+  if (publishedOnRecord) seenRef.current.add(addressKey);
+  return liveNow || publishedOnRecord || seenRef.current.has(addressKey);
 }
