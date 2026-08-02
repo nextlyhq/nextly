@@ -684,6 +684,21 @@ export function resetNextlyInstance(): void {
 }
 
 /**
+ * Whether the Direct API singleton has been built in this process.
+ *
+ * Answers the question without building it, which `getNextly()` cannot: asking
+ * it constructs the instance and registers the container binding. That makes
+ * "was the Direct API resolved?" unobservable through the ordinary surface, so
+ * a test cannot tell a caller that resolved it lazily from one that never
+ * touched it at all.
+ *
+ * @internal
+ */
+export function isNextlyInstantiated(): boolean {
+  return Boolean(globalForDirectApi.__nextly_directApiInstance);
+}
+
+/**
  * Module-level convenience object for Direct API operations.
  *
  * Each method lazily resolves the Nextly singleton on first call,

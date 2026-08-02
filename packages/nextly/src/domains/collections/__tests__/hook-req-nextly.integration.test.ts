@@ -7,10 +7,12 @@
  * so the handle the collections guide's own example reads was absent on exactly
  * the paths hooks run on most.
  *
- * Asserted against a production-shaped boot rather than the `createTestNextly`
- * harness. That harness calls `getNextly()` while building its return value, so
- * the binding always exists under it and a test written there cannot fail no
- * matter what the code does.
+ * Asserted against a production-shaped boot, and — since the harness stopped
+ * resolving the Direct API while building its return value — through the
+ * ordinary `createTestNextly` harness as well. The harness case is the one that
+ * matters for everything written afterwards: while it called `getNextly()`
+ * eagerly, the binding existed under it whatever the code did, so a test
+ * written there could not fail.
  */
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -18,7 +20,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createAdapter } from "../../../database/factory";
 import { container } from "../../../di/container";
 import { registerServices, shutdownServices } from "../../../di/register";
-import { resetNextlyInstance } from "../../../direct-api/nextly";
+import {
+  isNextlyInstantiated,
+  resetNextlyInstance,
+} from "../../../direct-api/nextly";
 import { resetEventBus } from "../../../events/event-bus";
 import { resetFilterRegistry } from "../../../filters";
 import { resetHookRegistry } from "../../../hooks/hook-registry";
@@ -27,6 +32,10 @@ import {
   clearLiveSnapshots,
 } from "../../../init/schema-snapshot-cache";
 import { resetPluginRouteRegistry } from "../../../plugins/routes/route-registry";
+import {
+  createTestNextly,
+  type TestNextly,
+} from "../../../plugins/test-nextly";
 import { getImageProcessor } from "../../../storage/image-processor";
 
 function resetAll(): void {
@@ -85,5 +94,55 @@ describe("the Direct API is bound for hook contexts at boot", () => {
 
     expect(resolved).toBeDefined();
     expect(typeof resolved?.create).toBe("function");
+  });
+});
+
+describe("the ordinary test harness leaves the binding to service registration", () => {
+  let current: TestNextly | undefined;
+
+  afterEach(async () => {
+    await current?.destroy();
+    current = undefined;
+    resetAll();
+  });
+
+  it("boots without resolving the Direct API, and binds it anyway", async () => {
+    await shutdownServices();
+    resetAll();
+
+    // The controls: nothing in this process has resolved the Direct API or
+    // bound it, so neither observation below can be left over from earlier.
+    expect(isNextlyInstantiated()).toBe(false);
+    expect(container.has("nextlyDirectAPI")).toBe(false);
+
+    current = await createTestNextly({ dialect: "sqlite" });
+
+    // The binding exists, and the harness is not what created it. Checking the
+    // binding alone would not say that: service registration binds it before
+    // the harness assembles its return value, so `container.has(...)` is true
+    // whether the harness resolves the Direct API or not, and a guard reading
+    // only that stays green if the harness goes back to resolving it eagerly.
+    // Whether the singleton was BUILT is the independent observation, because
+    // that is what an eager `getNextly()` does and a lazy property does not.
+    expect(isNextlyInstantiated()).toBe(false);
+    expect(container.has("nextlyDirectAPI")).toBe(true);
+
+    // The mirror: reading the property does resolve it, so the assertion above
+    // reflects the boot rather than the Direct API being unreachable.
+    expect(current.nextly).toBeDefined();
+    expect(isNextlyInstantiated()).toBe(true);
+  });
+
+  it("keeps `nextly` assignable, as the declared type allows", async () => {
+    // `TestNextly.nextly` is not readonly, so `handle.nextly = stub` compiles
+    // and did work while the property was a plain data property. A getter with
+    // no setter would make that same code throw under the strict mode ES
+    // modules run in, which is a silent break for any suite that stubs it.
+    current = await createTestNextly({ dialect: "sqlite" });
+
+    const stub = { marker: "stubbed" } as unknown as typeof current.nextly;
+    current.nextly = stub;
+
+    expect(current.nextly).toBe(stub);
   });
 });

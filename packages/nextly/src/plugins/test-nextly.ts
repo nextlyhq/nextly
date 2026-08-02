@@ -303,7 +303,15 @@ export interface CreateTestNextlyOptions {
 }
 
 export interface TestNextly {
-  /** The booted direct-API facade for CRUD assertions. */
+  /**
+   * The booted direct-API facade for CRUD assertions.
+   *
+   * Resolved on access. Resolving it registers the `nextlyDirectAPI` container
+   * binding as a side effect, and that binding is what a hook's `req.nextly`
+   * comes from — so a test that reads this property before asserting anything
+   * about `req.nextly` has supplied the answer itself. Assert the binding
+   * first, then read this.
+   */
   nextly: Nextly;
   /** Container accessor for inspecting any registered service. */
   getService: typeof getService;
@@ -755,8 +763,28 @@ async function bootServices(
     }
   }
 
+  // A handle a caller assigned over `nextly`. The property was a plain data
+  // property before it became lazy, and `TestNextly.nextly` is not declared
+  // readonly, so `handle.nextly = stub` compiles and has to keep working --
+  // a getter without a setter would turn that into a TypeError under the
+  // strict mode ES modules always run in.
+  let nextlyOverride: Nextly | undefined;
+
   return {
-    nextly: getNextly(),
+    // Resolved on access, not while assembling this object. `getNextly()`
+    // registers the `nextlyDirectAPI` container binding as a side effect of
+    // building its instance, so calling it here made that binding exist under
+    // this harness whatever the code under test did. `req.nextly` resolves
+    // through exactly that binding, so a test asserting a hook receives the
+    // handle passed whether or not service registration had provided it --
+    // the harness was answering the question the test was asking. Deferring
+    // leaves the container the shape service registration alone gives it.
+    get nextly(): Nextly {
+      return nextlyOverride ?? getNextly();
+    },
+    set nextly(replacement: Nextly) {
+      nextlyOverride = replacement;
+    },
     getService,
     hooks: getHookRegistry(),
     events: getEventBus(),
