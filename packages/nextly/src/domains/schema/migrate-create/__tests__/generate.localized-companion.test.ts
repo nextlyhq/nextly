@@ -14,6 +14,7 @@ import { join, resolve } from "node:path";
 
 import { beforeEach, describe, expect, it } from "vitest";
 
+import { parseLocalizationIntent } from "../../../i18n/migration/migration-intent";
 import { generateMigration, type MinimalConfigEntity } from "../generate";
 import { writeSnapshot } from "../snapshot-io";
 
@@ -424,4 +425,75 @@ describe("generateMigration — localized companion emission", () => {
       expect(files.some(f => f.includes("disable_localization"))).toBe(false);
     });
   });
+});
+
+// The three entity kinds are planned from one merged list, and the transition marker a companion
+// belongs to is keyed by kind as well as slug. An entry that lost track of which list it came from
+// would name another entity's record — and a collection, a single and a field group may all be
+// called "hero".
+describe("generateMigration — the companion records which kind of entity it is for", () => {
+  let migrationsDir: string;
+
+  beforeEach(async () => {
+    migrationsDir = await mkdtemp(join(tmpdir(), "nextly-i18n-kind-"));
+  });
+
+  const localized = (slug: string, tableName: string): MinimalConfigEntity => ({
+    slug,
+    tableName,
+    localized: true,
+    fields: [{ name: "body", type: "longText", localized: true }],
+  });
+
+  const cases: [
+    string,
+    "collection" | "single" | "fieldGroup",
+    () => object,
+  ][] = [
+    [
+      "collection",
+      "collection",
+      () => ({
+        collections: [localized("hero", "dc_hero")],
+        singles: [],
+        components: [],
+      }),
+    ],
+    [
+      "single",
+      "single",
+      () => ({
+        collections: [],
+        singles: [localized("hero", "single_hero")],
+        components: [],
+      }),
+    ],
+    [
+      "component",
+      "fieldGroup",
+      () => ({
+        collections: [],
+        singles: [],
+        components: [localized("hero", "comp_hero")],
+      }),
+    ],
+  ];
+
+  for (const [label, expected, entities] of cases) {
+    it(`records entity "${expected}" for a localized ${label}`, async () => {
+      await generateMigration({
+        name: "add_hero",
+        dialect: "sqlite",
+        migrationsDir,
+        defaultLocale: "en",
+        now: NOW,
+        ...entities(),
+      } as Parameters<typeof generateMigration>[0]);
+
+      const file = await findCompanionFile(migrationsDir, "hero");
+      expect(file).toBeDefined();
+      const content = await readFile(resolve(migrationsDir, file!), "utf-8");
+      expect(parseLocalizationIntent(content, file!)?.entity).toBe(expected);
+    });
+  }
 });

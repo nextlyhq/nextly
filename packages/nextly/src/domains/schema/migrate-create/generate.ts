@@ -31,6 +31,7 @@ import {
   planCompanionMigration,
   type CompanionMigrationPlan,
 } from "../../i18n/migration/plan-companion-migration";
+import type { I18nTransitionKind } from "../../i18n/migration/transition-state";
 import type {
   CompanionMigrationSpec,
   LocalizedColumnSpec,
@@ -192,8 +193,14 @@ export async function generateMigration(
   //     components (i18n Option B: companions are migration-owned, emitted as
   //     snapshot-less .sql). All three derive their companion the same way — from the
   //     entity's table name — so a single planner call over the merged list covers them.
+  // Tagged rather than concatenated: the kind is half of the transition marker's key, so an entry
+  // that lost track of which list it came from could not name the record it belongs to.
   const companionPlans = planCompanionMigrations(
-    [...args.collections, ...args.singles, ...args.components],
+    [
+      ...args.collections.map(e => tagged(e, "collection")),
+      ...args.singles.map(e => tagged(e, "single")),
+      ...args.components.map(e => tagged(e, "fieldGroup")),
+    ],
     previousSnapshot,
     args.dialect,
     args.defaultLocale ?? "en"
@@ -283,18 +290,20 @@ export async function generateMigration(
   //      file so `nextly migrate` restores the column before the main migration indexes it.
   const disablePlans = companionPlans.filter(p => p.plan.kind === "disable");
   const forwardPlans = companionPlans.filter(p => p.plan.kind !== "disable");
-  disablePlans.forEach(({ spec, plan }, i) => {
+  disablePlans.forEach(({ spec, plan, entity }, i) => {
     writeCompanionMigrationFile(args.migrationsDir, spec, {
       kind: "disable",
+      entity,
       upSql: plan.upSql,
       downSql: plan.downSql,
       now: new Date(now.getTime() - (disablePlans.length - i)),
     });
   });
-  forwardPlans.forEach(({ spec, plan }, i) => {
+  forwardPlans.forEach(({ spec, plan, entity }, i) => {
     writeCompanionMigrationFile(args.migrationsDir, spec, {
       // `none` plans are filtered out by the planner, so the kind is always writable here.
       kind: plan.kind === "none" ? "create-only" : plan.kind,
+      entity,
       upSql: plan.upSql,
       downSql: plan.downSql,
       now: new Date(now.getTime() + i + 1),
@@ -353,6 +362,12 @@ function buildDisableSpec(
 interface CompanionPlanEntry {
   spec: CompanionMigrationSpec;
   plan: CompanionMigrationPlan;
+  /**
+   * Which kind of entity the companion belongs to. Carried per entry rather than derived later
+   * because the three kinds are planned from one merged list, and the transition marker written
+   * for this companion is keyed by kind as well as slug.
+   */
+  entity: I18nTransitionKind;
 }
 
 /**
@@ -367,14 +382,27 @@ interface CompanionPlanEntry {
  *   - previous main table HELD the columns → enabling now  → create + seed + drop.
  *   - previous main table lacked them      → already localized → none (companion exists).
  */
+/** Pair an entity with the kind of list it came from, which its companion's marker is keyed by. */
+function tagged(
+  entity: MinimalConfigEntity,
+  kind: I18nTransitionKind
+): TaggedConfigEntity {
+  return { entity, kind };
+}
+
+interface TaggedConfigEntity {
+  entity: MinimalConfigEntity;
+  kind: I18nTransitionKind;
+}
+
 function planCompanionMigrations(
-  entities: MinimalConfigEntity[],
+  entities: TaggedConfigEntity[],
   previousSnapshot: NextlySchemaSnapshot,
   dialect: SupportedDialect,
   defaultLocale: string
 ): CompanionPlanEntry[] {
   const entries: CompanionPlanEntry[] = [];
-  for (const c of entities) {
+  for (const { entity: c, kind: entityKind } of entities) {
     // Derive the companion spec with `collectionLocalized: true` regardless of the
     // entity's CURRENT flag. For a localized entity this describes the companion to create;
     // for one being DISABLED it is the starting point that the previous snapshot's recorded
@@ -420,7 +448,8 @@ function planCompanionMigrations(
         localized: false,
         previouslyLocalized: true,
       });
-      if (plan.kind !== "none") entries.push({ spec: disableSpec, plan });
+      if (plan.kind !== "none")
+        entries.push({ spec: disableSpec, plan, entity: entityKind });
       continue;
     }
 
@@ -444,7 +473,7 @@ function planCompanionMigrations(
       prevMainColumnNames,
       companionExisted,
     });
-    if (plan.kind !== "none") entries.push({ spec, plan });
+    if (plan.kind !== "none") entries.push({ spec, plan, entity: entityKind });
   }
   return entries;
 }
