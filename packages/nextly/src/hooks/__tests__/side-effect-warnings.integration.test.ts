@@ -181,4 +181,42 @@ describe("every mutation shape reports its failures, not just the single-item on
     expect("warnings" in deleted && deleted.warnings).toHaveLength(1);
     expect(JSON.stringify(deleted)).not.toContain("delete-secret");
   });
+
+  it("reports an in-process bulkDelete's failures on BulkOperationResult", async () => {
+    // `bulkDelete` calls a third service again, so it needed the scope of its
+    // own. Its `failures` array is per-ITEM and stays empty here: every row
+    // really was deleted, and only the side effect failed.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "notes",
+          fields: [text({ name: "body" })],
+          hooks: {
+            afterDelete: [
+              () => {
+                throw NextlyError.internal({
+                  logContext: { detail: "bulk-secret" },
+                });
+              },
+            ],
+          },
+        }),
+      ],
+    });
+
+    const created = await current.nextly.create({
+      collection: "notes",
+      data: { title: "doomed", body: "doomed" },
+    });
+
+    const result = await current.nextly.bulkDelete({
+      collection: "notes",
+      ids: [(created.item as { id: string }).id],
+    });
+
+    expect(result.successes).toHaveLength(1);
+    expect(result.failures).toHaveLength(0);
+    expect(result.warnings).toHaveLength(1);
+    expect(JSON.stringify(result)).not.toContain("bulk-secret");
+  });
 });

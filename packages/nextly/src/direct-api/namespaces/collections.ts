@@ -430,14 +430,16 @@ export async function bulkDelete(
 ): Promise<BulkOperationResult> {
   const config = mergeConfig(ctx.defaultConfig, args);
 
-  const bulkResult = await ctx.collectionsHandler.bulkDeleteEntries({
-    collectionName: args.collection,
-    ids: args.ids,
-    overrideAccess: config.overrideAccess,
-    user: config.user,
-    context: config.context,
-    disableRevalidate: config.disableRevalidate,
-  });
+  const { result: bulkResult, warnings } = await collectingWarnings(() =>
+    ctx.collectionsHandler.bulkDeleteEntries({
+      collectionName: args.collection,
+      ids: args.ids,
+      overrideAccess: config.overrideAccess,
+      user: config.user,
+      context: config.context,
+      disableRevalidate: config.disableRevalidate,
+    })
+  );
 
   // Project to the public shape so internal post-commit signals (eventRecorded,
   // revalidationIntents) — already consumed by the write path — never reach a
@@ -448,6 +450,7 @@ export async function bulkDelete(
     total: bulkResult.total,
     successCount: bulkResult.successCount,
     failedCount: bulkResult.failedCount,
+    ...(warnings ? { warnings } : {}),
   };
 }
 

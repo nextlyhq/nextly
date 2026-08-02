@@ -506,4 +506,14 @@ export interface BulkOperationResult<T = { id: string }> {
 
   /** Number of failed operations. */
   failedCount: number;
+
+  /**
+   * Side effects that failed after the rows were written, when any did.
+   *
+   * Distinct from `failures`, which is per-ITEM and means that item did not
+   * happen. This is per-OPERATION: every listed success is durable, and a hook
+   * that ran after the write threw. Reporting one as the other would tell a
+   * caller a saved row failed and invite a retry that writes it twice.
+   */
+  warnings?: HookWarning[];
 }
