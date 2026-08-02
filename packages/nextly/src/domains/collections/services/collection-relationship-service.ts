@@ -102,6 +102,16 @@ interface NestedHookStateBase {
    */
   redactions: ReadAccessRedactions;
   /**
+   * The same removed values as `redactions`, but keyed by `relationKey(collection,
+   * id)` instead of the row object. A source hook can return a CLONE of a related
+   * row (a new object the WeakMap cannot key); the authoritative re-walk seeds the
+   * clone's evidence from here so an inverse conditional rule — a field visible
+   * only while a DENIED sibling is absent — cannot fall open on the clone. Keyed by
+   * id and re-judged (never a cached verdict): a replacement's denied fields are
+   * still stripped, and a same-id clone is judged against the original's evidence.
+   */
+  redactionsById: Map<string, Record<string, unknown>>;
+  /**
    * Every related row the pass reached, in visit order, with what is needed to
    * finish it. These entries drive the finalize step after every hook has run: it
    * re-applies access to each row (see `redactions`), then rebuilds labels last
@@ -131,6 +141,7 @@ function createNestedHookState(): NestedHookState {
     fields: new Map(),
     labelFields: new Map(),
     redactions: new WeakMap(),
+    redactionsById: new Map(),
     pending: [],
     applyFieldHooks: true,
   };
@@ -3081,17 +3092,24 @@ export class CollectionRelationshipService extends BaseService {
     access: RelatedRowAccess,
     walkState: NestedHookState
   ): Promise<void> {
-    if (!access.enforceFieldAccess || access.overrideAccess) return;
+    // NOT gated on `overrideAccess`. A trusted read skips the field RULES (each
+    // row's access pass is a no-op under override), but password and system-secret
+    // stripping is unconditional even for trusted reads, and a source hook can
+    // reintroduce a secret onto a related row after the first walk — so this pass
+    // still has to run to re-strip it.
+    if (!access.enforceFieldAccess) return;
     // Fresh `visited`/`pending` so every related row in the assembled response is
     // reached again (the first walk already claimed them), but the SAME
-    // `redactions` and metadata caches, so evidence carries over and the schema
-    // reads are not repeated.
+    // `redactions` (and its id-keyed twin) and metadata caches, so evidence carries
+    // over — including to a row a hook cloned — and the schema reads are not
+    // repeated.
     const repass: NestedHookState = {
       visited: new Set(),
       pending: [],
       fields: walkState.fields,
       labelFields: walkState.labelFields,
       redactions: walkState.redactions,
+      redactionsById: walkState.redactionsById,
       applyFieldHooks: false,
     };
     for (const entry of entries) {
@@ -3155,6 +3173,29 @@ export class CollectionRelationshipService extends BaseService {
   }
 
   /**
+   * Decode a `group`/`repeater` field held as a JSON string into its objects, in
+   * place, so the walk can descend into the relationships inside it.
+   *
+   * A source `afterRead` hook can return a container as the storage string SQLite
+   * keeps it as (the normal read decodes containers to objects before this walk;
+   * a hook that reshapes the document can hand one back as a string). Left as a
+   * string, {@link walkFieldValue} derives no rows from it and a denied target
+   * field on a relationship inside it would reach the response. Writing the decoded
+   * value back matches the object shape a normal read returns.
+   */
+  private decodeContainerFieldInPlace(
+    holder: Record<string, unknown>,
+    field: FieldDefinition
+  ): void {
+    if (
+      isRepeaterOrGroupField(field) &&
+      typeof holder[field.name] === "string"
+    ) {
+      holder[field.name] = parseJsonIfString(holder[field.name]);
+    }
+  }
+
+  /**
    * One level of {@link applyNestedFieldHooks}.
    *
    * Rows are claimed in {@link walkFieldValue} rather than here, so the claim
@@ -3172,6 +3213,7 @@ export class CollectionRelationshipService extends BaseService {
 
     const fields = await this.fieldsForNestedWalk(collectionName, state);
     for (const field of fields) {
+      this.decodeContainerFieldInPlace(entry, field);
       await this.walkFieldValue(entry[field.name], field, access, state, depth);
     }
   }
@@ -3205,6 +3247,7 @@ export class CollectionRelationshipService extends BaseService {
       // hooks of their own -- only the relationships inside them do.
       for (const row of rows) {
         for (const inner of nested) {
+          this.decodeContainerFieldInPlace(row, inner);
           await this.walkFieldValue(
             row[inner.name],
             inner,
@@ -3277,12 +3320,37 @@ export class CollectionRelationshipService extends BaseService {
       // this is a no-op, leaving trusted assembly untouched. What it removes is
       // recorded in the shared `redactions` so `finalizeRelatedRows` can restore
       // it as evidence and re-judge the row after every hook has run.
+      //
+      // Seed this row's removed-evidence from the id-keyed store when the WeakMap
+      // has none for it: a source hook can return a CLONE (a new object the
+      // WeakMap cannot key), and without the original's evidence an inverse
+      // conditional rule — a field visible only while a DENIED sibling is absent —
+      // would fall open on the clone. It is re-judged below, so a replacement's own
+      // denied fields are still stripped; only the removed siblings are restored.
+      if (
+        !state.redactions.has(resolved.row) &&
+        typeof resolved.row.id === "string"
+      ) {
+        const byId = state.redactionsById.get(
+          relationKey(resolved.collection, resolved.row.id)
+        );
+        if (byId) state.redactions.set(resolved.row, byId);
+      }
       await this.applyRelatedRowReadAccess(
         resolved.collection,
         [resolved.row],
         access,
         state.redactions
       );
+      // Mirror what this row had removed into the id-keyed store, so a later clone
+      // of it can restore the same evidence.
+      const removedForRow = state.redactions.get(resolved.row);
+      if (removedForRow && typeof resolved.row.id === "string") {
+        state.redactionsById.set(
+          relationKey(resolved.collection, resolved.row.id),
+          removedForRow
+        );
+      }
 
       // Rebuild the label from what survived the access pass, NOW, before the
       // parent's hooks run next up the stack. The fetch derives a row's `label`
@@ -3320,6 +3388,15 @@ export class CollectionRelationshipService extends BaseService {
       );
       if (hasPasswordField(targetFields)) {
         stripPasswordFieldValues(resolved.row, targetFields);
+      }
+      // A system entity (users) has no field registry, so the password strip above
+      // — which reads the registry — never sees its secret columns. They are
+      // stripped by name at fetch, but a source hook can reintroduce one onto the
+      // populated row afterward, so re-strip them on every walk, override included.
+      if (isSystemEntity(resolved.collection)) {
+        for (const col of SYSTEM_ENTITY_SECRET_COLUMNS) {
+          delete resolved.row[col];
+        }
       }
       stripSystemOwnerField(resolved.row);
     }

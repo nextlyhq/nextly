@@ -135,6 +135,18 @@ async function boot(): Promise<TestNextly> {
                   ?.charter?.sealed === "yes",
             },
           }),
+          // INVERSE conditional: visible only while the denied `classification` is
+          // NOT "private". A private row strips both; a hook cloning it drops
+          // `classification`, so a pass that judged the clone without restoring the
+          // original evidence would read `undefined !== "private"` and fall OPEN.
+          text({
+            name: "openInfo",
+            access: {
+              read: ({ data }) =>
+                (data as { classification?: unknown } | undefined)
+                  ?.classification !== "private",
+            },
+          }),
         ],
       }),
       defineCollection({
@@ -1225,5 +1237,137 @@ describe("a target's field hooks apply to rows reached through a relationship", 
     // And the nested vault's own label was rebuilt off a value the caller may see.
     const vault = author.vault as Record<string, unknown> | undefined;
     if (vault) expect(vault.label).not.toBe("TOPSECRET");
+  });
+
+  it("restores evidence for a related row a hook clones, keeping an inverse rule closed", async () => {
+    // `openInfo` is visible only while the denied `classification` is NOT
+    // "private". A private org strips both. A source hook returns a CLONE of the
+    // sanitized org (a new object) carrying `openInfo` but no `classification`;
+    // without restoring the original evidence the authoritative pass reads
+    // `undefined !== "private"` and returns it — a fail-OPEN, not over-redaction.
+    const t = await boot();
+    await t.nextly.create({
+      collection: ORGS,
+      data: { name: "acme", classification: "private" },
+    });
+    const orgId = await onlyId(t, ORGS);
+    await t.nextly.create({
+      collection: AUTHORS,
+      data: { name: "ada", organization: orgId },
+    });
+    const authorId = await onlyId(t, AUTHORS);
+    await t.nextly.create({
+      collection: POSTS,
+      data: { title: "p", author: authorId },
+    });
+    const postId = await onlyId(t, POSTS);
+
+    t.hooks.register("afterRead", POSTS, ctx => {
+      const entry = ctx.data as Record<string, unknown>;
+      const author = entry.author as Record<string, unknown> | undefined;
+      const org = author?.organization as Record<string, unknown> | undefined;
+      if (author && org) {
+        author.organization = { ...org, openInfo: "LEAKED" };
+      }
+      return entry;
+    });
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    const author = expanded.data!.author as Record<string, unknown>;
+    const org = author.organization as Record<string, unknown> | undefined;
+    expect(org).toBeTruthy();
+    // The original evidence was restored for the clone, so the inverse rule denied
+    // openInfo. Fail-closed.
+    expect(org!.openInfo).toBeUndefined();
+  });
+
+  it("decodes a container a hook returns as a JSON string and sanitizes inside it", async () => {
+    // A source hook returns `credits` as the JSON string SQLite stores it as, with
+    // a populated editor carrying a denied field. Left a string the walk derives no
+    // rows from it; decoded, the editor's denied `dossier` is stripped.
+    const t = await boot();
+    await t.nextly.create({ collection: AUTHORS, data: { name: "ed" } });
+    const editorId = await onlyId(t, AUTHORS);
+    await t.nextly.create({ collection: POSTS, data: { title: "p" } });
+    const postId = await onlyId(t, POSTS);
+
+    t.hooks.register("afterRead", POSTS, ctx => {
+      const entry = ctx.data as Record<string, unknown>;
+      entry.credits = JSON.stringify({
+        editor: { id: editorId, name: "ed", dossier: "LEAKED" },
+      });
+      return entry;
+    });
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    const credits = expanded.data!.credits as
+      | Record<string, unknown>
+      | undefined;
+    expect(credits).toBeTruthy();
+    const editor = credits!.editor as Record<string, unknown> | undefined;
+    expect(editor).toBeTruthy();
+    expect(editor!.dossier).toBeUndefined();
+  });
+
+  it("re-strips a password a source hook reintroduces under overrideAccess", async () => {
+    // Password removal is unconditional, trusted reads included. A source hook
+    // writes a password back onto a related row after the walk; under override the
+    // authoritative pass was skipped, leaving it in the response.
+    const t = await boot();
+    const postId = await seed(t);
+
+    t.hooks.register("afterRead", POSTS, ctx => {
+      const entry = ctx.data as Record<string, unknown>;
+      const author = entry.author as Record<string, unknown> | undefined;
+      if (author) author.passwordHash = "$2yLEAKED";
+      return entry;
+    });
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      overrideAccess: true,
+      depth: 2,
+    });
+
+    const author = expanded.data!.author as Record<string, unknown>;
+    expect(author).toBeTruthy();
+    expect(author.passwordHash).toBeUndefined();
+  });
+
+  it("re-strips a system-entity secret column a hook reintroduces", async () => {
+    // A `users` target has no field registry, so the registry-based password strip
+    // never sees its secret columns; they are stripped by name. A source hook can
+    // reintroduce `passwordHash`, so the walk must re-strip it by column name.
+    const t = await boot();
+    const service = t.getService("relationshipService") as unknown as {
+      applyNestedFieldHooks: (
+        entry: Record<string, unknown>,
+        collection: string,
+        access: Record<string, unknown>
+      ) => Promise<void>;
+    };
+
+    const doc = {
+      title: "owned",
+      owner: { id: "u1", email: "owner@example.test", passwordHash: "$2yHASH" },
+    };
+
+    await service.applyNestedFieldHooks(doc, POSTS, {
+      enforceFieldAccess: true,
+    });
+
+    const owner = doc.owner as Record<string, unknown>;
+    expect(owner.passwordHash).toBeUndefined();
   });
 });
