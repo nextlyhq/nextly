@@ -587,11 +587,16 @@ export function EntrySystemHeader({
         entryLabel={entryLabel}
         onConfirm={async () => {
           // Keep the dialog open (and its in-flight spinner visible) while the
-          // discard runs, then close once it settles. Closing first — as this
-          // did — hid the progress state and dropped the retry context on a slow
-          // or failed request.
-          await onDiscardWorkingDraft?.();
-          setDiscardDraftOpen(false);
+          // discard runs, then close only once it SUCCEEDS. Closing first — as
+          // this did — hid the progress state; closing on failure too would drop
+          // the retry context. A rejection leaves the dialog open; its error was
+          // already surfaced by the mutation's onError toast.
+          try {
+            await onDiscardWorkingDraft?.();
+            setDiscardDraftOpen(false);
+          } catch {
+            // Stay open for a retry.
+          }
         }}
         isLoading={isSubmitting}
       />

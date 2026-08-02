@@ -306,6 +306,21 @@ export function useUpdateEntry<
 
     // On success, invalidate queries to ensure fresh data
     onSuccess: data => {
+      // Write the server's response into the detail cache the editor reads, so
+      // fields it derives server-side are shown at once rather than only after
+      // the invalidation below refetches (which may be slow or fail). The
+      // working-draft split is why this matters: a status-less save returns
+      // `_isWorkingDraft`, and without seeding it here the optimistic merge (of
+      // the status-less payload, which carries no such flag) leaves the editor's
+      // Changed state and Publish/Discard controls hidden until a refetch lands.
+      // Keyed by the same `localeKey` the read uses; merged over the cached entry
+      // so any view-only fields the response omits survive.
+      if (optimistic) {
+        queryClient.setQueryData<T>(localeKey, old =>
+          old ? { ...old, ...data } : data
+        );
+      }
+
       // Invalidate entry list queries for this collection
       void queryClient.invalidateQueries({
         queryKey: entryKeys.listsByCollection(collectionSlug),
