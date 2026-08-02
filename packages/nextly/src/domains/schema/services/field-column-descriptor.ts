@@ -26,6 +26,11 @@
  * lockstep automatically.
  */
 
+import {
+  SYSTEM_COLUMNS,
+  type SystemColumnEntity,
+  type SystemColumnPresence,
+} from "../../../lib/system-columns";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { getFieldType } from "../field-types/field-type-registry";
 
@@ -363,55 +368,6 @@ export interface SystemColumnSet {
   isSingle?: boolean;
 }
 
-/**
- * When a document first became public, per dialect.
- *
- * `status` says what a document IS; nothing says what it HAS BEEN. Unpublishing returns a row to
- * `draft` and erases every trace it was ever live, but the links, feeds and search results that
- * accumulated while it was live do not go away. Anything deciding "was this address ever public" —
- * slug stability, redirect capture — needs a fact that survives the round trip.
- *
- * NULLABLE with NO DEFAULT, and that is the whole design. `NULL` means "not known to have been
- * published": true for a draft, and equally true for every row that predates this column, which
- * cannot be distinguished from a draft after the fact. A default would assert a publication date
- * that never happened.
- *
- * Set once on the first transition into `published` and never modified again, so it is not a
- * "last published" timestamp. Those are different questions: a last-published value moves on every
- * republish and its behaviour across an unpublish is a product choice, while this one has a single
- * defensible answer. Contentful, the most mature API surface here, carries both under distinct
- * names (`sys.firstPublishedAt` alongside `sys.publishedAt`) for the same reason.
- *
- * Gated on `hasStatus`: a collection with no draft lifecycle has no transition to record, and its
- * rows are public from the moment they are saved.
- *
- * Singles get it too. They could not at first: a Single's physical table was created by a DDL
- * generator that restated the system columns by hand, so a column added here reached the runtime
- * schema and not the table, and the resulting SELECT named a column that does not exist — failing
- * EVERY read of a status-enabled Single rather than merely leaving the marker unset. That
- * generator now renders from this list, so a Single's table receives whatever is declared here.
- */
-const FIRST_PUBLISHED_AT = {
-  postgresql: {
-    name: "first_published_at",
-    dialectType: "timestamp",
-    nullable: true,
-    primaryKey: false,
-  },
-  mysql: {
-    name: "first_published_at",
-    dialectType: "timestamp",
-    nullable: true,
-    primaryKey: false,
-  },
-  sqlite: {
-    name: "first_published_at",
-    dialectType: "integer",
-    nullable: true,
-    primaryKey: false,
-  },
-} as const;
-
 export interface SystemColumnDescriptor {
   name: string;
   dialectType: string;
@@ -424,215 +380,56 @@ export interface SystemColumnDescriptor {
   default?: string;
 }
 
+/**
+ * Whether a declared column is part of a table built with `opts`.
+ *
+ * `title` and `slug` step aside for an author's own fields of those names, and the lifecycle pair
+ * exists only where Draft/Published is enabled.
+ */
+function isPresent(
+  presence: SystemColumnPresence,
+  opts: SystemColumnSet
+): boolean {
+  switch (presence) {
+    case "always":
+      return true;
+    case "unlessAuthorDeclaredTitle":
+      return !opts.hasTitleField;
+    case "unlessAuthorDeclaredSlug":
+      return !opts.hasSlugField;
+    case "withStatusLifecycle":
+      return opts.hasStatus === true;
+  }
+}
+
+/**
+ * The system columns of one table, in declaration order.
+ *
+ * A projection of `SYSTEM_COLUMNS` rather than a per-dialect listing of its own: the three dialect
+ * branches this replaced restated the same eight columns three times, so a column added to one
+ * could be missed in another, and the set was invisible to every consumer that is not a DDL
+ * generator.
+ */
 export function getSystemColumnDescriptors(
   dialect: SupportedDialect,
   opts: SystemColumnSet
 ): SystemColumnDescriptor[] {
-  const cols: SystemColumnDescriptor[] = [];
-  if (dialect === "postgresql") {
-    cols.push({
-      name: "id",
-      dialectType: "text",
-      nullable: false,
-      primaryKey: true,
-    });
-    if (!opts.hasTitleField) {
-      cols.push({
-        name: "title",
-        dialectType: "text",
-        nullable: false,
-        primaryKey: false,
-      });
-    }
-    if (!opts.hasSlugField) {
-      cols.push({
-        name: "slug",
-        dialectType: "text",
-        nullable: false,
-        primaryKey: false,
-      });
-    }
-    // Timestamp defaults must mirror runtime-schema-generator's
-    // pgTimestamp(...).defaultNow() — otherwise the diff sees a phantom
-    // change_column_default (now() → undefined) on every apply and routes
-    // around the fast-path DDL emitter.
-    cols.push({
-      name: "created_at",
-      dialectType: "timestamp",
-      nullable: true,
-      primaryKey: false,
-      default: "now()",
-    });
-    cols.push({
-      name: "updated_at",
-      dialectType: "timestamp",
-      nullable: true,
-      primaryKey: false,
-      default: "now()",
-    });
-    // Owner of the row, stamped with the creating user's id. Collections only
-    // (never singles). Nullable: existing rows and system/seed creates have no
-    // user. Mirrors runtime-schema-generator's pgText("created_by") (text,
-    // matching the id column type).
-    if (!opts.isSingle) {
-      cols.push({
-        name: "created_by",
-        dialectType: "text",
-        nullable: true,
-        primaryKey: false,
-      });
-    }
-    if (opts.hasStatus) {
-      // Must mirror runtime-schema-generator's
-      // pgVarchar("status", { length: 20 }).notNull().default("draft").
-      // information_schema reports udt_name=varchar for that DDL, so
-      // emitting "text" here would cause a phantom change_column_type
-      // on every apply.
-      cols.push({
-        name: "status",
-        dialectType: "varchar",
-        length: 20,
-        nullable: false,
-        primaryKey: false,
-        default: "'draft'",
-      });
-      cols.push(FIRST_PUBLISHED_AT.postgresql);
-    }
-  } else if (dialect === "mysql") {
-    cols.push({
-      name: "id",
-      dialectType: "varchar(36)",
-      length: 36,
-      nullable: false,
-      primaryKey: true,
-    });
-    if (!opts.hasTitleField) {
-      cols.push({
-        name: "title",
-        dialectType: "varchar(255)",
-        length: 255,
-        nullable: false,
-        primaryKey: false,
-      });
-    }
-    if (!opts.hasSlugField) {
-      cols.push({
-        name: "slug",
-        dialectType: "varchar(255)",
-        length: 255,
-        nullable: false,
-        primaryKey: false,
-      });
-    }
-    // The runtime generator builds these as mysqlTimestamp(...).defaultNow(), so the physical
-    // column carries DEFAULT CURRENT_TIMESTAMP. Reporting no default here described the diff's
-    // desired state as something neither creation path produces — the drift this module exists to
-    // prevent, in the very pair its header promises to keep in lockstep. The PostgreSQL branch
-    // already carries its `now()`; this is the same fact, spelled the way MySQL spells it.
-    cols.push({
-      name: "created_at",
-      dialectType: "timestamp",
-      nullable: true,
-      primaryKey: false,
-      default: "CURRENT_TIMESTAMP",
-    });
-    cols.push({
-      name: "updated_at",
-      dialectType: "timestamp",
-      nullable: true,
-      primaryKey: false,
-      default: "CURRENT_TIMESTAMP",
-    });
-    // Owner of the row (creating user's id, NOT the row id). Collections only
-    // (never singles). Sized to match the MySQL users.id column (varchar(191),
-    // Auth.js-compatible), not the varchar(36) row id — a longer user id would
-    // otherwise be truncated. Nullable; mirrors runtime-schema-generator's
-    // created_by column.
-    if (!opts.isSingle) {
-      cols.push({
-        name: "created_by",
-        dialectType: "varchar(191)",
-        length: 191,
-        nullable: true,
-        primaryKey: false,
-      });
-    }
-    if (opts.hasStatus) {
-      cols.push({
-        name: "status",
-        dialectType: "varchar(20)",
-        length: 20,
-        nullable: false,
-        primaryKey: false,
-        default: "'draft'",
-      });
-      cols.push(FIRST_PUBLISHED_AT.mysql);
-    }
-  } else {
-    // sqlite
-    cols.push({
-      name: "id",
-      dialectType: "text",
-      nullable: false,
-      primaryKey: true,
-    });
-    if (!opts.hasTitleField) {
-      cols.push({
-        name: "title",
-        dialectType: "text",
-        nullable: false,
-        primaryKey: false,
-      });
-    }
-    if (!opts.hasSlugField) {
-      cols.push({
-        name: "slug",
-        dialectType: "text",
-        nullable: false,
-        primaryKey: false,
-      });
-    }
-    // SQLite was the one dialect whose timestamps had no default, so an insert that omitted
-    // them stored NULL where PostgreSQL and MySQL stored a time. The Schema Builder has always
-    // emitted this exact expression for SQLite; the runtime side was the half that lacked it,
-    // which is also why the two disagreed about the same table.
-    cols.push({
-      name: "created_at",
-      dialectType: "integer",
-      nullable: true,
-      primaryKey: false,
-      default: "(strftime('%s', 'now'))",
-    });
-    cols.push({
-      name: "updated_at",
-      dialectType: "integer",
-      nullable: true,
-      primaryKey: false,
-      default: "(strftime('%s', 'now'))",
-    });
-    // Owner of the row (creating user's id). Collections only (never singles).
-    // Nullable; mirrors runtime-schema-generator's sqliteText("created_by")
-    // (matching the id column type).
-    if (!opts.isSingle) {
-      cols.push({
-        name: "created_by",
-        dialectType: "text",
-        nullable: true,
-        primaryKey: false,
-      });
-    }
-    if (opts.hasStatus) {
-      cols.push({
-        name: "status",
-        dialectType: "text",
-        nullable: false,
-        primaryKey: false,
-        default: "'draft'",
-      });
-      cols.push(FIRST_PUBLISHED_AT.sqlite);
-    }
-  }
-  return cols;
+  const entity: SystemColumnEntity = opts.isSingle ? "single" : "collection";
+
+  return SYSTEM_COLUMNS.filter(
+    column =>
+      column.appliesTo.includes(entity) && isPresent(column.presence, opts)
+  ).map(column => {
+    const shape = column.shape[dialect];
+    return {
+      name: column.name,
+      dialectType: shape.dialectType,
+      ...(shape.length !== undefined ? { length: shape.length } : {}),
+      nullable: shape.nullable,
+      primaryKey: shape.primaryKey === true,
+      ...(shape.default !== undefined ? { default: shape.default } : {}),
+    };
+  });
 }
 
 /**
