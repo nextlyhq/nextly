@@ -54,7 +54,7 @@ import {
   updateImageSize,
   deleteImageSize,
 } from "./api/image-sizes";
-import { readOrGenerateRequestId } from "./api/request-id";
+import { readOrGenerateRequestId, withRequestIdHeader } from "./api/request-id";
 // canonical respondX wire shapes (spec §5.1) instead of the
 // hand-rolled `{ data: <payload> }` envelope.
 import { respondData, respondMutation } from "./api/response-shapes";
@@ -78,7 +78,11 @@ import { readAccessTokenCookie } from "./auth/cookies/access-token-cookie";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
 import { container } from "./di/container";
 import { NextlyError } from "./errors/nextly-error";
-import { withSideEffectWarnings } from "./hooks/side-effect-warnings";
+import {
+  currentFlattenedErrors,
+  logFlattenedErrors,
+  withSideEffectWarnings,
+} from "./hooks/side-effect-warnings";
 import { withTimezoneFormatting } from "./lib/date-formatting";
 import { createCorsMiddleware } from "./middleware/cors";
 import { createRateLimiter } from "./middleware/rate-limit";
@@ -1480,8 +1484,48 @@ export function createDynamicHandlers(options?: {
     // from inside it, so nothing between here and them has to carry the
     // failures; a request whose hooks all succeed collects an empty array and
     // its body is unchanged.
-    const { result: response } = await withSideEffectWarnings(() => handler());
-    const formattedResponse = await applyGlobalDateFormatting(response, req);
+    // Captured inside the scope, which closes when this returns. The dynamic
+    // routes do not pass through `withErrorHandler`, so without this the
+    // detail an envelope flattened on the ordinary `/api/...` surface reaches
+    // the log only as the boundary's reconstruction, with neither the cause
+    // nor the context the thrower attached.
+    let flattenedInRequest: NextlyError[] = [];
+    const { result: response } = await withSideEffectWarnings(async () => {
+      try {
+        return await handler();
+      } finally {
+        flattenedInRequest = currentFlattenedErrors();
+      }
+    });
+    // Settled BEFORE logging and put on the response, so the id an operator
+    // reads in the log is one the caller actually received. The response
+    // helpers do not set it for a 200 carrying per-item failures, so without
+    // this the log would carry an id generated here and shown to nobody,
+    // which is the join the diagnostics exist for.
+    const effectiveRequestId =
+      response.headers.get("x-request-id") ?? readOrGenerateRequestId(req);
+    const identifiedResponse = withRequestIdHeader(
+      response,
+      effectiveRequestId
+    );
+    // Imported here rather than at module scope, matching how this file already
+    // reaches the logger, so the route entry point keeps its import graph.
+    const { getNextlyLogger: resolveLogger } = await import(
+      "./observability/logger"
+    );
+    logFlattenedErrors(
+      flattenedInRequest,
+      entry => resolveLogger().error(entry),
+      {
+        requestId: effectiveRequestId,
+        route: new URL(req.url).pathname,
+        method: req.method,
+      }
+    );
+    const formattedResponse = await applyGlobalDateFormatting(
+      identifiedResponse,
+      req
+    );
     const corsResponse = cors.applyHeaders(req, formattedResponse);
     return applySecurityHeaders(corsResponse);
   }

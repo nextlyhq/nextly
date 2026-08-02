@@ -57,14 +57,14 @@ export const FieldGroupsEmptyState: React.FC<FieldGroupsEmptyStateProps> = ({
 
       {/* Headline */}
       <h3 className="text-lg font-semibold text-foreground mb-2">
-        {isSearching ? "No components found" : "No components yet"}
+        {isSearching ? "No field groups found" : "No field groups yet"}
       </h3>
 
       {/* Description */}
       <p className="text-sm text-muted-foreground mb-6 max-w-sm mx-auto">
         {isSearching
-          ? "No components match your search. Try adjusting your search terms or filters."
-          : "Get started by creating your first reusable component to share across your collections."}
+          ? "No field groups match your search. Try adjusting your search terms or filters."
+          : "Get started by creating your first reusable field group to share across your collections."}
       </p>
 
       {/* CTA (only show when not searching/filtering) */}

@@ -40,12 +40,21 @@ describe("the boot core-schema drift check on a migrated database", () => {
   it("introspects the migrated registry and never the legacy one", async () => {
     introspectLiveSnapshot.mockResolvedValue({ tables: [] });
 
-    await warnIfCoreSchemaIsBehind(adapter, {
-      debug: () => {},
-      info: () => {},
-      warn: () => {},
-      error: () => {},
-    });
+    // The production timeout is deliberately overridden. `warnIfCoreSchemaIsBehind` races the
+    // check against a 2s deadline so a slow database cannot delay boot, and the check begins with
+    // two dynamic imports — under a loaded full-suite run those lose the race, the check never
+    // reaches `introspectLiveSnapshot`, and this fails with "called 0 times" while passing alone.
+    // What is under test is WHICH tables get introspected, not whether the check beats a clock.
+    await warnIfCoreSchemaIsBehind(
+      adapter,
+      {
+        debug: () => {},
+        info: () => {},
+        warn: () => {},
+        error: () => {},
+      },
+      60_000
+    );
 
     expect(introspectLiveSnapshot).toHaveBeenCalledTimes(1);
     const names = introspectLiveSnapshot.mock.calls[0][2] as string[];

@@ -363,6 +363,55 @@ export interface SystemColumnSet {
   isSingle?: boolean;
 }
 
+/**
+ * When a document first became public, per dialect.
+ *
+ * `status` says what a document IS; nothing says what it HAS BEEN. Unpublishing returns a row to
+ * `draft` and erases every trace it was ever live, but the links, feeds and search results that
+ * accumulated while it was live do not go away. Anything deciding "was this address ever public" —
+ * slug stability, redirect capture — needs a fact that survives the round trip.
+ *
+ * NULLABLE with NO DEFAULT, and that is the whole design. `NULL` means "not known to have been
+ * published": true for a draft, and equally true for every row that predates this column, which
+ * cannot be distinguished from a draft after the fact. A default would assert a publication date
+ * that never happened.
+ *
+ * Set once on the first transition into `published` and never modified again, so it is not a
+ * "last published" timestamp. Those are different questions: a last-published value moves on every
+ * republish and its behaviour across an unpublish is a product choice, while this one has a single
+ * defensible answer. Contentful, the most mature API surface here, carries both under distinct
+ * names (`sys.firstPublishedAt` alongside `sys.publishedAt`) for the same reason.
+ *
+ * Gated on `hasStatus`: a collection with no draft lifecycle has no transition to record, and its
+ * rows are public from the moment they are saved.
+ *
+ * Singles get it too. They could not at first: a Single's physical table was created by a DDL
+ * generator that restated the system columns by hand, so a column added here reached the runtime
+ * schema and not the table, and the resulting SELECT named a column that does not exist — failing
+ * EVERY read of a status-enabled Single rather than merely leaving the marker unset. That
+ * generator now renders from this list, so a Single's table receives whatever is declared here.
+ */
+const FIRST_PUBLISHED_AT = {
+  postgresql: {
+    name: "first_published_at",
+    dialectType: "timestamp",
+    nullable: true,
+    primaryKey: false,
+  },
+  mysql: {
+    name: "first_published_at",
+    dialectType: "timestamp",
+    nullable: true,
+    primaryKey: false,
+  },
+  sqlite: {
+    name: "first_published_at",
+    dialectType: "integer",
+    nullable: true,
+    primaryKey: false,
+  },
+} as const;
+
 export interface SystemColumnDescriptor {
   name: string;
   dialectType: string;
@@ -447,6 +496,7 @@ export function getSystemColumnDescriptors(
         primaryKey: false,
         default: "'draft'",
       });
+      cols.push(FIRST_PUBLISHED_AT.postgresql);
     }
   } else if (dialect === "mysql") {
     cols.push({
@@ -516,6 +566,7 @@ export function getSystemColumnDescriptors(
         primaryKey: false,
         default: "'draft'",
       });
+      cols.push(FIRST_PUBLISHED_AT.mysql);
     }
   } else {
     // sqlite
@@ -578,6 +629,7 @@ export function getSystemColumnDescriptors(
         primaryKey: false,
         default: "'draft'",
       });
+      cols.push(FIRST_PUBLISHED_AT.sqlite);
     }
   }
   return cols;

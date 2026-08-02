@@ -1,5 +1,6 @@
 /**
- * Request-scoped collection of post-commit hook failures.
+ * Request-scoped diagnostics: what a request collected that its public
+ * response cannot carry.
  *
  * A side-effect phase (`afterCreate` / `afterUpdate` / `afterDelete`) runs after
  * the transaction has committed, so a handler throwing there cannot un-save the
@@ -19,6 +20,8 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 
+import type { NextlyError } from "../errors/nextly-error";
+
 import type { SideEffectHookFailure } from "./hook-registry";
 
 /**
@@ -29,7 +32,30 @@ import type { SideEffectHookFailure } from "./hook-registry";
  * the response the client is waiting on, without either scope having to know
  * the other exists.
  */
-const collectorStack = new AsyncLocalStorage<SideEffectHookFailure[][]>();
+interface RequestDiagnostics {
+  /** Post-commit hook failures, projected to the caller as warnings. */
+  hookFailures: SideEffectHookFailure[];
+  /**
+   * Typed errors whose private detail the public envelope drops.
+   *
+   * `errorToServiceResult` deliberately strips `cause` and `logContext` on the
+   * way out, because the result shape is publicly surfaced, and the boundary
+   * then rebuilds the error from what survived. The original is kept here so
+   * the operator gets the full one against the request id, without any of it
+   * crossing to the caller.
+   */
+  flattenedErrors: NextlyError[];
+}
+
+/**
+ * ONE scope holding both, rather than a buffer each.
+ *
+ * They share a lifetime and a rule -- collected privately, disclosed only
+ * through an explicit projection -- and two stores would each need their own
+ * public/private split. Two splits that can disagree about what is safe to
+ * disclose is the disclosure bug this exists to prevent.
+ */
+const collectorStack = new AsyncLocalStorage<RequestDiagnostics[]>();
 
 /**
  * The public projection of a hook failure.
@@ -86,7 +112,30 @@ export function toHookWarning(failure: SideEffectHookFailure): HookWarning {
 export function recordSideEffectWarning(failure: SideEffectHookFailure): void {
   const stack = collectorStack.getStore();
   if (!stack) return;
-  for (const collector of stack) collector.push(failure);
+  for (const scope of stack) scope.hookFailures.push(failure);
+}
+
+/**
+ * Keep a typed error's private detail for the log, before the envelope drops it.
+ *
+ * A no-op outside a request, where there is no response for the detail to be
+ * missing from. Never reaches a caller: nothing projects this list.
+ */
+export function recordFlattenedError(error: NextlyError): void {
+  const stack = collectorStack.getStore();
+  if (!stack) return;
+  for (const scope of stack) scope.flattenedErrors.push(error);
+}
+
+/**
+ * The errors this request flattened, for the boundary that logs them.
+ *
+ * Returned unprojected on purpose: the only caller is the logger, and a
+ * projection here would defeat the reason they are kept.
+ */
+export function currentFlattenedErrors(): NextlyError[] {
+  const stack = collectorStack.getStore();
+  return stack?.[stack.length - 1]?.flattenedErrors ?? [];
 }
 
 /**
@@ -99,10 +148,10 @@ export function recordSideEffectWarning(failure: SideEffectHookFailure): void {
 export async function withSideEffectWarnings<T>(
   operation: () => Promise<T>
 ): Promise<{ result: T; failures: SideEffectHookFailure[] }> {
-  const collected: SideEffectHookFailure[] = [];
-  const stack = [...(collectorStack.getStore() ?? []), collected];
+  const scope: RequestDiagnostics = { hookFailures: [], flattenedErrors: [] };
+  const stack = [...(collectorStack.getStore() ?? []), scope];
   const result = await collectorStack.run(stack, operation);
-  return { result, failures: collected };
+  return { result, failures: scope.hookFailures };
 }
 
 /**
@@ -115,7 +164,7 @@ export async function withSideEffectWarnings<T>(
 export function currentSideEffectWarnings(): HookWarning[] {
   const stack = collectorStack.getStore();
   const innermost = stack?.[stack.length - 1];
-  return (innermost ?? []).map(toHookWarning);
+  return (innermost?.hookFailures ?? []).map(toHookWarning);
 }
 
 /**
@@ -134,4 +183,47 @@ export async function collectingWarnings<T>(
   return failures.length > 0
     ? { result, warnings: failures.map(toHookWarning) }
     : { result };
+}
+
+/**
+ * Write a request's flattened-error diagnostics to the operator log.
+ *
+ * Shared by every request boundary so they cannot disagree about the shape or
+ * about the guard. Failures writing them are swallowed: this is observability,
+ * and a logger that throws must not replace a response the handler already
+ * produced. Losing a log line is recoverable; turning a completed write into a
+ * 500 is not.
+ */
+/**
+ * Codes an operator does not want a line for.
+ *
+ * A missing row, a rate limit and an unauthenticated probe are expected
+ * traffic, not faults, and the dispatcher already suppresses them for its own
+ * error log. Writing them here would flood the same log through a second door
+ * and undo that policy.
+ */
+const BENIGN_CODES: ReadonlySet<string> = new Set([
+  "NOT_FOUND",
+  "RATE_LIMITED",
+  "AUTH_REQUIRED",
+]);
+
+export function logFlattenedErrors(
+  errors: readonly NextlyError[],
+  write: (entry: Record<string, unknown>) => void,
+  context: { requestId: string; route?: string; method?: string }
+): void {
+  for (const error of errors) {
+    if (BENIGN_CODES.has(String(error.code))) continue;
+    try {
+      write({
+        kind: "flattened-service-error",
+        ...error.toLogJSON(context.requestId),
+        ...(context.route !== undefined ? { route: context.route } : {}),
+        ...(context.method !== undefined ? { method: context.method } : {}),
+      });
+    } catch {
+      // Deliberately swallowed; see above.
+    }
+  }
 }
