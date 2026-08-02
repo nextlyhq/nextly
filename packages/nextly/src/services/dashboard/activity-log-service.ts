@@ -14,7 +14,7 @@ import { randomUUID } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SqlParam } from "@nextlyhq/adapter-drizzle/types";
-import { sql, type Column, type Table } from "drizzle-orm";
+import { eq, sql, type Column, type Table } from "drizzle-orm";
 
 import { toDbError } from "../../database/errors";
 // PR 4 migration: switched from ServiceError.fromDatabaseError to
@@ -95,6 +95,22 @@ const TABLE = "activity_log";
  */
 interface ActivityWriteDb {
   insert(table: unknown): { values(data: unknown): Promise<unknown> };
+  select(fields: unknown): {
+    from(table: unknown): {
+      where(condition: unknown): {
+        limit(count: number): Promise<Record<string, unknown>[]> & {
+          // `.for("share")` exists on the Postgres and MySQL builders. SQLite
+          // has no row lock and never reaches the call.
+          for(strength: "share"): Promise<Record<string, unknown>[]>;
+        };
+      };
+    };
+  };
+}
+
+/** The same surface plus the transaction a lock has to be held inside. */
+interface TransactionalActivityDb extends ActivityWriteDb {
+  transaction<T>(work: (tx: ActivityWriteDb) => Promise<T>): Promise<T>;
 }
 
 /** The two tables an activity write reads and writes. */
@@ -138,50 +154,107 @@ export class ActivityLogService extends BaseService {
   }
 
   /**
+   * The column values for one entry, given whatever decides its identity.
+   *
+   * One source for the column list, so the two write paths below cannot come
+   * to disagree about the shape of a row.
+   */
+  private entryValues(
+    input: LogActivityInput,
+    createdAt: Date,
+    identity: {
+      userName: unknown;
+      userEmail: unknown;
+      actorDeletedAt: unknown;
+    }
+  ): Record<string, unknown> {
+    return {
+      id: randomUUID(),
+      userId: input.userId,
+      ...identity,
+      action: input.action,
+      collection: input.collection,
+      entryId: input.entryId ?? null,
+      entryTitle: input.entryTitle ?? null,
+      metadata: input.metadata ? JSON.stringify(input.metadata) : null,
+      createdAt,
+    };
+  }
+
+  /**
    * Record an activity log entry.
    *
-   * ONE statement, which is what makes the identity it stores correct even
-   * when the author is being deleted at the same moment. The row and the
-   * decision about whose name it may carry are written together, so there is
-   * no interval in which a durable row holds an identity that a second
-   * statement was still going to remove — a failure or a crash cannot leave
-   * that state behind, because the alternative to the whole statement is no
-   * row at all.
+   * The identity a row may carry has to be decided against an account that may
+   * be deleted at this very moment, and the two dialect families need
+   * different mechanisms for it.
    *
-   * Against a deletion that has not committed yet, the subquery still sees the
-   * account and the identity is stored. That entry necessarily predates the
-   * commit, which is exactly the case `deleteUser`'s post-commit sweep exists
-   * to cover; an entry written after the commit is erased here instead. The
-   * two windows are complementary, so neither ordering leaves an identity
-   * behind.
+   * **Postgres and MySQL** run the write inside a transaction that first takes
+   * a SHARED lock on the account row. `deleteUser` takes an EXCLUSIVE lock on
+   * that row before it erases anything, so the two cannot be in flight at
+   * once: either this lock is taken first and the deletion waits, so its
+   * erasure covers a row that already exists, or the deletion holds the row and
+   * this waits for its commit and then correctly finds the account gone. The
+   * lock is what closes the gap a single statement cannot — its subquery is
+   * answered when it STARTS while its row becomes visible when it COMMITS, and
+   * an insert spanning the deletion's commit satisfies neither the deletion's
+   * own erasure nor its post-commit sweep. Shared rather than exclusive so
+   * concurrent writes by the same author do not serialise against each other;
+   * only the deletion has to exclude them, for the length of one insert.
+   *
+   * **SQLite** has one writer, so its insert cannot interleave with the
+   * deletion's transaction at all and needs no lock. It decides the identity
+   * inside the statement instead, because a check followed by a separate
+   * insert would leave a durable row that a second statement was still going
+   * to correct — and `BaseService`'s SQLite transaction cannot be used to hold
+   * the two together: it issues `BEGIN IMMEDIATE` on the shared synchronous
+   * connection, which throws whenever another transaction is open and would
+   * become a silently missing audit entry here.
    *
    * Errors are caught and logged but never propagated — activity logging must
    * never break a content operation.
    */
   async logActivity(input: LogActivityInput): Promise<void> {
     try {
-      const { activityLog, users } = this.tables as ActivityWriteTables;
-      const db = this.db as ActivityWriteDb;
+      const tables = this.tables as ActivityWriteTables;
+      const { activityLog, users } = tables;
       const now = new Date();
 
-      const actorIsGone = sql`NOT EXISTS (SELECT 1 FROM ${users} WHERE ${users.id} = ${input.userId})`;
-      // Encoded through the column itself rather than by hand: the stamp is an
-      // epoch integer on SQLite and a datetime elsewhere, and an SQL fragment
-      // bypasses the mapping Drizzle would otherwise apply to a plain value.
-      const erasedAt = activityLog.actorDeletedAt.mapToDriverValue(now);
+      if (this.dialect === "sqlite") {
+        const actorIsGone = sql`NOT EXISTS (SELECT 1 FROM ${users} WHERE ${users.id} = ${input.userId})`;
+        // Encoded through the column itself: the stamp is an epoch integer
+        // here, and an SQL fragment bypasses the mapping Drizzle would
+        // otherwise apply to a plain value.
+        const erasedAt = activityLog.actorDeletedAt.mapToDriverValue(now);
+        await (this.db as ActivityWriteDb).insert(activityLog).values(
+          this.entryValues(input, now, {
+            userName: sql`CASE WHEN ${actorIsGone} THEN NULL ELSE ${input.userName} END`,
+            userEmail: sql`CASE WHEN ${actorIsGone} THEN NULL ELSE ${input.userEmail} END`,
+            actorDeletedAt: sql`CASE WHEN ${actorIsGone} THEN ${erasedAt} ELSE NULL END`,
+          })
+        );
+        return;
+      }
 
-      await db.insert(activityLog).values({
-        id: randomUUID(),
-        userId: input.userId,
-        userName: sql`CASE WHEN ${actorIsGone} THEN NULL ELSE ${input.userName} END`,
-        userEmail: sql`CASE WHEN ${actorIsGone} THEN NULL ELSE ${input.userEmail} END`,
-        actorDeletedAt: sql`CASE WHEN ${actorIsGone} THEN ${erasedAt} ELSE NULL END`,
-        action: input.action,
-        collection: input.collection,
-        entryId: input.entryId ?? null,
-        entryTitle: input.entryTitle ?? null,
-        metadata: input.metadata ? JSON.stringify(input.metadata) : null,
-        createdAt: now,
+      await (this.db as TransactionalActivityDb).transaction(async tx => {
+        const actor = await tx
+          .select({ id: users.id })
+          .from(users)
+          .where(eq(users.id, input.userId))
+          .limit(1)
+          .for("share");
+        // Plain values, decided in JS: the lock makes the answer stable for the
+        // rest of this transaction, and the transaction makes the read and the
+        // write land together. Deciding it in SQL instead would need the same
+        // CASE the SQLite path uses, whose untyped branches Postgres cannot
+        // infer a parameter type for.
+        const actorStillExists = actor.length > 0;
+        await tx.insert(activityLog).values(
+          this.entryValues(input, now, {
+            userName: actorStillExists ? input.userName : null,
+            userEmail: actorStillExists ? input.userEmail : null,
+            actorDeletedAt: actorStillExists ? null : now,
+          })
+        );
       });
     } catch (error) {
       this.logger.error("Failed to log activity", {
