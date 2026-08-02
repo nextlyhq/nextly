@@ -14,6 +14,7 @@ import { randomUUID } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SqlParam } from "@nextlyhq/adapter-drizzle/types";
+import { eq, type Column, type Table } from "drizzle-orm";
 
 import { toDbError } from "../../database/errors";
 // PR 4 migration: switched from ServiceError.fromDatabaseError to
@@ -86,6 +87,39 @@ export interface ActivityLogQueryOptions {
 const TABLE = "activity_log";
 
 /**
+ * The Drizzle surface an activity write needs.
+ *
+ * Structural rather than the concrete types because the real ones are
+ * dialect-specific (NodePgDatabase / MySql2Database / BetterSQLite3Database
+ * and their transaction variants), while the fluent API is identical.
+ */
+interface ActivityWriteDb {
+  insert(table: unknown): { values(data: unknown): Promise<unknown> };
+  select(fields: unknown): {
+    from(table: unknown): {
+      where(condition: unknown): {
+        limit(count: number): Promise<Record<string, unknown>[]> & {
+          // `.for("share")` exists on the Postgres and MySQL builders; SQLite
+          // has no row lock and never reaches the call.
+          for(strength: "share"): Promise<Record<string, unknown>[]>;
+        };
+      };
+    };
+  };
+}
+
+/** The same surface, plus the transaction the locking read has to run inside. */
+interface TransactionalActivityDb extends ActivityWriteDb {
+  transaction<T>(work: (tx: ActivityWriteDb) => Promise<T>): Promise<T>;
+}
+
+/** The two tables an activity write reads and writes. */
+interface ActivityWriteTables {
+  activityLog: Table;
+  users: Table & { id: Column };
+}
+
+/**
  * Safely convert an unknown driver-returned value to a nullable string.
  * Avoids `Object.toString()` fallthrough that triggers no-base-to-string.
  */
@@ -104,6 +138,64 @@ export class ActivityLogService extends BaseService {
   }
 
   /**
+   * Whether the acting account still exists, read under a shared lock where
+   * the dialect has one.
+   *
+   * The lock is the coordination point with `deleteUser`, which takes an
+   * EXCLUSIVE lock on the same row before it erases anything. Exactly one of
+   * two things can happen: this read wins, in which case the account is really
+   * still there and the deletion — which cannot start erasing until this
+   * transaction releases the row — sweeps up the entry about to be inserted;
+   * or the deletion wins, in which case this read blocks until it commits and
+   * then correctly reports the account gone.
+   *
+   * Shared rather than exclusive so two concurrent writes by the same author do
+   * not serialise against each other. Only the deletion needs to exclude them.
+   */
+  private async actorStillExists(
+    db: ActivityWriteDb,
+    users: ActivityWriteTables["users"],
+    userId: string,
+    lock: boolean
+  ): Promise<boolean> {
+    const query = db
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
+    const rows = lock ? await query.for("share") : await query;
+    return rows.length > 0;
+  }
+
+  /** Write one entry, erased up front if its author is already gone. */
+  private async insertActivity(
+    db: ActivityWriteDb,
+    activityLog: Table,
+    input: LogActivityInput,
+    actorStillExists: boolean
+  ): Promise<void> {
+    const now = new Date();
+    await db.insert(activityLog).values({
+      id: randomUUID(),
+      userId: input.userId,
+      // An entry landing after its author's account is gone can never be
+      // reached by that deletion's erasure — it swept before this row existed —
+      // so it is written erased instead. Skipping the row entirely would lose
+      // the audit fact; writing the identity would retain data someone asked to
+      // have erased.
+      userName: actorStillExists ? input.userName : null,
+      userEmail: actorStillExists ? input.userEmail : null,
+      actorDeletedAt: actorStillExists ? null : now,
+      action: input.action,
+      collection: input.collection,
+      entryId: input.entryId ?? null,
+      entryTitle: input.entryTitle ?? null,
+      metadata: input.metadata ? JSON.stringify(input.metadata) : null,
+      createdAt: now,
+    });
+  }
+
+  /**
    * Record an activity log entry.
    *
    * Errors are caught and logged but never propagated — activity logging
@@ -111,19 +203,33 @@ export class ActivityLogService extends BaseService {
    */
   async logActivity(input: LogActivityInput): Promise<void> {
     try {
-      const now = this.formatDateForDb();
+      const { activityLog, users } = this.tables as ActivityWriteTables;
 
-      await this.adapter.insert(TABLE, {
-        id: randomUUID(),
-        user_id: input.userId,
-        user_name: input.userName,
-        user_email: input.userEmail,
-        action: input.action,
-        collection: input.collection,
-        entry_id: input.entryId ?? null,
-        entry_title: input.entryTitle ?? null,
-        metadata: input.metadata ? JSON.stringify(input.metadata) : null,
-        created_at: now,
+      // SQLite takes no lock and opens no transaction. `BaseService`'s SQLite
+      // transaction branch issues `BEGIN IMMEDIATE` on the shared synchronous
+      // connection, which throws if any other transaction is already open —
+      // and because this method swallows its own failures, that would turn
+      // into silently missing audit entries. The driver serialises writers, so
+      // the check still holds for an account deleted before this call.
+      if (this.dialect === "sqlite") {
+        const db = this.db as ActivityWriteDb;
+        await this.insertActivity(
+          db,
+          activityLog,
+          input,
+          await this.actorStillExists(db, users, input.userId, false)
+        );
+        return;
+      }
+
+      const db = this.db as TransactionalActivityDb;
+      await db.transaction(async tx => {
+        await this.insertActivity(
+          tx,
+          activityLog,
+          input,
+          await this.actorStillExists(tx, users, input.userId, true)
+        );
       });
     } catch (error) {
       this.logger.error("Failed to log activity", {

@@ -188,6 +188,50 @@ describe("deleting a user erases them from the activity log without erasing the 
     expect(survivors).toHaveLength(0);
   });
 
+  it("writes an entry erased when its author is already gone", async () => {
+    // The erasure inside the delete transaction can only reach rows that exist
+    // when it runs. An activity write still in flight lands afterwards, and
+    // with no foreign key left to reject it, it would otherwise store the name
+    // and email of an account that no longer exists — permanently, because
+    // nothing sweeps it again. The writer decides what identity to store from
+    // whether the account is actually there.
+    const gone = await users.createLocalUser({
+      email: "erasure-late@test.local",
+      name: "Late Writer",
+      password: "TestPassword123!",
+      isActive: true,
+    });
+
+    await users.deleteUser(gone.id);
+
+    // The premise: the account really is gone before the write is attempted,
+    // so this exercises the post-deletion path and not the ordinary one.
+    const account = await adapter.executeQuery<{ id: string }>(
+      "SELECT id FROM users WHERE id = ?",
+      [String(gone.id)]
+    );
+    expect(account).toHaveLength(0);
+
+    await activity.logActivity({
+      userId: String(gone.id),
+      userName: "Late Writer",
+      userEmail: "erasure-late@test.local",
+      action: "update",
+      collection: "late_posts",
+      entryTitle: "Landed After Deletion",
+    });
+
+    const rows = await rowsFor(gone.id);
+    expect(rows).toHaveLength(1);
+    // The audit fact survives — dropping the row instead would lose it.
+    expect(rows[0].collection).toBe("late_posts");
+    expect(rows[0].entry_title).toBe("Landed After Deletion");
+    // The identity does not.
+    expect(rows[0].user_name).toBeNull();
+    expect(rows[0].user_email).toBeNull();
+    expect(rows[0].actor_deleted_at).not.toBeNull();
+  });
+
   it("leaves every other actor's entries untouched", async () => {
     const leaving = await users.createLocalUser({
       email: "erasure-leaving@test.local",

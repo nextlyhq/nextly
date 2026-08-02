@@ -56,6 +56,7 @@ import {
   type FieldDefinition,
 } from "../../../services/runtime-schema-generator";
 import { findUnexpectedDestructiveStatements } from "../../filter-unsafe-statements";
+import { isIdempotencyError } from "../../sql-statement-utils";
 
 interface Fixture {
   capturedFrom: string;
@@ -180,6 +181,60 @@ const addsWebhooksColumn = (stmt: string): boolean =>
     stmt.trim()
   );
 
+// `activity_log` carried `user_id` with a cascading foreign key when this
+// fixture was captured, which meant deleting a user destroyed their entire
+// activity trail. Undoing that is a one-time migration on a table that predates
+// the fixture, so it lands outside every allowlist above: the key is dropped,
+// the two identity columns become nullable so a deleted account's name and
+// email can be erased without deleting the row, and `actor_deleted_at` is
+// added. Every one of those is data-preserving — nothing here drops a column or
+// a row — and the pass-2 assertion is what proves the new shape then
+// round-trips to silence rather than being re-proposed forever.
+//
+// Scoped to `activity_log` and to those exact columns, so an unrelated
+// constraint drop or a widening of some other table cannot ride in behind it.
+// Tolerant of pg ("x") and MySQL (`x`) quoting, of the optional COLUMN keyword,
+// and of the three ways the dialects spell these edits. Making a column
+// nullable: pg emits `ALTER COLUMN ... DROP NOT NULL`, MySQL restates the whole
+// column with `MODIFY COLUMN`. Dropping the key: pg emits `DROP CONSTRAINT`,
+// MySQL emits `DROP FOREIGN KEY` and additionally drops the index it maintains
+// behind every foreign key — a standalone `DROP INDEX ... ON activity_log`
+// naming that same constraint, which is part of removing the key rather than a
+// loss of a real index.
+const ACTIVITY_LOG_FK = "activity_log_user_id_users_id_fk";
+
+const migratesActivityLogActor = (stmt: string): boolean => {
+  const s = stmt.trim();
+
+  // MySQL's companion index drop is the one edit that does not start with
+  // ALTER TABLE, so it is matched on its own, still pinned to both the table
+  // and the exact constraint name.
+  if (
+    new RegExp(
+      `^DROP INDEX [\`"]?${ACTIVITY_LOG_FK}[\`"]? ON [\`"]?activity_log[\`"]?`,
+      "i"
+    ).test(s)
+  ) {
+    return true;
+  }
+
+  if (!/^ALTER TABLE [`"]?activity_log[`"]? /i.test(s)) return false;
+  return (
+    // The cascade goes.
+    new RegExp(
+      `\\bDROP (CONSTRAINT|FOREIGN KEY) [\`"]?${ACTIVITY_LOG_FK}[\`"]?`,
+      "i"
+    ).test(s) ||
+    // The identity columns become erasable.
+    /\bALTER COLUMN [`"]?(user_name|user_email)[`"]? DROP NOT NULL/i.test(s) ||
+    /\bMODIFY COLUMN [`"]?(user_name|user_email)[`"]?\s+\w+(\([^)]*\))?\s*;?$/i.test(
+      s
+    ) ||
+    // The marker that says an identity was erased, and when.
+    /\bADD (COLUMN )?[`"]?actor_deleted_at[`"]?\b/i.test(s)
+  );
+};
+
 // Positive guard: the sim must actually create each new table (an empty first
 // pass would otherwise satisfy the additive-only check vacuously).
 const hasCreateTableFor = (stmts: string[], table: string): boolean =>
@@ -287,7 +342,8 @@ describe("existing-user upgrade sim (0.45 DDL → v1)", () => {
               addsPluginOptionsColumn(s) ||
               addsVersionsColumn(s) ||
               addsRevalidateColumn(s) ||
-              addsWebhooksColumn(s),
+              addsWebhooksColumn(s) ||
+              migratesActivityLogActor(s),
             `phantom diff: ${s}`
           ).toBe(true);
         }
@@ -363,7 +419,8 @@ describe("existing-user upgrade sim (0.45 DDL → v1)", () => {
               addsPluginOptionsColumn(s) ||
               addsVersionsColumn(s) ||
               addsRevalidateColumn(s) ||
-              addsWebhooksColumn(s),
+              addsWebhooksColumn(s) ||
+              migratesActivityLogActor(s),
             `unexpected reconcile statement shape: ${s}`
           ).toBe(true);
         }
@@ -373,7 +430,22 @@ describe("existing-user upgrade sim (0.45 DDL → v1)", () => {
             `missing CREATE TABLE for ${t}`
           ).toBe(true);
         }
-        await first.apply();
+        // Applied statement by statement with the SAME tolerance the product
+        // uses, not through the kit's own `apply()`. No upgrade path calls
+        // that: `freshPushSchema` executes the statements itself and skips the
+        // ones a reconcile has already satisfied. The distinction is load-
+        // bearing on MySQL, where removing a foreign key emits both a
+        // `DROP CONSTRAINT` and a `DROP INDEX` for the index the server keeps
+        // behind that key — the first statement removes both, so the second
+        // reports the key already gone. Applying via the kit here would fail
+        // the sim on a migration real users complete.
+        for (const stmt of first.sqlStatements) {
+          try {
+            await p.query(stmt);
+          } catch (err) {
+            if (!isIdempotencyError(err)) throw err;
+          }
+        }
 
         const [rows] = (await p.query(
           "SELECT slug FROM roles WHERE id = 'r-1'"

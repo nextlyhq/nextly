@@ -1366,6 +1366,31 @@ export class UserMutationService extends BaseService {
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
     }
 
+    // Sweep once more now the removal is visible. The erasure inside the
+    // transaction cannot reach an entry that landed after it ran but before the
+    // commit — an activity write already in flight when the deletion started —
+    // and such an entry carries the identity of an account that no longer
+    // exists. Erasing is idempotent, so a second pass over rows already erased
+    // costs one indexed update and changes nothing.
+    try {
+      await eraseActorPersonalData(
+        this.db as Parameters<typeof eraseActorPersonalData>[0],
+        this.tables,
+        String(userId),
+        new Date()
+      );
+    } catch (err) {
+      // The account is already gone and the caller has been served; failing
+      // here would report a completed deletion as an error and invite a retry
+      // that finds nothing to delete. Loud enough to act on, quiet enough not
+      // to undo a committed write.
+      this.logger.error(
+        `activity-log erasure sweep after deleteUser failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
+    }
+
     // With the removal and its outbox row committed, offer the same post-commit
     // hooks as createLocalUser: a bounded retention prune (so user churn on a
     // write-triggered-maintenance install still trims the outbox) and the

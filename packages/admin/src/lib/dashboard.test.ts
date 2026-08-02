@@ -73,7 +73,7 @@ describe("describeActivityActor", () => {
     });
 
     expect(actor.deleted).toBe(true);
-    expect(actor.name).toBe("[deleted user · a1b2]");
+    expect(actor.name).toBe("[deleted user · a1b2c3d4]");
     expect(actor.id).toBe(live.userId);
     expect(actor.email).toBeNull();
   });

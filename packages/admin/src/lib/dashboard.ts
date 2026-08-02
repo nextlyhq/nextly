@@ -14,10 +14,13 @@ const DELETED_ACTOR_INITIALS = "?";
 /**
  * How much of the actor's id is shown beside "deleted user".
  *
- * Enough to tell two deleted actors apart in one feed, which is the whole
- * reason the id survives the account.
+ * Telling two deleted actors apart is the whole reason the id survives the
+ * account, so the label has to be long enough that it actually does. Four hex
+ * characters is only 65,536 labels — about a 1.9% chance of a collision among
+ * 50 deleted actors, which would silently merge two people's histories in the
+ * feed. Eight puts that below one in a million.
  */
-const DELETED_ACTOR_ID_LENGTH = 4;
+const DELETED_ACTOR_ID_LENGTH = 8;
 
 /**
  * The actor to display for an activity entry, whether or not their account
