@@ -63,6 +63,7 @@ import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detect
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import { isIdempotencyError } from "../../domains/schema/pipeline/sql-statement-utils";
 import type { DesiredSingle } from "../../domains/schema/pipeline/types";
+import { withDeclaredTextWidth } from "../../domains/schema/services/builder-text-width";
 import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
@@ -606,6 +607,14 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       if (!b?.fields || !Array.isArray(b.fields))
         throw new Error("Single fields array is required");
 
+      // Settled once, in place, so the table that gets built, the hash that gets stored and the
+      // shape a later diff compares against all read the same answer. Converted the way every other
+      // read of this payload converts it: the handler annotates it as `FieldConfig`, but what the
+      // Builder sends is the Builder shape.
+      b.fields = withDeclaredTextWidth(
+        b.fields as unknown as FieldDefinition[]
+      ) as unknown as typeof b.fields;
+
       // This create path persists and runs DDL without the schema
       // preview/apply handlers. It keeps its own field rules, but nothing here
       // can judge a plugin type's own options, so an unsatisfiable declaration
@@ -1142,6 +1151,13 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       let migrationStatus = existing.migrationStatus;
 
       if (b.fields !== undefined) {
+        // Settled before the fields are both stored and diffed. On this path it also states what an
+        // already-created table holds: a Builder text column with no declared width is unbounded,
+        // so saying so is what keeps a save from reading that column as a change.
+        b.fields = withDeclaredTextWidth(
+          b.fields as unknown as FieldDefinition[]
+        ) as unknown as typeof b.fields;
+
         // Same rules as the ui-schema.json mirror (see api/fields-payload).
         assertValidFieldsPayload(b.fields);
         updateData.fields = b.fields;

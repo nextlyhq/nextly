@@ -51,6 +51,7 @@ import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detect
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import { isIdempotencyError } from "../../domains/schema/pipeline/sql-statement-utils";
 import type { DesiredFieldGroup } from "../../domains/schema/pipeline/types";
+import { withDeclaredTextWidth } from "../../domains/schema/services/builder-text-width";
 import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
@@ -348,6 +349,14 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         throw new Error("Component slug and fields are required");
       }
 
+      // Settled once, in place, so the table that gets built, the hash that gets stored and the
+      // shape a later diff compares against all read the same answer. Converted the way every other
+      // read of this payload converts it: the handler annotates it as `FieldConfig`, but what the
+      // Builder sends is the Builder shape.
+      b.fields = withDeclaredTextWidth(
+        b.fields as unknown as FieldDefinition[]
+      ) as unknown as FieldConfig[];
+
       // These direct create/update handlers persist and run DDL without the
       // preview/apply handlers below. Their own rules cover names and shapes;
       // what none of them can judge is a plugin type's own options, so an
@@ -545,6 +554,13 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         b?.localized !== undefined ? b.localized === true : wasLocalized;
 
       if (b?.fields) {
+        // Settled before the fields are both stored and diffed. On this path it also states what an
+        // already-created table holds: a Builder text column with no declared width is unbounded,
+        // so saying so is what keeps a save from reading that column as a change.
+        b.fields = withDeclaredTextWidth(
+          b.fields as unknown as FieldDefinition[]
+        ) as unknown as FieldConfig[];
+
         assertValidPluginFieldOptions(b.fields);
         updateData.fields = b.fields;
         updateData.schemaHash = calculateSchemaHash(b.fields);
