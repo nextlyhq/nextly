@@ -70,6 +70,46 @@ const DEFAULT_INTERNAL_MESSAGE = "An unexpected error occurred.";
  * Generic over `TArgs` so it transparently supports both static handlers
  * (`(req)`) and dynamic-segment handlers (`(req, { params })`).
  */
+
+/**
+ * The detail an author cannot see from a public error response.
+ *
+ * Built only for a development response. `logContext` and `cause` are what the
+ * public shape deliberately withholds, so this exists to shorten the loop
+ * between a failure and its cause while writing code -- not to be a second
+ * error surface. A cause is reduced to its message: a serialized stack is
+ * large, and the log already has the whole thing against the same request id.
+ *
+ * Returns undefined when there is nothing to add, so an ordinary development
+ * error response is the same shape a production one is.
+ */
+function buildDevDiagnostics(
+  thrown: NextlyError,
+  flattened: readonly NextlyError[]
+): Record<string, unknown> | undefined {
+  const causeMessage = (error: NextlyError): string | undefined =>
+    error.cause instanceof Error ? error.cause.message : undefined;
+
+  const detail: Record<string, unknown> = {};
+  if (thrown.logContext !== undefined) detail.logContext = thrown.logContext;
+  const thrownCause = causeMessage(thrown);
+  if (thrownCause !== undefined) detail.cause = thrownCause;
+
+  // Errors the envelope flattened before this frame. Without them the response
+  // names only the boundary's reconstruction, which is the defect that makes
+  // every unexpected failure look alike.
+  const earlier = flattened.map(error => ({
+    code: error.code,
+    ...(error.logContext !== undefined ? { logContext: error.logContext } : {}),
+    ...(causeMessage(error) !== undefined
+      ? { cause: causeMessage(error) }
+      : {}),
+  }));
+  if (earlier.length > 0) detail.flattened = earlier;
+
+  return Object.keys(detail).length > 0 ? detail : undefined;
+}
+
 export function withErrorHandler<TArgs extends unknown[]>(
   handler: (...args: TArgs) => Promise<Response>,
   options?: WithErrorHandlerOptions
@@ -89,6 +129,9 @@ export function withErrorHandler<TArgs extends unknown[]>(
     })();
     const method = req.method;
     let response: Response;
+    // Captured inside the scope below, because it closes before the catch that
+    // reads this. Development-only detail is built from it.
+    let flattenedInRequest: NextlyError[] = [];
 
     try {
       // Opens the post-commit warning scope for the standalone handlers this
@@ -111,7 +154,8 @@ export function withErrorHandler<TArgs extends unknown[]>(
           // Joined to the response by `requestId`, which the public envelope
           // already carries, so an operator correlates them without any of the
           // detail being disclosed.
-          for (const flattened of currentFlattenedErrors()) {
+          flattenedInRequest = currentFlattenedErrors();
+          for (const flattened of flattenedInRequest) {
             getNextlyLogger().error({
               kind: "flattened-service-error",
               ...flattened.toLogJSON(requestId),
@@ -198,6 +242,23 @@ export function withErrorHandler<TArgs extends unknown[]>(
         options?.internalErrorMessage !== undefined
       ) {
         responseJson.message = internalMessage;
+      }
+      // Development-only diagnostics.
+      //
+      // Gated on `NODE_ENV`, which the bundler replaces at BUILD time, so a
+      // production bundle cannot be talked into this branch: not by a header,
+      // a query parameter, or a role. That matters more than the convenience
+      // it buys -- this is exactly the detail the public shape withholds, so a
+      // gate that could flip at runtime would be a disclosure bug.
+      //
+      // Carries the thrown error's own context and anything the envelope
+      // flattened on the way here, which is what an author cannot otherwise
+      // see without reading the server log.
+      if (process.env.NODE_ENV === "development") {
+        const devDetail = buildDevDiagnostics(nextlyErr, flattenedInRequest);
+        if (devDetail) {
+          (responseJson as Record<string, unknown>)._devDiagnostics = devDetail;
+        }
       }
       const responseHeaders: Record<string, string> = {
         "content-type": "application/problem+json",

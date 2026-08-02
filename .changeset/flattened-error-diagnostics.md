@@ -22,4 +22,6 @@
 "nextly": patch
 ---
 
-When a service raises a typed error, the public result shape drops its `cause` and `logContext` before the boundary rebuilds it, so an operator saw a generic reconstruction with none of the detail the thrower attached. The original is now kept for the request and logged against the same `requestId` the response carries, so the two can be joined. Nothing about it reaches the caller: the public shape is unchanged.
+When a service raises a typed error, the public result shape drops its `cause` and `logContext` before the boundary rebuilds it, so an operator saw a generic reconstruction with none of the detail the thrower attached. The original is now kept for the request and logged against the same `requestId` the response carries, so the two can be joined.
+
+In development only, an error response also carries a `_devDiagnostics` field with that detail, so an author sees why a request failed without reading the server log. The gate is `NODE_ENV`, which the bundler replaces at build time: a production build cannot be made to include it by any header, query parameter or role, and production responses are byte-for-byte unchanged.
