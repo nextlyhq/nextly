@@ -17,7 +17,7 @@
  */
 
 import type { FieldConfig } from "../../collections/fields/types";
-import { ALWAYS_IMMUTABLE_SYSTEM_FIELDS } from "../../lib/immutable-system-fields";
+import { IMMUTABLE_SYSTEM_FIELDS_ANY_ENTITY } from "../../lib/immutable-system-fields";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { isFieldLocalized } from "../i18n/classify-fields";
 
@@ -28,17 +28,13 @@ import { isFieldLocalized } from "../i18n/classify-fields";
  * after `beforeUpdate` hooks have seen the payload. Stripping here means a hook
  * is never handed a forged `createdBy` or a stale `createdAt`.
  *
- * The always-immutable names come from the shared list rather than being
- * repeated: this copy had fallen behind it, so a restored snapshot reported the
- * first-publication marker as an unknown field and every complete restore came
- * back described as partial. The owner column is added on top because this path
- * protects it for singles as well, where it is not a system column.
+ * The set spans every entity rather than the one being restored, because this
+ * path protects the owner column for singles as well, where it is not a system
+ * column at all. Assembled by hand, this copy fell behind the writers' one and
+ * a restored snapshot then reported the first-publication marker as an unknown
+ * field, describing every complete restore as partial.
  */
-const IMMUTABLE_FIELDS = new Set([
-  ...ALWAYS_IMMUTABLE_SYSTEM_FIELDS,
-  "createdBy",
-  "created_by",
-]);
+const IMMUTABLE_FIELDS = IMMUTABLE_SYSTEM_FIELDS_ANY_ENTITY;
 
 /**
  * A component's own schema, as the payload filter needs to see it.

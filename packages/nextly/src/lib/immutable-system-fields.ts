@@ -6,64 +6,56 @@
  * owner stamp, the timestamps and the first-publication marker are decided here, not by whatever
  * a caller put in the body.
  *
- * Owned in one place because the entities that need it are written by different services. The
- * collection writer had this list and the single writer did not, so a marker a caller supplied
- * survived into a single's row — the same request that a collection rejected.
+ * The set is a projection of the system-column declarations rather than a list of its own. The
+ * collection writer had a list and the single writer did not, so a marker a caller supplied
+ * survived into a single's row on the same request a collection rejected.
  *
- * The set is NOT "every system column". `title`, `slug` and `status` are system-injected and
- * fully writable: they are content and lifecycle, not provenance. Only the columns the service
- * alone decides belong here.
+ * It is NOT "every system column". `title`, `slug` and `status` are system-injected and fully
+ * writable: they are content and lifecycle, not provenance. Only the columns the service alone
+ * decides are closed, which is exactly what `writableByClient` records.
  *
  * @module lib/immutable-system-fields
  */
 
+import {
+  immutableSystemColumnNames,
+  immutableSystemColumnNamesAnyEntity,
+  type SystemColumnEntity,
+} from "./system-columns";
+
 /** Which entity is being written. The owner column exists on only one of them. */
-export type WritableEntityKind = "collection" | "single";
+export type WritableEntityKind = SystemColumnEntity;
 
 /**
- * Reserved on every entity, in both spellings: config validation accepts camelCase field names
- * and snake-cases them to the same physical column, so reserving one spelling reserves nothing.
- *
- * `first_published_at` is here for a reason the timestamps are not. It is meant to be written
- * once and never moved, and a value taken from the request would make that guarantee decorative:
- * a draft create could claim a publication that never happened, and any later update could reset
- * a real one.
- */
-export const ALWAYS_IMMUTABLE_SYSTEM_FIELDS: readonly string[] = [
-  "id",
-  "created_at",
-  "createdAt",
-  "updated_at",
-  "updatedAt",
-  "first_published_at",
-  "firstPublishedAt",
-];
-
-/**
- * Reserved on collections only.
+ * Built once per entity, because the answer cannot change at runtime and every write asks it.
  *
  * A single is one global row, so owner-only access is meaningless and no `created_by` column is
  * injected onto its table — which leaves `created_by` an ordinary, legal field name for a single
- * to declare, and the single validator reserves only the publication marker for exactly that
- * reason. Stripping it there would silently discard a user's own column on every update, so the
- * reservation follows the column rather than the convenience of one shared list.
+ * to declare. Stripping it there would silently discard the author's own column on every update,
+ * so the reservation follows the column, which is what `appliesTo` on the declaration expresses.
  */
-const COLLECTION_ONLY_IMMUTABLE: readonly string[] = [
-  "created_by",
-  "createdBy",
-];
+const IMMUTABLE_BY_ENTITY: Readonly<
+  Record<WritableEntityKind, ReadonlySet<string>>
+> = {
+  collection: new Set(immutableSystemColumnNames("collection")),
+  single: new Set(immutableSystemColumnNames("single")),
+};
 
-const COLLECTION_SET: ReadonlySet<string> = new Set([
-  ...ALWAYS_IMMUTABLE_SYSTEM_FIELDS,
-  ...COLLECTION_ONLY_IMMUTABLE,
-]);
-const SINGLE_SET: ReadonlySet<string> = new Set(ALWAYS_IMMUTABLE_SYSTEM_FIELDS);
+/**
+ * The columns closed to clients on any entity at all.
+ *
+ * For callers that protect both kinds at once rather than one at a time: a restore refuses to
+ * carry the owner column back even for a single, where it is not a system column.
+ */
+export const IMMUTABLE_SYSTEM_FIELDS_ANY_ENTITY: ReadonlySet<string> = new Set(
+  immutableSystemColumnNamesAnyEntity()
+);
 
 /** The names a client may not write for the given entity. */
 export function immutableSystemFieldsFor(
   entity: WritableEntityKind
 ): ReadonlySet<string> {
-  return entity === "single" ? SINGLE_SET : COLLECTION_SET;
+  return IMMUTABLE_BY_ENTITY[entity];
 }
 
 /**
