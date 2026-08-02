@@ -54,8 +54,21 @@ export function useDiscardWorkingDraft({
       }),
 
     onSuccess: data => {
+      // Seed the authoritative live row the discard returned into every scoped
+      // variant of this entry's detail cache BEFORE invalidating. Otherwise the
+      // cache keeps the now-deleted working draft (and `_isWorkingDraft: true`)
+      // until the refetch lands: a slow or failed refetch would leave the editor
+      // showing Changed, and a remount could briefly restore the discarded
+      // values. `_isWorkingDraft` is cleared explicitly — the live item omits it,
+      // so a plain spread would let the stale `true` survive.
+      queryClient.setQueriesData<Record<string, unknown>>(
+        { queryKey: entryKeys.detail(collectionSlug, entryId) },
+        old => (old ? { ...old, ...data.item, _isWorkingDraft: false } : old)
+      );
+
       // The editor reads with `?draft=1`; with the sidecar gone the server has
-      // no draft to overlay, so refetching the detail returns the live row.
+      // no draft to overlay, so refetching the detail reconciles with the live
+      // row. List/count caches are left alone — the live row never changed.
       void queryClient.invalidateQueries({
         queryKey: entryKeys.detail(collectionSlug, entryId),
       });

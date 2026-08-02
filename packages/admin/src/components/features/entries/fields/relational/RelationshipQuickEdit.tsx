@@ -122,6 +122,16 @@ function ModalContent({
   // are still drafts.
   const { enabled: localizationEnabled } = useLocalization();
 
+  // Read the pending working draft in place of the live row when the related
+  // collection has the draft/published split, exactly as the full-page editor
+  // does. Reading the live row here instead would clobber the sidecar on save:
+  // the embedded form submits with no intent, so every live-loaded field is sent
+  // and the server merges those older live values over the saved draft. Showing
+  // and saving onto the draft keeps quick-edit consistent and non-destructive.
+  const draftsEnabled =
+    (collection as { draftsEnabled?: boolean } | undefined)?.draftsEnabled ===
+    true;
+
   const {
     data: entry,
     isLoading: isLoadingEntry,
@@ -131,6 +141,7 @@ function ModalContent({
     entryId,
     enabled: !!collectionSlug && !!entryId,
     translationStatus: localizationEnabled,
+    draft: draftsEnabled,
   });
 
   const isLoading = isLoadingCollection || isLoadingEntry;
@@ -193,9 +204,9 @@ function ModalContent({
       entry={entry}
       mode="edit"
       embedded
-      // This modal reads the live row (no working-draft overlay), so the update
-      // keys its optimistic cache onto that same query rather than the drafts one.
-      readDraft={false}
+      // Match the working-draft overlay this modal reads with, so the update keys
+      // its optimistic cache onto the same query the form is showing.
+      readDraft={draftsEnabled}
       onSuccess={updatedEntry => onUpdate(updatedEntry)}
       onCancel={onCancel}
     />
