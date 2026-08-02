@@ -64,6 +64,7 @@ import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import {
   convertTimestampsToCamelCase,
+  rehydrateSystemTimestamps,
   SYSTEM_TIMESTAMP_KEYS,
 } from "../../../shared/lib/case-conversion";
 import {
@@ -2711,13 +2712,7 @@ export class CollectionQueryService extends BaseService {
           // drafted entry. Rehydrate the system timestamps and every declared
           // date field — including those nested inside components — to Date
           // before the read pipeline runs below.
-          for (const key of ["createdAt", "updatedAt"]) {
-            const value = draftEntry[key];
-            if (typeof value === "string") {
-              const parsed = new Date(value);
-              if (!Number.isNaN(parsed.getTime())) draftEntry[key] = parsed;
-            }
-          }
+          rehydrateSystemTimestamps(draftEntry);
           rehydrateSnapshotDates(
             draftEntry,
             declaredFields,

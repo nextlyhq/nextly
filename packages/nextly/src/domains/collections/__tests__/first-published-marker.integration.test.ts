@@ -524,6 +524,73 @@ describe("first_published_at", () => {
     }
   });
 
+  it("keeps the marker on the working-draft shapes of a published document", async () => {
+    // A document with a pending working draft is written and read through documents rebuilt from a
+    // stored snapshot rather than from the row, and each rebuild restored the system columns from a
+    // list written out by hand. The marker was missing from those while an ordinary read of the
+    // same document returned it, so a published entry looked like one that had never been public
+    // for exactly as long as someone was editing it.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "fpmdrafts",
+          status: true,
+          versions: { drafts: true },
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const h = handler(current);
+    const trusted = { collectionName: "fpmdrafts", overrideAccess: true };
+
+    const created = await h.createEntry(trusted, {
+      title: "live",
+      status: "published",
+    });
+    const id = (created.data as { id: string }).id;
+
+    // An update carrying no status accumulates a working draft instead of touching the live row.
+    const updated = await h.updateEntry(
+      { ...trusted, entryId: id },
+      { title: "edited" }
+    );
+    assert(isRecord(updated.data), "the update returned no document");
+    // The live row is untouched, which is what proves the response above came from the draft
+    // shaper rather than from an ordinary row update that would carry the column anyway.
+    const rows = await tableRows(current, "dc_fpmdrafts");
+    expect(rows.find(r => r.id === id)?.title).toBe("live");
+    expect(updated.data.title).toBe("edited");
+    expect(updated.data.firstPublishedAt).toBeInstanceOf(Date);
+
+    // A second save is the one that exercises the snapshot round trip: the first accumulated its
+    // document from the live row, where the timestamp is still database-decoded, while this one
+    // rebuilds from the stored draft, where JSON has left it a string.
+    const resaved = await h.updateEntry(
+      { ...trusted, entryId: id },
+      { title: "edited again" }
+    );
+    assert(isRecord(resaved.data), "the second update returned no document");
+    expect(resaved.data.title).toBe("edited again");
+    expect(resaved.data.firstPublishedAt).toBeInstanceOf(Date);
+
+    // The read that overlays that draft has to agree with an ordinary read on both counts: that
+    // the marker is present, and that it is a Date. A hook calling a date method would otherwise
+    // fail only for an entry that happens to be drafted.
+    const overlaid = await h.getEntry({
+      ...trusted,
+      entryId: id,
+      includeWorkingDraft: true,
+    });
+    assert(isRecord(overlaid.data), "the draft read returned no document");
+    expect(overlaid.data._isWorkingDraft).toBe(true);
+    expect(overlaid.data.title).toBe("edited again");
+    expect(overlaid.data.firstPublishedAt).toBeInstanceOf(Date);
+
+    const live = await h.getEntry({ ...trusted, entryId: id });
+    assert(isRecord(live.data), "the live read returned no document");
+    expect(live.data.firstPublishedAt).toBeInstanceOf(Date);
+  });
+
   it("leaves a legacy already-public document unmarked when a translation publishes", async () => {
     // The row this protects: published before this column existed, so its marker is null because
     // the history was never recorded, not because it was never public. Publishing a translation
