@@ -106,6 +106,26 @@ async function boot(): Promise<TestNextly> {
               }),
             ],
           }),
+          // A group holding a denied field, beside a top-level sibling whose
+          // visibility depends on that nested value. The nested read judges each
+          // row twice — before and after the parent's hooks — and the second pass
+          // snapshots the org row before descending to restore the group's
+          // evidence, so re-judging `emblem` against the already-stripped group
+          // would wrongly drop it. A direct read judges `emblem` once with the
+          // group intact and keeps it; restoring the whole subtree's evidence
+          // before the ancestor snapshot is what keeps the two reads in step.
+          group({
+            name: "charter",
+            fields: [text({ name: "sealed", access: { read: () => false } })],
+          }),
+          text({
+            name: "emblem",
+            access: {
+              read: ({ data }) =>
+                (data as { charter?: { sealed?: unknown } } | undefined)
+                  ?.charter?.sealed === "yes",
+            },
+          }),
         ],
       }),
       defineCollection({
@@ -681,6 +701,46 @@ describe("a target's field hooks apply to rows reached through a relationship", 
     expect(org!.region).toBe("emea");
     // The denied sibling is still withheld.
     expect(org!.classification).toBeUndefined();
+  });
+
+  it("keeps an outer field whose access reads a denied value nested in a group", async () => {
+    // `emblem` is allowed only while the group's denied `sealed` is present as
+    // evidence; `sealed` denies read. A direct read judges `emblem` once, with
+    // the group intact, and keeps it. The nested read judges twice — before and
+    // after the parent's hooks — and the second pass snapshots the org row before
+    // descending to restore the group, so unless the whole subtree's evidence is
+    // restored FIRST it sees the stripped group and wrongly drops `emblem`.
+    const t = await boot();
+    await t.nextly.create({
+      collection: ORGS,
+      data: { name: "acme", charter: { sealed: "yes" }, emblem: "crest" },
+    });
+    const orgId = await onlyId(t, ORGS);
+    await t.nextly.create({
+      collection: AUTHORS,
+      data: { name: "ada", organization: orgId },
+    });
+    const authorId = await onlyId(t, AUTHORS);
+    await t.nextly.create({
+      collection: POSTS,
+      data: { title: "p", author: authorId },
+    });
+    const postId = await onlyId(t, POSTS);
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    const author = expanded.data!.author as Record<string, unknown>;
+    const org = author.organization as Record<string, unknown> | undefined;
+    expect(org).toBeTruthy();
+    // Kept: judged with the group's evidence intact, as a direct read would.
+    expect(org!.emblem).toBe("crest");
+    // The denied nested field is still withheld from the response.
+    const charter = org!.charter as Record<string, unknown> | undefined;
+    if (charter) expect(charter.sealed).toBeUndefined();
   });
 
   it("judges a repeater row a parent hook appends after the first pass", async () => {

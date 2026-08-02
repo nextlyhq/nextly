@@ -357,12 +357,19 @@ export async function applyFieldWriteAccess(opts: {
  * place, or added, replaced, or reordered rows). The second pass MUST re-run the
  * rules against the post-hook content — a cached verdict cannot be trusted once a
  * hook may have changed what the rule reads. Re-running alone would flip a
- * verdict, though: the first pass already removed the denied siblings a rule
- * reads as evidence, so a field kept only while such a sibling was present would
- * be wrongly dropped. Restoring each row's removed values first (unless a hook
- * has since set them) gives the rules the same evidence the first pass — and a
- * direct read — judged against, while the current values of everything a hook
- * touched are seen and re-judged.
+ * verdict, though: the first pass already removed the denied values a rule reads
+ * as evidence, so a field kept only while such a value was present would be
+ * wrongly dropped. Restoring each row's removed values first (unless a hook has
+ * since set them) gives the rules the same evidence the first pass — and a direct
+ * read — judged against, while the current values of everything a hook touched
+ * are seen and re-judged.
+ *
+ * The restore runs over the WHOLE subtree before any level's snapshot is taken,
+ * because the evidence a rule reads is not always a sibling: an outer field's
+ * rule can depend on a value inside a nested group or repeater the first pass
+ * already redacted. Snapshotting a level before descending to restore its nested
+ * rows would judge that outer rule against a stripped subtree and drop it, unlike
+ * a direct read which judges once with the subtree intact.
  *
  * Keyed by the row object, never by an `id`: two rows may carry the same `id`,
  * and a replacement row is a genuinely new object that must be judged on its own
@@ -374,25 +381,51 @@ export type ReadAccessRedactions = WeakMap<
   Record<string, unknown>
 >;
 
-/** Recursive worker for read access — same snapshot + recurse contract. When
- *  `redactions` carries values a prior pass removed from this row, they are
- *  restored as evidence (unless a hook has since set them) before the rules run,
- *  then re-removed; the rules always run against the current content. */
-async function applyReadAccessRec(
+/**
+ * Restore, throughout the subtree rooted at `entry`, the values a prior pass
+ * removed from each row — unless a hook has since set the key, so a hook's own
+ * value stands. Runs once before any snapshot is taken, so a rule at any level is
+ * judged against the evidence a single direct read would see.
+ *
+ * The restore has to span the whole subtree, not just the current row: an outer
+ * field's rule can read a value that lives in a nested group or repeater a prior
+ * pass already redacted. Restoring per row on the way down would take the outer
+ * level's snapshot before descending to restore that nested value, and the rule
+ * would judge against the stripped subtree and wrongly drop the outer field.
+ */
+function restoreReadAccessEvidence(
   entry: Record<string, unknown>,
   fns: Record<string, FieldFunctions>,
-  ctx: { user?: Record<string, unknown>; id?: string },
   redactions: ReadAccessRedactions
-): Promise<void> {
-  // Restore what a prior pass removed from THIS row, so a rule reading a denied
-  // sibling as evidence sees it again — matching a direct read's single pass.
-  // Only where a hook has not since set the key, so a hook's own value stands.
+): void {
   const priorlyRemoved = redactions.get(entry);
   if (priorlyRemoved) {
     for (const [name, value] of Object.entries(priorlyRemoved)) {
       if (!(name in entry)) entry[name] = value;
     }
   }
+  for (const [name, fieldFns] of Object.entries(fns)) {
+    if (!fieldFns.fields || !(name in entry)) continue;
+    const container = openNestedContainer(entry[name]);
+    if (!container) continue;
+    for (const row of container.rows) {
+      restoreReadAccessEvidence(row, fieldFns.fields, redactions);
+    }
+    entry[name] = container.serialize();
+  }
+}
+
+/** Recursive worker for read access — same snapshot + recurse contract. Prior
+ *  passes' removed values are restored across the whole subtree by
+ *  {@link restoreReadAccessEvidence} before this runs, so the snapshot reflects
+ *  the content a single direct read would judge; the rules always run against the
+ *  current content, and what this pass removes is recorded for the next. */
+async function applyReadAccessRec(
+  entry: Record<string, unknown>,
+  fns: Record<string, FieldFunctions>,
+  ctx: { user?: Record<string, unknown>; id?: string },
+  redactions: ReadAccessRedactions
+): Promise<void> {
   // Taken BEFORE the recursion below replaces nested containers with their
   // redacted serialization: a parent-level rule reading a protected nested
   // value would otherwise find it already removed, and the outcome would turn
@@ -428,8 +461,10 @@ async function applyReadAccessRec(
     if (!allowed) denied.push(name);
   }
   if (denied.length > 0) {
-    // Record the removed values (merged with any this row already carried) so a
-    // later pass can restore them as evidence and re-judge.
+    // Record the removed values (merged with any this row already carried, so a
+    // value a hook restored then this pass re-denied is still remembered) for the
+    // next pass to restore as evidence and re-judge.
+    const priorlyRemoved = redactions.get(entry);
     const removed: Record<string, unknown> = priorlyRemoved
       ? { ...priorlyRemoved }
       : {};
@@ -465,6 +500,12 @@ export async function applyFieldReadAccess(
   if (opts.overrideAccess) return;
   const fns = getFieldFunctions(opts.kind, opts.slug);
   if (!fns) return;
+  const store = redactions ?? new WeakMap();
+  // Restore the whole subtree's prior-pass evidence before any level's snapshot,
+  // so an outer rule reading a value nested in a group or repeater is judged
+  // against the same content a single direct read would (a no-op on the first
+  // pass, whose store is empty). The judge below re-removes what stays denied.
+  restoreReadAccessEvidence(opts.entry, fns, store);
   await applyReadAccessRec(
     opts.entry,
     fns,
@@ -472,7 +513,7 @@ export async function applyFieldReadAccess(
       user: opts.user,
       id: typeof opts.entry.id === "string" ? opts.entry.id : undefined,
     },
-    redactions ?? new WeakMap()
+    store
   );
 }
 
