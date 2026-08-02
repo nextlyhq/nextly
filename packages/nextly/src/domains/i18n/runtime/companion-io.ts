@@ -811,21 +811,17 @@ async function resumeInterruptedSeed(
   companionTableName: string,
   onError?: (error: unknown) => void
 ): Promise<boolean> {
-  const plan = await buildSeedingCreateStatements(adapter, args, newLocalized);
+  // The guard belongs to THIS path: it has read the transition record, so it knows the rows the
+  // companion already holds are an interrupted copy to be kept rather than the stale remains of a
+  // disable. The initial-create path has no such record and asks for the plain seed.
+  const plan = await buildSeedingCreateStatements(adapter, args, newLocalized, {
+    guardSeed: true,
+  });
   if (!plan) return false;
 
   // Everything the plan emits except the CREATE, which the interrupted run already ran.
   const copy = plan.filter(statement => !statement.startsWith("CREATE TABLE"));
   if (copy.length === 0) return false;
-
-  const q = (id: string) =>
-    args.dialect === "mysql" ? `\`${id}\`` : `"${id}"`;
-  const companion = q(companionTableName);
-  const main = q(args.tableName);
-  const guard =
-    ` WHERE NOT EXISTS (SELECT 1 FROM ${companion} ` +
-    `WHERE ${companion}.${q("_parent")} = ${main}.${q("id")} ` +
-    `AND ${companion}.${q("_locale")} = '${args.sourceLocale ?? ""}')`;
 
   try {
     // The plan is real, so the transition is recorded — before the first statement, and only now
@@ -869,11 +865,11 @@ async function resumeInterruptedSeed(
       }
     }
     for (const statement of copy) {
-      // Only the INSERT ... SELECT is row-producing and therefore needs the guard; anything else
-      // the plan carries (a nullability relax, for instance) is already idempotent.
-      await adapter.executeQuery(
-        statement.startsWith("INSERT INTO") ? `${statement}${guard}` : statement
-      );
+      // Issued as generated. The seed carries its guard from `buildLocalizationUpStatements`,
+      // which this path asks for — matching on a statement's leading text to decide whether to
+      // rewrite it made the guard a property of whoever executed the statement rather than of the
+      // statement itself.
+      await adapter.executeQuery(statement);
     }
     // The interrupted run's debt is discharged, so the record stops describing one.
     // A settlement that did not land means this run no longer holds the transition: someone took
@@ -954,7 +950,8 @@ async function buildSeedingCreateStatements(
     sourceLocale?: string;
     requireColumnsOnMain?: boolean;
   },
-  newLocalized: CompanionFieldLike[]
+  newLocalized: CompanionFieldLike[],
+  options: { guardSeed?: boolean } = {}
 ): Promise<string[] | null> {
   if (!args.sourceLocale) return null;
 
@@ -1008,6 +1005,7 @@ async function buildSeedingCreateStatements(
     { ...spec, columnsOnMain },
     {
       dropSeededColumns: false,
+      guardSeed: options.guardSeed,
       // Retained columns that were required must stop being so, or the first create after this
       // transition fails: the value now goes to the companion, so the main insert omits it.
       relaxColumns: onMain.filter(c => !c.nullable).map(c => c.name),
