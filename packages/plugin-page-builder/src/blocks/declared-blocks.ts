@@ -15,13 +15,27 @@
  * @module blocks/declared-blocks
  */
 
-import type { AnyBlockDefinition } from "@nextlyhq/blocks-engine";
+import type {
+  AnyBlockDefinition,
+  SupportDefinition,
+} from "@nextlyhq/blocks-engine";
 import type { PluginDeclaration } from "@nextlyhq/plugin-sdk";
 
 /** What a plugin puts under the page builder's key in `contributes.declarations`. */
 export interface PageBuilderDeclaration {
   /** Block definitions to register at boot. */
   blocks?: AnyBlockDefinition[];
+  /**
+   * Custom supports the declared blocks opt into.
+   *
+   * Declared rather than registered from the contributing plugin's `init`,
+   * because that runs AFTER the page builder's own, which is where declared
+   * blocks are registered. A block opting into a support registered later than
+   * itself is refused for naming a support nothing knows yet, and no ordering
+   * of plugins fixes it: the two happen in different passes. Declared, both are
+   * data the page builder reads at once, and it can register supports first.
+   */
+  supports?: SupportDefinition[];
 }
 
 /**
@@ -52,4 +66,32 @@ export function blocksIn(declaration: PluginDeclaration): {
     };
   }
   return { blocks: declared };
+}
+
+/**
+ * The custom supports in one declaration, with the plugin that declared them.
+ *
+ * Returns nothing rather than throwing for a declaration that is not the shape
+ * this plugin expects, for the same reason `blocksIn` does: another version of
+ * the page builder may understand keys this one does not.
+ */
+export function supportsIn(declaration: PluginDeclaration): {
+  supports: SupportDefinition[];
+  error?: string;
+} {
+  const value = declaration.value;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return { supports: [] };
+  }
+  const declared = (value as PageBuilderDeclaration).supports;
+  if (declared === undefined) return { supports: [] };
+  if (!Array.isArray(declared)) {
+    return {
+      supports: [],
+      error:
+        `"${declaration.source}" declared supports for the page builder as ` +
+        `${typeof declared}; it must be an array of support definitions.`,
+    };
+  }
+  return { supports: declared };
 }

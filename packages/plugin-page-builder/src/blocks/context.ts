@@ -35,22 +35,15 @@ export interface DataProvider {
   find(args: FindArgs): Promise<{ items: Record<string, unknown>[] }>;
 }
 
-declare module "@nextlyhq/plugin-sdk/blocks" {
-  interface BlockRenderContext {
-    /**
-     * Where a block reads content from. Absent when nothing can be queried,
-     * which is the editor drawing a block before a source has been chosen.
-     */
-    data?: DataProvider;
-    /**
-     * The entry the surrounding repeater is on.
-     *
-     * Set by a block rendering its slot once per entry, and read by whatever is
-     * inside that slot. It lives on the CONTEXT rather than being passed as a
-     * prop because a repeater does not know, and should not know, which of its
-     * descendants cares: the value flows down to all of them and each takes
-     * what it needs.
-     */
-    item?: Record<string, unknown>;
-  }
+/**
+ * How many more reads this page render may perform.
+ *
+ * A loop inside a loop asks its data source once per entry of the outer one, so
+ * depth in a document turns into multiplication in queries. The budget is
+ * shared by the whole render and taken from before each read, which turns an
+ * unbounded page into a bounded one that renders what it could reach.
+ */
+export interface QueryBudget {
+  /** Claim one read. False when the page has spent its allowance. */
+  take(): boolean;
 }

@@ -21,3 +21,13 @@ export {
   PAGE_BUILDER_PLUGIN,
 } from "./registration-service";
 export type { BlockRegistrationService } from "./registration-service";
+
+/**
+ * The renderer's own context declaration.
+ *
+ * Re-exported from the package's published entry so the augmentation it carries
+ * reaches a consumer's type graph. A plugin importing only the documented
+ * subpaths would otherwise never load that file, and `ctx.data` — the whole
+ * point of the context — would not exist for them.
+ */
+export type { DataProvider, FindArgs, QueryBudget } from "./context";

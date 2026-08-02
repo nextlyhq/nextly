@@ -30,7 +30,6 @@
 import type {
   BlockDefinition as EngineBlockDefinition,
   BlockRenderArgs as EngineBlockRenderArgs,
-  BlockSupportValue,
 } from "@nextlyhq/blocks-engine";
 import type { ReactNode } from "react";
 
@@ -59,37 +58,43 @@ import type { ReactNode } from "react";
  * every key, which is what leaves a misspelled `spaceing` to be found at boot,
  * in someone else's app, instead of while it is being written.
  *
+ * Each key names the sub-flags it recognises, so a nested typo is caught in the
+ * same breath as a top-level one: `{ spacing: { paddding: true } }` enables
+ * nothing at all, and finding that out at boot is exactly what this exists to
+ * prevent. A support with no finer granularity than all-or-nothing declares
+ * `never`.
+ *
  * The built-in keys are the style catalog's groups plus the capabilities that
- * have no catalog group of their own. A test holds this list to what the
- * registry actually accepts, so the two cannot drift.
+ * have no catalog group of their own. A test holds both the keys and their
+ * flags to what the registry actually accepts, so the two cannot drift.
  *
  * @experimental Carried by the same freeze as `defineBlock`.
  */
 export interface BlockSupportKeys {
   /** Padding and margin. */
-  spacing: true;
+  spacing: "margin" | "padding";
   /** Flow, alignment and gap. */
-  layout: true;
+  layout: never;
   /** Width, height and their limits. */
-  dimensions: true;
+  dimensions: never;
   /** Font, size, weight, line height and letter spacing. */
-  typography: true;
-  /** Text and other foreground colours. */
-  color: true;
+  typography: never;
+  /** Text and link colours. */
+  color: "text" | "link";
   /** Background colour, image and gradient. */
-  background: true;
+  background: "color" | "image" | "gradient";
   /** Border lines and corner rounding. */
-  border: true;
+  border: "line" | "radius";
   /** Box and text shadows. */
-  shadow: true;
+  shadow: never;
   /** Opacity, filters and transforms. */
-  effects: true;
+  effects: never;
   /** Positioning and stacking. */
-  position: true;
+  position: never;
   /** Container-query behaviour. */
-  container: true;
+  container: never;
   /** Author-written CSS on this block. Gates a capability, not a style group. */
-  customCss: true;
+  customCss: never;
 }
 
 /**
@@ -98,9 +103,11 @@ export interface BlockSupportKeys {
  *
  * @experimental Carried by the same freeze as `defineBlock`.
  */
-export type BlockSupports = Partial<
-  Record<keyof BlockSupportKeys, BlockSupportValue>
->;
+export type BlockSupports = {
+  [K in keyof BlockSupportKeys]?:
+    | boolean
+    | Partial<Record<BlockSupportKeys[K], boolean>>;
+};
 
 /**
  * Supports as written at a definition, with unknown keys refused.
@@ -187,8 +194,16 @@ export interface BlockDefinition<P extends object = Record<string, unknown>>
     "supports" | "render"
   > {
   supports?: BlockSupports;
-  /** Renders the block. May be async. */
-  render(args: BlockRenderArgs<P>): ReactNode;
+  /**
+   * Renders the block.
+   *
+   * The promise is spelled out rather than left to `ReactNode`. React 19 added
+   * promises to that type and React 18 did not, and this package supports both,
+   * so an async block would compile against one peer and be rejected by the
+   * other. Naming it here makes the async contract mean the same thing across
+   * the range this package declares.
+   */
+  render(args: BlockRenderArgs<P>): ReactNode | Promise<ReactNode>;
 }
 
 /**

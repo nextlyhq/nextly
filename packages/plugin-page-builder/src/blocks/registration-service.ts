@@ -27,7 +27,7 @@ import {
 import type { PluginContext } from "@nextlyhq/plugin-sdk";
 import { collectDeclarations } from "nextly";
 
-import { blocksIn } from "./declared-blocks";
+import { blocksIn, supportsIn } from "./declared-blocks";
 
 /** The page builder's own name, as the cross-plugin namespace keys it. */
 export const PAGE_BUILDER_PLUGIN = "@nextlyhq/plugin-page-builder";
@@ -200,10 +200,20 @@ function isBlockRegistrationBackend(
 export function registerDeclaredBlocks(ctx: PluginContext): void {
   const service = ctx.services.plugins[PAGE_BUILDER_PLUGIN]?.[BLOCK_SERVICE];
   if (!isBlockRegistrationBackend(service)) return;
-  for (const declaration of collectDeclarations(
+  const declarations = collectDeclarations(
     ctx.config.plugins ?? [],
     PAGE_BUILDER_PLUGIN
-  )) {
+  );
+  // Supports first, across every declaration, before any block is registered.
+  // Registration refuses a block naming a support nothing knows yet, and a
+  // block declared by one plugin may use a support declared by another, so
+  // interleaving the two would make the outcome depend on plugin order.
+  for (const declaration of declarations) {
+    const { supports, error } = supportsIn(declaration);
+    if (error) throw new Error(error);
+    for (const support of supports) service.registerSupport(support);
+  }
+  for (const declaration of declarations) {
     const { blocks, error } = blocksIn(declaration);
     if (error) throw new Error(error);
     if (blocks.length > 0) service.register(blocks, declaration.source);

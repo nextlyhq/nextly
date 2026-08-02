@@ -20,6 +20,8 @@
 import type { BlockRenderArgs } from "@nextlyhq/plugin-sdk/blocks";
 import type { ReactElement } from "react";
 
+import "../context-augmentation";
+
 /** What both presets store. */
 export interface ContainerProps {
   /**

@@ -26,6 +26,8 @@ import { defineBlock } from "@nextlyhq/plugin-sdk/blocks";
 import type { BlockRenderArgs } from "@nextlyhq/plugin-sdk/blocks";
 import type { ReactElement } from "react";
 
+import "../context-augmentation";
+
 export interface CollectionLoopProps {
   /** The collection queried. */
   collection?: string;
@@ -48,13 +50,41 @@ function keyFor(item: Record<string, unknown>, index: number): string | number {
   return typeof id === "string" || typeof id === "number" ? id : index;
 }
 
+/** The prop schema's bounds, applied to what was actually stored. */
+const MIN_LIMIT = 1;
+const MAX_LIMIT = 100;
+const DEFAULT_LIMIT = 10;
+
+/**
+ * The number of entries to ask for.
+ *
+ * The schema's bounds describe what an editor offers, not what a document
+ * holds: props are validated as an object and nothing more, so a stored or
+ * migrated node can carry a limit of zero, of minus one, or of a million. The
+ * value goes straight to a host-supplied data source, which may honour a huge
+ * one or reject a malformed one and take the block with it.
+ */
+function safeLimit(limit: number | undefined): number {
+  if (typeof limit !== "number" || !Number.isFinite(limit)) {
+    return DEFAULT_LIMIT;
+  }
+  return Math.min(MAX_LIMIT, Math.max(MIN_LIMIT, Math.floor(limit)));
+}
+
 export async function renderCollectionLoop({
   props,
   renderSlot,
   className,
   ctx,
 }: BlockRenderArgs<CollectionLoopProps>): Promise<ReactElement> {
-  const { collection } = props;
+  // A cleared text field persists as an empty string, which is a collection
+  // nobody named rather than a collection called "". Querying for it fails, the
+  // failure is swallowed below, and the block renders empty instead of showing
+  // its template the way an unconfigured loop is supposed to.
+  const collection =
+    typeof props.collection === "string" && props.collection.trim() !== ""
+      ? props.collection.trim()
+      : undefined;
   const { data } = ctx;
   if (collection === undefined || data === undefined) {
     // Nothing to query against, so the block renders its template once rather
@@ -63,13 +93,22 @@ export async function renderCollectionLoop({
     return <div className={className}>{renderSlot("children")}</div>;
   }
   let items: Record<string, unknown>[] = [];
+  // A loop inside a loop runs once per entry of the outer one, so depth in a
+  // document becomes multiplication in queries. Claiming from a shared
+  // allowance before reading is what keeps a page bounded; without one the
+  // renderer is not counting, which is the editor drawing a single block.
+  if (ctx.queries?.take() === false) {
+    return <div className={className} />;
+  }
   try {
     const result = await data.find({
       collection,
-      limit: props.limit ?? 10,
-      ...(props.sort === undefined ? {} : { sort: props.sort }),
+      limit: safeLimit(props.limit),
+      ...(typeof props.sort === "string" && props.sort !== ""
+        ? { sort: props.sort }
+        : {}),
     });
-    items = result.items;
+    items = Array.isArray(result.items) ? result.items : [];
   } catch {
     // A page that cannot reach its data renders empty rather than failing.
     items = [];
@@ -101,11 +140,14 @@ export const collectionLoop = defineBlock<CollectionLoopProps>({
   defaultProps: { limit: 10 },
   example: { props: { collection: "posts", limit: 3 } },
   slots: {
-    // The template repeated per entry. Locked to content-only editing: the
-    // shape is the author's, the repetition is the block's, and letting a
-    // structural edit happen per iteration is how a repeater becomes
-    // unpredictable.
-    children: { template: [], lock: "contentOnly" },
+    // The template repeated per entry, structurally editable.
+    //
+    // It starts empty, and `contentOnly` forbids exactly the edits that would
+    // fill it: an author could never insert the blocks that make up the
+    // template, so the loop could never show an entry. Locking a template is
+    // worth having once there is a way to lock a FINISHED one; locking an empty
+    // one only prevents it from being written.
+    children: { template: [] },
   },
   supports: {
     spacing: true,

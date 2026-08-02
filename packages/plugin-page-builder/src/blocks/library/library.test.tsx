@@ -241,10 +241,61 @@ describe("core/collection-loop", () => {
     expect(children.map(child => child.key)).toEqual(["7", "8"]);
   });
 
-  it("locks its template to content-only editing", () => {
-    // The shape is the author's and the repetition is the block's; a structural
-    // edit inside one iteration is how a repeater stops being predictable.
-    expect(collectionLoop.slots?.children.lock).toBe("contentOnly");
+  it("leaves its empty template structurally editable", () => {
+    // The template starts empty, and a content-only lock forbids exactly the
+    // edits that would fill it, so an author could never insert the blocks the
+    // loop repeats. Locking a finished template is worth having; locking an
+    // empty one only stops it being written.
+    expect(collectionLoop.slots?.children.lock).toBeUndefined();
+    expect(collectionLoop.slots?.children.template).toEqual([]);
+  });
+
+  it("treats a cleared collection name as no collection", () => {
+    // A cleared text field persists as "". Queried, it fails, the failure is
+    // swallowed, and the block renders empty instead of showing its template.
+    const { provider, calls } = stubProvider([{ id: "a" }]);
+    return renderCollectionLoop(
+      args<{ collection?: string }>({ collection: "   " }, { data: provider })
+    ).then(element => {
+      expect(renderToStaticMarkup(element)).toContain("<span>child</span>");
+      expect(calls).toEqual([]);
+    });
+  });
+
+  it("holds a stored limit to the bounds its schema advertises", async () => {
+    // Props are validated as an object and nothing more, so a stored or
+    // migrated node can carry any number at all, and it goes straight to a
+    // host-supplied data source.
+    const { provider, calls } = stubProvider([]);
+    await renderCollectionLoop(
+      args<{ collection?: string; limit?: number }>(
+        { collection: "posts", limit: 100_000 },
+        { data: provider }
+      )
+    );
+    expect(calls[0]?.limit).toBe(100);
+    const second = stubProvider([]);
+    await renderCollectionLoop(
+      args<{ collection?: string; limit?: number }>(
+        { collection: "posts", limit: -5 },
+        { data: second.provider }
+      )
+    );
+    expect(second.calls[0]?.limit).toBe(1);
+  });
+
+  it("stops querying when the page has spent its allowance", async () => {
+    // A loop inside a loop asks once per entry of the outer one, so depth in a
+    // document becomes multiplication in queries.
+    const { provider, calls } = stubProvider([{ id: "a" }]);
+    const element = await renderCollectionLoop(
+      args<{ collection?: string }>(
+        { collection: "posts" },
+        { data: provider, queries: { take: () => false } }
+      )
+    );
+    expect(calls).toEqual([]);
+    expect(renderToStaticMarkup(element)).toBe('<div class="nx-n1"></div>');
   });
 });
 
