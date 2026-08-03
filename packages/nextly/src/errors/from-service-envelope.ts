@@ -186,6 +186,14 @@ export function errorFromServiceEnvelope(
     // unrecognised legacy status still answers with what the producer chose
     // instead of being rounded to 500.
     statusCode: status,
+    // Forwarded even though the message is not. They are not the same kind of
+    // field: `message` is prose a legacy converter may have filled with a raw
+    // exception's text, while `publicData` is the structured payload whose
+    // whole purpose is to reach the caller. Dropping it silently disarmed the
+    // derived code -- a 429 answered RATE_LIMITED while `Retry-After` is read
+    // from `publicData.retryAfterSeconds`, so the caller was told to back off
+    // and not told for how long.
+    publicData: envelope.publicData as PublicData | undefined,
     logContext,
     ...(original !== undefined ? { cause: original } : {}),
   });

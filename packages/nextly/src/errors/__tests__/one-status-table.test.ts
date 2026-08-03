@@ -142,6 +142,28 @@ describe("a code-less failure never puts its own message on the wire", () => {
     });
   });
 
+  it("keeps public data on a derived code, or the code means nothing", () => {
+    // `message` is withheld and `publicData` is not, which is not an
+    // inconsistency: one is prose a legacy converter may have filled with a raw
+    // exception, the other is the structured payload whose purpose is to reach
+    // the caller. Dropping it disarms the derived code -- the boundary reads
+    // `Retry-After` from `publicData.retryAfterSeconds`, so a 429 that answers
+    // RATE_LIMITED without it tells a client to back off and not for how long.
+    const error = errorFromServiceEnvelope({
+      success: false,
+      statusCode: 429,
+      message: "slow down",
+      publicData: { retryAfterSeconds: 30 },
+    });
+
+    expect(error.code).toBe("RATE_LIMITED");
+    expect(error.publicData).toMatchObject({ retryAfterSeconds: 30 });
+    // The prose is still withheld, so the two rules are covered together.
+    expect(error.publicMessage).toBe(
+      "Too many requests. Please try again later."
+    );
+  });
+
   it("still answers with a rate limit's own message when it named the code", () => {
     // The mirror: a TYPED failure's `publicMessage` was authored to be seen, so
     // the generic sentence must not replace it.

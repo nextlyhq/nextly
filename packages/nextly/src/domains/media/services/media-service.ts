@@ -889,28 +889,19 @@ export class MediaService {
     const result = await this.legacyFolderService.createFolder(legacyInput);
 
     if (!result.success || !result.data) {
-      if (!result.code && result.statusCode === 404) {
-        // Generic NOT_FOUND — parentId stays operator-side.
-        throw NextlyError.notFound({
-          logContext: {
-            entity: "folder",
-            reason: "parent-folder-missing",
-            parentId: input.parentId,
-          },
-        });
-      }
-      if (!result.code && result.statusCode === 409) {
-        // Generic "Resource already exists." per §13.8 — name stays operator-side.
-        throw NextlyError.duplicate({
-          logContext: {
-            entity: "folder",
-            reason: "folder-name-conflict",
-            name: input.name,
-            legacyMessage: result.message,
-          },
-        });
-      }
-      throw this.mapSimpleErrorToNextlyError(result);
+      // One throw, whatever the failure was. The status branches that used to
+      // stand here answered exactly what the shared converter answers, so all
+      // they decided was whether the caller's context reached the log — and a
+      // folder service that names its own code skipped them, taking the name
+      // and parent with it.
+      //
+      // Identifiers go to the operator only; the public message never carries
+      // them (spec 13.8).
+      throw this.mapSimpleErrorToNextlyError(result, {
+        entity: "folder",
+        name: input.name,
+        parentId: input.parentId,
+      });
     }
 
     this.logger.info("Folder created", { folderId: result.data.id });
