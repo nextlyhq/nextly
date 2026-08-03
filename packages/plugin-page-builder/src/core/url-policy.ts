@@ -1,3 +1,5 @@
+import * as csstree from "css-tree";
+
 /**
  * Where a stylesheet this package emits is allowed to fetch from. React-free.
  *
@@ -11,6 +13,71 @@
  *
  * @module core/url-policy
  */
+
+/**
+ * Functions whose string arguments are text rather than something to fetch.
+ *
+ * An allowlist of the SAFE ones, deliberately, and the asymmetry is the reason.
+ * Listing the URL-taking functions instead means an unlisted one is a MISS — a
+ * leak — and that list is already hard to keep: `image()` and
+ * `-webkit-image-set()` were both found only by probing. Listing the text-taking
+ * ones means an unlisted function is refused, which costs a false positive and
+ * a message. A security control should fail toward the annoyance.
+ */
+export const TEXT_ARGUMENT_FUNCTIONS = new Set([
+  "counter",
+  "counters",
+  "format",
+  "local",
+  "symbols",
+]);
+
+/**
+ * Functions that stand in for a value rather than holding one.
+ *
+ * Transparent to the question "is this string a URL": what a `var()` or
+ * `attr()` fallback becomes depends entirely on where it sits, so it inherits
+ * the position rather than defining one.
+ */
+export const SUBSTITUTION_FUNCTIONS = new Set(["var", "env", "attr"]);
+
+/**
+ * Every value in a parsed CSS value that the browser may fetch.
+ *
+ * Both a `Url` node and a `String` in the right position: `image-set("https://…"
+ * 1x)` is a request and carries no `url()` at all. A `Url`-only walk let that
+ * through a structured style value after the same rule had already been worked
+ * out for custom CSS — which is why the rule lives here now rather than in
+ * whichever module last needed it.
+ */
+export function fetchableValues(value: csstree.CssNode): string[] {
+  const found: string[] = [];
+  const functions: string[] = [];
+  csstree.walk(value, {
+    enter(node: csstree.CssNode) {
+      if (node.type === "Function") functions.push(node.name.toLowerCase());
+      if (node.type === "Url") {
+        found.push(node.value);
+        return;
+      }
+      if (node.type !== "String") return;
+      // The nearest enclosing function that actually decides what the string
+      // is; substitutions stand in for a value and decide nothing.
+      const position = functions.filter(
+        name => !SUBSTITUTION_FUNCTIONS.has(name)
+      );
+      const enclosing = position[position.length - 1];
+      // A bare string is text: `content: "https://example.com"` is a caption.
+      if (enclosing === undefined) return;
+      if (TEXT_ARGUMENT_FUNCTIONS.has(enclosing)) return;
+      found.push(node.value);
+    },
+    leave(node: csstree.CssNode) {
+      if (node.type === "Function") functions.pop();
+    },
+  });
+  return found;
+}
 
 /**
  * The leading and trailing run the URL parser discards.

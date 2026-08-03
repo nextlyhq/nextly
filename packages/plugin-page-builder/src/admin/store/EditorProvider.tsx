@@ -71,6 +71,16 @@ export function EditorProvider({
    * The hosts block images may load from. Must match what the page is rendered
    * with, or the preview and the published page disagree about which images
    * exist.
+   *
+   * The registered surfaces — `PageBuilderEditView` and `PageBuilderField` —
+   * cannot supply this yet. Their props come from the admin's edit-view
+   * contract, and a plugin's own configuration has no route to a client
+   * component, so a host that configures `PageRenderer.remotePatterns` still
+   * gets an empty list in the canvas. The preview is then stricter than the
+   * page: it drops allowed remote backgrounds rather than showing forbidden
+   * ones, so the gap costs fidelity and not safety. Closing it needs a channel
+   * for plugin configuration to reach the client, which is a framework
+   * capability rather than something this component can reach for.
    */
   remotePatterns?: readonly RemotePattern[];
   /**

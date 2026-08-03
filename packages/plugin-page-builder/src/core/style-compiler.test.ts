@@ -157,6 +157,40 @@ describe("style compiler", () => {
     ).toContain("blur(2px)");
   });
 
+  it("checks a string image source, which carries no url() at all", () => {
+    // `image-set("https://…" 1x)` is a request and contains no `url()`, so a
+    // Url-only walk accepted it. Which strings can fetch had already been
+    // worked out for custom CSS; the compiler was answering it separately and
+    // less well.
+    for (const value of [
+      'image-set("https://evil.example/a.png" 1x)',
+      '-webkit-image-set("https://evil.example/b.png" 1x)',
+    ]) {
+      const node = makeNode(
+        "core/container",
+        {},
+        { base: { backgroundGradient: value } }
+      );
+      expect(compileNodeCss(node)).not.toContain("evil.example");
+      expect(
+        compileNodeCss(node, {
+          remotePatterns: [{ protocol: "https", hostname: "evil.example" }],
+        })
+      ).toContain("evil.example");
+    }
+    // A string that is text rather than an image source is untouched: the rule
+    // is about position, not about the presence of a URL-shaped string.
+    expect(
+      compileNodeCss(
+        makeNode(
+          "core/container",
+          {},
+          { base: { backgroundGradient: "linear-gradient(red, blue)" } }
+        )
+      )
+    ).toContain("linear-gradient");
+  });
+
   it("reads a structured URL the way the browser will, not as written", () => {
     // A leading U+0001 survives `trim()`, and the URL parser strips it. The
     // compiler had its own origin check that used `trim()` and a scheme regexp

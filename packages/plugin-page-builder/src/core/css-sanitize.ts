@@ -14,7 +14,11 @@
 import * as csstree from "css-tree";
 import type { CssNode, List, ListItem, Rule } from "css-tree";
 
-import { isRemoteUrl } from "./url-policy";
+import {
+  isRemoteUrl,
+  SUBSTITUTION_FUNCTIONS,
+  TEXT_ARGUMENT_FUNCTIONS,
+} from "./url-policy";
 
 /** Why one thing was removed, in a sentence the author can act on. */
 export interface CssWarning {
@@ -51,40 +55,9 @@ export interface SanitizedCss {
  * values, allowing only hosts the site has declared. Neither half is a channel
  * without the other, and each is checked where it is written.
  */
-/**
- * Functions whose string arguments are text rather than something to fetch.
- *
- * An allowlist of the SAFE ones, deliberately, and the asymmetry is the reason.
- * Listing the URL-taking functions instead means an unlisted one is a MISS — a
- * leak — and that list is already hard to keep: `image()` and
- * `-webkit-image-set()` were both found only by probing. Listing the text-taking
- * ones means an unlisted function is refused, which costs a false positive and
- * a message. A security control should fail toward the annoyance.
- *
- * `attr()` is the case that matters in practice: `content: attr(x, "https://…")`
- * is a caption's fallback, not a request.
- */
-const TEXT_ARGUMENT_FUNCTIONS = new Set([
-  "counter",
-  "counters",
-  "format",
-  "local",
-  "symbols",
-]);
-
-/**
- * Functions that stand in for a value rather than holding one.
- *
- * These are transparent to the question "is this string a URL": what a `var()`
- * or `attr()` fallback becomes depends entirely on where it sits, so it
- * inherits the position rather than defining one. `attr()` looked like a
- * text-taking function because its fallback usually IS text, but
- * `image-set(attr(x, "https://…") 1x)` consumes that fallback as an image. Treating `var` as text-taking hid a
- * fetch inside `image-set(var(--x, "https://…") 1x)`; treating it as
- * URL-taking would refuse `content: var(--label, "https://…")`, which is a
- * caption. Neither is right, because it is neither.
- */
-const SUBSTITUTION_FUNCTIONS = new Set(["var", "env", "attr"]);
+// The classification of which strings can fetch lives with the rest of the
+// origin policy, so custom CSS and structured style values cannot disagree
+// about what `image-set("https://…")` is.
 
 /**
  * What one scan concluded, which is not always "a URL" or "no URL".

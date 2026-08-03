@@ -19,7 +19,11 @@ import type {
   StyleScalar,
   StyleValues,
 } from "./types";
-import { isFetchableUrl, type RemotePattern } from "./url-policy";
+import {
+  fetchableValues,
+  isFetchableUrl,
+  type RemotePattern,
+} from "./url-policy";
 
 export interface BreakpointDef {
   id: string;
@@ -120,13 +124,9 @@ function safeValue(
   } catch {
     return null;
   }
-  let refused = false;
-  csstree.walk(ast, {
-    visit: "Url",
-    enter(node: csstree.Url) {
-      if (!isFetchableUrl(node.value, remotePatterns)) refused = true;
-    },
-  });
+  const refused = fetchableValues(ast).some(
+    url => !isFetchableUrl(url, remotePatterns)
+  );
   return refused ? null : v;
 }
 
