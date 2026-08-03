@@ -48,6 +48,14 @@ longest retention it needs, so a shorter audit window would have pruned it
 earlier than the webhook setting allows — irreversibly, and in a supported
 configuration.
 
-No behaviour changes for an existing deployment: the audit seam is off unless
-`webhookAuditEnabled` is set, so rows continue to be recorded webhook-class and
-pruned on the same schedule as before.
+Upgrading, by deployment:
+
+- **`webhooks.audit` off** (the default, and most installs): nothing changes.
+  Events are still recorded webhook-class and pruned on `eventsMaxAgeMs` exactly
+  as before.
+- **`webhooks.audit` on**: events that used to be recorded webhook-class are now
+  audit-class, so they move from `eventsMaxAgeMs` to `auditEventsMaxAgeMs` — at
+  the defaults, from 30 days to 90. That is the intended behaviour, since those
+  rows are recorded for history rather than delivery, but it retains roughly
+  three times as many events and the storage that implies. Set
+  `webhooks.retention.auditEventsMaxAgeMs` if a shorter window is wanted.

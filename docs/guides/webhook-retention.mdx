@@ -53,6 +53,8 @@ Because of that promise, `auditEventsMaxAgeMs` is **raised to `eventsMaxAgeMs` w
 
 The audit seam is **off** unless you enable it, so an install that has not turned it on records only `webhook`-class rows and is pruned exactly as before.
 
+**If you already run with `webhooks.audit` enabled,** note that those events previously fell under `eventsMaxAgeMs`, because nothing wrote the audit class. They now fall under `auditEventsMaxAgeMs` — at the defaults, 90 days instead of 30 — which retains roughly three times as many event rows. That is the point of the class, but it is a storage change worth planning for; lower `auditEventsMaxAgeMs` if you want the shorter window back.
+
 Set `webhooks.retention: false` to disable pruning entirely. Both the automatic passes **and** `nextly webhooks:prune` then do nothing, so the tables grow until you either re-enable retention or clean them up at the database level yourself.
 
 ## Pruning by hand: `nextly webhooks:prune`
