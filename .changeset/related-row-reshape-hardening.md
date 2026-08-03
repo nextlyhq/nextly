@@ -31,6 +31,15 @@ row, replacing, appending, reordering or removing its nested group/repeater rows
 or returning a rebuilt document — is discarded. The rebuild runs after every hook
 phase, so one phase cannot hand the next a contaminated related row to copy from.
 
+Also fixes a related-row read-access gap for a relationship that declares a single
+target as an ARRAY (`relationTo: ["posts"]`). That form stores and expands as the
+discriminated `{ relationTo, value }` pair, but the nested read decided the pair
+shape from the NUMBER of declared targets and so treated the wrapper as the row
+itself — evaluating the target collection's field `access.read` rules against an
+object holding only `relationTo` and `value`, which matches nothing. A field the
+target collection denies was returned inside the wrapper. The shape is now read
+from how the target was declared, in one place shared by every reader.
+
 This also removes the previous release's over-stripping: a related row a hook
 merely copied is no longer returned with its access-controlled fields denied, it
 is returned correctly sanitized, and the development-mode warning about reshaped

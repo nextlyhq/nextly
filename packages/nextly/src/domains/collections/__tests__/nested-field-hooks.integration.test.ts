@@ -641,6 +641,11 @@ async function boot(): Promise<TestNextly> {
             relationTo: AUTHORS,
             hasMany: true,
           }),
+          // A relationship declaring its target as a ONE-ELEMENT ARRAY. It stores
+          // and expands as the discriminated `{ relationTo, value }` pair, exactly
+          // as a multi-target field does, so anything deciding that shape from the
+          // NUMBER of declared targets reads this one as a bare row.
+          relationship({ name: "sponsor", relationTo: [ORGS] }),
         ],
       }),
     ],
@@ -1763,6 +1768,65 @@ describe("a target's field hooks apply to rows reached through a relationship", 
 
     expect(expanded.data!.contributors).toEqual([contributorId]);
     expect(JSON.stringify(expanded.data!.contributors)).not.toContain("LEAKED");
+  });
+
+  it("keeps a one-target polymorphic relationship populated through re-derivation", async () => {
+    // `relationTo: [ORGS]` declares a single target as an ARRAY, so the value is
+    // stored and expanded as the discriminated pair. Reading that shape as a bare
+    // row finds no id on the wrapper and drops the whole relationship, so the
+    // response loses a value no hook ever touched.
+    const t = await boot();
+    await t.nextly.create({
+      collection: ORGS,
+      data: { name: "acme", classification: "private" },
+    });
+    const orgId = await onlyId(t, ORGS);
+    await t.nextly.create({
+      collection: POSTS,
+      data: { title: "p", sponsor: { relationTo: ORGS, value: orgId } },
+    });
+    const postId = await onlyId(t, POSTS);
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    const sponsor = expanded.data!.sponsor as Record<string, unknown> | null;
+    expect(sponsor).not.toBeNull();
+    expect(sponsor!.relationTo).toBe(ORGS);
+    const row = sponsor!.value as Record<string, unknown>;
+    expect(row.id).toBe(orgId);
+    expect(row.name).toBe("acme");
+  });
+
+  it("applies the target's field access inside a one-target polymorphic wrapper", async () => {
+    // The row lives under `value`, so a walk that treats the wrapper as the row
+    // evaluates the target's rules against an object holding only `relationTo`
+    // and `value` — matching nothing, stripping nothing, and returning the
+    // denied `classification` inside.
+    const t = await boot();
+    await t.nextly.create({
+      collection: ORGS,
+      data: { name: "acme", classification: "private" },
+    });
+    const orgId = await onlyId(t, ORGS);
+    await t.nextly.create({
+      collection: POSTS,
+      data: { title: "p", sponsor: { relationTo: ORGS, value: orgId } },
+    });
+    const postId = await onlyId(t, POSTS);
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    const sponsor = expanded.data!.sponsor as Record<string, unknown>;
+    const row = sponsor.value as Record<string, unknown>;
+    expect(row.classification).toBeUndefined();
   });
 
   it("drops an unidentifiable row from a hasMany rather than leaving a gap", async () => {

@@ -155,34 +155,112 @@ function createNestedHookState(): NestedHookState {
  * naming a collection the field never pointed at cannot direct another
  * collection's hooks at this row.
  */
-function resolveNestedTarget(
-  row: Record<string, unknown>,
+/**
+ * Whether a field stores its values as the discriminated `{ relationTo, value }`
+ * pair rather than as bare ids.
+ *
+ * Decided by the ARRAY FORM of `relationTo`, not by how many targets it names: a
+ * field declaring a single target as an array (`relationTo: ["posts"]`) uses the
+ * same pair a multi-target field does, because the storage shape follows how the
+ * target was declared. Counting targets instead reads that pair as the row.
+ *
+ * Mirrors {@link declaredTargets}: a many-to-many field resolves its one target
+ * from `options.target` and stores bare ids, whatever `relationTo` says.
+ */
+function isDiscriminatedRelationship(field: FieldDefinition): boolean {
+  if (field.options?.relationType === "manyToMany" && field.options.target) {
+    return false;
+  }
+  return Array.isArray(field.relationTo);
+}
+
+/**
+ * What one relationship value actually holds.
+ *
+ * - `reference` — a bare id, or the pair a discriminated field stores while
+ *   nothing is populated. It carries no fields, so there is nothing to sanitize
+ *   and nothing to rebuild.
+ * - `populated` — an expanded row, with the collection it belongs to.
+ * - `unresolvable` — an expanded row whose collection cannot be established: a
+ *   pair naming a collection the field never declared, or a bare row under a
+ *   field naming several targets, where nothing in the value says which one it
+ *   came from.
+ */
+type RelationshipValueShape =
+  | { kind: "reference" }
+  | { kind: "unresolvable" }
+  | {
+      kind: "populated";
+      collection: string;
+      row: Record<string, unknown>;
+      discriminated: boolean;
+    };
+
+/**
+ * Read a relationship value's shape, once, for every reader that needs it.
+ *
+ * The walk and the response rebuild both have to agree about which values are
+ * discriminated and which collection a row belongs to. Deciding that separately
+ * in each is how they drift: one treating a `{ relationTo, value }` pair as the
+ * row evaluates the target's rules against an object holding neither of its
+ * fields, and the other drops a relationship nothing touched.
+ */
+function readRelationshipValueShape(
+  value: unknown,
   field: FieldDefinition
-): { collection: string; row: Record<string, unknown> } | null {
+): RelationshipValueShape {
+  if (value === null || value === undefined) return { kind: "reference" };
+  if (typeof value !== "object" || Array.isArray(value)) {
+    return { kind: "reference" };
+  }
   // The same resolver expansion uses, so a Schema Builder relationship -- whose
   // target lives in `options.target` with no `relationTo` at all -- is walked
   // rather than skipped.
   const targets = declaredTargets(field);
-  if (targets.length === 0) return null;
+  if (targets.length === 0) return { kind: "reference" };
 
-  // Whether a value is discriminated is a property of the FIELD: only a field
-  // declaring several targets stores `{ relationTo, value }`, because an id
-  // alone would not say which table it belongs to. Reading it off the row
-  // instead would mistake a target that legitimately has its own string
-  // `relationTo` field for a wrapper, and skip its hooks entirely.
-  if (targets.length > 1) {
-    const named = row.relationTo;
-    const inner = row.value;
-    if (typeof named !== "string") return null;
-    if (typeof inner !== "object" || inner === null) return null;
-    // Validated against what the field declares: nothing checks the stored
-    // slug on the way in, so an unvalidated one would let a writer aim another
-    // collection's hooks at this row.
-    if (!targets.includes(named)) return null;
-    return { collection: named, row: inner as Record<string, unknown> };
+  const record = value as Record<string, unknown>;
+  // Only a field that DECLARES the pair shape is read as one, so a target
+  // collection that legitimately defines its own string `relationTo` field is
+  // not mistaken for a wrapper and skipped.
+  if (
+    isDiscriminatedRelationship(field) &&
+    typeof record.relationTo === "string"
+  ) {
+    const inner = record.value;
+    if (inner === null || typeof inner !== "object" || Array.isArray(inner)) {
+      // The pair is still carrying an id: a reference, not an expanded row.
+      return { kind: "reference" };
+    }
+    // Validated against what the field declares: nothing checks the stored slug
+    // on the way in, so an unvalidated one would let a writer aim another
+    // collection's rules and hooks at this row.
+    if (!targets.includes(record.relationTo)) return { kind: "unresolvable" };
+    return {
+      kind: "populated",
+      collection: record.relationTo,
+      row: inner as Record<string, unknown>,
+      discriminated: true,
+    };
   }
 
-  return { collection: targets[0], row };
+  if (targets.length > 1) return { kind: "unresolvable" };
+  return {
+    kind: "populated",
+    collection: targets[0],
+    row: record,
+    discriminated: false,
+  };
+}
+
+function resolveNestedTarget(
+  row: Record<string, unknown>,
+  field: FieldDefinition
+): { collection: string; row: Record<string, unknown> } | null {
+  const shape = readRelationshipValueShape(row, field);
+  return shape.kind === "populated"
+    ? { collection: shape.collection, row: shape.row }
+    : null;
 }
 
 /**
@@ -944,58 +1022,6 @@ function relatedRowSnapshotKey(
   // cannot appear in a slug, an id, or a field name, so no two distinct triples
   // can collapse onto one key.
   return `${relationKey(collection, id)}\u0000${declaredLabelField(field)}`;
-}
-
-/**
- * Whether a relationship value holds an EXPANDED row rather than a reference.
- *
- * Only an expanded row carries fields, so only one can have been tampered with —
- * a bare id is returned as it stands. Whether the value is discriminated is a
- * property of the FIELD, matching {@link resolveNestedTarget}: a field naming one
- * target stores the row directly, while one naming several nests it under `value`,
- * so a single-target row that happens to define its own `value` column is not
- * mistaken for a wrapper.
- */
-function isPopulatedRelationshipValue(
-  item: unknown,
-  targets: string[]
-): boolean {
-  if (item === null || typeof item !== "object" || Array.isArray(item)) {
-    return false;
-  }
-  if (targets.length <= 1) return true;
-  const inner = (item as Record<string, unknown>).value;
-  return inner !== null && typeof inner === "object" && !Array.isArray(inner);
-}
-
-/**
- * The collection and id an EXPANDED relationship value refers to.
- *
- * Separate from {@link readRelationshipRef}, which reads a value still stored as a
- * reference: there a multi-target pair carries its id under `value` as a string,
- * whereas here `value` holds the populated row and the id has to be read from
- * inside it. The discriminator is checked against what the field declares for the
- * same reason it is on the way in — nothing validates the stored slug, so an
- * unchecked one would match a row recorded for another collection.
- */
-function readPopulatedRelationshipRef(
-  item: unknown,
-  targets: string[]
-): RelationshipRef | null {
-  if (item === null || typeof item !== "object") return null;
-  const record = item as Record<string, unknown>;
-  if (targets.length > 1) {
-    const named = record.relationTo;
-    if (typeof named !== "string" || !targets.includes(named)) return null;
-    const id = extractRelationshipId(record.value);
-    return typeof id === "string"
-      ? { collection: named, id, discriminated: true }
-      : null;
-  }
-  const id = extractRelationshipId(record);
-  return typeof id === "string"
-    ? { collection: targets[0], id, discriminated: false }
-    : null;
 }
 
 /**
@@ -3285,8 +3311,6 @@ export class CollectionRelationshipService extends BaseService {
     state: NestedHookState,
     rebuilt: Map<string, Record<string, unknown>>
   ): unknown {
-    const targets = declaredTargets(field);
-    if (targets.length === 0) return value;
     const items = readItemArray(value);
     if (items) {
       // An entry whose identity cannot be read has no reference left to keep, and
@@ -3294,17 +3318,11 @@ export class CollectionRelationshipService extends BaseService {
       // cannot resolve rather than leaving a gap between the ones it did.
       return items
         .map(item =>
-          this.reprojectRelationshipItem(item, field, targets, state, rebuilt)
+          this.reprojectRelationshipItem(item, field, state, rebuilt)
         )
         .filter(item => item !== null && item !== undefined);
     }
-    return this.reprojectRelationshipItem(
-      value,
-      field,
-      targets,
-      state,
-      rebuilt
-    );
+    return this.reprojectRelationshipItem(value, field, state, rebuilt);
   }
 
   /**
@@ -3321,14 +3339,22 @@ export class CollectionRelationshipService extends BaseService {
   private reprojectRelationshipItem(
     item: unknown,
     field: FieldDefinition,
-    targets: string[],
     state: NestedHookState,
     rebuilt: Map<string, Record<string, unknown>>
   ): unknown {
-    if (!isPopulatedRelationshipValue(item, targets)) return item;
+    const shape = readRelationshipValueShape(item, field);
+    // A reference carries no fields, so there is nothing here to rebuild — and
+    // replacing it would drop a relationship no hook ever touched.
+    if (shape.kind === "reference") return item;
+    if (shape.kind === "unresolvable") return null;
 
-    const ref = readPopulatedRelationshipRef(item, targets);
-    if (!ref) return null;
+    const id = extractRelationshipId(shape.row);
+    if (typeof id !== "string") return null;
+    const ref: RelationshipRef = {
+      collection: shape.collection,
+      id,
+      discriminated: shape.discriminated,
+    };
     const key = relatedRowSnapshotKey(ref.collection, ref.id, field);
 
     const already = rebuilt.get(key);
