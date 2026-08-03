@@ -97,12 +97,7 @@ export function createErrorFromResult(result: ServiceResultLike): NextlyError {
   // below is what carries it there — it is an enumerable own property, so it
   // survives into the object handed over.
   return errorFromServiceEnvelope(
-    {
-      ...result,
-      // A code-less envelope still needs the status-derived guess this boundary
-      // has always made, rather than falling through to a generic internal.
-      code: result.code ?? statusCodeToErrorCode(result.statusCode),
-    },
+    result,
     result.data !== undefined && result.data !== null
       ? { resultData: result.data }
       : {}
@@ -143,9 +138,6 @@ export function createErrorFromSingleResult(
     {
       ...result,
       message,
-      // A code-less envelope keeps the status-derived guess this boundary has
-      // always made rather than falling through to a generic internal.
-      code: result.code ?? statusCodeToErrorCode(result.statusCode),
       // Normalised to the canonical shape; SingleResult still emits `{field}`.
       errors: result.errors?.map(e => ({
         path: e.field,
@@ -157,45 +149,6 @@ export function createErrorFromSingleResult(
     },
     {}
   );
-}
-
-/**
- * Map an HTTP status code to the primary canonical `NextlyErrorCode` string
- * for that status. Mirrors the inverse of `NEXTLY_ERROR_STATUS` from
- * `error-codes.ts`, picking the most specific representative code per status.
- *
- * Statuses outside this table fall back to `INTERNAL_ERROR` — service-layer
- * results that need a more specific code (e.g. `BUSINESS_RULE_VIOLATION` at
- * 422) should throw `NextlyError` directly rather than returning a result
- * shape that funnels through this helper.
- */
-export function statusCodeToErrorCode(statusCode: number): string {
-  switch (statusCode) {
-    case 400:
-      return "VALIDATION_ERROR";
-    case 401:
-      return "AUTH_REQUIRED";
-    case 403:
-      return "FORBIDDEN";
-    case 404:
-      return "NOT_FOUND";
-    case 409:
-      return "CONFLICT";
-    case 413:
-      return "PAYLOAD_TOO_LARGE";
-    case 415:
-      return "UNSUPPORTED_MEDIA_TYPE";
-    case 422:
-      return "INVALID_INPUT";
-    case 429:
-      return "RATE_LIMITED";
-    case 502:
-      return "EXTERNAL_SERVICE_ERROR";
-    case 503:
-      return "SERVICE_UNAVAILABLE";
-    default:
-      return "INTERNAL_ERROR";
-  }
 }
 
 /**

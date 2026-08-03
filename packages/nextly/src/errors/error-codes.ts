@@ -68,3 +68,86 @@ export const NEXTLY_ERROR_STATUS = {
 } as const;
 
 export type NextlyErrorCode = keyof typeof NEXTLY_ERROR_STATUS;
+
+/**
+ * The code a status means when a failure names none.
+ *
+ * A service that returns `{ success: false, statusCode }` without a code
+ * leaves every boundary to infer one, and three boundaries inferring
+ * separately is how the same 401 became `AUTH_REQUIRED` through the Direct API
+ * and `INTERNAL_ERROR` through the REST dispatcher. This is the ONE inference,
+ * so they cannot disagree.
+ *
+ * It is a fallback, not a translation. A status is a coarser thing than a code
+ * -- 409 covers both `DUPLICATE` and `CONFLICT`, 400 covers `VALIDATION_ERROR`
+ * and `INVALID_INPUT` -- so a producer that knows which one it means must say
+ * so by setting `code`, and this table is never consulted for it. The entries
+ * below are the reading that is safe when nobody said: the one whose advice is
+ * still true if the other was meant.
+ */
+const STATUS_TO_CODE: Readonly<Record<number, NextlyErrorCode>> = {
+  400: "VALIDATION_ERROR",
+  401: "AUTH_REQUIRED",
+  403: "FORBIDDEN",
+  404: "NOT_FOUND",
+  // Staleness rather than a name clash: "refresh and try again" is unhelpful
+  // for a duplicate, while "already exists" would be WRONG for a stale write.
+  // A producer that means the clash sets `code: "DUPLICATE"`.
+  409: "CONFLICT",
+  413: "PAYLOAD_TOO_LARGE",
+  415: "UNSUPPORTED_MEDIA_TYPE",
+  422: "INVALID_INPUT",
+  429: "RATE_LIMITED",
+  502: "EXTERNAL_SERVICE_ERROR",
+  503: "SERVICE_UNAVAILABLE",
+};
+
+/**
+ * The canonical code for a status, for a failure that named none.
+ *
+ * Anything outside the table is an internal error: an unrecognised status from
+ * a legacy envelope says nothing a caller can act on, and inventing a specific
+ * code for it would assert a meaning no producer expressed.
+ */
+export function statusToErrorCode(statusCode: number): NextlyErrorCode {
+  return STATUS_TO_CODE[statusCode] ?? "INTERNAL_ERROR";
+}
+
+/**
+ * The sentence a caller reads for a code, when the failure supplied none.
+ *
+ * Kept beside the status table because they answer the same question together:
+ * a code-less envelope's own `message` is NOT usable here. Those envelopes come
+ * from legacy converters that store a raw exception's text, so promoting it
+ * would put driver output, table names and internal paths on the wire -- the
+ * disclosure the public error shape exists to prevent (spec 13.8).
+ *
+ * Every entry is generic by design. The specific detail stays in `logContext`
+ * for the operator, against the same request id.
+ */
+const GENERIC_PUBLIC_MESSAGE: Readonly<
+  Partial<Record<NextlyErrorCode, string>>
+> = {
+  VALIDATION_ERROR: "Validation failed.",
+  INVALID_INPUT: "The request could not be processed.",
+  AUTH_REQUIRED: "Authentication required.",
+  FORBIDDEN: "You don't have permission to perform this action.",
+  NOT_FOUND: "Not found.",
+  CONFLICT:
+    "The resource has changed since you last loaded it. Please refresh and try again.",
+  DUPLICATE: "Resource already exists.",
+  PAYLOAD_TOO_LARGE: "The request is too large.",
+  UNSUPPORTED_MEDIA_TYPE: "That file type is not supported.",
+  RATE_LIMITED: "Too many requests. Please try again later.",
+  EXTERNAL_SERVICE_ERROR: "An upstream service failed.",
+  SERVICE_UNAVAILABLE: "The service is temporarily unavailable.",
+  INTERNAL_ERROR: "An unexpected error occurred.",
+};
+
+/** The generic sentence for a code; the internal one for anything unlisted. */
+export function genericPublicMessage(code: string): string {
+  return (
+    GENERIC_PUBLIC_MESSAGE[code as NextlyErrorCode] ??
+    GENERIC_PUBLIC_MESSAGE.INTERNAL_ERROR!
+  );
+}
