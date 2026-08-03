@@ -65,14 +65,11 @@ export async function discardWorkingDraft(
   // discard of an empty document — and because nothing has been deleted yet, the
   // draft is left intact for a retry.
   if (!result.success) {
-    throw errorFromServiceEnvelope({
-      statusCode: result.statusCode,
-      code: result.code,
-      message: result.message,
-      messageKey: result.messageKey,
-      publicData: result.publicData,
-      errors: result.errors,
-    });
+    // The result object itself rather than a field-by-field copy of it. The
+    // read attached the thrown error to this object, and copying only the
+    // fields named here left that behind — so a driver failure underneath a
+    // discard reached the caller with nothing naming it.
+    throw errorFromServiceEnvelope(result);
   }
 
   // Now remove the sidecar through the collections handler, which deletes it

@@ -723,28 +723,16 @@ export class CollectionService extends BaseService {
     });
 
     if (!result.success) {
-      // Only a code-less legacy result takes the generic factory. A typed
-      // one -- a plugin's own error, or BUILDER_DISABLED -- keeps its code,
-      // message key and public data through the shared converter below.
-      if (!result.code && result.statusCode === 404) {
-        // Generic "Not found." from the factory; identifiers go to logContext.
-        throw NextlyError.notFound({
-          logContext: { entity: "entry", collectionName, entryId },
-        });
-      }
-      if (!result.code && result.statusCode === 403) {
-        // Generic forbidden message; the inner result.message often echoes
-        // policy reasons that §13.8 keeps off the wire — drop them here and
-        // preserve them in logContext only.
-        throw NextlyError.forbidden({
-          logContext: {
-            collectionName,
-            entryId,
-            innerMessage: result.message,
-          },
-        });
-      }
-      throw this.mapLegacyErrorToNextlyError(result);
+      // Every failure goes through the converter, including the code-less 404
+      // and 403 that used to short-circuit to a factory here. The converter
+      // answers those with the same generic error -- the identifiers stay in
+      // the log context and never reach the wire -- and short-circuiting only
+      // meant those two outcomes arrived without the failure they came from.
+      throw this.mapLegacyErrorToNextlyError(result, {
+        entity: "entry",
+        collectionName,
+        entryId,
+      });
     }
 
     return result.data as CollectionEntry;
@@ -779,33 +767,21 @@ export class CollectionService extends BaseService {
     );
 
     if (!result.success) {
-      // Only a code-less legacy result takes the generic factory. A typed
-      // one -- a plugin's own error, or BUILDER_DISABLED -- keeps its code,
-      // message key and public data through the shared converter below.
-      if (!result.code && result.statusCode === 404) {
-        // Generic "Not found." from the factory; identifiers go to logContext.
-        throw NextlyError.notFound({
-          logContext: { entity: "entry", collectionName, entryId },
-        });
-      }
-      if (!result.code && result.statusCode === 403) {
-        // Generic forbidden message; the inner result.message often echoes
-        // policy reasons that §13.8 keeps off the wire — drop them here and
-        // preserve them in logContext only.
-        throw NextlyError.forbidden({
-          logContext: {
-            collectionName,
-            entryId,
-            innerMessage: result.message,
-          },
-        });
-      }
+      // Every failure goes through the converter, including the code-less 404
+      // and 403 that used to short-circuit to a factory here. The converter
+      // answers those with the same generic error -- the identifiers stay in
+      // the log context and never reach the wire -- and short-circuiting only
+      // meant those two outcomes arrived without the failure they came from.
       this.logger.warn("Entry update failed", {
         collectionName,
         entryId,
         message: result.message,
       });
-      throw this.mapLegacyErrorToNextlyError(result);
+      throw this.mapLegacyErrorToNextlyError(result, {
+        entity: "entry",
+        collectionName,
+        entryId,
+      });
     }
 
     this.logger.info("Entry updated", { collectionName, entryId });
@@ -836,28 +812,16 @@ export class CollectionService extends BaseService {
     });
 
     if (!result.success) {
-      // Only a code-less legacy result takes the generic factory. A typed
-      // one -- a plugin's own error, or BUILDER_DISABLED -- keeps its code,
-      // message key and public data through the shared converter below.
-      if (!result.code && result.statusCode === 404) {
-        // Generic "Not found." from the factory; identifiers go to logContext.
-        throw NextlyError.notFound({
-          logContext: { entity: "entry", collectionName, entryId },
-        });
-      }
-      if (!result.code && result.statusCode === 403) {
-        // Generic forbidden message; the inner result.message often echoes
-        // policy reasons that §13.8 keeps off the wire — drop them here and
-        // preserve them in logContext only.
-        throw NextlyError.forbidden({
-          logContext: {
-            collectionName,
-            entryId,
-            innerMessage: result.message,
-          },
-        });
-      }
-      throw this.mapLegacyErrorToNextlyError(result);
+      // Every failure goes through the converter, including the code-less 404
+      // and 403 that used to short-circuit to a factory here. The converter
+      // answers those with the same generic error -- the identifiers stay in
+      // the log context and never reach the wire -- and short-circuiting only
+      // meant those two outcomes arrived without the failure they came from.
+      throw this.mapLegacyErrorToNextlyError(result, {
+        entity: "entry",
+        collectionName,
+        entryId,
+      });
     }
 
     this.logger.info("Entry deleted", { collectionName, entryId });
@@ -995,33 +959,21 @@ export class CollectionService extends BaseService {
     this.collectTxCommittedWrite(tx, result.success);
 
     if (!result.success) {
-      // Only a code-less legacy result takes the generic factory. A typed
-      // one -- a plugin's own error, or BUILDER_DISABLED -- keeps its code,
-      // message key and public data through the shared converter below.
-      if (!result.code && result.statusCode === 404) {
-        // Generic "Not found." from the factory; identifiers go to logContext.
-        throw NextlyError.notFound({
-          logContext: { entity: "entry", collectionName, entryId },
-        });
-      }
-      if (!result.code && result.statusCode === 403) {
-        // Generic forbidden message; the inner result.message often echoes
-        // policy reasons that §13.8 keeps off the wire — drop them here and
-        // preserve them in logContext only.
-        throw NextlyError.forbidden({
-          logContext: {
-            collectionName,
-            entryId,
-            innerMessage: result.message,
-          },
-        });
-      }
+      // Every failure goes through the converter, including the code-less 404
+      // and 403 that used to short-circuit to a factory here. The converter
+      // answers those with the same generic error -- the identifiers stay in
+      // the log context and never reach the wire -- and short-circuiting only
+      // meant those two outcomes arrived without the failure they came from.
       this.logger.warn("Entry update in transaction failed", {
         collectionName,
         entryId,
         message: result.message,
       });
-      throw this.mapLegacyErrorToNextlyError(result);
+      throw this.mapLegacyErrorToNextlyError(result, {
+        entity: "entry",
+        collectionName,
+        entryId,
+      });
     }
 
     this.logger.info("Entry updated in transaction", {
@@ -1072,28 +1024,16 @@ export class CollectionService extends BaseService {
     this.collectTxCommittedWrite(tx, result.success);
 
     if (!result.success) {
-      // Only a code-less legacy result takes the generic factory. A typed
-      // one -- a plugin's own error, or BUILDER_DISABLED -- keeps its code,
-      // message key and public data through the shared converter below.
-      if (!result.code && result.statusCode === 404) {
-        // Generic "Not found." from the factory; identifiers go to logContext.
-        throw NextlyError.notFound({
-          logContext: { entity: "entry", collectionName, entryId },
-        });
-      }
-      if (!result.code && result.statusCode === 403) {
-        // Generic forbidden message; the inner result.message often echoes
-        // policy reasons that §13.8 keeps off the wire — drop them here and
-        // preserve them in logContext only.
-        throw NextlyError.forbidden({
-          logContext: {
-            collectionName,
-            entryId,
-            innerMessage: result.message,
-          },
-        });
-      }
-      throw this.mapLegacyErrorToNextlyError(result);
+      // Every failure goes through the converter, including the code-less 404
+      // and 403 that used to short-circuit to a factory here. The converter
+      // answers those with the same generic error -- the identifiers stay in
+      // the log context and never reach the wire -- and short-circuiting only
+      // meant those two outcomes arrived without the failure they came from.
+      throw this.mapLegacyErrorToNextlyError(result, {
+        entity: "entry",
+        collectionName,
+        entryId,
+      });
     }
 
     this.logger.info("Entry deleted in transaction", {
@@ -1123,21 +1063,29 @@ export class CollectionService extends BaseService {
    * `code`, `errors` and `publicData` entirely, so a validation failure also
    * arrived without its per-field issues.
    */
-  private mapLegacyErrorToNextlyError(result: {
-    success: boolean;
-    statusCode: number;
-    code?: string;
-    message: string;
-    messageKey?: string;
-    publicData?: unknown;
-    data: unknown;
-    errors?: Array<{
-      path?: string;
-      field?: string;
+  private mapLegacyErrorToNextlyError(
+    result: {
+      success: boolean;
+      statusCode: number;
       code?: string;
       message: string;
-    }>;
-  }): NextlyError {
-    return errorFromServiceEnvelope(result, { innerMessage: result.message });
+      messageKey?: string;
+      publicData?: unknown;
+      data: unknown;
+      errors?: Array<{
+        path?: string;
+        field?: string;
+        code?: string;
+        message: string;
+      }>;
+    },
+    // What the caller knows and the envelope does not: which entity and which
+    // ids. Operator-only, so it goes to the log context and never the wire.
+    logContext: Record<string, unknown> = {}
+  ): NextlyError {
+    return errorFromServiceEnvelope(result, {
+      innerMessage: result.message,
+      ...logContext,
+    });
   }
 }
