@@ -569,7 +569,7 @@ describe("a rename between two spellings of one column", () => {
   });
 });
 
-describe("duplicate columns are judged per table", () => {
+describe("duplicate columns are judged globally, not per table", () => {
   const pair = [
     { type: "text", name: "foo_bar", localized: false },
     { type: "text", name: "FooBar", localized: true },
@@ -579,10 +579,24 @@ describe("duplicate columns are judged per table", () => {
     return (result.errors ?? []).filter(e => e.code === "FIELD_NAME_DUPLICATE");
   }
 
-  it("accepts one shared and one localized field reaching the same column name", () => {
-    // The localized field is emitted into the `_locales` companion and the shared one into the
-    // main table, so the column name occurs once in each. Refusing the pair would reject a schema
-    // the generators represent correctly.
+  it("collapses two converging keys before anything splits them by table", () => {
+    // The reason the rule cannot be relaxed for localized entities. The write path normalizes
+    // payload keys through the same conversion BEFORE extracting localized fields, so the two
+    // authored values land on one key and the second overwrites the first. Whatever table the
+    // survivor is then routed to, one of the author's values is already gone.
+    const authored = { foo_bar: "shared value", FooBar: "localized value" };
+    const normalized: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(authored)) {
+      normalized[toSnakeCase(key)] = value;
+    }
+
+    expect(Object.keys(normalized)).toEqual(["foo_bar"]);
+    expect(Object.keys(authored)).toHaveLength(2);
+  });
+
+  it("refuses one shared and one localized field reaching the same column name", () => {
+    // They are emitted into different tables, so physically nothing is declared twice — but the
+    // payload has already merged them by then, so accepting the pair would silently drop a value.
     expect({
       collection: duplicates(
         validateCollectionConfig({
@@ -591,7 +605,7 @@ describe("duplicate columns are judged per table", () => {
           localized: true,
           fields: pair,
         } as never)
-      ),
+      ).length,
       single: duplicates(
         validateSingleConfig({
           slug: "home",
@@ -599,29 +613,25 @@ describe("duplicate columns are judged per table", () => {
           localized: true,
           fields: pair,
         } as never)
-      ),
-    }).toEqual({ collection: [], single: [] });
+      ).length,
+    }).toEqual({ collection: 1, single: 1 });
   });
 
-  it("still refuses two fields that land in the same table", () => {
-    // Both localized, so both go to the companion — and an unlocalized collection puts everything
-    // in main, which is the case the rule was written for.
-    const bothLocalized = validateCollectionConfig({
-      slug: "posts",
-      labels: { singular: "Post", plural: "Posts" },
-      localized: true,
-      fields: pair.map(field => ({ ...field, localized: true })),
-    } as never);
-    const notLocalized = validateCollectionConfig({
-      slug: "posts",
-      labels: { singular: "Post", plural: "Posts" },
-      fields: pair,
-    } as never);
-
-    expect({
-      bothLocalized: duplicates(bothLocalized).length,
-      notLocalized: duplicates(notLocalized).length,
-    }).toEqual({ bothLocalized: 1, notLocalized: 1 });
+  it("still accepts two names that reach different columns when localized", () => {
+    // The mirror, so the rule above cannot be satisfied by refusing every localized pair.
+    expect(
+      duplicates(
+        validateCollectionConfig({
+          slug: "posts",
+          labels: { singular: "Post", plural: "Posts" },
+          localized: true,
+          fields: [
+            { type: "text", name: "alpha", localized: false },
+            { type: "text", name: "beta", localized: true },
+          ],
+        } as never)
+      )
+    ).toEqual([]);
   });
 });
 
