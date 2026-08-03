@@ -193,6 +193,71 @@ describe("login handler: respondAction shape", () => {
     expect(Number.isFinite(Date.parse(body.expiresAt as string))).toBe(true);
   });
 
+  it("records a login-succeeded audit event once a session is issued", async () => {
+    // Failures are recorded already. Without the matching success an operator
+    // reading the trail after a credential leak can see that someone tried and
+    // not whether they got in, which is the question that actually matters.
+    const passwordHash = await hashPassword("Pass1234!");
+    const fakeUser = {
+      id: "u1",
+      email: "a@example.com",
+      name: "A",
+      passwordHash,
+      isActive: true,
+      emailVerified: true,
+      failedLoginAttempts: 0,
+      lockedUntil: null,
+      mustChangePassword: false,
+    };
+    const findUserByEmail = vi.fn().mockResolvedValue(fakeUser);
+    const incrementFailedAttempts = vi.fn().mockResolvedValue(undefined);
+    const lockAccount = vi.fn().mockResolvedValue(undefined);
+    const resetFailedAttempts = vi.fn().mockResolvedValue(undefined);
+    const pipeline = loginPipelineDeps({
+      findUserByEmail,
+      incrementFailedAttempts,
+      lockAccount,
+      resetFailedAttempts,
+      maxLoginAttempts: 5,
+      lockoutDurationSeconds: 900,
+      requireEmailVerification: true,
+    });
+    const deps = {
+      secret: SECRET,
+      accessTokenTTL: 900,
+      refreshTokenTTL: 604800,
+      loginStallTimeMs: 0,
+      requireEmailVerification: true,
+      allowedOrigins: ALLOWED_ORIGINS,
+      trustProxy: false,
+      trustedProxyIps: [],
+      findUserByEmail,
+      incrementFailedAttempts,
+      lockAccount,
+      resetFailedAttempts,
+      fetchRoleIds: vi.fn().mockResolvedValue(["super-admin"]),
+      fetchCustomFields: vi.fn().mockResolvedValue({}),
+      storeRefreshToken: vi.fn().mockResolvedValue(undefined),
+      ...pipeline,
+    };
+
+    const req = makeRequest("POST", {
+      email: "a@example.com",
+      password: "Pass1234!",
+    });
+    const res = await handleLogin(req, deps);
+    expect(res.status).toBe(200);
+
+    const write = pipeline.auditLog.write;
+    expect(write).toHaveBeenCalledTimes(1);
+    // Attributed, unlike a failure: a completed login names who completed it.
+    // A failure cannot, because saying which account was reached is the
+    // account-state leak the unified error shape exists to avoid.
+    expect(write).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "login-succeeded", actorUserId: "u1" })
+    );
+  });
+
   it("returns password_change_required with a pending token (no session) for a must-change account", async () => {
     const passwordHash = await hashPassword("Pass1234!");
     const fakeUser = {
@@ -262,6 +327,12 @@ describe("login handler: respondAction shape", () => {
     expect(storeRefreshToken).not.toHaveBeenCalled();
     // No Set-Cookie for the access-token session.
     expect(res.headers.get("set-cookie") ?? "").not.toContain("nextly_session");
+    // And no successful-login record. This leg returns 200 with a pending
+    // token, so a success recorded on status alone would tell an operator the
+    // account was reached when no session exists.
+    expect(deps.auditLog.write).not.toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "login-succeeded" })
+    );
   });
 });
 
