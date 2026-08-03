@@ -32,3 +32,15 @@ produces — dropped it too.
 
 `NextlyError.notFound`, `.forbidden` and `.conflict` accept a `cause` alongside `logContext`,
 matching `.internal`.
+
+One place now builds the error response body, so plugin routes answer with what every other
+route answers with. Three consequences for a plugin route:
+
+- Failures now carry `_devDiagnostics` in development, which this surface never had.
+- A handler that throws a non-`NextlyError` still answers 500, but the thrown error is now
+  chained onto it instead of discarded.
+- A 401 or 403 now returns the canonical `{ error: { code, message, requestId } }` body with
+  `application/problem+json`, matching the rest of the API. It previously returned the legacy
+  `{ data: { ... } }` body with `application/json`, so a single plugin route answered rejected
+  requests and failing handlers in two different shapes. A client reading a plugin route's
+  auth-failure body needs updating; one reading the status or a handler failure does not.

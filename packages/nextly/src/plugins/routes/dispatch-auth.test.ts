@@ -1,14 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock the auth middleware so we drive the secure-by-default branches without a
-// real session. isErrorResponse/createJsonErrorResponse keep their real shape.
+// real session. `isErrorResponse` keeps its real shape.
+//
+// The conversion from a legacy auth result to the canonical error is NOT
+// mocked: it lives in its own module, and the point of the body assertions
+// below is what a caller actually receives, which a stubbed converter would
+// decide instead of the code.
 vi.mock("../../auth/middleware", () => ({
   requireAuthentication: vi.fn(),
   requirePermission: vi.fn(),
   isErrorResponse: (x: unknown) =>
     !!x && typeof x === "object" && "statusCode" in x,
-  createJsonErrorResponse: (e: { statusCode: number; error?: string }) =>
-    new Response(JSON.stringify({ error: e }), { status: e.statusCode }),
 }));
 
 import {
@@ -67,6 +70,17 @@ describe("secure-by-default plugin route dispatch", () => {
     const res = await runPluginRoute(req(), match(route({})));
     expect(res.status).toBe(401);
     expect(handlerCalls).toBe(0);
+    // The canonical envelope, not the legacy auth one. A rejected request and
+    // a failing handler on the SAME route answered in two different shapes,
+    // because each was built by a different owner; a status-only assertion is
+    // what let that stand.
+    expect(res.headers.get("content-type")).toBe("application/problem+json");
+    expect(await res.json()).toEqual({
+      error: expect.objectContaining({
+        code: "AUTH_REQUIRED",
+        requestId: expect.any(String),
+      }),
+    });
   });
 
   it("protected route runs with a mapped ctx.user when authenticated", async () => {
@@ -86,6 +100,10 @@ describe("secure-by-default plugin route dispatch", () => {
       match(route({ requiredPermission: "export-submissions" }))
     );
     expect(res.status).toBe(403);
+    expect(res.headers.get("content-type")).toBe("application/problem+json");
+    expect(await res.json()).toEqual({
+      error: expect.objectContaining({ code: "FORBIDDEN" }),
+    });
     expect(reqPerm).toHaveBeenCalledWith(
       expect.anything(),
       "export",
