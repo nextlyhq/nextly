@@ -22,6 +22,13 @@
 "@nextlyhq/tsconfig": patch
 ---
 
-A read that fails with a raw database error now chains that error onto what the caller
-receives. Only typed failures carried their origin before, so a connection drop or a constraint
-rejection on find, findByID or count arrived with nothing naming what actually went wrong.
+A failure now chains the error it actually came from onto what the caller receives, through
+every boundary that rebuilds one: REST routes, the Direct API, the singles route, the
+plugin-facing collection facade, the bulk-by-query paths and the version writes. Previously
+only typed failures carried their origin, and only on the Direct API, so a connection drop or
+a constraint rejection arrived with nothing naming what actually went wrong. The status-derived
+rebuilds — a code-less 404, 403, 409 or 500, which is exactly what a raw driver rejection
+produces — dropped it too.
+
+`NextlyError.notFound`, `.forbidden` and `.conflict` accept a `cause` alongside `logContext`,
+matching `.internal`.

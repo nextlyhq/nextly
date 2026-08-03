@@ -251,21 +251,28 @@ export class NextlyError extends Error {
   }
 
   static notFound(opts?: {
+    // Declared so a rebuild from a status-only envelope can chain the failure
+    // it came from. Without it the option is accepted and dropped whenever it
+    // arrives through a spread, which reads as forwarded and is not.
+    cause?: Error;
     logContext?: Record<string, unknown>;
   }): NextlyError {
     return new NextlyError({
       code: "NOT_FOUND",
       publicMessage: "Not found.",
+      cause: opts?.cause,
       logContext: opts?.logContext,
     });
   }
 
   static forbidden(opts?: {
+    cause?: Error;
     logContext?: Record<string, unknown>;
   }): NextlyError {
     return new NextlyError({
       code: "FORBIDDEN",
       publicMessage: "You don't have permission to perform this action.",
+      cause: opts?.cause,
       logContext: opts?.logContext,
     });
   }
@@ -310,6 +317,7 @@ export class NextlyError extends Error {
     // for state conflicts where "refresh and try again" would misdirect the
     // caller (a disabled endpoint, an in-flight delivery, and so on).
     message?: string;
+    cause?: Error;
     logContext?: Record<string, unknown>;
   }): NextlyError {
     return new NextlyError({
@@ -317,6 +325,7 @@ export class NextlyError extends Error {
       publicMessage:
         opts?.message ??
         "The resource has changed since you last loaded it. Please refresh and try again.",
+      cause: opts?.cause,
       logContext: { reason: opts?.reason, ...opts?.logContext },
     });
   }
