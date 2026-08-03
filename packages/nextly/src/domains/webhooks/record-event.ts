@@ -99,9 +99,14 @@ export async function recordEvent(
 
 /**
  * The Drizzle table row for one event (camelCase properties). Unlike
- * {@link eventRow}, the `payload` is passed as an OBJECT: the Drizzle
- * json/jsonb codec serializes it per dialect, and `createdAt`/`retentionClass`
- * are left to the column defaults the Drizzle insert applies.
+ * {@link eventRow}, the `payload` is passed as an OBJECT: the Drizzle json/jsonb
+ * codec serializes it per dialect, and `createdAt` is left to the column default
+ * the Drizzle insert applies.
+ *
+ * `retentionClass` is written explicitly, not defaulted. Which window prunes a
+ * row is decided by the caller from why the row was recorded, so leaving it to
+ * the column default would silently file an audit-relevant row under outbox
+ * hygiene.
  */
 function eventRowForDrizzle(
   envelope: WebhookEvent,

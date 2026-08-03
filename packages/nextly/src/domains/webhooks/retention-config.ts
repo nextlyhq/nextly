@@ -16,10 +16,16 @@
 /**
  * Which retention window governs an event row.
  *
- * A single event can drive a webhook AND be audit-relevant, so the class
- * records the LONGEST retention the row needs rather than what produced it.
- * Everything written today is `webhook`; the audit-log feature will mark the
- * rows it depends on as `audit` so outbox hygiene cannot evict its history.
+ * A single event can drive a webhook AND be audit-relevant, so the class records
+ * the LONGEST retention the row needs rather than what produced it. The mutation
+ * seam decides it from why the row was admitted: a write the audit seam admitted
+ * is `audit` and outlives outbox hygiene, one admitted only because an endpoint
+ * exists is `webhook`, and one that is both takes `audit`.
+ *
+ * Because a row can be dual-purpose and only carries the one label, resolution
+ * raises the audit window to the webhook window whenever that is longer — see
+ * {@link resolveWebhookRetentionConfig}. Without that, the label would promise
+ * the longer retention while being pruned on the shorter one.
  */
 export type EventRetentionClass = "webhook" | "audit";
 
@@ -28,7 +34,14 @@ export const EVENT_RETENTION_CLASSES: readonly EventRetentionClass[] = [
   "audit",
 ];
 
-/** The class every event is written with until the audit log exists. */
+/**
+ * The class a row falls back to when a recorder is given none.
+ *
+ * Not the class most rows carry — the mutation seam always classifies what it
+ * records. This is the floor for a caller that appends an event without saying
+ * why, and it is the shorter window deliberately: a row nothing claimed as
+ * audit-relevant should not silently acquire audit retention.
+ */
 export const DEFAULT_EVENT_RETENTION_CLASS: EventRetentionClass = "webhook";
 
 /** User-facing retention options. `false` anywhere means "keep forever". */
