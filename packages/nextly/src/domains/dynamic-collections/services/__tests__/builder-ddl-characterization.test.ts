@@ -41,7 +41,12 @@ type Dialect = "postgresql" | "mysql" | "sqlite";
  * so a bounded column needs a fixture per generator or the `VARCHAR(n)` branch goes unrecorded.
  */
 const FIELDS: FieldDefinition[] = [
-  { name: "title", type: "text", required: true },
+  {
+    name: "title",
+    type: "text",
+    required: true,
+    validation: { minLength: 3, regex: "^[A-Za-z0-9 ]+$" },
+  },
   { name: "slugKey", type: "text", unique: true },
   {
     name: "shortCode",
@@ -50,7 +55,13 @@ const FIELDS: FieldDefinition[] = [
     validation: { maxLength: 120 },
   },
   { name: "summary", type: "textarea" },
-  { name: "views", type: "number" },
+  // Each of these reaches a different CHECK branch: numeric bounds, a minimum length, and the
+  // dialect-specific regex operator. `maxLength` alone never gets there — it only selects a width.
+  {
+    name: "views",
+    type: "number",
+    validation: { min: 0, max: 10000 },
+  },
   { name: "rating", type: "number", options: { format: "float" } },
   { name: "published", type: "checkbox" },
   { name: "publishedAt", type: "date" },
@@ -62,7 +73,7 @@ const FIELDS: FieldDefinition[] = [
   {
     name: "author",
     type: "relationship",
-    options: { target: "dc_authors", onDelete: "cascade", onUpdate: "cascade" },
+    options: { target: "authors", onDelete: "cascade", onUpdate: "cascade" },
   },
   {
     name: "editors",
@@ -80,7 +91,7 @@ const FIELD_GROUP_FIELDS = FIELDS.map(field => {
   // This generator reads a relationship's target from `relationTo`, and renders a single-target
   // relationship differently from a hasMany one.
   if (field.name === "author") {
-    return { name: "author", type: "relationship", relationTo: "dc_authors" };
+    return { name: "author", type: "relationship", relationTo: "authors" };
   }
   return field;
 });
