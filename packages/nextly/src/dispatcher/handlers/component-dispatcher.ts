@@ -348,6 +348,16 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         throw new Error("Component slug and fields are required");
       }
 
+      // Refused before any DDL runs, not after. `registerComponent` makes the authoritative check,
+      // but it runs once the schema has already converged — so a create aimed at an existing slug
+      // would alter that field group's live table and only then be rejected.
+      const slugTaken = await svc.registry.getComponentBySlug(b.slug);
+      if (slugTaken) {
+        throw NextlyError.duplicate({
+          logContext: { reason: "component-slug-conflict", slug: b.slug },
+        });
+      }
+
       // These direct create/update handlers persist and run DDL without the
       // preview/apply handlers below. Their own rules cover names and shapes;
       // what none of them can judge is a plugin type's own options, so an
@@ -386,6 +396,8 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
                 // i18n: carry the flag so the diff omits translatable columns from the main
                 // comp_ table — they live in comp_<slug>_locales, reconciled out-of-band below.
                 localized: isLocalized,
+                // Authored in the Schema Builder: this handler is the Builder's own save path.
+                builderOwned: true,
               };
             },
           });
@@ -643,6 +655,8 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         // from the component's main table (they live in comp_<slug>_locales, reconciled
         // out-of-band below) — mirrors the collection/single apply path.
         localized: (component as { localized?: boolean }).localized === true,
+        // Authored in the Schema Builder: this handler is the Builder's own save path.
+        builderOwned: true,
       };
 
       const pipelinePreview = await previewDesiredSchema({
@@ -767,6 +781,8 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         // from the component's main table (they live in comp_<slug>_locales, reconciled
         // out-of-band below) — mirrors the collection/single apply path.
         localized: isLocalized,
+        // Authored in the Schema Builder: this handler is the Builder's own save path.
+        builderOwned: true,
       };
 
       const promptDispatcher = new BrowserPromptDispatcher(

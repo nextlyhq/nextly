@@ -80,9 +80,9 @@ function resolveFieldWidths<T>(fields: readonly T[]): readonly T[] {
 /**
  * Return a desired schema whose Builder-owned entities state the width of every text field.
  *
- * A `locked` entity is owned by code-first config or a plugin, and its columns were built by the
- * path whose default is the bounded kind. Rewriting those would make every code-first table read as
- * drift and stop `nextly migrate` applying anything, so they are left exactly as they are.
+ * An entity that does not state Builder ownership is left exactly as it is. Its columns were built
+ * by the path whose default is the bounded kind, and rewriting those would make every code-first
+ * table read as drift and stop `nextly migrate` applying anything.
  *
  * Copies rather than mutates: the caller's schema is often the registry's own objects, and a
  * preview must not leave a field changed behind it.
@@ -91,13 +91,16 @@ export function withResolvedBuilderTextWidths(
   desired: DesiredSchema
 ): DesiredSchema {
   const resolveGroup = <
-    E extends { fields: readonly unknown[]; locked?: boolean },
+    E extends { fields: readonly unknown[]; builderOwned?: boolean },
   >(
     group: Record<string, E>
   ): Record<string, E> => {
     const out: Record<string, E> = {};
     for (const [key, entity] of Object.entries(group)) {
-      if (entity.locked === true) {
+      // Explicit, never inferred. Most snapshot builders omit any ownership flag, so anything other
+      // than a stated yes has to mean code-first: the alternative reclassified every code-first
+      // entity on the HMR and db:sync paths and would have widened their columns.
+      if (entity.builderOwned !== true) {
         out[key] = entity;
         continue;
       }

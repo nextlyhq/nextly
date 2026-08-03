@@ -49,7 +49,7 @@ function builderSingle(tableName: string): DesiredSchema {
         slug: "page",
         tableName,
         fields: [{ name: "body", type: "text" }] as never,
-        locked: false,
+        builderOwned: true,
       },
     },
     components: {},

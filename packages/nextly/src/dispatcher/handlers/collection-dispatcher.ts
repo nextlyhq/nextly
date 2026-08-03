@@ -495,6 +495,8 @@ const COLLECTIONS_METHODS: Record<
         // must re-supply it or the preview would show translatable columns being
         // added to the main table.
         localized: (collection as { localized?: boolean }).localized === true,
+        // Authored in the Schema Builder: this handler is the Builder's own save path.
+        builderOwned: true,
       };
 
       const pipelinePreview = await previewDesiredSchema({
@@ -679,6 +681,8 @@ const COLLECTIONS_METHODS: Record<
         // toggle applies immediately; without this the apply re-adds translatable
         // columns to the main table.
         localized: isLocalized,
+        // Authored in the Schema Builder: this handler is the Builder's own save path.
+        builderOwned: true,
       };
 
       // Resolve adapter for the pipeline construction.

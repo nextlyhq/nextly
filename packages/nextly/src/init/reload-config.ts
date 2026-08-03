@@ -1979,6 +1979,10 @@ async function applyReload(opts?: {
           tableName: s.tableName,
           fields: (s.fields ?? []) as DesiredSingle["fields"],
           status: s.status === true,
+          // Read out of the registry, so this is a single the Schema Builder created — the code
+          // config above already claimed every code-first slug. Stating it keeps its columns
+          // described the same way here as on the path that created them.
+          builderOwned: true,
         };
       }
     }
@@ -2005,6 +2009,9 @@ async function applyReload(opts?: {
           slug: c.slug,
           tableName: c.tableName,
           fields: (c.fields ?? []) as DesiredFieldGroup["fields"],
+          // Registry-sourced, so Builder-authored: the code config above already claimed every
+          // code-first slug.
+          builderOwned: true,
         };
       }
     }

@@ -18,6 +18,7 @@ function schemaWith(
         slug: "page",
         tableName: "single_page",
         fields: [],
+        builderOwned: true,
         ...entity,
       },
     },
@@ -47,11 +48,15 @@ describe("withResolvedBuilderTextWidths", () => {
     expect(bodyType(resolved)).toBe("text");
   });
 
-  // A locked entity's columns were built by the path whose default is bounded, so rewriting them
-  // would make every code-first table read as drift.
-  it("leaves a locked entity on the bounded default", () => {
+  // Code-first columns were built by the path whose default is bounded, so rewriting them would
+  // make every code-first table read as drift. Ownership is never inferred: most snapshot builders
+  // state nothing, and anything other than an explicit yes has to mean code-first.
+  it.each([
+    ["states code ownership", { builderOwned: false }],
+    ["states nothing at all", { builderOwned: undefined }],
+  ])("leaves an entity that %s on the bounded default", (_, ownership) => {
     const resolved = withResolvedBuilderTextWidths(
-      schemaWith({ fields: [textField()] as never, locked: true })
+      schemaWith({ fields: [textField()] as never, ...ownership })
     );
 
     expect(bodyType(resolved)).toBe("varchar(255)");
@@ -88,6 +93,7 @@ describe("withResolvedBuilderTextWidths", () => {
           slug: "posts",
           tableName: "dc_posts",
           fields: [textField()] as never,
+          builderOwned: true,
         },
       },
       singles: {},
@@ -96,6 +102,7 @@ describe("withResolvedBuilderTextWidths", () => {
           slug: "hero",
           tableName: "comp_hero",
           fields: [textField()] as never,
+          builderOwned: true,
         },
       },
     });
