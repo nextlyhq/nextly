@@ -111,12 +111,18 @@ export interface PreCleanupExecutor {
 // F10 PR 2: scope of the apply, persisted into the journal so the admin
 // NotificationCenter can render meaningful audit rows. Plan C1 maps this onto
 // `SchemaEventScopeKind` from `schemas/schema-events/types.ts`.
-export interface MigrationJournalScope {
-  // `component` is carried because a field group is one of the entity kinds a UI apply can target,
-  // and recording it as a collection made scope-filtered history unable to find it.
-  kind: "collection" | "single" | "component" | "global" | "fresh-push";
-  slug?: string;
-}
+// A scope that names an entity kind carries the entity it names. Written as a union rather than one
+// shape with an optional slug because the difference is not decoration: a slugless entity scope has
+// nothing to filter history by, and the conversion to a notification scope had to invent a fallback
+// for a state it could not otherwise rule out. Stating it in the type retires the fallback.
+//
+// `component` is carried because a field group is one of the entity kinds a UI apply can target, and
+// recording it as a collection made scope-filtered history unable to find it.
+export type MigrationJournalScope =
+  | { kind: "collection" | "single" | "component"; slug: string }
+  // A whole-schema apply may still name the entity that prompted it.
+  | { kind: "global"; slug?: string }
+  | { kind: "fresh-push" };
 
 // F10 PR 2: per-change-kind counts derived from the pipeline's diff
 // result. Persisted into the journal so audit rows can show

@@ -489,12 +489,10 @@ function toNotificationScope(scope: MigrationJournalScope): MigrationScope {
       ? { kind: "global", slug: scope.slug }
       : { kind: "global" };
   }
-  // collection | single | component — all three require a slug per
-  // MigrationJournalScope's contract (asserted at the type-system
-  // level because slug is optional only for fresh-push/global).
-  return scope.slug
-    ? { kind: scope.kind, slug: scope.slug }
-    : { kind: "global" };
+  // collection | single | component — the scope type requires a slug on each of them, so there is
+  // no slugless case left to fall back for. The fallback this replaces silently retargeted such a
+  // scope to the whole schema, which is the one outcome an entity-scoped apply must not produce.
+  return { kind: scope.kind, slug: scope.slug };
 }
 
 export class PushSchemaPipeline {
