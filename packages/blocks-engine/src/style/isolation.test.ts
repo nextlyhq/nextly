@@ -499,6 +499,43 @@ describe("names CSS resolves for the whole document", () => {
     }
   });
 
+  it("checks every page in a selector list", () => {
+    // `@page` takes a LIST. Read whole, the prelude starts with whatever
+    // namespace the first page carried, so a second un-namespaced page was
+    // never looked at.
+    const found = findUnnamespacedGlobals(
+      `@page ${ns("cover")}, host { margin: 1cm }`,
+      SCOPE
+    );
+    expect(found).toHaveLength(1);
+    expect(found[0]?.name).toBe("host");
+    // The same bypass spelled with a pseudo-page, where the scan used to stop.
+    const withPseudo = findUnnamespacedGlobals(
+      `@page ${ns("cover")}:first, host { margin: 1cm }`,
+      SCOPE
+    );
+    expect(withPseudo.map(entry => entry.name)).toEqual(["host"]);
+  });
+
+  it("keeps two scopes apart when only their case differs", () => {
+    // A keyframe name is case-sensitive, but a font family is not: it is why
+    // `font-family: arial` finds a font installed as "Arial". So "Region" and
+    // "region" would otherwise share one family between them.
+    const upper = namespacedGlobalName("Fade", "Region");
+    const lower = namespacedGlobalName("Fade", "region");
+    expect(upper.toLowerCase()).not.toBe(lower.toLowerCase());
+    // Each is still accepted under its own scope and reported under the other.
+    const face = (name: string): string =>
+      `@font-face { font-family: ${name}; src: url(a.woff2) }`;
+    expect(findUnnamespacedGlobals(face(upper), "Region")).toEqual([]);
+    expect(findUnnamespacedGlobals(face(upper), "region")).toHaveLength(1);
+  });
+
+  it("leaves a scope without capitals alone", () => {
+    // The common case, including the page root, pays nothing for the encoding.
+    expect(namespacedGlobalName("fade", "region")).toBe("region-fade");
+  });
+
   it("does not split a family name on a comma inside its quotes", () => {
     // A family may be written as a string and a string may contain a comma, so
     // splitting the text cuts one name in half and reports the tail as another.

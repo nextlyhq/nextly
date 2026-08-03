@@ -180,7 +180,39 @@ function escapeScope(scopeClass: string): string {
   // from. `7f3a` is a legal scope and a legal class, but `7f3a-fade` tokenizes
   // as a dimension rather than an identifier, so an animation by that name is
   // one CSS never resolves. `\37 f3a-fade` is the same name spelled legally.
-  return escapeIdentifier(scopeClass.replaceAll("-", "--"));
+  return escapeIdentifier(encodeCase(scopeClass.replaceAll("-", "--")));
+}
+
+/**
+ * Case written so it survives a case-insensitive comparison.
+ *
+ * Not every name here is compared the same way. A `<custom-ident>` — a keyframe,
+ * a counter style, a colour profile — is case-sensitive, but a font family is
+ * matched case-insensitively, which is why `font-family: arial` finds a font
+ * installed as "Arial". So scopes "Region" and "region" produce two distinct
+ * animation names and ONE font family between them, and the document that
+ * loaded second gets both.
+ *
+ * Marking each capital with a leading `_` moves the distinction into characters
+ * that case folding does not touch, so the two scopes stay apart under either
+ * comparison. A literal `_` doubles so the marker cannot be forged. Scopes
+ * without capitals — which includes the page root — come back unchanged, so the
+ * usual name pays nothing for this.
+ */
+function encodeCase(text: string): string {
+  let out = "";
+  for (const char of text) {
+    if (char === "_") {
+      out += "__";
+      continue;
+    }
+    if (char >= "A" && char <= "Z") {
+      out += `_${char.toLowerCase()}`;
+      continue;
+    }
+    out += char;
+  }
+  return out;
 }
 
 /** Whether a name already carries this document's namespace. */
@@ -218,24 +250,41 @@ function preludeNames(css: string, node: Atrule): string[] {
 function pageNames(css: string, node: Atrule): string[] {
   const text = preludeNames(css, node)[0];
   if (text === undefined) return [];
-  // Everything up to the first unescaped colon, rather than a pattern spelling
-  // out which characters an identifier may hold. A CSS identifier can be
-  // non-ASCII or carry escapes — `@page 封面` and `@page \63 over` both name a
-  // page — and a pattern narrower than the grammar finds no name where one
-  // exists, which reads as "nothing to collide" rather than "could not tell".
-  let end = text.length;
-  for (let i = 0; i < text.length; i++) {
-    if (text[i] === "\\") {
+  // A page selector LIST, not one selector. `@page cover, host` names two pages,
+  // and reading the prelude whole made the text start with the namespace that
+  // the first one carried — so the second was never looked at.
+  const names: string[] = [];
+  for (const part of splitTopLevel(text)) {
+    const name = pageSelectorName(part);
+    if (name !== undefined) names.push(name);
+  }
+  return names;
+}
+
+/**
+ * The optional name one page selector defines.
+ *
+ * Everything up to the first unescaped colon, rather than a pattern spelling out
+ * which characters an identifier may hold. A CSS identifier can be non-ASCII or
+ * carry escapes — `@page 封面` and `@page \63 over` both name a page — and a
+ * pattern narrower than the grammar finds no name where one exists, which reads
+ * as "nothing to collide" rather than "could not tell". `@page :first` selects a
+ * page of an existing flow and names nothing.
+ */
+function pageSelectorName(part: string): string | undefined {
+  let end = part.length;
+  for (let i = 0; i < part.length; i++) {
+    if (part[i] === "\\") {
       i++;
       continue;
     }
-    if (text[i] === ":") {
+    if (part[i] === ":") {
       end = i;
       break;
     }
   }
-  const name = text.slice(0, end).trim();
-  return name === "" ? [] : [name];
+  const name = part.slice(0, end).trim();
+  return name === "" ? undefined : name;
 }
 
 /**
@@ -259,7 +308,20 @@ function featureValueFamilies(css: string, node: Atrule): string[] {
 function commaSeparatedNames(css: string, node: Atrule): string[] {
   const text = preludeNames(css, node)[0];
   if (text === undefined) return [];
-  const names: string[] = [];
+  return splitTopLevel(text)
+    .map(part => unquote(part.trim()))
+    .filter(part => part !== "");
+}
+
+/**
+ * A prelude's comma-separated parts, ignoring commas inside a string.
+ *
+ * Only a comma OUTSIDE a string separates two entries. A font family may be
+ * written as a string and a string may contain a comma, so splitting the raw
+ * text cuts `"Fade, Two"` in half and reports the tail as a name of its own.
+ */
+function splitTopLevel(text: string): string[] {
+  const parts: string[] = [];
   let start = 0;
   let quote: string | undefined;
   for (let i = 0; i < text.length; i++) {
@@ -276,17 +338,13 @@ function commaSeparatedNames(css: string, node: Atrule): string[] {
       quote = char;
       continue;
     }
-    // Only a comma OUTSIDE a string separates two families. A family may be
-    // written as a string and a string may contain a comma, so splitting the
-    // text would cut `"Fade, Two"` in half and report the tail as a name of its
-    // own — a finding against a stylesheet that was correct.
     if (char === ",") {
-      names.push(text.slice(start, i));
+      parts.push(text.slice(start, i));
       start = i + 1;
     }
   }
-  names.push(text.slice(start));
-  return names.map(part => unquote(part.trim())).filter(part => part !== "");
+  parts.push(text.slice(start));
+  return parts;
 }
 
 /**
