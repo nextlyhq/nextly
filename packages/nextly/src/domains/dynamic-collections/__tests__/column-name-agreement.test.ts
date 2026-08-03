@@ -216,13 +216,14 @@ describe("all three descriptions of the main table agree", () => {
       }).table
     );
 
-    // Every comparison below asserts three lists are equal, which an empty extraction satisfies
-    // without comparing a single column. Refused here, once, rather than at each call site.
-    if (created.length === 0 || runtime.length === 0 || desired.length === 0) {
-      throw new Error(
-        `column extraction produced nothing: created=${created.length} desired=${desired.length} runtime=${runtime.length}`
-      );
-    }
+    // Every comparison below asserts three lists are equal. An empty extraction cannot satisfy
+    // that on its own — the three come from independent generators, so one going empty makes the
+    // lists differ — but asserting it here names the cause instead of leaving an opaque diff.
+    expect({
+      created: created.length > 0,
+      desired: desired.length > 0,
+      runtime: runtime.length > 0,
+    }).toEqual({ created: true, desired: true, runtime: true });
 
     return {
       created: [...created].sort(),
@@ -658,19 +659,25 @@ describe("duplicate columns are judged globally, not per table", () => {
   });
 });
 
-describe("a junction-backed field is the same shape whatever its type", () => {
-  // `relationship` and `upload` both carry `relationType: "manyToMany"`, and the descriptor and the
-  // runtime's own many-to-many read path both key on the option alone. The DDL generator keyed on
-  // `type === "relationship"`, so an upload was created as a parent column that nothing addressed
-  // and given no junction table to read from — the created table and the addressed table
-  // disagreeing again, in a corner the earlier fixes did not reach.
+describe("junction storage is a relationship feature only", () => {
+  // `relationship` and `upload` can both carry `relationType: "manyToMany"`, and the descriptor
+  // once said neither had a column while the generator emitted one for the upload. The two are
+  // reconciled toward the ROW, not the junction, because only a relationship is junction-backed in
+  // the persistence layer: `collection-mutation-service` filters junction writes by
+  // `f.type === "relationship"`, and the read path builds its relation set from
+  // `isRelationshipField`, which is `field.type === "relationship"`. Giving an upload a junction
+  // table would give it storage nothing writes to and nothing reads from.
   const m2m = (type: string) => ({
     name: "gallery",
     type,
     options: { relationType: "manyToMany", target: "media" },
   });
 
-  it("emits no parent column and one junction table, for either type", () => {
+  it("routes a relationship to a junction and an upload to its own column", () => {
+    const expected: Record<string, unknown> = {
+      relationship: { parentColumn: false, descriptorColumn: false, tables: 2 },
+      upload: { parentColumn: true, descriptorColumn: true, tables: 1 },
+    };
     for (const dialect of DIALECTS) {
       for (const type of ["relationship", "upload"]) {
         const service = new DynamicCollectionSchemaService(undefined, dialect);
@@ -686,15 +693,21 @@ describe("a junction-backed field is the same shape whatever its type", () => {
         });
         const at = `${dialect}.${type}`;
 
+        const want = expected[type] as {
+          parentColumn: boolean;
+          descriptorColumn: boolean;
+          tables: number;
+        };
+
         expect({
           [`${at}.parentColumn`]: declaredColumns(sql).includes("gallery"),
           [`${at}.descriptorColumn`]:
             getColumnDescriptor(m2m(type) as never, dialect) !== null,
           [`${at}.createTables`]: (sql.match(/CREATE TABLE/g) ?? []).length,
         }).toEqual({
-          [`${at}.parentColumn`]: false,
-          [`${at}.descriptorColumn`]: false,
-          [`${at}.createTables`]: 2,
+          [`${at}.parentColumn`]: want.parentColumn,
+          [`${at}.descriptorColumn`]: want.descriptorColumn,
+          [`${at}.createTables`]: want.tables,
         });
       }
     }
