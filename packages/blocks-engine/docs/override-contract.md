@@ -16,10 +16,24 @@ mean it to.**
 
 ---
 
+## What this applies to
+
+Stylesheets compiled by this package, `@nextlyhq/blocks-engine`. Every guarantee
+below is enforced by tests against its output.
+
+`@nextlyhq/plugin-page-builder` still renders through a compiler of its own,
+which predates this contract and does not follow it: its rules are single
+classes, unanchored to the page root, so they carry one class of weight rather
+than the weights tabled below. Moving that renderer onto this engine is a
+separate piece of work. Until it lands, read this as the contract for the engine,
+not as a description of what that plugin currently emits.
+
+---
+
 ## What the builder emits
 
-Every rule the builder writes is anchored to the page root and carries three
-classes' worth of weight:
+Every rule the builder writes is anchored to the page root and carries at least
+two classes' worth of weight:
 
 ```css
 .nx-pb-page.nx-pb-page .nx-pb-a1b2 {
@@ -69,11 +83,43 @@ you asked for when you set it.
 it, and then your own overrides would need `!important` too, forever. One notch
 is enough to beat ordinary CSS and cheap to beat deliberately.
 
+### The exact weights
+
+Not every builder rule weighs the same, so here is the whole set. Read the
+"classes" column as the number you need to beat.
+
+| What it styles                | Selector                                        | Classes |
+| ----------------------------- | ----------------------------------------------- | ------- |
+| Page-wide settings            | `.nx-pb-page.nx-pb-page`                        | 2       |
+| A block type's defaults       | `.nx-pb-page.nx-pb-page .nx-bt-core--section`   | 3       |
+| One node's own styles         | `.nx-pb-page.nx-pb-page .nx-pb-a1b2`            | 3       |
+| Hiding a node at a breakpoint | `.nx-pb-page.nx-pb-page .nx-pb-a1b2.nx-pb-a1b2` | 4       |
+
+Two of these are deliberate rather than accidental.
+
+**Page settings weigh less** because they are the outermost element's own
+styles, and everything inside should be able to say otherwise — a block that
+sets its own colour is meant to beat the page's default colour.
+
+**Hiding weighs more** because it has to beat the node's own `display`,
+including one set on a state. `.nx-pb-a1b2:focus-visible { display: block }`
+would otherwise outrank a plain `display: none` and leave a focused element on
+screen at a width you hid it at.
+
+**States add nothing.** Hover, focus and the rest are emitted inside `:where()`,
+which contributes zero, so `:hover` styles weigh exactly what the same node's
+base styles weigh and win on source order instead. Rendering a document under a
+scope adds one class to every row above.
+
+If you are ever unsure, count the classes in the winning selector in devtools
+and write one more.
+
 ---
 
 ## How to override the builder on purpose
 
-Any of these wins. Pick whichever suits your codebase.
+Pick whichever suits your codebase. Read the note on cascade layers below first
+if your CSS lives in an `@layer` — Tailwind's does.
 
 **Add a class to the front.** The simplest, and it reads as intent:
 
@@ -114,6 +160,36 @@ the builder emits, so repeating it adds nothing. Put an ancestor in front of it:
 
 Class order inside a compound carries no weight; only the count does. When in
 doubt, add one more class than the builder's selector has, or use `!important`.
+
+### If your CSS is in a cascade layer
+
+Specificity is only consulted between declarations in the same layer, and **an
+unlayered declaration beats a layered one whatever its specificity**. The builder
+emits an unlayered `<style>` element, so a rule of yours inside `@layer` loses to
+it no matter how many classes you add:
+
+```css
+@layer components {
+  /* 0-5-0, and still loses: it is layered, ours is not */
+  .my-theme .nx-pb-page.nx-pb-page .nx-pb-a1b2 {
+    color: rebeccapurple;
+  }
+}
+```
+
+This is worth knowing because Tailwind puts its own rules in layers, so anything
+you write in `@layer components`, or in a file Tailwind processes into one, is
+affected. Two things still work:
+
+- **Write the override unlayered.** A plain stylesheet with no `@layer` around
+  it outranks every layer, so the specificity rules above apply as written.
+- **Use `!important`.** For important declarations the order flips — layered
+  beats unlayered — and since the builder never writes `!important` at all, an
+  important rule of yours wins from anywhere.
+
+The builder does not emit into a layer itself, and that is deliberate: a layered
+stylesheet loses to every unlayered rule on the host page, which would put the
+builder below any styling that happens not to use layers.
 
 ---
 
