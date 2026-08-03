@@ -245,14 +245,22 @@ describeMaybe(
           settled = true;
         });
 
-      await new Promise(resolve => setTimeout(resolve, BLOCKED_FOR_MS));
-      // The assertion that fails when the lock is removed: without it the write
-      // is an ordinary insert that never touches the account row and finishes
-      // immediately.
-      expect(settled).toBe(false);
-
-      release();
-      await holder;
+      try {
+        await new Promise(resolve => setTimeout(resolve, BLOCKED_FOR_MS));
+        // The assertion that fails when the lock is removed: without it the
+        // write is an ordinary insert that never touches the account row and
+        // finishes immediately.
+        expect(settled).toBe(false);
+      } finally {
+        // Released even when the assertion throws. Without this the holding
+        // transaction keeps its exclusive lock on the account row, so the
+        // activity write never settles and teardown's `DELETE FROM users`
+        // waits on that same row — the deletes run before `disconnect`, which
+        // is therefore never reached. Releasing here keeps a failed assertion
+        // a reported failure rather than a stalled one.
+        release();
+        await holder;
+      }
       await write;
       expect(settled).toBe(true);
 

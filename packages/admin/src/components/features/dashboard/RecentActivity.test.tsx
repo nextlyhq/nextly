@@ -22,6 +22,8 @@ const mockActivities: Activity[] = [
       email: "john@example.com",
       avatar: "https://i.pravatar.cc/150?img=1",
       initials: "JD",
+      // A live author: the component renders the name as given. An erased
+      // actor arrives with `deleted: true` and a placeholder name instead.
       deleted: false,
     },
     type: "create",
@@ -39,6 +41,7 @@ const mockActivities: Activity[] = [
       email: "jane@example.com",
       avatar: "https://i.pravatar.cc/150?img=2",
       initials: "JS",
+      // Live as well, so neither fixture exercises the erased rendering.
       deleted: false,
     },
     type: "update",

@@ -72,6 +72,10 @@ function mapEntry(entry: ActivityLogEntry): Activity {
 
   return {
     id: entry.id,
+    // Delegated rather than mapped here. Whether an entry's author still
+    // exists changes the name, the initials and the email it may show, and a
+    // second surface deriving those rules independently is how two views of
+    // the same deleted actor start disagreeing. One helper owns them.
     user: describeActivityActor(entry),
     type: entry.action,
     action: ACTION_LABELS[entry.action] ?? entry.action,
