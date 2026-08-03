@@ -79,8 +79,14 @@ interface PluginContext {
 // Acts as the current user (RBAC enforced):
 await ctx.services.collections.listEntries(slug, {}, { as: "user", user: ctx.user });
 // Privileged work — explicit, visible elevation:
-await ctx.services.collections.createEntry(slug, data, { as: "system" });
+const { item, warnings } = await ctx.services.collections.createEntry(slug, data, { as: "system" });
 ```
+
+Writes (`createEntry`, `updateEntry`, `deleteEntry`) resolve to the same
+`{ message, item, warnings? }` envelope the Direct API and the REST API return.
+`warnings` is present only when a post-commit hook failed: the row is already
+saved at that point, so the write succeeds and the failure travels beside it.
+Reads are unchanged and return their value directly.
 
 ## Hooks & events
 
