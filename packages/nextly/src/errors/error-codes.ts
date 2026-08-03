@@ -70,36 +70,55 @@ export const NEXTLY_ERROR_STATUS = {
 export type NextlyErrorCode = keyof typeof NEXTLY_ERROR_STATUS;
 
 /**
- * The code a status means when a failure names none.
+ * The codes that REPRESENT their status, when a failure names none.
  *
- * A service that returns `{ success: false, statusCode }` without a code
- * leaves every boundary to infer one, and three boundaries inferring
- * separately is how the same 401 became `AUTH_REQUIRED` through the Direct API
- * and `INTERNAL_ERROR` through the REST dispatcher. This is the ONE inference,
+ * A service that returns `{ success: false, statusCode }` without a code leaves
+ * every boundary to infer one, and three boundaries inferring separately is how
+ * the same 401 became `AUTH_REQUIRED` through the Direct API and
+ * `INTERNAL_ERROR` through the REST dispatcher. This list is the ONE inference,
  * so they cannot disagree.
  *
- * It is a fallback, not a translation. A status is a coarser thing than a code
- * -- 409 covers both `DUPLICATE` and `CONFLICT`, 400 covers `VALIDATION_ERROR`
- * and `INVALID_INPUT` -- so a producer that knows which one it means must say
- * so by setting `code`, and this table is never consulted for it. The entries
- * below are the reading that is safe when nobody said: the one whose advice is
- * still true if the other was meant.
+ * Listed as CODES, not as status numbers: the number for each comes from
+ * {@link NEXTLY_ERROR_STATUS} below, so a code whose canonical status changes
+ * carries its inference with it instead of leaving a stale literal here.
+ *
+ * Several codes share a status -- 409 is both `CONFLICT` and `DUPLICATE`, 400
+ * is both `VALIDATION_ERROR` and `INVALID_INPUT` -- so this is a choice, not a
+ * mechanical inversion. Each entry is the reading that is still safe if the
+ * other was meant: `CONFLICT` says "reload", which is unhelpful for a name
+ * clash, while `DUPLICATE` would say "already exists", which is WRONG for a
+ * stale write. A producer that knows which it means sets `code` and is
+ * believed, and this list is never consulted for it.
  */
+const CANONICAL_CODE_FOR_STATUS = [
+  "VALIDATION_ERROR",
+  "AUTH_REQUIRED",
+  "FORBIDDEN",
+  "NOT_FOUND",
+  "CONFLICT",
+  "PAYLOAD_TOO_LARGE",
+  "UNSUPPORTED_MEDIA_TYPE",
+  "RATE_LIMITED",
+  "EXTERNAL_SERVICE_ERROR",
+  "SERVICE_UNAVAILABLE",
+] as const satisfies readonly NextlyErrorCode[];
+
+/**
+ * 422, which no canonical code claims.
+ *
+ * `INVALID_INPUT` answers 400 in this system, so it cannot supply this key the
+ * way the codes above supply theirs. Legacy envelopes nonetheless use 422 for
+ * "understood but unprocessable", and reading it as an internal error would
+ * report the caller's own mistake as a server fault. Named rather than inlined
+ * so it is visibly the one entry that is NOT derived.
+ */
+const LEGACY_UNPROCESSABLE_STATUS = 422;
+
 const STATUS_TO_CODE: Readonly<Record<number, NextlyErrorCode>> = {
-  400: "VALIDATION_ERROR",
-  401: "AUTH_REQUIRED",
-  403: "FORBIDDEN",
-  404: "NOT_FOUND",
-  // Staleness rather than a name clash: "refresh and try again" is unhelpful
-  // for a duplicate, while "already exists" would be WRONG for a stale write.
-  // A producer that means the clash sets `code: "DUPLICATE"`.
-  409: "CONFLICT",
-  413: "PAYLOAD_TOO_LARGE",
-  415: "UNSUPPORTED_MEDIA_TYPE",
-  422: "INVALID_INPUT",
-  429: "RATE_LIMITED",
-  502: "EXTERNAL_SERVICE_ERROR",
-  503: "SERVICE_UNAVAILABLE",
+  ...Object.fromEntries(
+    CANONICAL_CODE_FOR_STATUS.map(code => [NEXTLY_ERROR_STATUS[code], code])
+  ),
+  [LEGACY_UNPROCESSABLE_STATUS]: "INVALID_INPUT",
 };
 
 /**

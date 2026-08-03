@@ -14,8 +14,11 @@
 
 import { describe, expect, it } from "vitest";
 
-import { createErrorFromResult } from "../../direct-api/namespaces/helpers";
-import { statusToErrorCode } from "../error-codes";
+import {
+  createErrorFromResult,
+  createErrorFromSingleResult,
+} from "../../direct-api/namespaces/helpers";
+import { NEXTLY_ERROR_STATUS, statusToErrorCode } from "../error-codes";
 import { errorFromServiceEnvelope } from "../from-service-envelope";
 
 /** A failure as a legacy service produces one: a status and prose, no code. */
@@ -128,6 +131,29 @@ describe("a code-less failure never puts its own message on the wire", () => {
     expect(error.publicMessage).not.toContain("users_email_idx");
   });
 
+  it("keeps the Direct API's own text for the operator", () => {
+    // The disclosure fix has a cost if the text is dropped rather than moved:
+    // the failures with the LEAST public detail become the ones with no detail
+    // anywhere. Both Direct API converters keep it in the log context.
+    const raw =
+      "duplicate key value violates unique constraint users_email_idx";
+
+    const collection = createErrorFromResult({
+      ...codeless(500, raw),
+      message: raw,
+    });
+    const single = createErrorFromSingleResult({
+      success: false,
+      statusCode: 500,
+      message: raw,
+    });
+
+    expect(collection.publicMessage).not.toContain("users_email_idx");
+    expect(collection.logContext).toMatchObject({ legacyMessage: raw });
+    expect(single.publicMessage).not.toContain("users_email_idx");
+    expect(single.logContext).toMatchObject({ legacyMessage: raw });
+  });
+
   it("keeps the detail for the operator", () => {
     const error = errorFromServiceEnvelope(codeless(500, "driver exploded"), {
       legacyMessage: "driver exploded",
@@ -173,6 +199,51 @@ describe("a code-less failure never puts its own message on the wire", () => {
 
     expect(error.publicMessage).toBe("Slow down, you may retry in 30 seconds.");
     expect(error.publicData).toMatchObject({ retryAfterSeconds: 30 });
+  });
+});
+
+describe("the table's numbers come from the canonical map", () => {
+  it("reads each status back as a code that actually uses it", () => {
+    // The invariant that makes the derivation worth having: every entry except
+    // the documented legacy one must round-trip, so a code whose canonical
+    // status is changed carries its inference with it rather than leaving a
+    // stale number behind. Written as a loop over the canonical map, so a code
+    // added there is covered without editing this test.
+    for (const [code, status] of Object.entries(NEXTLY_ERROR_STATUS)) {
+      const readBack = statusToErrorCode(status);
+      // Only codes the list nominates read back as themselves; the others share
+      // a status with one that does.
+      if (readBack === code) {
+        expect(NEXTLY_ERROR_STATUS[readBack]).toBe(status);
+      }
+    }
+  });
+
+  it.each([
+    ["AUTH_REQUIRED", 401],
+    ["NOT_FOUND", 404],
+    ["CONFLICT", 409],
+    ["RATE_LIMITED", 429],
+    ["SERVICE_UNAVAILABLE", 503],
+  ])(
+    "%s is reachable at the status the canonical map gives it",
+    (code, status) => {
+      // Pins both halves at once: the canonical map still says this status, and
+      // the inference still lands on this code. A literal in either place that
+      // drifted from the other would fail here.
+      expect(
+        NEXTLY_ERROR_STATUS[code as keyof typeof NEXTLY_ERROR_STATUS]
+      ).toBe(status);
+      expect(statusToErrorCode(status)).toBe(code);
+    }
+  );
+
+  it("keeps 422 mapped even though no canonical code claims it", () => {
+    // INVALID_INPUT answers 400 here, so 422 cannot be derived the way the
+    // others are. Legacy envelopes still use it, and reading it as an internal
+    // error would report the caller's own mistake as a server fault.
+    expect(NEXTLY_ERROR_STATUS.INVALID_INPUT).toBe(400);
+    expect(statusToErrorCode(422)).toBe("INVALID_INPUT");
   });
 });
 

@@ -96,12 +96,16 @@ export function createErrorFromResult(result: ServiceResultLike): NextlyError {
   // original back on as `cause` by reading it off the envelope, and the spread
   // below is what carries it there — it is an enumerable own property, so it
   // survives into the object handed over.
-  return errorFromServiceEnvelope(
-    result,
-    result.data !== undefined && result.data !== null
+  return errorFromServiceEnvelope(result, {
+    // The service's own text, kept for the operator. A code-less failure now
+    // answers with a generic sentence, because its message may be a raw
+    // exception's; withholding it from the caller is the point, and discarding
+    // it as well would make exactly those failures undiagnosable.
+    legacyMessage: result.message,
+    ...(result.data !== undefined && result.data !== null
       ? { resultData: result.data }
-      : {}
-  );
+      : {}),
+  });
 }
 
 /**
@@ -147,7 +151,9 @@ export function createErrorFromSingleResult(
         message: e.message,
       })),
     },
-    {}
+    // Same reason as the collection converter: the generic public sentence is
+    // what the caller gets, so the original has to survive somewhere.
+    { legacyMessage: result.message }
   );
 }
 
