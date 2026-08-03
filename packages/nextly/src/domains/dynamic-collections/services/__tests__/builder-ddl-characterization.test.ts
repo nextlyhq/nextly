@@ -75,9 +75,24 @@ const FIELDS: FieldDefinition[] = [
   {
     name: "editors",
     type: "relationship",
-    relationTo: "dc_authors",
+    relationTo: "authors",
     hasMany: true,
   },
+  // Only `options.relationType: "manyToMany"` reaches this generator's junction branch, which emits
+  // a whole table of its own with its own columns, constraints and index names.
+  {
+    name: "tags",
+    type: "relationship",
+    options: { target: "tags", relationType: "manyToMany" },
+  },
+  // A default the author sets, rendered by the generator rather than injected as a system default
+  // like the timestamps are — nothing else in this fixture reaches that branch.
+  { name: "state", type: "text", default: "draft" },
+  // Structured containers. The two generators disagree about these today: this one has no mapping
+  // entry for either and falls back to text, while the field-group generator renders the dialect's
+  // JSON type. Routing one through the other's mapping would change what is persisted.
+  { name: "blocks", type: "repeater" },
+  { name: "meta", type: "group" },
 ];
 
 /** The same shapes, with the width stated the way the field-group generator reads it. */
@@ -89,6 +104,15 @@ const FIELD_GROUP_FIELDS = FIELDS.map(field => {
   // relationship differently from a hasMany one.
   if (field.name === "author") {
     return { name: "author", type: "relationship", relationTo: "authors" };
+  }
+  // A junction is a collection-generator concept; a field group stores the same relationship as a
+  // scalar column, so this states it the way that generator reads it.
+  if (field.name === "tags") {
+    return { name: "tags", type: "relationship", relationTo: "tags" };
+  }
+  // This generator reads a default from `defaultValue`, and renders one only for a checkbox.
+  if (field.name === "state") {
+    return { name: "state", type: "checkbox", defaultValue: true };
   }
   return field;
 });

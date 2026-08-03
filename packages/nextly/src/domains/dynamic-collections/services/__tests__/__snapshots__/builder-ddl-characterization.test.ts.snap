@@ -20,6 +20,9 @@ CREATE TABLE IF NOT EXISTS \`dc_pinned\` (
 \`lookup_code\` text,
 \`author\` varchar(36),
 \`editors\` varchar(36),
+\`state\` text   DEFAULT 'draft',
+\`blocks\` text,
+\`meta\` text,
   CONSTRAINT \`chk_dc_pinned_validation\` CHECK (LENGTH(\`title\`) >= 3 AND \`title\` REGEXP '^[A-Za-z0-9 ]+$' AND \`views\` >= 0 AND \`views\` <= 10000),
   CONSTRAINT \`fk_dc_pinned_author\` FOREIGN KEY (\`author\`) REFERENCES \`dc_authors\`(\`id\`) ON DELETE CASCADE ON UPDATE CASCADE
 );
@@ -34,7 +37,22 @@ CREATE INDEX \`idx_dc_pinned_created_at\` ON \`dc_pinned\`(\`created_at\` DESC);
 --> statement-breakpoint
 CREATE INDEX \`idx_dc_pinned_created_by\` ON \`dc_pinned\`(\`created_by\`);
 --> statement-breakpoint
-CREATE UNIQUE INDEX \`idx_dc_pinned_slug\` ON \`dc_pinned\`(\`slug\`);"
+CREATE UNIQUE INDEX \`idx_dc_pinned_slug\` ON \`dc_pinned\`(\`slug\`);
+--> statement-breakpoint
+-- Junction table for many-to-many: pinned.tags -> tags
+CREATE TABLE IF NOT EXISTS \`dc_pinned_dc_tags_tags\` (
+  \`id\` varchar(36) PRIMARY KEY NOT NULL,
+  \`pinned_id\` varchar(36) NOT NULL,
+  \`tags_id\` varchar(36) NOT NULL,
+  \`created_at\` timestamp DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  CONSTRAINT \`fk_dc_pinned_dc_tags_tags_pinned\` FOREIGN KEY (\`pinned_id\`) REFERENCES \`dc_pinned\`(\`id\`) ON DELETE CASCADE ON UPDATE NO ACTION,
+  CONSTRAINT \`fk_dc_pinned_dc_tags_tags_tags\` FOREIGN KEY (\`tags_id\`) REFERENCES \`dc_tags\`(\`id\`) ON DELETE CASCADE ON UPDATE NO ACTION,
+  CONSTRAINT \`uq_dc_pinned_dc_tags_tags_pair\` UNIQUE (\`pinned_id\`, \`tags_id\`)
+);
+--> statement-breakpoint
+CREATE INDEX \`idx_dc_pinned_dc_tags_tags_pinned\` ON \`dc_pinned_dc_tags_tags\`(\`pinned_id\`);
+--> statement-breakpoint
+CREATE INDEX \`idx_dc_pinned_dc_tags_tags_tags\` ON \`dc_pinned_dc_tags_tags\`(\`tags_id\`);"
 `;
 
 exports[`builder DDL — pinned as it is today > mysql > emits the same CREATE for a localized single 1`] = `
@@ -51,6 +69,8 @@ CREATE TABLE IF NOT EXISTS \`single_pinned\` (
 \`payload\` json,
 \`author\` varchar(36),
 \`editors\` varchar(36),
+\`blocks\` text,
+\`meta\` text,
   CONSTRAINT \`chk_single_pinned_validation\` CHECK (\`views\` >= 0 AND \`views\` <= 10000),
   CONSTRAINT \`fk_single_pinned_author\` FOREIGN KEY (\`author\`) REFERENCES \`dc_authors\`(\`id\`) ON DELETE CASCADE ON UPDATE CASCADE
 );
@@ -61,7 +81,22 @@ CREATE INDEX \`idx_single_pinned_editors\` ON \`single_pinned\`(\`editors\`);
 --> statement-breakpoint
 CREATE INDEX \`idx_single_pinned_created_at\` ON \`single_pinned\`(\`created_at\` DESC);
 --> statement-breakpoint
-CREATE UNIQUE INDEX \`idx_single_pinned_slug\` ON \`single_pinned\`(\`slug\`);"
+CREATE UNIQUE INDEX \`idx_single_pinned_slug\` ON \`single_pinned\`(\`slug\`);
+--> statement-breakpoint
+-- Junction table for many-to-many: single_pinned.tags -> tags
+CREATE TABLE IF NOT EXISTS \`dc_tags_single_pinned_tags\` (
+  \`id\` varchar(36) PRIMARY KEY NOT NULL,
+  \`single_pinned_id\` varchar(36) NOT NULL,
+  \`tags_id\` varchar(36) NOT NULL,
+  \`created_at\` timestamp DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  CONSTRAINT \`fk_dc_tags_single_pinned_tags_single_pinned\` FOREIGN KEY (\`single_pinned_id\`) REFERENCES \`single_pinned\`(\`id\`) ON DELETE CASCADE ON UPDATE NO ACTION,
+  CONSTRAINT \`fk_dc_tags_single_pinned_tags_tags\` FOREIGN KEY (\`tags_id\`) REFERENCES \`dc_tags\`(\`id\`) ON DELETE CASCADE ON UPDATE NO ACTION,
+  CONSTRAINT \`uq_dc_tags_single_pinned_tags_pair\` UNIQUE (\`single_pinned_id\`, \`tags_id\`)
+);
+--> statement-breakpoint
+CREATE INDEX \`idx_dc_tags_single_pinned_tags_single_pinned\` ON \`dc_tags_single_pinned_tags\`(\`single_pinned_id\`);
+--> statement-breakpoint
+CREATE INDEX \`idx_dc_tags_single_pinned_tags_tags\` ON \`dc_tags_single_pinned_tags\`(\`tags_id\`);"
 `;
 
 exports[`builder DDL — pinned as it is today > mysql > emits the same CREATE for a single 1`] = `
@@ -83,6 +118,9 @@ CREATE TABLE IF NOT EXISTS \`single_pinned\` (
 \`lookup_code\` text,
 \`author\` varchar(36),
 \`editors\` varchar(36),
+\`state\` text   DEFAULT 'draft',
+\`blocks\` text,
+\`meta\` text,
   CONSTRAINT \`chk_single_pinned_validation\` CHECK (LENGTH(\`title\`) >= 3 AND \`title\` REGEXP '^[A-Za-z0-9 ]+$' AND \`views\` >= 0 AND \`views\` <= 10000),
   CONSTRAINT \`fk_single_pinned_author\` FOREIGN KEY (\`author\`) REFERENCES \`dc_authors\`(\`id\`) ON DELETE CASCADE ON UPDATE CASCADE
 );
@@ -95,7 +133,22 @@ CREATE INDEX \`idx_single_pinned_lookup_code\` ON \`single_pinned\`(\`lookup_cod
 --> statement-breakpoint
 CREATE INDEX \`idx_single_pinned_created_at\` ON \`single_pinned\`(\`created_at\` DESC);
 --> statement-breakpoint
-CREATE UNIQUE INDEX \`idx_single_pinned_slug\` ON \`single_pinned\`(\`slug\`);"
+CREATE UNIQUE INDEX \`idx_single_pinned_slug\` ON \`single_pinned\`(\`slug\`);
+--> statement-breakpoint
+-- Junction table for many-to-many: single_pinned.tags -> tags
+CREATE TABLE IF NOT EXISTS \`dc_tags_single_pinned_tags\` (
+  \`id\` varchar(36) PRIMARY KEY NOT NULL,
+  \`single_pinned_id\` varchar(36) NOT NULL,
+  \`tags_id\` varchar(36) NOT NULL,
+  \`created_at\` timestamp DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  CONSTRAINT \`fk_dc_tags_single_pinned_tags_single_pinned\` FOREIGN KEY (\`single_pinned_id\`) REFERENCES \`single_pinned\`(\`id\`) ON DELETE CASCADE ON UPDATE NO ACTION,
+  CONSTRAINT \`fk_dc_tags_single_pinned_tags_tags\` FOREIGN KEY (\`tags_id\`) REFERENCES \`dc_tags\`(\`id\`) ON DELETE CASCADE ON UPDATE NO ACTION,
+  CONSTRAINT \`uq_dc_tags_single_pinned_tags_pair\` UNIQUE (\`single_pinned_id\`, \`tags_id\`)
+);
+--> statement-breakpoint
+CREATE INDEX \`idx_dc_tags_single_pinned_tags_single_pinned\` ON \`dc_tags_single_pinned_tags\`(\`single_pinned_id\`);
+--> statement-breakpoint
+CREATE INDEX \`idx_dc_tags_single_pinned_tags_tags\` ON \`dc_tags_single_pinned_tags\`(\`tags_id\`);"
 `;
 
 exports[`builder DDL — pinned as it is today > mysql > emits the same CREATE for a single with Draft/Published 1`] = `
@@ -119,6 +172,9 @@ CREATE TABLE IF NOT EXISTS \`single_pinned\` (
 \`lookup_code\` text,
 \`author\` varchar(36),
 \`editors\` varchar(36),
+\`state\` text   DEFAULT 'draft',
+\`blocks\` text,
+\`meta\` text,
   CONSTRAINT \`chk_single_pinned_validation\` CHECK (LENGTH(\`title\`) >= 3 AND \`title\` REGEXP '^[A-Za-z0-9 ]+$' AND \`views\` >= 0 AND \`views\` <= 10000),
   CONSTRAINT \`fk_single_pinned_author\` FOREIGN KEY (\`author\`) REFERENCES \`dc_authors\`(\`id\`) ON DELETE CASCADE ON UPDATE CASCADE
 );
@@ -131,7 +187,22 @@ CREATE INDEX \`idx_single_pinned_lookup_code\` ON \`single_pinned\`(\`lookup_cod
 --> statement-breakpoint
 CREATE INDEX \`idx_single_pinned_created_at\` ON \`single_pinned\`(\`created_at\` DESC);
 --> statement-breakpoint
-CREATE UNIQUE INDEX \`idx_single_pinned_slug\` ON \`single_pinned\`(\`slug\`);"
+CREATE UNIQUE INDEX \`idx_single_pinned_slug\` ON \`single_pinned\`(\`slug\`);
+--> statement-breakpoint
+-- Junction table for many-to-many: single_pinned.tags -> tags
+CREATE TABLE IF NOT EXISTS \`dc_tags_single_pinned_tags\` (
+  \`id\` varchar(36) PRIMARY KEY NOT NULL,
+  \`single_pinned_id\` varchar(36) NOT NULL,
+  \`tags_id\` varchar(36) NOT NULL,
+  \`created_at\` timestamp DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  CONSTRAINT \`fk_dc_tags_single_pinned_tags_single_pinned\` FOREIGN KEY (\`single_pinned_id\`) REFERENCES \`single_pinned\`(\`id\`) ON DELETE CASCADE ON UPDATE NO ACTION,
+  CONSTRAINT \`fk_dc_tags_single_pinned_tags_tags\` FOREIGN KEY (\`tags_id\`) REFERENCES \`dc_tags\`(\`id\`) ON DELETE CASCADE ON UPDATE NO ACTION,
+  CONSTRAINT \`uq_dc_tags_single_pinned_tags_pair\` UNIQUE (\`single_pinned_id\`, \`tags_id\`)
+);
+--> statement-breakpoint
+CREATE INDEX \`idx_dc_tags_single_pinned_tags_single_pinned\` ON \`dc_tags_single_pinned_tags\`(\`single_pinned_id\`);
+--> statement-breakpoint
+CREATE INDEX \`idx_dc_tags_single_pinned_tags_tags\` ON \`dc_tags_single_pinned_tags\`(\`tags_id\`);"
 `;
 
 exports[`builder DDL — pinned as it is today > postgresql > emits the same CREATE for a collection 1`] = `
@@ -154,6 +225,9 @@ CREATE TABLE IF NOT EXISTS "dc_pinned" (
 "lookup_code" text,
 "author" text,
 "editors" text,
+"state" text   DEFAULT 'draft',
+"blocks" text,
+"meta" text,
   CONSTRAINT "chk_dc_pinned_validation" CHECK (LENGTH("title") >= 3 AND "title" ~ '^[A-Za-z0-9 ]+$' AND "views" >= 0 AND "views" <= 10000),
   CONSTRAINT "fk_dc_pinned_author" FOREIGN KEY ("author") REFERENCES "dc_authors"("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
@@ -168,7 +242,22 @@ CREATE INDEX IF NOT EXISTS "idx_dc_pinned_created_at" ON "dc_pinned"("created_at
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_dc_pinned_created_by" ON "dc_pinned"("created_by");
 --> statement-breakpoint
-CREATE UNIQUE INDEX IF NOT EXISTS "idx_dc_pinned_slug" ON "dc_pinned"("slug");"
+CREATE UNIQUE INDEX IF NOT EXISTS "idx_dc_pinned_slug" ON "dc_pinned"("slug");
+--> statement-breakpoint
+-- Junction table for many-to-many: pinned.tags -> tags
+CREATE TABLE IF NOT EXISTS "dc_pinned_dc_tags_tags" (
+  "id" text PRIMARY KEY NOT NULL,
+  "pinned_id" text NOT NULL,
+  "tags_id" text NOT NULL,
+  "created_at" timestamp DEFAULT now() NOT NULL,
+  CONSTRAINT "fk_dc_pinned_dc_tags_tags_pinned" FOREIGN KEY ("pinned_id") REFERENCES "dc_pinned"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
+  CONSTRAINT "fk_dc_pinned_dc_tags_tags_tags" FOREIGN KEY ("tags_id") REFERENCES "dc_tags"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
+  CONSTRAINT "uq_dc_pinned_dc_tags_tags_pair" UNIQUE ("pinned_id", "tags_id")
+);
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_dc_pinned_dc_tags_tags_pinned" ON "dc_pinned_dc_tags_tags"("pinned_id");
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_dc_pinned_dc_tags_tags_tags" ON "dc_pinned_dc_tags_tags"("tags_id");"
 `;
 
 exports[`builder DDL — pinned as it is today > postgresql > emits the same CREATE for a localized single 1`] = `
@@ -185,6 +274,8 @@ CREATE TABLE IF NOT EXISTS "single_pinned" (
 "payload" jsonb,
 "author" text,
 "editors" text,
+"blocks" text,
+"meta" text,
   CONSTRAINT "chk_single_pinned_validation" CHECK ("views" >= 0 AND "views" <= 10000),
   CONSTRAINT "fk_single_pinned_author" FOREIGN KEY ("author") REFERENCES "dc_authors"("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
@@ -195,7 +286,22 @@ CREATE INDEX IF NOT EXISTS "idx_single_pinned_editors" ON "single_pinned"("edito
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_single_pinned_created_at" ON "single_pinned"("created_at" DESC);
 --> statement-breakpoint
-CREATE UNIQUE INDEX IF NOT EXISTS "idx_single_pinned_slug" ON "single_pinned"("slug");"
+CREATE UNIQUE INDEX IF NOT EXISTS "idx_single_pinned_slug" ON "single_pinned"("slug");
+--> statement-breakpoint
+-- Junction table for many-to-many: single_pinned.tags -> tags
+CREATE TABLE IF NOT EXISTS "dc_tags_single_pinned_tags" (
+  "id" text PRIMARY KEY NOT NULL,
+  "single_pinned_id" text NOT NULL,
+  "tags_id" text NOT NULL,
+  "created_at" timestamp DEFAULT now() NOT NULL,
+  CONSTRAINT "fk_dc_tags_single_pinned_tags_single_pinned" FOREIGN KEY ("single_pinned_id") REFERENCES "single_pinned"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
+  CONSTRAINT "fk_dc_tags_single_pinned_tags_tags" FOREIGN KEY ("tags_id") REFERENCES "dc_tags"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
+  CONSTRAINT "uq_dc_tags_single_pinned_tags_pair" UNIQUE ("single_pinned_id", "tags_id")
+);
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_dc_tags_single_pinned_tags_single_pinned" ON "dc_tags_single_pinned_tags"("single_pinned_id");
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_dc_tags_single_pinned_tags_tags" ON "dc_tags_single_pinned_tags"("tags_id");"
 `;
 
 exports[`builder DDL — pinned as it is today > postgresql > emits the same CREATE for a single 1`] = `
@@ -217,6 +323,9 @@ CREATE TABLE IF NOT EXISTS "single_pinned" (
 "lookup_code" text,
 "author" text,
 "editors" text,
+"state" text   DEFAULT 'draft',
+"blocks" text,
+"meta" text,
   CONSTRAINT "chk_single_pinned_validation" CHECK (LENGTH("title") >= 3 AND "title" ~ '^[A-Za-z0-9 ]+$' AND "views" >= 0 AND "views" <= 10000),
   CONSTRAINT "fk_single_pinned_author" FOREIGN KEY ("author") REFERENCES "dc_authors"("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
@@ -229,7 +338,22 @@ CREATE INDEX IF NOT EXISTS "idx_single_pinned_lookup_code" ON "single_pinned"("l
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_single_pinned_created_at" ON "single_pinned"("created_at" DESC);
 --> statement-breakpoint
-CREATE UNIQUE INDEX IF NOT EXISTS "idx_single_pinned_slug" ON "single_pinned"("slug");"
+CREATE UNIQUE INDEX IF NOT EXISTS "idx_single_pinned_slug" ON "single_pinned"("slug");
+--> statement-breakpoint
+-- Junction table for many-to-many: single_pinned.tags -> tags
+CREATE TABLE IF NOT EXISTS "dc_tags_single_pinned_tags" (
+  "id" text PRIMARY KEY NOT NULL,
+  "single_pinned_id" text NOT NULL,
+  "tags_id" text NOT NULL,
+  "created_at" timestamp DEFAULT now() NOT NULL,
+  CONSTRAINT "fk_dc_tags_single_pinned_tags_single_pinned" FOREIGN KEY ("single_pinned_id") REFERENCES "single_pinned"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
+  CONSTRAINT "fk_dc_tags_single_pinned_tags_tags" FOREIGN KEY ("tags_id") REFERENCES "dc_tags"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
+  CONSTRAINT "uq_dc_tags_single_pinned_tags_pair" UNIQUE ("single_pinned_id", "tags_id")
+);
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_dc_tags_single_pinned_tags_single_pinned" ON "dc_tags_single_pinned_tags"("single_pinned_id");
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_dc_tags_single_pinned_tags_tags" ON "dc_tags_single_pinned_tags"("tags_id");"
 `;
 
 exports[`builder DDL — pinned as it is today > postgresql > emits the same CREATE for a single with Draft/Published 1`] = `
@@ -253,6 +377,9 @@ CREATE TABLE IF NOT EXISTS "single_pinned" (
 "lookup_code" text,
 "author" text,
 "editors" text,
+"state" text   DEFAULT 'draft',
+"blocks" text,
+"meta" text,
   CONSTRAINT "chk_single_pinned_validation" CHECK (LENGTH("title") >= 3 AND "title" ~ '^[A-Za-z0-9 ]+$' AND "views" >= 0 AND "views" <= 10000),
   CONSTRAINT "fk_single_pinned_author" FOREIGN KEY ("author") REFERENCES "dc_authors"("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
@@ -265,7 +392,22 @@ CREATE INDEX IF NOT EXISTS "idx_single_pinned_lookup_code" ON "single_pinned"("l
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_single_pinned_created_at" ON "single_pinned"("created_at" DESC);
 --> statement-breakpoint
-CREATE UNIQUE INDEX IF NOT EXISTS "idx_single_pinned_slug" ON "single_pinned"("slug");"
+CREATE UNIQUE INDEX IF NOT EXISTS "idx_single_pinned_slug" ON "single_pinned"("slug");
+--> statement-breakpoint
+-- Junction table for many-to-many: single_pinned.tags -> tags
+CREATE TABLE IF NOT EXISTS "dc_tags_single_pinned_tags" (
+  "id" text PRIMARY KEY NOT NULL,
+  "single_pinned_id" text NOT NULL,
+  "tags_id" text NOT NULL,
+  "created_at" timestamp DEFAULT now() NOT NULL,
+  CONSTRAINT "fk_dc_tags_single_pinned_tags_single_pinned" FOREIGN KEY ("single_pinned_id") REFERENCES "single_pinned"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
+  CONSTRAINT "fk_dc_tags_single_pinned_tags_tags" FOREIGN KEY ("tags_id") REFERENCES "dc_tags"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
+  CONSTRAINT "uq_dc_tags_single_pinned_tags_pair" UNIQUE ("single_pinned_id", "tags_id")
+);
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_dc_tags_single_pinned_tags_single_pinned" ON "dc_tags_single_pinned_tags"("single_pinned_id");
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_dc_tags_single_pinned_tags_tags" ON "dc_tags_single_pinned_tags"("tags_id");"
 `;
 
 exports[`builder DDL — pinned as it is today > sqlite > emits the same CREATE for a collection 1`] = `
@@ -288,6 +430,9 @@ CREATE TABLE IF NOT EXISTS "dc_pinned" (
 "lookup_code" text,
 "author" text,
 "editors" text,
+"state" text   DEFAULT 'draft',
+"blocks" text,
+"meta" text,
   CONSTRAINT "chk_dc_pinned_validation" CHECK (LENGTH("title") >= 3 AND "views" >= 0 AND "views" <= 10000),
   CONSTRAINT "fk_dc_pinned_author" FOREIGN KEY ("author") REFERENCES "dc_authors"("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
@@ -302,7 +447,22 @@ CREATE INDEX IF NOT EXISTS "idx_dc_pinned_created_at" ON "dc_pinned"("created_at
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_dc_pinned_created_by" ON "dc_pinned"("created_by");
 --> statement-breakpoint
-CREATE UNIQUE INDEX IF NOT EXISTS "idx_dc_pinned_slug" ON "dc_pinned"("slug");"
+CREATE UNIQUE INDEX IF NOT EXISTS "idx_dc_pinned_slug" ON "dc_pinned"("slug");
+--> statement-breakpoint
+-- Junction table for many-to-many: pinned.tags -> tags
+CREATE TABLE IF NOT EXISTS "dc_pinned_dc_tags_tags" (
+  "id" text PRIMARY KEY NOT NULL,
+  "pinned_id" text NOT NULL,
+  "tags_id" text NOT NULL,
+  "created_at" integer DEFAULT (strftime('%s', 'now')) NOT NULL,
+  CONSTRAINT "fk_dc_pinned_dc_tags_tags_pinned" FOREIGN KEY ("pinned_id") REFERENCES "dc_pinned"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
+  CONSTRAINT "fk_dc_pinned_dc_tags_tags_tags" FOREIGN KEY ("tags_id") REFERENCES "dc_tags"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
+  CONSTRAINT "uq_dc_pinned_dc_tags_tags_pair" UNIQUE ("pinned_id", "tags_id")
+);
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_dc_pinned_dc_tags_tags_pinned" ON "dc_pinned_dc_tags_tags"("pinned_id");
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_dc_pinned_dc_tags_tags_tags" ON "dc_pinned_dc_tags_tags"("tags_id");"
 `;
 
 exports[`builder DDL — pinned as it is today > sqlite > emits the same CREATE for a localized single 1`] = `
@@ -319,6 +479,8 @@ CREATE TABLE IF NOT EXISTS "single_pinned" (
 "payload" text,
 "author" text,
 "editors" text,
+"blocks" text,
+"meta" text,
   CONSTRAINT "chk_single_pinned_validation" CHECK ("views" >= 0 AND "views" <= 10000),
   CONSTRAINT "fk_single_pinned_author" FOREIGN KEY ("author") REFERENCES "dc_authors"("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
@@ -329,7 +491,22 @@ CREATE INDEX IF NOT EXISTS "idx_single_pinned_editors" ON "single_pinned"("edito
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_single_pinned_created_at" ON "single_pinned"("created_at");
 --> statement-breakpoint
-CREATE UNIQUE INDEX IF NOT EXISTS "idx_single_pinned_slug" ON "single_pinned"("slug");"
+CREATE UNIQUE INDEX IF NOT EXISTS "idx_single_pinned_slug" ON "single_pinned"("slug");
+--> statement-breakpoint
+-- Junction table for many-to-many: single_pinned.tags -> tags
+CREATE TABLE IF NOT EXISTS "dc_tags_single_pinned_tags" (
+  "id" text PRIMARY KEY NOT NULL,
+  "single_pinned_id" text NOT NULL,
+  "tags_id" text NOT NULL,
+  "created_at" integer DEFAULT (strftime('%s', 'now')) NOT NULL,
+  CONSTRAINT "fk_dc_tags_single_pinned_tags_single_pinned" FOREIGN KEY ("single_pinned_id") REFERENCES "single_pinned"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
+  CONSTRAINT "fk_dc_tags_single_pinned_tags_tags" FOREIGN KEY ("tags_id") REFERENCES "dc_tags"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
+  CONSTRAINT "uq_dc_tags_single_pinned_tags_pair" UNIQUE ("single_pinned_id", "tags_id")
+);
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_dc_tags_single_pinned_tags_single_pinned" ON "dc_tags_single_pinned_tags"("single_pinned_id");
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_dc_tags_single_pinned_tags_tags" ON "dc_tags_single_pinned_tags"("tags_id");"
 `;
 
 exports[`builder DDL — pinned as it is today > sqlite > emits the same CREATE for a single 1`] = `
@@ -351,6 +528,9 @@ CREATE TABLE IF NOT EXISTS "single_pinned" (
 "lookup_code" text,
 "author" text,
 "editors" text,
+"state" text   DEFAULT 'draft',
+"blocks" text,
+"meta" text,
   CONSTRAINT "chk_single_pinned_validation" CHECK (LENGTH("title") >= 3 AND "views" >= 0 AND "views" <= 10000),
   CONSTRAINT "fk_single_pinned_author" FOREIGN KEY ("author") REFERENCES "dc_authors"("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
@@ -363,7 +543,22 @@ CREATE INDEX IF NOT EXISTS "idx_single_pinned_lookup_code" ON "single_pinned"("l
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_single_pinned_created_at" ON "single_pinned"("created_at");
 --> statement-breakpoint
-CREATE UNIQUE INDEX IF NOT EXISTS "idx_single_pinned_slug" ON "single_pinned"("slug");"
+CREATE UNIQUE INDEX IF NOT EXISTS "idx_single_pinned_slug" ON "single_pinned"("slug");
+--> statement-breakpoint
+-- Junction table for many-to-many: single_pinned.tags -> tags
+CREATE TABLE IF NOT EXISTS "dc_tags_single_pinned_tags" (
+  "id" text PRIMARY KEY NOT NULL,
+  "single_pinned_id" text NOT NULL,
+  "tags_id" text NOT NULL,
+  "created_at" integer DEFAULT (strftime('%s', 'now')) NOT NULL,
+  CONSTRAINT "fk_dc_tags_single_pinned_tags_single_pinned" FOREIGN KEY ("single_pinned_id") REFERENCES "single_pinned"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
+  CONSTRAINT "fk_dc_tags_single_pinned_tags_tags" FOREIGN KEY ("tags_id") REFERENCES "dc_tags"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
+  CONSTRAINT "uq_dc_tags_single_pinned_tags_pair" UNIQUE ("single_pinned_id", "tags_id")
+);
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_dc_tags_single_pinned_tags_single_pinned" ON "dc_tags_single_pinned_tags"("single_pinned_id");
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_dc_tags_single_pinned_tags_tags" ON "dc_tags_single_pinned_tags"("tags_id");"
 `;
 
 exports[`builder DDL — pinned as it is today > sqlite > emits the same CREATE for a single with Draft/Published 1`] = `
@@ -387,6 +582,9 @@ CREATE TABLE IF NOT EXISTS "single_pinned" (
 "lookup_code" text,
 "author" text,
 "editors" text,
+"state" text   DEFAULT 'draft',
+"blocks" text,
+"meta" text,
   CONSTRAINT "chk_single_pinned_validation" CHECK (LENGTH("title") >= 3 AND "views" >= 0 AND "views" <= 10000),
   CONSTRAINT "fk_single_pinned_author" FOREIGN KEY ("author") REFERENCES "dc_authors"("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
@@ -399,7 +597,22 @@ CREATE INDEX IF NOT EXISTS "idx_single_pinned_lookup_code" ON "single_pinned"("l
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_single_pinned_created_at" ON "single_pinned"("created_at");
 --> statement-breakpoint
-CREATE UNIQUE INDEX IF NOT EXISTS "idx_single_pinned_slug" ON "single_pinned"("slug");"
+CREATE UNIQUE INDEX IF NOT EXISTS "idx_single_pinned_slug" ON "single_pinned"("slug");
+--> statement-breakpoint
+-- Junction table for many-to-many: single_pinned.tags -> tags
+CREATE TABLE IF NOT EXISTS "dc_tags_single_pinned_tags" (
+  "id" text PRIMARY KEY NOT NULL,
+  "single_pinned_id" text NOT NULL,
+  "tags_id" text NOT NULL,
+  "created_at" integer DEFAULT (strftime('%s', 'now')) NOT NULL,
+  CONSTRAINT "fk_dc_tags_single_pinned_tags_single_pinned" FOREIGN KEY ("single_pinned_id") REFERENCES "single_pinned"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
+  CONSTRAINT "fk_dc_tags_single_pinned_tags_tags" FOREIGN KEY ("tags_id") REFERENCES "dc_tags"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
+  CONSTRAINT "uq_dc_tags_single_pinned_tags_pair" UNIQUE ("single_pinned_id", "tags_id")
+);
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_dc_tags_single_pinned_tags_single_pinned" ON "dc_tags_single_pinned_tags"("single_pinned_id");
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_dc_tags_single_pinned_tags_tags" ON "dc_tags_single_pinned_tags"("tags_id");"
 `;
 
 exports[`field group DDL — pinned as it is today > mysql > emits the same CREATE for a field group 1`] = `
@@ -423,6 +636,10 @@ CREATE TABLE IF NOT EXISTS \`comp_pinned\` (
   \`lookup_code\` TEXT,
   \`author\` VARCHAR(36),
   \`editors\` JSON,
+  \`tags\` VARCHAR(36),
+  \`state\` BOOLEAN DEFAULT true,
+  \`blocks\` JSON,
+  \`meta\` JSON,
   \`created_at\` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   \`updated_at\` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -430,6 +647,8 @@ CREATE TABLE IF NOT EXISTS \`comp_pinned\` (
 CREATE INDEX \`idx_comp_pinned_parent\` ON \`comp_pinned\`(\`_parent_id\`, \`_parent_table\`, \`_parent_field\`);
 --> statement-breakpoint
 CREATE INDEX \`idx_comp_pinned_author\` ON \`comp_pinned\`(\`author\`);
+--> statement-breakpoint
+CREATE INDEX \`idx_comp_pinned_tags\` ON \`comp_pinned\`(\`tags\`);
 --> statement-breakpoint
 CREATE INDEX \`idx_comp_pinned_lookup_code\` ON \`comp_pinned\`(\`lookup_code\`);
 --> statement-breakpoint
@@ -452,13 +671,19 @@ CREATE TABLE IF NOT EXISTS \`comp_pinned\` (
   \`payload\` JSON,
   \`author\` VARCHAR(36),
   \`editors\` JSON,
+  \`tags\` VARCHAR(36),
+  \`state\` BOOLEAN DEFAULT true,
+  \`blocks\` JSON,
+  \`meta\` JSON,
   \`created_at\` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   \`updated_at\` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 --> statement-breakpoint
 CREATE INDEX \`idx_comp_pinned_parent\` ON \`comp_pinned\`(\`_parent_id\`, \`_parent_table\`, \`_parent_field\`);
 --> statement-breakpoint
-CREATE INDEX \`idx_comp_pinned_author\` ON \`comp_pinned\`(\`author\`);"
+CREATE INDEX \`idx_comp_pinned_author\` ON \`comp_pinned\`(\`author\`);
+--> statement-breakpoint
+CREATE INDEX \`idx_comp_pinned_tags\` ON \`comp_pinned\`(\`tags\`);"
 `;
 
 exports[`field group DDL — pinned as it is today > postgresql > emits the same CREATE for a field group 1`] = `
@@ -482,6 +707,10 @@ CREATE TABLE IF NOT EXISTS "comp_pinned" (
   "lookup_code" TEXT,
   "author" UUID,
   "editors" JSONB,
+  "tags" UUID,
+  "state" BOOLEAN DEFAULT true,
+  "blocks" JSONB,
+  "meta" JSONB,
   "created_at" TIMESTAMP NOT NULL DEFAULT NOW(),
   "updated_at" TIMESTAMP NOT NULL DEFAULT NOW()
 );
@@ -489,6 +718,8 @@ CREATE TABLE IF NOT EXISTS "comp_pinned" (
 CREATE INDEX IF NOT EXISTS "idx_comp_pinned_parent" ON "comp_pinned"("_parent_id", "_parent_table", "_parent_field");
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_comp_pinned_author" ON "comp_pinned"("author");
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_comp_pinned_tags" ON "comp_pinned"("tags");
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_comp_pinned_lookup_code" ON "comp_pinned"("lookup_code");
 --> statement-breakpoint
@@ -511,13 +742,19 @@ CREATE TABLE IF NOT EXISTS "comp_pinned" (
   "payload" JSONB,
   "author" UUID,
   "editors" JSONB,
+  "tags" UUID,
+  "state" BOOLEAN DEFAULT true,
+  "blocks" JSONB,
+  "meta" JSONB,
   "created_at" TIMESTAMP NOT NULL DEFAULT NOW(),
   "updated_at" TIMESTAMP NOT NULL DEFAULT NOW()
 );
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_comp_pinned_parent" ON "comp_pinned"("_parent_id", "_parent_table", "_parent_field");
 --> statement-breakpoint
-CREATE INDEX IF NOT EXISTS "idx_comp_pinned_author" ON "comp_pinned"("author");"
+CREATE INDEX IF NOT EXISTS "idx_comp_pinned_author" ON "comp_pinned"("author");
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_comp_pinned_tags" ON "comp_pinned"("tags");"
 `;
 
 exports[`field group DDL — pinned as it is today > sqlite > emits the same CREATE for a field group 1`] = `
@@ -541,6 +778,10 @@ CREATE TABLE IF NOT EXISTS "comp_pinned" (
   "lookup_code" TEXT,
   "author" TEXT,
   "editors" TEXT,
+  "tags" TEXT,
+  "state" INTEGER DEFAULT 1,
+  "blocks" TEXT,
+  "meta" TEXT,
   "created_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
   "updated_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
 );
@@ -548,6 +789,8 @@ CREATE TABLE IF NOT EXISTS "comp_pinned" (
 CREATE INDEX IF NOT EXISTS "idx_comp_pinned_parent" ON "comp_pinned"("_parent_id", "_parent_table", "_parent_field");
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_comp_pinned_author" ON "comp_pinned"("author");
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_comp_pinned_tags" ON "comp_pinned"("tags");
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_comp_pinned_lookup_code" ON "comp_pinned"("lookup_code");
 --> statement-breakpoint
@@ -570,11 +813,17 @@ CREATE TABLE IF NOT EXISTS "comp_pinned" (
   "payload" TEXT,
   "author" TEXT,
   "editors" TEXT,
+  "tags" TEXT,
+  "state" INTEGER DEFAULT 1,
+  "blocks" TEXT,
+  "meta" TEXT,
   "created_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
   "updated_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
 );
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_comp_pinned_parent" ON "comp_pinned"("_parent_id", "_parent_table", "_parent_field");
 --> statement-breakpoint
-CREATE INDEX IF NOT EXISTS "idx_comp_pinned_author" ON "comp_pinned"("author");"
+CREATE INDEX IF NOT EXISTS "idx_comp_pinned_author" ON "comp_pinned"("author");
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_comp_pinned_tags" ON "comp_pinned"("tags");"
 `;
