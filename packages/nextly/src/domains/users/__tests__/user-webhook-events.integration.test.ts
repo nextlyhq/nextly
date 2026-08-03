@@ -41,6 +41,7 @@ import {
   accounts as accountsSqlite,
   users as usersSqlite,
 } from "../../../schemas/users/sqlite";
+import { activityLog as activityLogSqlite } from "../../../schemas/audit/sqlite";
 import { nextlyEvents as eventsSqlite } from "../../../schemas/webhooks/sqlite";
 import { UserMutationService } from "../services/user-mutation-service";
 
@@ -54,8 +55,9 @@ const TEST_DB_URL = `file:${TEST_DB_PATH}`;
 process.env.DB_DIALECT = "sqlite";
 process.env.DATABASE_URL = TEST_DB_URL;
 
-// Production DDL from the sqlite table definitions (never hand-copied), for both
-// the users table the service writes and the nextly_events outbox it records to.
+// Production DDL from the sqlite table definitions (never hand-copied), for the
+// users table the service writes, the nextly_events outbox it records to, and
+// the activity_log it erases the removed account's identity from.
 async function ddl(): Promise<string[]> {
   const kit = await getSQLiteDrizzleKit();
   const statements = await kit.generateMigration(
@@ -66,6 +68,7 @@ async function ddl(): Promise<string[]> {
       roles: rolesSqlite,
       userRoles: userRolesSqlite,
       nextlyEvents: eventsSqlite,
+      activityLog: activityLogSqlite,
     })
   );
   return splitStatements(statements);

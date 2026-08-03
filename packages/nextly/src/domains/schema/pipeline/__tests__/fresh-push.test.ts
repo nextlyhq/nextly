@@ -459,4 +459,33 @@ describe("isIdempotencyError boundary (data-safety)", () => {
       true
     );
   });
+
+  it("tolerates a drop of something already gone", async () => {
+    const { isIdempotencyError } = await import("../sql-statement-utils");
+    // Removing a MySQL foreign key emits `DROP CONSTRAINT` and then a
+    // `DROP INDEX` for the index the server maintains behind that key, which
+    // the first statement has already taken with it. "Already gone" on a drop
+    // is the same fact as "already there" on a create: the schema is in the
+    // state the statement was asking for.
+    expect(
+      isIdempotencyError(
+        new Error(
+          "Can't DROP 'activity_log_user_id_users_id_fk'; check that column/key exists"
+        )
+      )
+    ).toBe(true);
+  });
+
+  it("still re-throws a statement that names something that never existed", async () => {
+    const { isIdempotencyError } = await import("../sql-statement-utils");
+    // The boundary for the case above. A bare "does not exist" is what
+    // PostgreSQL also reports for a statement referencing a genuinely missing
+    // table, and swallowing that would let a broken reconcile look successful.
+    expect(
+      isIdempotencyError(new Error('relation "posts" does not exist'))
+    ).toBe(false);
+    expect(
+      isIdempotencyError(new Error('column "author" does not exist'))
+    ).toBe(false);
+  });
 });
