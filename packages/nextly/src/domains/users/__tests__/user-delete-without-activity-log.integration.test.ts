@@ -24,6 +24,10 @@ import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { getSQLiteDrizzleKit } from "../../../database/drizzle-kit-lazy";
+import {
+  LEGACY_ACTIVITY_LOG_SQLITE,
+  ERASURE_COLUMNS,
+} from "../../audit/__tests__/legacy-activity-log-fixture";
 import { splitStatements } from "../../../domains/schema/pipeline/sql-statement-utils";
 import {
   roles as rolesSqlite,
@@ -107,19 +111,7 @@ describe("deleting a user on a database with no activity_log (real SQLite)", () 
     // existing one. `core-reconcile-activity-actor.integration.test.ts` pins
     // that. Failing every deletion on those installations would be a worse
     // regression than the defect the erasure fixes.
-    await adapter.executeQuery(`
-      CREATE TABLE "activity_log" (
-        "id" TEXT PRIMARY KEY,
-        "user_id" TEXT NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
-        "user_name" TEXT NOT NULL,
-        "user_email" TEXT NOT NULL,
-        "action" TEXT NOT NULL,
-        "collection" TEXT NOT NULL,
-        "entry_id" TEXT,
-        "entry_title" TEXT,
-        "metadata" TEXT,
-        "created_at" INTEGER NOT NULL
-      )`);
+    await adapter.executeQuery(LEGACY_ACTIVITY_LOG_SQLITE);
     // A fresh service, because the previous case cached its answer for a
     // database that had no table at all.
     const legacyUsers = new UserMutationService(adapter, silentLogger);
@@ -129,7 +121,9 @@ describe("deleting a user on a database with no activity_log (real SQLite)", () 
     const columns = await adapter.executeQuery<{ name: string }>(
       `SELECT name FROM pragma_table_info('activity_log')`
     );
-    expect(columns.map(c => c.name)).not.toContain("identity_erased_at");
+    for (const column of ERASURE_COLUMNS) {
+      expect(columns.map(c => c.name)).not.toContain(column);
+    }
 
     const doomed = await legacyUsers.createLocalUser({
       email: "legacy-activity-log@test.local",

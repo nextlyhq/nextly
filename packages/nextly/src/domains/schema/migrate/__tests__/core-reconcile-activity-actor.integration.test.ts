@@ -30,7 +30,11 @@ import Database from "better-sqlite3";
 import { drizzle as drizzleSqlite } from "drizzle-orm/better-sqlite3";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { getSQLiteDrizzleKit } from "../../../../database/drizzle-kit-lazy";
 import { getDialectTablesForPush } from "../../../../database/index";
+import { LEGACY_ACTIVITY_LOG_SQLITE } from "../../../audit/__tests__/legacy-activity-log-fixture";
+import { users as usersSqlite } from "../../../../schemas/users/sqlite";
+import { splitStatements } from "../../pipeline/sql-statement-utils";
 import { freshPushSchema } from "../../pipeline/fresh-push";
 
 const TEST_DIR = join(
@@ -38,37 +42,6 @@ const TEST_DIR = join(
   `nextly-core-reconcile-actor-${process.pid}-${Date.now()}`
 );
 const TEST_DB_PATH = join(TEST_DIR, "legacy.db");
-
-/** `activity_log` exactly as it stood before this change. */
-const LEGACY_ACTIVITY_LOG = `
-  CREATE TABLE "activity_log" (
-    "id" TEXT PRIMARY KEY,
-    "user_id" TEXT NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
-    "user_name" TEXT NOT NULL,
-    "user_email" TEXT NOT NULL,
-    "action" TEXT NOT NULL,
-    "collection" TEXT NOT NULL,
-    "entry_id" TEXT,
-    "entry_title" TEXT,
-    "metadata" TEXT,
-    "created_at" INTEGER NOT NULL
-  )`;
-
-const LEGACY_USERS = `
-  CREATE TABLE "users" (
-    "id" TEXT PRIMARY KEY,
-    "name" TEXT,
-    "email" TEXT NOT NULL UNIQUE,
-    "email_verified" INTEGER,
-    "password_updated_at" INTEGER,
-    "image" TEXT,
-    "password_hash" TEXT,
-    "is_active" INTEGER NOT NULL DEFAULT 0,
-    "failed_login_attempts" INTEGER NOT NULL DEFAULT 0,
-    "locked_until" INTEGER,
-    "created_at" INTEGER NOT NULL DEFAULT (unixepoch()),
-    "updated_at" INTEGER NOT NULL DEFAULT (unixepoch())
-  )`;
 
 /** The orphan: ordinary user content, absent from the core-only push. */
 const CONTENT_TABLE = `
@@ -85,17 +58,28 @@ interface ColumnInfo {
 describe("core reconcile on a pre-change SQLite database with content", () => {
   let sqlite: Database.Database;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     if (!existsSync(TEST_DIR)) mkdirSync(TEST_DIR, { recursive: true });
     sqlite = new Database(TEST_DB_PATH);
-    sqlite.exec(LEGACY_USERS);
-    sqlite.exec(LEGACY_ACTIVITY_LOG);
+    // `users` is unchanged by this work, so it comes from the production
+    // definition. Only `activity_log` is pinned to its historical shape.
+    const kit = await getSQLiteDrizzleKit();
+    const usersDdl = await kit.generateMigration(
+      await kit.generateDrizzleJson({}),
+      await kit.generateDrizzleJson({ users: usersSqlite })
+    );
+    for (const stmt of splitStatements(usersDdl)) sqlite.exec(stmt);
+    sqlite.exec(LEGACY_ACTIVITY_LOG_SQLITE);
     sqlite.exec(CONTENT_TABLE);
+    // `created_at` / `updated_at` are NOT NULL with a JS-side default in the
+    // production definition, so a raw insert has to supply them.
+    const nowEpoch = Math.floor(Date.now() / 1000);
     sqlite
       .prepare(
-        `INSERT INTO users (id, email, name, is_active) VALUES (?, ?, ?, 1)`
+        `INSERT INTO users (id, email, name, is_active, created_at, updated_at)
+         VALUES (?, ?, ?, 1, ?, ?)`
       )
-      .run("u-1", "keeper@test.local", "Keeper");
+      .run("u-1", "keeper@test.local", "Keeper", nowEpoch, nowEpoch);
     sqlite
       .prepare(
         `INSERT INTO activity_log

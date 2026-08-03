@@ -207,8 +207,17 @@ describeMaybe(
 
       let settled = false;
       let release!: () => void;
+      let acquired!: () => void;
       const held = new Promise<void>(resolve => {
         release = resolve;
+      });
+      // Starting the transaction is not the same as holding the row. Without
+      // waiting for the lock to be granted, the activity write can take its
+      // shared lock and commit first under pool or CI scheduling, and the
+      // assertion below would fail on timing while the production locking is
+      // perfectly correct.
+      const lockHeld = new Promise<void>(resolve => {
+        acquired = resolve;
       });
 
       // Hold the account row exclusively on another connection. A shared lock
@@ -217,8 +226,11 @@ describeMaybe(
         await tx.execute(
           sqlTag.raw(`SELECT id FROM users WHERE id = '${actorId}' FOR UPDATE`)
         );
+        acquired();
         await held;
       });
+
+      await lockHeld;
 
       const write = activity
         .logActivity({
