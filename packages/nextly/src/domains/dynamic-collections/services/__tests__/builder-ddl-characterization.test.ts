@@ -1,22 +1,18 @@
 /**
- * What the Schema Builder's DDL looks like today, pinned exactly.
+ * What the Schema Builder's DDL generators emit, recorded exactly.
  *
- * This suite asserts nothing about what the SQL *should* be. It records what it *is*, so that a
- * change which is supposed to move this code without altering its output can be shown to have done
- * that rather than asserted to have done it.
+ * These assert nothing about what the SQL *should* be. They record what it *is*, so that a change
+ * which is meant to leave the emitted DDL alone can be shown to have done so rather than assumed to.
  *
- * The Builder's create DDL is about to be relocated out of the request handlers and into services,
- * so a single write and its registry row can be held under one migration lock. That move is only
- * safe if the emitted SQL is untouched, and "untouched" is a claim a diff of moved code cannot
- * settle — the generator is called from a new place with arguments assembled differently, and a
- * dropped option changes the table while every test that checks column *presence* still passes.
+ * That distinction matters because the generators are called from several places with their
+ * arguments assembled differently, and an option dropped at one call site changes the table while
+ * every test asserting a column *exists* still passes.
  *
- * Whole strings rather than substrings, on purpose: the failure this guards against is a column
- * silently changing type, losing NOT NULL, or gaining a default, and a substring assertion sees none
- * of those.
+ * Whole strings rather than substrings, on purpose: the failure worth catching is a column quietly
+ * changing type, losing NOT NULL, or gaining a default, and a substring assertion sees none of those.
  *
- * If one of these fails, the question is never "update the expectation". It is "was this change
- * meant to alter the DDL?" — and if it was, the expectation moves in the same commit as the reason.
+ * A failure here never means "update the expectation". It asks whether the change was meant to alter
+ * the DDL — and if it was, the expectation moves in the same commit as the reason.
  */
 import { describe, expect, it } from "vitest";
 
@@ -44,24 +40,35 @@ const FIELDS: FieldDefinition[] = [
   { name: "lookupCode", type: "text", index: true },
 ];
 
+/**
+ * The table name carries the case, not just the option: `generateMigrationSQL` treats any
+ * `single_`-prefixed name as a single regardless of `isSingle`, so a collection asserted under a
+ * `single_` name silently snapshots the single branch and leaves collection-only columns unpinned.
+ */
 function generate(
   dialect: Dialect,
+  tableName: string,
   options: Parameters<DynamicCollectionSchemaService["generateMigrationSQL"]>[2]
 ): string {
   return new DynamicCollectionSchemaService(undefined, dialect)
-    .generateMigrationSQL("single_pinned", FIELDS, options)
+    .generateMigrationSQL(tableName, FIELDS, options)
     .trim();
 }
+
+const SINGLE_TABLE = "single_pinned";
+const COLLECTION_TABLE = "dc_pinned";
 
 describe("builder DDL — pinned as it is today", () => {
   describe.each<Dialect>(["postgresql", "mysql", "sqlite"])("%s", dialect => {
     it("emits the same CREATE for a single", () => {
-      expect(generate(dialect, { isSingle: true })).toMatchSnapshot();
+      expect(
+        generate(dialect, SINGLE_TABLE, { isSingle: true })
+      ).toMatchSnapshot();
     });
 
     it("emits the same CREATE for a single with Draft/Published", () => {
       expect(
-        generate(dialect, { isSingle: true, hasStatus: true })
+        generate(dialect, SINGLE_TABLE, { isSingle: true, hasStatus: true })
       ).toMatchSnapshot();
     });
 
@@ -69,12 +76,14 @@ describe("builder DDL — pinned as it is today", () => {
     // relocation that drops this option would recreate them on main and strand the companion.
     it("emits the same CREATE for a localized single", () => {
       expect(
-        generate(dialect, { isSingle: true, localized: true })
+        generate(dialect, SINGLE_TABLE, { isSingle: true, localized: true })
       ).toMatchSnapshot();
     });
 
     it("emits the same CREATE for a collection", () => {
-      expect(generate(dialect, { isSingle: false })).toMatchSnapshot();
+      expect(
+        generate(dialect, COLLECTION_TABLE, { isSingle: false })
+      ).toMatchSnapshot();
     });
   });
 });

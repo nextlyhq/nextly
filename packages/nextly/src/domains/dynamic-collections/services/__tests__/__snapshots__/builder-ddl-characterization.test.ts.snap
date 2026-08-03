@@ -1,12 +1,13 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
 exports[`builder DDL — pinned as it is today > mysql > emits the same CREATE for a collection 1`] = `
-"-- Create dynamic collection: single_pinned
-CREATE TABLE IF NOT EXISTS \`single_pinned\` (
+"-- Create dynamic collection: dc_pinned
+CREATE TABLE IF NOT EXISTS \`dc_pinned\` (
   \`id\` varchar(36) PRIMARY KEY NOT NULL,
   \`slug\` varchar(255) NOT NULL,
   \`created_at\` timestamp DEFAULT CURRENT_TIMESTAMP,
   \`updated_at\` timestamp DEFAULT CURRENT_TIMESTAMP,
+  \`created_by\` varchar(191),
 \`title\` text NOT NULL,
 \`slug_key\` text  UNIQUE,
 \`summary\` text,
@@ -18,11 +19,13 @@ CREATE TABLE IF NOT EXISTS \`single_pinned\` (
 \`lookup_code\` text
 );
 --> statement-breakpoint
-CREATE INDEX \`idx_single_pinned_lookup_code\` ON \`single_pinned\`(\`lookup_code\`);
+CREATE INDEX \`idx_dc_pinned_lookup_code\` ON \`dc_pinned\`(\`lookup_code\`);
 --> statement-breakpoint
-CREATE INDEX \`idx_single_pinned_created_at\` ON \`single_pinned\`(\`created_at\` DESC);
+CREATE INDEX \`idx_dc_pinned_created_at\` ON \`dc_pinned\`(\`created_at\` DESC);
 --> statement-breakpoint
-CREATE UNIQUE INDEX \`idx_single_pinned_slug\` ON \`single_pinned\`(\`slug\`);"
+CREATE INDEX \`idx_dc_pinned_created_by\` ON \`dc_pinned\`(\`created_by\`);
+--> statement-breakpoint
+CREATE UNIQUE INDEX \`idx_dc_pinned_slug\` ON \`dc_pinned\`(\`slug\`);"
 `;
 
 exports[`builder DDL — pinned as it is today > mysql > emits the same CREATE for a localized single 1`] = `
@@ -97,12 +100,13 @@ CREATE UNIQUE INDEX \`idx_single_pinned_slug\` ON \`single_pinned\`(\`slug\`);"
 `;
 
 exports[`builder DDL — pinned as it is today > postgresql > emits the same CREATE for a collection 1`] = `
-"-- Create dynamic collection: single_pinned
-CREATE TABLE IF NOT EXISTS "single_pinned" (
+"-- Create dynamic collection: dc_pinned
+CREATE TABLE IF NOT EXISTS "dc_pinned" (
   "id" text PRIMARY KEY NOT NULL,
   "slug" text NOT NULL,
   "created_at" timestamp DEFAULT now(),
   "updated_at" timestamp DEFAULT now(),
+  "created_by" text,
 "title" text NOT NULL,
 "slug_key" text  UNIQUE,
 "summary" text,
@@ -114,11 +118,13 @@ CREATE TABLE IF NOT EXISTS "single_pinned" (
 "lookup_code" text
 );
 --> statement-breakpoint
-CREATE INDEX IF NOT EXISTS "idx_single_pinned_lookup_code" ON "single_pinned"("lookup_code");
+CREATE INDEX IF NOT EXISTS "idx_dc_pinned_lookup_code" ON "dc_pinned"("lookup_code");
 --> statement-breakpoint
-CREATE INDEX IF NOT EXISTS "idx_single_pinned_created_at" ON "single_pinned"("created_at" DESC);
+CREATE INDEX IF NOT EXISTS "idx_dc_pinned_created_at" ON "dc_pinned"("created_at" DESC);
 --> statement-breakpoint
-CREATE UNIQUE INDEX IF NOT EXISTS "idx_single_pinned_slug" ON "single_pinned"("slug");"
+CREATE INDEX IF NOT EXISTS "idx_dc_pinned_created_by" ON "dc_pinned"("created_by");
+--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS "idx_dc_pinned_slug" ON "dc_pinned"("slug");"
 `;
 
 exports[`builder DDL — pinned as it is today > postgresql > emits the same CREATE for a localized single 1`] = `
@@ -193,12 +199,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS "idx_single_pinned_slug" ON "single_pinned"("s
 `;
 
 exports[`builder DDL — pinned as it is today > sqlite > emits the same CREATE for a collection 1`] = `
-"-- Create dynamic collection: single_pinned
-CREATE TABLE IF NOT EXISTS "single_pinned" (
+"-- Create dynamic collection: dc_pinned
+CREATE TABLE IF NOT EXISTS "dc_pinned" (
   "id" text PRIMARY KEY NOT NULL,
   "slug" text NOT NULL,
   "created_at" integer DEFAULT (strftime('%s', 'now')),
   "updated_at" integer DEFAULT (strftime('%s', 'now')),
+  "created_by" text,
 "title" text NOT NULL,
 "slug_key" text  UNIQUE,
 "summary" text,
@@ -210,11 +217,13 @@ CREATE TABLE IF NOT EXISTS "single_pinned" (
 "lookup_code" text
 );
 --> statement-breakpoint
-CREATE INDEX IF NOT EXISTS "idx_single_pinned_lookup_code" ON "single_pinned"("lookup_code");
+CREATE INDEX IF NOT EXISTS "idx_dc_pinned_lookup_code" ON "dc_pinned"("lookup_code");
 --> statement-breakpoint
-CREATE INDEX IF NOT EXISTS "idx_single_pinned_created_at" ON "single_pinned"("created_at");
+CREATE INDEX IF NOT EXISTS "idx_dc_pinned_created_at" ON "dc_pinned"("created_at");
 --> statement-breakpoint
-CREATE UNIQUE INDEX IF NOT EXISTS "idx_single_pinned_slug" ON "single_pinned"("slug");"
+CREATE INDEX IF NOT EXISTS "idx_dc_pinned_created_by" ON "dc_pinned"("created_by");
+--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS "idx_dc_pinned_slug" ON "dc_pinned"("slug");"
 `;
 
 exports[`builder DDL — pinned as it is today > sqlite > emits the same CREATE for a localized single 1`] = `
