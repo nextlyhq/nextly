@@ -45,17 +45,39 @@ const URL_SCHEME = /^\s*[a-z][a-z0-9+.-]*:/i;
  * selector, so the same URL is harmless there; it is the combination that
  * leaks, and this is where the combination is possible.
  */
+/**
+ * The leading and trailing run the URL parser discards.
+ *
+ * "Remove any leading and trailing C0 control or space from input." C0 is
+ * U+0000 to U+001F, which `trim()` does not cover — U+0001 is not whitespace,
+ * so a scheme hidden behind one survived a trim while resolving to the same
+ * host. Scanned by code point rather than matched, because a regexp holding
+ * literal control characters is its own hazard to read and to lint.
+ */
+function trimControlsAndSpace(value: string): string {
+  let start = 0;
+  let end = value.length;
+  while (start < end && value.charCodeAt(start) <= 0x20) start += 1;
+  while (end > start && value.charCodeAt(end - 1) <= 0x20) end -= 1;
+  return value.slice(start, end);
+}
+
 function isRemoteUrl(value: string): boolean {
-  // Normalised the way a URL parser normalises, because that is what decides
-  // where the request goes. Tab, newline and carriage return are REMOVED from a
-  // URL outright, so a scheme written with a tab inside it is fetched as
-  // `https://evil` while matching no scheme pattern. Backslashes are read as
-  // slashes for http and https, so `/\\evil.example/a` reaches another host
-  // while beginning with neither `//` nor a scheme.
-  const trimmed = value
+  // Normalised the way the URL parser normalises, because that is what decides
+  // where the request goes rather than how the value was spelled. The two
+  // removals below are the first two steps of the WHATWG basic URL parser,
+  // quoted beside each. Guessing at this twice produced two bypasses — a tab
+  // inside a scheme, then a U+0001 in front of one — so it follows the
+  // algorithm now instead of the cases anyone happened to think of.
+  //
+  // Backslashes are read as slashes for http and https, so
+  // `/\\evil.example/a` reaches another host while beginning with neither `//`
+  // nor a scheme.
+  const withoutBreaks = value
+    // "Remove all ASCII tab or newline from input."
     .replace(/[\t\n\r]/g, "")
-    .trim()
     .replaceAll("\\", "/");
+  const trimmed = trimControlsAndSpace(withoutBreaks);
   if (URL_SCHEME.test(trimmed)) return true;
   // No scheme, but still another host: `//evil.example/x.png` inherits the
   // page's protocol and nothing else.
@@ -88,29 +110,42 @@ const TEXT_ARGUMENT_FUNCTIONS = new Set([
 
 /** The first `url()` in a declaration that leaves this origin, if any. */
 function firstRemoteUrl(decl: csstree.Declaration): string | undefined {
-  const direct = remoteUrlInValue(decl.value);
-  if (direct !== undefined) return direct;
-  // A custom property holds an arbitrary token stream, so css-tree gives its
-  // value as `Raw` and the walks above see nothing inside it. The URL is still
-  // a URL: `--probe: url("https://evil")` fetches as soon as anything says
-  // `var(--probe)`. Re-parsing the raw text as a value puts it back within
-  // reach of the same two checks, so there is one definition of "remote" rather
-  // than a second one that reads text.
-  if (decl.value.type !== "Raw") return undefined;
-  let reparsed: csstree.CssNode;
-  try {
-    reparsed = csstree.parse(decl.value.value, { context: "value" });
-  } catch {
-    // Unreadable is not the same as safe. This is the one place the check
-    // cannot see what it is judging, so it refuses rather than waves it
-    // through, and reports the raw text so the author knows which line went.
-    return decl.value.value.trim();
-  }
-  return remoteUrlInValue(reparsed);
+  return remoteUrlInValue(decl.value, 0);
 }
 
-/** The first remote URL reachable in one parsed value, if any. */
-function remoteUrlInValue(value: csstree.CssNode): string | undefined {
+/**
+ * How many times a `Raw` value may be re-parsed before the search gives up.
+ *
+ * Re-parsing can yield another `Raw`, so the walk is bounded rather than
+ * trusting the input to be shallow. Three is past anything CSS nests in
+ * practice — a fallback inside a fallback inside a fallback — and a value
+ * deeper than that is refused rather than followed, because refusing costs one
+ * declaration and following forever costs the request.
+ */
+const MAX_RAW_DEPTH = 3;
+
+/**
+ * The first remote URL reachable in one value, if any.
+ *
+ * Three shapes can hold one, and missing any of them reopens the channel:
+ *
+ * A `Url` node, which is the obvious case.
+ *
+ * A `String` node used as a function ARGUMENT, since `image-set("https://…")`
+ * fetches while `content: "https://…"` is a caption. Which functions take text
+ * is the allowlist above; anything unclassified is treated as able to fetch.
+ *
+ * A `Raw` node, which is where css-tree puts anything it does not parse into a
+ * value — a custom property's whole value, and a `var()` fallback nested inside
+ * an otherwise ordinary one. Both reach the network: the browser substitutes
+ * the fallback in, and `var(--probe)` resolves the property. Re-parsing puts
+ * them back within reach of the two checks above, so "remote" keeps ONE
+ * definition rather than growing a second that reads text.
+ */
+function remoteUrlInValue(
+  value: csstree.CssNode,
+  depth: number
+): string | undefined {
   let found: string | undefined;
   // `.value` is decoded on both node types, so a scheme spelled with CSS
   // escapes is read the way a browser resolves it rather than as written.
@@ -121,10 +156,7 @@ function remoteUrlInValue(value: csstree.CssNode): string | undefined {
     },
   });
   if (found !== undefined) return found;
-  // A string is a URL when it is an ARGUMENT and text when it is not.
-  // `image-set("https://…" 1x)` fetches; `content: "https://…"` is a caption.
-  // Which functions take text is the allowlist above; anything else is treated
-  // as able to fetch, so a function nobody has classified fails closed.
+
   csstree.walk(value, {
     visit: "String",
     enter(node: csstree.StringNode) {
@@ -135,7 +167,31 @@ function remoteUrlInValue(value: csstree.CssNode): string | undefined {
       if (isRemoteUrl(node.value)) found = node.value;
     },
   });
-  return found;
+  if (found !== undefined) return found;
+
+  const raws: string[] = [];
+  csstree.walk(value, {
+    visit: "Raw",
+    enter(node: csstree.Raw) {
+      raws.push(node.value);
+    },
+  });
+  for (const raw of raws) {
+    if (raw.trim() === "") continue;
+    // Unreadable is not the same as safe. This is the one place the check
+    // cannot see what it is judging, so it refuses rather than waves it
+    // through, and reports the raw text so the author knows which line went.
+    if (depth >= MAX_RAW_DEPTH) return raw.trim();
+    let reparsed: csstree.CssNode;
+    try {
+      reparsed = csstree.parse(raw, { context: "value" });
+    } catch {
+      return raw.trim();
+    }
+    const nested = remoteUrlInValue(reparsed, depth + 1);
+    if (nested !== undefined) return nested;
+  }
+  return undefined;
 }
 
 function isDangerousValue(val: string): boolean {

