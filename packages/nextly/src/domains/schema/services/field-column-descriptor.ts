@@ -118,7 +118,7 @@ export function toSnakeCase(name: string): string {
 }
 
 /**
- * The physical columns a list of declared field names occupies.
+ * The physical columns a list of fields occupies.
  *
  * Anything deciding "has the author already declared this system field?" has to ask it of the
  * COLUMN rather than the spelling. `Title` and `title` are one column, so injecting the system
@@ -126,12 +126,22 @@ export function toSnakeCase(name: string): string {
  * Four places make that decision — both config factories, the dev-server single sync and the
  * single dispatcher's alter input — and this is the one definition they share.
  *
- * Accepts unknown entries because two of those callers run before the config has been parsed.
+ * A field that occupies no column claims none: a component or a many-to-many named `Title` keeps
+ * its values in its own table, so the system column still has to be injected beside it. Counting
+ * it would drop the system field from the config while the generators still emit the column.
+ *
+ * Takes loosely-typed fields because two of those callers run before the config has been parsed.
  */
-export function columnsDeclaredBy(names: Iterable<unknown>): Set<string> {
+export function columnsDeclaredBy(
+  fields: Iterable<
+    { name?: unknown; type?: unknown; options?: unknown } | null | undefined
+  >
+): Set<string> {
   const columns = new Set<string>();
-  for (const name of names) {
-    if (typeof name === "string") columns.add(toSnakeCase(name));
+  for (const field of fields) {
+    if (!field || typeof field.name !== "string") continue;
+    if (!fieldProducesColumn(field)) continue;
+    columns.add(toSnakeCase(field.name));
   }
   return columns;
 }

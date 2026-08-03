@@ -309,21 +309,39 @@ describe("all three descriptions of the main table agree", () => {
 });
 
 describe("columnsDeclaredBy", () => {
-  it("answers on the column, and tolerates entries that are not names", () => {
+  it("answers on the column, and tolerates entries that are not fields", () => {
     // The shared definition behind four "has the author already declared this?" decisions.
-    // Anything that is not a string is skipped rather than coerced, because two of those callers
+    // Anything without a string name is skipped rather than coerced, because two of those callers
     // run before the config has been parsed.
     expect([
       ...columnsDeclaredBy([
-        "Title",
-        "publishedAt",
-        "x_y",
-        undefined,
+        { name: "Title", type: "text" },
+        { name: "publishedAt", type: "text" },
+        { name: "x_y", type: "text" },
+        { type: "text" },
+        { name: 42, type: "text" },
         null,
-        42,
-        { name: "nope" },
+        undefined,
       ]),
     ]).toEqual(["title", "published_at", "x_y"]);
+  });
+
+  it("claims no column for a field that occupies none", () => {
+    // A component or many-to-many named `Title` keeps its values in its own table, so it does not
+    // own the `title` column and the system field still has to be injected beside it. Counting it
+    // dropped `title` from the config while the generators went on emitting the column.
+    const declared: Array<Record<string, unknown>> = [
+      { name: "Title", type: "component", component: "hero" },
+      {
+        name: "Slug",
+        type: "relationship",
+        relationTo: "tags",
+        options: { relationTo: "tags", relationType: "manyToMany" },
+      },
+      { name: "body", type: "text" },
+    ];
+
+    expect([...columnsDeclaredBy(declared)]).toEqual(["body"]);
   });
 });
 

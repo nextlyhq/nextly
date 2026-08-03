@@ -1207,7 +1207,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // field named `Title` already owns the `title` column, so prepending the system one beside
         // it hands the alter two fields for a single column.
         const declaredColumns = (fields: FieldDefinition[]): Set<string> =>
-          columnsDeclaredBy(fields.map(f => f.name));
+          columnsDeclaredBy(fields);
         const existingFieldsForAlter = omitLocalized(existingFields);
         const existingFieldColumns = declaredColumns(existingFieldsForAlter);
         const normalizedOldFields: FieldDefinition[] = [

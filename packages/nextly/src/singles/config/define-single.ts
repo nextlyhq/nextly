@@ -236,9 +236,7 @@ export function defineSingle(config: SingleConfigInput): SingleConfig {
   // Keyed by the COLUMN each field becomes, not by its declared name. A field named `Title` owns
   // the `title` column, so injecting the system one beside it declares that column twice and the
   // table cannot be created — the injection has to ask the same question the generators do.
-  const userFieldColumns = columnsDeclaredBy(
-    config.fields.map(f => ("name" in f ? f.name : undefined))
-  );
+  const userFieldColumns = columnsDeclaredBy(config.fields);
 
   const systemFields: FieldConfig[] = [];
 

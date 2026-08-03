@@ -639,7 +639,7 @@ export async function performSinglesAutoSync(
         // beside it asks for that column twice.
         const systemFields = [];
         const declaredColumns = columnsDeclaredBy(
-          (singleConfig.fields as Array<{ name?: string }>).map(f => f.name)
+          singleConfig.fields as Array<{ name?: string; type?: string }>
         );
         if (!declaredColumns.has("title")) {
           systemFields.push({ name: "title", type: "text" });
