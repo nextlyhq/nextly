@@ -234,7 +234,13 @@ export function speculativeBudget(
   return budget === undefined ? undefined : { ...budget };
 }
 
-/** Whether the structural allowance is spent and the walk must stop. */
+/**
+ * Whether the structural allowance is spent and the walk must stop.
+ *
+ * Named for WHICH allowance it reads. There are two now — structural and site —
+ * and a bare "is the budget spent?" answers for neither in particular, which is
+ * how site warnings came to be charged against the checks that decide validity.
+ */
 export function structuralAllowanceSpent(
   budget: ReadyStyleIssueBudget
 ): boolean {

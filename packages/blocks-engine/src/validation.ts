@@ -199,6 +199,8 @@ export const ISSUE_CODES = {
     "More style problems were found than the validation reports.",
   "site-issues-truncated":
     "Some token and class names were not checked against the site, so any that do not resolve are not reported.",
+  "invalid-scope":
+    "The compile scope is not a single class, so the document's rules were not scoped.",
 } as const;
 
 /** A stable validation issue code. */
