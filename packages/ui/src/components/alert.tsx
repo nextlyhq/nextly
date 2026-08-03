@@ -70,6 +70,7 @@ import { cn } from "../lib/utils";
  * - Success: <CheckCircle2 className="h-4 w-4" />
  * - Warning: <AlertTriangle className="h-4 w-4" />
  * - Destructive: <XCircle className="h-4 w-4" />
+ * @experimental
  */
 const alertVariants = cva(
   "relative flex items-start gap-3 rounded-md  border border-border p-4 text-sm   transition-colors duration-150",
@@ -97,6 +98,7 @@ const alertVariants = cva(
   }
 );
 
+/** @experimental */
 export type AlertProps = HTMLAttributes<HTMLDivElement> &
   VariantProps<typeof alertVariants>;
 
@@ -111,6 +113,7 @@ export type AlertProps = HTMLAttributes<HTMLDivElement> &
  *   <CheckCircle2 className="h-4 w-4" />
  *   <AlertDescription>Operation completed successfully</AlertDescription>
  * </Alert>
+ * @experimental
  */
 const Alert = forwardRef<HTMLDivElement, AlertProps>(
   ({ className, variant = "info", role = "alert", ...props }, ref) => {
@@ -127,6 +130,7 @@ const Alert = forwardRef<HTMLDivElement, AlertProps>(
 );
 Alert.displayName = "Alert";
 
+/** @experimental */
 export type AlertTitleProps = HTMLAttributes<HTMLHeadingElement>;
 
 /**
@@ -137,6 +141,7 @@ export type AlertTitleProps = HTMLAttributes<HTMLHeadingElement>;
  *
  * @example
  * <AlertTitle>Payment Successful</AlertTitle>
+ * @experimental
  */
 const AlertTitle = forwardRef<HTMLHeadingElement, AlertTitleProps>(
   ({ className, ...props }, ref) => {
@@ -155,6 +160,7 @@ const AlertTitle = forwardRef<HTMLHeadingElement, AlertTitleProps>(
 );
 AlertTitle.displayName = "AlertTitle";
 
+/** @experimental */
 export type AlertDescriptionProps = HTMLAttributes<HTMLDivElement>;
 
 /**
@@ -167,6 +173,7 @@ export type AlertDescriptionProps = HTMLAttributes<HTMLDivElement>;
  * <AlertDescription>
  *   Your changes have been saved. <a href="/view">View details</a>
  * </AlertDescription>
+ * @experimental
  */
 const AlertDescription = forwardRef<HTMLDivElement, AlertDescriptionProps>(
   ({ className, ...props }, ref) => {

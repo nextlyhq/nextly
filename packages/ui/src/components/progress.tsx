@@ -64,6 +64,7 @@ import { cn } from "../lib/utils";
 // Square corners: the capsule track clips the trailing edge already, so a radius
 // here would only round the leading edge, tapering low percentages into a sliver
 // narrower than the value they represent.
+/** @experimental */
 export const progressVariants = cva("h-full rounded-none transition-all", {
   variants: {
     variant: {
@@ -79,6 +80,7 @@ export const progressVariants = cva("h-full rounded-none transition-all", {
 
 /**
  * Progress component props
+ * @experimental
  */
 export type ProgressProps = {
   /**
@@ -151,6 +153,7 @@ export type ProgressProps = {
  *   );
  * }
  * ```
+ * @experimental
  */
 const Progress = React.forwardRef<HTMLDivElement, ProgressProps>(
   (

@@ -107,7 +107,7 @@ function GalleryComponent({ images, columns, caption }: GalleryComponentProps) {
           they must not follow the admin palette in either mode. */}
       {lightboxIndex !== null && (
         <div
-          className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4"
+          className="fixed inset-0 z-50 bg-overlay flex items-center justify-center p-4"
           onClick={() => setLightboxIndex(null)}
           role="dialog"
           aria-modal="true"

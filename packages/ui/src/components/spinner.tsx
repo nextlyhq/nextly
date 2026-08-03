@@ -47,6 +47,7 @@ import { cn } from "../lib/utils";
  * @example
  * // Custom color
  * <Spinner className="text-primary" />
+ * @experimental
  */
 const spinnerVariants = cva("animate-spin motion-reduce:animate-none", {
   variants: {
@@ -66,6 +67,7 @@ const spinnerVariants = cva("animate-spin motion-reduce:animate-none", {
  *
  * Extends LucideProps to support all standard SVG attributes (data-*, id, etc.)
  * while providing size variants and accessibility features.
+ * @experimental
  */
 export type SpinnerProps = Omit<LucideProps, "size"> &
   VariantProps<typeof spinnerVariants> & {
@@ -78,6 +80,7 @@ export type SpinnerProps = Omit<LucideProps, "size"> &
 
 /**
  * Spinner component for loading states
+ * @experimental
  */
 const Spinner = forwardRef<SVGSVGElement, SpinnerProps>(
   (

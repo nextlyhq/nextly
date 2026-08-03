@@ -61,14 +61,18 @@ import { usePortalContainer } from "../providers/portal-provider";
  * ```
  *
  * @see https://www.radix-ui.com/primitives/docs/components/dialog
+ * @public
  */
 
 const Sheet = DialogPrimitive.Root;
 
+/** @experimental */
 const SheetTrigger = DialogPrimitive.Trigger;
 
+/** @experimental */
 const SheetClose = DialogPrimitive.Close;
 
+/** @experimental */
 const SheetPortal = DialogPrimitive.Portal;
 
 /**
@@ -79,6 +83,7 @@ const SheetPortal = DialogPrimitive.Portal;
  * - **Background**: Black with 50% opacity + backdrop blur
  * - **Animation**: Fade in/out (150ms)
  * - **z-index**: 50
+ * @experimental
  */
 const SheetOverlay = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Overlay>,
@@ -89,7 +94,7 @@ const SheetOverlay = React.forwardRef<
       // A modal scrim: a black wash is the point, so it stays a literal
       // rather than a surface token. Painting it from `background` would
       // make it a white veil in light mode and near-invisible in dark.
-      "fixed inset-0 z-50 bg-black/50 backdrop-blur-sm",
+      "fixed inset-0 z-50 bg-overlay backdrop-blur-sm",
       "data-[state=open]:animate-in data-[state=closed]:animate-out",
       "data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
       className
@@ -104,6 +109,7 @@ SheetOverlay.displayName = DialogPrimitive.Overlay.displayName;
  * Sheet Content Variants
  *
  * Defines slide-in animations for each side and size options.
+ * @experimental
  */
 const sheetVariants = cva(
   "fixed z-50 gap-4 bg-background p-6 shadow-lg will-change-transform transition ease-in-out data-[state=closed]:duration-150 data-[state=open]:duration-150 data-[state=open]:animate-in data-[state=closed]:animate-out",
@@ -124,6 +130,7 @@ const sheetVariants = cva(
   }
 );
 
+/** @experimental */
 export interface SheetContentProps
   extends React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>,
     VariantProps<typeof sheetVariants> {}
@@ -140,6 +147,7 @@ export interface SheetContentProps
  * - **Close Button**: Positioned in top-right corner (16px from edges)
  *
  * @param side - Which edge to slide in from: "left", "right", "top", "bottom"
+ * @public
  */
 const SheetContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
@@ -170,6 +178,7 @@ SheetContent.displayName = DialogPrimitive.Content.displayName;
  *
  * - **Layout**: Flex column with 6px gap
  * - **Text Alignment**: Left (default) or center
+ * @public
  */
 const SheetHeader = ({
   className,
@@ -192,6 +201,7 @@ SheetHeader.displayName = "SheetHeader";
  *
  * - **Layout**: Flex row on desktop, column on mobile
  * - **Alignment**: Right-aligned on desktop, stretched on mobile
+ * @experimental
  */
 const SheetFooter = ({
   className,
@@ -215,6 +225,7 @@ SheetFooter.displayName = "SheetFooter";
  * - **Font**: text-lg font-semibold
  * - **Color**: text-foreground
  * - **Required**: For accessibility (screen readers)
+ * @public
  */
 const SheetTitle = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Title>,
@@ -236,6 +247,7 @@ SheetTitle.displayName = DialogPrimitive.Title.displayName;
  * - **Font**: text-sm
  * - **Color**: text-muted-foreground
  * - **Purpose**: Provide context for screen readers
+ * @public
  */
 const SheetDescription = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Description>,

@@ -12,7 +12,7 @@
  * with `"use client"` and pulls in the whole component tree, which does not
  * belong in a Node test process.
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -235,5 +235,64 @@ describe("ui STABILITY.md ledger", () => {
     expect(documentedPublic().names).toContain("toast");
     expect(documentedPublic().names.length).toBeGreaterThan(20);
     expect(publicPerSource().size).toBeGreaterThan(20);
+  });
+});
+
+/**
+ * The barrel's tags are a ledger; the tags on the declarations are what ships.
+ *
+ * They are the same fact written twice, which is only safe if something forces
+ * them to agree. The barrel's tags reached no consumer at all until the
+ * declarations carried them too: the DTS bundler flattens every re-export into
+ * one `export { … }` clause and drops the doc comment that sat on the export
+ * statement, so `@experimental` was visible in the source and absent from the
+ * published `.d.ts` that editors and API tooling actually read.
+ */
+describe("ui release tags reach the published types", () => {
+  /** Symbols re-exported from a dependency, whose declarations are not ours. */
+  const FOREIGN = new Set(["toast", "ToasterProps"]);
+
+  const builtTypes = (): string => {
+    const file = path.join(PKG_ROOT, "dist", "index.d.ts");
+    return readFileSync(file, "utf8");
+  };
+
+  const built = existsSync(path.join(PKG_ROOT, "dist", "index.d.ts"))
+    ? builtTypes()
+    : undefined;
+
+  it.runIf(built !== undefined)(
+    "carries every barrel tag through to dist/index.d.ts",
+    () => {
+      const tagged = taggedPerSource();
+      const declared = new Set(
+        [
+          ...(built ?? "").matchAll(
+            // The tag sits in a doc block immediately above the declaration it
+            // describes; capture the name that follows it.
+            /@(?:public|experimental)[\s\S]{0,400}?\*\/\s*(?:declare\s+)?(?:const|function|interface|type|class)\s+([A-Za-z0-9_$]+)/g
+          ),
+        ].map(m => m[1])
+      );
+      const missing = [...tagged.public, ...tagged.experimental]
+        .filter(name => !FOREIGN.has(name))
+        .filter(name => !declared.has(name))
+        .sort();
+
+      expect(
+        missing,
+        "Tagged in index.ts but the tag does not reach dist/index.d.ts. The " +
+          "bundler keeps a doc comment attached to a DECLARATION and drops one " +
+          "attached to an export statement, so the tag has to live on the " +
+          `declaration: ${missing.join(", ")}`
+      ).toEqual([]);
+    }
+  );
+
+  it.runIf(built !== undefined)("is not passing vacuously", () => {
+    expect((built ?? "").match(/@public/g)?.length ?? 0).toBeGreaterThan(20);
+    expect((built ?? "").match(/@experimental/g)?.length ?? 0).toBeGreaterThan(
+      50
+    );
   });
 });

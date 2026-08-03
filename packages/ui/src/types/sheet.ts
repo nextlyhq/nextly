@@ -9,6 +9,7 @@ import type * as DialogPrimitive from "@radix-ui/react-dialog";
 /**
  * Sheet root component props
  * Extends Radix UI Dialog.Root props
+ * @experimental
  */
 export type SheetProps = React.ComponentPropsWithoutRef<
   typeof DialogPrimitive.Root
@@ -17,6 +18,7 @@ export type SheetProps = React.ComponentPropsWithoutRef<
 /**
  * Sheet trigger component props
  * Extends Radix UI Dialog.Trigger props
+ * @experimental
  */
 export type SheetTriggerProps = React.ComponentPropsWithoutRef<
   typeof DialogPrimitive.Trigger
@@ -25,6 +27,7 @@ export type SheetTriggerProps = React.ComponentPropsWithoutRef<
 /**
  * Sheet close component props
  * Extends Radix UI Dialog.Close props
+ * @experimental
  */
 export type SheetCloseProps = React.ComponentPropsWithoutRef<
   typeof DialogPrimitive.Close
@@ -33,6 +36,7 @@ export type SheetCloseProps = React.ComponentPropsWithoutRef<
 /**
  * Sheet overlay component props
  * Extends Radix UI Dialog.Overlay props
+ * @experimental
  */
 export type SheetOverlayProps = React.ComponentPropsWithoutRef<
   typeof DialogPrimitive.Overlay
@@ -55,18 +59,21 @@ export type SheetContentProps = React.ComponentPropsWithoutRef<
 /**
  * Sheet header component props
  * Standard div props
+ * @experimental
  */
 export type SheetHeaderProps = React.HTMLAttributes<HTMLDivElement>;
 
 /**
  * Sheet footer component props
  * Standard div props
+ * @experimental
  */
 export type SheetFooterProps = React.HTMLAttributes<HTMLDivElement>;
 
 /**
  * Sheet title component props
  * Extends Radix UI Dialog.Title props
+ * @experimental
  */
 export type SheetTitleProps = React.ComponentPropsWithoutRef<
   typeof DialogPrimitive.Title
@@ -75,6 +82,7 @@ export type SheetTitleProps = React.ComponentPropsWithoutRef<
 /**
  * Sheet description component props
  * Extends Radix UI Dialog.Description props
+ * @experimental
  */
 export type SheetDescriptionProps = React.ComponentPropsWithoutRef<
   typeof DialogPrimitive.Description
@@ -82,10 +90,14 @@ export type SheetDescriptionProps = React.ComponentPropsWithoutRef<
 
 /**
  * Sheet component refs
+ * @experimental
  */
 export type SheetOverlayRef = React.ElementRef<typeof DialogPrimitive.Overlay>;
+/** @experimental */
 export type SheetContentRef = React.ElementRef<typeof DialogPrimitive.Content>;
+/** @experimental */
 export type SheetTitleRef = React.ElementRef<typeof DialogPrimitive.Title>;
+/** @experimental */
 export type SheetDescriptionRef = React.ElementRef<
   typeof DialogPrimitive.Description
 >;

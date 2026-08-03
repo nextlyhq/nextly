@@ -37,6 +37,7 @@ import { cn } from "../lib/utils";
  * - tel: Phone number input
  * - url: URL validation
  * - search: Search input with clear button
+ * @experimental
  */
 const inputVariants = cva(
   "file:text-foreground placeholder:text-muted-foreground placeholder:opacity-50 selection:bg-primary selection:text-primary-foreground w-full min-w-0 rounded-md border border-input bg-background text-sm transition-all duration-150 outline-none file:inline-flex file:h-7 file:border-0 file:bg-transparent file:text-sm file:font-medium disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 focus:ring-0 focus:ring-offset-0 focus:outline-none focus:border-primary! focus-visible:border-primary! aria-invalid:border-destructive aria-invalid:focus:border-destructive! data-[invalid=true]:border-destructive data-[invalid=true]:focus:border-destructive!",
@@ -54,10 +55,12 @@ const inputVariants = cva(
   }
 );
 
+/** @public */
 export interface InputProps
   extends Omit<ComponentProps<"input">, "size">,
     VariantProps<typeof inputVariants> {}
 
+/** @public */
 const Input = forwardRef<HTMLInputElement, InputProps>(
   ({ className, type, size, ...props }, ref) => {
     return (

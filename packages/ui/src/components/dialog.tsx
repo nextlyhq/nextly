@@ -57,16 +57,21 @@ import { usePortalContainer } from "../providers/portal-provider";
  * - Includes ARIA labels and descriptions
  * - Screen reader announcements via role="dialog"
  * - Close button has sr-only text for screen readers
+ * @public
  */
 
 const Dialog = DialogPrimitive.Root;
 
+/** @experimental */
 const DialogTrigger = DialogPrimitive.Trigger;
 
+/** @experimental */
 const DialogPortal = DialogPrimitive.Portal;
 
+/** @experimental */
 const DialogClose = DialogPrimitive.Close;
 
+/** @experimental */
 export type DialogOverlayProps = ComponentPropsWithoutRef<
   typeof DialogPrimitive.Overlay
 >;
@@ -74,6 +79,7 @@ export type DialogOverlayProps = ComponentPropsWithoutRef<
 /**
  * DialogOverlay - The backdrop overlay behind the dialog content.
  * Renders with black/80 opacity and blur effect per design spec.
+ * @experimental
  */
 const DialogOverlay = forwardRef<
   ElementRef<typeof DialogPrimitive.Overlay>,
@@ -86,7 +92,7 @@ const DialogOverlay = forwardRef<
       // A modal scrim: a black wash is the point, so it stays a literal
       // rather than a surface token. Painting it from `background` would
       // make it a white veil in light mode and near-invisible in dark.
-      "fixed inset-0 z-50 bg-black/80 backdrop-blur-sm transition-opacity duration-150 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
+      "fixed inset-0 z-50 bg-overlay backdrop-blur-sm transition-opacity duration-150 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
       className
     )}
     {...props}
@@ -102,6 +108,7 @@ DialogOverlay.displayName = DialogPrimitive.Overlay.displayName;
  * @variant lg - Large dialog (672px / max-w-2xl) - complex forms, data tables
  * @variant xl - Extra large dialog (896px / max-w-4xl) - content editors, media galleries
  * @variant full - Full width with margin (responsive) - fullscreen on mobile
+ * @experimental
  */
 const dialogContentVariants = cva("", {
   variants: {
@@ -118,6 +125,7 @@ const dialogContentVariants = cva("", {
   },
 });
 
+/** @experimental */
 export type DialogContentProps = ComponentPropsWithoutRef<
   typeof DialogPrimitive.Content
 > &
@@ -134,6 +142,7 @@ export type DialogContentProps = ComponentPropsWithoutRef<
  *   Your content here
  * </DialogContent>
  * ```
+ * @public
  */
 const DialogContent = forwardRef<
   ElementRef<typeof DialogPrimitive.Content>,
@@ -168,11 +177,13 @@ const DialogContent = forwardRef<
 });
 DialogContent.displayName = DialogPrimitive.Content.displayName;
 
+/** @experimental */
 export type DialogHeaderProps = HTMLAttributes<HTMLDivElement>;
 
 /**
  * DialogHeader - Container for dialog title and description.
  * Provides consistent spacing and alignment (centered on mobile, left-aligned on desktop).
+ * @public
  */
 const DialogHeader = forwardRef<HTMLDivElement, DialogHeaderProps>(
   ({ className, ...props }, ref) => (
@@ -188,6 +199,7 @@ const DialogHeader = forwardRef<HTMLDivElement, DialogHeaderProps>(
 );
 DialogHeader.displayName = "DialogHeader";
 
+/** @experimental */
 export type DialogFooterProps = HTMLAttributes<HTMLDivElement>;
 
 /**
@@ -201,6 +213,7 @@ export type DialogFooterProps = HTMLAttributes<HTMLDivElement>;
  *   <Button type="submit">Save Changes</Button>
  * </DialogFooter>
  * ```
+ * @public
  */
 const DialogFooter = forwardRef<HTMLDivElement, DialogFooterProps>(
   ({ className, ...props }, ref) => (
@@ -216,6 +229,7 @@ const DialogFooter = forwardRef<HTMLDivElement, DialogFooterProps>(
 );
 DialogFooter.displayName = "DialogFooter";
 
+/** @experimental */
 export type DialogTitleProps = ComponentPropsWithoutRef<
   typeof DialogPrimitive.Title
 >;
@@ -225,6 +239,7 @@ export type DialogTitleProps = ComponentPropsWithoutRef<
  * Uses text-lg (18px) with semibold weight per design system.
  *
  * @accessibility Required for screen readers. Always include a DialogTitle.
+ * @public
  */
 const DialogTitle = forwardRef<
   ElementRef<typeof DialogPrimitive.Title>,
@@ -241,6 +256,7 @@ const DialogTitle = forwardRef<
 ));
 DialogTitle.displayName = DialogPrimitive.Title.displayName;
 
+/** @experimental */
 export type DialogDescriptionProps = ComponentPropsWithoutRef<
   typeof DialogPrimitive.Description
 >;
@@ -251,6 +267,7 @@ export type DialogDescriptionProps = ComponentPropsWithoutRef<
  *
  * @accessibility Provides additional context for screen readers.
  * If not needed visually, you can use sr-only class.
+ * @public
  */
 const DialogDescription = forwardRef<
   ElementRef<typeof DialogPrimitive.Description>,

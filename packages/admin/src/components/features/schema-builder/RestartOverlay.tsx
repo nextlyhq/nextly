@@ -14,7 +14,7 @@ export function RestartOverlay() {
   // than a themed one, and the dots and text are read against that scrim.
   return (
     <div
-      className="fixed inset-0 z-[9998] flex items-center justify-center bg-black/75 backdrop-blur-sm"
+      className="fixed inset-0 z-[9998] flex items-center justify-center bg-overlay backdrop-blur-sm"
       role="status"
       aria-label="Server is restarting"
     >

@@ -12,6 +12,7 @@ import { cn } from "../lib/utils";
  * A pill track carrying a circular thumb is how a toggle is recognised, so both
  * parts use `rounded-full` and stay outside the `--radius` scale: at any theme
  * radius the switch must still read as a switch and not as a small checkbox.
+ * @public
  */
 function Switch({ className, ...props }: ComponentProps<typeof SwitchRoot>) {
   return (

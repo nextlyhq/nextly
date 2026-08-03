@@ -40,23 +40,27 @@ import { usePortalContainer } from "../providers/portal-provider";
  * - Grouping support with labels
  * - Placeholder text support
  * - Error state via aria-invalid
+ * @public
  */
 function Select({ ...props }: ComponentProps<typeof SelectPrimitive.Root>) {
   return <SelectPrimitive.Root data-slot="select" {...props} />;
 }
 
+/** @experimental */
 function SelectGroup({
   ...props
 }: ComponentProps<typeof SelectPrimitive.Group>) {
   return <SelectPrimitive.Group data-slot="select-group" {...props} />;
 }
 
+/** @public */
 function SelectValue({
   ...props
 }: ComponentProps<typeof SelectPrimitive.Value>) {
   return <SelectPrimitive.Value data-slot="select-value" {...props} />;
 }
 
+/** @experimental */
 const selectTriggerVariants = cva(
   // hover:border-primary (full strength) keeps the hover boundary more visible
   // than the resting border-input, not a fainter alpha of it.
@@ -75,10 +79,12 @@ const selectTriggerVariants = cva(
   }
 );
 
+/** @experimental */
 export interface SelectTriggerProps
   extends ComponentProps<typeof SelectPrimitive.Trigger>,
     VariantProps<typeof selectTriggerVariants> {}
 
+/** @public */
 const SelectTrigger = forwardRef<
   React.ElementRef<typeof SelectPrimitive.Trigger>,
   SelectTriggerProps
@@ -100,6 +106,7 @@ const SelectTrigger = forwardRef<
 
 SelectTrigger.displayName = "SelectTrigger";
 
+/** @public */
 function SelectContent({
   className,
   children,
@@ -137,6 +144,7 @@ function SelectContent({
   );
 }
 
+/** @experimental */
 function SelectLabel({
   className,
   ...props
@@ -150,6 +158,7 @@ function SelectLabel({
   );
 }
 
+/** @public */
 function SelectItem({
   className,
   children,
@@ -174,6 +183,7 @@ function SelectItem({
   );
 }
 
+/** @experimental */
 function SelectSeparator({
   className,
   ...props
@@ -187,6 +197,7 @@ function SelectSeparator({
   );
 }
 
+/** @experimental */
 function SelectScrollUpButton({
   className,
   ...props
@@ -205,6 +216,7 @@ function SelectScrollUpButton({
   );
 }
 
+/** @experimental */
 function SelectScrollDownButton({
   className,
   ...props
