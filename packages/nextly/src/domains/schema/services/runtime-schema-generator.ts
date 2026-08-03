@@ -56,6 +56,7 @@ import {
   DEFAULT_DECIMAL_SCALE,
   getColumnDescriptor,
   getSystemColumnDescriptors,
+  toSnakeCase,
 } from "./field-column-descriptor";
 
 export type SupportedDialect = DescriptorDialect;
@@ -263,10 +264,13 @@ function buildDrizzleColumnRecord(
   // suppress the system title/slug column, or the table would have neither.
   const producesColumn = (f: FieldDefinition): boolean =>
     getColumnDescriptor(f, dialect) !== null;
-  const hasTitleField = fields.some(
-    f => f.name === "title" && producesColumn(f)
-  );
-  const hasSlugField = fields.some(f => f.name === "slug" && producesColumn(f));
+  // Matched on the COLUMN the field becomes, not its declared name: an author writing `Title`
+  // means the same column, and the three places that make this decision have to agree or one
+  // injects a system column the others do not have.
+  const declaresColumn = (column: string): boolean =>
+    fields.some(f => toSnakeCase(f.name) === column && producesColumn(f));
+  const hasTitleField = declaresColumn("title");
+  const hasSlugField = declaresColumn("slug");
 
   // Localized fields live in the companion `_locales` table; omit them from the main table.
   const localizedNames = options.localized

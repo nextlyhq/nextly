@@ -438,6 +438,48 @@ export function isReservedSystemColumn(
   );
 }
 
+/**
+ * Whether an author's own field may take over this column by declaring it.
+ *
+ * True only for the columns whose presence is conditional on the author declaring them — today
+ * `title` and `slug`. Taking one over is allowed **under that column's own name only**: a field
+ * named `Title` reaches the same column but stays a different identity everywhere the declared
+ * name is the key — the runtime table's property, the payload keys a mutation generates, the
+ * response document, the generated types — so the two would write one column under two names and
+ * the generated value would overwrite the author's.
+ */
+export function isOwnableSystemColumn(
+  physicalName: string,
+  entity: SystemColumnEntity
+): boolean {
+  return SYSTEM_COLUMNS.some(
+    column =>
+      column.name === physicalName &&
+      column.appliesTo.includes(entity) &&
+      (column.presence === "unlessAuthorDeclaredTitle" ||
+        column.presence === "unlessAuthorDeclaredSlug")
+  );
+}
+
+/**
+ * Whether this column exists only because the publish lifecycle is enabled.
+ *
+ * The lifecycle owns the column's exact shape — its length, its NOT NULL, its `'draft'` default
+ * and the values publish/unpublish write — so an author's field cannot stand in for it. When the
+ * lifecycle is on, a field reaching one of these columns is a collision rather than a takeover.
+ */
+export function isLifecycleSystemColumn(
+  physicalName: string,
+  entity: SystemColumnEntity
+): boolean {
+  return SYSTEM_COLUMNS.some(
+    column =>
+      column.name === physicalName &&
+      column.appliesTo.includes(entity) &&
+      column.presence === "withStatusLifecycle"
+  );
+}
+
 /** The names a validator on `surface` refuses for an author's own field. */
 export function reservedSystemFieldNames(
   surface: ReservationSurface
