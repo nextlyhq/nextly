@@ -79,6 +79,11 @@ function errorToMetadataResult(
       statusCode: 500,
       message: fallback.defaultMessage,
       data: null,
+      // The thrown error itself, which is all this branch has to contribute:
+      // a defect in our own code must not lend the result a typed code, but it
+      // is the only thing that names where the defect was, and a boundary
+      // rebuilding a bare 500 has nothing else to chain.
+      ...errorEnvelopeFields(error),
     };
   }
   const mapped = NextlyError.fromDatabaseError(toDbError(dialect, error));
@@ -91,6 +96,11 @@ function errorToMetadataResult(
       statusCode: fallback.statusCode,
       message: error instanceof Error ? error.message : fallback.defaultMessage,
       data: null,
+      // The ORIGINAL throwable, not `mapped`. This branch exists to refuse
+      // `mapped`'s typing so the caller's fallback status survives, and taking
+      // its fields here would put back the code the branch just declined; the
+      // thrown error is also the one that actually names the failure.
+      ...errorEnvelopeFields(error),
     };
   }
   return {

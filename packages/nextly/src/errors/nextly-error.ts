@@ -301,12 +301,14 @@ export class NextlyError extends Error {
 
   static validation(opts: {
     errors: ValidationPublicData["errors"];
+    cause?: Error;
     logContext?: Record<string, unknown>;
   }): NextlyError {
     return new NextlyError({
       code: "VALIDATION_ERROR",
       publicMessage: "Validation failed.",
       publicData: { errors: opts.errors },
+      cause: opts.cause,
       logContext: opts.logContext,
     });
   }
