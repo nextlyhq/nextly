@@ -430,11 +430,35 @@ function envelopeRules(
   //   what "this is what it looks like while hovered" has to mean.
   for (const state of STYLE_STATES) {
     const byBreakpoint = styles[state];
+    // The same account the envelope itself gets, one level down. A state whose
+    // value is `[]` or a string styles nothing, and skipping it quietly leaves
+    // an author with values in the document, no CSS on the page, and nothing
+    // connecting the two.
+    if (byBreakpoint !== undefined && !isPlainRecord(byBreakpoint)) {
+      pushBoundedWarning(warningAllowance, warnings, {
+        path: pointer(basePath, state),
+        code: "invalid-style-values",
+        severity: "warning",
+        message: `Styles for "${describeValue(state)}" are ${describeValue(byBreakpoint)} rather than an object, so none of them were written.`,
+      });
+      continue;
+    }
     if (!isPlainRecord(byBreakpoint)) continue;
     for (const context of contexts) {
       const values = byBreakpoint[context.id];
-      if (!isPlainRecord(values)) continue;
       const path = pointer(pointer(basePath, state), context.id);
+      // And one level down again. `undefined` stays silent: a breakpoint a node
+      // says nothing about is the normal case, not a malformed one.
+      if (values !== undefined && !isPlainRecord(values)) {
+        pushBoundedWarning(warningAllowance, warnings, {
+          path,
+          code: "invalid-style-values",
+          severity: "warning",
+          message: `Styles at "${describeValue(context.id)}" are ${describeValue(values)} rather than an object, so none of them were written.`,
+        });
+        continue;
+      }
+      if (!isPlainRecord(values)) continue;
       const compiled = compileStyleValues(
         values,
         path,
@@ -502,7 +526,32 @@ function visibilityRules(
   warnings: ValidationIssue[],
   warningAllowance: WarningAllowance
 ): CssRule[] {
-  const devices = node.visibility?.devices;
+  // The containing structures get the same account as the values inside them.
+  // A `visibility` or `devices` that is an array, a string or null applies none
+  // of what it holds, and returning quietly is indistinguishable from a node
+  // that simply said nothing about being hidden.
+  const visibility: unknown = node.visibility;
+  if (visibility !== undefined && !isPlainRecord(visibility)) {
+    pushBoundedWarning(warningAllowance, warnings, {
+      path: pointer(basePath, "visibility"),
+      code: "invalid-visibility",
+      severity: "warning",
+      message: `Visibility is ${describeValue(visibility)} rather than an object, so none of it was applied and the node stays visible.`,
+    });
+    return [];
+  }
+  const devices: unknown = isPlainRecord(visibility)
+    ? visibility.devices
+    : undefined;
+  if (devices !== undefined && !isPlainRecord(devices)) {
+    pushBoundedWarning(warningAllowance, warnings, {
+      path: pointer(pointer(basePath, "visibility"), "devices"),
+      code: "invalid-visibility",
+      severity: "warning",
+      message: `Visibility devices are ${describeValue(devices)} rather than an object, so none of them were applied and the node stays visible.`,
+    });
+    return [];
+  }
   if (!isPlainRecord(devices)) return [];
   const rules: CssRule[] = [];
   const known = new Set(contexts.map(context => context.id));
@@ -642,6 +691,8 @@ function documentNodes(
   // Stopping at the same limits validation enforces bounds the work rather than
   // only the shape of it.
   let stopped = false;
+  // Every array entry read, usable or not.
+  let seen = 0;
   const stop = (path: string, reason: string): void => {
     if (stopped) return;
     stopped = true;
@@ -662,19 +713,26 @@ function documentNodes(
       );
       break;
     }
-    level.nodes.forEach((node, index) => {
-      if (stopped) return;
-      if (placed.length >= limits.maxNodes) {
+    // An indexed loop rather than `forEach`, and counting every ENTRY rather
+    // than every entry that turned out usable. `forEach` cannot be broken out
+    // of, so reaching the cap still walked the rest of an oversized array; and
+    // a malformed entry never reached `placed`, so an array made entirely of
+    // them passed the cap without ever tripping it. The bound has to be on what
+    // is READ, since reading is the work being bounded.
+    for (let index = 0; index < level.nodes.length; index += 1) {
+      if (seen >= limits.maxNodes) {
         stop(
           level.base,
           `Only the first ${limits.maxNodes} nodes were styled, because the document holds more than a document may.`
         );
-        return;
+        break;
       }
-      if (!isPlainRecord(node) || typeof node.id !== "string") return;
+      seen += 1;
+      const node = level.nodes[index];
+      if (!isPlainRecord(node) || typeof node.id !== "string") continue;
       const path = pointer(level.base, index);
       placed.push({ node, path });
-      if (!isPlainRecord(node.slots)) return;
+      if (!isPlainRecord(node.slots)) continue;
       // Sorted, so two documents whose slots were written in a different order
       // still compile to the same bytes.
       for (const slot of Object.keys(node.slots).sort()) {
@@ -686,7 +744,7 @@ function documentNodes(
           depth: level.depth + 1,
         });
       }
-    });
+    }
   }
   return placed;
 }
