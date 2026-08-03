@@ -6,8 +6,11 @@ import { Activity } from "@admin/types/dashboard/activity";
 
 import { RecentActivity } from "./RecentActivity";
 
-// Mock the useRecentActivity hook
-vi.mock("../../hooks/queries/useRecentActivity", () => ({
+// Mocked through the same specifier the component imports. A relative path
+// from this directory resolves to `src/components/hooks/...`, which does not
+// exist, and a mock registered against a module nobody loads leaves the real
+// hook in place.
+vi.mock("@admin/hooks/queries/useRecentActivity", () => ({
   useRecentActivity: vi.fn(),
 }));
 
@@ -88,7 +91,8 @@ describe("RecentActivity", () => {
     render(<RecentActivity />);
 
     expect(
-      screen.getByText(/failed to load recent activity/i)
+      // The copy the error branch renders.
+      screen.getByText(/failed to fetch activity stream/i)
     ).toBeInTheDocument();
   });
 
@@ -105,7 +109,9 @@ describe("RecentActivity", () => {
     render(<RecentActivity />);
 
     await waitFor(() => {
-      expect(screen.getByText(/no recent activity/i)).toBeInTheDocument();
+      expect(
+        screen.getByText(/activity log is currently silent/i)
+      ).toBeInTheDocument();
     });
   });
 
@@ -210,7 +216,7 @@ describe("RecentActivity", () => {
 
     await waitFor(() => {
       // Header should be present
-      expect(screen.getByText("Recent Activity")).toBeInTheDocument();
+      expect(screen.getByText("System Event Log")).toBeInTheDocument();
 
       // Content should be visible
       expect(screen.getByText("John Doe")).toBeVisible();

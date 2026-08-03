@@ -10,12 +10,14 @@
  * add missing TABLES but never alters an existing one, and whose redundant
  * `CREATE` statements are swallowed as "already exists".
  *
- * If this change's alterations landed in that degraded pass, an upgrade would
- * report success while leaving `activity_log` on its old shape — and the
- * erasure would then fail on a column that does not exist, taking every user
- * deletion down with it. The upgrade simulation cannot answer this: it puts
- * its dynamic table in the DESIRED schema, so drizzle-kit never sees an
- * orphan and never takes the fallback.
+ * A degraded pass alone would report success while leaving `activity_log` on
+ * its old shape, and the erasure would then fail on a column that does not
+ * exist. What makes the alterations land is the SECOND push: once the first
+ * has created whatever was missing, nothing is added, the resolver has no pair
+ * to resolve, and drizzle-kit emits the alterations itself.
+ *
+ * The upgrade simulation cannot cover this: it puts its dynamic table in the
+ * DESIRED schema, so drizzle-kit never sees an orphan and never degrades.
  *
  * The fixture is the pre-change shape written out by hand on purpose. It is a
  * historical artifact, not a copy of the current schema — deriving it from
@@ -106,12 +108,7 @@ describe("core reconcile on a pre-change SQLite database with content", () => {
     rmSync(TEST_DIR, { recursive: true, force: true });
   });
 
-  // `it.fails` because the reconcile does NOT do this today, and the assertions
-  // below say what it must do. Written as an expectation rather than a
-  // description of the bug so it inverts the moment someone repairs the
-  // degraded pass — at which point delete this wrapper, and the guard in
-  // `UserMutationService.activityLogSupportsErasure` that exists to survive it.
-  it.fails("applies the actor-column changes and keeps the rows", async () => {
+  it("applies the actor-column changes and keeps the rows", async () => {
     // The premise: the old shape really is in place, and there really is an
     // orphan content table for the resolver to trip over. Without both, this
     // suite would exercise the ordinary path and prove nothing.
