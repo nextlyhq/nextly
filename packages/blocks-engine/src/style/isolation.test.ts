@@ -815,6 +815,29 @@ describe("names CSS resolves for the whole document", () => {
     }
   });
 
+  it("reads a descriptor whose name is spelled with escapes", () => {
+    // `font\\2d family` IS `font-family` to CSS. css-tree keeps the source
+    // spelling, so comparing the raw text skips the declaration entirely and
+    // the face defines a family nothing looked at.
+    const found = findUnnamespacedGlobals(
+      `@font-face { font\\2d family: Host; src: url(a.woff2) }`,
+      SCOPE
+    );
+    expect(found).toHaveLength(1);
+    expect(found[0]?.name).toBe("Host");
+  });
+
+  it("keeps an unquoted multi-word family, which is valid", () => {
+    // The validity check must not mistake a legal family for a malformed one:
+    // `Two Words` is one family written as two identifiers.
+    const found = findUnnamespacedGlobals(
+      `@font-face { font-family: Two Words; src: url(a.woff2) }`,
+      SCOPE
+    );
+    expect(found).toHaveLength(1);
+    expect(found[0]?.name).toBe("Two Words");
+  });
+
   it("ignores a trailing descriptor that is not valid", () => {
     // The `@font-face` descriptor takes ONE family, unlike the property that
     // shares its name. A value naming two is invalid, so a browser drops it and
@@ -826,6 +849,14 @@ describe("names CSS resolves for the whole document", () => {
     );
     expect(found).toHaveLength(1);
     expect(found[0]?.name).toBe("Host");
+    // Two adjacent strings is not a `<family-name>` either, and the namespaced
+    // half of it must not be read as the family.
+    const adjacent = findUnnamespacedGlobals(
+      `@font-face { font-family: Host; font-family: "${ns("safe")}" "Decoy"; src: url(a.woff2) }`,
+      SCOPE
+    );
+    expect(adjacent).toHaveLength(1);
+    expect(adjacent[0]?.name).toBe("Host");
     // A VALID trailing descriptor still wins, which is the case above it.
     expect(
       findUnnamespacedGlobals(

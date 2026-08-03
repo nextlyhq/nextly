@@ -52,6 +52,14 @@ and the pure operations over it.
   and the element renders with what it inherits, so renaming a token must never
   make stored documents unpublishable.
 
+## The override contract
+
+What this package promises about the CSS it emits, and what it promises about
+yours: the exact specificity of every rule, what outranks specificity
+altogether, and how to override the builder on purpose.
+
+[docs/override-contract.md](./docs/override-contract.md)
+
 ## Stability
 
 Alpha. The document format carries `formatVersion` and changes to stored

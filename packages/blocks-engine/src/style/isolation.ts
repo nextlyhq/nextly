@@ -499,22 +499,51 @@ function fontFaceFamilies(css: string, node: Atrule): string[] {
   let family: string | undefined;
   for (const child of block.children) {
     if (child.type !== "Declaration") continue;
-    if (child.property.toLowerCase() !== "font-family") continue;
-    // Kept rather than returned: a later descriptor wins inside a block the way
-    // a later declaration does anywhere else, so the family this rule defines is
-    // the LAST one. Stopping at the first would let
-    // `font-family: safe; font-family: Host` pass the namespace check while
-    // defining "Host".
-    const raw = sourceTextOf(css, child.value).trim();
-    // The last VALID one, though. This descriptor takes a single family, unlike
-    // the property that shares its name, so a value naming two is invalid and a
-    // browser drops it — leaving the previous descriptor in force. Reading it
-    // anyway would let an invalid namespaced decoy stand in front of the name
-    // that really lands.
-    if (splitTopLevel(raw).length !== 1) continue;
-    family = unquote(raw);
+    if (decodeIdentifier(child.property).toLowerCase() !== "font-family") {
+      continue;
+    }
+    // The last VALID descriptor, not simply the last. This one takes a single
+    // family, unlike the property that shares its name, so a browser drops a
+    // value naming two and the previous descriptor stays in force. Reading an
+    // invalid one would let a namespaced decoy stand in front of the name that
+    // really lands.
+    //
+    // Judged on the value's own shape rather than on its text: exactly one
+    // string, or a run of identifiers, which is how an unquoted multi-word
+    // family like `Two Words` is written. Anything else — two strings, a
+    // comma-separated list, a string beside an identifier — is not a
+    // `<family-name>`.
+    const value = child.value;
+    if (value.type !== "Value") continue;
+    const parts = value.children.toArray();
+    const strings = parts.filter(part => part.type === "String").length;
+    const idents = parts.filter(part => part.type === "Identifier").length;
+    const valid =
+      (strings === 1 && parts.length === 1) ||
+      (strings === 0 && idents === parts.length && idents > 0);
+    if (!valid) continue;
+    family = unquote(sourceTextOf(css, value).trim());
   }
   return family === undefined || family === "" ? [] : [family];
+}
+
+/**
+ * A CSS identifier with its escapes resolved.
+ *
+ * A property name may be spelled with escapes and still be the same property:
+ * `font\2d family` IS `font-family`, and CSS reads it that way. css-tree keeps
+ * the source spelling, so comparing the raw text skips the declaration and the
+ * face defines a family nothing checked.
+ */
+function decodeIdentifier(name: string): string {
+  if (!name.includes("\\")) return name;
+  return name.replace(
+    /\\(?:([0-9a-fA-F]{1,6})[ \t\n\f\r]?|(.))/gs,
+    (_match, hex: string | undefined, literal: string | undefined) => {
+      if (hex !== undefined) return String.fromCodePoint(parseInt(hex, 16));
+      return literal ?? "";
+    }
+  );
 }
 
 /** One at-rule defining a name that is not namespaced to this document. */
