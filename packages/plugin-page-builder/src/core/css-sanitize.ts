@@ -14,6 +14,8 @@
 import * as csstree from "css-tree";
 import type { CssNode, List, ListItem, Rule } from "css-tree";
 
+import { isRemoteUrl } from "./url-policy";
+
 /** Why one thing was removed, in a sentence the author can act on. */
 export interface CssWarning {
   code: "remote-url" | "unsafe-value" | "unsupported-at-rule" | "unchecked";
@@ -25,9 +27,6 @@ export interface SanitizedCss {
   css: string;
   warnings: CssWarning[];
 }
-
-/** Any `scheme:` prefix, tolerating the whitespace a value may carry. */
-const URL_SCHEME = /^\s*[a-z][a-z0-9+.-]*:/i;
 
 /**
  * Whether a `url()` target leaves this origin.
@@ -52,45 +51,6 @@ const URL_SCHEME = /^\s*[a-z][a-z0-9+.-]*:/i;
  * values, allowing only hosts the site has declared. Neither half is a channel
  * without the other, and each is checked where it is written.
  */
-/**
- * The leading and trailing run the URL parser discards.
- *
- * "Remove any leading and trailing C0 control or space from input." C0 is
- * U+0000 to U+001F, which `trim()` does not cover — U+0001 is not whitespace,
- * so a scheme hidden behind one survived a trim while resolving to the same
- * host. Scanned by code point rather than matched, because a regexp holding
- * literal control characters is its own hazard to read and to lint.
- */
-function trimControlsAndSpace(value: string): string {
-  let start = 0;
-  let end = value.length;
-  while (start < end && value.charCodeAt(start) <= 0x20) start += 1;
-  while (end > start && value.charCodeAt(end - 1) <= 0x20) end -= 1;
-  return value.slice(start, end);
-}
-
-function isRemoteUrl(value: string): boolean {
-  // Normalised the way the URL parser normalises, because that is what decides
-  // where the request goes rather than how the value was spelled. The two
-  // removals below are the first two steps of the WHATWG basic URL parser,
-  // quoted beside each. Guessing at this twice produced two bypasses — a tab
-  // inside a scheme, then a U+0001 in front of one — so it follows the
-  // algorithm now instead of the cases anyone happened to think of.
-  //
-  // Backslashes are read as slashes for http and https, so
-  // `/\\evil.example/a` reaches another host while beginning with neither `//`
-  // nor a scheme.
-  const withoutBreaks = value
-    // "Remove all ASCII tab or newline from input."
-    .replace(/[\t\n\r]/g, "")
-    .replaceAll("\\", "/");
-  const trimmed = trimControlsAndSpace(withoutBreaks);
-  if (URL_SCHEME.test(trimmed)) return true;
-  // No scheme, but still another host: `//evil.example/x.png` inherits the
-  // page's protocol and nothing else.
-  return trimmed.startsWith("//");
-}
-
 /**
  * Functions whose string arguments are text rather than something to fetch.
  *

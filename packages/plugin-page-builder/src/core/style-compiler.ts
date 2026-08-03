@@ -19,6 +19,7 @@ import type {
   StyleScalar,
   StyleValues,
 } from "./types";
+import { isFetchableUrl, type RemotePattern } from "./url-policy";
 
 export interface BreakpointDef {
   id: string;
@@ -30,6 +31,9 @@ export const DEFAULT_BREAKPOINTS: BreakpointDef[] = [
   { id: "tablet", maxWidth: 1024 },
   { id: "mobile", maxWidth: 640 },
 ];
+
+export type { RemotePattern } from "./url-policy";
+export { isAllowedRemoteUrl } from "./url-policy";
 
 export interface CompileOptions {
   breakpoints?: BreakpointDef[];
@@ -89,114 +93,50 @@ function resolveScalar(v: StyleScalar): string {
   return String(v);
 }
 
-/** Validate a CSS *value*. Returns the value if safe, else null (dropped). */
-function safeValue(v: string): string | null {
+/**
+ * Validate a CSS *value*. Returns the value if safe, else null (dropped).
+ *
+ * The origin check runs over EVERY value rather than the properties someone
+ * remembered can fetch. `filter: url("https://…#f")` is a request, and it
+ * reached the page because `filter` went through the plain-value path while
+ * only `backgroundImage` was checked — a hand-kept list of fetch-capable
+ * properties is the same losing shape as a hand-kept list of dangerous
+ * schemes. Asking the parser which values contain a `url()` cannot miss one.
+ */
+function safeValue(
+  v: string,
+  remotePatterns: readonly RemotePattern[] = []
+): string | null {
   if (v == null || v === "") return null;
   if (/[{};<>]/.test(v)) return null; // fast reject declaration/tag breakout
+  let ast: csstree.CssNode;
   try {
-    csstree.parse(v, {
+    ast = csstree.parse(v, {
       context: "value",
       onParseError: e => {
         throw e;
       },
     });
-    return v;
   } catch {
     return null;
   }
-}
-
-/**
- * One host a block image may be loaded from.
- *
- * Deliberately the shape of Next.js's `images.remotePatterns`, because a Nextly
- * app already declares the same thing there for `next/image` and copying the
- * entry across should just work. `**` at the start of a hostname matches any
- * depth of subdomain; `*` matches one label. A pathname ending `/**` matches
- * any path beneath it.
- */
-export interface RemotePattern {
-  protocol?: "http" | "https";
-  hostname: string;
-  port?: string;
-  pathname?: string;
-}
-
-function hostnameMatches(pattern: string, hostname: string): boolean {
-  if (pattern === hostname) return true;
-  // `**.example.com` matches any depth of subdomain but not the bare apex,
-  // which is what Next.js does and what people expect from the extra star.
-  if (pattern.startsWith("**.")) return hostname.endsWith(pattern.slice(2));
-  if (pattern.startsWith("*.")) {
-    const rest = hostname.slice(0, -(pattern.length - 1));
-    return (
-      hostname.endsWith(pattern.slice(1)) && rest !== "" && !rest.includes(".")
-    );
-  }
-  return false;
-}
-
-function pathnameMatches(
-  pattern: string | undefined,
-  pathname: string
-): boolean {
-  if (pattern === undefined) return true;
-  if (pattern.endsWith("/**")) return pathname.startsWith(pattern.slice(0, -2));
-  return pattern === pathname;
-}
-
-/**
- * Whether a remote image URL is one this site has declared it loads from.
- *
- * Closed by default: with no patterns configured, nothing off-origin is
- * allowed. That is the same posture as `next/image`, and it is the posture the
- * page builder needs, because a remote image URL is a request whose firing can
- * be made conditional by a custom-CSS selector — so an undeclared host is a
- * channel out, not merely an unexpected image.
- */
-export function isAllowedRemoteUrl(
-  url: string,
-  patterns: readonly RemotePattern[]
-): boolean {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return false;
-  }
-  // A pattern that names no protocol means "either of the two this type
-  // allows", not "any scheme at all". Skipping the check when `protocol` was
-  // omitted admitted `ftp:`, `file:` and `ws:` against a host-only pattern —
-  // schemes `RemotePattern` cannot even express, arriving through the one path
-  // that does not look.
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
-  return patterns.some(pattern => {
-    if (
-      pattern.protocol !== undefined &&
-      `${pattern.protocol}:` !== parsed.protocol
-    ) {
-      return false;
-    }
-    if (!hostnameMatches(pattern.hostname, parsed.hostname)) return false;
-    if (pattern.port !== undefined && pattern.port !== parsed.port)
-      return false;
-    return pathnameMatches(pattern.pathname, parsed.pathname);
+  let refused = false;
+  csstree.walk(ast, {
+    visit: "Url",
+    enter(node: csstree.Url) {
+      if (!isFetchableUrl(node.value, remotePatterns)) refused = true;
+    },
   });
+  return refused ? null : v;
 }
 
 /**
  * Validate a URL for url().
  *
- * Two separate jobs. The syntactic one is unchanged: css-tree accepts a quoted
- * `javascript:` url, and a quote or paren in the value would break out of the
- * `url()` this is interpolated into.
- *
- * The other is where the request may go. A same-origin path is always fine; a
- * URL that leaves this origin is allowed only from a declared host. Custom CSS
- * is emitted into the same stylesheet as this output and can suppress a
- * declaration conditionally, so an image on an arbitrary host is a request an
- * author can gate on a secret-dependent selector and read back by its absence.
- * Refusing here is what makes that gate point at nothing.
+ * The syntactic half is unchanged: css-tree accepts a quoted `javascript:` url,
+ * and a quote or paren in the value would break out of the `url()` this is
+ * interpolated into. The origin half is the shared policy, so a structured
+ * style value and custom CSS answer "where may this fetch from" the same way.
  */
 function safeUrl(
   url: string,
@@ -205,12 +145,7 @@ function safeUrl(
   const u = url.trim();
   if (/^(javascript|data|vbscript):/i.test(u)) return null;
   if (/["')\\]/.test(u) || /[\n\r]/.test(u)) return null; // avoid url() breakout
-  // A scheme or a leading `//` means another origin may be reached; anything
-  // else resolves against this document and needs no allowlist.
-  const leavesOrigin = /^[a-z][a-z0-9+.-]*:/i.test(u) || u.startsWith("//");
-  if (!leavesOrigin) return u;
-  const absolute = u.startsWith("//") ? `https:${u}` : u;
-  return isAllowedRemoteUrl(absolute, remotePatterns) ? u : null;
+  return isFetchableUrl(u, remotePatterns) ? u : null;
 }
 
 const SIMPLE: [keyof StyleValues, string][] = [
@@ -260,7 +195,7 @@ function compileStyleValues(
     for (const side of ["top", "right", "bottom", "left"] as const) {
       const raw = sides[side];
       if (raw == null) continue;
-      const v = safeValue(raw);
+      const v = safeValue(raw, remotePatterns);
       if (v) out.push(`${prop}-${side}: ${v}`);
     }
   };
@@ -270,7 +205,7 @@ function compileStyleValues(
   for (const [key, cssName] of SIMPLE) {
     const raw = sv[key] as StyleScalar | undefined;
     if (raw == null) continue;
-    const v = safeValue(resolveScalar(raw));
+    const v = safeValue(resolveScalar(raw), remotePatterns);
     if (v) out.push(`${cssName}: ${v}`);
   }
 
@@ -286,16 +221,16 @@ function compileStyleValues(
       for (const side of ["top", "right", "bottom", "left"] as const) {
         const raw = b.width[side];
         if (raw == null) continue;
-        const v = safeValue(raw);
+        const v = safeValue(raw, remotePatterns);
         if (v) out.push(`border-${side}-width: ${v}`);
       }
     }
     if (b.style) {
-      const v = safeValue(b.style);
+      const v = safeValue(b.style, remotePatterns);
       if (v) out.push(`border-style: ${v}`);
     }
     if (b.color != null) {
-      const v = safeValue(resolveScalar(b.color));
+      const v = safeValue(resolveScalar(b.color), remotePatterns);
       if (v) out.push(`border-color: ${v}`);
     }
   }
@@ -304,17 +239,17 @@ function compileStyleValues(
   if (sv.position) {
     const p = sv.position;
     if (p.type) {
-      const v = safeValue(p.type);
+      const v = safeValue(p.type, remotePatterns);
       if (v) out.push(`position: ${v}`);
     }
     for (const side of ["top", "right", "bottom", "left"] as const) {
       const raw = p[side];
       if (raw == null) continue;
-      const v = safeValue(raw);
+      const v = safeValue(raw, remotePatterns);
       if (v) out.push(`${side}: ${v}`);
     }
     if (p.zIndex != null) {
-      const v = safeValue(String(p.zIndex));
+      const v = safeValue(String(p.zIndex), remotePatterns);
       if (v) out.push(`z-index: ${v}`);
     }
   }
@@ -334,14 +269,14 @@ function compileStyleValues(
     ] as const) {
       const raw = bg[k];
       if (raw == null) continue;
-      const v = safeValue(raw);
+      const v = safeValue(raw, remotePatterns);
       if (v) out.push(`${cssName}: ${v}`);
     }
   }
 
   // Gradient (emitted as background-image; safeValue validates the function).
   if (sv.backgroundGradient) {
-    const v = safeValue(sv.backgroundGradient);
+    const v = safeValue(sv.backgroundGradient, remotePatterns);
     if (v) out.push(`background-image: ${v}`);
   }
 
@@ -391,11 +326,11 @@ export function compileNodeCss(
   // Descendant link colors (Default / Hover) → `.cls a` / `.cls a:hover`.
   const base = node.style?.base;
   if (base?.linkColor != null) {
-    const v = safeValue(resolveScalar(base.linkColor));
+    const v = safeValue(resolveScalar(base.linkColor), remotePatterns);
     if (v) blocks.push(`.${cls} a { color: ${v}; }`);
   }
   if (base?.linkColorHover != null) {
-    const v = safeValue(resolveScalar(base.linkColorHover));
+    const v = safeValue(resolveScalar(base.linkColorHover), remotePatterns);
     if (v) blocks.push(`.${cls} a:hover { color: ${v}; }`);
   }
 

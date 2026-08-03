@@ -16,6 +16,7 @@ import {
 } from "react";
 
 import type { BlockDocument } from "../../core/types";
+import type { RemotePattern } from "../../core/url-policy";
 
 import {
   editorReducer,
@@ -24,11 +25,20 @@ import {
   type EditorState,
 } from "./editorStore";
 
+/** Stable identity so the context value does not change on every render. */
+const EMPTY_PATTERNS: readonly RemotePattern[] = [];
+
 interface EditorContextValue {
   state: EditorState;
   dispatch: Dispatch<EditorAction>;
   /** Whether page-level custom CSS is editable in this mount (Edit view: yes; field mount: no — the host form owns persistence there). */
   pageCssEnabled: boolean;
+  /**
+   * The hosts block images may load from, as the published page will apply
+   * them. The preview compiles with the same list so an allowed off-origin
+   * background does not vanish in the editor and reappear on the page.
+   */
+  remotePatterns: readonly RemotePattern[];
 }
 
 const EditorContext = createContext<EditorContextValue | null>(null);
@@ -50,12 +60,19 @@ export function EditorProvider({
   document: doc,
   draftKey,
   customCss,
+  remotePatterns,
   onDocumentChange,
   onCustomCssChange,
   children,
 }: {
   document: BlockDocument;
   draftKey: string;
+  /**
+   * The hosts block images may load from. Must match what the page is rendered
+   * with, or the preview and the published page disagree about which images
+   * exist.
+   */
+  remotePatterns?: readonly RemotePattern[];
   /**
    * Initial page-level custom CSS. Passing a string (even "") enables the page-CSS
    * editor panel; leaving it undefined (field mount) hides it.
@@ -130,7 +147,12 @@ export function EditorProvider({
 
   return (
     <EditorContext.Provider
-      value={{ state, dispatch, pageCssEnabled: customCss !== undefined }}
+      value={{
+        state,
+        dispatch,
+        pageCssEnabled: customCss !== undefined,
+        remotePatterns: remotePatterns ?? EMPTY_PATTERNS,
+      }}
     >
       {children}
     </EditorContext.Provider>

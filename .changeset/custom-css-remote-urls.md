@@ -52,6 +52,13 @@ hosts it loads from:
 />
 ```
 
+The policy covers every value a block emits, not the properties someone
+remembered can fetch: `filter: url(…)` is a request too, and `next/image`'s
+`pathname` wildcards (`/img/*` as one segment, `/img/**` as any depth) are read
+the way Next.js reads them so a copied config keeps matching. A
+protocol-relative `//host/a.png` is refused rather than resolved against a
+guess, since the document's protocol is not knowable at compile time.
+
 BREAKING for pages using a remote block background: it stops rendering until its
 host is declared. The shape is Next.js's `images.remotePatterns`, so an entry can
 be copied straight across from `next.config`, and the posture matches

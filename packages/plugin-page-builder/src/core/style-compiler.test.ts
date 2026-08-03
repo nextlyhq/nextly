@@ -132,6 +132,44 @@ describe("style compiler", () => {
     ).toContain('background-image: url("/a.jpg")');
   });
 
+  it("applies the origin policy to every value, not a list of properties", () => {
+    // `filter: url(…#f)` is a request, and it reached the page because `filter`
+    // went through the plain-value path while only `backgroundImage` was
+    // checked. A hand-kept list of fetch-capable properties is the same losing
+    // shape as a hand-kept list of dangerous schemes.
+    const filtered = makeNode(
+      "core/container",
+      {},
+      { base: { filters: 'url("https://evil.example/f.svg#x")' } }
+    );
+    expect(compileNodeCss(filtered)).not.toContain("evil.example");
+    // Declared, so allowed — the value is not simply banned.
+    expect(
+      compileNodeCss(filtered, {
+        remotePatterns: [{ protocol: "https", hostname: "evil.example" }],
+      })
+    ).toContain("evil.example");
+    // A filter with no URL in it is untouched.
+    expect(
+      compileNodeCss(
+        makeNode("core/container", {}, { base: { filters: "blur(2px)" } })
+      )
+    ).toContain("blur(2px)");
+  });
+
+  it("reads a structured URL the way the browser will, not as written", () => {
+    // A leading U+0001 survives `trim()`, and the URL parser strips it. The
+    // compiler had its own origin check that used `trim()` and a scheme regexp
+    // while the sanitizer followed the WHATWG steps, so the same value was
+    // refused in one and emitted by the other.
+    const node = makeNode(
+      "core/container",
+      {},
+      { base: { backgroundImage: "\u0001https://evil.example/a.png" } }
+    );
+    expect(compileNodeCss(node)).not.toContain("evil.example");
+  });
+
   it("refuses a protocol-relative url, which reaches another host too", () => {
     // `//evil.example/a.png` carries no scheme and still leaves the origin,
     // inheriting only the page's protocol.
@@ -390,6 +428,22 @@ describe("isAllowedRemoteUrl", () => {
     }
     expect(isAllowedRemoteUrl("https://example.com/x", hostOnly)).toBe(true);
     expect(isAllowedRemoteUrl("http://example.com/x", hostOnly)).toBe(true);
+  });
+
+  it("reads a pathname wildcard as Next.js does", () => {
+    // `pathname: "/img/*"` is a shape Next.js accepts, and this type advertises
+    // that a config copies straight across. Treating anything without a
+    // trailing `/**` as a literal made that config silently stop matching, and
+    // the image vanished with no explanation.
+    const one = [{ hostname: "cdn.example", pathname: "/img/*" }];
+    expect(isAllowedRemoteUrl("https://cdn.example/img/a.png", one)).toBe(true);
+    expect(isAllowedRemoteUrl("https://cdn.example/img/a/b.png", one)).toBe(
+      false
+    );
+    const deep = [{ hostname: "cdn.example", pathname: "/img/**" }];
+    expect(isAllowedRemoteUrl("https://cdn.example/img/a/b.png", deep)).toBe(
+      true
+    );
   });
 
   it("allows nothing when nothing is declared", () => {
