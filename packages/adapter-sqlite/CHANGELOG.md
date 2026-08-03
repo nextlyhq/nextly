@@ -1,5 +1,515 @@
 # @nextlyhq/adapter-sqlite
 
+## 0.0.2-alpha.51
+
+### Patch Changes
+
+- [#495](https://github.com/nextlyhq/nextly/pull/495) [`90dbe11`](https://github.com/nextlyhq/nextly/commit/90dbe11c6eec4b04ea56f4e27df4c62d11c3eff5) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Deleting a user no longer deletes what they did. Activity-log entries carried a cascading
+  foreign key to the account that produced them, so removing a user destroyed their entire audit
+  trail. The entries now outlive the account, and the account holder name and email are erased from
+  them at deletion time instead, leaving the record of what happened intact and attributed to an
+  opaque id. The dashboard activity feed renders those entries as a deleted actor rather than a
+  blank one.
+
+- [#520](https://github.com/nextlyhq/nextly/pull/520) [`ab607c3`](https://github.com/nextlyhq/nextly/commit/ab607c333959aed225990143e0660cbe579240f4) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The admin panel's stylesheet no longer publishes names into the page that hosts
+  it. Its animation names and Tailwind's internal `--tw-*` custom properties were
+  resolved for the whole document regardless of the scoping on its selectors, so
+  a host defining `spin`, `fade-in` or the same `--tw-*` registrations shared them
+  with the admin and the later stylesheet won. Both are namespaced now, and the
+  build fails if either escapes again.
+
+  `@nextlyhq/ui`'s Tailwind preset keeps its named-plus-default export shape,
+  which the build warns about. That shape is deliberate and now says so at the
+  build config as well as beside the code: a preset is consumed as a value, so
+  `require()` has to return it, and silencing the warning would change it back.
+
+  The field-UI kit gains `ConditionRow` (@experimental), exported from
+  `@nextlyhq/plugin-sdk/admin` alongside `operatorsForType` and
+  `operatorTakesValue`. It edits one condition as source / operator / value,
+  choosing the operators and the value editor from the source field's type, and a
+  source carrying an option list is compared against a dropdown of exactly those
+  rather than free text. It owns the row and not the container, so a surface keeps
+  its own chrome; pass `operatorsFor` to narrow the offered operators to the ones
+  your runtime can evaluate.
+
+  Both first-party condition editors now compose it. The schema builder's gains
+  nothing an author will notice beyond the value dropdown; the form builder's
+  gains type-aware comparisons, a dropdown for choice fields, and typed number and
+  date inputs. Stored shapes are unchanged in both, including the form builder's
+  `comparison` key and its seven-comparison vocabulary.
+
+- [#493](https://github.com/nextlyhq/nextly/pull/493) [`d8d5bfe`](https://github.com/nextlyhq/nextly/commit/d8d5bfe868e3c6eb4a26851ceebb9b466e1a33ba) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Keep the durable first-publication marker on every shape the entry editor uses, and let the
+  editor trust it. A published entry that was unpublished and then reloaded no longer offers its
+  slug back to the title generator, so republishing lands at the address the links already point
+  at. The marker is consulted only for a slug shared by every language, because it records that a
+  document was public somewhere rather than in one particular language.
+
+  The marker also survives editing: a document with a pending working draft now reports it on the
+  save response and on the draft read, as a date rather than a string, matching an ordinary read.
+
+- [#515](https://github.com/nextlyhq/nextly/pull/515) [`19efb3a`](https://github.com/nextlyhq/nextly/commit/19efb3a7018b7fae2aa695333493dfd137f96bd9) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The admin now reports a save whose follow-up actions failed, instead of showing it as a clean save.
+
+  A post-commit hook (`afterCreate` / `afterUpdate` / `afterDelete`) runs once the row is already
+  durable, so a handler failing there cannot un-save it. The server has always answered success and
+  carried the failure alongside as `warnings`, but the admin's entry clients returned only `item` and
+  discarded that array, so a search index that was not reindexed, a webhook that was not delivered or
+  a cache that was not purged looked identical to a clean write.
+
+  Creating, updating or deleting an entry now shows "Entry updated successfully, but 2 follow-up
+  actions failed" with the failures behind a disclosure. It stays a success toast, never an error:
+  the row IS saved, and reporting a failure would invite the editor to repeat a write that already
+  took effect.
+
+  `entryApi.create`, `entryApi.update` and `entryApi.delete` now resolve to `{ item, warnings? }`
+  rather than the entry alone. The `onSuccess` callbacks on `useCreateEntry`, `useUpdateEntry` and
+  `useDeleteEntry` still receive the entry, so callers of those hooks are unaffected.
+
+- [#504](https://github.com/nextlyhq/nextly/pull/504) [`e7a675f`](https://github.com/nextlyhq/nextly/commit/e7a675f6473d0669f2d52c00edd3a190d370cf30) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Schema Builder tables keep the text column width they had. Creating a field group or single routed its columns through the shared descriptor, which read a text field with no stated width as bounded where the previous generator read it as unbounded, so on MySQL a new text column held 255 characters instead of 65 535.
+
+  A text field that limits its length now gets a column at exactly that limit, on every path that can build one: a field limited to 400 characters no longer lands in a column that rejects what its own validation accepts. The limit is the field's validation maximum, which is the one the Schema Builder has always sized a bounded column from. Localized companion migrations, Single identity seeding, and columns added to an existing table all recognise the bounded text column, so a freshly generated migration applies, a new Single keeps its seeded title and slug, and a column added at boot is not reported as changed on the next preview.
+
+  A field whose type belongs to a plugin that is not loaded also keeps the unbounded column it was built with, instead of being reported as a narrowing on a table nothing has touched.
+
+  A field group's text field that declares a maximum length keeps the bounded column it was created with. Its width is declared under a different key from a collection's, which the schema comparison did not read, so on PostgreSQL such a field was reported as a type change on a column that had not changed.
+
+- [#509](https://github.com/nextlyhq/nextly/pull/509) [`c686245`](https://github.com/nextlyhq/nextly/commit/c6862456110db02565c3759ec8daf7b32c2fd228) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - **Behaviour change.** A code-first collection or single that declares a field named `id`,
+  `createdAt`, `created_at`, `updatedAt` or `updated_at` is now refused when the config is read,
+  instead of failing later during schema application. Any casing that resolves to one of those
+  columns is refused too, so `CreatedAt` is caught alongside `createdAt`.
+
+  Such a collection could never have worked: the field is emitted alongside the injected column and
+  the database rejects a table that declares the same column twice. The error now names the column
+  it collides with, and arrives where the name is chosen.
+
+  `title`, `slug` and `status` are unaffected and remain declarable — the first two step aside for
+  an author's own field, and a `status` field is taken up by the draft/publish lifecycle.
+
+- [#507](https://github.com/nextlyhq/nextly/pull/507) [`f348a0f`](https://github.com/nextlyhq/nextly/commit/f348a0f0b65b46fcb5697c2f0fe1c9fcd45d0e11) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Resolve a field name to its database column the same way everywhere. A Schema Builder collection
+  created a field whose name began with a capital under an extra leading underscore, while the
+  runtime schema and the schema diff addressed it without one — so the table and every read of it
+  disagreed, and the diff reported the column missing on every apply.
+
+  Every decision about which column a field occupies now asks the same question of the same
+  conversion: which system column an author's field replaces, whether two names collide, which system
+  fields a config factory injects, and which columns an ALTER may touch. Two fields whose names reach
+  one column (such as `foo_bar` and `FooBar`) are now reported where the names are chosen rather than
+  failing during schema application, and editing a many-to-many field's index or flags no longer emits
+  statements against a column it never had.
+
+  Field types that store their values in their own tables, such as a component or a many-to-many
+  relationship, are consistently treated as occupying no column: they neither collide with each other
+  nor suppress a system column that still has to be injected beside them.
+
+  **Two configurations that were previously accepted are now refused at startup, with an error naming
+  the fix.** A field may replace the system `title` or `slug` column only under that column's own
+  name: `title` still works and is unchanged, while `Title` is refused, because it reaches the same
+  column while remaining a separate identity in every payload — a create carrying `Title` gained a
+  second generated `title` and the generated value overwrote the author's. And a field whose name
+  reaches a column the Draft/Published lifecycle owns is refused while that lifecycle is enabled; such
+  a collection could never have been created, since the column was declared twice. With the lifecycle
+  off, `status` remains an ordinary field name.
+
+  Emitted SQL is unchanged for every field name the Schema Builder accepts.
+
+- [#496](https://github.com/nextlyhq/nextly/pull/496) [`387061e`](https://github.com/nextlyhq/nextly/commit/387061eb80a94ac758e17ceeb811d1b0026e68b6) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Reject a field named `id`, `createdAt` or `updatedAt` in a Field Group (component), through both
+  the visual builder and `defineFieldGroup`. A component keeps its values in a table of its own
+  carrying those columns, so such a field is emitted into the same `CREATE TABLE` as the injected one
+  and the database refuses the statement. The name is now refused where it is chosen, with a message
+  saying which system column it collides with.
+
+  Field groups that already declare such a field could never have had a working table, since creating
+  it fails; they will now be reported at configuration time instead of during schema application.
+
+- [#505](https://github.com/nextlyhq/nextly/pull/505) [`e7316d8`](https://github.com/nextlyhq/nextly/commit/e7316d835c635a06880deaf8e16e5bebadcd4d74) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A core schema change now reaches a database that already holds content. Adding a column to
+  one of Nextly own tables, or changing a constraint on one, was silently skipped on SQLite and
+  MySQL whenever any content table existed, while nextly migrate still reported success. The
+  reconcile now runs a second pass after a degraded one: with nothing left to create, the schema
+  differ has no ambiguity to resolve and emits the alterations it previously abandoned.
+
+- [#510](https://github.com/nextlyhq/nextly/pull/510) [`781fa81`](https://github.com/nextlyhq/nextly/commit/781fa816354ad962a919a81396b9fc4123ee196b) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Custom CSS in the page builder can no longer end the `<style>` element it is
+  rendered into. A value written with a CSS escape, such as
+  `content: "\3c /style>"`, contains no markup as authored but was decoded into
+  markup when the stylesheet was serialized, and on a server-rendered page the
+  browser then parsed whatever followed it as HTML. Those sequences are now
+  escaped on the way out, so they still mean the same thing to CSS and nothing to
+  the HTML parser.
+
+  Custom CSS also keeps its meaning inside `:not()`, `:is()`, `:where()` and
+  `:has()`. Scoping used to rewrite the selectors held by those, so
+  `.a:has(> .b)` silently became "has a `.b` anywhere under the page root".
+
+- [#508](https://github.com/nextlyhq/nextly/pull/508) [`444bd26`](https://github.com/nextlyhq/nextly/commit/444bd26fef33fe4c4a7e511bc77359d64fde375d) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - An error thrown by a Direct API call now chains the failure it actually came from. The public
+  result shape drops the driver error and the identifiers the thrower attached, and the boundary
+  rebuilt from what survived, so every unexpected failure arrived looking alike. The original is
+  carried alongside the envelope and chained as the rebuilt error cause.
+
+- [#490](https://github.com/nextlyhq/nextly/pull/490) [`a2e92ae`](https://github.com/nextlyhq/nextly/commit/a2e92aed1bf1e9133e898274c98a8b5bef208338) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Blocks now receive a render context, so a block that reads content is an
+  ordinary async component rather than something the API had no way to express.
+  A slot is now something a block draws rather than something it receives already
+  drawn: `renderSlot(name, ctx?)` replaces the map of rendered children, so a
+  repeater can draw its template once per entry with that entry's values, and a
+  block that hides a panel no longer pays to render it.
+
+  A block's `supports` is checked against the catalog while it is being written
+  instead of at boot, and a plugin that registers its own support adds it to that
+  check by augmenting `BlockSupportKeys` in `@nextlyhq/plugin-sdk/blocks`. A key
+  lists the sub-flags it recognises as a union of strings, and declares either
+  `never` or `true` when it is all-or-nothing; both are read the same way, and a
+  sub-flag the key does not declare is refused where it is written. The
+  types a block definition asks for are all reachable from that same subpath, so
+  writing a block no longer means importing the engine directly. Renderers now
+  describe what they provide once by augmenting `BlockRenderContext`, so `ctx` is
+  typed without every block naming a context type of its own.
+
+  Breaking, in an experimental package:
+  - `BlockSupportValue` is no longer exported from `@nextlyhq/plugin-sdk/blocks`.
+    It is the shape the registry stores from every source, so as authoring
+    vocabulary it accepted a sub-flag name the per-key check refuses. Write a
+    shared setting for one key as `BlockSupports["spacing"]`, or a whole object
+    through `blockSupports()`.
+  - `BlockRenderResult` from `@nextlyhq/plugin-sdk/blocks` is now
+    `ReactNode | Promise<ReactNode>` rather than the engine's `unknown`, so a
+    helper typed with it satisfies a block's `render`.
+  - `BlockRenderArgs.slots` is replaced by `BlockRenderArgs.renderSlot`.
+  - `BlockDefinition.resolve` is removed. Nothing ever called it, so a data-loading
+    function written against it silently never ran; blocks read data through `ctx`.
+  - `createRevision`, `pruneRevisions` and `Revision` are removed from
+    `@nextlyhq/plugin-page-builder`. They duplicated the content-versioning
+    support that already ships in core, and nothing in the package used them.
+
+- [#512](https://github.com/nextlyhq/nextly/pull/512) [`8c36bb6`](https://github.com/nextlyhq/nextly/commit/8c36bb6aad3c5e7df9b2d194a5710a3a957aaa6c) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Record the outcome of every event the outbox captures. `success | failure |
+unknown` is the vocabulary the audit and observability schemas converge on, and
+  the one field NIST SP 800-53 AU-3(e) requires that the envelope did not already
+  carry.
+
+  Absence means success, which is what every event recorded so far is: a row is
+  written inside the transaction of a change that commits, so a recorded event is
+  by construction a completed one — and that is also why the column's default is
+  the correct value for existing rows. The field exists so that a refusal, such as
+  a denied publish, can be recorded as the distinct thing it is rather than being
+  indistinguishable from a change that happened.
+
+  Additive and optional on the webhook envelope, so existing subscribers are
+  unaffected.
+
+- [#513](https://github.com/nextlyhq/nextly/pull/513) [`c9ef62a`](https://github.com/nextlyhq/nextly/commit/c9ef62a6d3d77078b5f0a5505e18e8e2931478dd) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Record which retention window governs each captured event, and shorten the audit
+  window to 90 days.
+
+  The event table has carried a `retention_class` column since the outbox shipped,
+  but nothing ever wrote anything but `webhook`, so every row was measured against
+  the short outbox-hygiene window. The class now follows from why the row was
+  recorded: a row admitted by the audit seam is audit-class and outlives outbox
+  hygiene, while one admitted only because an endpoint exists stays webhook-class.
+  A row that is both takes the longer window, since evicting it on the delivery
+  clock would lose history nothing can reconstruct.
+
+  The audit window default moves from 365 days to 90. The previous value was
+  justified as "SOC 2 practice is a one-year floor", which does not hold up:
+  neither SOC 2 nor ISO 27001 A.8.15 mandates a period — both require only that
+  retention be defined and risk-based — and the twelve-month figure is PCI DSS
+  convention that has spread into the wider discourse. 90 days is where comparable
+  products land for content activity. A deployment genuinely in PCI scope should
+  raise `auditEventsMaxAgeMs`, which is a decision only the operator can make.
+
+  `auditEventsMaxAgeMs` is now raised to `eventsMaxAgeMs` whenever the webhook
+  window is the longer of the two, including when it is `false`. A row admitted by
+  both the audit seam and an endpoint is labelled `audit` because that is the
+  longest retention it needs, so a shorter audit window would have pruned it
+  earlier than the webhook setting allows — irreversibly, and in a supported
+  configuration.
+
+  Upgrading, by deployment:
+  - **`webhooks.audit` off** (the default, and most installs): nothing changes.
+    Events are still recorded webhook-class and pruned on `eventsMaxAgeMs` exactly
+    as before.
+  - **`webhooks.audit` on**: events that used to be recorded webhook-class are now
+    audit-class, so they move from `eventsMaxAgeMs` to `auditEventsMaxAgeMs` — at
+    the defaults, from 30 days to 90. That is the intended behaviour, since those
+    rows are recorded for history rather than delivery, but it retains roughly
+    three times as many events and the storage that implies. Set
+    `webhooks.retention.auditEventsMaxAgeMs` if a shorter window is wanted.
+
+- [#489](https://github.com/nextlyhq/nextly/pull/489) [`3a75d0e`](https://github.com/nextlyhq/nextly/commit/3a75d0e9ffef4211c330e9b949063b918505f8f5) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The admin now calls field groups "field groups" in the places that used to say "components".
+
+  The field picker, the Schema Builder's field-group editor, the entry form, the entries table badge, the Field Groups list and its empty states, and the dashboard's getting-started panel all carried the old wording, so a page titled "Field Groups" could tell you that you had selected components. Only the words changed: the stored field type, table names and API payloads are untouched, so no data or integration is affected.
+
+- [#465](https://github.com/nextlyhq/nextly/pull/465) [`97bcb2c`](https://github.com/nextlyhq/nextly/commit/97bcb2cc75b917c9899a692e159868c21c5979e1) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Collections and singles with Draft/Published now record when a document first went live, in a new `firstPublishedAt` timestamp.
+
+  Until now a row only said what it IS. Unpublishing sent it back to draft and erased every trace it had ever been public, even though the inbound links, feeds and search results it collected while live were still out there. Anything that needs to ask "was this address ever public" had nothing to read.
+
+  The value is set once, on the first transition into published, and never changes afterwards: it is the date of the first publication, not the most recent one. It survives an unpublish, and it stays empty for an entry that has only ever been a draft. Entries that already existed keep an empty value, because whether they were once published was never recorded and cannot be recovered after the fact.
+
+  Collections and singles without Draft/Published do not get the column: they have no unpublished state, so there is no transition to record.
+
+  For a collection translated into several languages, the value answers whether the document has been public in any language, since every translation shares one address. Publishing a single translation therefore records it.
+
+  The value is set by Nextly alone. A `firstPublishedAt` sent in a create or update request is ignored, so the recorded date is always one that actually happened.
+
+- [#491](https://github.com/nextlyhq/nextly/pull/491) [`c78afca`](https://github.com/nextlyhq/nextly/commit/c78afca553094f6d472d506482587c2fe722bf35) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - When a service raises a typed error, the public result shape drops its `cause` and `logContext` before the boundary rebuilds it, so an operator saw a generic reconstruction with none of the detail the thrower attached. The original is now kept for the request and logged against the same `requestId` the response carries, so the two can be joined.
+
+  An error response can also carry a `_devDiagnostics` field with that detail, so an author sees why a request failed without reading the server log. It requires TWO signals: `NODE_ENV=development` AND `NEXTLY_DEV_DIAGNOSTICS=1`. Set the second in your local env file to switch it on. Neither alone is enough, because Nextly ships pre-built and stays external to your app build, so `NODE_ENV` is read at runtime and a production deployment started with the wrong value must not be able to disclose it. Production responses are unchanged either way.
+
+- [#517](https://github.com/nextlyhq/nextly/pull/517) [`089a758`](https://github.com/nextlyhq/nextly/commit/089a758bd3b27543b5cbb5c7bae94e09f2ace4d2) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Two corrections to how the page builder's isolation check reads names, both of
+  which made it reject stylesheets that were correct.
+
+  A font family is matched without regard to case, so a namespaced family spelled
+  in capitals is the same family; a keyframe or a layer name is case-sensitive and
+  still is. A comment is whitespace, so a comma inside one no longer splits one
+  name into two.
+
+- [#487](https://github.com/nextlyhq/nextly/pull/487) [`41d7c8d`](https://github.com/nextlyhq/nextly/commit/41d7c8d438059e58e65e766d82cdf858d7ca4d2a) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Localization migration files now record what transition they are for.
+
+  `nextly migrate:create` writes an extra header line on each `_locales` companion migration naming the transition, the kind of entity it belongs to, and the columns involved. Nothing reads it yet, so applying a migration behaves exactly as before, and files generated by earlier versions keep applying unchanged.
+
+- [#518](https://github.com/nextlyhq/nextly/pull/518) [`1797d27`](https://github.com/nextlyhq/nextly/commit/1797d273a3c7082c2e0c8e6959cb8137c36c7f3f) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Record a `login-succeeded` audit event when a session is issued.
+
+  Failed logins have been recorded since the audit log shipped; successes were
+  not. A trail of failures alone shows that someone tried and not whether they got
+  in, which is the first question asked after a credential leak.
+
+  The event is written where the session is issued, not where the flow began.
+  Three handlers issue sessions — password login, second-factor resolution, and
+  the forced first-sign-in password change — so recording it in the login handler
+  alone would have left every user who completes a second factor absent from the
+  success trail, which is the population most worth seeing in it. Recording on an
+  HTTP 200 instead would have the opposite fault: the challenge and
+  password-change legs answer 200 while issuing no session, so a success would be
+  reported for an account that was never reached.
+
+  It is recorded last, after the post-login hooks. A hook that throws sends the
+  handler into its failure path, which returns an error and records a failure, so
+  the client receives neither the token body nor the cookies — a success recorded
+  before that point would leave the trail asserting both outcomes for one attempt.
+  Those hooks now run inside the same shared step for that reason: all three
+  handlers ran the identical pair, and the order between them decides whether the
+  trail can contradict itself.
+
+  Unlike the failure event it is attributed to the account. Naming the account on
+  a failure is the account-state leak the unified error response exists to avoid;
+  on a success it is the whole value of the record.
+
+  Setup records it too. Creating the first administrator hands out a working
+  session without going through the shared login path, so that account — the
+  super-admin — was the one login absent from the trail.
+
+  Also fixes an overstated token expiry on the login and setup responses. The
+  `expiresAt` they return was derived from a fresh clock reading taken after the
+  awaited work that follows signing, so it named a later moment than the token's
+  own `exp` claim. `signAccessTokenWithExpiry` now returns the token together with
+  the expiry it actually carries, computed once and set explicitly, so a caller
+  reports the truth rather than a parallel calculation that drifts by however long
+  that work takes — unbounded, since plugin `afterLogin` hooks run there.
+
+- [#477](https://github.com/nextlyhq/nextly/pull/477) [`302264b`](https://github.com/nextlyhq/nextly/commit/302264b9230c24fe4553e7ed98324ca72a284f27) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Field-level read access on an expanded relationship now applies to each related row before its parent's `afterRead` field hooks run, matching a direct read. Previously a parent hook was handed a nested child with the caller's denied fields still present, so a hook that copied such a field onto an allowed key exposed it under that key even though the child's own field was redacted afterward.
+
+  Behavior change: a field `afterRead` hook can no longer observe a related row's caller-denied field, so it can neither leak nor mask on one. A value that must stay hidden should be protected with an `access.read` rule keyed on the caller rather than a hook that reads another field the caller cannot see. Trusted reads (`overrideAccess`) are unaffected, since field access is skipped for them.
+
+- [#499](https://github.com/nextlyhq/nextly/pull/499) [`1825c8f`](https://github.com/nextlyhq/nextly/commit/1825c8f3e5e442db1218413dec0aec169ccebf4e) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Catch every spelling of a Field Group field name that collides with one of its table's system
+  columns, not only the two that were listed. `CreatedAt` reaches the same `created_at` column as
+  `createdAt` does, and was accepted. Names are now compared as the column they become, so a field
+  declared with a plugin-contributed type is checked too — its type registers after the config is
+  read, and it was previously skipped.
+
+  A Field Group field that references another Field Group may take any name that a Field Group
+  instance does not already use for itself: not `id`, which is the instance's own identity, and not a
+  name that converts to `created_at` or `updated_at`, which a read would fill with the row's
+  timestamp instead of the referenced data.
+
+- [#516](https://github.com/nextlyhq/nextly/pull/516) [`00fee42`](https://github.com/nextlyhq/nextly/commit/00fee42c6e73d7d75905fa743fee747cc09f290b) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - **Breaking (plugin authors):** `ctx.services.collections.createEntry`, `updateEntry` and
+  `deleteEntry` now resolve to `{ message, item, warnings? }` instead of the bare row.
+
+  This is the same envelope the Direct API and the REST API already return, so the same failure is
+  equally visible however the write was made. Previously a plugin was the ONLY caller of a write
+  that could not see a post-commit hook failure: `afterCreate` / `afterUpdate` / `afterDelete` run
+  once the row is durable, so a handler failing there cannot un-save it — the write reports success
+  and the failure travels beside it as `warnings`. The plugin facade never opened a collector, so
+  those failures were invisible to the plugin that caused them.
+
+  Migration is one property access:
+
+  ```ts
+  // Before
+  const post = await ctx.services.collections.createEntry(slug, data, {
+    as: "system",
+  });
+  post.id;
+
+  // After
+  const { item, warnings } = await ctx.services.collections.createEntry(
+    slug,
+    data,
+    { as: "system" }
+  );
+  item.id;
+  if (warnings)
+    ctx.logger.warn("side effects failed", { id: item.id, warnings });
+  ```
+
+  `deleteEntry` reports `item` as `{ id }`, since there is no row left to return. Reads
+  (`listEntries`, `findEntryById`, `count`) and `createMany` are unchanged.
+
+- [#483](https://github.com/nextlyhq/nextly/pull/483) [`326ac0d`](https://github.com/nextlyhq/nextly/commit/326ac0d5702ca0fce7ebf173627b7fabac56d677) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A hook that throws in a post-commit phase (`afterCreate` / `afterUpdate` / `afterDelete`) now reports the failure to the caller instead of only to the server log. The write still reports success, because the row is durable and a side-effect phase cannot change it, but the result carries a `warnings` array naming the phase, the entity and the error code so an integration can react to a side effect that did not run. The field is present only when something failed, so an ordinary response is unchanged. It appears on the REST mutation and bulk envelopes and on the Direct API's `MutationResult`, `DeleteResult` and `BulkOperationResult`.
+
+  **Breaking (Direct API):** `nextly.updateSingle()` now returns the same `{ message, item }` envelope the collection mutations return, instead of the bare updated document. Singles run the same post-commit phases as collections, so this is what gives their hook failures somewhere to be reported — and it removes the one mutation that did not report its outcome like the others. Read the document from `.item`:
+
+  ```ts
+  // before
+  const settings = await nextly.updateSingle({ slug: "site-settings", data });
+  settings.siteName;
+
+  // after
+  const { item } = await nextly.updateSingle({ slug: "site-settings", data });
+  item.siteName;
+  ```
+
+- [#511](https://github.com/nextlyhq/nextly/pull/511) [`51d2469`](https://github.com/nextlyhq/nextly/commit/51d2469a54d0ef748244976c0c609e8a26c30394) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A failure now chains the error it actually came from onto what the caller receives, through
+  every boundary that rebuilds one: REST routes, the Direct API, the singles route, the
+  plugin-facing collection facade, the bulk-by-query paths and the version writes. Previously
+  only typed failures carried their origin, and only on the Direct API, so a connection drop or
+  a constraint rejection arrived with nothing naming what actually went wrong. The status-derived
+  rebuilds — a code-less 404, 403, 409 or 500, which is exactly what a raw driver rejection
+  produces — dropped it too.
+
+  `NextlyError.notFound`, `.forbidden` and `.conflict` accept a `cause` alongside `logContext`,
+  matching `.internal`.
+
+  One place now builds the error response body, so plugin routes answer with what every other
+  route answers with. Three consequences for a plugin route:
+  - Failures now carry `_devDiagnostics` in development, which this surface never had.
+  - A handler that throws a non-`NextlyError` still answers 500, but the thrown error is now
+    chained onto it instead of discarded.
+  - A 401 or 403 now returns the canonical `{ error: { code, message, requestId } }` body with
+    `application/problem+json`, matching the rest of the API. It previously returned the legacy
+    `{ data: { ... } }` body with `application/json`, so a single plugin route answered rejected
+    requests and failing handlers in two different shapes. A client reading a plugin route's
+    auth-failure body needs updating; one reading the status or a handler failure does not.
+
+- [#497](https://github.com/nextlyhq/nextly/pull/497) [`a4d86c1`](https://github.com/nextlyhq/nextly/commit/a4d86c160c6ee0d82a132a3218a3c0bd7bdcde05) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Harden nested field-level read access against `afterRead` hooks that reshape a
+  read response. A related row's presentation is its own collection's authority, so
+  the response's related rows are now rebuilt from the versions the read sanitized
+  rather than inspected for tampering: whatever a source collection's `afterRead`
+  hook did to a related row — reintroducing a denied field, cloning or reshaping the
+  row, replacing, appending, reordering or removing its nested group/repeater rows,
+  or returning a rebuilt document — is discarded. The rebuild runs after every hook
+  phase, so one phase cannot hand the next a contaminated related row to copy from.
+
+  Closes a field-hook exfiltration path on related rows. A field hook belongs to one
+  field but is handed the whole row, so a hook on an ALLOWED field of a related row
+  could read a DENIED field beside it and return it as its own value — and the access
+  pass that ran afterwards, judging each field by its own rule, had no reason to remove
+  the copy. The target collection's field access now runs BEFORE its field hooks and
+  again after, the same order a direct read of that collection uses: a row reached
+  through a relationship may be redacted more strictly than the target's own endpoint,
+  never more loosely.
+
+  Also fixes a related-row read-access gap for a relationship that declares a single
+  target as an ARRAY (`relationTo: ["posts"]`). That form stores and expands as the
+  discriminated `{ relationTo, value }` pair, but the nested read decided the pair
+  shape from the NUMBER of declared targets and so treated the wrapper as the row
+  itself — evaluating the target collection's field `access.read` rules against an
+  object holding only `relationTo` and `value`, which matches nothing. A field the
+  target collection denies was returned inside the wrapper. The shape is now read
+  from how the target was declared, in one place shared by every reader.
+
+  This also removes the previous release's over-stripping: a related row a hook
+  merely copied is no longer returned with its access-controlled fields denied, it
+  is returned correctly sanitized, and the development-mode warning about reshaped
+  rows is gone. A denied source field stays hidden from the source collection's own
+  field hooks so it cannot be copied onto a selected field.
+
+  Notes for hook authors. A source collection's `afterRead` hook can no longer change
+  how a related row appears in the response, including its readable fields: transform
+  the related collection's own fields with that collection's field hooks instead.
+  Filtering or reordering a `hasMany` relationship still works, since that shapes the
+  source field rather than the related rows. A populated related row a hook invents
+  (one the read never expanded, so no collection's read rules were ever applied to it)
+  is returned as the bare reference it names rather than as an object.
+
+- [#486](https://github.com/nextlyhq/nextly/pull/486) [`04fb6ab`](https://github.com/nextlyhq/nextly/commit/04fb6ab8274b850807b457b5d9777c6beaabfdf5) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Style values are read more carefully in three places. A composite no longer
+  builds an unbounded amount of issue text before its allowance is checked, an
+  `attr()` fallback is validated as the single value it substitutes rather than as
+  an arithmetic expression, and an expression is still judged where it can be even
+  when part of it cannot be read.
+
+- [#501](https://github.com/nextlyhq/nextly/pull/501) [`fcdcd2d`](https://github.com/nextlyhq/nextly/commit/fcdcd2d5798dbe4aff493c2d60e3d5dc1678387a) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The style compiler now accounts for every shape of persisted data it cannot use.
+  A state map, a breakpoint map, a `visibility` envelope or its `devices` map that
+  is not an object applies nothing, and each is reported rather than skipped, so a
+  document with values and a page with no CSS are always connected by a warning.
+
+  The node walk is bounded by what it READS rather than by what it could use, so
+  an array of malformed entries can no longer pass the node cap without tripping
+  it.
+
+- [#492](https://github.com/nextlyhq/nextly/pull/492) [`379c16a`](https://github.com/nextlyhq/nextly/commit/379c16a613abd0dff09803f89e7bf1cfe43332d6) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The engine can now compile a page's stored styles into CSS. `compilePageCss`
+  turns a document and its site context into one stylesheet plus the class each
+  node should carry, reading only persisted data: styles are never gathered while
+  something renders, so a block cannot lose its styling by not being on screen
+  when the sheet was built.
+
+  Design tokens compile to the custom properties they read, logical values stay
+  logical so one stored style is correct in both reading directions, states
+  compile to `:hover`, `:focus-visible` and `:active`, and both breakpoint axes
+  compile to media and container queries. The same document always produces the
+  same bytes.
+
+  States are emitted inside `:where()` so they add no specificity, and every rule
+  is decided by source order instead: a node's own value beats its block type's
+  default at every width, and a value set for a state beats a base value set at a
+  narrower breakpoint.
+
+  A value the validator refuses is left out of the stylesheet and reported rather
+  than written, whether or not the caller validated first. The same holds for
+  everything the compiler cannot act on: a block type that is not a namespaced
+  slug, a style state it does not recognise, a breakpoint id that resolves to more
+  than one definition, two nodes sharing an id, and a malformed envelope are all
+  left out and named. `StyleCompileContext` takes the document `limits`, so the
+  node walk stops where validation would have.
+
+- [#503](https://github.com/nextlyhq/nextly/pull/503) [`387e593`](https://github.com/nextlyhq/nextly/commit/387e59380729bcc6d00e2d8aef5b3dee6e70e486) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Stylesheets compiled by `@nextlyhq/blocks-engine` now sit one specificity notch
+  higher, so ordinary site CSS no longer beats a value set in the builder by
+  accident. A rule like `.content .card h1` used to win over a block's own colour
+  and leave the author with a style that silently did not appear.
+
+  This applies to that engine's output. `@nextlyhq/plugin-page-builder` renders
+  through a compiler of its own that does not yet follow these weights, so pages
+  rendered through it are unchanged by this release.
+
+  Overriding on purpose still works: an unlayered selector that beats the builder's
+  specificity wins, and so does `!important`, because the compiler deliberately
+  never writes it. Two things are worth knowing.
+
+  If your CSS lives in a cascade layer, as Tailwind's does, layer order is settled
+  before specificity and the builder emits an unlayered stylesheet, so adding
+  classes inside an `@layer` will not win. Write the override unlayered, or use
+  `!important`.
+
+  If the property you are overriding is mid-transition, the transitioning value
+  outranks every author declaration including `!important` until the transition
+  ends. Add `transition: none !important` to your rule if that applies.
+
+- [#466](https://github.com/nextlyhq/nextly/pull/466) [`4dc8a46`](https://github.com/nextlyhq/nextly/commit/4dc8a464f0d149a8075e49eb34ed2d10c80eb51a) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Add the style-property catalog to the blocks engine: the set of style properties a block may set, each with its value shape, the CSS it emits, and the design tokens it accepts. Storage keys are logical, so one page renders correctly in both left-to-right and right-to-left languages without a separate copy. Style values are checked for safety and for being the kind of value their property takes, before they reach a stylesheet.
+
+  The built-in block `supports` sub-flags now match the catalog. A block declaring `spacing.blockGap`, `color.background`, or `border.width`/`style`/`color` will fail to register and must use the group's current flags instead; the error names them.
+
+- [#488](https://github.com/nextlyhq/nextly/pull/488) [`a4c6092`](https://github.com/nextlyhq/nextly/commit/a4c6092ea288d7ae67858f5087c821231a9776de) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Document validation can now check design-token names and class ids against the
+  site that will render them. Both are optional: validation is given the site or
+  it is not, and without it these names are not checked at all. An unresolved name
+  is always a warning, never an error, so renaming a token or retiring a class
+  never makes a stored document unpublishable — including when a rename leaves
+  more unresolved names than one report can carry, which is now said separately
+  and does not stop the checks that decide whether a document is valid.
+
+- [#494](https://github.com/nextlyhq/nextly/pull/494) [`9653096`](https://github.com/nextlyhq/nextly/commit/9653096008a39ab4502e55d33bb8dc2379fc5b27) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Reject a Schema Builder field named `createdAt` or `updatedAt` when the name is chosen, rather
+  than letting it fail later as a database error. Both snake-case onto a system column and land in
+  the same `CREATE TABLE` twice, so a collection carrying one could never be created.
+
+  Internally, what a system column is now lives in one declaration per column instead of ten
+  hand-written lists across the codebase, so a column added in future reaches the schema, the
+  write paths, the response shapes and every validator at once.
+
+- Updated dependencies [[`90dbe11`](https://github.com/nextlyhq/nextly/commit/90dbe11c6eec4b04ea56f4e27df4c62d11c3eff5), [`ab607c3`](https://github.com/nextlyhq/nextly/commit/ab607c333959aed225990143e0660cbe579240f4), [`d8d5bfe`](https://github.com/nextlyhq/nextly/commit/d8d5bfe868e3c6eb4a26851ceebb9b466e1a33ba), [`19efb3a`](https://github.com/nextlyhq/nextly/commit/19efb3a7018b7fae2aa695333493dfd137f96bd9), [`e7a675f`](https://github.com/nextlyhq/nextly/commit/e7a675f6473d0669f2d52c00edd3a190d370cf30), [`c686245`](https://github.com/nextlyhq/nextly/commit/c6862456110db02565c3759ec8daf7b32c2fd228), [`f348a0f`](https://github.com/nextlyhq/nextly/commit/f348a0f0b65b46fcb5697c2f0fe1c9fcd45d0e11), [`387061e`](https://github.com/nextlyhq/nextly/commit/387061eb80a94ac758e17ceeb811d1b0026e68b6), [`e7316d8`](https://github.com/nextlyhq/nextly/commit/e7316d835c635a06880deaf8e16e5bebadcd4d74), [`781fa81`](https://github.com/nextlyhq/nextly/commit/781fa816354ad962a919a81396b9fc4123ee196b), [`444bd26`](https://github.com/nextlyhq/nextly/commit/444bd26fef33fe4c4a7e511bc77359d64fde375d), [`a2e92ae`](https://github.com/nextlyhq/nextly/commit/a2e92aed1bf1e9133e898274c98a8b5bef208338), [`8c36bb6`](https://github.com/nextlyhq/nextly/commit/8c36bb6aad3c5e7df9b2d194a5710a3a957aaa6c), [`c9ef62a`](https://github.com/nextlyhq/nextly/commit/c9ef62a6d3d77078b5f0a5505e18e8e2931478dd), [`3a75d0e`](https://github.com/nextlyhq/nextly/commit/3a75d0e9ffef4211c330e9b949063b918505f8f5), [`97bcb2c`](https://github.com/nextlyhq/nextly/commit/97bcb2cc75b917c9899a692e159868c21c5979e1), [`c78afca`](https://github.com/nextlyhq/nextly/commit/c78afca553094f6d472d506482587c2fe722bf35), [`089a758`](https://github.com/nextlyhq/nextly/commit/089a758bd3b27543b5cbb5c7bae94e09f2ace4d2), [`41d7c8d`](https://github.com/nextlyhq/nextly/commit/41d7c8d438059e58e65e766d82cdf858d7ca4d2a), [`1797d27`](https://github.com/nextlyhq/nextly/commit/1797d273a3c7082c2e0c8e6959cb8137c36c7f3f), [`302264b`](https://github.com/nextlyhq/nextly/commit/302264b9230c24fe4553e7ed98324ca72a284f27), [`1825c8f`](https://github.com/nextlyhq/nextly/commit/1825c8f3e5e442db1218413dec0aec169ccebf4e), [`00fee42`](https://github.com/nextlyhq/nextly/commit/00fee42c6e73d7d75905fa743fee747cc09f290b), [`326ac0d`](https://github.com/nextlyhq/nextly/commit/326ac0d5702ca0fce7ebf173627b7fabac56d677), [`51d2469`](https://github.com/nextlyhq/nextly/commit/51d2469a54d0ef748244976c0c609e8a26c30394), [`a4d86c1`](https://github.com/nextlyhq/nextly/commit/a4d86c160c6ee0d82a132a3218a3c0bd7bdcde05), [`04fb6ab`](https://github.com/nextlyhq/nextly/commit/04fb6ab8274b850807b457b5d9777c6beaabfdf5), [`fcdcd2d`](https://github.com/nextlyhq/nextly/commit/fcdcd2d5798dbe4aff493c2d60e3d5dc1678387a), [`379c16a`](https://github.com/nextlyhq/nextly/commit/379c16a613abd0dff09803f89e7bf1cfe43332d6), [`387e593`](https://github.com/nextlyhq/nextly/commit/387e59380729bcc6d00e2d8aef5b3dee6e70e486), [`4dc8a46`](https://github.com/nextlyhq/nextly/commit/4dc8a464f0d149a8075e49eb34ed2d10c80eb51a), [`a4c6092`](https://github.com/nextlyhq/nextly/commit/a4c6092ea288d7ae67858f5087c821231a9776de), [`9653096`](https://github.com/nextlyhq/nextly/commit/9653096008a39ab4502e55d33bb8dc2379fc5b27)]:
+  - @nextlyhq/adapter-drizzle@0.0.2-alpha.51
+
 ## 0.0.2-alpha.50
 
 ### Patch Changes
