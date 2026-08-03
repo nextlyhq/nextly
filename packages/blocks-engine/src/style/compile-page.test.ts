@@ -1384,3 +1384,88 @@ describe("more of what the compiler skips is now accounted for", () => {
     ).toHaveLength(0);
   });
 });
+
+describe("malformed envelopes are accounted for at every level", () => {
+  it("reports a state whose value is not an object", () => {
+    const out = compilePageCss(
+      doc([node("n1", { base: [] as unknown as Record<string, unknown> })]),
+      CTX
+    );
+    expect(out.warnings.map(issue => issue.code)).toContain(
+      "invalid-style-values"
+    );
+  });
+
+  it("reports a breakpoint map whose value is not an object", () => {
+    const out = compilePageCss(
+      doc([node("n1", { base: { base: "red" } })]),
+      CTX
+    );
+    expect(out.css).toBe("");
+    expect(out.warnings.map(issue => issue.code)).toContain(
+      "invalid-style-values"
+    );
+  });
+
+  it("stays silent about a breakpoint a node simply says nothing about", () => {
+    // `undefined` is the normal case, not a malformed one. Reported, it would
+    // be one warning per unstyled breakpoint on every node in the document.
+    const out = compilePageCss(
+      doc([node("n1", { base: { base: { color: "#0f0" } } })]),
+      CTX
+    );
+    expect(out.warnings).toEqual([]);
+  });
+
+  it("reports a visibility envelope that is not an object", () => {
+    for (const visibility of [[], "hidden", null]) {
+      const out = compilePageCss(
+        doc([node("n1", undefined, { visibility })]),
+        CTX
+      );
+      expect(out.css).not.toContain("display: none");
+      expect(out.warnings.map(issue => issue.code)).toContain(
+        "invalid-visibility"
+      );
+    }
+  });
+
+  it("reports a devices map that is not an object", () => {
+    const out = compilePageCss(
+      doc([node("n1", undefined, { visibility: { devices: [] } })]),
+      CTX
+    );
+    expect(out.warnings.map(issue => issue.code)).toContain(
+      "invalid-visibility"
+    );
+  });
+});
+
+describe("the node walk is bounded by what it reads", () => {
+  it("stops at the cap even when every entry is malformed", () => {
+    // A malformed entry never reaches `placed`, so counting only successes let
+    // an array made entirely of them pass the cap without tripping it.
+    const nodes = Array.from(
+      { length: DEFAULT_LIMITS.maxNodes + 500 },
+      () => null
+    ) as unknown as BlockNode[];
+    const out = compilePageCss(doc(nodes), CTX);
+    expect(out.warnings.map(issue => issue.code)).toContain(
+      "node-count-exceeded"
+    );
+  });
+
+  it("styles nothing past the cap", () => {
+    // A guard on the outcome, not on the loop shape: breaking out of the array
+    // rather than running `forEach` to its end changes the work done and not
+    // the result, so this holds either way and is here to keep it holding.
+    const nodes = [
+      ...Array.from({ length: DEFAULT_LIMITS.maxNodes + 10 }, (_, index) =>
+        node(`n${index}`)
+      ),
+      node("beyond", { base: { base: { color: "#f00" } } }),
+    ];
+    const out = compilePageCss(doc(nodes), CTX);
+    expect(out.css).not.toContain("#f00");
+  });
+});
