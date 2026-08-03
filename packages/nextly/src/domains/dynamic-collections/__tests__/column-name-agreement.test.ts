@@ -13,6 +13,8 @@
 import { describe, expect, it } from "vitest";
 
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import { buildDesiredTableFromFields } from "../../schema/pipeline/diff/build-from-fields";
+import { generateRuntimeSchema } from "../../schema/services/runtime-schema-generator";
 import {
   fieldProducesColumn,
   getColumnDescriptor,
@@ -34,6 +36,25 @@ const FIELD_NAMES = [
 ];
 
 const DIALECTS: SupportedDialect[] = ["postgresql", "mysql", "sqlite"];
+
+/**
+ * The column names a generated Drizzle table carries.
+ *
+ * Read off `Symbol("drizzle:Columns")` rather than through drizzle-orm's column-listing helper,
+ * which is deprecated on v1 yet still compiles — `scripts/check-drizzle-v1-legacy.cjs` refuses it
+ * for exactly that reason. `filter-unsafe-statements.ts` reads `Symbol("drizzle:Name")` the same
+ * way. If the symbol ever moves, the set comes back empty and the assertions below fail loudly.
+ */
+function runtimeColumnNames(table: unknown): string[] {
+  const symbol = Object.getOwnPropertySymbols(table as object).find(
+    candidate => String(candidate) === "Symbol(drizzle:Columns)"
+  );
+  if (!symbol) return [];
+  const columns = (table as Record<symbol, unknown>)[symbol];
+  return Object.values(columns as Record<string, { name: string }>).map(
+    column => column.name
+  );
+}
 
 /** The identifiers declared in the CREATE TABLE body, before any index statement. */
 function declaredColumns(sql: string): string[] {
@@ -132,6 +153,103 @@ describe("collection column names agree across the generators", () => {
           expect({ [`${dialect}.${table}.${name}`]: duplicated }).toEqual({
             [`${dialect}.${table}.${name}`]: [],
           });
+        }
+      }
+    }
+  });
+});
+
+describe("all three descriptions of the main table agree", () => {
+  // The created table, the runtime schema every query is built from, and the diff's desired state
+  // are produced by three modules from one field list. Comparing each against the descriptor, as
+  // the tests above do, cannot catch them disagreeing with EACH OTHER — which is what a name
+  // matched before localization is resolved does.
+  function columnSets(
+    fields: unknown[],
+    dialect: SupportedDialect,
+    options: { hasStatus?: boolean; localized?: boolean }
+  ) {
+    const service = new DynamicCollectionSchemaService(undefined, dialect);
+    const generate = service as unknown as {
+      generateMigrationSQL: (
+        name: string,
+        fields: unknown[],
+        options?: unknown
+      ) => string;
+    };
+
+    const created = declaredColumns(
+      generate.generateMigrationSQL("dc_agree", fields, options)
+    );
+    const desired = buildDesiredTableFromFields(
+      "dc_agree",
+      fields as Parameters<typeof buildDesiredTableFromFields>[1],
+      dialect,
+      options
+    ).columns.map(column => column.name);
+    // The runtime generator spells the publish-lifecycle toggle `status` where the other two
+    // spell it `hasStatus`; passing the wrong one silently omits the system column instead of
+    // failing, so it is translated here rather than assumed.
+    const runtime = runtimeColumnNames(
+      generateRuntimeSchema("dc_agree", fields as FieldDefinition[], dialect, {
+        status: options.hasStatus,
+        localized: options.localized,
+      }).table
+    );
+
+    return {
+      created: [...created].sort(),
+      desired: [...desired].sort(),
+      runtime: [...runtime].sort(),
+    };
+  }
+
+  it("agrees when a localized field is named Title or Slug", () => {
+    // A localized field lives in the companion table, so the main table has neither the user's
+    // column nor the injected system one. Deciding that on the declared name made the created
+    // table drop it while the other two injected it, and the diff then reconciled a column the
+    // table does not have.
+    for (const dialect of DIALECTS) {
+      for (const name of ["Title", "Slug", "title", "slug"]) {
+        const sets = columnSets(
+          [
+            { name, type: "text", localized: true },
+            { name: "body", type: "text" },
+          ],
+          dialect,
+          { hasStatus: false, localized: true }
+        );
+
+        expect({
+          [`${dialect}.${name}.desired`]: sets.desired,
+          [`${dialect}.${name}.runtime`]: sets.runtime,
+        }).toEqual({
+          [`${dialect}.${name}.desired`]: sets.created,
+          [`${dialect}.${name}.runtime`]: sets.created,
+        });
+      }
+    }
+  });
+
+  it("agrees for every name shape, localized or not", () => {
+    for (const dialect of DIALECTS) {
+      for (const name of FIELD_NAMES) {
+        for (const localized of [false, true]) {
+          for (const hasStatus of [false, true]) {
+            const sets = columnSets([{ name, type: "text" }], dialect, {
+              hasStatus,
+              localized,
+            });
+            const label = `${dialect}.${name}.loc=${localized}.status=${hasStatus}`;
+
+            expect({
+              [`${label}.desired`]: sets.desired,
+              [`${label}.runtime`]: sets.runtime,
+            }).toEqual({
+              [`${label}.desired`]: sets.created,
+              [`${label}.runtime`]: sets.created,
+            });
+          }
         }
       }
     }
