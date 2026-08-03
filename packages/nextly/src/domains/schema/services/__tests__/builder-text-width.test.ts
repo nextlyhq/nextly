@@ -162,6 +162,30 @@ describe("withResolvedBuilderTextWidths", () => {
   // A contributed type declaring `storage: "text"` reaches the database through the same column as
   // a plain text field — both generators resolve it that way before rendering — so matching the
   // declared token alone left it bounded while the table held an unbounded column.
+  // The field schema accepts any slug-shaped token, so a stored field can name a type whose plugin
+  // is not loaded. Both sides then reach for text — the creators fall through their type map to an
+  // unbounded column, the descriptor falls through its switch to the bounded default — so reading
+  // the unresolved token as non-text left an untouched column reading as a narrowing.
+  it("gives a field with an unregistered type an unbounded column", () => {
+    const resolved = withResolvedBuilderTextWidths(
+      schemaWith({
+        fields: [{ name: "body", type: "acme-not-loaded" }] as never,
+      })
+    );
+
+    expect(bodyType(resolved)).toBe("text");
+  });
+
+  // A built-in whose column the creators bound too. Widening it would invent a disagreement rather
+  // than remove one.
+  it("leaves a built-in bounded type alone", () => {
+    const resolved = withResolvedBuilderTextWidths(
+      schemaWith({ fields: [{ name: "body", type: "email" }] as never })
+    );
+
+    expect(bodyType(resolved)).toBe("varchar(255)");
+  });
+
   it("resolves a contributed type to what it stores", () => {
     registerFieldType({
       type: "color-swatch",

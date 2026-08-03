@@ -1,3 +1,4 @@
+import { isBuiltInFieldType } from "../../../schemas/_zod/ui-schema";
 import { storageTypeToken } from "../../../shared/lib/plugin-storage";
 import type { DesiredSchema } from "../pipeline/types";
 
@@ -46,9 +47,17 @@ interface WidthSignals {
  * held an unbounded column, which is the disagreement this module exists to remove.
  */
 function storesText(field: WidthSignals): boolean {
-  if (field.type === undefined) return false;
+  if (typeof field.type !== "string") return false;
   if (field.type === "text") return true;
-  return storageTypeToken({ type: field.type }) === "text";
+  const token = storageTypeToken({ type: field.type });
+  if (token === "text") return true;
+  // A token nothing has registered. The field schema accepts any slug-shaped type, so a stored
+  // field can name a type whose plugin is not loaded — and both sides then reach for text: the
+  // creators fall through their type map to an unbounded column, the descriptor falls through its
+  // switch to the bounded default. `storageTypeToken` hands back the unresolved token rather than
+  // that fallback, so matching only the resolved one read those fields as non-text and left exactly
+  // the disagreement this module exists to remove.
+  return token === field.type && !isBuiltInFieldType(field.type);
 }
 
 /** An `options` value a variant can be written onto without destroying what is already there. */

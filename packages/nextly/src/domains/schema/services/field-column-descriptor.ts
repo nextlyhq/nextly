@@ -354,7 +354,11 @@ function classifyFieldKind(field: FieldDefinition): ColumnKind {
         // creators made it unbounded, which reports an untouched column as a narrowing.
         return kind === "text" ? textKindForDeclaredWidth(field) : kind;
       }
-      return "text";
+      // An unregistered type: the field schema accepts any slug-shaped token, so a stored field can
+      // name a type whose plugin is not loaded. It lands in a text column like the rest of this
+      // branch, so it answers the width question the same way rather than being forced to the
+      // bounded default.
+      return textKindForDeclaredWidth(field);
     }
   }
 }
