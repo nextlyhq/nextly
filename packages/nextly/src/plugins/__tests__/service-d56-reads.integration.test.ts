@@ -80,7 +80,7 @@ describe("ctx.services.collections reads/writes (D56, harness hook-wired)", () =
       { title: "x", kind: "q" },
       { as: "system" }
     );
-    expect((created as { id: string }).id).toBeDefined();
+    expect((created.item as { id: string }).id).toBeDefined();
     expect(
       await services.collections.count("widgets", {}, { as: "system" })
     ).toBe(1);
