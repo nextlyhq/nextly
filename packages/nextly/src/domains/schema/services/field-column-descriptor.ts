@@ -118,9 +118,73 @@ export function toSnakeCase(name: string): string {
 }
 
 /**
+ * The physical columns a list of fields occupies.
+ *
+ * Anything deciding "has the author already declared this system field?" has to ask it of the
+ * COLUMN rather than the spelling. `Title` and `title` are one column, so injecting the system
+ * field beside an author's `Title` declares that column twice and the table cannot be created.
+ * Four places make that decision — both config factories, the dev-server single sync and the
+ * single dispatcher's alter input — and this is the one definition they share.
+ *
+ * A field that occupies no column claims none: a component or a many-to-many named `Title` keeps
+ * its values in its own table, so the system column still has to be injected beside it. Counting
+ * it would drop the system field from the config while the generators still emit the column.
+ *
+ * Takes loosely-typed fields because two of those callers run before the config has been parsed.
+ */
+export function columnsDeclaredBy(
+  fields: Iterable<
+    { name?: unknown; type?: unknown; options?: unknown } | null | undefined
+  >
+): Set<string> {
+  const columns = new Set<string>();
+  for (const field of fields) {
+    if (!field || typeof field.name !== "string") continue;
+    if (!fieldProducesColumn(field)) continue;
+    columns.add(toSnakeCase(field.name));
+  }
+  return columns;
+}
+
+/**
+ * Whether a field becomes a column of the table it is declared on.
+ *
+ * The single answer to that question: `classifyFieldKind` and `getColumnDescriptor` both defer to
+ * it, so a rule that only applies to columns cannot disagree with the generator about which fields
+ * have one.
+ *
+ * Dialect-free by construction — a component and a many-to-many relationship keep their values in
+ * their own tables on every dialect. Structural rather than typed because config validation asks
+ * this before the field has been parsed. Anything unrecognised counts as a column, matching the
+ * text fallback below, so a field type whose plugin has not registered yet is still held to the
+ * rules that columns carry rather than quietly escaping them.
+ */
+export function fieldProducesColumn(field: {
+  type?: unknown;
+  options?: unknown;
+}): boolean {
+  if (typeof field.type !== "string") return true;
+  if (LAYOUT_FIELD_TYPES.has(field.type)) return false;
+  // Component values live in their own comp_{slug} tables and are stripped from the parent row on
+  // write, so the parent needs no column.
+  if (field.type === "component") return false;
+  // A many-to-many relationship stores its links in a dedicated junction table, not on the parent
+  // row. Every other relationship shape does get a column.
+  if (field.type === "relationship" || field.type === "upload") {
+    const options: unknown = field.options;
+    const relationType =
+      typeof options === "object" && options !== null
+        ? (options as { relationType?: unknown }).relationType
+        : undefined;
+    return relationType !== "manyToMany";
+  }
+  return true;
+}
+
+/**
  * Given a Nextly field config, returns the database column shape
- * for the requested dialect. Returns `null` for layout-only field
- * types that don't get a column.
+ * for the requested dialect. Returns `null` for every field type
+ * that gets no column of its own — see `fieldProducesColumn`.
  *
  * The output is consumed by:
  *   - `runtime-schema-generator.ts` — translates `kind` +
@@ -132,9 +196,8 @@ export function getColumnDescriptor(
   field: FieldDefinition,
   dialect: SupportedDialect
 ): ColumnDescriptor | null {
-  if (LAYOUT_FIELD_TYPES.has(field.type)) return null;
-
   const name = toSnakeCase(field.name);
+  // "skip" covers every column-less field type, layout ones included, via fieldProducesColumn.
   const kind = classifyFieldKind(field);
   // FK columns are always created without NOT NULL in the DDL (both generateMigrationSQL
   // and the Drizzle runtime builder). `required` is enforced at the application layer.
@@ -177,6 +240,8 @@ export function getColumnDescriptor(
  * `build-from-fields.ts` ignored it and shipped wrong types.
  */
 function classifyFieldKind(field: FieldDefinition): ColumnKind {
+  if (!fieldProducesColumn(field)) return "skip";
+
   switch (field.type) {
     case "text":
     case "email":
@@ -212,16 +277,9 @@ function classifyFieldKind(field: FieldDefinition): ColumnKind {
 
     case "relationship":
     case "upload": {
-      // A many-to-many relationship stores its links in a dedicated junction
-      // table, not on the parent row, so the parent needs no column (mirrors
-      // component fields, which return "skip"). Emitting an fkSingle column
-      // here produced a phantom parent column the junction-only physical
-      // schema never has, so the runtime table object disagreed with the DB.
-      const relationType = (field as { options?: { relationType?: string } })
-        .options?.relationType;
-      if (relationType === "manyToMany") return "skip";
-      // hasMany or array-target relationships are stored as JSON
-      // arrays of FK ids. Single-target -> plain FK column.
+      // Many-to-many is already excluded by fieldProducesColumn, which owns the junction-table
+      // rule. hasMany or array-target relationships are stored as JSON arrays of FK ids.
+      // Single-target -> plain FK column.
       const hasMany = (field as { hasMany?: boolean }).hasMany;
       const relationTo = (field as { relationTo?: unknown }).relationTo;
       if (hasMany || Array.isArray(relationTo)) return "json";
@@ -233,12 +291,6 @@ function classifyFieldKind(field: FieldDefinition): ColumnKind {
     case "json":
     case "chips":
       return "json";
-
-    case "component":
-      // Component values live in their own comp_{slug} tables and are stripped
-      // from the parent row on write, so the parent needs no column. Emitting
-      // one (NOT NULL when required) produced an orphan that broke every insert.
-      return "skip";
 
     default: {
       // Plugin-contributed custom field type maps to its declared storage

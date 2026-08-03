@@ -65,6 +65,7 @@ import type { Resolution } from "../../domains/schema/pipeline/resolution/types"
 import { isIdempotencyError } from "../../domains/schema/pipeline/sql-statement-utils";
 import type { DesiredSingle } from "../../domains/schema/pipeline/types";
 import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
+import { columnsDeclaredBy } from "../../domains/schema/services/field-column-descriptor";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
@@ -1202,12 +1203,15 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           );
           return fields.filter(f => !localizedNames.has(f.name));
         };
+        // Keyed by the COLUMN each field becomes, matching `defineSingle` and the generators. A
+        // field named `Title` already owns the `title` column, so prepending the system one beside
+        // it hands the alter two fields for a single column.
+        const declaredColumns = (fields: FieldDefinition[]): Set<string> =>
+          columnsDeclaredBy(fields);
         const existingFieldsForAlter = omitLocalized(existingFields);
-        const existingFieldNames = new Set(
-          existingFieldsForAlter.map(f => f.name)
-        );
+        const existingFieldColumns = declaredColumns(existingFieldsForAlter);
         const normalizedOldFields: FieldDefinition[] = [
-          ...systemFields.filter(sf => !existingFieldNames.has(sf.name)),
+          ...systemFields.filter(sf => !existingFieldColumns.has(sf.name)),
           ...existingFieldsForAlter,
           {
             name: "updatedAt",
@@ -1218,9 +1222,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
 
         const newFieldsRaw = b.fields as unknown as FieldDefinition[];
         const newFieldsForAlter = omitLocalized(newFieldsRaw);
-        const newFieldNames = new Set(newFieldsForAlter.map(f => f.name));
+        const newFieldColumns = declaredColumns(newFieldsForAlter);
         const normalizedNewFields: FieldDefinition[] = [
-          ...systemFields.filter(sf => !newFieldNames.has(sf.name)),
+          ...systemFields.filter(sf => !newFieldColumns.has(sf.name)),
           ...newFieldsForAlter,
           {
             name: "updatedAt",

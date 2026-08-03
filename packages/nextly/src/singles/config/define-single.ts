@@ -44,6 +44,7 @@ import type {
   FieldConfig,
 } from "../../collections/fields/types";
 import type { SingleAccessControl } from "../../domains/auth/services/access-control-types";
+import { columnsDeclaredBy } from "../../domains/schema/services/field-column-descriptor";
 
 import type {
   SingleConfig,
@@ -232,18 +233,14 @@ export function defineSingle(config: SingleConfigInput): SingleConfig {
   // (createDefaultDocument always writes them). If the user already defined
   // fields with these names, their definitions take priority.
 
-  const userFieldNames = new Set(
-    config.fields
-      .filter(
-        (f): f is FieldConfig & { name: string } =>
-          "name" in f && typeof f.name === "string"
-      )
-      .map(f => f.name)
-  );
+  // Keyed by the COLUMN each field becomes, not by its declared name. A field named `Title` owns
+  // the `title` column, so injecting the system one beside it declares that column twice and the
+  // table cannot be created — the injection has to ask the same question the generators do.
+  const userFieldColumns = columnsDeclaredBy(config.fields);
 
   const systemFields: FieldConfig[] = [];
 
-  if (!userFieldNames.has("title")) {
+  if (!userFieldColumns.has("title")) {
     systemFields.push({
       type: "text",
       name: "title",
@@ -258,7 +255,7 @@ export function defineSingle(config: SingleConfigInput): SingleConfig {
     });
   }
 
-  if (!userFieldNames.has("slug")) {
+  if (!userFieldColumns.has("slug")) {
     systemFields.push({
       type: "text",
       name: "slug",
