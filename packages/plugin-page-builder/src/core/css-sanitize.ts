@@ -46,22 +46,75 @@ const URL_SCHEME = /^\s*[a-z][a-z0-9+.-]*:/i;
  * leaks, and this is where the combination is possible.
  */
 function isRemoteUrl(value: string): boolean {
-  // Backslashes first: for http and https a URL parser treats them as slashes,
-  // so `/\\evil.example/a` and `\\\\evil.example/a` both resolve to another
-  // host while beginning with neither `//` nor a scheme.
-  const trimmed = value.trim().replaceAll("\\", "/");
+  // Normalised the way a URL parser normalises, because that is what decides
+  // where the request goes. Tab, newline and carriage return are REMOVED from a
+  // URL outright, so a scheme written with a tab inside it is fetched as
+  // `https://evil` while matching no scheme pattern. Backslashes are read as
+  // slashes for http and https, so `/\\evil.example/a` reaches another host
+  // while beginning with neither `//` nor a scheme.
+  const trimmed = value
+    .replace(/[\t\n\r]/g, "")
+    .trim()
+    .replaceAll("\\", "/");
   if (URL_SCHEME.test(trimmed)) return true;
   // No scheme, but still another host: `//evil.example/x.png` inherits the
   // page's protocol and nothing else.
   return trimmed.startsWith("//");
 }
 
+/**
+ * Functions whose string arguments are text rather than something to fetch.
+ *
+ * An allowlist of the SAFE ones, deliberately, and the asymmetry is the reason.
+ * Listing the URL-taking functions instead means an unlisted one is a MISS — a
+ * leak — and that list is already hard to keep: `image()` and
+ * `-webkit-image-set()` were both found only by probing. Listing the text-taking
+ * ones means an unlisted function is refused, which costs a false positive and
+ * a message. A security control should fail toward the annoyance.
+ *
+ * `attr()` is the case that matters in practice: `content: attr(x, "https://…")`
+ * is a caption's fallback, not a request.
+ */
+const TEXT_ARGUMENT_FUNCTIONS = new Set([
+  "attr",
+  "counter",
+  "counters",
+  "var",
+  "env",
+  "format",
+  "local",
+  "symbols",
+]);
+
 /** The first `url()` in a declaration that leaves this origin, if any. */
 function firstRemoteUrl(decl: csstree.Declaration): string | undefined {
+  const direct = remoteUrlInValue(decl.value);
+  if (direct !== undefined) return direct;
+  // A custom property holds an arbitrary token stream, so css-tree gives its
+  // value as `Raw` and the walks above see nothing inside it. The URL is still
+  // a URL: `--probe: url("https://evil")` fetches as soon as anything says
+  // `var(--probe)`. Re-parsing the raw text as a value puts it back within
+  // reach of the same two checks, so there is one definition of "remote" rather
+  // than a second one that reads text.
+  if (decl.value.type !== "Raw") return undefined;
+  let reparsed: csstree.CssNode;
+  try {
+    reparsed = csstree.parse(decl.value.value, { context: "value" });
+  } catch {
+    // Unreadable is not the same as safe. This is the one place the check
+    // cannot see what it is judging, so it refuses rather than waves it
+    // through, and reports the raw text so the author knows which line went.
+    return decl.value.value.trim();
+  }
+  return remoteUrlInValue(reparsed);
+}
+
+/** The first remote URL reachable in one parsed value, if any. */
+function remoteUrlInValue(value: csstree.CssNode): string | undefined {
   let found: string | undefined;
   // `.value` is decoded on both node types, so a scheme spelled with CSS
   // escapes is read the way a browser resolves it rather than as written.
-  csstree.walk(decl, {
+  csstree.walk(value, {
     visit: "Url",
     enter(node: csstree.Url) {
       if (found === undefined && isRemoteUrl(node.value)) found = node.value;
@@ -70,14 +123,15 @@ function firstRemoteUrl(decl: csstree.Declaration): string | undefined {
   if (found !== undefined) return found;
   // A string is a URL when it is an ARGUMENT and text when it is not.
   // `image-set("https://…" 1x)` fetches; `content: "https://…"` is a caption.
-  // Asking whether a function encloses it separates the two without a list of
-  // URL-taking functions to keep up to date — and the list is what fails, since
-  // `image()` and `-webkit-image-set()` take one too.
-  csstree.walk(decl, {
+  // Which functions take text is the allowlist above; anything else is treated
+  // as able to fetch, so a function nobody has classified fails closed.
+  csstree.walk(value, {
     visit: "String",
     enter(node: csstree.StringNode) {
       if (found !== undefined) return;
-      if (this.function === null) return;
+      const fn = this.function;
+      if (fn === null) return;
+      if (TEXT_ARGUMENT_FUNCTIONS.has(fn.name.toLowerCase())) return;
       if (isRemoteUrl(node.value)) found = node.value;
     },
   });

