@@ -6,7 +6,7 @@ import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
 import { setAccessTokenCookie } from "../cookies/access-token-cookie";
 import { setRefreshTokenCookie } from "../cookies/refresh-token-cookie";
 import { buildClaims } from "../jwt/claims";
-import { signAccessToken } from "../jwt/sign";
+import { signAccessTokenWithExpiry } from "../jwt/sign";
 import type { AuthHookRegistry } from "../pipeline/hooks";
 import {
   generateRefreshToken,
@@ -92,11 +92,8 @@ export async function issueSession(
     deps.pluginCtx
   );
 
-  const accessToken = await signAccessToken(
-    claims,
-    deps.secret,
-    deps.accessTokenTTL
-  );
+  const { token: accessToken, expiresAt: accessTokenExpiresAt } =
+    await signAccessTokenWithExpiry(claims, deps.secret, deps.accessTokenTTL);
 
   const rawRefreshToken = generateRefreshToken();
   const refreshTokenHash = hashRefreshToken(rawRefreshToken);
@@ -156,9 +153,9 @@ export async function issueSession(
       },
       accessToken,
       refreshToken: rawRefreshToken,
-      expiresAt: new Date(
-        Date.now() + deps.accessTokenTTL * 1000
-      ).toISOString(),
+      // The token's own expiry, not a fresh reading: the hooks and the audit
+      // write above are awaited, and a plugin hook is arbitrary code.
+      expiresAt: accessTokenExpiresAt.toISOString(),
     },
     {
       status: 200,

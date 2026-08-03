@@ -48,3 +48,15 @@ trail can contradict itself.
 Unlike the failure event it is attributed to the account. Naming the account on
 a failure is the account-state leak the unified error response exists to avoid;
 on a success it is the whole value of the record.
+
+Setup records it too. Creating the first administrator hands out a working
+session without going through the shared login path, so that account — the
+super-admin — was the one login absent from the trail.
+
+Also fixes an overstated token expiry on the login and setup responses. The
+`expiresAt` they return was derived from a fresh clock reading taken after the
+awaited work that follows signing, so it named a later moment than the token's
+own `exp` claim. `signAccessTokenWithExpiry` now returns the token together with
+the expiry it actually carries, computed once and set explicitly, so a caller
+reports the truth rather than a parallel calculation that drifts by however long
+that work takes — unbounded, since plugin `afterLogin` hooks run there.

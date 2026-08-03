@@ -21,6 +21,7 @@
  * Every test also asserts the body has no `data` property, guarding
  * against accidental re-introduction of a `{ data: ... }` envelope.
  */
+import { jwtVerify } from "jose";
 import { describe, expect, it, vi } from "vitest";
 
 import { hashPassword } from "../../password";
@@ -41,6 +42,7 @@ import { NextlyError } from "../../../errors/nextly-error";
 import { handleSession } from "../session";
 import { handleSetup, handleSetupStatus } from "../setup";
 import { handleResendVerification, handleVerifyEmail } from "../verify-email";
+import { secretToKey } from "../../jwt/sign";
 import { hashRefreshToken } from "../../session/refresh";
 import { verifyCredentials } from "../../credentials/verify-credentials";
 import { AuthHookRegistry } from "../../pipeline/hooks";
@@ -670,6 +672,7 @@ describe("setup handler: respondAction shape", () => {
       fetchRoleIds: vi.fn().mockResolvedValue(["super-admin"]),
       seedPermissions: vi.fn().mockResolvedValue(undefined),
       storeRefreshToken: vi.fn().mockResolvedValue(undefined),
+      auditLog: { write: vi.fn().mockResolvedValue(undefined) },
     };
     const req = makeRequest("POST", {
       email: "a@example.com",
@@ -685,6 +688,22 @@ describe("setup handler: respondAction shape", () => {
     expect(typeof body.accessToken).toBe("string");
     expect(typeof body.refreshToken).toBe("string");
     expect(typeof body.expiresAt).toBe("string");
+    // The first administrator receives a working session, so the trail has to
+    // show it. Setup is the one session-issuing path that does not run through
+    // the shared login completion, which is exactly why it was missing.
+    expect(deps.auditLog.write).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "login-succeeded", actorUserId: "u1" })
+    );
+    // The reported expiry must be the token's own, not a clock reading taken
+    // after the awaited work above. Asserting the signer in isolation would not
+    // catch a caller that ignores what it returns.
+    const { payload } = await jwtVerify(
+      body.accessToken as string,
+      secretToKey(SECRET)
+    );
+    expect(Date.parse(body.expiresAt as string)).toBe(
+      (payload.exp as number) * 1000
+    );
   });
 
   // Security: an unknown user count must never be treated as 0 -- a second
