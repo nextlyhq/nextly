@@ -18,6 +18,27 @@ export const NODE_CLASS_PREFIX = "nx-pb-";
 /** The class on the page root that every emitted selector is anchored to. */
 export const PAGE_ROOT_CLASS = "nx-pb-page";
 
+/**
+ * The page root as it is written into a selector, with its class REPEATED.
+ *
+ * Repeating a class is the standard way to buy a notch of specificity without
+ * reaching for `!important`, and the notch is the whole point: a builder rule
+ * sits at 0-3-0 rather than 0-2-0, so ordinary host CSS like
+ * `.content .card h1` (0-2-1) no longer beats a value the author set in the
+ * builder. Losing that contest is the failure users actually report — a style
+ * set in the editor that silently does not appear on the page.
+ *
+ * It costs deliberate overrides one rung, and that trade is the contract: a
+ * host rule with higher specificity or `!important` still wins, so the page
+ * remains the user's. `!important` is not used here precisely so that remains
+ * true — it would end the argument instead of winning it.
+ *
+ * One constant rather than the literal repeated at call sites: the number of
+ * repetitions IS the override contract, and a contract with two definitions has
+ * none.
+ */
+export const PAGE_ROOT_SELECTOR = `.${PAGE_ROOT_CLASS}.${PAGE_ROOT_CLASS}`;
+
 /** The prefix on the shared class carrying one block type's base styles. */
 export const BLOCK_TYPE_CLASS_PREFIX = "nx-bt-";
 

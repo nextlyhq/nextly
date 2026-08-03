@@ -8,7 +8,7 @@ import {
 
 import { compilePageCss } from "./compile-page";
 import { findUnscopedRules } from "./isolation";
-import { PAGE_ROOT_CLASS } from "./node-class";
+import { PAGE_ROOT_CLASS, PAGE_ROOT_SELECTOR } from "./node-class";
 
 const SCOPE = PAGE_ROOT_CLASS;
 
@@ -190,5 +190,51 @@ describe("the compiler cannot emit a rule that escapes the page root", () => {
       ],
     } as unknown as BlockDocument);
     expect(out.css).not.toContain("body");
+  });
+});
+
+describe("the override contract, as a user would meet it", () => {
+  /** The specificity of a selector, as (id, class, type). */
+  function specificity(selector: string): [number, number, number] {
+    const ids = (selector.match(/#[\w-]+/g) ?? []).length;
+    const classes = (selector.match(/\.[\w-]+|\[[^\]]*\]|:(?!:)[a-z-]+/g) ?? [])
+      .length;
+    const types = (selector.match(/(^|[\s>+~])[a-z]+[\w-]*/g) ?? []).length;
+    return [ids, classes, types];
+  }
+
+  it("puts a node's rule above ordinary host CSS", () => {
+    // The contest users actually lose: a host theme with a moderately specific
+    // rule beating a value they set in the builder, with nothing to explain it.
+    const out = compilePageCss(
+      {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: "n1",
+            type: "core/box",
+            version: 1,
+            props: {},
+            styles: { base: { base: { color: "#fff" } } },
+          },
+        ],
+      } as unknown as BlockDocument,
+      { breakpoints: FIXTURE_BREAKPOINTS }
+    );
+    const emitted = out.css.slice(0, out.css.indexOf("{")).trim();
+    const [, classes] = specificity(emitted);
+    // Three classes, so `.content .card h1` (two classes, one type) loses.
+    expect(classes).toBeGreaterThanOrEqual(3);
+  });
+
+  it("still lets a host override deliberately", () => {
+    // The other half of the contract, and the reason `!important` is not used:
+    // the page belongs to the user, so a rule that outranks ours must win.
+    const ours = `${PAGE_ROOT_SELECTOR} .nx-pb-abc`;
+    const deliberate = `.my-theme ${PAGE_ROOT_SELECTOR} .nx-pb-abc`;
+    const [, oursClasses] = specificity(ours);
+    const [, theirsClasses] = specificity(deliberate);
+    expect(theirsClasses).toBeGreaterThan(oursClasses);
   });
 });
