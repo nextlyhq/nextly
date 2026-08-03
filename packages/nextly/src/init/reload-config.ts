@@ -51,7 +51,10 @@ import {
   noopMigrationJournal,
   noopPreRenameExecutor,
 } from "../domains/schema/pipeline/pushschema-pipeline-stubs";
-import { mergeRegisteredCollectionsSafely } from "../domains/schema/pipeline/registered-collections";
+import {
+  isCodeOwned,
+  mergeRegisteredCollectionsSafely,
+} from "../domains/schema/pipeline/registered-collections";
 import { RegexRenameDetector } from "../domains/schema/pipeline/rename-detector";
 import type {
   DesiredCollection,
@@ -1979,10 +1982,11 @@ async function applyReload(opts?: {
           tableName: s.tableName,
           fields: (s.fields ?? []) as DesiredSingle["fields"],
           status: s.status === true,
-          // Read out of the registry, so this is a single the Schema Builder created — the code
-          // config above already claimed every code-first slug. Stating it keeps its columns
-          // described the same way here as on the path that created them.
-          builderOwned: true,
+          // Read from the row, not inferred from the row's presence. A code-first single dropped
+          // from the config keeps its registry row for optional orphan cleanup, so it reaches this
+          // loop while still owned by code; calling it the Builder's would widen its columns on the
+          // apply that follows, for a removal nobody requested.
+          builderOwned: !isCodeOwned(s),
         };
       }
     }
@@ -2009,9 +2013,8 @@ async function applyReload(opts?: {
           slug: c.slug,
           tableName: c.tableName,
           fields: (c.fields ?? []) as DesiredFieldGroup["fields"],
-          // Registry-sourced, so Builder-authored: the code config above already claimed every
-          // code-first slug.
-          builderOwned: true,
+          // Read from the row, for the same reason as the singles loop above.
+          builderOwned: !isCodeOwned(c),
         };
       }
     }

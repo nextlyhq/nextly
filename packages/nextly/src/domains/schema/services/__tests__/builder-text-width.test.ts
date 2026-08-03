@@ -207,6 +207,30 @@ describe("withResolvedBuilderTextWidths", () => {
     });
   });
 
+  // The field-group generator never reads a variant, so a stated one settles nothing there: the
+  // column comes out unbounded whatever it says, and treating it as settled left the diff expecting
+  // varchar(255) against a TEXT column.
+  it("ignores a variant on a field group, which its generator never reads", () => {
+    const resolved = withResolvedBuilderTextWidths({
+      collections: {},
+      singles: {},
+      components: {
+        hero: {
+          slug: "hero",
+          tableName: "comp_hero",
+          fields: [
+            { name: "body", type: "text", options: { variant: "short" } },
+          ] as never,
+          builderOwned: true,
+        },
+      },
+    });
+
+    expect(resolved.components.hero.fields[0]).toMatchObject({
+      options: { variant: "long" },
+    });
+  });
+
   it("still widens a collection field carrying only a maxLength", () => {
     const resolved = withResolvedBuilderTextWidths(
       schemaWith({

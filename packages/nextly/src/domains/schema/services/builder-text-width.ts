@@ -78,7 +78,7 @@ function modifierOptions(
  */
 function resolveFieldWidths<T>(
   fields: readonly T[],
-  honoursMaxLength: boolean
+  signal: "variant" | "maxLength"
 ): readonly T[] {
   let changed = false;
 
@@ -88,7 +88,7 @@ function resolveFieldWidths<T>(
 
     const options = modifierOptions(candidate.options);
     if (options === undefined) return field;
-    if (statesWidth(candidate, options, honoursMaxLength)) return field;
+    if (statesWidth(candidate, options, signal)) return field;
 
     changed = true;
     return { ...candidate, options: { ...options, variant: "long" } };
@@ -110,20 +110,25 @@ function resolveFieldWidths<T>(
 /**
  * Whether a field already states a width its own generator will render.
  *
- * The two generators do not read the same signal, so neither does this. A field group's generator
- * bounds a column on a top-level `maxLength` (`field-group-schema-service.ts`:
- * `field.maxLength ? varchar(maxLength) : text`), while a collection's bounds it only on
- * `options.variant === "short"` — a `maxLength` alone leaves that column unbounded. Applying either
- * rule to both kinds is wrong in one direction or the other: it would either widen a field group
- * column the author sized, or leave a collection column bounded that its generator never bounded.
+ * Each kind is given ONLY the signal its own generator acts on, because reading both would be wrong
+ * for each in a different direction:
+ *
+ * - a field group's generator branches on a top-level `maxLength` and nothing else
+ *   (`field-group-schema-service.ts`: `field.maxLength ? varchar(maxLength) : text`). It never reads
+ *   a variant, so honouring one would leave that column unbounded while the diff expected it bounded.
+ * - a collection's generator branches only on `options.variant === "short"`. A `maxLength` alone
+ *   leaves that column unbounded, so honouring one would bound a column its generator never bounded.
+ *
+ * The caller states which generator a list belongs to rather than this guessing from the field.
  */
 function statesWidth(
   field: WidthSignals,
   options: Record<string, unknown>,
-  honoursMaxLength: boolean
+  signal: "variant" | "maxLength"
 ): boolean {
-  if (options.variant !== undefined) return true;
-  return honoursMaxLength && field.maxLength !== undefined;
+  return signal === "maxLength"
+    ? field.maxLength !== undefined
+    : options.variant !== undefined;
 }
 
 export function withResolvedBuilderTextWidths(
@@ -133,7 +138,7 @@ export function withResolvedBuilderTextWidths(
     E extends { fields: readonly unknown[]; builderOwned?: boolean },
   >(
     group: Record<string, E>,
-    honoursMaxLength: boolean
+    signal: "variant" | "maxLength"
   ): Record<string, E> => {
     const out: Record<string, E> = {};
     for (const [key, entity] of Object.entries(group)) {
@@ -144,16 +149,16 @@ export function withResolvedBuilderTextWidths(
         out[key] = entity;
         continue;
       }
-      const fields = resolveFieldWidths(entity.fields, honoursMaxLength);
+      const fields = resolveFieldWidths(entity.fields, signal);
       out[key] = fields === entity.fields ? entity : { ...entity, fields };
     }
     return out;
   };
 
   return {
-    collections: resolveGroup(desired.collections, false),
-    singles: resolveGroup(desired.singles, false),
-    // Field groups alone: their generator is the one that renders a declared `maxLength`.
-    components: resolveGroup(desired.components, true),
+    collections: resolveGroup(desired.collections, "variant"),
+    singles: resolveGroup(desired.singles, "variant"),
+    // A field group's generator reads a declared `maxLength`, and never a variant.
+    components: resolveGroup(desired.components, "maxLength"),
   };
 }

@@ -56,7 +56,7 @@ export interface RegisteredCollectionRow {
  * populated. Either one being set is enough, because misreading code as Builder-authored is the
  * direction that rewrites a table nobody asked to change.
  */
-function isCodeOwned(row: RegisteredCollectionRow): boolean {
+export function isCodeOwned(row: RegisteredCollectionRow): boolean {
   if (row.locked === true) return true;
   const source = row.source;
   return source === "code" || (!!source && source.startsWith("plugin:"));
