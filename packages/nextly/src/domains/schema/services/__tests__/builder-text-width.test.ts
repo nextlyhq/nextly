@@ -1,4 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+
+import {
+  clearFieldTypes,
+  registerFieldType,
+} from "../../field-types/field-type-registry";
 
 import { buildDesiredTableFromFields } from "../../pipeline/diff/build-from-fields";
 import type { DesiredSchema } from "../../pipeline/types";
@@ -37,6 +42,10 @@ function bodyType(desired: DesiredSchema): string | undefined {
     "mysql"
   ).columns.find(c => c.name === "body")?.type;
 }
+
+afterEach(() => {
+  clearFieldTypes();
+});
 
 describe("withResolvedBuilderTextWidths", () => {
   // MySQL is the only dialect where the two readings differ, and there they are 65 535 and 255.
@@ -147,6 +156,33 @@ describe("withResolvedBuilderTextWidths", () => {
     const resolved = withResolvedBuilderTextWidths(original);
 
     expect(resolved.singles.page.fields[0]).toHaveProperty("options", choices);
+  });
+
+  // A contributed type declaring `storage: "text"` reaches the database through the same column as
+  // a plain text field — both generators resolve it that way before rendering — so matching the
+  // declared token alone left it bounded while the table held an unbounded column.
+  it("resolves a contributed type to what it stores", () => {
+    registerFieldType({
+      type: "color-swatch",
+      storage: "text",
+      component: "@acme/swatch/admin#ColorSwatch",
+    });
+
+    const resolved = withResolvedBuilderTextWidths(
+      schemaWith({
+        fields: [{ name: "swatch", type: "color-swatch" }] as never,
+      })
+    );
+
+    expect(
+      buildDesiredTableFromFields(
+        "single_page",
+        resolved.singles.page.fields as unknown as Parameters<
+          typeof buildDesiredTableFromFields
+        >[1],
+        "mysql"
+      ).columns.find(c => c.name === "swatch")?.type
+    ).toBe("text");
   });
 
   it("does not widen a type whose width is settled by what it holds", () => {

@@ -633,22 +633,31 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // preview/apply handlers. It keeps its own field rules, but nothing here
       // can judge a plugin type's own options, so an unsatisfiable declaration
       // would be stored and then fail on every write to the single.
-      // Refused before any DDL runs, not after. `registerSingle` makes the authoritative check
-      // inside its own transaction, but that happens once the table has already been created or
-      // altered — so a create aimed at a slug that exists changed that single's live table and was
-      // only then rejected, leaving a table altered for a request that failed.
-      const slugTaken = await svc.registry.getSingleBySlug(b.slug);
-      if (slugTaken) {
-        throw NextlyError.duplicate({
-          logContext: { reason: "single-slug-conflict", slug: b.slug },
-        });
-      }
       assertValidPluginFieldOptions(b.fields);
 
       const schemaHash = calculateSchemaHash(b.fields);
       // Canonical resolver keeps the UI-create path in sync with registry
       // and DDL so every call site writes and reads the same physical table.
       const tableName = resolveSingleTableName({ slug: b.slug });
+
+      // Refused before any DDL runs, and keyed on the TABLE NAME rather than the slug. A slug is
+      // normalised on its way to a table name, so `foo-bar` and `foo_bar` name one physical table
+      // while looking like two free slugs. The registry's own check runs after the DDL, by which
+      // point `CREATE TABLE IF NOT EXISTS` has reported success against the table that already
+      // exists and the runtime registration has rebound it to this request's fields.
+      const owner = (await svc.registry.getAllSingles()).find(
+        s => s.tableName === tableName
+      );
+      if (owner) {
+        throw NextlyError.duplicate({
+          logContext: {
+            reason: "single-table-conflict",
+            slug: b.slug,
+            tableName,
+            ownedBy: owner.slug,
+          },
+        });
+      }
 
       // Generate migration SQL for the Single's data table. Passing
       // isSingle: true skips the slug column and auto-adds updated_at.

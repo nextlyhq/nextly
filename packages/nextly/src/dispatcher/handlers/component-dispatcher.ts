@@ -376,15 +376,6 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
       // preview/apply handlers below. Their own rules cover names and shapes;
       // what none of them can judge is a plugin type's own options, so an
       // unsatisfiable declaration would be stored and fail on every write.
-      // Refused before any DDL runs, for the same reason as the single create path: the
-      // authoritative duplicate check in `registerComponent` happens after the table has been
-      // created, so a create aimed at an existing slug altered that field group's live table first.
-      const slugTaken = await svc.registry.getComponentBySlug(b.slug);
-      if (slugTaken) {
-        throw NextlyError.duplicate({
-          logContext: { reason: "component-slug-conflict", slug: b.slug },
-        });
-      }
       assertValidPluginFieldOptions(b.fields);
 
       const isLocalized = b.localized === true;
@@ -392,6 +383,27 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
       // Canonical name derivation, shared with the registry sync and
       // migrate:create paths, so the created table and the registry row agree.
       const tableName = resolveComponentTableName(b.slug);
+
+      // Refused before any DDL runs, and keyed on the TABLE NAME rather than the slug. The two are
+      // not the same key: a slug is normalised on its way to a table name, so `foo-bar` and
+      // `foo_bar` name one physical table while looking like two free slugs. Left to the registry's
+      // own check, which runs after the DDL, `CREATE TABLE IF NOT EXISTS` reports success against
+      // the table that already exists and the runtime registration then rebinds it to this
+      // request's fields — so a rejected create leaves the existing field group reading through a
+      // schema that does not describe it.
+      const owner = (await svc.registry.getAllComponents()).find(
+        c => c.tableName === tableName
+      );
+      if (owner) {
+        throw NextlyError.duplicate({
+          logContext: {
+            reason: "component-table-conflict",
+            slug: b.slug,
+            tableName,
+            ownedBy: owner.slug,
+          },
+        });
+      }
 
       // Use FieldGroupSchemaService to generate tables with parent
       // reference columns (_parent_id, _parent_table, _parent_field,

@@ -1,3 +1,4 @@
+import { storageTypeToken } from "../../../shared/lib/plugin-storage";
 import type { DesiredSchema } from "../pipeline/types";
 
 /**
@@ -34,6 +35,21 @@ interface WidthSignals {
   options?: unknown;
 }
 
+/**
+ * Whether a field ends up in a string column, resolving a contributed type to what it actually
+ * stores.
+ *
+ * A plugin type declaring `storage: "text"` reaches the database through the same column as a plain
+ * text field — both generators resolve it that way before rendering — so it needs the same answer
+ * here. Matching the declared token alone left those fields on the bounded default while the table
+ * held an unbounded column, which is the disagreement this module exists to remove.
+ */
+function storesText(field: WidthSignals): boolean {
+  if (field.type === undefined) return false;
+  if (field.type === "text") return true;
+  return storageTypeToken({ type: field.type }) === "text";
+}
+
 /** An `options` value a variant can be written onto without destroying what is already there. */
 function modifierOptions(
   options: unknown
@@ -64,7 +80,7 @@ function resolveFieldWidths<T>(fields: readonly T[]): readonly T[] {
 
   const out = fields.map(field => {
     const candidate = field as T & WidthSignals;
-    if (candidate.type !== "text") return field;
+    if (!storesText(candidate)) return field;
 
     const options = modifierOptions(candidate.options);
     if (options === undefined) return field;

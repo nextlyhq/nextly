@@ -306,7 +306,15 @@ function classifyFieldKind(field: FieldDefinition): ColumnKind {
       // Plugin-contributed custom field type maps to its declared storage
       // primitive; otherwise fall back to text (legacy default — no change).
       const custom = getFieldType(field.type);
-      if (custom) return STORAGE_TO_COLUMN_KIND[custom.storage] ?? "text";
+      if (custom) {
+        const kind = STORAGE_TO_COLUMN_KIND[custom.storage] ?? "text";
+        // A contributed type that stores text answers the same width question a built-in text
+        // field does, and its column is rendered by the same branch. Ignoring the signal here left
+        // a field the caller had declared unbounded in a bounded column.
+        return kind === "text" && field.options?.variant === "long"
+          ? "longText"
+          : kind;
+      }
       return "text";
     }
   }
