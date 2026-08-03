@@ -1,13 +1,14 @@
 /**
  * Parser-backed page-level custom-CSS sanitizer + scoper (spec §8/§14). React-free.
  *
- * Fails closed: on a fatal parse error returns "". Strips raw markup, drops dangerous
- * at-rules (@import and anything but @media/@supports) and declarations
- * (javascript:/vbscript:/data:/expression()), then prefixes every selector with the
- * page scope class so custom CSS cannot leak onto the host site.
+ * Fails closed: on a fatal parse error returns "". Drops dangerous at-rules
+ * (@import and anything but @media/@supports) and declarations
+ * (javascript:/vbscript:/data:/expression()), prefixes every selector with the
+ * page scope class so custom CSS cannot leak onto the host site, and escapes the
+ * one sequence that could end the `<style>` element this is emitted into.
  */
 import * as csstree from "css-tree";
-import type { CssNode, List, ListItem } from "css-tree";
+import type { CssNode, List, ListItem, Rule } from "css-tree";
 
 function isDangerousValue(val: string): boolean {
   const v = val.toLowerCase();
@@ -19,15 +20,35 @@ function isDangerousValue(val: string): boolean {
   );
 }
 
+/**
+ * Escape the sequences that would end the `<style>` element or open an HTML
+ * comment inside it.
+ *
+ * This runs on the GENERATED text rather than the source, because the two differ
+ * in exactly the way that matters: `csstree.generate` decodes CSS escapes into
+ * literal characters, so `content: "\3c /style>"` — which contains no markup as
+ * written — serializes to `content:"</style>"`, and the HTML parser ends the
+ * stylesheet there. Filtering the input cannot see that coming, and the value
+ * cannot be fixed in the AST either: css-tree re-encodes a backslash placed in a
+ * string value, turning the escape into a literal backslash.
+ *
+ * Replacing `</` is safe because `</` cannot occur anywhere in valid CSS except
+ * inside a string or a url, which is the only place this needs to reach. A
+ * media range writes `<` followed by a space or a value, never a slash. `\3c` is
+ * the same character to a CSS parser, so an author who wrote `content: "</div>"`
+ * still gets `</div>` on the page; it is only the bytes the HTML parser sees
+ * that change.
+ */
+function escapeMarkupSequences(css: string): string {
+  return css.replaceAll("</", "\\3c /").replaceAll("<!", "\\3c !");
+}
+
 export function sanitizeCustomCss(css: string, scopeClass: string): string {
   if (!css) return "";
 
-  // Defensively strip any raw <style>/<script> tags before parsing.
-  const cleaned = css.replace(/<\/?(style|script)[^>]*>/gi, "");
-
   let ast: CssNode;
   try {
-    ast = csstree.parse(cleaned);
+    ast = csstree.parse(css);
   } catch {
     return "";
   }
@@ -51,23 +72,33 @@ export function sanitizeCustomCss(css: string, scopeClass: string): string {
     },
   });
 
-  // Scope every selector under the page root class.
+  // Scope each rule's own selectors under the page root class.
+  //
+  // Walked from the Rule rather than by visiting every Selector, because a
+  // Selector also appears inside `:not()`, `:is()`, `:where()` and `:has()`, and
+  // prefixing those changes what the author wrote: `.a:has(> .b)` would become
+  // `.a:has(.scope > .b)`, which asks a different question. The arguments of a
+  // functional pseudo-class are already confined by the compound they hang off,
+  // so scoping the outer selector is what confines the whole rule.
   csstree.walk(ast, {
-    visit: "Selector",
-    enter(node: CssNode) {
-      const sel = node as csstree.Selector;
-      const first = sel.children.first;
-      const alreadyScoped =
-        first != null &&
-        first.type === "ClassSelector" &&
-        first.name === scopeClass;
-      if (alreadyScoped) return;
-      sel.children.prependData({ type: "Combinator", name: " " });
-      sel.children.prependData({ type: "ClassSelector", name: scopeClass });
+    visit: "Rule",
+    enter(node: Rule) {
+      if (node.prelude.type !== "SelectorList") return;
+      for (const sel of node.prelude.children) {
+        if (sel.type !== "Selector") continue;
+        const first = sel.children.first;
+        const alreadyScoped =
+          first != null &&
+          first.type === "ClassSelector" &&
+          first.name === scopeClass;
+        if (alreadyScoped) continue;
+        sel.children.prependData({ type: "Combinator", name: " " });
+        sel.children.prependData({ type: "ClassSelector", name: scopeClass });
+      }
     },
   });
 
-  return csstree.generate(ast);
+  return escapeMarkupSequences(csstree.generate(ast));
 }
 
 /**

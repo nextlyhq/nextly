@@ -671,8 +671,8 @@ function PagePanel() {
         }
       />
       <p className="nx-pb-empty" style={{ marginTop: 4 }}>
-        Applies to this page only. Unsafe rules (imports, scripts, data URLs)
-        are stripped on render.
+        Applies to this page only. Rules are scoped to the page and checked on
+        render: imports, data URLs and script-like values are removed.
       </p>
     </div>
   );
