@@ -27,3 +27,5 @@ Schema Builder tables keep the text column width they had. Creating a field grou
 A text field that states its own width now gets a column at exactly that width, on every path that can build one: a field limited to 400 characters no longer lands in a column that rejects what its own validation accepts. Localized companion migrations, Single identity seeding, and columns added to an existing table all recognise the bounded text column, so a freshly generated migration applies, a new Single keeps its seeded title and slug, and a column added at boot is not reported as changed on the next preview.
 
 A field whose type belongs to a plugin that is not loaded also keeps the unbounded column it was built with, instead of being reported as a narrowing on a table nothing has touched.
+
+A field group's text field that declares a maximum length keeps the bounded column it was created with. Its width is declared under a different key from a collection's, which the schema comparison did not read, so on PostgreSQL such a field was reported as a type change on a column that had not changed.

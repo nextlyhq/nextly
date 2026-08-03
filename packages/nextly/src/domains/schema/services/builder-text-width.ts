@@ -101,7 +101,13 @@ function resolveFieldWidths<T>(
 
     const options = modifierOptions(candidate.options);
     if (options === undefined) return field;
-    if (statesWidth(candidate, options, signal)) return field;
+
+    if (statesWidth(candidate, options, signal)) {
+      const bounded = canonicalBoundedWidth(candidate, options, signal);
+      if (bounded === undefined) return field;
+      changed = true;
+      return bounded;
+    }
 
     changed = true;
     return { ...candidate, options: { ...options, variant: "long" } };
@@ -134,6 +140,43 @@ function resolveFieldWidths<T>(
  *
  * The caller states which generator a list belongs to rather than this guessing from the field.
  */
+/**
+ * Rewrite a stated width into the one signal the descriptor reads, or nothing when it already is.
+ *
+ * A field group's generator takes its width from a top-level `maxLength`, a key the descriptor does
+ * not look at. Left as it was, such a field reached the descriptor stating nothing, came back as the
+ * unbounded default, and previewed as a type change against the `varchar(120)` its own generator had
+ * just created — on PostgreSQL, where the two answers are different types rather than two widths of
+ * one type.
+ *
+ * Translating here rather than teaching the descriptor that key is what keeps the per-generator rules
+ * from leaking into it: the descriptor answers one question about one canonical shape, and this
+ * module owns the fact that two generators ask it in two different words. Teaching the descriptor to
+ * read `maxLength` would also bound every COLLECTION field carrying one, which that generator leaves
+ * unbounded.
+ */
+function canonicalBoundedWidth<T extends WidthSignals>(
+  field: T,
+  options: Record<string, unknown>,
+  signal: "variant" | "maxLength"
+): T | undefined {
+  // A collection or single already states its width the way the descriptor reads it.
+  if (signal !== "maxLength") return undefined;
+  // Already canonical, so rewriting would be the second pass changing what the first settled.
+  if (options.variant !== undefined) return undefined;
+  const declared = field.maxLength;
+  if (typeof declared !== "number") return undefined;
+  if (!Number.isInteger(declared) || declared <= 0) return undefined;
+
+  return {
+    ...field,
+    options: { ...options, variant: "short" },
+    // The width itself, under the key the descriptor reads it from. Stating the variant alone would
+    // bound the column at the default 255 while the generator had bounded it at what was declared.
+    length: declared,
+  };
+}
+
 function statesWidth(
   field: WidthSignals,
   options: Record<string, unknown>,

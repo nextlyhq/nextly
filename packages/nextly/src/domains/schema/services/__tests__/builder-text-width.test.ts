@@ -227,9 +227,23 @@ describe("withResolvedBuilderTextWidths", () => {
       },
     });
 
-    expect(resolved.components.hero.fields[0]).not.toMatchObject({
-      options: { variant: "long" },
-    });
+    // Asserted as the column the diff would compare, not merely as "not widened": the generator
+    // bounds this at 120 on both dialects that bound a string, and the descriptor reads a width from
+    // neither the top-level key nor an absent variant, so an unwidened field still came back as the
+    // unbounded default and previewed as a type change on PostgreSQL.
+    const columnType = (dialect: "postgresql" | "mysql" | "sqlite") =>
+      buildDesiredTableFromFields(
+        "comp_hero",
+        resolved.components.hero.fields as unknown as Parameters<
+          typeof buildDesiredTableFromFields
+        >[1],
+        dialect
+      ).columns.find(c => c.name === "body")?.type;
+
+    expect(columnType("postgresql")).toBe("varchar(120)");
+    expect(columnType("mysql")).toBe("varchar(120)");
+    // SQLite has one string type, which is what that generator emits for it too.
+    expect(columnType("sqlite")).toBe("text");
   });
 
   // The field-group generator never reads a variant, so a stated one settles nothing there: the
