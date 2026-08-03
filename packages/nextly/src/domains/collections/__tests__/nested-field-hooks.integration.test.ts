@@ -292,6 +292,21 @@ async function boot(): Promise<TestNextly> {
           // relations are not expanded on a list), so it is the field a
           // source-hook re-contamination test uses on the list path.
           text({ name: "dossier", access: { read: () => false } }),
+          // Copies the row's OWN denied `dossier` onto an allowed field of the
+          // same row. A direct read applies field access BEFORE the field hooks,
+          // so this hook is handed a row without `dossier` and copies nothing;
+          // reaching the row through a relationship must not be looser.
+          text({
+            name: "harvestOwn",
+            hooks: {
+              afterRead: [
+                ({ data }) =>
+                  ((data as Record<string, unknown>).dossier as
+                    | string
+                    | undefined) ?? null,
+              ],
+            },
+          }),
           // Writes a secret back after the fetch stripped it. Only a second
           // strip AFTER the hooks keeps it out of the response.
           text({
@@ -1775,6 +1790,46 @@ describe("a target's field hooks apply to rows reached through a relationship", 
 
     expect(expanded.data!.contributors).toEqual([contributorId]);
     expect(JSON.stringify(expanded.data!.contributors)).not.toContain("LEAKED");
+  });
+
+  it("hides a related row's denied field from its own field hooks", async () => {
+    // A target collection's field hook runs against the row it belongs to. Given
+    // the row unredacted, a hook on an ALLOWED field can read the DENIED one and
+    // return it as its own value; the access pass afterwards removes the denied
+    // field but not the copy, which then rides out on a field no rule protects.
+    // A direct read of the same collection applies access before the hooks, so
+    // expansion has to as well — it may be stricter than the target's own
+    // endpoint, never looser.
+    const t = await boot();
+    await t.nextly.create({
+      collection: AUTHORS,
+      data: { name: "ada", dossier: "SECRET" },
+    });
+    const authorId = await onlyId(t, AUTHORS);
+    await t.nextly.create({
+      collection: POSTS,
+      data: { title: "p", author: authorId },
+    });
+    const postId = await onlyId(t, POSTS);
+
+    // The target's own endpoint: the hook never sees `dossier`.
+    const direct = await handlerOf(t).getEntry({
+      collectionName: AUTHORS,
+      entryId: authorId,
+      depth: 2,
+    });
+    expect(direct.data!.dossier).toBeUndefined();
+    expect(direct.data!.harvestOwn).not.toBe("SECRET");
+
+    // The same row reached through a relationship must match.
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+    const author = expanded.data!.author as Record<string, unknown>;
+    expect(author.dossier).toBeUndefined();
+    expect(author.harvestOwn).not.toBe("SECRET");
   });
 
   it("keeps the deeper occurrence of a row from flattening a shallower one", async () => {

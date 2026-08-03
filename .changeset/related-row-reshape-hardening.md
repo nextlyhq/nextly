@@ -31,6 +31,15 @@ row, replacing, appending, reordering or removing its nested group/repeater rows
 or returning a rebuilt document — is discarded. The rebuild runs after every hook
 phase, so one phase cannot hand the next a contaminated related row to copy from.
 
+Closes a field-hook exfiltration path on related rows. A field hook belongs to one
+field but is handed the whole row, so a hook on an ALLOWED field of a related row
+could read a DENIED field beside it and return it as its own value — and the access
+pass that ran afterwards, judging each field by its own rule, had no reason to remove
+the copy. The target collection's field access now runs BEFORE its field hooks and
+again after, the same order a direct read of that collection uses: a row reached
+through a relationship may be redacted more strictly than the target's own endpoint,
+never more loosely.
+
 Also fixes a related-row read-access gap for a relationship that declares a single
 target as an ARRAY (`relationTo: ["posts"]`). That form stores and expands as the
 discriminated `{ relationTo, value }` pair, but the nested read decided the pair

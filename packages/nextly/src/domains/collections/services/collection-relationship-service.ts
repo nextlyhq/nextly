@@ -3705,6 +3705,22 @@ export class CollectionRelationshipService extends BaseService {
         [resolved.row],
         await this.fieldsForNestedWalk(resolved.collection, state)
       );
+      // The target's OWN field access, BEFORE its own field hooks. A hook belongs
+      // to one field but is handed the whole row, so given an unredacted one a
+      // hook on an allowed field can read a denied field beside it and return it
+      // as its own value — where the pass after the hooks, which judges each field
+      // by its own rule, has no reason to remove it. A direct read of the
+      // collection applies access before its field hooks for exactly this reason,
+      // and a row reached through a relationship may be redacted more strictly
+      // than the target's own endpoint but never more loosely. What this removes
+      // is recorded in the shared `redactions`, so the pass after the hooks
+      // restores it as evidence and re-judges the row against its current content.
+      await this.applyRelatedRowReadAccess(
+        resolved.collection,
+        [resolved.row],
+        access,
+        state.redactions
+      );
       // Deepest first, so a hook reading into its own relations sees them
       // already transformed rather than half-processed.
       await runFieldHooks({
