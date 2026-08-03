@@ -98,7 +98,6 @@ function isRemoteUrl(value: string): boolean {
  * is a caption's fallback, not a request.
  */
 const TEXT_ARGUMENT_FUNCTIONS = new Set([
-  "attr",
   "counter",
   "counters",
   "format",
@@ -110,17 +109,26 @@ const TEXT_ARGUMENT_FUNCTIONS = new Set([
  * Functions that stand in for a value rather than holding one.
  *
  * These are transparent to the question "is this string a URL": what a `var()`
- * fallback becomes depends entirely on where the `var()` sits, so it inherits
- * the position rather than defining one. Treating `var` as text-taking hid a
+ * or `attr()` fallback becomes depends entirely on where it sits, so it
+ * inherits the position rather than defining one. `attr()` looked like a
+ * text-taking function because its fallback usually IS text, but
+ * `image-set(attr(x, "https://…") 1x)` consumes that fallback as an image. Treating `var` as text-taking hid a
  * fetch inside `image-set(var(--x, "https://…") 1x)`; treating it as
  * URL-taking would refuse `content: var(--label, "https://…")`, which is a
  * caption. Neither is right, because it is neither.
  */
-const SUBSTITUTION_FUNCTIONS = new Set(["var", "env"]);
+const SUBSTITUTION_FUNCTIONS = new Set(["var", "env", "attr"]);
 
 /** The first `url()` in a declaration that leaves this origin, if any. */
 function firstRemoteUrl(decl: csstree.Declaration): string | undefined {
-  return remoteUrlInValue(decl.value, 0);
+  // A custom property's value is checked as though it could land anywhere,
+  // because it can. `--probe: "https://evil"` is a bare string here and an
+  // image URL the moment something writes `image-set(var(--probe) 1x)`, and
+  // which of those it becomes is decided at the USE, in a declaration that
+  // contains no string of its own to inspect. Nothing at this point knows,
+  // so a remote-looking value in a custom property is refused.
+  const anywhere = decl.property.startsWith("--");
+  return remoteUrlInValue(decl.value, 0, [], anywhere);
 }
 
 /**
@@ -155,7 +163,8 @@ const MAX_RAW_DEPTH = 3;
 function remoteUrlInValue(
   value: csstree.CssNode,
   depth: number,
-  outerPosition: readonly string[] = []
+  outerPosition: readonly string[] = [],
+  anyPositionIsUrl = false
 ): string | undefined {
   let found: string | undefined;
   // One walk, maintaining the enclosing-function stack, because all three
@@ -183,6 +192,10 @@ function remoteUrlInValue(
         return;
       }
       if (node.type !== "String") return;
+      if (anyPositionIsUrl) {
+        if (isRemoteUrl(node.value)) found = node.value;
+        return;
+      }
       const position = positionOf(functions, outerPosition);
       const enclosing = position[position.length - 1];
       // No enclosing function once substitutions are ignored: the string sits
@@ -211,7 +224,12 @@ function remoteUrlInValue(
     } catch {
       return raw.text.trim();
     }
-    const nested = remoteUrlInValue(reparsed, depth + 1, raw.position);
+    const nested = remoteUrlInValue(
+      reparsed,
+      depth + 1,
+      raw.position,
+      anyPositionIsUrl
+    );
     if (nested !== undefined) return nested;
   }
   return undefined;

@@ -318,6 +318,42 @@ describe("custom CSS may not reach off this origin", () => {
     }
   });
 
+  it("refuses a remote-looking custom property, wherever it lands", () => {
+    // `--probe: "https://evil"` is a bare string where it is DEFINED and an
+    // image URL where it is used. Which it becomes is decided at the use, in a
+    // declaration holding no string of its own to inspect, so nothing at
+    // definition time can know — and it is refused rather than guessed at.
+    const out = sanitizeCustomCss(
+      `.a { --probe: "https://evil.example/a.png"; background-image: image-set(var(--probe) 1x) }`,
+      SCOPE
+    );
+    expect(out.css).not.toContain("evil.example");
+    expect(out.warnings.map(w => w.code)).toContain("remote-url");
+    // A custom property that is plainly not a URL is untouched, which is the
+    // overwhelmingly common case and the cost of getting this wrong.
+    expect(
+      sanitizeCustomCss(`.a { --gap: 12px; padding: var(--gap) }`, SCOPE)
+        .warnings
+    ).toEqual([]);
+  });
+
+  it("treats attr() as a substitution, not as text", () => {
+    // `attr()` looked text-taking because its fallback usually is text. But
+    // `image-set(attr(x, "https://…") 1x)` consumes that fallback as an image,
+    // so it inherits its position the way `var()` does.
+    const out = sanitizeCustomCss(
+      `.a { background-image: image-set(attr(data-probe, "https://evil.example/a.png") 1x) }`,
+      SCOPE
+    );
+    expect(out.css).not.toContain("evil.example");
+    expect(out.warnings.map(w => w.code)).toContain("remote-url");
+    // And a caption's fallback is still a caption.
+    expect(
+      sanitizeCustomCss(`.a { content: attr(data-label, "a caption") }`, SCOPE)
+        .warnings
+    ).toEqual([]);
+  });
+
   it("leaves an ordinary fallback alone", () => {
     // The other side: most fallbacks are values, not URLs, and refusing them
     // would break the commonest use of `var()` there is.
