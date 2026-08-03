@@ -57,12 +57,14 @@ export interface IssueSessionDeps {
  * HttpOnly cookies (spec §7.6). Extracted from the login handler so the
  * challenge-resolve path issues sessions identically.
  *
- * It is also where a successful login is recorded, for that same reason. Three
- * handlers issue sessions — password login, second-factor resolution, and the
- * forced first-sign-in password change — and a user who always completes a
- * second factor never passes through the first. Recording at each call site
- * left that population out of the trail entirely, so the record belongs where
- * the session is created rather than where the flow happened to begin.
+ * It also runs the post-login hooks and records the successful login, for that
+ * same reason. Three handlers complete a login — password login, second-factor
+ * resolution, and the forced first-sign-in password change — and each ran the
+ * identical pair of steps after issuing the session. A user who always completes
+ * a second factor never passes through the first, so recording at each call site
+ * left that population out of the trail entirely; and the ORDER of those steps
+ * decides whether the trail can contradict itself, which is not something three
+ * copies should each be trusted to get right.
  */
 export async function issueSession(
   user: AuthUser,
@@ -110,10 +112,19 @@ export async function issueSession(
     expiresAt: new Date(Date.now() + deps.refreshTokenTTL * 1000),
   });
 
-  // After the refresh token is durable: the session now exists, so the record
-  // describes something that happened rather than something about to. Attributed
-  // on purpose — naming the account is the account-state leak a FAILURE must
-  // avoid, and is the whole value of a success.
+  // Last, after the post-login hooks. A hook that throws sends the caller into
+  // its failure path, which returns an error and records a failure — the client
+  // never receives the token body or the cookies. Recording the success before
+  // that point left the trail asserting both outcomes for one attempt and
+  // claiming the account was reached when nothing was delivered.
+  //
+  // Running the hooks here rather than in each caller is what makes that
+  // ordering a property of the code instead of a convention: all three handlers
+  // ran exactly this pair, and one of them getting the order wrong is invisible
+  // until an audit is read.
+  await deps.authHooks.runAfterLogin(user, deps.pluginCtx);
+  // Attributed on purpose — naming the account is the account-state leak a
+  // FAILURE must avoid, and is the whole value of a success.
   await deps.auditLog.write({
     kind: "login-succeeded",
     actorUserId: user.id,

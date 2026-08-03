@@ -258,6 +258,78 @@ describe("login handler: respondAction shape", () => {
     );
   });
 
+  it("does not record a success when an afterLogin hook rejects", async () => {
+    // The hook runs after the session is created but before the client has the
+    // token body or cookies. If it throws, the handler returns an error and
+    // records a failure — so a success recorded earlier would leave the trail
+    // asserting both outcomes for one attempt, and claiming the user got in
+    // when nothing was ever delivered to them.
+    const passwordHash = await hashPassword("Pass1234!");
+    const fakeUser = {
+      id: "u1",
+      email: "a@example.com",
+      name: "A",
+      passwordHash,
+      isActive: true,
+      emailVerified: true,
+      failedLoginAttempts: 0,
+      lockedUntil: null,
+      mustChangePassword: false,
+    };
+    const findUserByEmail = vi.fn().mockResolvedValue(fakeUser);
+    const incrementFailedAttempts = vi.fn().mockResolvedValue(undefined);
+    const lockAccount = vi.fn().mockResolvedValue(undefined);
+    const resetFailedAttempts = vi.fn().mockResolvedValue(undefined);
+    const pipeline = loginPipelineDeps({
+      findUserByEmail,
+      incrementFailedAttempts,
+      lockAccount,
+      resetFailedAttempts,
+      maxLoginAttempts: 5,
+      lockoutDurationSeconds: 900,
+      requireEmailVerification: true,
+    });
+    pipeline.authHooks.add({
+      afterLogin: () => {
+        throw new Error("afterLogin exploded");
+      },
+    } as never);
+    const deps = {
+      secret: SECRET,
+      accessTokenTTL: 900,
+      refreshTokenTTL: 604800,
+      loginStallTimeMs: 0,
+      requireEmailVerification: true,
+      allowedOrigins: ALLOWED_ORIGINS,
+      trustProxy: false,
+      trustedProxyIps: [],
+      findUserByEmail,
+      incrementFailedAttempts,
+      lockAccount,
+      resetFailedAttempts,
+      fetchRoleIds: vi.fn().mockResolvedValue(["super-admin"]),
+      fetchCustomFields: vi.fn().mockResolvedValue({}),
+      storeRefreshToken: vi.fn().mockResolvedValue(undefined),
+      ...pipeline,
+    };
+
+    const req = makeRequest("POST", {
+      email: "a@example.com",
+      password: "Pass1234!",
+    });
+    const res = await handleLogin(req, deps);
+    expect(res.status).toBeGreaterThanOrEqual(400);
+
+    const write = pipeline.auditLog.write;
+    expect(write).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "login-failed" })
+    );
+    // Exactly one outcome for one attempt.
+    expect(write).not.toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "login-succeeded" })
+    );
+  });
+
   it("returns password_change_required with a pending token (no session) for a must-change account", async () => {
     const passwordHash = await hashPassword("Pass1234!");
     const fakeUser = {

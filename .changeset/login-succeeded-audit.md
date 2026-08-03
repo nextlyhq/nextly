@@ -37,6 +37,14 @@ HTTP 200 instead would have the opposite fault: the challenge and
 password-change legs answer 200 while issuing no session, so a success would be
 reported for an account that was never reached.
 
+It is recorded last, after the post-login hooks. A hook that throws sends the
+handler into its failure path, which returns an error and records a failure, so
+the client receives neither the token body nor the cookies — a success recorded
+before that point would leave the trail asserting both outcomes for one attempt.
+Those hooks now run inside the same shared step for that reason: all three
+handlers ran the identical pair, and the order between them decides whether the
+trail can contradict itself.
+
 Unlike the failure event it is attributed to the account. Naming the account on
 a failure is the account-state leak the unified error response exists to avoid;
 on a success it is the whole value of the record.
