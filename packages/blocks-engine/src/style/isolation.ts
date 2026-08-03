@@ -157,13 +157,29 @@ export function namespacedGlobalName(name: string, scopeClass: string): string {
   // accepts a dashed ident and moving them would produce a name CSS refuses.
   const custom = name.startsWith("--");
   const bare = custom ? name.slice(2) : name;
-  return `${custom ? "--" : ""}${scopeClass}-${bare}`;
+  return `${custom ? "--" : ""}${escapeScope(scopeClass)}-${bare}`;
+}
+
+/**
+ * The scope with its own dashes doubled, so joining it to a name is reversible.
+ *
+ * `${scope}-${name}` on its own is not injective, and the collision is the exact
+ * one this function exists to prevent: scope "a" with name "b-c" and scope "a-b"
+ * with name "c" both spell "a-b-c". Two documents differing only that way would
+ * define one animation between them, and the later definition would win for
+ * both — a namespace that reintroduces the collision it was added to remove.
+ *
+ * Doubling every dash in the scope leaves the single dash that follows it as the
+ * only odd-length run at the boundary, so distinct pairs cannot meet.
+ */
+function escapeScope(scopeClass: string): string {
+  return scopeClass.replaceAll("-", "--");
 }
 
 /** Whether a name already carries this document's namespace. */
 function isNamespaced(name: string, scopeClass: string): boolean {
   const bare = name.startsWith("--") ? name.slice(2) : name;
-  return bare.startsWith(`${scopeClass}-`);
+  return bare.startsWith(`${escapeScope(scopeClass)}-`);
 }
 
 /** A family name without its quotes; the name is the same either way. */
@@ -191,8 +207,24 @@ function preludeNames(css: string, node: Atrule): string[] {
 function pageNames(css: string, node: Atrule): string[] {
   const text = preludeNames(css, node)[0];
   if (text === undefined) return [];
-  const name = /^-{0,2}[A-Za-z_][A-Za-z0-9_-]*/.exec(text);
-  return name === null ? [] : [name[0]];
+  // Everything up to the first unescaped colon, rather than a pattern spelling
+  // out which characters an identifier may hold. A CSS identifier can be
+  // non-ASCII or carry escapes — `@page 封面` and `@page \63 over` both name a
+  // page — and a pattern narrower than the grammar finds no name where one
+  // exists, which reads as "nothing to collide" rather than "could not tell".
+  let end = text.length;
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === "\\") {
+      i++;
+      continue;
+    }
+    if (text[i] === ":") {
+      end = i;
+      break;
+    }
+  }
+  const name = text.slice(0, end).trim();
+  return name === "" ? [] : [name];
 }
 
 /**
@@ -233,13 +265,18 @@ function commaSeparatedNames(css: string, node: Atrule): string[] {
 function fontFaceFamilies(css: string, node: Atrule): string[] {
   const block = node.block;
   if (block === null) return [];
+  let family: string | undefined;
   for (const child of block.children) {
     if (child.type !== "Declaration") continue;
     if (child.property.toLowerCase() !== "font-family") continue;
-    const family = unquote(sourceTextOf(css, child.value).trim());
-    return family === "" ? [] : [family];
+    // Kept rather than returned: a later descriptor wins inside a block the way
+    // a later declaration does anywhere else, so the family this rule defines is
+    // the LAST one. Stopping at the first would let
+    // `font-family: safe; font-family: Host` pass the namespace check while
+    // defining "Host".
+    family = unquote(sourceTextOf(css, child.value).trim());
   }
-  return [];
+  return family === undefined || family === "" ? [] : [family];
 }
 
 /** One at-rule defining a name that is not namespaced to this document. */
@@ -298,6 +335,19 @@ export function findUnnamespacedGlobals(
           name: "",
           reason: `"@${atRule}" is not classified, so whether it defines a document-global name is unknown. Add it to the at-rule table.`,
         });
+        return;
+      }
+      // A layer inside a layer is named by the pair: `@layer a { @layer b { … } }`
+      // defines `a.b`, so an inner name that carries no namespace of its own is
+      // still namespaced by the one it sits in. Judging it alone would call a
+      // correctly namespaced hierarchy a collision. The outermost layer is the
+      // one that has to carry the namespace, and it is checked on its own.
+      if (
+        atRule === "layer" &&
+        this.atrule !== null &&
+        this.atrule !== node &&
+        this.atrule.name.toLowerCase() === "layer"
+      ) {
         return;
       }
       const readNames = facts.globalNames;

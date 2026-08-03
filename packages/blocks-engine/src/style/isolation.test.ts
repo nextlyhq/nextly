@@ -16,6 +16,9 @@ import { PAGE_ROOT_CLASS, PAGE_ROOT_SELECTOR } from "./node-class";
 
 const SCOPE = PAGE_ROOT_CLASS;
 
+/** The namespaced spelling of a name, as the compiler would write it. */
+const ns = (name: string): string => namespacedGlobalName(name, SCOPE);
+
 describe("what counts as anchored", () => {
   it("accepts a selector descending from the page root", () => {
     expect(findUnscopedRules(`.${SCOPE} .a { color: red }`, SCOPE)).toEqual([]);
@@ -324,11 +327,50 @@ describe("the override contract, as a user would meet it", () => {
 });
 
 describe("names CSS resolves for the whole document", () => {
-  it("namespaces an animation name, and a custom property keeps its dashes", () => {
-    expect(namespacedGlobalName("fade", SCOPE)).toBe(`${SCOPE}-fade`);
-    // `@property` only accepts a dashed ident, so moving the dashes would
-    // produce a name CSS refuses outright.
-    expect(namespacedGlobalName("--gap", SCOPE)).toBe(`--${SCOPE}-gap`);
+  it("namespaces a name so the check accepts it back", () => {
+    // Asserted as a round trip rather than against a spelling, so the two
+    // halves cannot drift: whatever this produces is what the invariant must
+    // then consider namespaced.
+    expect(
+      findUnnamespacedGlobals(
+        `@keyframes ${ns("fade")} { from { opacity: 0 } }`,
+        SCOPE
+      )
+    ).toEqual([]);
+    expect(ns("fade")).toContain("fade");
+  });
+
+  it("keeps a custom property's leading dashes at the front", () => {
+    // `@property` only accepts a dashed ident, so moving the dashes inward
+    // would produce a name CSS refuses outright.
+    expect(ns("--gap").startsWith("--")).toBe(true);
+    expect(
+      findUnnamespacedGlobals(`@property ${ns("--gap")} { syntax: "*" }`, SCOPE)
+    ).toEqual([]);
+  });
+
+  it("gives two scopes different names for names that would otherwise meet", () => {
+    // Concatenating scope and name with a single dash is not injective: scope
+    // "a" with name "b-c" and scope "a-b" with name "c" would both spell
+    // "a-b-c". Two documents differing only that way would define one animation
+    // between them, and the later would win for both — the namespace
+    // reintroducing the collision it exists to prevent.
+    expect(namespacedGlobalName("b-c", "a")).not.toBe(
+      namespacedGlobalName("c", "a-b")
+    );
+    // And each is still recognised under its OWN scope, not the other's.
+    expect(
+      findUnnamespacedGlobals(
+        `@keyframes ${namespacedGlobalName("b-c", "a")} { from { opacity: 0 } }`,
+        "a"
+      )
+    ).toEqual([]);
+    expect(
+      findUnnamespacedGlobals(
+        `@keyframes ${namespacedGlobalName("b-c", "a")} { from { opacity: 0 } }`,
+        "a-b"
+      )
+    ).toHaveLength(1);
   });
 
   it("reports a global name defined without the namespace", () => {
@@ -346,12 +388,12 @@ describe("names CSS resolves for the whole document", () => {
   it("accepts one that carries the namespace", () => {
     expect(
       findUnnamespacedGlobals(
-        `@keyframes ${SCOPE}-fade { from { opacity: 0 } }`,
+        `@keyframes ${ns("fade")} { from { opacity: 0 } }`,
         SCOPE
       )
     ).toEqual([]);
     expect(
-      findUnnamespacedGlobals(`@property --${SCOPE}-gap { syntax: "*" }`, SCOPE)
+      findUnnamespacedGlobals(`@property ${ns("--gap")} { syntax: "*" }`, SCOPE)
     ).toEqual([]);
   });
 
@@ -379,7 +421,7 @@ describe("names CSS resolves for the whole document", () => {
   it("accepts a namespaced font family", () => {
     expect(
       findUnnamespacedGlobals(
-        `@font-face { font-family: "${SCOPE}-Fade"; src: url(a.woff2) }`,
+        `@font-face { font-family: "${ns("Fade")}"; src: url(a.woff2) }`,
         SCOPE
       )
     ).toEqual([]);
@@ -403,7 +445,7 @@ describe("names CSS resolves for the whole document", () => {
     expect(found).toHaveLength(1);
     expect(found[0]?.name).toBe("cover");
     expect(
-      findUnnamespacedGlobals(`@page ${SCOPE}-cover { margin: 1cm }`, SCOPE)
+      findUnnamespacedGlobals(`@page ${ns("cover")} { margin: 1cm }`, SCOPE)
     ).toEqual([]);
   });
 
@@ -434,7 +476,7 @@ describe("names CSS resolves for the whole document", () => {
     expect(found[0]?.name).toBe("Fade");
     expect(
       findUnnamespacedGlobals(
-        `@font-feature-values ${SCOPE}-Fade { @styleset { nice: 1 } }`,
+        `@font-feature-values ${ns("Fade")} { @styleset { nice: 1 } }`,
         SCOPE
       )
     ).toEqual([]);
@@ -450,7 +492,7 @@ describe("names CSS resolves for the whole document", () => {
     expect(found.map(entry => entry.name)).toEqual(["Fade Two", "Other"]);
     expect(
       findUnnamespacedGlobals(
-        `@font-feature-values ${SCOPE}-Fade Two { @styleset { nice: 1 } }`,
+        `@font-feature-values ${ns("Fade Two")} { @styleset { nice: 1 } }`,
         SCOPE
       )
     ).toEqual([]);
@@ -465,10 +507,58 @@ describe("names CSS resolves for the whole document", () => {
     expect(found[0]?.name).toBe("--brand");
     expect(
       findUnnamespacedGlobals(
-        `@color-profile --${SCOPE}-brand { src: url(a.icc) }`,
+        `@color-profile ${ns("--brand")} { src: url(a.icc) }`,
         SCOPE
       )
     ).toEqual([]);
+  });
+
+  it("reads a page name that is not spelled in ASCII", () => {
+    // A CSS identifier may be non-ASCII or carry escapes. A pattern narrower
+    // than the grammar finds no name here, and finding no name reads as
+    // "nothing to collide" rather than "could not tell".
+    for (const [prelude, name] of [
+      ["封面", "封面"],
+      ["\\63 over", "\\63 over"],
+      ["cover:first", "cover"],
+    ]) {
+      const found = findUnnamespacedGlobals(
+        `@page ${prelude} { margin: 1cm }`,
+        SCOPE
+      );
+      expect(found).toHaveLength(1);
+      expect(found[0]?.name).toBe(name);
+    }
+  });
+
+  it("reads the font family a face actually defines", () => {
+    // A later descriptor wins inside a block, so the family this rule defines
+    // is the last one. Stopping at the first lets a namespaced decoy stand in
+    // front of the name that really lands.
+    const found = findUnnamespacedGlobals(
+      `@font-face { font-family: ${ns("safe")}; font-family: Host; src: url(a.woff2) }`,
+      SCOPE
+    );
+    expect(found).toHaveLength(1);
+    expect(found[0]?.name).toBe("Host");
+  });
+
+  it("accepts a nested layer under a namespaced one", () => {
+    // `@layer a { @layer b { … } }` defines `a.b`, so an inner name carrying no
+    // namespace of its own is still namespaced by the layer it sits in.
+    expect(
+      findUnnamespacedGlobals(
+        `@layer ${ns("theme")} { @layer utilities { .a { color: red } } }`,
+        SCOPE
+      )
+    ).toEqual([]);
+    // The outermost still has to carry it.
+    expect(
+      findUnnamespacedGlobals(
+        `@layer host { @layer utilities { .a { color: red } } }`,
+        SCOPE
+      )
+    ).toHaveLength(1);
   });
 
   it("reports every layer a prelude names", () => {
@@ -495,7 +585,7 @@ describe("names CSS resolves for the whole document", () => {
     // the family name on its parent is what could collide.
     expect(
       findUnnamespacedGlobals(
-        `@font-feature-values ${SCOPE}-Fade { @styleset { nice: 1 } }`,
+        `@font-feature-values ${ns("Fade")} { @styleset { nice: 1 } }`,
         SCOPE
       )
     ).toEqual([]);
