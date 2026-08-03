@@ -38,6 +38,7 @@ import {
   chooseTypeColumns,
   resolveRegistryNameFromCatalog,
 } from "../../field-groups/storage/resolve-storage-names";
+import { withResolvedBuilderTextWidths } from "../services/builder-text-width";
 import { generateRuntimeSchema } from "../services/runtime-schema-generator";
 import { identifierCaseRules } from "../utils/resolve-catalog-name";
 
@@ -519,7 +520,12 @@ export class PushSchemaPipeline {
     /** Which entity kind `uiTargetSlug` names, so the journal row records it accurately. */
     uiTargetKind?: "collection" | "single" | "component";
   }): Promise<PipelineResult> {
-    const { desired, db, dialect, source, promptChannel, databaseName } = args;
+    const { db, dialect, source, promptChannel, databaseName } = args;
+    // Resolved once, before anything reads it. A desired schema is consumed by TWO builders — the
+    // snapshot the diff compares and the Drizzle tables drizzle-kit turns into DDL — and resolving
+    // inside either leaves the other on the raw fields, so a table would converge and then report a
+    // type change against itself on every following diff.
+    const desired = withResolvedBuilderTextWidths(args.desired);
     const scope = computeJournalScope(
       source,
       args.uiTargetSlug,
@@ -673,7 +679,6 @@ export class PushSchemaPipeline {
               {
                 hasStatus: c.status === true,
                 localized: c.localized === true,
-                builderOwned: c.locked !== true,
               }
             )
           ),
@@ -687,7 +692,6 @@ export class PushSchemaPipeline {
               {
                 hasStatus: s.status === true,
                 localized: (s as { localized?: boolean }).localized === true,
-                builderOwned: s.locked !== true,
               }
             )
           ),
@@ -701,7 +705,6 @@ export class PushSchemaPipeline {
               {
                 localized: (c as { localized?: boolean }).localized === true,
                 typeColumn: fieldGroupTypeColumns.get(c.tableName),
-                builderOwned: c.locked !== true,
               }
             )
           ),

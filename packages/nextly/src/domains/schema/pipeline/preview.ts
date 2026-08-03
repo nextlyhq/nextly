@@ -22,6 +22,8 @@
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { withResolvedBuilderTextWidths } from "../services/builder-text-width";
+
 import { RealClassifier } from "./classifier/classifier";
 import {
   countNulls as countNullsHelper,
@@ -102,7 +104,11 @@ export async function previewDesiredSchema(
   args: PreviewDesiredSchemaArgs,
   deps: PreviewDesiredSchemaDeps = {}
 ): Promise<PipelinePreviewResult> {
-  const { desired, db, dialect } = args;
+  const { db, dialect } = args;
+  // Resolved once, here, so the snapshot this function builds and the DDL the apply path builds
+  // from the same declaration describe the same column. Two different builders read a desired
+  // schema, and normalising what they share is what keeps them from disagreeing forever.
+  const desired = withResolvedBuilderTextWidths(args.desired);
   const renameDetector = deps.renameDetector ?? new RegexRenameDetector();
   const classifier = deps.classifier ?? new RealClassifier();
   const introspect = deps.introspect ?? introspectLiveSnapshot;
@@ -136,7 +142,6 @@ export async function previewDesiredSchema(
       {
         hasStatus: c.status === true,
         localized: c.localized === true,
-        builderOwned: c.locked !== true,
       }
     )
   );
@@ -151,7 +156,6 @@ export async function previewDesiredSchema(
       {
         hasStatus: s.status === true,
         localized: s.localized === true,
-        builderOwned: s.locked !== true,
       }
     )
   );
@@ -166,7 +170,6 @@ export async function previewDesiredSchema(
       // preview's desired snapshot (they live in the companion), matching collections/singles.
       {
         localized: (c as { localized?: boolean }).localized === true,
-        builderOwned: c.locked !== true,
       }
     )
   );

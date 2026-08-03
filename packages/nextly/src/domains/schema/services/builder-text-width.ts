@@ -1,3 +1,5 @@
+import type { DesiredSchema } from "../pipeline/types";
+
 /**
  * A text field with no stated width, on an entity the Schema Builder owns, describes an unbounded
  * column.
@@ -13,11 +15,17 @@
  * `nextly migrate` from applying anything. The two paths need different answers because they have
  * different histories, and `locked` already records which history a table has.
  *
- * 🔴 Applied where fields become columns rather than in a request handler. Preview and apply each
- * build their own desired schema, and several handlers build one directly, so any placement further
- * up is a placement one path can miss — which is not hypothetical: resolving this in the create
- * handler alone left preview describing the very column that handler had just created as
- * `varchar(255)`, reporting a destructive type change against a table nobody had touched.
+ * 🔴 Applied to the whole `DesiredSchema` at the entrance to apply and preview, and nowhere else.
+ *
+ * That placement is load-bearing, because a desired schema is read TWICE by two different builders:
+ * `buildDesiredTableFromFields` produces the snapshot the diff compares, and `generateRuntimeSchema`
+ * produces the Drizzle tables drizzle-kit turns into DDL. Resolving inside either one leaves the
+ * other reading the raw fields, and the two then disagree permanently: the diff expects `text` while
+ * the DDL creates `varchar(255)`, so a table converges and immediately reports a type change again.
+ * Normalising the input they share is the only placement that makes them agree by construction.
+ *
+ * Doing it in a request handler is worse still — the handlers are many, and each preview path that
+ * builds its own desired schema would have to remember.
  */
 
 /** The width signals a field can carry, named structurally because callers pass several field types. */
@@ -51,9 +59,7 @@ function modifierOptions(
  * Idempotent: a field this has resolved states a variant, so a second pass leaves it alone. Returns
  * the original array when nothing needed resolving.
  */
-export function resolveBuilderTextWidths<T>(
-  fields: readonly T[]
-): readonly T[] {
+function resolveFieldWidths<T>(fields: readonly T[]): readonly T[] {
   let changed = false;
 
   const out = fields.map(field => {
@@ -69,4 +75,41 @@ export function resolveBuilderTextWidths<T>(
   });
 
   return changed ? out : fields;
+}
+
+/**
+ * Return a desired schema whose Builder-owned entities state the width of every text field.
+ *
+ * A `locked` entity is owned by code-first config or a plugin, and its columns were built by the
+ * path whose default is the bounded kind. Rewriting those would make every code-first table read as
+ * drift and stop `nextly migrate` applying anything, so they are left exactly as they are.
+ *
+ * Copies rather than mutates: the caller's schema is often the registry's own objects, and a
+ * preview must not leave a field changed behind it.
+ */
+export function withResolvedBuilderTextWidths(
+  desired: DesiredSchema
+): DesiredSchema {
+  const resolveGroup = <
+    E extends { fields: readonly unknown[]; locked?: boolean },
+  >(
+    group: Record<string, E>
+  ): Record<string, E> => {
+    const out: Record<string, E> = {};
+    for (const [key, entity] of Object.entries(group)) {
+      if (entity.locked === true) {
+        out[key] = entity;
+        continue;
+      }
+      const fields = resolveFieldWidths(entity.fields);
+      out[key] = fields === entity.fields ? entity : { ...entity, fields };
+    }
+    return out;
+  };
+
+  return {
+    collections: resolveGroup(desired.collections),
+    singles: resolveGroup(desired.singles),
+    components: resolveGroup(desired.components),
+  };
 }

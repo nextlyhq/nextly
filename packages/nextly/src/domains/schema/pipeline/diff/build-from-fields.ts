@@ -29,7 +29,6 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { STORAGE_FORMAT } from "../../../../schemas/storage-format";
 import { resolveLocalizedFieldNames } from "../../../i18n/classify-fields";
-import { resolveBuilderTextWidths } from "../../services/builder-text-width";
 import {
   getColumnDescriptor,
   getSystemColumnDescriptors,
@@ -80,16 +79,6 @@ export interface BuildDesiredTableOptions {
    * dropped.
    */
   localized?: boolean;
-  /**
-   * When true, this entity was authored in the Schema Builder rather than in code, and a text field
-   * that states no width is read as unbounded.
-   *
-   * The two origins need different answers to the same silence: the Builder's previous generator
-   * created an unstated text field as `TEXT`, while the descriptor's default — which every
-   * code-first table was built with — is the bounded kind. Passed in rather than inferred because
-   * only the caller holds the registry's `locked` flag that records which one this is.
-   */
-  builderOwned?: boolean;
 }
 
 /**
@@ -196,17 +185,10 @@ export function collectionIndexSpecs<F extends MinimalFieldDef>(
 
 export function buildDesiredTableFromFields(
   tableName: string,
-  fieldsIn: MinimalFieldDef[],
+  fields: MinimalFieldDef[],
   dialect: SupportedDialect,
   options: BuildDesiredTableOptions = {}
 ): TableSpec {
-  // Resolved before anything reads a field, so every consumer below — the columns, the index rules
-  // and the system-column checks — sees one answer. Doing it here rather than at each call site is
-  // what makes it impossible for a path that builds its own desired schema to skip it.
-  const fields = options.builderOwned
-    ? (resolveBuilderTextWidths(fieldsIn) as MinimalFieldDef[])
-    : fieldsIn;
-
   const columns: ColumnSpec[] = [];
 
   // Localized fields live in the companion `_locales` table (migration-owned); omit them
@@ -300,12 +282,10 @@ export function buildDesiredTableFromFields(
  */
 export function buildDesiredTableFromComponentFields(
   tableName: string,
-  fieldsIn: MinimalFieldDef[],
+  fields: MinimalFieldDef[],
   dialect: SupportedDialect,
   options: {
     localized?: boolean;
-    /** Same meaning as on {@link BuildDesiredTableOptions} — a field group the Builder authored. */
-    builderOwned?: boolean;
     /**
      * The discriminator this table actually carries.
      *
@@ -322,12 +302,6 @@ export function buildDesiredTableFromComponentFields(
   } = {}
 ): TableSpec {
   const typeColumn = options.typeColumn ?? STORAGE_FORMAT.columns.type;
-  // Resolved before anything reads a field, for the same reason as the collection/single builder:
-  // this is the one place every field group's desired columns are derived, so a path that builds
-  // its own snapshot cannot skip it.
-  const fields = options.builderOwned
-    ? (resolveBuilderTextWidths(fieldsIn) as MinimalFieldDef[])
-    : fieldsIn;
   const columns: ColumnSpec[] = [];
 
   // i18n: when the component is localized, its translatable fields live in the
