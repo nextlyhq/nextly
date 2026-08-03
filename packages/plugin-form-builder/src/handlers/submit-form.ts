@@ -336,7 +336,12 @@ export async function submitForm(
 
     return {
       success: true,
-      submission: submission as unknown as SubmissionDocument,
+      // The created ROW, not the envelope around it. The service's loose
+      // `CollectionEntry` and this declared document do not overlap enough for
+      // a checked assertion, so the conversion goes through `unknown` and
+      // TypeScript verifies nothing here — which is why the integration test
+      // reads `submission.id` off the result rather than only `success`.
+      submission: submission.item as unknown as SubmissionDocument,
       redirect,
     };
   } catch (error) {

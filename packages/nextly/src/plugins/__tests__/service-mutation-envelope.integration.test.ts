@@ -15,8 +15,18 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { defineCollection, text } from "../../config";
 import { NextlyError } from "../../errors/nextly-error";
-import { definePlugin } from "../plugin-context";
+import { definePlugin, type PluginContext } from "../plugin-context";
 import { createTestNextly, type TestNextly } from "../test-nextly";
+
+/**
+ * The real plugin-facing services type, not `any`.
+ *
+ * These cases exist to pin the exported `PluginCollectionService` signature, so
+ * asserting against an untyped fixture would let a wrong signature compile
+ * while the runtime assertions still passed -- the suite would then prove only
+ * that the proxy returns an object with those keys.
+ */
+type PluginServices = PluginContext["services"];
 
 let current: TestNextly | undefined;
 afterEach(async () => {
@@ -37,10 +47,10 @@ const widgets = () =>
  * collection, because the path being covered is a plugin observing a failure
  * its OWN write caused.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function boot(failAfter?: "create" | "update" | "delete"): Promise<any> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let services: any;
+async function boot(
+  failAfter?: "create" | "update" | "delete"
+): Promise<PluginServices> {
+  let services: PluginServices | undefined;
   const probe = definePlugin({
     name: "@test/mutation-envelope",
     version: "1.0.0",
@@ -63,6 +73,11 @@ async function boot(failAfter?: "create" | "update" | "delete"): Promise<any> {
     collections: [widgets()],
     plugins: [probe],
   });
+  // `init` has run by the time the harness resolves, so this is set. Asserted
+  // rather than assumed: a harness that stopped calling `init` would otherwise
+  // fail every case below on a property of `undefined`, which reads as a
+  // regression in the code under test.
+  if (!services) throw new Error("plugin init did not run");
   return services;
 }
 
@@ -135,18 +150,24 @@ describe("ctx.services.collections write envelope", () => {
     // The row IS written -- the hook ran after the commit -- so the call
     // resolves rather than rejecting, and the failure travels beside it.
     expect(result.item.title).toBe("x");
-    expect(result.warnings).toHaveLength(1);
-    expect(result.warnings[0]).toMatchObject({
-      phase: "afterCreate",
-      collection: "widgets",
-      code: "INTERNAL_ERROR",
-    });
+    expect(result.warnings).toEqual([
+      expect.objectContaining({
+        phase: "afterCreate",
+        collection: "widgets",
+        code: "INTERNAL_ERROR",
+      }),
+    ]);
   });
 
-  it("does not open a scope for reads", async () => {
+  it("leaves reads returning their value directly", async () => {
     // The reads are deliberately untouched: nothing runs after them that could
-    // fail without failing the read, so wrapping them would only add a
-    // meaningless envelope to unwrap.
+    // fail without failing the read, so wrapping them would only add an
+    // envelope to unwrap for no information.
+    //
+    // The paginated result is the whole return value, not something nested
+    // under `item` — checked at runtime as well as in the type, because the
+    // proxy decides this by name at run time and a write verb added for reads
+    // by mistake would still compile.
     const services = await boot();
     await services.collections.createEntry(
       "widgets",
@@ -160,7 +181,8 @@ describe("ctx.services.collections write envelope", () => {
       { as: "system" }
     );
 
-    expect(list.message).toBeUndefined();
     expect(list.data).toHaveLength(1);
+    expect(list).not.toHaveProperty("item");
+    expect(list).not.toHaveProperty("message");
   });
 });
