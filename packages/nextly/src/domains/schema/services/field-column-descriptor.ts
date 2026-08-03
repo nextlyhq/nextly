@@ -118,6 +118,25 @@ export function toSnakeCase(name: string): string {
 }
 
 /**
+ * The physical columns a list of declared field names occupies.
+ *
+ * Anything deciding "has the author already declared this system field?" has to ask it of the
+ * COLUMN rather than the spelling. `Title` and `title` are one column, so injecting the system
+ * field beside an author's `Title` declares that column twice and the table cannot be created.
+ * Four places make that decision — both config factories, the dev-server single sync and the
+ * single dispatcher's alter input — and this is the one definition they share.
+ *
+ * Accepts unknown entries because two of those callers run before the config has been parsed.
+ */
+export function columnsDeclaredBy(names: Iterable<unknown>): Set<string> {
+  const columns = new Set<string>();
+  for (const name of names) {
+    if (typeof name === "string") columns.add(toSnakeCase(name));
+  }
+  return columns;
+}
+
+/**
  * Whether a field becomes a column of the table it is declared on.
  *
  * The single answer to that question: `classifyFieldKind` and `getColumnDescriptor` both defer to

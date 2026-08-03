@@ -16,6 +16,7 @@ import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { buildDesiredTableFromFields } from "../../schema/pipeline/diff/build-from-fields";
 import { generateRuntimeSchema } from "../../schema/services/runtime-schema-generator";
 import {
+  columnsDeclaredBy,
   fieldProducesColumn,
   getColumnDescriptor,
   toSnakeCase,
@@ -304,6 +305,25 @@ describe("all three descriptions of the main table agree", () => {
         }
       }
     }
+  });
+});
+
+describe("columnsDeclaredBy", () => {
+  it("answers on the column, and tolerates entries that are not names", () => {
+    // The shared definition behind four "has the author already declared this?" decisions.
+    // Anything that is not a string is skipped rather than coerced, because two of those callers
+    // run before the config has been parsed.
+    expect([
+      ...columnsDeclaredBy([
+        "Title",
+        "publishedAt",
+        "x_y",
+        undefined,
+        null,
+        42,
+        { name: "nope" },
+      ]),
+    ]).toEqual(["title", "published_at", "x_y"]);
   });
 });
 

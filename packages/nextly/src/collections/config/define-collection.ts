@@ -34,7 +34,7 @@
 import type { BeforeOperationHandler, HookHandler } from "@nextly/hooks/types";
 
 import type { CollectionAccessControl } from "../../domains/auth/services/access-control-types";
-import { toSnakeCase } from "../../domains/schema/services/field-column-descriptor";
+import { columnsDeclaredBy } from "../../domains/schema/services/field-column-descriptor";
 import type { WebhookEventType } from "../../domains/webhooks/types";
 import type { RevalidateConfig } from "../../revalidation/types";
 import type { VersionsConfig } from "../../schemas/versions/types";
@@ -1122,13 +1122,8 @@ export function defineCollection(
   // Keyed by the COLUMN each field becomes, not by its declared name. A field named `Title` owns
   // the `title` column, so injecting the system one beside it declares that column twice and the
   // table cannot be created — the injection has to ask the same question the generators do.
-  const userFieldColumns = new Set(
-    config.fields
-      .filter(
-        (f): f is FieldConfig & { name: string } =>
-          "name" in f && typeof f.name === "string"
-      )
-      .map(f => toSnakeCase(f.name))
+  const userFieldColumns = columnsDeclaredBy(
+    config.fields.map(f => ("name" in f ? f.name : undefined))
   );
 
   const systemFields: FieldConfig[] = [];
