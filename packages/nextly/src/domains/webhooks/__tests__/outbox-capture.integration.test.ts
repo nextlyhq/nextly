@@ -22,6 +22,7 @@ import {
 import { NextlyError } from "../../../errors";
 import type { CollectionService } from "../../collections/services/collection-service";
 import type { CollectionsHandler } from "../../../services/collections-handler";
+import { recordEvent } from "../record-event";
 import { recordMutationEvent } from "../record-mutation-event";
 import type { WebhookEvent } from "../types";
 
@@ -46,6 +47,7 @@ interface EventRow {
   payload: unknown;
   actorType: string | null;
   actorId: string | null;
+  outcome: string;
 }
 
 /**
@@ -81,6 +83,42 @@ async function events(handle: TestNextly): Promise<EventRow[]> {
 }
 
 describe("webhook outbox capture (integration)", () => {
+  it("stores a non-default outcome through the real schema", async () => {
+    // Asserting the DEFAULT here would prove nothing: the column defaults to
+    // "success", so a recorder that dropped the field entirely would still read
+    // back as one. Recording a REFUSAL is what separates the two — it can only
+    // arrive if the recorder carries the value and the column accepts it.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "posts",
+          access: { read: () => true, create: () => true, update: () => true },
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+
+    const envelope: WebhookEvent = {
+      id: "evt_outcome_1",
+      type: "entry.updated",
+      specversion: "1",
+      timestamp: new Date().toISOString(),
+      resource: { kind: "entry", collection: "posts", id: "p1" },
+      data: {},
+      previous: null,
+      changedFields: [],
+      outcome: "failure",
+    };
+    await current.adapter.transaction(async tx =>
+      recordEvent(tx, { envelope })
+    );
+
+    const rows = await events(current);
+    const recorded = rows.find(row => row.id === "evt_outcome_1");
+    expect(recorded).toBeDefined();
+    expect(recorded!.outcome).toBe("failure");
+  });
+
   it("records entry.created carrying the assembled document when versioning is OFF", async () => {
     // Versioning off is the case that regressed before: the document assembly
     // used to live inside the versioning branch, so nothing was available to
