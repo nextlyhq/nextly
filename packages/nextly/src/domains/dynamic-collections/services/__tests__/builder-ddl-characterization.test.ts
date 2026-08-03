@@ -13,9 +13,6 @@
  *
  * Whole strings rather than substrings, on purpose: the failure worth catching is a column quietly
  * changing type, losing NOT NULL, or gaining a default, and a substring assertion sees none of those.
- *
- * A failure here never means "update the expectation". It asks whether the change was meant to alter
- * the DDL — and if it was, the expectation moves in the same commit as the reason.
  */
 import { describe, expect, it } from "vitest";
 
