@@ -472,14 +472,20 @@ function lengthForField(
 }
 
 /**
- * The width a field declares, from the two keys that carry one, or nothing when it declares none.
+ * The width a field declares, or nothing when it declares none.
+ *
+ * Read from `validation.maxLength` and from nowhere else, because that is the only key the creators
+ * size a bounded string from. A top-level `length` is deliberately NOT consulted: a field declaring
+ * `{ variant: "short", length: 500 }` gets `varchar(255)` from the creator, so honouring the 500
+ * here gave the same declaration one capacity when created directly and another through the
+ * pipeline, with the width normalisation then hiding the difference from any later diff.
  *
  * Rejects anything that is not a whole positive count. These reach DDL as `VARCHAR(n)`, so a
  * fraction, a zero or a negative would be rendered into the statement as written and the create
  * would fail on a value the field system had already accepted.
  */
 function declaredMaxLength(field: FieldDefinition): number | undefined {
-  const declared = field.validation?.maxLength ?? field.length;
+  const declared = field.validation?.maxLength;
   if (typeof declared !== "number") return undefined;
   if (!Number.isInteger(declared) || declared <= 0) return undefined;
   return declared;

@@ -35,6 +35,8 @@ interface WidthSignals {
   type?: string;
   options?: unknown;
   maxLength?: number;
+  /** The one key a bounded string's width is read from, on either generator's fields. */
+  validation?: { maxLength?: number };
 }
 
 /**
@@ -171,9 +173,11 @@ function canonicalBoundedWidth<T extends WidthSignals>(
   return {
     ...field,
     options: { ...options, variant: "short" },
-    // The width itself, under the key the descriptor reads it from. Stating the variant alone would
-    // bound the column at the default 255 while the generator had bounded it at what was declared.
-    length: declared,
+    // The width itself, under the one key a bounded string is sized from. Stating the variant alone
+    // would bound the column at the default 255 while the generator had bounded it at what was
+    // declared. Written here rather than to a top-level `length` so there is a single width key: a
+    // second one would be honoured for collections too, whose creator ignores it.
+    validation: { ...(field.validation ?? {}), maxLength: declared },
   };
 }
 

@@ -78,6 +78,18 @@ describe("getColumnDescriptor — a declared text width", () => {
     expect(desc?.dialectType).toBe("text");
   });
 
+  // The creators size a bounded string from validation.maxLength and read no other key, so a
+  // top-level `length` must not become the physical width: honouring it gave the same declaration
+  // one capacity when created directly and another through the pipeline.
+  it("ignores a top-level length the creators do not read", () => {
+    const desc = getColumnDescriptor(
+      field({ options: { variant: "short" }, length: 500 }),
+      "mysql"
+    );
+
+    expect(desc?.dialectType).toBe("varchar(255)");
+  });
+
   it("falls back to the default width when none is declared", () => {
     const desc = getColumnDescriptor(
       field({ options: { variant: "short" } }),
