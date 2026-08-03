@@ -45,6 +45,9 @@ describe("formatRelativeTime", () => {
 });
 
 describe("describeActivityActor", () => {
+  // A live actor: `identityErasedAt` is null, which is the single field that
+  // decides every case below. Each test starts from this and changes only what
+  // it is about, so a failure names the difference that caused it.
   const live = {
     userId: "a1b2c3d4-0000-4000-8000-000000000001",
     userName: "Ada Author",

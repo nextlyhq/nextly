@@ -245,14 +245,20 @@ describeMaybe(
           settled = true;
         });
 
-      await new Promise(resolve => setTimeout(resolve, BLOCKED_FOR_MS));
-      // The assertion that fails when the lock is removed: without it the write
-      // is an ordinary insert that never touches the account row and finishes
-      // immediately.
-      expect(settled).toBe(false);
-
-      release();
-      await holder;
+      try {
+        await new Promise(resolve => setTimeout(resolve, BLOCKED_FOR_MS));
+        // The assertion that fails when the lock is removed: without it the
+        // write is an ordinary insert that never touches the account row and
+        // finishes immediately.
+        expect(settled).toBe(false);
+      } finally {
+        // Released even when the assertion throws. Without this the holding
+        // transaction keeps its exclusive lock, the activity write never
+        // settles, and `afterAll` blocks forever on disconnect — turning one
+        // reportable failure into a hung suite that says nothing about why.
+        release();
+        await holder;
+      }
       await write;
       expect(settled).toBe(true);
 
