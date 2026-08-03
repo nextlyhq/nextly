@@ -16,7 +16,7 @@ import type { CssNode, List, ListItem, Rule } from "css-tree";
 
 /** Why one thing was removed, in a sentence the author can act on. */
 export interface CssWarning {
-  code: "remote-url" | "unsafe-value" | "unsupported-at-rule";
+  code: "remote-url" | "unsafe-value" | "unsupported-at-rule" | "unchecked";
   message: string;
 }
 
@@ -119,8 +119,22 @@ const TEXT_ARGUMENT_FUNCTIONS = new Set([
  */
 const SUBSTITUTION_FUNCTIONS = new Set(["var", "env", "attr"]);
 
+/**
+ * What one scan concluded, which is not always "a URL" or "no URL".
+ *
+ * A scan can also run out of the depth it is willing to follow, and that is a
+ * third answer rather than a shade of the second. Collapsing it into "found a
+ * remote URL" removed valid CSS while telling the author it referred to a host
+ * it never mentioned, which sends them looking for a URL that does not exist.
+ * Both outcomes still remove the rule — unreadable is not the same as safe —
+ * but they say different things, so they are different values.
+ */
+type CssFinding =
+  | { kind: "remote"; url: string }
+  | { kind: "unreadable"; reason: "depth" | "syntax" };
+
 /** The first `url()` in a declaration that leaves this origin, if any. */
-function firstRemoteUrl(decl: csstree.Declaration): string | undefined {
+function firstRemoteUrl(decl: csstree.Declaration): CssFinding | undefined {
   // A custom property's value is checked as though it could land anywhere,
   // because it can. `--probe: "https://evil"` is a bare string here and an
   // image URL the moment something writes `image-set(var(--probe) 1x)`, and
@@ -132,15 +146,36 @@ function firstRemoteUrl(decl: csstree.Declaration): string | undefined {
 }
 
 /**
- * How many times a `Raw` value may be re-parsed before the search gives up.
+ * How deep a nested rule may go before the scan stops following it.
  *
- * Re-parsing can yield another `Raw`, so the walk is bounded rather than
- * trusting the input to be shallow. Three is past anything CSS nests in
- * practice — a fallback inside a fallback inside a fallback — and a value
- * deeper than that is refused rather than followed, because refusing costs one
- * declaration and following forever costs the request.
+ * A bound is required, and the reason is cost rather than taste. Each level is
+ * re-parsed from the text of the level above it, and that text is a substring
+ * of its parent, so following d levels of a sheet of length n parses O(n·d)
+ * characters — quadratic in the input, since d can itself grow with n. Measured
+ * on this parser, a 23 KB sheet nested 3000 deep took 9.5 seconds to scan, and
+ * custom CSS carries no length limit to make that impossible. The bound is what
+ * keeps the work linear in the input.
+ *
+ * The value is set well past real CSS instead of at it. Style guides put hand
+ * authored nesting at three levels; the deepest stylesheet in this repository,
+ * the admin panel's compiled output, reaches five. Sixteen clears both several
+ * times over while holding the worst case to sixteen passes over the sheet.
+ *
+ * Kept separate from {@link MAX_VALUE_NESTING} because the two bound different
+ * things — rules inside rules against fallbacks inside values — and evidence
+ * about one says nothing about the other.
  */
-const MAX_RAW_DEPTH = 3;
+export const MAX_RULE_NESTING = 16;
+
+/**
+ * How deep a value may nest `Raw` fragments before the scan stops following it.
+ *
+ * Values are short, so the cost argument above barely bites here; this exists so
+ * a hostile value cannot recurse without end. A real fallback chain bottoms out
+ * in a literal after a handful of levels, and a design-token stack that walks
+ * `var()` through five or six tiers still clears this comfortably.
+ */
+export const MAX_VALUE_NESTING = 16;
 
 /**
  * The first remote URL reachable in one value, if any.
@@ -165,7 +200,7 @@ function remoteUrlInValue(
   depth: number,
   outerPosition: readonly string[] = [],
   anyPositionIsUrl = false
-): string | undefined {
+): CssFinding | undefined {
   let found: string | undefined;
   // One walk, maintaining the enclosing-function stack, because all three
   // shapes below depend on where in the value they sit.
@@ -210,19 +245,21 @@ function remoteUrlInValue(
       if (node.type === "Function") functions.pop();
     },
   });
-  if (found !== undefined) return found;
+  if (found !== undefined) return { kind: "remote", url: found };
 
   for (const raw of raws) {
     if (raw.text.trim() === "") continue;
     // Unreadable is not the same as safe. This is the one place the check
     // cannot see what it is judging, so it refuses rather than waves it
-    // through, and reports the raw text so the author knows which line went.
-    if (depth >= MAX_RAW_DEPTH) return raw.text.trim();
+    // through — but it refuses as itself, not disguised as a URL it never saw.
+    if (depth >= MAX_VALUE_NESTING) {
+      return { kind: "unreadable", reason: "depth" };
+    }
     let reparsed: csstree.CssNode;
     try {
       reparsed = csstree.parse(raw.text, { context: "value" });
     } catch {
-      return raw.text.trim();
+      return { kind: "unreadable", reason: "syntax" };
     }
     const nested = remoteUrlInValue(
       reparsed,
@@ -250,15 +287,18 @@ function remoteUrlInValue(
  * `.a { .b { url(…) } }` and misses `.a { .b { .c { url(…) } } }`. Bounded, and
  * a rule deeper than the bound is refused rather than followed.
  */
-function remoteUrlInRawRule(text: string, depth: number): string | undefined {
-  if (depth >= MAX_RAW_DEPTH) return text.trim();
+function remoteUrlInRawRule(
+  text: string,
+  depth: number
+): CssFinding | undefined {
+  if (depth >= MAX_RULE_NESTING) return { kind: "unreadable", reason: "depth" };
   let inner: csstree.CssNode;
   try {
     inner = csstree.parse(text, { context: "stylesheet" });
   } catch {
-    return text.trim();
+    return { kind: "unreadable", reason: "syntax" };
   }
-  let remote: string | undefined;
+  let remote: CssFinding | undefined;
   csstree.walk(inner, {
     visit: "Declaration",
     enter(decl: csstree.Declaration) {
@@ -354,7 +394,9 @@ export function sanitizeCustomCss(
       css: "",
       warnings: [
         {
-          code: "unsafe-value",
+          // Unreadable, not unsafe. Nothing here judged the CSS and found a
+          // problem with it; the parser never got far enough to judge.
+          code: "unchecked",
           message:
             "This CSS could not be parsed, so none of it was applied. Check for an unclosed brace, quote or comment.",
         },
@@ -383,12 +425,24 @@ export function sanitizeCustomCss(
     enter(node: CssNode, item: ListItem<CssNode>, list: List<CssNode>) {
       const decl = node as csstree.Declaration;
       if (!list || !item) return;
-      const remote = firstRemoteUrl(decl);
-      if (remote !== undefined) {
-        warn(
-          "remote-url",
-          `"${decl.property}" refers to "${remote}", which is not on this site. Upload the file to the media library and use its path instead.`
-        );
+      const finding = firstRemoteUrl(decl);
+      if (finding !== undefined) {
+        if (finding.kind === "remote") {
+          warn(
+            "remote-url",
+            `"${decl.property}" refers to "${finding.url}", which is not on this site. Upload the file to the media library and use its path instead.`
+          );
+        } else if (finding.reason === "depth") {
+          warn(
+            "unchecked",
+            `"${decl.property}" nests values more than ${MAX_VALUE_NESTING} levels deep, so it could not be checked and was removed. Shorten the fallback chain.`
+          );
+        } else {
+          warn(
+            "unchecked",
+            `"${decl.property}" could not be parsed, so it could not be checked and was removed.`
+          );
+        }
         list.remove(item);
         return;
       }
@@ -425,12 +479,27 @@ export function sanitizeCustomCss(
         // not read, so there is no structure to remove a declaration from. If
         // anything inside it reaches another origin the nested rule goes, which
         // is the same trade the declaration path makes.
-        const remote = remoteUrlInRawRule(raw.value, 0);
-        if (remote === undefined) continue;
-        warn(
-          "remote-url",
-          `A nested rule refers to "${remote}", which is not on this site. Upload the file to the media library and use its path instead.`
-        );
+        // Counted from one, not zero: this `Raw` is the rule nested inside the
+        // one being walked, so it already sits at the second level. Starting at
+        // zero made the bound permit one level more than the warning claimed.
+        const finding = remoteUrlInRawRule(raw.value, 1);
+        if (finding === undefined) continue;
+        if (finding.kind === "remote") {
+          warn(
+            "remote-url",
+            `A nested rule refers to "${finding.url}", which is not on this site. Upload the file to the media library and use its path instead.`
+          );
+        } else if (finding.reason === "depth") {
+          warn(
+            "unchecked",
+            `A nested rule is more than ${MAX_RULE_NESTING} levels deep, so it could not be checked and was removed. Flatten the nesting.`
+          );
+        } else {
+          warn(
+            "unchecked",
+            `A nested rule could not be parsed, so it could not be checked and was removed.`
+          );
+        }
         block.children.remove(item);
       }
     },
