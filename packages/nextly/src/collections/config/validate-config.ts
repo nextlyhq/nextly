@@ -25,7 +25,8 @@
  */
 
 import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
-import { reservedSystemFieldNames } from "../../lib/system-columns";
+import { toSnakeCase } from "../../domains/schema/services/field-column-descriptor";
+import { isReservedSystemColumn } from "../../lib/system-columns";
 import { SYSTEM_RESOURCES } from "../../schemas/_zod/rbac";
 import {
   type BaseValidationError,
@@ -181,9 +182,6 @@ const RESERVED_SLUGS_SET: Set<string> = new Set<string>([
 // Components embed in JSON and carry neither column, so they may use both names
 // freely. Nested repeater/group fields are stored inside JSON, not as table
 // columns, so the reservation applies to the top level only.
-const COLLECTION_RESERVED_FIELD_NAMES: ReadonlySet<string> = new Set(
-  reservedSystemFieldNames("collectionConfig")
-);
 
 // ============================================================
 // Index Validation (collection-specific)
@@ -519,16 +517,29 @@ function validateFields(
     return;
   }
 
-  // Block the injected owner column at the top level before per-field
-  // validation. Nested fields are validated recursively inside
-  // validateFieldsArray and are intentionally exempt (JSON-stored, no column).
+  // Block names that become a column the table already carries. Such a field is emitted alongside
+  // the injected one, so the table declares the column twice and the database refuses the
+  // statement — a collection carrying one could never have been created.
+  //
+  // Compared as the PHYSICAL column, through the same conversion schema generation uses, because a
+  // field name reaches its column that way: `createdAt`, `created_at` and `CreatedAt` all arrive at
+  // `created_at`, and a set of literal spellings can only hold the ones somebody listed.
+  //
+  // `title`, `slug` and `status` are deliberately absent. The first two step aside for an author's
+  // own field by design, and a `status` field is accepted by the lifecycle rather than duplicated;
+  // reserving any of them would refuse a configuration that works today.
+  //
+  // Nested fields are validated recursively inside validateFieldsArray and are intentionally
+  // exempt: they are stored inside JSON and never become columns of their own.
   fields.forEach((field, index) => {
     if (!field || typeof field !== "object") return;
     const name = (field as Record<string, unknown>).name;
-    if (typeof name === "string" && COLLECTION_RESERVED_FIELD_NAMES.has(name)) {
+    if (typeof name !== "string") return;
+    const column = toSnakeCase(name);
+    if (isReservedSystemColumn(column, "collectionConfig")) {
       errors.push({
         path: `${path}[${index}].name`,
-        message: `Field name '${name}' is reserved for a system column`,
+        message: `Field name '${name}' is reserved: it becomes the system column '${column}'`,
         code: "FIELD_NAME_RESERVED",
       });
     }
