@@ -28,9 +28,11 @@ import {
 import {
   endpointsPresent,
   isWebhookAuditEnabled,
+  resolveEventRetentionClass,
   shouldRecordEvent,
 } from "./recording-activation";
 import { isWebhookRecordingEnabled } from "./recording-policy";
+import type { EventRetentionClass } from "./retention-config";
 import {
   sensitiveFieldPaths,
   type SensitiveFieldSource,
@@ -94,23 +96,29 @@ export interface RecordMutationEventArgs {
  * the flag TTL across processes; a few events recorded just before the last
  * endpoint is removed are pruned by retention.
  */
-function prepareMutationEnvelope(
-  args: RecordMutationEventArgs
-): WebhookEvent | null {
+function prepareMutationEnvelope(args: RecordMutationEventArgs): {
+  envelope: WebhookEvent;
+  retentionClass: EventRetentionClass;
+} | null {
   if (!resourceRecordingEnabled(args.resource)) {
     return null;
   }
+  // Read once and reuse: the gate and the retention class are two decisions
+  // from the same facts, and reading the flags twice could straddle a refresh
+  // and record a row whose class disagrees with why it was admitted.
+  const auditEnabled = isWebhookAuditEnabled();
+  const hasEndpoints = endpointsPresent();
   if (
     !shouldRecordEvent({
       collectionAllows: true,
-      auditEnabled: isWebhookAuditEnabled(),
-      hasEndpoints: endpointsPresent(),
+      auditEnabled,
+      hasEndpoints,
     })
   ) {
     return null;
   }
 
-  return buildEnvelope({
+  const envelope = buildEnvelope({
     id: (args.newId ?? (() => crypto.randomUUID()))(),
     type: args.type,
     timestamp: args.timestamp ?? new Date(),
@@ -124,15 +132,19 @@ function prepareMutationEnvelope(
       ? { statusChange: args.statusChange }
       : {}),
   });
+  return {
+    envelope,
+    retentionClass: resolveEventRetentionClass({ auditEnabled, hasEndpoints }),
+  };
 }
 
 export async function recordMutationEvent(
   tx: TransactionContext,
   args: RecordMutationEventArgs
 ): Promise<boolean> {
-  const envelope = prepareMutationEnvelope(args);
-  if (!envelope) return false;
-  await recordEvent(tx, { envelope });
+  const prepared = prepareMutationEnvelope(args);
+  if (!prepared) return false;
+  await recordEvent(tx, prepared);
   return true;
 }
 
@@ -148,8 +160,8 @@ export async function recordMutationEventInTx(
   dialect: SupportedDialect,
   args: RecordMutationEventArgs
 ): Promise<boolean> {
-  const envelope = prepareMutationEnvelope(args);
-  if (!envelope) return false;
-  await recordEventInTx(tx, dialect, { envelope });
+  const prepared = prepareMutationEnvelope(args);
+  if (!prepared) return false;
+  await recordEventInTx(tx, dialect, prepared);
   return true;
 }

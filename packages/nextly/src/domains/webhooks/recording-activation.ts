@@ -34,6 +34,7 @@ import {
   isWebhookRecordingEnabled,
   type WebhookRecordingScope,
 } from "./recording-policy";
+import type { EventRetentionClass } from "./retention-config";
 
 /**
  * How long a primed presence value is trusted before a stale read schedules a
@@ -87,6 +88,24 @@ export function shouldRecordEvent(input: {
   hasEndpoints: boolean;
 }): boolean {
   return input.collectionAllows && (input.auditEnabled || input.hasEndpoints);
+}
+
+/**
+ * Which retention window a recorded row falls under.
+ *
+ * The class records the LONGEST retention the row needs, not what produced it,
+ * so a row that is both audit-relevant and deliverable is audit-class: audit
+ * history is measured in months while outbox hygiene is measured in days, and
+ * evicting a row on the delivery schedule would lose history nothing can
+ * reconstruct. Pure and total for its inputs, like {@link shouldRecordEvent},
+ * whose inputs it deliberately shares — the class follows from WHY the row was
+ * recorded, so the two decisions read from one set of facts.
+ */
+export function resolveEventRetentionClass(input: {
+  auditEnabled: boolean;
+  hasEndpoints: boolean;
+}): EventRetentionClass {
+  return input.auditEnabled ? "audit" : "webhook";
 }
 
 /** Publish whether the audit seam records events regardless of endpoints. */

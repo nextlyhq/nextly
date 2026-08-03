@@ -177,19 +177,25 @@ the builder emits, so repeating it adds nothing. Put an ancestor in front of it:
 /* The builder already emits this when the document has a scope: */
 /* .nx-pb-page.nx-pb-page.my-region .nx-pb-a1b2 { color: teal }  (0-4-0) */
 
-/* So this TIES, and loses on source order — the builder's inline
-   <style> comes after your stylesheet: */
+/* So this TIES, and a tie is settled by something this package does not
+   control — see the note below. Do not rely on it: */
 .my-region.nx-pb-page.nx-pb-page .nx-pb-a1b2 {
   color: rebeccapurple;
-} /* 0-4-0 — no */
+} /* 0-4-0 — unreliable */
 
-/* This wins: */
+/* This wins outright, whatever the order: */
 .my-theme .my-region.nx-pb-page.nx-pb-page .nx-pb-a1b2 {
   color: rebeccapurple;
 } /* 0-5-0 — yes */
 ```
 
-One exception to that tie, if you use `@scope`. Source order is not the next
+**Do not write a rule that ties.** This package compiles a stylesheet; it does
+not attach one. Where the compiled CSS lands relative to yours is the
+integrating renderer's decision, so whether a tie falls your way depends on
+something neither this package nor this document can promise. Beat the
+builder's specificity and the question does not arise.
+
+One further wrinkle on ties, if you use `@scope`. Source order is not the next
 tiebreaker after specificity — **scope proximity is**, and a rule with no
 scoping root counts as infinitely far away. So a tied rule of yours inside an
 `@scope` rooted near the element beats the builder's unscoped one, even though
