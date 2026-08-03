@@ -295,27 +295,59 @@ function remoteUrlInValue(
  * a rule deeper than the bound is refused rather than followed.
  */
 /**
- * Every `Raw` sitting directly in a block, wherever that block hangs.
+ * Every `Raw` anywhere in a parsed fragment.
  *
- * Both rules and at-rules have blocks, and a rule nested inside either comes
- * back as `Raw`. Reading only `Rule` blocks let one through:
- * `.a { @media (…) { .probe { url(…) } } }` is valid nested CSS, and its inner
- * rule is a `Raw` child of the `@media`, not of `.a`. What decides whether a
- * `Raw` needs reading is that it is in a block at all, not what kind of node
- * the block belongs to.
+ * Deliberately not "every `Raw` in a block", which is what this collected
+ * before and what let two shapes through in turn. A rule nested in an at-rule
+ * hangs off the at-rule's block rather than the enclosing rule's; and a
+ * declaration WRITTEN AFTER a nested rule survives a stylesheet re-parse as a
+ * top-level `Raw` belonging to no block at all, which is how
+ * `.a { .child { } background: url(…) }` stayed whole.
+ *
+ * There is no property of a `Raw`'s parent that predicts whether it needs
+ * reading, so the parent is not consulted. Anything the parser could not read
+ * is anything the parser could not read.
  */
-function rawBlockChildren(root: csstree.CssNode): string[] {
+function allRawText(root: csstree.CssNode): string[] {
   const found: string[] = [];
   csstree.walk(root, {
-    enter(node: csstree.CssNode) {
-      if (node.type !== "Rule" && node.type !== "Atrule") return;
-      if (node.block == null) return;
-      for (const child of node.block.children) {
-        if (child.type === "Raw") found.push(child.value);
-      }
+    visit: "Raw",
+    enter(node: csstree.Raw) {
+      if (node.value.trim() !== "") found.push(node.value);
     },
   });
   return found;
+}
+
+/**
+ * The first remote URL among declarations in a fragment that holds only them.
+ *
+ * The leftover after a nested rule is a declaration, not a rule, so re-parsing
+ * it as a stylesheet yields nothing to walk. Parsed as the declaration list it
+ * actually is, it becomes declarations the ordinary value check can read. A
+ * fragment that is not a plain declaration list comes back as `Raw` again and
+ * yields nothing here, which is correct — the rule path handles those.
+ */
+function remoteUrlInRawDeclarations(text: string): {
+  read: boolean;
+  finding?: CssFinding;
+} {
+  let parsed: csstree.CssNode;
+  try {
+    parsed = csstree.parse(text, { context: "declarationList" });
+  } catch {
+    return { read: false };
+  }
+  let read = false;
+  let finding: CssFinding | undefined;
+  csstree.walk(parsed, {
+    visit: "Declaration",
+    enter(decl: csstree.Declaration) {
+      read = true;
+      if (finding === undefined) finding = firstRemoteUrl(decl);
+    },
+  });
+  return { read, finding };
 }
 
 function remoteUrlInRawRule(
@@ -337,9 +369,18 @@ function remoteUrlInRawRule(
     },
   });
   if (remote !== undefined) return remote;
-  const deeper = rawBlockChildren(inner);
-  for (const raw of deeper) {
-    if (raw.trim() === "") continue;
+  for (const raw of allRawText(inner)) {
+    // Two readings, because a `Raw` here is either a nested rule or the
+    // declarations written beside one, and which it is cannot be told from
+    // where it sits.
+    const asDeclarations = remoteUrlInRawDeclarations(raw);
+    if (asDeclarations.finding !== undefined) return asDeclarations.finding;
+    // Whether the declaration reading UNDERSTOOD the text is also what says
+    // there is nothing left to recurse into. A plain declaration re-parsed as a
+    // stylesheet comes back as the identical `Raw`, so recursing on it would
+    // descend forever and report the depth bound against perfectly ordinary
+    // CSS — which it did, until this stopped at the point progress stops.
+    if (asDeclarations.read) continue;
     const nested = remoteUrlInRawRule(raw, depth + 1);
     if (nested !== undefined) return nested;
   }
