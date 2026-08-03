@@ -337,7 +337,9 @@ export function compileDocumentBlockCss(doc: BlockDocument): string {
   walk(doc.root, n => {
     if (n.customCss) {
       const scoped = sanitizeBlockCss(n.customCss, nodeClass(n.id));
-      if (scoped) parts.push(scoped);
+      // `.css`, not the result: the object is always truthy, so testing it
+      // would push an empty string for every block that has none.
+      if (scoped.css) parts.push(scoped.css);
     }
   });
   return parts.join("\n");

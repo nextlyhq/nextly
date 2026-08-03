@@ -53,7 +53,7 @@ export function PageRenderer({
     compileDocumentMotionCss(document),
     compileDocumentCss(document, { breakpoints }),
     compileDocumentBlockCss(document),
-    sanitizeCustomCss(customCss ?? "", PAGE_ROOT_CLASS),
+    sanitizeCustomCss(customCss ?? "", PAGE_ROOT_CLASS).css,
   ]
     .filter(Boolean)
     .join("\n");

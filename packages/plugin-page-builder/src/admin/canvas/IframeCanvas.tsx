@@ -147,7 +147,7 @@ export function IframeCanvas({ children }: { children: ReactNode }) {
       compileDocumentCss(state.document) +
       "\n" +
       // Same sanitize+scope pass as PageRenderer, so the preview is faithful.
-      sanitizeCustomCss(state.customCss, "nx-pb-page");
+      sanitizeCustomCss(state.customCss, "nx-pb-page").css;
   }, [state.document, state.customCss, body]);
 
   // Selection via a native delegated listener ON THE IFRAME DOCUMENT. React's synthetic

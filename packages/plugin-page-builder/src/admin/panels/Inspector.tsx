@@ -24,9 +24,10 @@ import {
   TabsTrigger,
   Textarea,
 } from "@nextlyhq/ui";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { getPath } from "../../core/bindings";
+import { sanitizeCustomCss } from "../../core/css-sanitize";
 import { defaultBlockRegistry } from "../../core/registry";
 import { readStyleValue } from "../../core/responsive";
 import { normalizeSupports } from "../../core/supports";
@@ -44,6 +45,7 @@ import {
   type ContentField,
 } from "../content/contentFields";
 import { AttributesControl } from "../controls/advanced/AttributesControl";
+import { CssWarnings } from "../controls/advanced/CssWarnings";
 import { CustomCssControl } from "../controls/advanced/CustomCssControl";
 import { MotionControl } from "../controls/advanced/MotionControl";
 import {
@@ -653,6 +655,12 @@ function AdvancedTab({ node }: { node: BlockNode }) {
  */
 function PagePanel() {
   const { state, dispatch } = useEditor();
+  // Sanitized here only to read back what it removed; the page <style> is
+  // compiled elsewhere from the same function, so this cannot drift from it.
+  const warnings = useMemo(
+    () => sanitizeCustomCss(state.customCss, "nx-pb-page").warnings,
+    [state.customCss]
+  );
   return (
     <div style={{ padding: 12 }}>
       <SectionLabel>Page</SectionLabel>
@@ -672,8 +680,11 @@ function PagePanel() {
       />
       <p className="nx-pb-empty" style={{ marginTop: 4 }}>
         Applies to this page only. Rules are scoped to the page and checked on
-        render: imports, data URLs and script-like values are removed.
+        render: imports, off-site URLs and script-like values are removed.
       </p>
+      <div style={{ marginTop: 4 }}>
+        <CssWarnings warnings={warnings} />
+      </div>
     </div>
   );
 }
