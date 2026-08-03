@@ -185,6 +185,38 @@ describe("withResolvedBuilderTextWidths", () => {
     ).toBe("text");
   });
 
+  // The two generators read a declared width from different places, so this must too. A field
+  // group's generator bounds a column on a top-level maxLength; a collection's does not, and would
+  // leave the same field unbounded.
+  it("leaves a field group's declared maxLength bounded", () => {
+    const resolved = withResolvedBuilderTextWidths({
+      collections: {},
+      singles: {},
+      components: {
+        hero: {
+          slug: "hero",
+          tableName: "comp_hero",
+          fields: [{ name: "body", type: "text", maxLength: 120 }] as never,
+          builderOwned: true,
+        },
+      },
+    });
+
+    expect(resolved.components.hero.fields[0]).not.toMatchObject({
+      options: { variant: "long" },
+    });
+  });
+
+  it("still widens a collection field carrying only a maxLength", () => {
+    const resolved = withResolvedBuilderTextWidths(
+      schemaWith({
+        fields: [{ name: "body", type: "text", maxLength: 120 }] as never,
+      })
+    );
+
+    expect(bodyType(resolved)).toBe("text");
+  });
+
   it("does not widen a type whose width is settled by what it holds", () => {
     const resolved = withResolvedBuilderTextWidths(
       schemaWith({

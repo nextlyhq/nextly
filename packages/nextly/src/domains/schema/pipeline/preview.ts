@@ -36,6 +36,10 @@ import {
 import { diffSnapshots } from "./diff/diff";
 import { introspectLiveSnapshot } from "./diff/introspect-live";
 import type { NextlySchemaSnapshot, Operation } from "./diff/types";
+import {
+  excludeLockedTableOps,
+  logSkippedLockedOps,
+} from "./pushschema-pipeline";
 import type {
   Classifier,
   ClassificationLevel,
@@ -177,7 +181,17 @@ export async function previewDesiredSchema(
     tables: [...collectionTables, ...singleTables, ...componentTables],
   };
 
-  const operations = diffSnapshots(liveSnapshot, desiredSnapshot);
+  const allOperations = diffSnapshots(liveSnapshot, desiredSnapshot);
+
+  // Preview is what the browser asks the operator to confirm, so it must show the operation set the
+  // apply can actually run. The apply drops operations on code-first and plugin-owned tables before
+  // it reads them; leaving them in here surfaced destructive warnings and rename prompts for drift
+  // on a table the save does not own and would never have touched.
+  const { kept: operations, skipped } = excludeLockedTableOps(
+    allOperations,
+    desired
+  );
+  logSkippedLockedOps(skipped);
 
   // Phase B: rename detection + classification.
   // The rename detector reads typed Operation[] (post Option E) and

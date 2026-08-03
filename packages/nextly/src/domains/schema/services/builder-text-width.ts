@@ -33,6 +33,7 @@ import type { DesiredSchema } from "../pipeline/types";
 interface WidthSignals {
   type?: string;
   options?: unknown;
+  maxLength?: number;
 }
 
 /**
@@ -75,7 +76,10 @@ function modifierOptions(
  * Idempotent: a field this has resolved states a variant, so a second pass leaves it alone. Returns
  * the original array when nothing needed resolving.
  */
-function resolveFieldWidths<T>(fields: readonly T[]): readonly T[] {
+function resolveFieldWidths<T>(
+  fields: readonly T[],
+  honoursMaxLength: boolean
+): readonly T[] {
   let changed = false;
 
   const out = fields.map(field => {
@@ -84,7 +88,7 @@ function resolveFieldWidths<T>(fields: readonly T[]): readonly T[] {
 
     const options = modifierOptions(candidate.options);
     if (options === undefined) return field;
-    if (options.variant !== undefined) return field;
+    if (statesWidth(candidate, options, honoursMaxLength)) return field;
 
     changed = true;
     return { ...candidate, options: { ...options, variant: "long" } };
@@ -103,13 +107,33 @@ function resolveFieldWidths<T>(fields: readonly T[]): readonly T[] {
  * Copies rather than mutates: the caller's schema is often the registry's own objects, and a
  * preview must not leave a field changed behind it.
  */
+/**
+ * Whether a field already states a width its own generator will render.
+ *
+ * The two generators do not read the same signal, so neither does this. A field group's generator
+ * bounds a column on a top-level `maxLength` (`field-group-schema-service.ts`:
+ * `field.maxLength ? varchar(maxLength) : text`), while a collection's bounds it only on
+ * `options.variant === "short"` — a `maxLength` alone leaves that column unbounded. Applying either
+ * rule to both kinds is wrong in one direction or the other: it would either widen a field group
+ * column the author sized, or leave a collection column bounded that its generator never bounded.
+ */
+function statesWidth(
+  field: WidthSignals,
+  options: Record<string, unknown>,
+  honoursMaxLength: boolean
+): boolean {
+  if (options.variant !== undefined) return true;
+  return honoursMaxLength && field.maxLength !== undefined;
+}
+
 export function withResolvedBuilderTextWidths(
   desired: DesiredSchema
 ): DesiredSchema {
   const resolveGroup = <
     E extends { fields: readonly unknown[]; builderOwned?: boolean },
   >(
-    group: Record<string, E>
+    group: Record<string, E>,
+    honoursMaxLength: boolean
   ): Record<string, E> => {
     const out: Record<string, E> = {};
     for (const [key, entity] of Object.entries(group)) {
@@ -120,15 +144,16 @@ export function withResolvedBuilderTextWidths(
         out[key] = entity;
         continue;
       }
-      const fields = resolveFieldWidths(entity.fields);
+      const fields = resolveFieldWidths(entity.fields, honoursMaxLength);
       out[key] = fields === entity.fields ? entity : { ...entity, fields };
     }
     return out;
   };
 
   return {
-    collections: resolveGroup(desired.collections),
-    singles: resolveGroup(desired.singles),
-    components: resolveGroup(desired.components),
+    collections: resolveGroup(desired.collections, false),
+    singles: resolveGroup(desired.singles, false),
+    // Field groups alone: their generator is the one that renders a declared `maxLength`.
+    components: resolveGroup(desired.components, true),
   };
 }

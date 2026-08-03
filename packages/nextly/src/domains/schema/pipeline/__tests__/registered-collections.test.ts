@@ -81,6 +81,23 @@ describe("mergeRegisteredCollections", () => {
     expect(merged.hero.builderOwned).toBe(true);
   });
 
+  // A code-first or plugin entity dropped from the config keeps its registry row on purpose, so
+  // reaching this merge does not make it the Builder's. Calling it so would rewrite its columns on
+  // the next sync against a table that orphan retention exists to leave alone.
+  it.each([
+    ["a locked row", { locked: true }],
+    ["a code-sourced row", { source: "code" }],
+    ["a plugin-sourced row", { source: "plugin:seo" }],
+  ])("does not claim %s for the Builder", (_, ownership) => {
+    const merged = mergeRegisteredEntities(
+      {},
+      [{ slug: "orphan", tableName: "dc_orphan", fields: [], ...ownership }],
+      (_row, base) => base
+    );
+
+    expect(merged.orphan.builderOwned).toBe(false);
+  });
+
   it("defaults localized to false rather than undefined", () => {
     const merged = mergeRegisteredEntities(
       {},

@@ -43,6 +43,23 @@ export interface RegisteredCollectionRow {
   fields?: unknown[];
   status?: boolean;
   localized?: boolean;
+  /** Set for a row owned by code-first config or a plugin. */
+  locked?: boolean;
+  /** `code`, `plugin:<name>`, or the UI source. Read only to corroborate `locked`. */
+  source?: string;
+}
+
+/**
+ * Whether a registry row belongs to code-first config or a plugin rather than the Schema Builder.
+ *
+ * `locked` is the persisted answer; `source` corroborates it for a row written before the flag was
+ * populated. Either one being set is enough, because misreading code as Builder-authored is the
+ * direction that rewrites a table nobody asked to change.
+ */
+function isCodeOwned(row: RegisteredCollectionRow): boolean {
+  if (row.locked === true) return true;
+  const source = row.source;
+  return source === "code" || (!!source && source.startsWith("plugin:"));
 }
 
 /** Logger slice used to report a registry that could not be read. */
@@ -80,11 +97,12 @@ export function mergeRegisteredEntities<T>(
       // a companion `_locales` table, and an entity whose flag is dropped has
       // those columns re-added to its main table by the very next diff.
       localized: row.localized === true,
-      // Every row reaching this point came from the registry and lost to no config entry, which
-      // is what it means for the Schema Builder to own it. Stated here rather than by each caller
-      // for the same reason as `localized`: an entity that arrives without it is described the way
-      // a code-first table is described, and the next diff reports its columns as drift.
-      builderOwned: true,
+      // Registry-only is NOT the same as Builder-authored. A code-first or plugin collection
+      // dropped from the current config keeps its row on purpose — `findOrphanedCollections`
+      // retains exactly those — so it reaches this merge while still being owned by code. Calling
+      // it the Builder's would rewrite its columns on the next sync against a table that orphan
+      // retention exists to leave alone. The row says which it is, so the row is asked.
+      builderOwned: !isCodeOwned(row),
     });
   }
 

@@ -456,7 +456,7 @@ export function excludeLockedTableOps(
   return { kept, skipped };
 }
 
-function logSkippedLockedOps(skipped: Operation[]): void {
+export function logSkippedLockedOps(skipped: Operation[]): void {
   if (skipped.length === 0 || process.env.DEBUG_SCHEMA !== "1") return;
   const tables = [
     ...new Set(skipped.map(op => operationTargetTable(op) ?? "<unknown>")),
