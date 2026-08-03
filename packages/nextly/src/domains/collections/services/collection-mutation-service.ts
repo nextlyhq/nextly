@@ -34,6 +34,7 @@ import { toDbError } from "../../../database/errors";
 // text out of the wire and routes identifying detail to logContext (§13.8).
 import { NextlyError } from "../../../errors";
 import { typedErrorEnvelopeFields } from "../../../errors/from-service-envelope";
+import { withOriginalError } from "../../../errors/original-error";
 import type { ValidationPublicData } from "../../../errors/public-data";
 import { emitDocumentEvent } from "../../../events/domain-events";
 import { getEventBus } from "../../../events/event-bus";
@@ -246,27 +247,34 @@ function errorToServiceResult<T = unknown>(
       error.code === "VALIDATION_ERROR"
         ? (error.publicData as ValidationPublicData | undefined)?.errors
         : undefined;
-    return {
-      success: false,
-      statusCode: error.statusCode,
-      // The canonical code rides along so boundary translators can rebuild
-      // the exact error (409 alone cannot separate DUPLICATE from CONFLICT).
-      code: error.code,
-      // A localized error selects its message by key, so dropping it leaves a
-      // client unable to render anything but the default string.
-      ...(error.messageKey !== undefined
-        ? { messageKey: error.messageKey }
-        : {}),
-      // Public by definition -- it is what `toResponseJSON` puts on the wire --
-      // so it rides the envelope and the boundary can rebuild an error whose
-      // meaning lives in it rather than in its code.
-      ...(error.publicData !== undefined
-        ? { publicData: error.publicData }
-        : {}),
-      message: error.publicMessage,
-      data: null,
-      ...(validationErrors ? { errors: validationErrors } : {}),
-    };
+    // The envelope carries the thrown error itself, not just what survives
+    // being made public, so the boundary that rebuilds from it can keep the
+    // original as the rebuilt error's `cause`. Symbol-keyed, so it cannot
+    // reach a response body.
+    return withOriginalError(
+      {
+        success: false,
+        statusCode: error.statusCode,
+        // The canonical code rides along so boundary translators can rebuild
+        // the exact error (409 alone cannot separate DUPLICATE from CONFLICT).
+        code: error.code,
+        // A localized error selects its message by key, so dropping it leaves a
+        // client unable to render anything but the default string.
+        ...(error.messageKey !== undefined
+          ? { messageKey: error.messageKey }
+          : {}),
+        // Public by definition -- it is what `toResponseJSON` puts on the wire --
+        // so it rides the envelope and the boundary can rebuild an error whose
+        // meaning lives in it rather than in its code.
+        ...(error.publicData !== undefined
+          ? { publicData: error.publicData }
+          : {}),
+        message: error.publicMessage,
+        data: null,
+        ...(validationErrors ? { errors: validationErrors } : {}),
+      },
+      error
+    );
   }
   // Free helper takes dialect explicitly (no `this`) so callers pass
   // `this.dialect` from BaseService. Normalising raw driver errors first
@@ -275,23 +283,33 @@ function errorToServiceResult<T = unknown>(
   // The mapping is where a unique or FK violation gains the context that says
   // WHICH constraint; the envelope below drops it, so it is kept here too.
   recordFlattenedError(mapped);
+  // Both mapped branches carry the provenance too. A driver failure is the
+  // case where the chained cause is worth the most — it is the only place the
+  // constraint that actually rejected the write is named.
   if (mapped.code === "INTERNAL_ERROR") {
-    return {
-      success: false,
-      statusCode: fallback.statusCode ?? 500,
-      message: error instanceof Error ? error.message : fallback.defaultMessage,
-      data: null,
-    };
+    return withOriginalError(
+      {
+        success: false,
+        statusCode: fallback.statusCode ?? 500,
+        message:
+          error instanceof Error ? error.message : fallback.defaultMessage,
+        data: null,
+      },
+      mapped
+    );
   }
-  return {
-    success: false,
-    statusCode: mapped.statusCode,
-    // Same passthrough as the NextlyError branch: a unique-violation maps to
-    // DUPLICATE here, and the code keeps that distinction across the envelope.
-    code: mapped.code,
-    message: mapped.publicMessage,
-    data: null,
-  };
+  return withOriginalError(
+    {
+      success: false,
+      statusCode: mapped.statusCode,
+      // Same passthrough as the NextlyError branch: a unique-violation maps to
+      // DUPLICATE here, and the code keeps that distinction across the envelope.
+      code: mapped.code,
+      message: mapped.publicMessage,
+      data: null,
+    },
+    mapped
+  );
 }
 
 /**

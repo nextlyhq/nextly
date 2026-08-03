@@ -9,6 +9,7 @@ import { recordFlattenedError } from "../hooks/side-effect-warnings";
 
 import { NEXTLY_ERROR_STATUS } from "./error-codes";
 import { NextlyError } from "./nextly-error";
+import { withOriginalError } from "./original-error";
 import type { PublicData } from "./public-data";
 
 /** The failure fields a service envelope can carry. */
@@ -43,7 +44,8 @@ export interface ServiceErrorEnvelope {
  */
 function validationFromEnvelope(
   envelope: ServiceErrorEnvelope,
-  logContext: Record<string, unknown>
+  logContext: Record<string, unknown>,
+  cause?: Error
 ): NextlyError {
   // The issues reach this in one of two shapes. A write path lifts them onto
   // the envelope's own `errors`, normalising the legacy `{field}` key on the
@@ -90,6 +92,9 @@ function validationFromEnvelope(
       envelope.code === "VALIDATION_ERROR" ? envelope.messageKey : undefined,
     publicData: { errors: normalized },
     logContext,
+    // Forwarded like every other branch: a field-transform failure carries
+    // the operator context that says which transform rejected the value.
+    ...(cause !== undefined ? { cause } : {}),
   });
 }
 
@@ -110,7 +115,12 @@ function validationFromEnvelope(
  */
 export function errorFromServiceEnvelope(
   envelope: ServiceErrorEnvelope,
-  logContext: Record<string, unknown> = {}
+  logContext: Record<string, unknown> = {},
+  // The error this envelope was built from, when the caller still has it.
+  // Chained rather than assigned afterwards because `cause` is read-only once
+  // a NextlyError exists — and it belongs to the error's identity, not to
+  // something bolted on after the fact.
+  cause?: Error
 ): NextlyError {
   // Read from the canonical map rather than repeated literals: this converter
   // exists so one place decides how a status and a code correspond, and a
@@ -121,7 +131,7 @@ export function errorFromServiceEnvelope(
     // Validation keeps its own path: it also normalises the legacy `{field}`
     // shape into the canonical `{path}` one the admin maps onto form fields.
     if (envelope.code === "VALIDATION_ERROR") {
-      return validationFromEnvelope(envelope, logContext);
+      return validationFromEnvelope(envelope, logContext, cause);
     }
     return new NextlyError({
       code: envelope.code,
@@ -134,6 +144,7 @@ export function errorFromServiceEnvelope(
       messageKey: envelope.messageKey,
       publicData: envelope.publicData as PublicData | undefined,
       logContext,
+      ...(cause !== undefined ? { cause } : {}),
     });
   }
 
@@ -176,11 +187,24 @@ export function typedErrorEnvelopeFields(
   // flattening for every path that uses it, so recording here covers them all
   // rather than each call site remembering to.
   recordFlattenedError(error);
-  return {
-    code: String(error.code),
-    statusCode: error.statusCode,
-    message: error.publicMessage,
-    ...(error.messageKey !== undefined ? { messageKey: error.messageKey } : {}),
-    ...(error.publicData !== undefined ? { publicData: error.publicData } : {}),
-  };
+  // The provenance rides on the fields themselves, so every producer that
+  // spreads this gets it without remembering to. This function IS the
+  // flattening for the read paths and the singles, exactly as it is the one
+  // place they record the error — attaching anywhere else would mean each of
+  // them opting in separately, which is how the first version of this reached
+  // only the collection writes.
+  return withOriginalError(
+    {
+      code: String(error.code),
+      statusCode: error.statusCode,
+      message: error.publicMessage,
+      ...(error.messageKey !== undefined
+        ? { messageKey: error.messageKey }
+        : {}),
+      ...(error.publicData !== undefined
+        ? { publicData: error.publicData }
+        : {}),
+    },
+    error
+  );
 }
