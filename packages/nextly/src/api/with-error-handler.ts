@@ -28,6 +28,7 @@ import {
 import { getNextlyLogger } from "../observability/logger";
 import { getGlobalOnError, type OnErrorHook } from "../observability/on-error";
 
+import { buildErrorResponse } from "./error-response";
 import { readOrGenerateRequestId, withRequestIdHeader } from "./request-id";
 
 type UnstableRethrow = (err: unknown) => void;
@@ -71,91 +72,6 @@ const DEFAULT_INTERNAL_MESSAGE = "An unexpected error occurred.";
  * Generic over `TArgs` so it transparently supports both static handlers
  * (`(req)`) and dynamic-segment handlers (`(req, { params })`).
  */
-
-/**
- * The detail an author cannot see from a public error response.
- *
- * Built only for a development response. `logContext` and `cause` are what the
- * public shape deliberately withholds, so this exists to shorten the loop
- * between a failure and its cause while writing code -- not to be a second
- * error surface. A cause is reduced to its message: a serialized stack is
- * large, and the log already has the whole thing against the same request id.
- *
- * Returns undefined when there is nothing to add, so an ordinary development
- * error response is the same shape a production one is.
- */
-
-/**
- * Whether an error response may carry the detail the public shape withholds.
- *
- * Two signals, both required. `NODE_ENV` is not sufficient on its own because
- * this package is published pre-built and app builds keep it external, so the
- * check runs at runtime and a misconfigured production deployment would
- * satisfy it. `NEXTLY_DEV_DIAGNOSTICS` is named for exactly one purpose, so
- * nothing sets it incidentally.
- *
- * Read per call rather than cached, so a test can exercise both sides and so a
- * process cannot latch the permissive answer from however it happened to start.
- */
-
-/**
- * A value that is safe to put on a response body, or undefined.
- *
- * `logContext` is whatever a thrower attached, so it can hold a cycle, a
- * BigInt, or anything else `JSON.stringify` refuses. Serializing the response
- * happens after this, inside the error path, so a value that throws there
- * would reject the request instead of returning the error the handler built --
- * turning a diagnostic aid into a failure worse than the one it describes.
- *
- * Round-tripped rather than inspected: that is the same operation the response
- * will perform, so it answers the exact question rather than an approximation
- * of it.
- */
-function jsonSafe(value: unknown): unknown {
-  if (value === undefined) return undefined;
-  try {
-    return JSON.parse(JSON.stringify(value)) as unknown;
-  } catch {
-    return "[unserializable]";
-  }
-}
-
-function devDiagnosticsEnabled(): boolean {
-  return (
-    process.env.NODE_ENV === "development" &&
-    process.env.NEXTLY_DEV_DIAGNOSTICS === "1"
-  );
-}
-
-function buildDevDiagnostics(
-  thrown: NextlyError,
-  flattened: readonly NextlyError[]
-): Record<string, unknown> | undefined {
-  const causeMessage = (error: NextlyError): string | undefined =>
-    error.cause instanceof Error ? error.cause.message : undefined;
-
-  const detail: Record<string, unknown> = {};
-  const context = jsonSafe(thrown.logContext);
-  if (context !== undefined) detail.logContext = context;
-  const thrownCause = causeMessage(thrown);
-  if (thrownCause !== undefined) detail.cause = thrownCause;
-
-  // Errors the envelope flattened before this frame. Without them the response
-  // names only the boundary's reconstruction, which is the defect that makes
-  // every unexpected failure look alike.
-  const earlier = flattened.map(error => ({
-    code: error.code,
-    ...(jsonSafe(error.logContext) !== undefined
-      ? { logContext: jsonSafe(error.logContext) }
-      : {}),
-    ...(causeMessage(error) !== undefined
-      ? { cause: causeMessage(error) }
-      : {}),
-  }));
-  if (earlier.length > 0) detail.flattened = earlier;
-
-  return Object.keys(detail).length > 0 ? detail : undefined;
-}
 
 export function withErrorHandler<TArgs extends unknown[]>(
   handler: (...args: TArgs) => Promise<Response>,
@@ -281,55 +197,20 @@ export function withErrorHandler<TArgs extends unknown[]>(
         }
       }
 
-      // (5) Serialize. For INTERNAL_ERROR with a custom internalMessage option,
-      // override the public message at the wire-format step.
-      const responseJson = nextlyErr.toResponseJSON(requestId);
-      if (
-        nextlyErr.code === "INTERNAL_ERROR" &&
-        options?.internalErrorMessage !== undefined
-      ) {
-        responseJson.message = internalMessage;
-      }
-      // Development-only diagnostics, gated on TWO independent signals.
+      // (5) Serialize. The body, its development-only detail, `Retry-After`
+      // and the content type belong to the shared builder, so a route reached
+      // through this wrapper and one reached through the plugin dispatcher
+      // answer with the same thing.
       //
-      // `nextly` ships as a pre-built package and app builds keep it external,
-      // so nothing rewrites this file: `NODE_ENV` is read at runtime, and a
-      // production deployment started with the wrong value would otherwise
-      // disclose the detail the public shape exists to withhold. So the gate
-      // also requires an explicitly named opt-in that nothing sets by
-      // accident, and neither signal alone is enough.
-      //
-      // Same shape as the dev auto-login, which is the more dangerous feature
-      // of the two and is already guarded this way: an explicit opt-in plus a
-      // production block, rather than an environment name on its own.
-      //
-      // Carries the thrown error's own context and anything the envelope
-      // flattened on the way here, which is what an author cannot otherwise
-      // see without reading the server log.
-      if (devDiagnosticsEnabled()) {
-        const devDetail = buildDevDiagnostics(nextlyErr, flattenedInRequest);
-        if (devDetail) {
-          (responseJson as Record<string, unknown>)._devDiagnostics = devDetail;
-        }
-      }
-      const responseHeaders: Record<string, string> = {
-        "content-type": "application/problem+json",
-      };
-      // Set Retry-After for rate-limited responses. Type-narrow on shape
-      // rather than cast — defends against future PublicData variants.
-      if (nextlyErr.code === "RATE_LIMITED") {
-        const data = nextlyErr.publicData;
-        if (
-          data &&
-          "retryAfterSeconds" in data &&
-          typeof data.retryAfterSeconds === "number"
-        ) {
-          responseHeaders["retry-after"] = String(data.retryAfterSeconds);
-        }
-      }
-      response = new Response(JSON.stringify({ error: responseJson }), {
-        status: nextlyErr.statusCode,
-        headers: responseHeaders,
+      // `flattenedInRequest` is passed rather than read there: the scope it
+      // comes from closed when the handler returned, so this frame is the last
+      // one that can still see it.
+      response = buildErrorResponse(nextlyErr, {
+        requestId,
+        ...(options?.internalErrorMessage !== undefined
+          ? { internalMessage }
+          : {}),
+        flattened: flattenedInRequest,
       });
     }
 

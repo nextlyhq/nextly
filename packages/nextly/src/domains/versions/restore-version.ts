@@ -21,6 +21,7 @@ import { getService } from "../../di";
 import { NextlyError } from "../../errors";
 import type { ServiceErrorEnvelope } from "../../errors/from-service-envelope";
 import { errorFromServiceEnvelope } from "../../errors/from-service-envelope";
+import { originalErrorOf } from "../../errors/original-error";
 import type { VersionScopeKind } from "../../schemas/versions/types";
 import {
   applyFieldReadAccess,
@@ -554,8 +555,15 @@ function assertWriteSucceeded(
 
   const status = result.statusCode ?? 500;
 
+  // The failure the update was built from, chained onto whichever branch below
+  // answers. Only the code-keyed branch went through the converter, so every
+  // other outcome of a failed restore -- a denial, a conflict, a rejected
+  // snapshot, a server fault -- reached the caller naming nothing.
+  const original = originalErrorOf(result);
+
   if (status === 403 || status === 404) {
     throw NextlyError.notFound({
+      cause: original,
       logContext: {
         reason: "restore-write-denied",
         statusCode: status,
@@ -585,6 +593,7 @@ function assertWriteSucceeded(
   // collision reports through an ordinary update.
   if (status === 409) {
     throw NextlyError.conflict({
+      cause: original,
       logContext: {
         reason: "restore-write-conflict",
         message: result.message,
@@ -612,6 +621,7 @@ function assertWriteSucceeded(
                 "This version could not be applied to the document as it is now.",
             },
           ],
+      cause: original,
       logContext: {
         reason: "restore-write-rejected",
         statusCode: status,
@@ -623,6 +633,7 @@ function assertWriteSucceeded(
   }
 
   throw NextlyError.internal({
+    cause: original,
     logContext: {
       reason: "restore-write-failed",
       statusCode: status,

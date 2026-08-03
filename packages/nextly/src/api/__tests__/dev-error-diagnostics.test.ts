@@ -13,7 +13,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { typedErrorEnvelopeFields } from "../../errors/from-service-envelope";
+import { errorEnvelopeFields } from "../../errors/from-service-envelope";
 import { NextlyError } from "../../errors/nextly-error";
 import {
   currentFlattenedErrors,
@@ -106,11 +106,11 @@ describe("development-only error diagnostics", () => {
 });
 
 describe("diagnostics survive every flattening path", () => {
-  it("records from typedErrorEnvelopeFields", async () => {
+  it("records from errorEnvelopeFields", async () => {
     // That function IS the flattening for the paths that use it, so it records
     // rather than each of its call sites remembering to.
     const { result } = await withSideEffectWarnings(async () => {
-      typedErrorEnvelopeFields(
+      errorEnvelopeFields(
         NextlyError.conflict({ logContext: { constraint: "posts_slug_key" } })
       );
       return currentFlattenedErrors();
@@ -123,10 +123,11 @@ describe("diagnostics survive every flattening path", () => {
   });
 
   it("records nothing for a value that is not a typed error", async () => {
-    // The control: it returns null for those, and recording one would put a
-    // fabricated entry in the operator log.
+    // The control: an untyped error still leaves with its provenance, but it
+    // is not RECORDED — the operator log is for typed failures, and an entry
+    // fabricated from a bare Error would carry no code to act on.
     const { result } = await withSideEffectWarnings(async () => {
-      typedErrorEnvelopeFields(new Error("plain"));
+      errorEnvelopeFields(new Error("plain"));
       return currentFlattenedErrors();
     });
 
