@@ -6,11 +6,10 @@ import { Activity } from "@admin/types/dashboard/activity";
 
 import { RecentActivity } from "./RecentActivity";
 
-// Mocked through the SAME specifier the component imports. A relative path
-// from here resolves to `src/components/hooks/...`, which does not exist, so
-// the mock registered against a module nobody loads: the real hook stayed in
-// place and `vi.mocked()` wrapped a plain function, leaving every case below
-// asserting nothing.
+// Mocked through the same specifier the component imports. A relative path
+// from this directory resolves to `src/components/hooks/...`, which does not
+// exist, and a mock registered against a module nobody loads leaves the real
+// hook in place.
 vi.mock("@admin/hooks/queries/useRecentActivity", () => ({
   useRecentActivity: vi.fn(),
 }));
@@ -92,9 +91,7 @@ describe("RecentActivity", () => {
     render(<RecentActivity />);
 
     expect(
-      // Asserted against what the component actually renders. These three
-      // expectations had drifted from the copy years of edits moved on from,
-      // and the broken mock meant nothing ever noticed.
+      // The copy the error branch renders.
       screen.getByText(/failed to fetch activity stream/i)
     ).toBeInTheDocument();
   });

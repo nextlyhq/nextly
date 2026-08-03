@@ -40,10 +40,9 @@ describe("formatRelativeTime", () => {
   it("returns formatted date for timestamps 7+ days ago", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-20T12:00:00Z"));
-    // "Mar 1, 2026", not "Mar 1": past the relative window the value is
-    // rendered through the admin's CONFIGURED date format, which deliberately
-    // overrides the caller's month/day options — that override is the whole
-    // point of a global setting. The old expectation predates it.
+    // Carries the year even though only month and day are requested: the
+    // shared formatter fills in `year: "numeric"` whenever the caller does not
+    // name one, so anything past the relative window reads as "Mar 1, 2026".
     expect(formatRelativeTime("2026-03-01T12:00:00Z")).toBe("Mar 1, 2026");
   });
 });
