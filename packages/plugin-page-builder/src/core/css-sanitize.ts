@@ -46,7 +46,10 @@ const URL_SCHEME = /^\s*[a-z][a-z0-9+.-]*:/i;
  * leaks, and this is where the combination is possible.
  */
 function isRemoteUrl(value: string): boolean {
-  const trimmed = value.trim();
+  // Backslashes first: for http and https a URL parser treats them as slashes,
+  // so `/\\evil.example/a` and `\\\\evil.example/a` both resolve to another
+  // host while beginning with neither `//` nor a scheme.
+  const trimmed = value.trim().replaceAll("\\", "/");
   if (URL_SCHEME.test(trimmed)) return true;
   // No scheme, but still another host: `//evil.example/x.png` inherits the
   // page's protocol and nothing else.
@@ -56,12 +59,25 @@ function isRemoteUrl(value: string): boolean {
 /** The first `url()` in a declaration that leaves this origin, if any. */
 function firstRemoteUrl(decl: csstree.Declaration): string | undefined {
   let found: string | undefined;
+  // `.value` is decoded on both node types, so a scheme spelled with CSS
+  // escapes is read the way a browser resolves it rather than as written.
   csstree.walk(decl, {
     visit: "Url",
     enter(node: csstree.Url) {
+      if (found === undefined && isRemoteUrl(node.value)) found = node.value;
+    },
+  });
+  if (found !== undefined) return found;
+  // A string is a URL when it is an ARGUMENT and text when it is not.
+  // `image-set("https://…" 1x)` fetches; `content: "https://…"` is a caption.
+  // Asking whether a function encloses it separates the two without a list of
+  // URL-taking functions to keep up to date — and the list is what fails, since
+  // `image()` and `-webkit-image-set()` take one too.
+  csstree.walk(decl, {
+    visit: "String",
+    enter(node: csstree.StringNode) {
       if (found !== undefined) return;
-      // `node.value` is decoded, so a scheme spelled with CSS escapes is read
-      // the way a browser reads it rather than the way it was written.
+      if (this.function === null) return;
       if (isRemoteUrl(node.value)) found = node.value;
     },
   });

@@ -194,6 +194,47 @@ describe("custom CSS may not reach off this origin", () => {
     expect(out.warnings.map(w => w.code)).toContain("remote-url");
   });
 
+  it("reads a URL a function carries as a bare string", () => {
+    // `image-set("…" 1x)` fetches the string. css-tree calls it a String rather
+    // than a Url, so a walker looking only for Url nodes never sees it, and the
+    // whole channel reopens through a spelling.
+    for (const css of [
+      `.a { background-image: image-set("https://evil.example/a.png" 1x) }`,
+      `.a { background-image: -webkit-image-set("https://evil.example/a.png" 1x) }`,
+      `.a { background: image("https://evil.example/a.png") }`,
+    ]) {
+      const out = sanitizeCustomCss(css, SCOPE);
+      expect(out.css).not.toContain("evil.example");
+      expect(out.warnings.map(w => w.code)).toContain("remote-url");
+    }
+  });
+
+  it("leaves a string that is text rather than an argument", () => {
+    // The other half of that rule. A bare string is a caption, not a request,
+    // and refusing it would break showing a URL on the page.
+    for (const css of [
+      `.a { content: "https://example.com" }`,
+      `.a { font-family: "https://example.com" }`,
+    ]) {
+      const out = sanitizeCustomCss(css, SCOPE);
+      expect(out.warnings).toEqual([]);
+    }
+  });
+
+  it("resolves backslashes the way a URL parser does", () => {
+    // For http and https a backslash is a slash, so these reach another host
+    // while beginning with neither `//` nor a scheme.
+    // Four backslashes here is two in the CSS source, which is ONE after the
+    // CSS string decodes — the literal backslash a URL parser reads as a slash.
+    // Two in this file would be one in the source, where `\\e` is a CSS escape
+    // for U+000E and reaches no host at all.
+    for (const url of ["/\\\\evil.example/a", "\\\\\\\\evil.example/a"]) {
+      const out = sanitizeCustomCss(`.a { background: url("${url}") }`, SCOPE);
+      expect(out.css).not.toContain("evil.example");
+      expect(out.warnings.map(w => w.code)).toContain("remote-url");
+    }
+  });
+
   it("keeps the paths that resolve against this site", () => {
     for (const url of ["/media/hero.png", "./hero.png", "hero.png", "#frag"]) {
       const out = sanitizeCustomCss(`.a { background: url("${url}") }`, SCOPE);

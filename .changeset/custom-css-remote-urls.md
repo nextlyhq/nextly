@@ -37,3 +37,9 @@ Everything the sanitizer removes is now reported rather than dropped silently,
 including at-rules it does not support. A rule that disappears with nothing on
 screen to explain it reads as a bug in the builder, and the author's own source
 still contains the line that did not survive.
+
+BREAKING, for anyone calling the sanitizer directly: `sanitizeCustomCss` and
+`sanitizeBlockCss` return `{ css, warnings }` rather than a string. They are
+re-exported from the package root, so this is a visible change even though the
+page builder itself is the only expected caller. Read `.css` where you read the
+result before.
