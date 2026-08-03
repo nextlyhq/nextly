@@ -29,11 +29,9 @@ import { RESERVED_SLUGS } from "../../collections/config/validate-config";
 import { isFieldGroupField } from "../../collections/fields/guards";
 import type { FieldConfig } from "../../collections/fields/types";
 import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
+import { toSnakeCase } from "../../domains/schema/services/field-column-descriptor";
 import { NextlyError } from "../../errors";
-import {
-  isReservedSystemColumn,
-  toPhysicalColumnName,
-} from "../../lib/system-columns";
+import { isReservedSystemColumn } from "../../lib/system-columns";
 import {
   type BaseValidationError,
   DEFAULT_SQL_KEYWORDS_SET,
@@ -340,17 +338,34 @@ function validateFields(
     if (!field || typeof field !== "object") return;
     const name = (field as Record<string, unknown>).name;
     if (typeof name !== "string") return;
-    const column = toPhysicalColumnName(name);
+    const column = toSnakeCase(name);
 
     if (isFieldGroupField(field as FieldConfig)) {
-      // No column, but the value still travels on the instance payload, and that payload uses
-      // `id` for the instance's own identity: a read seeds it from the row and a repeatable write
-      // decides insert-or-update by it. A reference stored under the same key would displace the
-      // identity, so existing instances would be read as new ones and the originals deleted.
-      if (column === "id") {
+      // A reference emits no column, but its value still rides on the instance payload, where two
+      // keys are already spoken for — and they are spoken for in different ways.
+      //
+      // The identity is assigned straight onto the payload and read back under the exact key `id`,
+      // so only that literal displaces it. `Id` is a separate property and stays usable.
+      if (name === "id") {
         errors.push({
           path: `${path}[${index}].name`,
           message: `Field name '${name}' is reserved: a field group instance uses 'id' for its own identity`,
+          code: "FIELD_NAME_RESERVED",
+        });
+        return;
+      }
+
+      // The timestamps are the opposite: the read indexes the row's columns by each field's
+      // CONVERTED name, so any spelling that converts to one of them is handed the row's timestamp
+      // in place of the referenced data — which then round-trips back as the reference's value.
+      // `id` is excluded because it is the case above, where conversion does not apply.
+      if (
+        column !== "id" &&
+        isReservedSystemColumn(column, "fieldGroupConfig")
+      ) {
+        errors.push({
+          path: `${path}[${index}].name`,
+          message: `Field name '${name}' is reserved: a field group instance carries '${column}' of its own`,
           code: "FIELD_NAME_RESERVED",
         });
       }

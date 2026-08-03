@@ -15,7 +15,10 @@ import { describe, expect, it } from "vitest";
 import type { FieldConfig } from "../../collections/fields/types";
 import { fieldNameSchema } from "../../domains/dynamic-collections/services/dynamic-collection-validation-service";
 import { FieldGroupSchemaService } from "../../domains/field-groups/services/field-group-schema-service";
-import { getSystemColumnDescriptors } from "../../domains/schema/services/field-column-descriptor";
+import {
+  getSystemColumnDescriptors,
+  toSnakeCase,
+} from "../../domains/schema/services/field-column-descriptor";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import { SYSTEM_SCHEMA_VERSION } from "../../domains/schema/services/schema-hash";
 import { validateFieldGroupConfig } from "../../field-groups/config/validate-field-group";
@@ -33,7 +36,6 @@ import {
   systemColumnDefaultSql,
   systemColumnDialectType,
   systemColumnNames,
-  toPhysicalColumnName,
   type ReservationSurface,
   type SystemColumnDialect,
   type SystemColumnKind,
@@ -171,14 +173,15 @@ describe("reservation projections", () => {
   });
 
   it("normalizes a field name to the column the generator would emit", () => {
-    // The conversion the check depends on. `CreatedAt` is the case a literal set of spellings
-    // missed: the substitution introduces a leading underscore that the generator then drops.
+    // The canonical conversion, shared with the generators rather than restated — the reservation
+    // is only correct while it agrees with them. `CreatedAt` is the case a literal set of
+    // spellings missed: the substitution introduces a leading underscore that is then dropped.
     expect({
-      createdAt: toPhysicalColumnName("createdAt"),
-      CreatedAt: toPhysicalColumnName("CreatedAt"),
-      created_at: toPhysicalColumnName("created_at"),
-      Id: toPhysicalColumnName("Id"),
-      headline: toPhysicalColumnName("headline"),
+      createdAt: toSnakeCase("createdAt"),
+      CreatedAt: toSnakeCase("CreatedAt"),
+      created_at: toSnakeCase("created_at"),
+      Id: toSnakeCase("Id"),
+      headline: toSnakeCase("headline"),
     }).toEqual({
       createdAt: "created_at",
       CreatedAt: "created_at",
@@ -390,7 +393,36 @@ describe("the validators actually refuse what the projection lists", () => {
     // uses `id` for the instance's own identity: the read seeds it from the row, and a repeatable
     // write decides insert-or-update by it. A reference stored under the same key would displace
     // the identity, so existing instances would read as new and the originals be removed.
-    for (const name of ["id", "Id"]) {
+    // Only the literal `id`. The identity is assigned straight onto the payload and read back
+    // under that exact key, so `Id` is a separate property and stays usable — normalizing here
+    // would refuse a configuration that works.
+    for (const [name, expected] of [
+      ["id", 1],
+      ["Id", 0],
+    ] as const) {
+      const result = validateFieldGroupConfig({
+        slug: "probe",
+        fields: [{ name, type: "component", component: "child" }],
+      } as unknown as FieldGroupConfig);
+      const reserved = (result.errors ?? []).filter(
+        e => e.code === "FIELD_NAME_RESERVED"
+      );
+
+      expect({ [name]: reserved.length }).toEqual({ [name]: expected });
+    }
+  });
+
+  it("keeps the timestamp payload keys reserved on a reference", () => {
+    // The opposite of `id`: the read indexes the row's columns by each field's CONVERTED name, so
+    // every spelling that converts to a timestamp column would be handed the row's timestamp in
+    // place of the referenced data.
+    for (const name of [
+      "createdAt",
+      "created_at",
+      "CreatedAt",
+      "updatedAt",
+      "updated_at",
+    ]) {
       const result = validateFieldGroupConfig({
         slug: "probe",
         fields: [{ name, type: "component", component: "child" }],
@@ -411,7 +443,7 @@ describe("the validators actually refuse what the projection lists", () => {
     // The type token is `component`, which IS a data field — so the guard that skips non-column
     // fields does not cover it and the reference check is doing real work here. Written with the
     // wrong token this assertion passes for the wrong reason, because no branch is reached at all.
-    for (const name of ["createdAt", "CreatedAt", "updatedAt", "headline"]) {
+    for (const name of ["headline", "Id", "seoBlock"]) {
       const field = { name, type: "component", component: "child" };
       const result = validateFieldGroupConfig({
         slug: "probe",

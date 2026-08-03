@@ -28,7 +28,7 @@ columns, not only the two that were listed. `CreatedAt` reaches the same `create
 declared with a plugin-contributed type is checked too — its type registers after the config is
 read, and it was previously skipped.
 
-A Field Group field that references another Field Group may take any name except `id`. Those keep
-their data in the referenced table and produce no column of their own, so the previous check
-refused configurations that work. `id` stays reserved because an instance uses it for its own
-identity.
+A Field Group field that references another Field Group may take any name that a Field Group
+instance does not already use for itself: not `id`, which is the instance's own identity, and not a
+name that converts to `created_at` or `updated_at`, which a read would fill with the row's
+timestamp instead of the referenced data.
