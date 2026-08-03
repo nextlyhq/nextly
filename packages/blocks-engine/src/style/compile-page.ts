@@ -38,7 +38,7 @@ import type { Declaration } from "./declarations";
 import {
   blockTypeClassName,
   nodeClassNames,
-  PAGE_ROOT_CLASS,
+  PAGE_ROOT_SELECTOR,
 } from "./node-class";
 import { serializeRules } from "./serialize";
 import type { CssRule } from "./serialize";
@@ -776,7 +776,7 @@ export function compilePageCss(
   const contexts = breakpointContexts(ctx.breakpoints);
   const tokenPrefix = ctx.tokenPrefix ?? DEFAULT_TOKEN_PREFIX;
   const scope = scopeSelector(ctx.scope, warnings);
-  const pageRoot = `.${PAGE_ROOT_CLASS}${scope}`;
+  const pageRoot = `${PAGE_ROOT_SELECTOR}${scope}`;
 
   const nodes = documentNodes(doc, warnings, warningAllowance, ctx.limits);
   const classes = nodeClassNames(nodes.map(entry => entry.node.id));

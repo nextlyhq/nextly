@@ -49,13 +49,19 @@ async function ageEvent(
   handle: TestNextly,
   id: string,
   createdAt: Date,
-  fannedOut: boolean
+  fannedOut: boolean,
+  // Stated per case rather than inherited. The test harness enables the audit
+  // seam, so a recorded row is audit-class and would be measured against the
+  // long window — a case about outbox hygiene has to say so, or it reads as
+  // testing one window while exercising another.
+  retentionClass: "webhook" | "audit" = "webhook"
 ): Promise<void> {
   await handle.adapter.update(
     "nextly_events",
     {
       created_at: createdAt,
       fanned_out_at: fannedOut ? createdAt : null,
+      retention_class: retentionClass,
     },
     { and: [{ column: "id", op: "=", value: id }] }
   );
@@ -64,9 +70,10 @@ async function ageEvent(
 const OLD = new Date("2020-01-01T00:00:00.000Z");
 
 describe("webhook retention (integration)", () => {
-  it("writes events with the webhook retention class by default", async () => {
-    // Audit-class rows only appear once the audit log exists; until then every
-    // row takes the short window.
+  it("records an audit-class row while the audit seam is on", async () => {
+    // The class follows from WHY the row was recorded, and the harness enables
+    // the audit seam. Nothing needs a row beyond delivery is webhook-class; this
+    // one is needed for history, so it takes the long window.
     const t = await boot();
     const handler = t.getService<CollectionsHandler>("collectionsHandler");
     await handler.createEntry(
@@ -76,7 +83,38 @@ describe("webhook retention (integration)", () => {
 
     const rows = await events(t);
     expect(rows).toHaveLength(1);
-    expect(rows[0].retentionClass).toBe("webhook");
+    expect(rows[0].retentionClass).toBe("audit");
+  });
+
+  it("keeps an audit-class row at an age that evicts a webhook-class one", async () => {
+    // The class is the ONLY difference: both rows are the same age, in the same
+    // pass, under the same config. One is past the webhook window and inside the
+    // audit window, so the short window evicts one and not the other. Aged to 60
+    // days for exactly that reason — past 30, inside 90.
+    const t = await boot();
+    const handler = t.getService<CollectionsHandler>("collectionsHandler");
+    await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "kept" }
+    );
+    await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "evicted" }
+    );
+    const [kept, evicted] = await events(t);
+    const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
+    await ageEvent(t, kept.id, sixtyDaysAgo, true, "audit");
+    await ageEvent(t, evicted.id, sixtyDaysAgo, true, "webhook");
+
+    const result = await pruneWebhookData(
+      { adapter: t.adapter },
+      resolveWebhookRetentionConfig({})!
+    );
+
+    expect(result.events.webhook).toBe(1);
+    const remaining = await events(t);
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0].id).toBe(kept.id);
   });
 
   it("prunes an aged, fanned-out event", async () => {

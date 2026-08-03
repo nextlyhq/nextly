@@ -8,7 +8,11 @@ import { FIXTURE_BREAKPOINTS } from "../validation.fixtures";
 
 import { compilePageCss } from "./compile-page";
 import type { StyleCompileContext } from "./compile-page";
-import { nodeClassName, nodeClassNames } from "./node-class";
+import {
+  nodeClassName,
+  nodeClassNames,
+  PAGE_ROOT_SELECTOR,
+} from "./node-class";
 import {
   MAX_STYLE_ISSUES,
   MAX_STYLE_ISSUE_PATH_BYTES,
@@ -44,7 +48,9 @@ function css(document: BlockDocument, ctx: StyleCompileContext = CTX): string {
 describe("a node's own styles", () => {
   it("writes one anchored rule at the node's class", () => {
     const out = css(doc([node("n1", { base: { base: { color: "#fff" } } })]));
-    expect(out).toBe(`.nx-pb-page .${nodeClassName("n1")} { color: #fff }`);
+    expect(out).toBe(
+      `${PAGE_ROOT_SELECTOR} .${nodeClassName("n1")} { color: #fff }`
+    );
   });
 
   it("writes logical properties as the catalog stores them", () => {
@@ -171,15 +177,15 @@ describe("states", () => {
     const cls = nodeClassName("n1");
     expect(out).toBe(
       [
-        `.nx-pb-page .${cls} { color: #111 }`,
+        `${PAGE_ROOT_SELECTOR} .${cls} { color: #111 }`,
         // `:where()` matches the same elements and adds no specificity, so what
         // a state rule beats is decided by where it sits, not by the pseudo-
         // class it carries.
-        `.nx-pb-page .${cls}:where(:hover) { color: #222 }`,
+        `${PAGE_ROOT_SELECTOR} .${cls}:where(:hover) { color: #222 }`,
         // Focus styling follows `:focus-visible`, so a mouse click does not
         // paint a ring the author only meant for keyboard users.
-        `.nx-pb-page .${cls}:where(:focus-visible) { color: #333 }`,
-        `.nx-pb-page .${cls}:where(:active) { color: #444 }`,
+        `${PAGE_ROOT_SELECTOR} .${cls}:where(:focus-visible) { color: #333 }`,
+        `${PAGE_ROOT_SELECTOR} .${cls}:where(:active) { color: #444 }`,
       ].join("\n")
     );
   });
@@ -202,19 +208,19 @@ describe("breakpoints", () => {
     const cls = nodeClassName("n1");
     expect(out).toBe(
       [
-        `.nx-pb-page .${cls} { color: #000 }`,
+        `${PAGE_ROOT_SELECTOR} .${cls} { color: #000 }`,
         // Desktop-first: the unconditional rule is the widest layout, and each
         // narrower breakpoint has to come later to override it.
         `@media (max-width: 1024px) {`,
-        `  .nx-pb-page .${cls} { color: #222 }`,
+        `  ${PAGE_ROOT_SELECTOR} .${cls} { color: #222 }`,
         `}`,
         `@media (max-width: 640px) {`,
-        `  .nx-pb-page .${cls} { color: #333 }`,
+        `  ${PAGE_ROOT_SELECTOR} .${cls} { color: #333 }`,
         `}`,
         // Container queries last, so an element responding to its own box wins
         // over the same value keyed to the window.
         `@container (max-width: 320px) {`,
-        `  .nx-pb-page .${cls} { color: #444 }`,
+        `  ${PAGE_ROOT_SELECTOR} .${cls} { color: #444 }`,
         `}`,
       ].join("\n")
     );
@@ -244,9 +250,9 @@ describe("cascade tiers", () => {
     );
     expect(out).toBe(
       [
-        `.nx-pb-page { color: #111 }`,
-        `.nx-pb-page .nx-bt-core--box { color: #222 }`,
-        `.nx-pb-page .${nodeClassName("n1")} { color: #333 }`,
+        `${PAGE_ROOT_SELECTOR} { color: #111 }`,
+        `${PAGE_ROOT_SELECTOR} .nx-bt-core--box { color: #222 }`,
+        `${PAGE_ROOT_SELECTOR} .${nodeClassName("n1")} { color: #333 }`,
       ].join("\n")
     );
   });
@@ -293,8 +299,8 @@ describe("properties that style something inside the block", () => {
     const cls = nodeClassName("n1");
     expect(out).toBe(
       [
-        `.nx-pb-page .${cls} { color: #111 }`,
-        `.nx-pb-page .${cls} a { color: #00f }`,
+        `${PAGE_ROOT_SELECTOR} .${cls} { color: #111 }`,
+        `${PAGE_ROOT_SELECTOR} .${cls} a { color: #00f }`,
       ].join("\n")
     );
   });
@@ -312,7 +318,7 @@ describe("visibility", () => {
         `@media (max-width: 640px) {`,
         // The class is doubled so hiding outranks a `display` stored on a
         // state; a plain rule loses to `:focus-visible` however late it comes.
-        `  .nx-pb-page .${nodeClassName("n1")}.${nodeClassName("n1")} { display: none }`,
+        `  ${PAGE_ROOT_SELECTOR} .${nodeClassName("n1")}.${nodeClassName("n1")} { display: none }`,
         `}`,
       ].join("\n")
     );
@@ -347,7 +353,7 @@ describe("visibility", () => {
     expect(out).toBe(
       [
         `@media (max-width: 1024px) and (width > 640px) {`,
-        `  .nx-pb-page .${nodeClassName("n1")}.${nodeClassName("n1")} { display: none }`,
+        `  ${PAGE_ROOT_SELECTOR} .${nodeClassName("n1")}.${nodeClassName("n1")} { display: none }`,
         `}`,
       ].join("\n")
     );
@@ -367,7 +373,7 @@ describe("visibility", () => {
     expect(out).toBe(
       [
         `@media (width > 640px) {`,
-        `  .nx-pb-page .${cls}.${cls} { display: none }`,
+        `  ${PAGE_ROOT_SELECTOR} .${cls}.${cls} { display: none }`,
         `}`,
       ].join("\n")
     );
@@ -415,7 +421,7 @@ describe("visibility", () => {
     expect(out).toBe(
       [
         `@container (width > 320px) {`,
-        `  .nx-pb-page .${cls}.${cls} { display: none }`,
+        `  ${PAGE_ROOT_SELECTOR} .${cls}.${cls} { display: none }`,
         `}`,
       ].join("\n")
     );
@@ -739,10 +745,12 @@ describe("two documents in one DOM", () => {
       styles: { base: { base: { color: "#000" } } },
     });
     const scoped = css(document, { ...CTX, scope: "nx-doc-a" });
-    expect(scoped).toContain(".nx-pb-page.nx-doc-a {");
-    expect(scoped).toContain(`.nx-pb-page.nx-doc-a .${nodeClassName("n1")}`);
+    expect(scoped).toContain(`${PAGE_ROOT_SELECTOR}.nx-doc-a {`);
+    expect(scoped).toContain(
+      `${PAGE_ROOT_SELECTOR}.nx-doc-a .${nodeClassName("n1")}`
+    );
     // A renderer showing one document at a time passes nothing and is unchanged.
-    expect(css(document)).toContain(".nx-pb-page {");
+    expect(css(document)).toContain(`${PAGE_ROOT_SELECTOR} {`);
   });
 
   it("ignores a scope that is not a class name", () => {
@@ -753,7 +761,7 @@ describe("two documents in one DOM", () => {
       scope: "a, .other { color: red } .x",
     });
     expect(out).not.toContain("color: red");
-    expect(out).toContain(".nx-pb-page .");
+    expect(out).toContain(`${PAGE_ROOT_SELECTOR} .`);
   });
 });
 
@@ -1043,7 +1051,9 @@ describe("the compile scope", () => {
       );
       expect(out.warnings).toEqual([]);
       // Present, and never as a bare selector that would match something else.
-      expect(out.css).not.toContain(`.nx-pb-page .${nodeClassName("n1")} {`);
+      expect(out.css).not.toContain(
+        `${PAGE_ROOT_SELECTOR} .${nodeClassName("n1")} {`
+      );
       expect(out.css).toContain("color: #fff");
     }
   });
@@ -1053,7 +1063,7 @@ describe("the compile scope", () => {
       doc([node("n1", { base: { base: { color: "#fff" } } })]),
       { ...CTX, scope: "7f3a" }
     );
-    expect(out.css).toContain(".nx-pb-page.\\37 f3a");
+    expect(out.css).toContain(`${PAGE_ROOT_SELECTOR}.\\37 f3a`);
   });
 
   it("says so when a scope cannot be one class", () => {
@@ -1065,7 +1075,7 @@ describe("the compile scope", () => {
       { ...CTX, scope: "two words" }
     );
     expect(out.warnings.map(issue => issue.code)).toEqual(["invalid-scope"]);
-    expect(out.css).toContain(".nx-pb-page .");
+    expect(out.css).toContain(`${PAGE_ROOT_SELECTOR} .`);
   });
 });
 

@@ -174,6 +174,7 @@ export {
   BLOCK_TYPE_CLASS_PREFIX,
   NODE_CLASS_PREFIX,
   PAGE_ROOT_CLASS,
+  PAGE_ROOT_SELECTOR,
 } from "./style/node-class";
 export {
   compileStyleValues,
