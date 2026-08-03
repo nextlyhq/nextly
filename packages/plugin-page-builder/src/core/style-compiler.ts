@@ -164,6 +164,12 @@ export function isAllowedRemoteUrl(
   } catch {
     return false;
   }
+  // A pattern that names no protocol means "either of the two this type
+  // allows", not "any scheme at all". Skipping the check when `protocol` was
+  // omitted admitted `ftp:`, `file:` and `ws:` against a host-only pattern —
+  // schemes `RemotePattern` cannot even express, arriving through the one path
+  // that does not look.
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
   return patterns.some(pattern => {
     if (
       pattern.protocol !== undefined &&

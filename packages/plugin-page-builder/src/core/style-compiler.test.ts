@@ -375,6 +375,23 @@ describe("isAllowedRemoteUrl", () => {
     ).toBe(true);
   });
 
+  it("admits only http and https, even when the pattern names neither", () => {
+    // `RemotePattern.protocol` can only say http or https, so omitting it means
+    // "either of those" rather than "any scheme". Skipping the check when it
+    // was omitted let a host-only pattern admit schemes the type cannot even
+    // express.
+    const hostOnly = [{ hostname: "example.com" }];
+    for (const url of [
+      "ftp://example.com/x",
+      "file://example.com/x",
+      "ws://example.com/x",
+    ]) {
+      expect(isAllowedRemoteUrl(url, hostOnly)).toBe(false);
+    }
+    expect(isAllowedRemoteUrl("https://example.com/x", hostOnly)).toBe(true);
+    expect(isAllowedRemoteUrl("http://example.com/x", hostOnly)).toBe(true);
+  });
+
   it("allows nothing when nothing is declared", () => {
     expect(isAllowedRemoteUrl("https://cdn.example.com/a.png", [])).toBe(false);
   });
