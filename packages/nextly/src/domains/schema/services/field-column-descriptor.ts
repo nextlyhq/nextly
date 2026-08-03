@@ -97,6 +97,7 @@ export const DEFAULT_DECIMAL_SCALE = 2;
 export type ColumnKind =
   | "text" // PG: text, MySQL: varchar(255), SQLite: text
   | "longText" // PG: text, MySQL: text, SQLite: text — for textarea/richtext
+  | "shortText" // PG/MySQL: varchar(N), SQLite: text — a text field explicitly declared short
   | "varchar" // varchar(N) explicitly (uses `length`)
   | "boolean" // PG: bool, MySQL: tinyint(1), SQLite: integer(boolean mode)
   | "integer" // PG: int4, MySQL: int, SQLite: integer
@@ -215,12 +216,13 @@ export function getColumnDescriptor(
         }
       : undefined;
 
+  const length = lengthForField(kind, field);
+
   const dialectType = renderDialectType(kind, dialect, {
-    length: undefined,
+    length,
     precision: decimal?.precision,
     scale: decimal?.scale,
   });
-  const length = lengthForKind(kind);
 
   return {
     name,
@@ -230,6 +232,52 @@ export function getColumnDescriptor(
     nullable,
     kind,
   };
+}
+
+/**
+ * Which string kind a text-storing field asks for, from what it says about its own width.
+ *
+ * Only a field that reaches a string column may state a width: an email, a password and a select
+ * value are bounded by what they hold, while free text is bounded by nothing. Silence keeps the
+ * answer this path has always given, so the signal only ever adds information — a caller that KNOWS
+ * a field is unbounded can say so instead of discovering the ceiling when a paste is rejected, and
+ * on MySQL the two render 255 characters apart.
+ *
+ * One function rather than a branch per caller: a plugin-contributed type declaring `storage: "text"`
+ * lands in the same column as a built-in text field and is rendered by the same branch, so it has to
+ * answer this question the same way. Asking it in only one of the two places left a contributed
+ * field the caller had declared unbounded sitting in a bounded column.
+ */
+function textKindForDeclaredWidth(field: FieldDefinition): ColumnKind {
+  const options = field.options;
+  if (options?.variant === "long") return "longText";
+  // Declared short, so bounded on every dialect that has a bounded string. Its own kind rather
+  // than the existing `varchar` one, which renders PostgreSQL `text` and is what the system
+  // `status` column uses — widening that to a real varchar would make every existing status
+  // column read as a type change.
+  if (options?.variant === "short") return "shortText";
+  // `options` is the choice list on a select, and the payload schema permits that shape on any
+  // field. A text field carrying one states no width, and every generator reads it the same
+  // way — as unbounded — so reading it as bounded here would report an untouched column as a
+  // narrowing on every diff.
+  if (Array.isArray(options)) return "longText";
+  return "text";
+}
+
+/**
+ * Whether a kind stores a string, so a caller holding a string has somewhere valid to put it.
+ *
+ * Asked here rather than restated as a list of kind names by each caller: the kinds that store text
+ * are a property of the kind set, so a set that grows has one place to say whether the new member
+ * belongs. A caller carrying its own copy silently answered "no" for a kind added after it.
+ */
+export function isTextStorageKind(kind: ColumnKind): boolean {
+  return (
+    kind === "text" ||
+    kind === "longText" ||
+    kind === "shortText" ||
+    kind === "varchar"
+  );
 }
 
 /**
@@ -244,6 +292,8 @@ function classifyFieldKind(field: FieldDefinition): ColumnKind {
 
   switch (field.type) {
     case "text":
+      return textKindForDeclaredWidth(field);
+
     case "email":
     case "password":
     case "select":
@@ -296,8 +346,19 @@ function classifyFieldKind(field: FieldDefinition): ColumnKind {
       // Plugin-contributed custom field type maps to its declared storage
       // primitive; otherwise fall back to text (legacy default — no change).
       const custom = getFieldType(field.type);
-      if (custom) return STORAGE_TO_COLUMN_KIND[custom.storage] ?? "text";
-      return "text";
+      if (custom) {
+        const kind = STORAGE_TO_COLUMN_KIND[custom.storage] ?? "text";
+        // A contributed type that stores text answers the same width question a built-in text
+        // field does, and its column is rendered by the same branch, so it is asked in the same
+        // way. Answering it here with a narrower rule left a contributed field bounded while the
+        // creators made it unbounded, which reports an untouched column as a narrowing.
+        return kind === "text" ? textKindForDeclaredWidth(field) : kind;
+      }
+      // An unregistered type: the field schema accepts any slug-shaped token, so a stored field can
+      // name a type whose plugin is not loaded. It lands in a text column like the rest of this
+      // branch, so it answers the width question the same way rather than being forced to the
+      // bounded default.
+      return textKindForDeclaredWidth(field);
     }
   }
 }
@@ -342,6 +403,12 @@ function renderDialectType(
     if (dialect === "mysql") return "text";
     return "text"; // sqlite
   }
+  if (kind === "shortText") {
+    // SQLite has one string type, so a short field is `text` there and the bound lives in
+    // validation alone — which is what the generators emit for it too.
+    if (dialect === "sqlite") return "text";
+    return `varchar(${length ?? 255})`;
+  }
   if (kind === "varchar") {
     if (dialect === "postgresql") return "text";
     if (dialect === "mysql") return `varchar(${length ?? 255})`;
@@ -385,11 +452,43 @@ function renderDialectType(
  * Returns the length for kinds that carry one. Used by both the
  * dialect-token rendering and the runtime Drizzle builder.
  */
-function lengthForKind(kind: ColumnKind): number | undefined {
+function lengthForField(
+  kind: ColumnKind,
+  field: FieldDefinition
+): number | undefined {
+  // The one kind a field asks for by declaring a width, so it is the one kind built at the width
+  // asked for. The others are sized by what they hold, not by the field.
+  //
+  // What this width does NOT do is survive a later edit: `normalize-type.ts` strips the modifier
+  // before the diff compares, so widening an existing column from 120 to 500 is invisible to
+  // convergence and no resize is emitted. Creating at the declared width is still strictly better
+  // than creating at 255 — a field declaring 500 characters otherwise gets a column that rejects
+  // what its own stored validation accepts — but resizing needs the diff to compare widths first.
+  if (kind === "shortText") return declaredMaxLength(field) ?? 255;
   if (kind === "text") return 255;
   if (kind === "varchar") return 255;
   if (kind === "fkSingle") return 36;
   return undefined;
+}
+
+/**
+ * The width a field declares, or nothing when it declares none.
+ *
+ * Read from `validation.maxLength` and from nowhere else, because that is the only key the creators
+ * size a bounded string from. A top-level `length` is deliberately NOT consulted: a field declaring
+ * `{ variant: "short", length: 500 }` gets `varchar(255)` from the creator, so honouring the 500
+ * here gave the same declaration one capacity when created directly and another through the
+ * pipeline, with the width normalisation then hiding the difference from any later diff.
+ *
+ * Rejects anything that is not a whole positive count. These reach DDL as `VARCHAR(n)`, so a
+ * fraction, a zero or a negative would be rendered into the statement as written and the create
+ * would fail on a value the field system had already accepted.
+ */
+function declaredMaxLength(field: FieldDefinition): number | undefined {
+  const declared = field.validation?.maxLength;
+  if (typeof declared !== "number") return undefined;
+  if (!Number.isInteger(declared) || declared <= 0) return undefined;
+  return declared;
 }
 
 // ============================================================================

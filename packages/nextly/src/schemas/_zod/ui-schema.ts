@@ -52,6 +52,19 @@ export const UI_FIELD_TYPES = [
 
 const BUILT_IN_UI_FIELD_TYPES = new Set<string>(UI_FIELD_TYPES);
 
+/**
+ * Whether a field type is one this schema names, rather than a token a plugin contributed or a
+ * token nothing has registered at all.
+ *
+ * The field schema accepts any slug-shaped token, so "not one of ours" is a state a stored field can
+ * genuinely be in, and the layers that decide storage have to tell it apart from a built-in. Asked
+ * here because this is where the list of built-ins is declared; a caller keeping its own copy would
+ * answer wrongly the first time the list grew.
+ */
+export function isBuiltInFieldType(type: string): boolean {
+  return BUILT_IN_UI_FIELD_TYPES.has(type);
+}
+
 /** Field names the framework reserves (system columns). */
 // Universal system columns present on every entity table (collection, single,
 // component). The collection-only owner column (`created_by`/`createdBy`) is

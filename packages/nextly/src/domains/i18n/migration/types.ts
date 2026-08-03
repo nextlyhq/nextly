@@ -1,6 +1,31 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 /**
+ * Every storage kind a localized column may declare.
+ *
+ * Stated once, as a value, because both a type and a runtime check need it: the generator writes
+ * one of these into a migration file's header and the parser that reads that file back has to
+ * accept exactly the same set. Kept as two independent lists, the parser rejected a kind the
+ * generator had just written and aborted the run — so the list is the value, and the type is
+ * derived from it.
+ */
+export const LOCALIZED_COLUMN_KINDS = [
+  "text",
+  "longText",
+  "shortText",
+  "boolean",
+  "integer",
+  "double",
+  "decimal",
+  "timestamp",
+  "json",
+  "fkSingle",
+] as const;
+
+/** Logical storage kind — drives the per-dialect DDL type. */
+export type LocalizedColumnKind = (typeof LOCALIZED_COLUMN_KINDS)[number];
+
+/**
  * A single localized column, described independently of the field system.
  * M3 will derive these from field descriptors; M1 accepts them directly so the
  * migration generator is self-contained and testable.
@@ -8,17 +33,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 export interface LocalizedColumnSpec {
   /** snake_case column name; identical on the main and companion tables. */
   name: string;
-  /** logical storage kind — drives the per-dialect DDL type. */
-  kind:
-    | "text"
-    | "longText"
-    | "boolean"
-    | "integer"
-    | "double"
-    | "decimal"
-    | "timestamp"
-    | "json"
-    | "fkSingle";
+  kind: LocalizedColumnKind;
   /** optional length for text/varchar-like columns. */
   length?: number;
   /** precision/scale for the `decimal` kind (DECIMAL/NUMERIC); ignored otherwise. */

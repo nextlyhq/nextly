@@ -24,6 +24,9 @@ export function ddlType(
       return dialect === "mysql" ? `VARCHAR(${len})` : "TEXT";
     case "longText":
       return dialect === "mysql" ? "LONGTEXT" : "TEXT";
+    case "shortText":
+      // Bounded on both dialects that have a bounded string; SQLite has only one.
+      return dialect === "sqlite" ? "TEXT" : `VARCHAR(${len})`;
     case "boolean":
       return dialect === "postgresql"
         ? "BOOLEAN"
