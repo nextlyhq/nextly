@@ -85,17 +85,27 @@ is enough to beat ordinary CSS and cheap to beat deliberately.
 
 ### The exact weights
 
-Not every builder rule weighs the same, so here is the whole set. Read the
-"classes" column as the number you need to beat.
+Not every builder rule weighs the same. Specificity is written the way devtools
+shows it: (ids, classes, types), where a pseudo-class such as `:hover` counts in
+the middle column.
 
-| What it styles                | Selector                                        | Classes |
-| ----------------------------- | ----------------------------------------------- | ------- |
-| Page-wide settings            | `.nx-pb-page.nx-pb-page`                        | 2       |
-| A block type's defaults       | `.nx-pb-page.nx-pb-page .nx-bt-core--section`   | 3       |
-| One node's own styles         | `.nx-pb-page.nx-pb-page .nx-pb-a1b2`            | 3       |
-| Hiding a node at a breakpoint | `.nx-pb-page.nx-pb-page .nx-pb-a1b2.nx-pb-a1b2` | 4       |
+| What it styles                | Selector                                        | Specificity |
+| ----------------------------- | ----------------------------------------------- | ----------- |
+| Page-wide settings            | `.nx-pb-page.nx-pb-page`                        | 0-2-0       |
+| Links inside the page         | `.nx-pb-page.nx-pb-page a`                      | 0-2-1       |
+| A block type's defaults       | `.nx-pb-page.nx-pb-page .nx-bt-core--section`   | 0-3-0       |
+| One node's own styles         | `.nx-pb-page.nx-pb-page .nx-pb-a1b2`            | 0-3-0       |
+| Links inside a node           | `.nx-pb-page.nx-pb-page .nx-pb-a1b2 a`          | 0-3-1       |
+| Hovered links inside a node   | `.nx-pb-page.nx-pb-page .nx-pb-a1b2 a:hover`    | 0-4-1       |
+| Hiding a node at a breakpoint | `.nx-pb-page.nx-pb-page .nx-pb-a1b2.nx-pb-a1b2` | 0-4-0       |
 
-Two of these are deliberate rather than accidental.
+The rule behind the table, which matters more than the rows: **a property that
+styles something inside the element adds that thing's own weight.** Link colour
+is the case that exists today, and the last three rows are what it produces.
+Anything similar added later follows the same pattern rather than appearing as
+a new exception, so read the table as worked examples of the rule.
+
+Two of the rows are deliberate rather than incidental.
 
 **Page settings weigh less** because they are the outermost element's own
 styles, and everything inside should be able to say otherwise — a block that
@@ -111,8 +121,10 @@ which contributes zero, so `:hover` styles weigh exactly what the same node's
 base styles weigh and win on source order instead. Rendering a document under a
 scope adds one class to every row above.
 
-If you are ever unsure, count the classes in the winning selector in devtools
-and write one more.
+If you are ever unsure, read the winning rule's specificity in devtools and
+write something that beats it, rather than working from this table. The table
+says what the builder emits; devtools says what actually won, which is the
+question you are asking.
 
 ---
 

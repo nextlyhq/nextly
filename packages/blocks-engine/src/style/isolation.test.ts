@@ -128,6 +128,47 @@ describe("what counts as anchored", () => {
     }
   });
 
+  it("accepts a rule an enclosing scope already confines", () => {
+    // `@scope (.nx-pb-page)` restricts everything inside it to the root's
+    // subtree, so the nested selector is anchored by the at-rule rather than by
+    // itself. Judging it alone reports a leak against output that has none.
+    expect(
+      findUnscopedRules(`@scope (.${SCOPE}) { .child { color: red } }`, SCOPE)
+    ).toEqual([]);
+    // A limit does not change what the root confines.
+    expect(
+      findUnscopedRules(
+        `@scope (.${SCOPE}) to (.limit) { .child { color: red } }`,
+        SCOPE
+      )
+    ).toEqual([]);
+    // Still true through a conditional wrapper, which groups without rescoping.
+    expect(
+      findUnscopedRules(
+        `@scope (.${SCOPE}) { @media (max-width: 1px) { .child { color: red } } }`,
+        SCOPE
+      )
+    ).toEqual([]);
+  });
+
+  it("does not take an unanchored scope for an anchor", () => {
+    // A scope rooted somewhere else confines its contents to somewhere else.
+    expect(
+      findUnscopedRules(`@scope (.other) { .child { color: red } }`, SCOPE)
+    ).toHaveLength(1);
+    // Every root in a list has to anchor: the second here confines nothing.
+    expect(
+      findUnscopedRules(
+        `@scope (.${SCOPE}, body) { .child { color: red } }`,
+        SCOPE
+      )
+    ).toHaveLength(1);
+    // `to (…)` alone sets an upper bound and establishes no root of its own.
+    expect(
+      findUnscopedRules(`@scope to (.limit) { .child { color: red } }`, SCOPE)
+    ).toHaveLength(1);
+  });
+
   it("does not call a valid at-rule prelude a leak", () => {
     // css-tree validates at-rule preludes against a grammar it ships, and that
     // grammar rejects every `@container` query. Reporting those as findings

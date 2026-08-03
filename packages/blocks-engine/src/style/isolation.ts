@@ -36,7 +36,7 @@
  *
  * @module style/isolation
  */
-import type { Atrule, CssNode, Rule, Selector } from "css-tree";
+import type { Atrule, CssNode, Selector } from "css-tree";
 import parse from "css-tree/parser";
 import walk from "css-tree/walker";
 
@@ -125,6 +125,58 @@ const AT_RULES: Record<string, AtRuleFacts> = {
  * AST's top level rather than the selector text handles that for free, because
  * a pseudo-class keeps its arguments in its own children.
  */
+/**
+ * Whether an `@scope` prelude confines everything inside it to the page root.
+ *
+ * `@scope (.nx-pb-page) { .child { … } }` restricts `.child` to the root's
+ * subtree, so the nested selector is anchored by the at-rule rather than by
+ * itself. Judging it alone reports a leak against output that has none, and a
+ * check that rejects correct stylesheets is the expensive kind of wrong: it
+ * teaches people to stop reading it.
+ *
+ * Only a prelude that opens with a root counts. `@scope to (.limit)` sets an
+ * upper bound within an outer scope and establishes no root of its own, so it
+ * confines nothing on its own account.
+ */
+function scopeRootIsAnchored(prelude: string, scopeClass: string): boolean {
+  const text = prelude.trim();
+  if (!text.startsWith("(")) return false;
+  // Scanned rather than matched to the first `)`, because a root may contain
+  // parentheses of its own: `:is(.a, .b)` is a legal scope root.
+  let depth = 0;
+  let close = -1;
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === "(") depth++;
+    else if (text[i] === ")") {
+      depth--;
+      if (depth === 0) {
+        close = i;
+        break;
+      }
+    }
+  }
+  if (close === -1) return false;
+  const root = text.slice(1, close);
+  let ast: CssNode;
+  try {
+    ast = parse(root, { context: "selectorList" });
+  } catch {
+    return false;
+  }
+  const roots: Selector[] = [];
+  walk(ast, {
+    visit: "Selector",
+    enter(node: Selector) {
+      roots.push(node);
+    },
+  });
+  // EVERY root has to be anchored, and there has to be one. A scope rooted at
+  // `.nx-pb-page, body` confines its contents to either, and the second confines
+  // nothing.
+  if (roots.length === 0) return false;
+  return roots.every(node => selectorIsAnchored(node, scopeClass));
+}
+
 function selectorIsAnchored(selector: Selector, scopeClass: string): boolean {
   const parts = selector.children.toArray();
   const index = parts.findIndex(
@@ -530,15 +582,37 @@ export function findUnscopedRules(
   }
   if (parsed.ast === undefined) return offenders;
 
+  // The at-rules a rule sits inside, outermost first. Tracked rather than read
+  // from the walk context, which names only the nearest: an `@scope` that
+  // anchors its contents can be separated from them by a `@media`.
+  const enclosing: Atrule[] = [];
   walk(parsed.ast, {
-    visit: "Rule",
-    enter(node: Rule) {
+    leave(node: CssNode) {
+      if (node.type === "Atrule") enclosing.pop();
+    },
+    enter(node: CssNode) {
+      if (node.type === "Atrule") {
+        enclosing.push(node);
+        return;
+      }
+      if (node.type !== "Rule") return;
       // A rule inside `@keyframes` has percentage "selectors" that match no
       // element; anchoring does not apply to it.
-      const inNonSelectorAtRule = this.atrule
-        ? AT_RULES[this.atrule.name.toLowerCase()]?.selectorless === true
-        : false;
+      const nearest = enclosing[enclosing.length - 1];
+      const inNonSelectorAtRule =
+        nearest === undefined
+          ? false
+          : AT_RULES[nearest.name.toLowerCase()]?.selectorless === true;
       if (inNonSelectorAtRule) return;
+      // An enclosing `@scope` rooted at the page root already confines
+      // everything inside it, so its selectors need not repeat the anchor.
+      const scoped = enclosing.some(
+        atrule =>
+          atrule.name.toLowerCase() === "scope" &&
+          atrule.prelude !== null &&
+          scopeRootIsAnchored(sourceTextOf(css, atrule.prelude), scopeClass)
+      );
+      if (scoped) return;
       if (node.prelude.type !== "SelectorList") {
         // A prelude css-tree could not read is a prelude this check cannot
         // vouch for, and a browser may well match elements with it.
