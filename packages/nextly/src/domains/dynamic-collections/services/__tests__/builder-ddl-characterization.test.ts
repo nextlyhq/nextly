@@ -56,14 +56,34 @@ const FIELDS: FieldDefinition[] = [
   { name: "publishedAt", type: "date" },
   { name: "payload", type: "json" },
   { name: "lookupCode", type: "text", index: true },
+  // A relationship renders differently from every primitive above: its own column type, its own
+  // index, and on this generator a foreign key with delete and update actions. It reads the target
+  // from `options.target`, where the field-group generator reads `relationTo`.
+  {
+    name: "author",
+    type: "relationship",
+    options: { target: "dc_authors", onDelete: "cascade", onUpdate: "cascade" },
+  },
+  {
+    name: "editors",
+    type: "relationship",
+    relationTo: "dc_authors",
+    hasMany: true,
+  },
 ];
 
 /** The same shapes, with the width stated the way the field-group generator reads it. */
-const FIELD_GROUP_FIELDS = FIELDS.map(field =>
-  field.name === "shortCode"
-    ? { name: "shortCode", type: "text", maxLength: 120 }
-    : field
-);
+const FIELD_GROUP_FIELDS = FIELDS.map(field => {
+  if (field.name === "shortCode") {
+    return { name: "shortCode", type: "text", maxLength: 120 };
+  }
+  // This generator reads a relationship's target from `relationTo`, and renders a single-target
+  // relationship differently from a hasMany one.
+  if (field.name === "author") {
+    return { name: "author", type: "relationship", relationTo: "dc_authors" };
+  }
+  return field;
+});
 
 /**
  * The table name carries the case, not just the option: `generateMigrationSQL` treats any

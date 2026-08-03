@@ -17,8 +17,15 @@ CREATE TABLE IF NOT EXISTS \`dc_pinned\` (
 \`published\` boolean,
 \`published_at\` timestamp,
 \`payload\` json,
-\`lookup_code\` text
+\`lookup_code\` text,
+\`author\` varchar(36),
+\`editors\` varchar(36),
+  CONSTRAINT \`fk_dc_pinned_author\` FOREIGN KEY (\`author\`) REFERENCES \`dc_dc_authors\`(\`id\`) ON DELETE CASCADE ON UPDATE CASCADE
 );
+--> statement-breakpoint
+CREATE INDEX \`idx_dc_pinned_author\` ON \`dc_pinned\`(\`author\`);
+--> statement-breakpoint
+CREATE INDEX \`idx_dc_pinned_editors\` ON \`dc_pinned\`(\`editors\`);
 --> statement-breakpoint
 CREATE INDEX \`idx_dc_pinned_lookup_code\` ON \`dc_pinned\`(\`lookup_code\`);
 --> statement-breakpoint
@@ -40,8 +47,15 @@ CREATE TABLE IF NOT EXISTS \`single_pinned\` (
 \`rating\` decimal(10,2),
 \`published\` boolean,
 \`published_at\` timestamp,
-\`payload\` json
+\`payload\` json,
+\`author\` varchar(36),
+\`editors\` varchar(36),
+  CONSTRAINT \`fk_single_pinned_author\` FOREIGN KEY (\`author\`) REFERENCES \`dc_dc_authors\`(\`id\`) ON DELETE CASCADE ON UPDATE CASCADE
 );
+--> statement-breakpoint
+CREATE INDEX \`idx_single_pinned_author\` ON \`single_pinned\`(\`author\`);
+--> statement-breakpoint
+CREATE INDEX \`idx_single_pinned_editors\` ON \`single_pinned\`(\`editors\`);
 --> statement-breakpoint
 CREATE INDEX \`idx_single_pinned_created_at\` ON \`single_pinned\`(\`created_at\` DESC);
 --> statement-breakpoint
@@ -64,8 +78,15 @@ CREATE TABLE IF NOT EXISTS \`single_pinned\` (
 \`published\` boolean,
 \`published_at\` timestamp,
 \`payload\` json,
-\`lookup_code\` text
+\`lookup_code\` text,
+\`author\` varchar(36),
+\`editors\` varchar(36),
+  CONSTRAINT \`fk_single_pinned_author\` FOREIGN KEY (\`author\`) REFERENCES \`dc_dc_authors\`(\`id\`) ON DELETE CASCADE ON UPDATE CASCADE
 );
+--> statement-breakpoint
+CREATE INDEX \`idx_single_pinned_author\` ON \`single_pinned\`(\`author\`);
+--> statement-breakpoint
+CREATE INDEX \`idx_single_pinned_editors\` ON \`single_pinned\`(\`editors\`);
 --> statement-breakpoint
 CREATE INDEX \`idx_single_pinned_lookup_code\` ON \`single_pinned\`(\`lookup_code\`);
 --> statement-breakpoint
@@ -92,8 +113,15 @@ CREATE TABLE IF NOT EXISTS \`single_pinned\` (
 \`published\` boolean,
 \`published_at\` timestamp,
 \`payload\` json,
-\`lookup_code\` text
+\`lookup_code\` text,
+\`author\` varchar(36),
+\`editors\` varchar(36),
+  CONSTRAINT \`fk_single_pinned_author\` FOREIGN KEY (\`author\`) REFERENCES \`dc_dc_authors\`(\`id\`) ON DELETE CASCADE ON UPDATE CASCADE
 );
+--> statement-breakpoint
+CREATE INDEX \`idx_single_pinned_author\` ON \`single_pinned\`(\`author\`);
+--> statement-breakpoint
+CREATE INDEX \`idx_single_pinned_editors\` ON \`single_pinned\`(\`editors\`);
 --> statement-breakpoint
 CREATE INDEX \`idx_single_pinned_lookup_code\` ON \`single_pinned\`(\`lookup_code\`);
 --> statement-breakpoint
@@ -119,8 +147,15 @@ CREATE TABLE IF NOT EXISTS "dc_pinned" (
 "published" boolean,
 "published_at" timestamp,
 "payload" jsonb,
-"lookup_code" text
+"lookup_code" text,
+"author" text,
+"editors" text,
+  CONSTRAINT "fk_dc_pinned_author" FOREIGN KEY ("author") REFERENCES "dc_dc_authors"("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_dc_pinned_author" ON "dc_pinned"("author");
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_dc_pinned_editors" ON "dc_pinned"("editors");
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_dc_pinned_lookup_code" ON "dc_pinned"("lookup_code");
 --> statement-breakpoint
@@ -142,8 +177,15 @@ CREATE TABLE IF NOT EXISTS "single_pinned" (
 "rating" decimal(10,2),
 "published" boolean,
 "published_at" timestamp,
-"payload" jsonb
+"payload" jsonb,
+"author" text,
+"editors" text,
+  CONSTRAINT "fk_single_pinned_author" FOREIGN KEY ("author") REFERENCES "dc_dc_authors"("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_single_pinned_author" ON "single_pinned"("author");
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_single_pinned_editors" ON "single_pinned"("editors");
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_single_pinned_created_at" ON "single_pinned"("created_at" DESC);
 --> statement-breakpoint
@@ -166,8 +208,15 @@ CREATE TABLE IF NOT EXISTS "single_pinned" (
 "published" boolean,
 "published_at" timestamp,
 "payload" jsonb,
-"lookup_code" text
+"lookup_code" text,
+"author" text,
+"editors" text,
+  CONSTRAINT "fk_single_pinned_author" FOREIGN KEY ("author") REFERENCES "dc_dc_authors"("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_single_pinned_author" ON "single_pinned"("author");
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_single_pinned_editors" ON "single_pinned"("editors");
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_single_pinned_lookup_code" ON "single_pinned"("lookup_code");
 --> statement-breakpoint
@@ -194,8 +243,15 @@ CREATE TABLE IF NOT EXISTS "single_pinned" (
 "published" boolean,
 "published_at" timestamp,
 "payload" jsonb,
-"lookup_code" text
+"lookup_code" text,
+"author" text,
+"editors" text,
+  CONSTRAINT "fk_single_pinned_author" FOREIGN KEY ("author") REFERENCES "dc_dc_authors"("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_single_pinned_author" ON "single_pinned"("author");
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_single_pinned_editors" ON "single_pinned"("editors");
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_single_pinned_lookup_code" ON "single_pinned"("lookup_code");
 --> statement-breakpoint
@@ -221,8 +277,15 @@ CREATE TABLE IF NOT EXISTS "dc_pinned" (
 "published" integer,
 "published_at" integer,
 "payload" text,
-"lookup_code" text
+"lookup_code" text,
+"author" text,
+"editors" text,
+  CONSTRAINT "fk_dc_pinned_author" FOREIGN KEY ("author") REFERENCES "dc_dc_authors"("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_dc_pinned_author" ON "dc_pinned"("author");
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_dc_pinned_editors" ON "dc_pinned"("editors");
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_dc_pinned_lookup_code" ON "dc_pinned"("lookup_code");
 --> statement-breakpoint
@@ -244,8 +307,15 @@ CREATE TABLE IF NOT EXISTS "single_pinned" (
 "rating" real,
 "published" integer,
 "published_at" integer,
-"payload" text
+"payload" text,
+"author" text,
+"editors" text,
+  CONSTRAINT "fk_single_pinned_author" FOREIGN KEY ("author") REFERENCES "dc_dc_authors"("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_single_pinned_author" ON "single_pinned"("author");
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_single_pinned_editors" ON "single_pinned"("editors");
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_single_pinned_created_at" ON "single_pinned"("created_at");
 --> statement-breakpoint
@@ -268,8 +338,15 @@ CREATE TABLE IF NOT EXISTS "single_pinned" (
 "published" integer,
 "published_at" integer,
 "payload" text,
-"lookup_code" text
+"lookup_code" text,
+"author" text,
+"editors" text,
+  CONSTRAINT "fk_single_pinned_author" FOREIGN KEY ("author") REFERENCES "dc_dc_authors"("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_single_pinned_author" ON "single_pinned"("author");
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_single_pinned_editors" ON "single_pinned"("editors");
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_single_pinned_lookup_code" ON "single_pinned"("lookup_code");
 --> statement-breakpoint
@@ -296,8 +373,15 @@ CREATE TABLE IF NOT EXISTS "single_pinned" (
 "published" integer,
 "published_at" integer,
 "payload" text,
-"lookup_code" text
+"lookup_code" text,
+"author" text,
+"editors" text,
+  CONSTRAINT "fk_single_pinned_author" FOREIGN KEY ("author") REFERENCES "dc_dc_authors"("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_single_pinned_author" ON "single_pinned"("author");
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_single_pinned_editors" ON "single_pinned"("editors");
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_single_pinned_lookup_code" ON "single_pinned"("lookup_code");
 --> statement-breakpoint
@@ -325,11 +409,15 @@ CREATE TABLE IF NOT EXISTS \`comp_pinned\` (
   \`published_at\` DATETIME,
   \`payload\` JSON,
   \`lookup_code\` TEXT,
+  \`author\` VARCHAR(36),
+  \`editors\` JSON,
   \`created_at\` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   \`updated_at\` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 --> statement-breakpoint
 CREATE INDEX \`idx_comp_pinned_parent\` ON \`comp_pinned\`(\`_parent_id\`, \`_parent_table\`, \`_parent_field\`);
+--> statement-breakpoint
+CREATE INDEX \`idx_comp_pinned_author\` ON \`comp_pinned\`(\`author\`);
 --> statement-breakpoint
 CREATE INDEX \`idx_comp_pinned_lookup_code\` ON \`comp_pinned\`(\`lookup_code\`);
 --> statement-breakpoint
@@ -350,11 +438,15 @@ CREATE TABLE IF NOT EXISTS \`comp_pinned\` (
   \`published\` BOOLEAN,
   \`published_at\` DATETIME,
   \`payload\` JSON,
+  \`author\` VARCHAR(36),
+  \`editors\` JSON,
   \`created_at\` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   \`updated_at\` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 --> statement-breakpoint
-CREATE INDEX \`idx_comp_pinned_parent\` ON \`comp_pinned\`(\`_parent_id\`, \`_parent_table\`, \`_parent_field\`);"
+CREATE INDEX \`idx_comp_pinned_parent\` ON \`comp_pinned\`(\`_parent_id\`, \`_parent_table\`, \`_parent_field\`);
+--> statement-breakpoint
+CREATE INDEX \`idx_comp_pinned_author\` ON \`comp_pinned\`(\`author\`);"
 `;
 
 exports[`field group DDL — pinned as it is today > postgresql > emits the same CREATE for a field group 1`] = `
@@ -376,11 +468,15 @@ CREATE TABLE IF NOT EXISTS "comp_pinned" (
   "published_at" TIMESTAMP,
   "payload" JSONB,
   "lookup_code" TEXT,
+  "author" UUID,
+  "editors" JSONB,
   "created_at" TIMESTAMP NOT NULL DEFAULT NOW(),
   "updated_at" TIMESTAMP NOT NULL DEFAULT NOW()
 );
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_comp_pinned_parent" ON "comp_pinned"("_parent_id", "_parent_table", "_parent_field");
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_comp_pinned_author" ON "comp_pinned"("author");
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_comp_pinned_lookup_code" ON "comp_pinned"("lookup_code");
 --> statement-breakpoint
@@ -401,11 +497,15 @@ CREATE TABLE IF NOT EXISTS "comp_pinned" (
   "published" BOOLEAN,
   "published_at" TIMESTAMP,
   "payload" JSONB,
+  "author" UUID,
+  "editors" JSONB,
   "created_at" TIMESTAMP NOT NULL DEFAULT NOW(),
   "updated_at" TIMESTAMP NOT NULL DEFAULT NOW()
 );
 --> statement-breakpoint
-CREATE INDEX IF NOT EXISTS "idx_comp_pinned_parent" ON "comp_pinned"("_parent_id", "_parent_table", "_parent_field");"
+CREATE INDEX IF NOT EXISTS "idx_comp_pinned_parent" ON "comp_pinned"("_parent_id", "_parent_table", "_parent_field");
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_comp_pinned_author" ON "comp_pinned"("author");"
 `;
 
 exports[`field group DDL — pinned as it is today > sqlite > emits the same CREATE for a field group 1`] = `
@@ -427,11 +527,15 @@ CREATE TABLE IF NOT EXISTS "comp_pinned" (
   "published_at" INTEGER,
   "payload" TEXT,
   "lookup_code" TEXT,
+  "author" TEXT,
+  "editors" TEXT,
   "created_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
   "updated_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
 );
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_comp_pinned_parent" ON "comp_pinned"("_parent_id", "_parent_table", "_parent_field");
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_comp_pinned_author" ON "comp_pinned"("author");
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_comp_pinned_lookup_code" ON "comp_pinned"("lookup_code");
 --> statement-breakpoint
@@ -452,9 +556,13 @@ CREATE TABLE IF NOT EXISTS "comp_pinned" (
   "published" INTEGER,
   "published_at" INTEGER,
   "payload" TEXT,
+  "author" TEXT,
+  "editors" TEXT,
   "created_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
   "updated_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
 );
 --> statement-breakpoint
-CREATE INDEX IF NOT EXISTS "idx_comp_pinned_parent" ON "comp_pinned"("_parent_id", "_parent_table", "_parent_field");"
+CREATE INDEX IF NOT EXISTS "idx_comp_pinned_parent" ON "comp_pinned"("_parent_id", "_parent_table", "_parent_field");
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_comp_pinned_author" ON "comp_pinned"("author");"
 `;
