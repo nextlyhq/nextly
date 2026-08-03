@@ -30,6 +30,7 @@ import {
 } from "../../../shared/lib/plugin-storage";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import {
+  fieldProducesColumn,
   getColumnDescriptor,
   getSystemColumnDescriptors,
   renderSystemColumnSql,
@@ -258,8 +259,11 @@ export class DynamicCollectionSchemaService {
     // of the entity fails. Iterating the list — rather than sourcing each column in place — is
     // what makes that impossible, since a new entry needs no edit here to be created.
     //
-    // A component named "title" produces no column, so it must not suppress the system title
-    // column; the same holds for "slug".
+    // A field that produces no column must not suppress the system title or slug column, or the
+    // table would have neither: a component and a many-to-many relationship both keep their values
+    // in their own tables. Asked through the shared predicate rather than a list of the types this
+    // file remembers, because the runtime schema and the diff ask it that way and all three have to
+    // reach the same answer.
     //
     // Matched on the COLUMN the field becomes rather than on its declared name. An author writing
     // `Title` means the same column, and comparing the raw name would inject the system one beside
@@ -269,7 +273,7 @@ export class DynamicCollectionSchemaService {
         f =>
           typeof f.name === "string" &&
           toSnakeCase(f.name) === column &&
-          f.type !== STORAGE_FORMAT.fieldType
+          fieldProducesColumn(f)
       );
     const hasTitleField = declaresColumn("title");
     const hasSlugField = declaresColumn("slug");

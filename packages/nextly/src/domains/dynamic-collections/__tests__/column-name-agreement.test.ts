@@ -231,6 +231,54 @@ describe("all three descriptions of the main table agree", () => {
     }
   });
 
+  it("agrees when a column-less field is named after a system column", () => {
+    // The gap the name-only cases above leave: a field can carry a system column's name AND
+    // produce no column. A many-to-many relationship or a component named `Title` must not
+    // suppress the injected `title` anywhere, because it puts nothing in its place — and each
+    // generator has to reach that conclusion the same way, through the canonical predicate rather
+    // than a hand-rolled list of the types it happens to remember.
+    const columnLess = [
+      {
+        label: "manyToMany",
+        make: (name: string) => ({
+          name,
+          type: "relationship",
+          relationTo: "tags",
+          options: { relationTo: "tags", relationType: "manyToMany" },
+        }),
+      },
+      {
+        label: "component",
+        make: (name: string) => ({
+          name,
+          type: "component",
+          component: "hero",
+        }),
+      },
+    ];
+
+    for (const dialect of DIALECTS) {
+      for (const { label, make } of columnLess) {
+        for (const name of ["Title", "title", "Slug", "slug"]) {
+          const sets = columnSets(
+            [make(name), { name: "body", type: "text" }],
+            dialect,
+            { hasStatus: false, localized: false }
+          );
+          const at = `${dialect}.${label}.${name}`;
+
+          expect({
+            [`${at}.desired`]: sets.desired,
+            [`${at}.runtime`]: sets.runtime,
+          }).toEqual({
+            [`${at}.desired`]: sets.created,
+            [`${at}.runtime`]: sets.created,
+          });
+        }
+      }
+    }
+  });
+
   it("agrees for every name shape, localized or not", () => {
     for (const dialect of DIALECTS) {
       for (const name of FIELD_NAMES) {
