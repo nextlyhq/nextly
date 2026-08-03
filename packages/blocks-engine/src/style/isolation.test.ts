@@ -896,6 +896,48 @@ describe("names CSS resolves for the whole document", () => {
     ).toHaveLength(1);
   });
 
+  it("folds case for a family and not for an identifier", () => {
+    // A `<custom-ident>` is case-sensitive, so `FADE` and `fade` really are two
+    // animations. A family name is not, which is why `font-family: arial` finds
+    // a font installed as "Arial" — so one shared comparison rejects a family
+    // that CSS resolves as exactly the namespaced one it is.
+    const upper = ns("safe").toUpperCase();
+    expect(
+      findUnnamespacedGlobals(
+        `@font-face { font-family: ${upper}; src: url(a.woff2) }`,
+        SCOPE
+      )
+    ).toEqual([]);
+    // The identifier side must NOT fold, or two real animations become one.
+    expect(
+      findUnnamespacedGlobals(
+        `@keyframes ${ns("fade").toUpperCase()} { from { opacity: 0 } }`,
+        SCOPE
+      )
+    ).toHaveLength(1);
+    // And a family that is genuinely someone else's is still reported.
+    expect(
+      findUnnamespacedGlobals(
+        `@font-face { font-family: Host; src: url(a.woff2) }`,
+        SCOPE
+      )
+    ).toHaveLength(1);
+  });
+
+  it("does not split a name on a comma inside a comment", () => {
+    // A comment is whitespace to CSS, so this names ONE layer. Splitting on the
+    // comma reports the tail as a second, un-namespaced name.
+    expect(
+      findUnnamespacedGlobals(`@layer ${ns("theme")}/* retained, x */;`, SCOPE)
+    ).toEqual([]);
+    // Two real layers still split.
+    expect(
+      findUnnamespacedGlobals(`@layer base, components;`, SCOPE).map(
+        e => e.name
+      )
+    ).toEqual(["base", "components"]);
+  });
+
   it("reports every layer a prelude names", () => {
     // A host layer of the same name is the same layer, so two orderings that
     // were meant to be independent merge into one.

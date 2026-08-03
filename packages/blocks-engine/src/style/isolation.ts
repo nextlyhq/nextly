@@ -78,6 +78,17 @@ interface AtRuleFacts {
   selectorless: boolean;
   /** The document-global names it defines, if it defines any. */
   globalNames?: (css: string, node: Atrule) => string[];
+  /**
+   * Its names are matched without regard to ASCII case.
+   *
+   * True for font families and false for everything else, and the split is not
+   * arbitrary: a `<custom-ident>` — a keyframe, a counter style, a layer — is
+   * case-SENSITIVE, so `Fade` and `fade` are two animations. A family name is
+   * not, which is why `font-family: arial` finds a font installed as "Arial".
+   * One shared comparison therefore rejects `NX…-SAFE` as un-namespaced when
+   * CSS resolves it as exactly the namespaced family it is.
+   */
+  caseInsensitiveNames?: boolean;
 }
 
 const AT_RULES: Record<string, AtRuleFacts> = {
@@ -98,11 +109,16 @@ const AT_RULES: Record<string, AtRuleFacts> = {
   "font-palette-values": { selectorless: true, globalNames: preludeName },
   "position-try": { selectorless: true, globalNames: preludeName },
   "color-profile": { selectorless: true, globalNames: preludeName },
-  "font-face": { selectorless: true, globalNames: fontFaceFamilies },
+  "font-face": {
+    selectorless: true,
+    globalNames: fontFaceFamilies,
+    caseInsensitiveNames: true,
+  },
   page: { selectorless: true, globalNames: pageNames },
   "font-feature-values": {
     selectorless: true,
     globalNames: featureValueFamilies,
+    caseInsensitiveNames: true,
   },
 };
 
@@ -336,8 +352,14 @@ function scopeToken(scopeClass: string): string {
 }
 
 /** Whether a name already carries this document's namespace. */
-function isNamespaced(name: string, scopeClass: string): boolean {
-  const prefix = `${scopeToken(scopeClass)}-`;
+function isNamespaced(
+  name: string,
+  scopeClass: string,
+  foldCase = false
+): boolean {
+  const raw = `${scopeToken(scopeClass)}-`;
+  const prefix = foldCase ? raw.toLowerCase() : raw;
+  if (foldCase) name = name.toLowerCase();
   // Both spellings, because a custom property carries `--` in front of the
   // namespace and the plain form does not.
   return name.startsWith(prefix) || name.startsWith(`--${prefix}`);
@@ -474,6 +496,16 @@ function splitTopLevel(text: string): string[] {
     }
     if (char === '"' || char === "'") {
       quote = char;
+      continue;
+    }
+    // A comment is whitespace to CSS, so a comma inside one separates nothing.
+    // `@layer x/* retained, comment */` names ONE layer, and splitting on that
+    // comma reports the tail as a second, un-namespaced name.
+    if (char === "/" && text[i + 1] === "*") {
+      const end = text.indexOf("*/", i + 2);
+      // An unterminated comment runs to the end, so nothing after it is a name.
+      if (end === -1) break;
+      i = end + 1;
       continue;
     }
     if (char === ",") {
@@ -622,8 +654,9 @@ export function findUnnamespacedGlobals(
       if (atRule === "layer" && ancestors.includes("layer")) return;
       const readNames = facts.globalNames;
       if (readNames === undefined) return;
+      const foldCase = facts.caseInsensitiveNames === true;
       for (const name of readNames(css, node)) {
-        if (isNamespaced(name, scopeClass)) continue;
+        if (isNamespaced(name, scopeClass, foldCase)) continue;
         found.push({
           atRule,
           name,
