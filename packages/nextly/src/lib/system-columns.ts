@@ -196,7 +196,13 @@ export const SYSTEM_COLUMNS: readonly SystemColumnDeclaration[] = [
     writableByClient: false,
     publishedUnderCamelName: false,
     strippedFromResponses: false,
-    reservedIn: ["builder", "fieldGroupConfig", "uiSchema"],
+    reservedIn: [
+      "builder",
+      "collectionConfig",
+      "singleConfig",
+      "fieldGroupConfig",
+      "uiSchema",
+    ],
     shape: {
       postgresql: { kind: "text", nullable: false, primaryKey: true },
       mysql: {
@@ -251,7 +257,13 @@ export const SYSTEM_COLUMNS: readonly SystemColumnDeclaration[] = [
     writableByClient: false,
     publishedUnderCamelName: true,
     strippedFromResponses: false,
-    reservedIn: ["builder", "fieldGroupConfig", "uiSchema"],
+    reservedIn: [
+      "builder",
+      "collectionConfig",
+      "singleConfig",
+      "fieldGroupConfig",
+      "uiSchema",
+    ],
     shape: {
       postgresql: {
         kind: "timestamp",
@@ -270,7 +282,13 @@ export const SYSTEM_COLUMNS: readonly SystemColumnDeclaration[] = [
     writableByClient: false,
     publishedUnderCamelName: true,
     strippedFromResponses: false,
-    reservedIn: ["builder", "fieldGroupConfig", "uiSchema"],
+    reservedIn: [
+      "builder",
+      "collectionConfig",
+      "singleConfig",
+      "fieldGroupConfig",
+      "uiSchema",
+    ],
     shape: {
       postgresql: {
         kind: "timestamp",

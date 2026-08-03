@@ -23,7 +23,8 @@
 
 import { RESERVED_SLUGS } from "../../collections/config/validate-config";
 import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
-import { reservedSystemFieldNames } from "../../lib/system-columns";
+import { toSnakeCase } from "../../domains/schema/services/field-column-descriptor";
+import { isReservedSystemColumn } from "../../lib/system-columns";
 import { SYSTEM_RESOURCES } from "../../schemas/_zod/rbac";
 import {
   type BaseValidationError,
@@ -267,9 +268,6 @@ function validateField(
 // owner column, so unlike a collection only the first-publication marker is
 // reserved here — which is why this check had to be added rather than extended:
 // until the marker reached a Single's table there was nothing to collide with.
-const SINGLE_RESERVED_FIELD_NAMES: ReadonlySet<string> = new Set(
-  reservedSystemFieldNames("singleConfig")
-);
 
 /**
  * Validate an array of field configurations.
@@ -321,10 +319,12 @@ function validateFields(
   fields.forEach((field, index) => {
     if (!field || typeof field !== "object") return;
     const name = (field as Record<string, unknown>).name;
-    if (typeof name === "string" && SINGLE_RESERVED_FIELD_NAMES.has(name)) {
+    if (typeof name !== "string") return;
+    const column = toSnakeCase(name);
+    if (isReservedSystemColumn(column, "singleConfig")) {
       errors.push({
         path: `${path}[${index}].name`,
-        message: `Field name '${name}' is reserved for a system column`,
+        message: `Field name '${name}' is reserved: it becomes the system column '${column}'`,
         code: "FIELD_NAME_RESERVED",
       });
     }
