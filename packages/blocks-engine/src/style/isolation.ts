@@ -1,0 +1,780 @@
+/**
+ * The isolation invariant: nothing this compiler emits may match outside the
+ * page root.
+ *
+ * The compiler builds every selector from the page root outwards, so it cannot
+ * emit an unanchored rule by construction — and that was true on the day a
+ * stored block type reached a selector unescaped and emitted
+ * `.nx-pb-page .nx-bt-evil--x, body { … }`. "By construction" is a property of
+ * the code as written, and the code is rewritten every week. This checks the
+ * OUTPUT, which is the only thing a page actually loads.
+ *
+ * Isolation here is anchoring, not encapsulation, and that is a decision rather
+ * than a limitation. `@layer` cannot be the mechanism: unlayered styles beat
+ * every layer regardless of order, so any host using a CSS-in-JS library would
+ * automatically outrank everything we emit. `@scope` does not stop inheritance —
+ * `color`, `font-size` and `font-weight` cross a scope boundary freely — so it
+ * solves the half that anchoring already solves and not the half that needs
+ * help. Shadow DOM is the only complete isolation and is the wrong goal: this
+ * page belongs to the user, and the contract is "predictable and overridable",
+ * not "sealed".
+ *
+ * The parser and walker are imported by subpath rather than from css-tree's
+ * root, the way the value checks already do it: the root entry loads MDN
+ * reference data that reaches for `node:module`, and this package promises to
+ * run in browsers and edge runtimes. A test enforces it.
+ *
+ * The offending selector is read back out of the source by position rather than
+ * regenerated from the AST. It costs nothing, keeps the generator off the
+ * import graph, and reports what the stylesheet actually SAYS — which is what
+ * someone reading the finding needs to go and look at.
+ *
+ * Both checks below return findings rather than throwing, and an empty result
+ * means the sheet is clean on that axis — never that it could not be read. CSS
+ * parses tolerantly, so "could not be read" is a real outcome and is reported
+ * as a finding of its own; see {@link parseStylesheet}.
+ *
+ * @module style/isolation
+ */
+import type { Atrule, CssNode, Selector } from "css-tree";
+import parse from "css-tree/parser";
+import walk from "css-tree/walker";
+
+import { hashId } from "./node-class";
+
+/** One rule whose selector can match outside the page root. */
+export interface UnscopedRule {
+  /** The offending selector, as it would be written into the stylesheet. */
+  selector: string;
+  /** Why it escapes, in a sentence a person can act on. */
+  reason: string;
+}
+
+/**
+ * What each at-rule means to the two invariants below.
+ *
+ * One table rather than two lists, because both questions are asked of the same
+ * set of at-rules and an entry present in one list but missing from the other is
+ * an at-rule that NEITHER check looks at. That is not hypothetical: a named
+ * `@page` was skipped for anchoring, correctly, because it holds no selectors
+ * that match elements — and then skipped for naming too, because it was absent
+ * from the second list. A rule exempted from one check has to answer the other,
+ * and a table makes that a missing field rather than a missing line.
+ *
+ * `selectorless` marks the at-rules whose contents match no element at all:
+ * `@keyframes` holds percentage steps, `@font-face` and `@property` hold
+ * descriptors. Asking whether those are anchored is a category error. Their risk
+ * is a document-global NAME, which is what `globalNames` reads.
+ *
+ * The table is TOTAL: an at-rule with no entry here is reported rather than
+ * skipped. Enumerating only the dangerous ones means whoever adds an at-rule has
+ * to remember a list kept somewhere else, and three separate named at-rules
+ * reached this compiler's output that way, each found after the previous one was
+ * taken for the last. Reporting the unclassified ones turns that into a question
+ * asked at the point of the change.
+ */
+interface AtRuleFacts {
+  /** Its contents match no elements, so anchoring does not apply to them. */
+  selectorless: boolean;
+  /** The document-global names it defines, if it defines any. */
+  globalNames?: (css: string, node: Atrule) => string[];
+}
+
+const AT_RULES: Record<string, AtRuleFacts> = {
+  // Wrap ordinary rules and name nothing: the rules inside are checked for
+  // anchoring like any other, and there is no name to collide.
+  media: { selectorless: false },
+  supports: { selectorless: false },
+  container: { selectorless: false },
+  scope: { selectorless: false },
+  "starting-style": { selectorless: false },
+  // Wraps ordinary rules AND names its layers. A host layer of the same name is
+  // the same layer, which merges two orderings that were meant to be separate.
+  layer: { selectorless: false, globalNames: commaSeparatedNames },
+  // Match no elements; define a name CSS resolves for the whole document.
+  keyframes: { selectorless: true, globalNames: preludeName },
+  property: { selectorless: true, globalNames: preludeName },
+  "counter-style": { selectorless: true, globalNames: preludeName },
+  "font-palette-values": { selectorless: true, globalNames: preludeName },
+  "position-try": { selectorless: true, globalNames: preludeName },
+  "color-profile": { selectorless: true, globalNames: preludeName },
+  "font-face": { selectorless: true, globalNames: fontFaceFamilies },
+  page: { selectorless: true, globalNames: pageNames },
+  "font-feature-values": {
+    selectorless: true,
+    globalNames: featureValueFamilies,
+  },
+};
+
+/**
+ * The index of the `)` closing the group `text` opens with, or -1.
+ *
+ * Counting brackets alone gets this wrong in both directions, and one of them
+ * is a leak rather than a nuisance. A `)` inside a comment ends the group early:
+ * a root written as `.nx-pb-page`, a comment holding a `)`, and then ` + .outside`
+ * reads as a root of `.nx-pb-page` while the real root is a SIBLING of the page
+ * root, so every rule inside would be exempted from a check it should have
+ * failed. A `)` inside a string ends the group early too — `([data-x=")"]
+ * .nx-pb-page)` is a legal root — which merely reports a leak that is not there.
+ *
+ * Returning -1 for an unterminated comment or string is the safe answer: the
+ * root cannot be read, so no exemption is granted and the rules inside are
+ * checked on their own merits.
+ */
+function matchingParen(text: string): number {
+  let depth = 0;
+  let quote: string | undefined;
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    if (char === "\\") {
+      i++;
+      continue;
+    }
+    if (quote !== undefined) {
+      if (char === quote) quote = undefined;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (char === "/" && text[i + 1] === "*") {
+      const end = text.indexOf("*/", i + 2);
+      if (end === -1) return -1;
+      i = end + 1;
+      continue;
+    }
+    if (char === "(") depth++;
+    else if (char === ")") {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+/**
+ * Whether an `@scope` prelude confines everything inside it to the page root.
+ *
+ * `@scope (.nx-pb-page) { .child { … } }` restricts `.child` to the root's
+ * subtree, so the nested selector is anchored by the at-rule rather than by
+ * itself. Judging it alone reports a leak against output that has none, and a
+ * check that rejects correct stylesheets is the expensive kind of wrong: it
+ * teaches people to stop reading it.
+ *
+ * Only a prelude that opens with a root counts. `@scope to (.limit)` sets an
+ * upper bound within an outer scope and establishes no root of its own, so it
+ * confines nothing on its own account.
+ */
+function scopeRootIsAnchored(prelude: string, scopeClass: string): boolean {
+  const text = prelude.trim();
+  if (!text.startsWith("(")) return false;
+  const close = matchingParen(text);
+  if (close === -1) return false;
+  const root = text.slice(1, close);
+  let ast: CssNode;
+  try {
+    ast = parse(root, { context: "selectorList" });
+  } catch {
+    return false;
+  }
+  // The list's own entries, not every Selector in the tree. Walking reaches the
+  // selectors held by a pseudo-class as well, so `(.nx-pb-page:not(.disabled))`
+  // would be judged on `.disabled` too and rejected — a scope that confines its
+  // contents perfectly well. What each pseudo-class means to anchoring is
+  // {@link partAnchors}'s question, asked once per root rather than per
+  // selector found anywhere beneath it.
+  if (ast.type !== "SelectorList") return false;
+  const roots: Selector[] = [];
+  for (const node of ast.children) {
+    if (node.type === "Selector") roots.push(node);
+  }
+  // EVERY root has to be anchored, and there has to be one. A scope rooted at
+  // `.nx-pb-page, body` confines its contents to either, and the second confines
+  // nothing.
+  if (roots.length === 0) return false;
+  return roots.every(node => selectorIsAnchored(node, scopeClass));
+}
+
+/**
+ * Whether one selector is anchored inside the scope class.
+ *
+ * Two subtleties, both of which a substring test gets wrong and both of which
+ * cost a leak to learn:
+ *
+ * The scope has to appear as its own class, not as a prefix of another. Matching
+ * text would accept `.nx-pb-page-header`, a different class that merely starts
+ * the same way.
+ *
+ * What decides is the combinator taken directly from an occurrence of the
+ * scope. `.scope + .x` is a sibling of the page root and therefore outside it,
+ * while `.scope .a + .b` is not: `.b` shares a parent with `.a`, which is
+ * already inside, so no later combinator can leave the subtree.
+ *
+ * Any occurrence will do, not merely the first. `.scope + .scope .child` leaves
+ * one root and enters another, and its subject is inside a root however the
+ * selector arrived there.
+ *
+ * Which parts count as an occurrence is {@link partAnchors}'s question, and it
+ * is not simply "contains the class": a scope inside `:not()` is the opposite
+ * of being scoped by it.
+ */
+function selectorIsAnchored(selector: Selector, scopeClass: string): boolean {
+  const parts = selector.children.toArray();
+  // EVERY occurrence, not the first. A selector can leave one page root and
+  // enter another: `.nx-pb-page + .nx-pb-page .child` matches a `.child` that is
+  // inside a root however the selector arrived there, and stopping at the first
+  // occurrence sees only the `+` that leaves it.
+  for (let index = 0; index < parts.length; index++) {
+    const part = parts[index];
+    if (part === undefined || !partAnchors(part, scopeClass)) continue;
+    // Everything after the scope's own compound belongs to the subtree only if
+    // the step leaving it is a descendant or child step. No LATER combinator can
+    // leave it again: a sibling shares a parent that is already inside.
+    const next = parts
+      .slice(index + 1)
+      .find(entry => entry.type === "Combinator");
+    if (next === undefined) return true;
+    if (next.name === " " || next.name === ">") return true;
+  }
+  return false;
+}
+
+/**
+ * Whether one part of a compound puts its own element at or inside the page
+ * root.
+ *
+ * The scope's class is the ordinary case. The other one is a pseudo-class that
+ * holds selectors, and which of those anchor follows from what each MEANS
+ * rather than from the fact that it contains a selector:
+ *
+ * `:is()` and `:where()` match when ANY branch does, so they anchor only when
+ * EVERY branch anchors — `:is(.nx-pb-page)` is the page root, `:is(.nx-pb-page,
+ * body)` is either and so confines nothing.
+ *
+ * `:not()` is the opposite of anchoring: being NOT the page root is the one
+ * thing that guarantees an element is outside it.
+ *
+ * `:has()` asks about an element's descendants, not about the element, so
+ * `:has(.nx-pb-page)` matches things that CONTAIN the page root — the host page
+ * itself, most obviously.
+ */
+function partAnchors(part: CssNode, scopeClass: string): boolean {
+  if (part.type === "ClassSelector") return part.name === scopeClass;
+  if (part.type !== "PseudoClassSelector") return false;
+  const name = part.name.toLowerCase();
+  if (name !== "is" && name !== "where" && name !== "matches") return false;
+  const children = part.children;
+  if (children === null) return false;
+  const branches: Selector[] = [];
+  for (const child of children) {
+    if (child.type !== "SelectorList") continue;
+    for (const branch of child.children) {
+      if (branch.type === "Selector") branches.push(branch);
+    }
+  }
+  // An empty `:is()` matches nothing, which is not the same as anchoring.
+  if (branches.length === 0) return false;
+  return branches.every(branch => selectorIsAnchored(branch, scopeClass));
+}
+
+/**
+ * A name that CSS resolves globally, wearing the document's namespace.
+ *
+ * `@keyframes`, `@property`, `@counter-style` and `@font-palette-values` all
+ * define names in one flat per-document space, no matter where the rule sits or
+ * how tightly its selectors are scoped. Two documents on one page — or a
+ * document and its host — that both define `fade` do not get one each: the
+ * later definition wins for BOTH, silently, and which one is later depends on
+ * the order stylesheets happened to load.
+ *
+ * Anchoring cannot help, because these names are not selectors. Namespacing is
+ * the whole mechanism, which is why the invariant below exists before anything
+ * emits one: the moment tokens or animations start defining names, an
+ * un-namespaced one has to be a test failure rather than a rendering mystery
+ * somebody debugs six months later.
+ */
+export function namespacedGlobalName(name: string, scopeClass: string): string {
+  // A custom-property name keeps its leading dashes, since `@property` only
+  // accepts a dashed ident and moving them would produce a name CSS refuses.
+  const custom = name.startsWith("--");
+  const bare = custom ? name.slice(2) : name;
+  return `${custom ? "--" : ""}${scopeToken(scopeClass)}-${bare}`;
+}
+
+/**
+ * The scope as a fixed-shape token: a letter prefix and a hash, nothing else.
+ *
+ * Carrying the scope's own text into the name is what three separate collisions
+ * came from, and each fix left the next one intact. Doubling the scope's dashes
+ * made `a` + `b-c` and `a-b` + `c` distinct but not `a` + `-b-c` and `a-b` + `c`,
+ * because the NAME's leading dashes merge with the separator just as the
+ * scope's trailing ones do. Escaping both sides does not close it either: two
+ * adjacent runs of variable length cannot be told apart by one separator, so
+ * `a-` + `b` and `a` + `-b` collide however carefully each side is escaped.
+ *
+ * A hash removes the boundary problem instead of encoding around it. The token
+ * contains no dash, so the FIRST dash is unambiguously the separator whatever
+ * the name does, and the name needs no escaping at all. It is also immune to the
+ * other two hazards this encoding met: base36 is unchanged by case folding, so
+ * scopes differing only in case — or only by U+212A against "K" — stay apart,
+ * and the token always begins with a letter, so a scope like `7f3a` cannot
+ * produce a name that tokenizes as a dimension.
+ *
+ * The cost is that the scope is no longer legible in the name. That is a real
+ * loss and it is the right trade: the scope is an internal detail, the author's
+ * own name is still there to recognise, and the readable spelling bought three
+ * rounds of collisions.
+ *
+ * Reuses the document's existing hash, whose collision analysis lives with it.
+ * Two distinct scopes hashing together would share a namespace — the very thing
+ * this prevents — but at 53 bits, with a handful of documents on a page, that
+ * sits far below the rate at which anything else here fails.
+ */
+function scopeToken(scopeClass: string): string {
+  return `nx${hashId(scopeClass)}`;
+}
+
+/** Whether a name already carries this document's namespace. */
+function isNamespaced(name: string, scopeClass: string): boolean {
+  const prefix = `${scopeToken(scopeClass)}-`;
+  // Both spellings, because a custom property carries `--` in front of the
+  // namespace and the plain form does not.
+  return name.startsWith(prefix) || name.startsWith(`--${prefix}`);
+}
+
+/** A family name without its quotes; the name is the same either way. */
+function unquote(name: string): string {
+  return name.replace(/^["']|["']$/g, "");
+}
+
+/**
+ * The prelude as one name, unquoted.
+ *
+ * A `<keyframes-name>` may be written as a string as well as an identifier, and
+ * `@keyframes "fade"` names the same animation as `@keyframes fade`. Left
+ * quoted, a correctly namespaced name fails the prefix check and a safe
+ * stylesheet is reported as colliding.
+ *
+ * Separate from {@link preludeNames} rather than folded into it, because the
+ * extractors that split a prelude on commas have to see the quotes: unquoting
+ * first would turn `"Fade, Two"` into two names, which is the defect the
+ * quote-aware split exists to prevent.
+ */
+function preludeName(css: string, node: Atrule): string[] {
+  const raw = preludeNames(css, node)[0];
+  if (raw === undefined) return [];
+  const name = unquote(raw);
+  return name === "" ? [] : [name];
+}
+
+/** The whole prelude, verbatim, for the extractors that read it themselves. */
+function preludeNames(css: string, node: Atrule): string[] {
+  const prelude = node.prelude;
+  if (prelude === null) return [];
+  const name =
+    prelude.type === "Raw" ? prelude.value.trim() : sourceTextOf(css, prelude);
+  return name === "" ? [] : [name];
+}
+
+/**
+ * The page name a `@page` rule defines, which is optional.
+ *
+ * `@page :first` names nothing: it selects the first page of a flow that
+ * already exists. `@page cover` defines "cover", and `@page cover:first`
+ * defines it too while selecting one of its pages. Only a leading identifier is
+ * a name, so the pseudo-class comes off before the comparison.
+ */
+function pageNames(css: string, node: Atrule): string[] {
+  const text = preludeNames(css, node)[0];
+  if (text === undefined) return [];
+  // A page selector LIST, not one selector. `@page cover, host` names two pages,
+  // and reading the prelude whole made the text start with the namespace that
+  // the first one carried — so the second was never looked at.
+  const names: string[] = [];
+  for (const part of splitTopLevel(text)) {
+    const name = pageSelectorName(part);
+    if (name !== undefined) names.push(name);
+  }
+  return names;
+}
+
+/**
+ * The optional name one page selector defines.
+ *
+ * Everything up to the first unescaped colon, rather than a pattern spelling out
+ * which characters an identifier may hold. A CSS identifier can be non-ASCII or
+ * carry escapes — `@page 封面` and `@page \63 over` both name a page — and a
+ * pattern narrower than the grammar finds no name where one exists, which reads
+ * as "nothing to collide" rather than "could not tell". `@page :first` selects a
+ * page of an existing flow and names nothing.
+ */
+function pageSelectorName(part: string): string | undefined {
+  let end = part.length;
+  for (let i = 0; i < part.length; i++) {
+    if (part[i] === "\\") {
+      i++;
+      continue;
+    }
+    if (part[i] === ":") {
+      end = i;
+      break;
+    }
+  }
+  const name = part.slice(0, end).trim();
+  return name === "" ? undefined : name;
+}
+
+/**
+ * The font families an `@font-feature-values` rule attaches values to.
+ *
+ * Its prelude is a family list rather than a name it invents, but the collision
+ * is the same one: the feature values inside attach to those families for the
+ * whole document, so ours and a host's for one family are a single set and the
+ * later definition wins for both.
+ */
+function featureValueFamilies(css: string, node: Atrule): string[] {
+  return commaSeparatedNames(css, node);
+}
+
+/**
+ * Every name in a comma-separated prelude.
+ *
+ * Split on commas rather than read token by token, so an unquoted multi-word
+ * font family stays one name instead of being reported a word at a time.
+ */
+function commaSeparatedNames(css: string, node: Atrule): string[] {
+  const text = preludeNames(css, node)[0];
+  if (text === undefined) return [];
+  return splitTopLevel(text)
+    .map(part => unquote(part.trim()))
+    .filter(part => part !== "");
+}
+
+/**
+ * A prelude's comma-separated parts, ignoring commas inside a string.
+ *
+ * Only a comma OUTSIDE a string separates two entries. A font family may be
+ * written as a string and a string may contain a comma, so splitting the raw
+ * text cuts `"Fade, Two"` in half and reports the tail as a name of its own.
+ */
+function splitTopLevel(text: string): string[] {
+  const parts: string[] = [];
+  let start = 0;
+  let quote: string | undefined;
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    if (char === "\\") {
+      i++;
+      continue;
+    }
+    if (quote !== undefined) {
+      if (char === quote) quote = undefined;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (char === ",") {
+      parts.push(text.slice(start, i));
+      start = i + 1;
+    }
+  }
+  parts.push(text.slice(start));
+  return parts;
+}
+
+/**
+ * The family name an `@font-face` declares, unquoted.
+ *
+ * `@font-face` is the one at-rule that names itself in a DESCRIPTOR rather than
+ * a prelude, and the name is every bit as global: `font-family: Fade` inside it
+ * defines "Fade" for the whole document, so a host font and ours by the same
+ * name are one font, and which one it is depends on load order.
+ */
+function fontFaceFamilies(css: string, node: Atrule): string[] {
+  const block = node.block;
+  if (block === null) return [];
+  let family: string | undefined;
+  for (const child of block.children) {
+    if (child.type !== "Declaration") continue;
+    if (decodeIdentifier(child.property).toLowerCase() !== "font-family") {
+      continue;
+    }
+    // The last VALID descriptor, not simply the last. This one takes a single
+    // family, unlike the property that shares its name, so a browser drops a
+    // value naming two and the previous descriptor stays in force. Reading an
+    // invalid one would let a namespaced decoy stand in front of the name that
+    // really lands.
+    //
+    // Judged on the value's own shape rather than on its text: exactly one
+    // string, or a run of identifiers, which is how an unquoted multi-word
+    // family like `Two Words` is written. Anything else — two strings, a
+    // comma-separated list, a string beside an identifier — is not a
+    // `<family-name>`.
+    const value = child.value;
+    if (value.type !== "Value") continue;
+    const parts = value.children.toArray();
+    const strings = parts.filter(part => part.type === "String").length;
+    const idents = parts.filter(part => part.type === "Identifier").length;
+    const valid =
+      (strings === 1 && parts.length === 1) ||
+      (strings === 0 && idents === parts.length && idents > 0);
+    if (!valid) continue;
+    family = unquote(sourceTextOf(css, value).trim());
+  }
+  return family === undefined || family === "" ? [] : [family];
+}
+
+/**
+ * A CSS identifier with its escapes resolved.
+ *
+ * A property name may be spelled with escapes and still be the same property:
+ * `font\2d family` IS `font-family`, and CSS reads it that way. css-tree keeps
+ * the source spelling, so comparing the raw text skips the declaration and the
+ * face defines a family nothing checked.
+ */
+function decodeIdentifier(name: string): string {
+  if (!name.includes("\\")) return name;
+  return name.replace(
+    /\\(?:([0-9a-fA-F]{1,6})[ \t\n\f\r]?|(.))/gs,
+    (_match, hex: string | undefined, literal: string | undefined) => {
+      if (hex !== undefined) return String.fromCodePoint(parseInt(hex, 16));
+      return literal ?? "";
+    }
+  );
+}
+
+/** One at-rule defining a name that is not namespaced to this document. */
+export interface GlobalName {
+  /** The at-rule, e.g. "keyframes". */
+  atRule: string;
+  /** The name it defines. */
+  name: string;
+  /** Why it is a problem, in a sentence a person can act on. */
+  reason: string;
+}
+
+/**
+ * Every globally-resolved name a stylesheet defines without the namespace.
+ *
+ * Separate from {@link findUnscopedRules} because it is a different failure:
+ * that one is a rule matching elements it does not own, this one is a NAME
+ * colliding with someone else's. A sheet can be perfectly anchored and still
+ * rename the host's animation.
+ */
+export function findUnnamespacedGlobals(
+  css: string,
+  scopeClass: string
+): GlobalName[] {
+  const parsed = parseStylesheet(css);
+  const found: GlobalName[] = [];
+  if (parsed.reason !== "") {
+    found.push({ atRule: "", name: "", reason: parsed.reason });
+  }
+  if (parsed.ast === undefined) return found;
+  // The at-rules enclosing the one being visited, outermost first. css-tree's
+  // walk context names only the NEAREST at-rule, and a layer's namespace can sit
+  // further out than that: `@layer x { @media … { @layer y } }` still defines
+  // `x.y`, because a conditional wrapper groups rules without renaming them.
+  const enclosing: string[] = [];
+  walk(parsed.ast, {
+    visit: "Atrule",
+    leave() {
+      enclosing.pop();
+    },
+    enter(node: Atrule) {
+      const atRule = node.name.toLowerCase();
+      const ancestors = [...enclosing];
+      enclosing.push(atRule);
+      const facts = AT_RULES[atRule];
+      if (facts === undefined) {
+        // An at-rule inside a selectorless one is a descriptor of it — the
+        // `@styleset` blocks within `@font-feature-values`, say — and is
+        // covered by the name check on its parent.
+        const parent = ancestors[ancestors.length - 1];
+        if (parent !== undefined && AT_RULES[parent]?.selectorless === true) {
+          return;
+        }
+        // Default deny. Three named at-rules reached this compiler's output
+        // before anyone classified them, each found separately and each after
+        // the last was called the last. Enumerating the dangerous ones asks
+        // whoever adds an at-rule to remember a list in another file; reporting
+        // the unclassified ones asks them to answer a question. A finding here
+        // means "decide what this rule does", not "this rule is wrong".
+        found.push({
+          atRule,
+          name: "",
+          reason: `"@${atRule}" is not classified, so whether it defines a document-global name is unknown. Add it to the at-rule table.`,
+        });
+        return;
+      }
+      // A layer inside a layer is named by the pair: `@layer a { @layer b { … } }`
+      // defines `a.b`, so an inner name that carries no namespace of its own is
+      // still namespaced by the one it sits in. Judging it alone would call a
+      // correctly namespaced hierarchy a collision. The outermost layer is the
+      // one that has to carry the namespace, and it is checked on its own.
+      //
+      // Asked of the whole ancestry rather than the nearest at-rule, because a
+      // conditional wrapper does not break the chain: `@media` groups rules
+      // without renaming them, so the layer above it still applies.
+      if (atRule === "layer" && ancestors.includes("layer")) return;
+      const readNames = facts.globalNames;
+      if (readNames === undefined) return;
+      for (const name of readNames(css, node)) {
+        if (isNamespaced(name, scopeClass)) continue;
+        found.push({
+          atRule,
+          name,
+          reason: `"@${atRule}" defines the name "${name}", which CSS resolves for the whole document, so it collides with any other definition of that name on the page.`,
+        });
+      }
+    },
+  });
+  return found;
+}
+
+/** One node's own text, exactly as the stylesheet spells it. */
+function sourceText(css: string, node: Selector): string {
+  return sourceTextOf(css, node);
+}
+
+/**
+ * The stylesheet's AST, or the reason it cannot be checked.
+ *
+ * css-tree parses in tolerant mode: a malformed stylesheet does not throw, it
+ * RECOVERS, keeping what it could read and turning what it could not into `Raw`
+ * nodes. A `try`/`catch` therefore catches almost nothing, and the recovered
+ * tree is missing exactly the parts most worth checking.
+ *
+ * That matters because browsers recover too, and differently. Given
+ * `.nx-pb-page .a{} } body { color:red }` css-tree reports "Selector is
+ * expected" and hands back a rule with a `Raw` prelude, while a browser drops
+ * the stray brace and applies `body { color: red }` to the host page. Checking
+ * the recovered tree would find nothing and report the sheet clean.
+ *
+ * So recovery is treated as a failure of the check rather than a success. This
+ * compiler generates its own CSS, so a parse error here is a defect in this
+ * package, not in anyone's content — and an invariant that cannot read its
+ * input has to say so rather than return "nothing found".
+ *
+ * At-rule preludes are deliberately left unparsed. Their internal grammar is
+ * not what this module reads — selectors are — and css-tree validates each one
+ * against a grammar it ships, which lags CSS itself: it rejects every
+ * `@container` query as malformed, a feature this compiler emits routinely, and
+ * would reject each new at-rule until css-tree caught up. Skipping that
+ * grammar keeps the errors that remain meaningful, leaves the preludes readable
+ * as text for the names below, and still parses the rules INSIDE those at-rules
+ * so anchoring is checked there too.
+ */
+function parseStylesheet(css: string): { ast?: CssNode; reason: string } {
+  const errors: string[] = [];
+  let ast: CssNode;
+  try {
+    ast = parse(css, {
+      positions: true,
+      parseAtrulePrelude: false,
+      onParseError: (error: Error) => errors.push(error.message),
+    });
+  } catch {
+    return {
+      reason: "The stylesheet could not be parsed, so it was not checked.",
+    };
+  }
+  // The recovered tree comes back even when it recovered, so a caller can
+  // report what the parser DID manage to read alongside the fact that it had to
+  // guess. Stopping at the first problem would hide the rest of them.
+  return {
+    ast,
+    reason:
+      errors.length > 0
+        ? `The stylesheet did not parse cleanly (${errors[0]}), so what a browser would make of it cannot be checked.`
+        : "",
+  };
+}
+
+/** The same, for any node that carries a position. */
+function sourceTextOf(css: string, node: CssNode): string {
+  const loc = node.loc;
+  if (loc === undefined) return "";
+  return css.slice(loc.start.offset, loc.end.offset).trim();
+}
+
+/**
+ * Every rule in a stylesheet whose selector can match outside `scopeClass`.
+ *
+ * Parsed rather than pattern-matched. A stylesheet is a grammar, and the
+ * interesting cases — a selector list where only the first part is anchored, an
+ * escaped class containing what looks like a combinator, a scope buried inside
+ * `:not()` — are exactly the ones text handling gets wrong.
+ *
+ * Returns findings rather than throwing, so a caller can report all of them at
+ * once. Empty means the sheet is anchored.
+ */
+export function findUnscopedRules(
+  css: string,
+  scopeClass: string
+): UnscopedRule[] {
+  const parsed = parseStylesheet(css);
+  const offenders: UnscopedRule[] = [];
+  if (parsed.reason !== "") {
+    // Unparsable output is a failure of this compiler, not of the document, and
+    // it is not something a caller can be told to fix in their content. Report
+    // it as a finding rather than pretending the sheet was checked.
+    offenders.push({ selector: "", reason: parsed.reason });
+  }
+  if (parsed.ast === undefined) return offenders;
+
+  // The at-rules a rule sits inside, outermost first. Tracked rather than read
+  // from the walk context, which names only the nearest: an `@scope` that
+  // anchors its contents can be separated from them by a `@media`.
+  const enclosing: Atrule[] = [];
+  walk(parsed.ast, {
+    leave(node: CssNode) {
+      if (node.type === "Atrule") enclosing.pop();
+    },
+    enter(node: CssNode) {
+      if (node.type === "Atrule") {
+        enclosing.push(node);
+        return;
+      }
+      if (node.type !== "Rule") return;
+      // A rule inside `@keyframes` has percentage "selectors" that match no
+      // element; anchoring does not apply to it.
+      const nearest = enclosing[enclosing.length - 1];
+      const inNonSelectorAtRule =
+        nearest === undefined
+          ? false
+          : AT_RULES[nearest.name.toLowerCase()]?.selectorless === true;
+      if (inNonSelectorAtRule) return;
+      // An enclosing `@scope` rooted at the page root already confines
+      // everything inside it, so its selectors need not repeat the anchor.
+      const scoped = enclosing.some(
+        atrule =>
+          atrule.name.toLowerCase() === "scope" &&
+          atrule.prelude !== null &&
+          scopeRootIsAnchored(sourceTextOf(css, atrule.prelude), scopeClass)
+      );
+      if (scoped) return;
+      if (node.prelude.type !== "SelectorList") {
+        // A prelude css-tree could not read is a prelude this check cannot
+        // vouch for, and a browser may well match elements with it.
+        offenders.push({
+          selector: sourceTextOf(css, node.prelude),
+          reason: `This selector could not be parsed, so whether it stays inside ".${scopeClass}" is unknown.`,
+        });
+        return;
+      }
+      for (const selector of node.prelude.children) {
+        if (selector.type !== "Selector") continue;
+        if (selectorIsAnchored(selector, scopeClass)) continue;
+        offenders.push({
+          selector: sourceText(css, selector),
+          reason: `This selector is not anchored inside ".${scopeClass}", so it can match elements the document does not own.`,
+        });
+      }
+    },
+  });
+  return offenders;
+}
