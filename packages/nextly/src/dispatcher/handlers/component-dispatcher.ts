@@ -825,6 +825,9 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         promptChannel: "browser",
         databaseName,
         uiTargetSlug: slug,
+        // Named, not defaulted: the scope defaults to a collection, and a field group recorded under
+        // that kind is invisible to every history query filtered by its own.
+        uiTargetKind: "component" as const,
       });
 
       if (!result.success) {

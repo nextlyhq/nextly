@@ -29,6 +29,7 @@ export interface RegisteredEntityBase {
   tableName: string;
   fields: DesiredCollection["fields"];
   localized: boolean;
+  builderOwned: boolean;
 }
 
 /**
@@ -79,6 +80,11 @@ export function mergeRegisteredEntities<T>(
       // a companion `_locales` table, and an entity whose flag is dropped has
       // those columns re-added to its main table by the very next diff.
       localized: row.localized === true,
+      // Every row reaching this point came from the registry and lost to no config entry, which
+      // is what it means for the Schema Builder to own it. Stated here rather than by each caller
+      // for the same reason as `localized`: an entity that arrives without it is described the way
+      // a code-first table is described, and the next diff reports its columns as drift.
+      builderOwned: true,
     });
   }
 

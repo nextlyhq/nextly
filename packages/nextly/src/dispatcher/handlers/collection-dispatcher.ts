@@ -747,6 +747,8 @@ const COLLECTIONS_METHODS: Record<
             // editing so the admin NotificationCenter can render "Posts
             // schema updated" instead of generic "global".
             uiTargetSlug: p.collectionName,
+            // Stated rather than relying on the default, so the default stops being load-bearing.
+            uiTargetKind: "collection" as const,
           });
         },
         // The optimistic-lock check now runs up front via
