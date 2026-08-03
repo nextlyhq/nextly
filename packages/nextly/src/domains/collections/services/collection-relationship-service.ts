@@ -910,6 +910,43 @@ function readRelationshipRef(
 }
 
 /**
+ * The display column a relationship field asks its target for, or "" when it
+ * asks for none and the label is auto-selected.
+ *
+ * Read from both shapes expansion supports — a Schema Builder field keeps it
+ * under `options`, and a field may carry it at its root — so the two readers
+ * that need it (the label rebuild and the snapshot key) cannot disagree about
+ * which column a field asked for.
+ */
+function declaredLabelField(field: FieldDefinition): string {
+  const override =
+    field.options?.targetLabelField ??
+    (field as Record<string, unknown>).targetLabelField;
+  return typeof override === "string" ? override : "";
+}
+
+/**
+ * Identifies a related row AS ONE FIELD PRESENTS IT: the row itself, plus the
+ * display column the field asked for.
+ *
+ * Two relationship fields can point at the same row and ask for different
+ * labels, and batch expansion fetches per field — so each holds its own row
+ * object carrying its own label. Keyed on the row alone, one field's sanitized
+ * version would overwrite the other's and then be restored into both, giving one
+ * of them the wrong label.
+ */
+function relatedRowSnapshotKey(
+  collection: string,
+  id: string,
+  field: FieldDefinition
+): string {
+  // The same NUL separator {@link relationKey} uses, and for the same reason: it
+  // cannot appear in a slug, an id, or a field name, so no two distinct triples
+  // can collapse onto one key.
+  return `${relationKey(collection, id)}\u0000${declaredLabelField(field)}`;
+}
+
+/**
  * Whether a relationship value holds an EXPANDED row rather than a reference.
  *
  * Only an expanded row carries fields, so only one can have been tampered with —
@@ -3137,10 +3174,10 @@ export class CollectionRelationshipService extends BaseService {
     // rebuilt from. Taken here rather than during the walk because a row is not
     // final until the loops above have re-judged it — a sibling parent's hooks,
     // in a listing that shares one row object between entries, run before this.
-    for (const { row, collection } of state.pending) {
+    for (const { row, collection, field } of state.pending) {
       if (typeof row.id !== "string") continue;
       state.sanitized.set(
-        relationKey(collection, row.id),
+        relatedRowSnapshotKey(collection, row.id, field),
         detachData<Record<string, unknown>>(row)
       );
     }
@@ -3252,11 +3289,22 @@ export class CollectionRelationshipService extends BaseService {
     if (targets.length === 0) return value;
     const items = readItemArray(value);
     if (items) {
-      return items.map(item =>
-        this.reprojectRelationshipItem(item, targets, state, rebuilt)
-      );
+      // An entry whose identity cannot be read has no reference left to keep, and
+      // a list must not carry a hole where it stood: expansion drops an entry it
+      // cannot resolve rather than leaving a gap between the ones it did.
+      return items
+        .map(item =>
+          this.reprojectRelationshipItem(item, field, targets, state, rebuilt)
+        )
+        .filter(item => item !== null && item !== undefined);
     }
-    return this.reprojectRelationshipItem(value, targets, state, rebuilt);
+    return this.reprojectRelationshipItem(
+      value,
+      field,
+      targets,
+      state,
+      rebuilt
+    );
   }
 
   /**
@@ -3272,6 +3320,7 @@ export class CollectionRelationshipService extends BaseService {
    */
   private reprojectRelationshipItem(
     item: unknown,
+    field: FieldDefinition,
     targets: string[],
     state: NestedHookState,
     rebuilt: Map<string, Record<string, unknown>>
@@ -3280,7 +3329,7 @@ export class CollectionRelationshipService extends BaseService {
 
     const ref = readPopulatedRelationshipRef(item, targets);
     if (!ref) return null;
-    const key = relationKey(ref.collection, ref.id);
+    const key = relatedRowSnapshotKey(ref.collection, ref.id, field);
 
     const already = rebuilt.get(key);
     if (already) return withReferenceIdentity(already, ref);
@@ -3744,14 +3793,11 @@ export class CollectionRelationshipService extends BaseService {
   ): Promise<void> {
     if (!("label" in row)) return;
 
-    // Read from both shapes expansion supports. A relationship storing the
-    // override at the field root would otherwise have its label rebuilt from an
-    // auto-selected field, so the same row came back labelled differently only
-    // because this pass ran.
-    const override =
-      field.options?.targetLabelField ??
-      (field as Record<string, unknown>).targetLabelField;
-    const declared = typeof override === "string" ? override : "";
+    // Read from both shapes expansion supports, through the same reader the
+    // snapshot key uses. A relationship storing the override at the field root
+    // would otherwise have its label rebuilt from an auto-selected field, so the
+    // same row came back labelled differently only because this pass ran.
+    const declared = declaredLabelField(field);
     const cacheKey = `${resolved.collection}:${declared}`;
     let pending = state.labelFields.get(cacheKey);
     if (!pending) {

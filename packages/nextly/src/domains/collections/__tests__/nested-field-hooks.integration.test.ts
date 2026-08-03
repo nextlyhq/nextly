@@ -1765,6 +1765,49 @@ describe("a target's field hooks apply to rows reached through a relationship", 
     expect(JSON.stringify(expanded.data!.contributors)).not.toContain("LEAKED");
   });
 
+  it("drops an unidentifiable row from a hasMany rather than leaving a gap", async () => {
+    // A hook appends a populated contributor with no readable id to a hasMany
+    // relationship. There is no reference to keep and no sanitized version to
+    // restore, so the entry is dropped — the response must not carry a null
+    // between the entries that did resolve, which no consumer of a relationship
+    // list expects.
+    const t = await boot();
+    await t.nextly.create({ collection: AUTHORS, data: { name: "c" } });
+    const contributorId = await onlyId(t, AUTHORS);
+    await t.nextly.create({
+      collection: POSTS,
+      data: { title: "p", contributors: [contributorId] },
+    });
+    const postId = await onlyId(t, POSTS);
+
+    t.hooks.register("afterRead", POSTS, ctx => {
+      const entry = ctx.data as Record<string, unknown>;
+      const contributors = entry.contributors as unknown[] | undefined;
+      if (Array.isArray(contributors)) {
+        contributors.push({ name: "ghost", dossier: "LEAKED" });
+      }
+      return entry;
+    });
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    const contributors = expanded.data!.contributors as Record<
+      string,
+      unknown
+    >[];
+    expect(Array.isArray(contributors)).toBe(true);
+    expect(contributors).toHaveLength(1);
+    expect(contributors.every(row => row !== null && row !== undefined)).toBe(
+      true
+    );
+    expect(contributors[0].id).toBe(contributorId);
+    expect(JSON.stringify(contributors)).not.toContain("LEAKED");
+  });
+
   it("re-derives a reordered cloned repeater, keeping an inverse rule closed", async () => {
     // `openTag` on a division is visible only while the denied `grade` is NOT
     // "restricted". A restricted division strips both. A source hook DEEP-clones
