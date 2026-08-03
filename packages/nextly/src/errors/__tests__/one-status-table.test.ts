@@ -83,7 +83,6 @@ describe("a named code is never overridden by the table", () => {
     // The table's reading is staleness, so a producer that means the clash has
     // to say so — and be believed.
     const error = errorFromServiceEnvelope({
-      success: false,
       statusCode: 409,
       code: "DUPLICATE",
       message: "A folder with this name already exists in this location",
@@ -104,7 +103,6 @@ describe("a named code is never overridden by the table", () => {
 
   it("keeps a plugin's own code, which is in no table at all", () => {
     const error = errorFromServiceEnvelope({
-      success: false,
       statusCode: 409,
       code: "ARCHIVE_LOCKED",
       message: "That archive is locked.",
@@ -150,7 +148,6 @@ describe("a code-less failure never puts its own message on the wire", () => {
     // `Retry-After` from `publicData.retryAfterSeconds`, so a 429 that answers
     // RATE_LIMITED without it tells a client to back off and not for how long.
     const error = errorFromServiceEnvelope({
-      success: false,
       statusCode: 429,
       message: "slow down",
       publicData: { retryAfterSeconds: 30 },
@@ -168,7 +165,6 @@ describe("a code-less failure never puts its own message on the wire", () => {
     // The mirror: a TYPED failure's `publicMessage` was authored to be seen, so
     // the generic sentence must not replace it.
     const error = errorFromServiceEnvelope({
-      success: false,
       statusCode: 429,
       code: "RATE_LIMITED",
       message: "Slow down, you may retry in 30 seconds.",
