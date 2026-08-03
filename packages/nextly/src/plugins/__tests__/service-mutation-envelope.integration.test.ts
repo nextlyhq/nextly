@@ -77,7 +77,11 @@ async function boot(
   // rather than assumed: a harness that stopped calling `init` would otherwise
   // fail every case below on a property of `undefined`, which reads as a
   // regression in the code under test.
-  if (!services) throw new Error("plugin init did not run");
+  if (!services) {
+    throw NextlyError.internal({
+      logContext: { reason: "test-harness-init-did-not-run" },
+    });
+  }
   return services;
 }
 
