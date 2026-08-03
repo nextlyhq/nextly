@@ -40,6 +40,11 @@ export const nextlyEvents = sqliteTable(
     // NULL means the event still needs fan-out.
     fannedOutAt: integer("fanned_out_at", { mode: "timestamp" }),
     // Which retention window governs this row; see the PostgreSQL definition.
+    // Whether the action this row describes succeeded. Defaults to "success"
+    // because a row is only written inside the transaction of a change that
+    // commits, so every event recorded before this column existed was one —
+    // which is also why the default is the correct value for those rows.
+    outcome: text("outcome").notNull().default("success"),
     retentionClass: text("retention_class").notNull().default("webhook"),
   },
   t => [
