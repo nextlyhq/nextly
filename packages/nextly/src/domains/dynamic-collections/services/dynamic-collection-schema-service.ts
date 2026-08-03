@@ -136,9 +136,9 @@ export class DynamicCollectionSchemaService {
 
     const columns = mainFields
       .map(f => {
-        // Skip many-to-many fields as they don't create columns in the main table. Asked
-        // through the shared predicate, which is type-agnostic: an `upload` carries the same
-        // option and the runtime's own read path treats it as junction-backed too.
+        // Skip junction-backed fields: their links live in a junction table, not on this row.
+        // Asked through the shared predicate so this and the descriptor cannot disagree about
+        // which fields those are — an `upload` is not one of them, whatever option it carries.
         if (usesJunctionTable(f)) {
           return null;
         }
