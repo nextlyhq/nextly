@@ -195,6 +195,44 @@ describe("what counts as anchored", () => {
     ).toHaveLength(1);
   });
 
+  it("accepts a selector that leaves one page root and enters another", () => {
+    // The subject is inside a root however the selector reached it. Reading only
+    // the first occurrence sees the `+` that leaves the first root and calls a
+    // safe selector a leak.
+    expect(
+      findUnscopedRules(`.${SCOPE} + .${SCOPE} .child { color: red }`, SCOPE)
+    ).toEqual([]);
+    // Still refused when no occurrence confines the subject.
+    expect(
+      findUnscopedRules(`.${SCOPE} + .${SCOPE} + .child { color: red }`, SCOPE)
+    ).toHaveLength(1);
+  });
+
+  it("finds the real scope root past a comment or a string", () => {
+    // A `)` inside a comment ends the root early, and the root that gets read is
+    // not the one that applies: here the real root is a SIBLING of the page
+    // root, so everything inside would be exempted from a check it must fail.
+    // This is the one direction of this bug that leaks rather than annoys.
+    expect(
+      findUnscopedRules(
+        `@scope (.${SCOPE}/* ) */ + .outside) { .child { color: red } }`,
+        SCOPE
+      )
+    ).toHaveLength(1);
+    // The same confusion the other way round: a `)` inside a string truncates a
+    // root that does anchor, reporting a leak that is not there.
+    expect(
+      findUnscopedRules(
+        `@scope ([data-x=")"] .${SCOPE}) { .child { color: red } }`,
+        SCOPE
+      )
+    ).toEqual([]);
+    // No assertion for an unterminated comment: it swallows the rest of the
+    // sheet, so there is no rule left that could leak. `matchingParen` returns
+    // -1 there and the exemption is withheld, but nothing reaches the check to
+    // observe it.
+  });
+
   it("does not take an unanchored scope for an anchor", () => {
     // A scope rooted somewhere else confines its contents to somewhere else.
     expect(
@@ -722,6 +760,26 @@ describe("names CSS resolves for the whole document", () => {
         SCOPE
       )
     ).toEqual([]);
+  });
+
+  it("reads a keyframes name written as a string", () => {
+    // `<keyframes-name>` accepts a string as well as an identifier, and
+    // `@keyframes "fade"` names the same animation as `@keyframes fade`. Left
+    // quoted, a correctly namespaced name fails the prefix check.
+    expect(
+      findUnnamespacedGlobals(
+        `@keyframes "${ns("fade")}" { from { opacity: 0 } }`,
+        SCOPE
+      )
+    ).toEqual([]);
+    // And a quoted name that is NOT namespaced is still reported, without its
+    // quotes, so the message names the animation rather than its spelling.
+    const found = findUnnamespacedGlobals(
+      `@keyframes "fade" { from { opacity: 0 } }`,
+      SCOPE
+    );
+    expect(found).toHaveLength(1);
+    expect(found[0]?.name).toBe("fade");
   });
 
   it("reports a colour profile, which resolves by name like the rest", () => {

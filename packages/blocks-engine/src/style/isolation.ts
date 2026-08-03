@@ -92,12 +92,12 @@ const AT_RULES: Record<string, AtRuleFacts> = {
   // the same layer, which merges two orderings that were meant to be separate.
   layer: { selectorless: false, globalNames: commaSeparatedNames },
   // Match no elements; define a name CSS resolves for the whole document.
-  keyframes: { selectorless: true, globalNames: preludeNames },
-  property: { selectorless: true, globalNames: preludeNames },
-  "counter-style": { selectorless: true, globalNames: preludeNames },
-  "font-palette-values": { selectorless: true, globalNames: preludeNames },
-  "position-try": { selectorless: true, globalNames: preludeNames },
-  "color-profile": { selectorless: true, globalNames: preludeNames },
+  keyframes: { selectorless: true, globalNames: preludeName },
+  property: { selectorless: true, globalNames: preludeName },
+  "counter-style": { selectorless: true, globalNames: preludeName },
+  "font-palette-values": { selectorless: true, globalNames: preludeName },
+  "position-try": { selectorless: true, globalNames: preludeName },
+  "color-profile": { selectorless: true, globalNames: preludeName },
   "font-face": { selectorless: true, globalNames: fontFaceFamilies },
   page: { selectorless: true, globalNames: pageNames },
   "font-feature-values": {
@@ -107,24 +107,52 @@ const AT_RULES: Record<string, AtRuleFacts> = {
 };
 
 /**
- * Whether one selector is anchored inside the scope class.
+ * The index of the `)` closing the group `text` opens with, or -1.
  *
- * Two subtleties, both of which a substring test gets wrong and both of which
- * cost a leak to learn:
+ * Counting brackets alone gets this wrong in both directions, and one of them
+ * is a leak rather than a nuisance. A `)` inside a comment ends the group early:
+ * a root written as `.nx-pb-page`, a comment holding a `)`, and then ` + .outside`
+ * reads as a root of `.nx-pb-page` while the real root is a SIBLING of the page
+ * root, so every rule inside would be exempted from a check it should have
+ * failed. A `)` inside a string ends the group early too — `([data-x=")"]
+ * .nx-pb-page)` is a legal root — which merely reports a leak that is not there.
  *
- * The scope has to appear as its own class, not as a prefix of another. Matching
- * text would accept `.nx-pb-page-header`, a different class that merely starts
- * the same way.
- *
- * Only the combinator taken DIRECTLY from the scope decides. `.scope + .x` is a
- * sibling of the page root and therefore outside it, while `.scope .a + .b` is
- * not: `.b` shares a parent with `.a`, which is already inside, so every later
- * combinator stays within the subtree.
- *
- * A scope inside `:not()` is the opposite of being scoped by it. Walking the
- * AST's top level rather than the selector text handles that for free, because
- * a pseudo-class keeps its arguments in its own children.
+ * Returning -1 for an unterminated comment or string is the safe answer: the
+ * root cannot be read, so no exemption is granted and the rules inside are
+ * checked on their own merits.
  */
+function matchingParen(text: string): number {
+  let depth = 0;
+  let quote: string | undefined;
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    if (char === "\\") {
+      i++;
+      continue;
+    }
+    if (quote !== undefined) {
+      if (char === quote) quote = undefined;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (char === "/" && text[i + 1] === "*") {
+      const end = text.indexOf("*/", i + 2);
+      if (end === -1) return -1;
+      i = end + 1;
+      continue;
+    }
+    if (char === "(") depth++;
+    else if (char === ")") {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
 /**
  * Whether an `@scope` prelude confines everything inside it to the page root.
  *
@@ -141,20 +169,7 @@ const AT_RULES: Record<string, AtRuleFacts> = {
 function scopeRootIsAnchored(prelude: string, scopeClass: string): boolean {
   const text = prelude.trim();
   if (!text.startsWith("(")) return false;
-  // Scanned rather than matched to the first `)`, because a root may contain
-  // parentheses of its own: `:is(.a, .b)` is a legal scope root.
-  let depth = 0;
-  let close = -1;
-  for (let i = 0; i < text.length; i++) {
-    if (text[i] === "(") depth++;
-    else if (text[i] === ")") {
-      depth--;
-      if (depth === 0) {
-        close = i;
-        break;
-      }
-    }
-  }
+  const close = matchingParen(text);
   if (close === -1) return false;
   const root = text.slice(1, close);
   let ast: CssNode;
@@ -181,15 +196,48 @@ function scopeRootIsAnchored(prelude: string, scopeClass: string): boolean {
   return roots.every(node => selectorIsAnchored(node, scopeClass));
 }
 
+/**
+ * Whether one selector is anchored inside the scope class.
+ *
+ * Two subtleties, both of which a substring test gets wrong and both of which
+ * cost a leak to learn:
+ *
+ * The scope has to appear as its own class, not as a prefix of another. Matching
+ * text would accept `.nx-pb-page-header`, a different class that merely starts
+ * the same way.
+ *
+ * What decides is the combinator taken directly from an occurrence of the
+ * scope. `.scope + .x` is a sibling of the page root and therefore outside it,
+ * while `.scope .a + .b` is not: `.b` shares a parent with `.a`, which is
+ * already inside, so no later combinator can leave the subtree.
+ *
+ * Any occurrence will do, not merely the first. `.scope + .scope .child` leaves
+ * one root and enters another, and its subject is inside a root however the
+ * selector arrived there.
+ *
+ * Which parts count as an occurrence is {@link partAnchors}'s question, and it
+ * is not simply "contains the class": a scope inside `:not()` is the opposite
+ * of being scoped by it.
+ */
 function selectorIsAnchored(selector: Selector, scopeClass: string): boolean {
   const parts = selector.children.toArray();
-  const index = parts.findIndex(part => partAnchors(part, scopeClass));
-  if (index === -1) return false;
-  // Everything after the scope's own compound belongs to the subtree only if
-  // the step leaving it is a descendant or child step.
-  const next = parts.slice(index + 1).find(part => part.type === "Combinator");
-  if (next === undefined) return true;
-  return next.name === " " || next.name === ">";
+  // EVERY occurrence, not the first. A selector can leave one page root and
+  // enter another: `.nx-pb-page + .nx-pb-page .child` matches a `.child` that is
+  // inside a root however the selector arrived there, and stopping at the first
+  // occurrence sees only the `+` that leaves it.
+  for (let index = 0; index < parts.length; index++) {
+    const part = parts[index];
+    if (part === undefined || !partAnchors(part, scopeClass)) continue;
+    // Everything after the scope's own compound belongs to the subtree only if
+    // the step leaving it is a descendant or child step. No LATER combinator can
+    // leave it again: a sibling shares a parent that is already inside.
+    const next = parts
+      .slice(index + 1)
+      .find(entry => entry.type === "Combinator");
+    if (next === undefined) return true;
+    if (next.name === " " || next.name === ">") return true;
+  }
+  return false;
 }
 
 /**
@@ -300,7 +348,27 @@ function unquote(name: string): string {
   return name.replace(/^["']|["']$/g, "");
 }
 
-/** The whole prelude, for the at-rules whose prelude IS the name they define. */
+/**
+ * The prelude as one name, unquoted.
+ *
+ * A `<keyframes-name>` may be written as a string as well as an identifier, and
+ * `@keyframes "fade"` names the same animation as `@keyframes fade`. Left
+ * quoted, a correctly namespaced name fails the prefix check and a safe
+ * stylesheet is reported as colliding.
+ *
+ * Separate from {@link preludeNames} rather than folded into it, because the
+ * extractors that split a prelude on commas have to see the quotes: unquoting
+ * first would turn `"Fade, Two"` into two names, which is the defect the
+ * quote-aware split exists to prevent.
+ */
+function preludeName(css: string, node: Atrule): string[] {
+  const raw = preludeNames(css, node)[0];
+  if (raw === undefined) return [];
+  const name = unquote(raw);
+  return name === "" ? [] : [name];
+}
+
+/** The whole prelude, verbatim, for the extractors that read it themselves. */
 function preludeNames(css: string, node: Atrule): string[] {
   const prelude = node.prelude;
   if (prelude === null) return [];
