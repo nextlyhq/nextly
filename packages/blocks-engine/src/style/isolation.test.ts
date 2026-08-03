@@ -482,6 +482,40 @@ describe("names CSS resolves for the whole document", () => {
     ).toEqual([]);
   });
 
+  it("makes a name CSS can actually resolve, whatever the scope", () => {
+    // A scope is a class, and CSS is stricter about names than about classes:
+    // `7f3a` is a legal class but `7f3a-fade` tokenizes as a dimension, so an
+    // animation by that name is one nothing resolves.
+    for (const scope of ["7f3a", "region", "_r", "-r"]) {
+      const name = namespacedGlobalName("fade", scope);
+      expect(
+        findUnnamespacedGlobals(
+          `@keyframes ${name} { from { opacity: 0 } }`,
+          scope
+        )
+      ).toEqual([]);
+      // A leading digit has to be escaped rather than carried through.
+      expect(/^[0-9]/.test(name)).toBe(false);
+    }
+  });
+
+  it("does not split a family name on a comma inside its quotes", () => {
+    // A family may be written as a string and a string may contain a comma, so
+    // splitting the text cuts one name in half and reports the tail as another.
+    expect(
+      findUnnamespacedGlobals(
+        `@font-feature-values "${ns("Fade, Two")}" { @styleset { nice: 1 } }`,
+        SCOPE
+      )
+    ).toEqual([]);
+    // Two genuine families are still read as two.
+    const found = findUnnamespacedGlobals(
+      `@font-feature-values "One, A", Two { @styleset { nice: 1 } }`,
+      SCOPE
+    );
+    expect(found.map(entry => entry.name)).toEqual(["One, A", "Two"]);
+  });
+
   it("keeps an unquoted multi-word family together", () => {
     // Read token by token, `Fade Two` would be reported as two names, and a
     // namespaced family followed by a second word would be a false finding.

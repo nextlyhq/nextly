@@ -27,6 +27,9 @@ longer beats a value set in the builder by accident. A rule like
 `.content .card h1` used to win over a block's own colour and leave the author
 with a style that silently did not appear.
 
-Overriding on purpose still works and still wins: a selector with more classes,
-or `!important`, takes precedence exactly as before. `!important` is deliberately
-not used by the compiler so that stays true.
+Overriding on purpose still works. An unlayered selector with more classes takes
+precedence, and `!important` always does, because the compiler deliberately never
+writes it. One caveat worth knowing if your CSS lives in a cascade layer, as
+Tailwind's does: layer order is settled before specificity, and the builder emits
+an unlayered stylesheet, so adding classes inside an `@layer` will not win. Write
+the override unlayered, or use `!important`.

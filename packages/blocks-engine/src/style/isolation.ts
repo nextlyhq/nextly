@@ -40,6 +40,8 @@ import type { Atrule, CssNode, Rule, Selector } from "css-tree";
 import parse from "css-tree/parser";
 import walk from "css-tree/walker";
 
+import { escapeIdentifier } from "./css-value";
+
 /** One rule whose selector can match outside the page root. */
 export interface UnscopedRule {
   /** The offending selector, as it would be written into the stylesheet. */
@@ -173,13 +175,22 @@ export function namespacedGlobalName(name: string, scopeClass: string): string {
  * only odd-length run at the boundary, so distinct pairs cannot meet.
  */
 function escapeScope(scopeClass: string): string {
-  return scopeClass.replaceAll("-", "--");
+  // Escaped as an identifier as well as dash-doubled, because the result is a
+  // NAME and CSS is stricter about those than about the class the scope came
+  // from. `7f3a` is a legal scope and a legal class, but `7f3a-fade` tokenizes
+  // as a dimension rather than an identifier, so an animation by that name is
+  // one CSS never resolves. `\37 f3a-fade` is the same name spelled legally.
+  return escapeIdentifier(scopeClass.replaceAll("-", "--"));
 }
 
 /** Whether a name already carries this document's namespace. */
 function isNamespaced(name: string, scopeClass: string): boolean {
-  const bare = name.startsWith("--") ? name.slice(2) : name;
-  return bare.startsWith(`${escapeScope(scopeClass)}-`);
+  const prefix = `${escapeScope(scopeClass)}-`;
+  // Both spellings, rather than stripping a leading `--` as the custom-property
+  // marker: a scope may itself begin with a dash, which doubling turns into
+  // `--`, so a plain name under scope "-r" also starts that way and stripping
+  // would look for the scope in the wrong place.
+  return name.startsWith(prefix) || name.startsWith(`--${prefix}`);
 }
 
 /** A family name without its quotes; the name is the same either way. */
@@ -248,10 +259,34 @@ function featureValueFamilies(css: string, node: Atrule): string[] {
 function commaSeparatedNames(css: string, node: Atrule): string[] {
   const text = preludeNames(css, node)[0];
   if (text === undefined) return [];
-  return text
-    .split(",")
-    .map(part => unquote(part.trim()))
-    .filter(part => part !== "");
+  const names: string[] = [];
+  let start = 0;
+  let quote: string | undefined;
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    if (char === "\\") {
+      i++;
+      continue;
+    }
+    if (quote !== undefined) {
+      if (char === quote) quote = undefined;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    // Only a comma OUTSIDE a string separates two families. A family may be
+    // written as a string and a string may contain a comma, so splitting the
+    // text would cut `"Fade, Two"` in half and report the tail as a name of its
+    // own — a finding against a stylesheet that was correct.
+    if (char === ",") {
+      names.push(text.slice(start, i));
+      start = i + 1;
+    }
+  }
+  names.push(text.slice(start));
+  return names.map(part => unquote(part.trim())).filter(part => part !== "");
 }
 
 /**
