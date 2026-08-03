@@ -20,7 +20,7 @@ import type {
 
 import { webhookTables } from "../../schemas/webhooks";
 
-import type { WebhookEvent } from "./types";
+import { DEFAULT_EVENT_OUTCOME, type WebhookEvent } from "./types";
 
 /**
  * Row shape written to `nextly_events` (snake_case column names). `created_at`
@@ -54,6 +54,8 @@ function eventRow(envelope: WebhookEvent, now: Date): Record<string, unknown> {
     payload: JSON.stringify(envelope),
     actor_type: envelope.actor?.type ?? null,
     actor_id: envelope.actor?.id ?? null,
+    // Absent means the action completed; see WebhookEvent.outcome.
+    outcome: envelope.outcome ?? DEFAULT_EVENT_OUTCOME,
     created_at: now,
   };
 }
@@ -96,6 +98,8 @@ function eventRowForDrizzle(envelope: WebhookEvent): Record<string, unknown> {
     payload: envelope,
     actorType: envelope.actor?.type ?? null,
     actorId: envelope.actor?.id ?? null,
+    // Absent means the action completed; see WebhookEvent.outcome.
+    outcome: envelope.outcome ?? DEFAULT_EVENT_OUTCOME,
   };
 }
 
