@@ -2,7 +2,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
-import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
+import { currentMysqlDatabaseName } from "../../domains/schema/pipeline/database-url";
 import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanup/executor";
 import { BrowserPromptDispatcher } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
 import { PushSchemaPipeline } from "../../domains/schema/pipeline/pushschema-pipeline";
@@ -12,7 +12,6 @@ import {
 } from "../../domains/schema/pipeline/pushschema-pipeline-stubs";
 import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector";
 import type { DesiredSchema } from "../../domains/schema/pipeline/types";
-import { resolveBuilderTextWidths } from "../../domains/schema/services/builder-text-width";
 import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
 import { NextlyError } from "../../errors";
 import { getProductionNotifier } from "../../runtime/notifications/index";
@@ -70,13 +69,6 @@ export async function applyBuilderSchema(
   const desired = await buildFullDesiredSchema();
   args.apply(desired);
 
-  // After the caller states its entity, so the entity being saved is covered too, and over the whole
-  // schema rather than one entry: the pipeline diffs EVERY managed table, so an entity nobody is
-  // editing still has its columns compared. Resolving only the target's widths would let a save
-  // describe a sibling's unbounded text column as bounded and narrow a table the operator never
-  // touched.
-  resolveBuilderTextWidths(desired);
-
   const pipeline = new PushSchemaPipeline({
     executor: new DrizzleStatementExecutor(dialect, db),
     renameDetector: new RegexRenameDetector(),
@@ -101,11 +93,13 @@ export async function applyBuilderSchema(
     dialect,
     source: "ui",
     promptChannel: "browser",
-    // MySQL's pushSchema needs the database name; the other dialects ignore it.
+    // MySQL's pushSchema needs the database name; the other dialects ignore it. Asked of the
+    // connection rather than parsed out of the environment, because an adapter can be constructed
+    // programmatically with no DATABASE_URL set — or with one naming a different database. Reading
+    // the env there yields nothing usable, MySQL then refuses the apply for a missing database name,
+    // and the entity is registered with no table behind it.
     databaseName:
-      dialect === "mysql"
-        ? extractDatabaseNameFromUrl(process.env.DATABASE_URL)
-        : undefined,
+      dialect === "mysql" ? await currentMysqlDatabaseName(db) : undefined,
     uiTargetSlug: slug,
     uiTargetKind: kind,
   });

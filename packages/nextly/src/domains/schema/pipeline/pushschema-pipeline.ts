@@ -670,7 +670,11 @@ export class PushSchemaPipeline {
               // localized collection's translatable columns are omitted from the
               // main table's desired snapshot (they live in the companion
               // `_locales` table) rather than being re-added by the diff.
-              { hasStatus: c.status === true, localized: c.localized === true }
+              {
+                hasStatus: c.status === true,
+                localized: c.localized === true,
+                builderOwned: c.locked !== true,
+              }
             )
           ),
           ...Object.values(desired.singles).map(s =>
@@ -683,6 +687,7 @@ export class PushSchemaPipeline {
               {
                 hasStatus: s.status === true,
                 localized: (s as { localized?: boolean }).localized === true,
+                builderOwned: s.locked !== true,
               }
             )
           ),
@@ -696,13 +701,29 @@ export class PushSchemaPipeline {
               {
                 localized: (c as { localized?: boolean }).localized === true,
                 typeColumn: fieldGroupTypeColumns.get(c.tableName),
+                builderOwned: c.locked !== true,
               }
             )
           ),
         ],
       };
 
-      const operations = diffSnapshots(liveSnapshot, desiredSnapshot);
+      const allOperations = diffSnapshots(liveSnapshot, desiredSnapshot);
+
+      // A UI save owns only the entity being edited. An operation targeting a code-first or
+      // plugin-owned table is dropped here, BEFORE anything reads the operation set, because those
+      // tables belong to `nextly.config.ts` and reconciling their drift is db:sync's job.
+      //
+      // 🔴 Dropped before rename detection rather than after prompting, which is where this used to
+      // happen. An operation on a locked table still reached the rename detector and the prompt gate
+      // on the way, and an unresolved candidate fails closed — so unapplied drift on a table the
+      // save was never going to touch could refuse the entire save, over an operation the very next
+      // step discards. Code-first applies keep the full set: they ARE the authority for those tables.
+      const { kept: operations, skipped: skippedLockedOps } =
+        source === "ui"
+          ? excludeLockedTableOps(allOperations, desired)
+          : { kept: allOperations, skipped: [] as Operation[] };
+      logSkippedLockedOps(skippedLockedOps);
 
       // Phase B: rename detection + prompt + resolution application.
       const candidates = this.deps.renameDetector.detect(operations, dialect);
@@ -773,15 +794,9 @@ export class PushSchemaPipeline {
           toRenameResolutions(dispatchResult.confirmedRenames, candidates)
         );
 
-      // A UI save owns only the entity being edited. Drop any operation that
-      // targets a code-first/plugin-owned table so the Schema Builder can never
-      // alter schema the user did not edit. Code-first applies (db:sync) are
-      // the authority for those tables and keep the full operation set.
-      const { kept: resolvedOps, skipped: skippedLockedOps } =
-        source === "ui"
-          ? excludeLockedTableOps(allResolvedOps, desired)
-          : { kept: allResolvedOps, skipped: [] as Operation[] };
-      logSkippedLockedOps(skippedLockedOps);
+      // Already excluded above, before the operation set was read. Resolutions are keyed to the
+      // candidates and events that set produced, so none of them can reintroduce a locked table.
+      const resolvedOps = allResolvedOps;
 
       // Phase C+D: execute pre-resolution ops, then pushSchema for the rest.
       const drizzleSchema = this.testHooks._buildDrizzleSchemaOverride

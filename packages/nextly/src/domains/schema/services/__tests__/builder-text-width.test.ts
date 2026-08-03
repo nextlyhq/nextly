@@ -1,115 +1,99 @@
 import { describe, expect, it } from "vitest";
 
-import type { FieldConfig } from "../../../../collections/fields/types";
-import type { DesiredSchema } from "../../pipeline/types";
+import { buildDesiredTableFromFields } from "../../pipeline/diff/build-from-fields";
 import { resolveBuilderTextWidths } from "../builder-text-width";
-import { getColumnDescriptor } from "../field-column-descriptor";
 
-/**
- * The desired schema declares its fields as `FieldConfig` while the descriptor reads them as
- * `FieldDefinition`. `build-from-fields.ts` converts at exactly this boundary for the same reason,
- * so the assertions below go through the descriptor rather than reading the marker property:
- * the column a field produces is the contract, and how the width is recorded is not.
- */
-function mysqlType(field: FieldConfig): string | undefined {
-  return getColumnDescriptor(
-    field as unknown as Parameters<typeof getColumnDescriptor>[0],
-    "mysql"
-  )?.dialectType;
+/** Widened past the literal so a test can read back the modifiers the resolver writes. */
+function textField(extra: Record<string, unknown> = {}): {
+  name: string;
+  type: string;
+  options?: unknown;
+} {
+  return { name: "body", type: "text", ...extra };
 }
 
-function textField(extra: Record<string, unknown> = {}): FieldConfig {
-  return { name: "body", type: "text", ...extra } as unknown as FieldConfig;
+function bodyType(
+  fields: Parameters<typeof buildDesiredTableFromFields>[1],
+  builderOwned: boolean
+): string | undefined {
+  return buildDesiredTableFromFields("single_page", fields, "mysql", {
+    builderOwned,
+  }).columns.find(c => c.name === "body")?.type;
 }
 
-function schemaWith(
-  entity: Partial<DesiredSchema["singles"][string]>
-): DesiredSchema {
-  return {
-    collections: {},
-    singles: {
-      page: {
-        slug: "page",
-        tableName: "single_page",
-        fields: [],
-        ...entity,
-      },
-    },
-    components: {},
-  };
-}
+// The seam matters as much as the rule: preview and apply each build their own desired schema, and
+// resolving in only one of them reported a destructive type change against an untouched table.
+describe("buildDesiredTableFromFields — builder text width", () => {
+  it("gives a builder-owned text field an unbounded column on MySQL", () => {
+    expect(bodyType([textField()], true)).toBe("text");
+  });
+
+  it("leaves a code-first text field on the bounded default", () => {
+    expect(bodyType([textField()], false)).toBe("varchar(255)");
+  });
+
+  it("keeps a stated short variant bounded", () => {
+    expect(bodyType([textField({ options: { variant: "short" } })], true)).toBe(
+      "varchar(255)"
+    );
+  });
+
+  // A width the descriptor cannot render must not be read as a decision to stay bounded: doing so
+  // left a field declaring 500 characters in a varchar(255) column, rejecting values its own stored
+  // validation limit accepts.
+  it.each([
+    ["a validation maxLength", { validation: { maxLength: 500 } }],
+    ["a top-level length", { length: 500 }],
+  ])("does not treat %s as a reason to stay bounded", (_, extra) => {
+    expect(bodyType([textField(extra)], true)).toBe("text");
+  });
+
+  it("does not widen a type whose width is settled by what it holds", () => {
+    const table = buildDesiredTableFromFields(
+      "single_page",
+      [
+        { name: "email", type: "email" },
+        { name: "choice", type: "select" },
+      ],
+      "mysql",
+      { builderOwned: true }
+    );
+
+    for (const name of ["email", "choice"]) {
+      expect(table.columns.find(c => c.name === name)?.type).toBe(
+        "varchar(255)"
+      );
+    }
+  });
+});
 
 describe("resolveBuilderTextWidths", () => {
-  // MySQL renders the two kinds 255 characters apart, which is the whole reason this exists.
-  it("leaves a builder-owned text field unbounded on MySQL", () => {
-    const desired = schemaWith({ fields: [textField()] });
+  it("returns the original array when nothing needs resolving", () => {
+    const fields = [{ name: "n", type: "number" }];
 
-    resolveBuilderTextWidths(desired);
-
-    expect(mysqlType(desired.singles.page.fields[0])).toBe("text");
+    expect(resolveBuilderTextWidths(fields)).toBe(fields);
   });
 
-  // A locked entity's columns were built by the path whose default is the bounded kind, so
-  // rewriting them would make every code-first table read as drift.
-  it("leaves a locked entity on the bounded default", () => {
-    const desired = schemaWith({ fields: [textField()], locked: true });
+  // Running twice must not differ from running once: the resolved field states a variant, which the
+  // second pass reads as already answered.
+  it("is idempotent", () => {
+    const once = resolveBuilderTextWidths([textField()]);
 
-    resolveBuilderTextWidths(desired);
-
-    expect(mysqlType(desired.singles.page.fields[0])).toBe("varchar(255)");
-  });
-
-  it("resolves every entity, not only the one being saved", () => {
-    const desired: DesiredSchema = {
-      collections: {
-        posts: { slug: "posts", tableName: "dc_posts", fields: [textField()] },
-      },
-      singles: {},
-      components: {
-        hero: { slug: "hero", tableName: "comp_hero", fields: [textField()] },
-      },
-    };
-
-    resolveBuilderTextWidths(desired);
-
-    expect(mysqlType(desired.collections.posts.fields[0])).toBe("text");
-    expect(mysqlType(desired.components.hero.fields[0])).toBe("text");
-  });
-
-  it.each([
-    ["a stated variant", { options: { variant: "short" } }],
-    ["a top-level length", { length: 80 }],
-    ["a validation maxLength", { validation: { maxLength: 80 } }],
-  ])("treats %s as the author's answer and leaves it bounded", (_, extra) => {
-    const desired = schemaWith({ fields: [textField(extra)] });
-
-    resolveBuilderTextWidths(desired);
-
-    expect(mysqlType(desired.singles.page.fields[0])).toBe("varchar(255)");
+    expect(resolveBuilderTextWidths(once)).toBe(once);
   });
 
   // An array cannot carry a variant, and overwriting it with one would discard whatever it held.
   it("leaves a text field whose options is an array untouched", () => {
-    const field = textField({ options: [{ label: "A", value: "a" }] });
-    const desired = schemaWith({ fields: [field] });
+    const fields = [textField({ options: [{ label: "A", value: "a" }] })];
 
-    resolveBuilderTextWidths(desired);
-
-    expect(desired.singles.page.fields[0]).toBe(field);
+    expect(resolveBuilderTextWidths(fields)).toBe(fields);
   });
 
-  it("does not widen a type whose width is settled by what it holds", () => {
-    const desired = schemaWith({
-      fields: [
-        { name: "email", type: "email" } as unknown as FieldConfig,
-        { name: "password", type: "password" } as unknown as FieldConfig,
-      ],
-    });
+  it("preserves other modifiers on the field it resolves", () => {
+    const [field] = resolveBuilderTextWidths([
+      textField({ options: { target: "posts" } }),
+    ]);
 
-    resolveBuilderTextWidths(desired);
-
-    for (const field of desired.singles.page.fields) {
-      expect(mysqlType(field)).toBe("varchar(255)");
-    }
+    expect(field.options).toEqual({ target: "posts", variant: "long" });
   });
 });

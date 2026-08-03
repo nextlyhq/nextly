@@ -1,7 +1,5 @@
-import type { DesiredSchema } from "../pipeline/types";
-
 /**
- * A text field with no declared width, on an entity the Schema Builder owns, describes an unbounded
+ * A text field with no stated width, on an entity the Schema Builder owns, describes an unbounded
  * column.
  *
  * `getColumnDescriptor` reads an unstated width as the bounded kind, which renders `varchar(255)` on
@@ -10,42 +8,22 @@ import type { DesiredSchema } from "../pipeline/types";
  * apart, so leaving the silence to be interpreted means a field created before the move and an
  * identical field created after it hold different amounts of text.
  *
- * Resolving it by changing the descriptor's default instead would be wrong: that default is also
- * what every **code-first** table was built with, so moving it would make all of them read as drift
- * and stop `nextly migrate` from applying anything. The two paths need different answers because
- * they have different histories.
+ * Changing the descriptor's default instead would be wrong: that default is also what every
+ * code-first table was built with, so moving it would make all of them read as drift and stop
+ * `nextly migrate` from applying anything. The two paths need different answers because they have
+ * different histories, and `locked` already records which history a table has.
  *
- * Which history a table has is already recorded. `locked` marks an entity as owned by code-first
- * config or a plugin, so an unlocked entity is one the Builder created, and its unstated widths are
- * the Builder's. Reading that flag keeps the decision derivable from stored state rather than
- * carried in a field payload — which matters twice over: the payload schema declares `options` as
- * the select/radio choice **array**, so a marker written there fails validation, and only the
- * entity being saved passes through a handler while the diff compares every entity at once.
+ * 🔴 Applied where fields become columns rather than in a request handler. Preview and apply each
+ * build their own desired schema, and several handlers build one directly, so any placement further
+ * up is a placement one path can miss — which is not hypothetical: resolving this in the create
+ * handler alone left preview describing the very column that handler had just created as
+ * `varchar(255)`, reporting a destructive type change against a table nobody had touched.
  */
-export function resolveBuilderTextWidths(desired: DesiredSchema): void {
-  for (const group of [
-    desired.collections,
-    desired.singles,
-    desired.components,
-  ]) {
-    for (const entity of Object.values(group)) {
-      // A locked entity is code-first or plugin-owned, and its columns were built by the path whose
-      // default is the bounded kind. Rewriting those would make every one of them read as drift.
-      if (entity.locked === true) continue;
-      entity.fields = widenUnstatedText(entity.fields);
-    }
-  }
-}
 
-/**
- * The width signals a field can carry, named structurally because the desired schema's three entity
- * kinds each declare their own field element type.
- */
+/** The width signals a field can carry, named structurally because callers pass several field types. */
 interface WidthSignals {
   type?: string;
-  length?: number;
   options?: unknown;
-  validation?: { maxLength?: number } | null;
 }
 
 /** An `options` value a variant can be written onto without destroying what is already there. */
@@ -61,24 +39,34 @@ function modifierOptions(
   return { ...(options as Record<string, unknown>) };
 }
 
-function statesWidth(
-  field: WidthSignals,
-  options: Record<string, unknown>
-): boolean {
-  if (field.length !== undefined) return true;
-  if (typeof field.validation?.maxLength === "number") return true;
-  return options.variant !== undefined;
-}
+/**
+ * Resolve the width of every unstated text field in a Builder-owned entity's field list.
+ *
+ * Only an explicit `variant` counts as stating the width. A `maxLength` or a `length` deliberately
+ * does NOT, because the descriptor renders neither: treating one as authoritative would leave a
+ * field declaring 500 characters in a `varchar(255)` column, rejecting values the stored validation
+ * limit accepts. Until a width can survive the diff, the honest reading of an unstated field is
+ * unbounded — wider than a bounded column, and never narrower than the data it is asked to hold.
+ *
+ * Idempotent: a field this has resolved states a variant, so a second pass leaves it alone. Returns
+ * the original array when nothing needed resolving.
+ */
+export function resolveBuilderTextWidths<T>(
+  fields: readonly T[]
+): readonly T[] {
+  let changed = false;
 
-function widenUnstatedText<T>(fields: readonly T[]): T[] {
-  return fields.map(field => {
+  const out = fields.map(field => {
     const candidate = field as T & WidthSignals;
     if (candidate.type !== "text") return field;
 
     const options = modifierOptions(candidate.options);
     if (options === undefined) return field;
-    if (statesWidth(candidate, options)) return field;
+    if (options.variant !== undefined) return field;
 
+    changed = true;
     return { ...candidate, options: { ...options, variant: "long" } };
   });
+
+  return changed ? out : fields;
 }
