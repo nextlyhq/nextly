@@ -618,8 +618,10 @@ ${allColumnDefs.join(",\n")}
 
     // Find fields that were modified to add/remove an index
     for (const field of newFields) {
-      // Component fields have no parent column, so there is no index to add/drop.
-      if (field.type === STORAGE_FORMAT.fieldType) continue;
+      // A field with no parent column has no index to add or drop. Asked through the shared
+      // predicate: a many-to-many relationship has no column either, and indexing one emitted
+      // CREATE INDEX against a name the table does not have, which fails the whole save.
+      if (!fieldProducesColumn(field)) continue;
       const oldField = oldFieldMap.get(field.name);
       if (oldField && oldField.index !== field.index) {
         const idxCol = toSnakeCase(field.name);
@@ -655,9 +657,10 @@ ${allColumnDefs.join(",\n")}
       // Phase D: skip the renamed source — it's already been handled
       // above as ALTER TABLE RENAME COLUMN.
       if (field.name === renamedFromName) continue;
-      // Component fields never had a parent column, so there is nothing to drop
-      // (and SQLite's DROP COLUMN has no IF EXISTS to tolerate the absence).
-      if (field.type === STORAGE_FORMAT.fieldType) continue;
+      // A field with no parent column has nothing to drop, and SQLite's DROP COLUMN has no
+      // IF EXISTS to tolerate the absence. A many-to-many relationship is in that set too: its
+      // links live in a junction table, so dropping one must not touch the parent.
+      if (!fieldProducesColumn(field)) continue;
       if (!newFieldMap.has(field.name)) {
         const dropCol = toSnakeCase(field.name);
         // SQLite doesn't support IF EXISTS on DROP COLUMN
@@ -678,8 +681,9 @@ ${allColumnDefs.join(",\n")}
     // For simplicity, we skip column modifications for SQLite
     if (this.dialect !== "sqlite") {
       for (const field of newFields) {
-        // Component fields have no parent column to alter.
-        if (field.type === STORAGE_FORMAT.fieldType) continue;
+        // A field with no parent column has nothing to alter. Toggling `required` on a
+        // many-to-many emitted ALTER COLUMN against a name the table does not have.
+        if (!fieldProducesColumn(field)) continue;
         const oldField = oldFieldMap.get(field.name);
         if (oldField && this.isFieldModified(oldField, field)) {
           const alterCol = toSnakeCase(field.name);

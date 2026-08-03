@@ -304,6 +304,92 @@ describe("all three descriptions of the main table agree", () => {
   });
 });
 
+describe("altering a field that has no column", () => {
+  // The CREATE path knows a many-to-many stores its links in a junction table. The ALTER paths
+  // asked the same question by naming the component type alone, so a many-to-many reached them as
+  // though it owned a column: toggling its index emitted CREATE INDEX and ALTER COLUMN against a
+  // name the table does not have, which fails the whole save rather than that one field.
+  function alterSql(
+    dialect: SupportedDialect,
+    oldFields: unknown[],
+    newFields: unknown[]
+  ): string {
+    const service = new DynamicCollectionSchemaService(undefined, dialect);
+    const alter = service as unknown as {
+      generateAlterTableMigration: (
+        table: string,
+        oldFields: unknown[],
+        newFields: unknown[]
+      ) => string;
+    };
+    return alter.generateAlterTableMigration("dc_p", oldFields, newFields);
+  }
+
+  const columnLess = {
+    manyToMany: (extra: Record<string, unknown>) => ({
+      name: "tags",
+      type: "relationship",
+      relationTo: "tags",
+      options: { relationTo: "tags", relationType: "manyToMany" },
+      ...extra,
+    }),
+    component: (extra: Record<string, unknown>) => ({
+      name: "tags",
+      type: "component",
+      component: "hero",
+      ...extra,
+    }),
+  };
+
+  it("emits no column statement when its index or flags change", () => {
+    for (const dialect of DIALECTS) {
+      for (const [label, make] of Object.entries(columnLess)) {
+        for (const change of [
+          { index: true },
+          { required: true },
+          { unique: true },
+        ]) {
+          const sql = alterSql(dialect, [make({})], [make(change)]);
+          const offending = [
+            "CREATE INDEX",
+            "DROP INDEX",
+            "ALTER COLUMN",
+            "ADD COLUMN",
+          ].filter(statement => sql.includes(statement));
+          const at = `${dialect}.${label}.${Object.keys(change)[0]}`;
+
+          expect({ [at]: offending }).toEqual({ [at]: [] });
+        }
+      }
+    }
+  });
+
+  it("emits no DROP COLUMN when one is removed", () => {
+    // The junction table is torn down elsewhere; the parent never had the column. On SQLite this
+    // mattered most, because its DROP COLUMN carries no IF EXISTS to absorb the mistake.
+    for (const dialect of DIALECTS) {
+      for (const [label, make] of Object.entries(columnLess)) {
+        const sql = alterSql(dialect, [make({})], []);
+
+        expect({
+          [`${dialect}.${label}`]: sql.includes("DROP COLUMN"),
+        }).toEqual({ [`${dialect}.${label}`]: false });
+      }
+    }
+  });
+
+  it("still alters an ordinary field", () => {
+    // The mirror, so the tests above cannot be satisfied by emitting nothing at all.
+    const sql = alterSql(
+      "postgresql",
+      [{ name: "headline", type: "text" }],
+      [{ name: "headline", type: "text", index: true }]
+    );
+
+    expect(sql).toContain("CREATE INDEX");
+  });
+});
+
 describe("two field names that reach one column", () => {
   it("are refused as duplicates before any DDL is generated", () => {
     // `foo_bar` and `FooBar` are different names that become the same column, so a table carrying
