@@ -137,6 +137,35 @@ describe("version routes", () => {
     expect(parsed.method).toBeUndefined();
   });
 
+  it("parses discarding a collection entry's working draft as a write", () => {
+    const parsed = parseRestRoute(
+      ["collections", "posts", "entries", "e1", "versions", "working-draft"],
+      "DELETE"
+    );
+
+    expect(parsed).toMatchObject({
+      service: "collections",
+      method: "discardWorkingDraft",
+      // Discarding rewrites what the editor sees (it reverts the document to its
+      // live published row), so it resolves to update-{slug}, not read-{slug}.
+      operation: "update",
+      routeParams: { collectionName: "posts", entryId: "e1" },
+    });
+    // `working-draft` is a named sub-resource, never captured as a version number.
+    expect(parsed.routeParams?.versionNo).toBeUndefined();
+  });
+
+  it("does not discard a working draft on a POST", () => {
+    // Only DELETE discards; a create-verb on the same path owns no route and
+    // must not fall through to an entry write.
+    expect(
+      parseRestRoute(
+        ["collections", "posts", "entries", "e1", "versions", "working-draft"],
+        "POST"
+      ).method
+    ).toBeUndefined();
+  });
+
   it("still matches the entry itself when no segments trail", () => {
     // The guard must not cost the entry routes their own paths.
     expect(

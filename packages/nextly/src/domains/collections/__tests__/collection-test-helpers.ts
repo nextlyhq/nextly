@@ -237,6 +237,25 @@ export function createMockRelationshipService(): MockRecord {
     expandRelationships: vi
       .fn()
       .mockImplementation((entry: unknown) => Promise.resolve(entry)),
+    // The read paths call this once the document is assembled. A double that
+    // omits it certifies a path that throws for real.
+    applyNestedFieldHooks: vi.fn().mockResolvedValue(undefined),
+    // Paired with it: the list path finishes the rows it collected once the
+    // whole listing has been walked, so a double carrying only the first half
+    // certifies a path that throws for real.
+    finalizeRelatedRows: vi.fn().mockResolvedValue(undefined),
+    // The authoritative re-sanitization the read paths run over the assembled
+    // response after every source hook. Both list and detail paths now call it on
+    // every successful read, so a double without it certifies a path that throws.
+    reprojectRelatedRows: vi.fn().mockResolvedValue(undefined),
+    createNestedHookState: vi.fn().mockImplementation(() => ({
+      visited: new Set(),
+      fields: new Map(),
+      labelFields: new Map(),
+      redactions: new WeakMap(),
+      pending: [],
+      sanitized: new Map(),
+    })),
     insertManyToManyRelations: vi.fn().mockResolvedValue(undefined),
     deleteManyToManyRelations: vi.fn().mockResolvedValue(undefined),
   };

@@ -708,6 +708,7 @@ export class CollectionSyncService extends BaseService {
               parentTable: tableName,
             });
             await teardownEntityI18n({
+              kind: "collection",
               adapter: this.adapter,
               slug,
               tableName,

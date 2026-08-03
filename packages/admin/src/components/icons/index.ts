@@ -147,7 +147,7 @@ export {
   Phone, // Collection Settings: icon picker
   Play, // APIPlayground: execute request button
   Plus,
-  Puzzle, // Component Builder: default component icon
+  Puzzle, // Field Group builder: default field-group icon
   Quote, // Rich text editor
   Redo, // Rich text editor
   RefreshCw,

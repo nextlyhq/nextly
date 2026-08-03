@@ -7,7 +7,11 @@
  */
 import { describe, it, expect } from "vitest";
 
-import { mapIntentToPayload, passwordFieldNames } from "../useEntryForm";
+import {
+  mapIntentToPayload,
+  passwordFieldNames,
+  resolveDefaultSaveIntent,
+} from "../useEntryForm";
 
 const RAW = { title: "Hello", body: "Body content", customField: 42 };
 
@@ -50,6 +54,15 @@ describe("mapIntentToPayload", () => {
     // submits with whatever status the server already has. The mapping
     // must not inject a status field in that case.
     expect(mapIntentToPayload(RAW, undefined)).toEqual(RAW);
+  });
+
+  it("save-working-draft → passes rawData through without a status", () => {
+    // Why: a status-less save on a drafts-enabled published entry is exactly
+    // what tells the server to store a pending working draft and leave the
+    // live row untouched. Injecting any status would re-write the live row.
+    const result = mapIntentToPayload(RAW, "save-working-draft");
+    expect(result).toEqual(RAW);
+    expect(result).not.toHaveProperty("status");
   });
 
   it("does not mutate the input rawData object", () => {
@@ -125,5 +138,60 @@ describe("passwordFieldNames", () => {
       },
     ] as unknown as Parameters<typeof passwordFieldNames>[0];
     expect(passwordFieldNames(fields)).toEqual(new Set());
+  });
+});
+
+describe("resolveDefaultSaveIntent", () => {
+  const base = { mode: "edit" as const, hasStatus: true, draftsEnabled: true };
+
+  it("published + drafts on → save-working-draft", () => {
+    expect(
+      resolveDefaultSaveIntent({ ...base, effectiveStatus: "published" })
+    ).toBe("save-working-draft");
+  });
+
+  it("published + drafts off → save-changes", () => {
+    expect(
+      resolveDefaultSaveIntent({
+        ...base,
+        draftsEnabled: false,
+        effectiveStatus: "published",
+      })
+    ).toBe("save-changes");
+  });
+
+  it("draft → save-draft", () => {
+    expect(
+      resolveDefaultSaveIntent({ ...base, effectiveStatus: "draft" })
+    ).toBe("save-draft");
+  });
+
+  it("an unpublished translation (no active-locale status) saves a draft, not save-changes", () => {
+    // The core of the fix: on a non-default locale the main row may be published
+    // while this translation is not, so effectiveStatus is undefined. Keying off
+    // it saves a draft rather than re-publishing the wrong language.
+    expect(
+      resolveDefaultSaveIntent({ ...base, effectiveStatus: undefined })
+    ).toBe("save-draft");
+  });
+
+  it("non-status collection → no lifecycle intent", () => {
+    expect(
+      resolveDefaultSaveIntent({
+        ...base,
+        hasStatus: false,
+        effectiveStatus: "published",
+      })
+    ).toBeUndefined();
+  });
+
+  it("create mode → no lifecycle intent", () => {
+    expect(
+      resolveDefaultSaveIntent({
+        ...base,
+        mode: "create",
+        effectiveStatus: undefined,
+      })
+    ).toBeUndefined();
   });
 });

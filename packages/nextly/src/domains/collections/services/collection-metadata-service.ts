@@ -10,6 +10,7 @@ import { toDbError } from "../../../database/errors";
 // still consume the result tuple; only the internal error mapping changed.
 import type { PermissionSeedService } from "../../../domains/auth/services/permission-seed-service";
 import { NextlyError, isProgrammerError } from "../../../errors";
+import { typedErrorEnvelopeFields } from "../../../errors/from-service-envelope";
 import type { CollectionFileManager } from "../../../services/collection-file-manager";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
@@ -25,6 +26,14 @@ export interface MetadataServiceResult {
   message: string;
   data: Record<string, unknown> | Record<string, unknown>[] | null;
   meta?: Record<string, unknown>;
+  /**
+   * The failure's typed fields, so a boundary can rebuild the exact error
+   * rather than guess it from the status. Absent on success and on an untyped
+   * failure.
+   */
+  code?: string;
+  messageKey?: string;
+  publicData?: unknown;
 }
 
 /**
@@ -49,6 +58,10 @@ function errorToMetadataResult(
       statusCode: error.statusCode,
       message: error.publicMessage,
       data: null,
+      // The code above all: a boundary rebuilding from status alone cannot tell
+      // a DUPLICATE from a CONFLICT, and an occupied slug would be reported as
+      // a stale-resource conflict.
+      ...typedErrorEnvelopeFields(error),
     };
   }
   // Best-effort DbError detection — fromDatabaseError handles both DbError
@@ -85,6 +98,10 @@ function errorToMetadataResult(
     statusCode: mapped.statusCode,
     message: mapped.publicMessage,
     data: null,
+    // The mapped error is typed too. Without its code a raw unique violation
+    // becomes a code-less 409, which a boundary reads as staleness rather than
+    // the duplicate it is, and a mapped timeout loses DATABASE_ERROR.
+    ...typedErrorEnvelopeFields(mapped),
   };
 }
 
@@ -716,7 +733,32 @@ export class CollectionMetadataService extends BaseService {
 
         if (this.isDevelopment()) {
           try {
-            await this.fileManager.runMigration(updateArtifacts.migrationSQL);
+            // The file is what a fresh database will replay; this is what THIS one needs. They
+            // differ only where unattended provisioning left the local schema in a shape no
+            // migration history produces, and running the file here would then fail on a column
+            // that is already present.
+            await this.fileManager.runMigration(
+              updateArtifacts.localMigrationSQL ?? updateArtifacts.migrationSQL
+            );
+            // The companion may have just been dropped or reshaped by that migration, and a
+            // `ready` verdict outlives the table it describes: for up to its TTL, concurrent
+            // requests on this same process would keep querying a relation that is gone instead of
+            // reading the restored main-table values. Forgotten unconditionally — the verdict is
+            // re-resolved on demand, so discarding one that was still valid costs a probe, while
+            // keeping one that is not costs correctness. The dispatcher disable paths already do
+            // this; the metadata path drops through `runMigration` and did not.
+            {
+              const existing = await this.collectionService.getCollection(
+                params.collectionName
+              );
+              const { forgetCompanionReadiness } = await import(
+                "../../i18n/runtime/companion-readiness"
+              );
+              forgetCompanionReadiness(
+                this.adapter,
+                `${existing.tableName}_locales`
+              );
+            }
             // Get collection to access table name for verification
             const existingCollection =
               await this.collectionService.getCollection(params.collectionName);
@@ -855,6 +897,7 @@ export class CollectionMetadataService extends BaseService {
       // environment, and the shared-archive purge is DML that no migration file should
       // carry (the archive table is created lazily and may not exist).
       await teardownEntityI18n({
+        kind: "collection",
         adapter: this.adapter,
         slug: params.collectionName,
         tableName: collection.tableName,

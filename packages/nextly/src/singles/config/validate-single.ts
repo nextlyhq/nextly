@@ -23,6 +23,8 @@
 
 import { RESERVED_SLUGS } from "../../collections/config/validate-config";
 import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
+import { toSnakeCase } from "../../domains/schema/services/field-column-descriptor";
+import { isReservedSystemColumn } from "../../lib/system-columns";
 import { SYSTEM_RESOURCES } from "../../schemas/_zod/rbac";
 import {
   type BaseValidationError,
@@ -32,8 +34,6 @@ import {
   validateFieldTypeShared,
   validateNumberDecimalDimensionsShared,
   validateRelationshipTargetShared,
-  validateBlocksDefaultShared,
-  validateBlocksPolicyShared,
   validatePluginFieldOptionsShared,
   validateSelectOptionsShared,
   validateSlugShared,
@@ -72,6 +72,8 @@ export type SingleValidationErrorCode =
   | "FIELD_NAME_INVALID_FORMAT"
   | "FIELD_NAME_SQL_KEYWORD"
   | "FIELD_NAME_DUPLICATE"
+  // A field named after a column the system injects onto the Single's table.
+  | "FIELD_NAME_RESERVED"
   | "FIELD_TYPE_REQUIRED"
   | "FIELD_TYPE_INVALID"
   // A declared default the field's own rules reject.
@@ -178,6 +180,20 @@ function validateField(
 
   // Plugin types are accepted only when they opted into the entries surface —
   // registration alone is not authorization for a single field.
+  // Whether a name is usable as a column does not depend on the field's type,
+  // and a contributed type has no answer here at all — it defers to boot. Left
+  // behind the type check, a plugin field's name was never checked by anything:
+  // the deferral returns before this, and the boot gate asks only whether the
+  // token was claimed. A duplicate or SQL-reserved name reached schema
+  // generation as a colliding column.
+  validateFieldNameShared(
+    f.name,
+    path,
+    errsBase,
+    seenNames,
+    DEFAULT_SQL_KEYWORDS_SET
+  );
+
   if (
     !validateFieldTypeShared(f.type, path, errsBase, type =>
       isPluginFieldTypeOnSurface(type, "entries")
@@ -186,14 +202,6 @@ function validateField(
     return;
   }
   const fieldType = f.type as string;
-
-  validateFieldNameShared(
-    f.name,
-    path,
-    errsBase,
-    seenNames,
-    DEFAULT_SQL_KEYWORDS_SET
-  );
 
   // A plugin type reaches none of the cases below, so its own declaration
   // checks run here rather than as a case that could never be written for a
@@ -211,8 +219,6 @@ function validateField(
 
     case "blocks":
       // A blocks default must satisfy the same field policy the write applies.
-      validateBlocksPolicyShared(f, path, errsBase);
-      validateBlocksDefaultShared(f, path, errsBase);
       break;
 
     case "relationship":
@@ -257,6 +263,12 @@ function validateField(
   }
 }
 
+// System columns injected onto a Single's table, under both the snake_case name
+// and the camelCase alias that snake-cases to the same column. A Single gets no
+// owner column, so unlike a collection only the first-publication marker is
+// reserved here — which is why this check had to be added rather than extended:
+// until the marker reached a Single's table there was nothing to collide with.
+
 /**
  * Validate an array of field configurations.
  */
@@ -299,6 +311,24 @@ function validateFields(
     });
     return;
   }
+
+  // Block the injected system columns at the top level, before per-field
+  // validation. Reserved even when the draft/publish lifecycle is off, so
+  // enabling it later fails here rather than at migration time. Nested
+  // repeater/group fields live inside JSON and are exempt, as for collections.
+  fields.forEach((field, index) => {
+    if (!field || typeof field !== "object") return;
+    const name = (field as Record<string, unknown>).name;
+    if (typeof name !== "string") return;
+    const column = toSnakeCase(name);
+    if (isReservedSystemColumn(column, "singleConfig")) {
+      errors.push({
+        path: `${path}[${index}].name`,
+        message: `Field name '${name}' is reserved: it becomes the system column '${column}'`,
+        code: "FIELD_NAME_RESERVED",
+      });
+    }
+  });
 
   // Why: empty fields list is now valid for both code-first defines and the
   // new modal-driven create flow (Builder redesign PR 2/3). System columns

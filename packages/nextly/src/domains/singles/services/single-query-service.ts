@@ -46,6 +46,7 @@ import {
 } from "../../../services/access";
 import { GENERIC_DEFAULT_OWNER_FIELD } from "../../../services/access/types";
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
+import type { RelatedRowReadContext } from "../../../services/collections/related-row-read-context";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import { BaseService } from "../../../shared/base-service";
@@ -77,10 +78,13 @@ import {
 } from "../../i18n/resolve-locale";
 import {
   buildCompanionSchema,
-  companionTableExists,
   splitLocalizedWrite,
   upsertCompanionRow,
 } from "../../i18n/runtime/companion-io";
+import {
+  isCompanionReady,
+  resolveCompanionSchemaReadiness,
+} from "../../i18n/runtime/companion-readiness";
 import { getColumnDescriptor } from "../../schema/services/field-column-descriptor";
 import { captureInTx } from "../../versions/capture-in-tx";
 import { VersionCaptureService } from "../../versions/version-capture-service";
@@ -95,7 +99,7 @@ import type {
 import type { SingleRegistryService } from "./single-registry-service";
 import {
   assertNoPasswordDefault,
-  assertValidBlocksDefault,
+  assertValidPluginDefault,
   buildSingleErrorResult,
   collectAllMediaIds,
   deserializeJsonFields,
@@ -765,20 +769,21 @@ export class SingleQueryService extends BaseService {
           doc,
           options.locale,
           options.fallbackLocale,
-          statusFilterValue,
-          strict
+          statusFilterValue
         );
       } catch (error) {
-        // Only strict rethrows, and the result builder puts a bare Error's own
-        // message on the wire — companion table and column names.
-        if (!strict) throw error;
+        // Normalized whether or not the caller is judging an access rule on the result. A
+        // companion read failure propagates, and the result builder puts a bare Error's own
+        // message on the wire — the failed query, with companion table and column names in it.
         throw NextlyError.is(error)
           ? error
           : NextlyError.internal({
               cause: error instanceof Error ? error : undefined,
               logContext: {
                 single: slug,
-                reason: "translation-load-failed-during-authorization",
+                reason: strict
+                  ? "translation-load-failed-during-authorization"
+                  : "translation-load-failed",
               },
             });
       }
@@ -787,6 +792,12 @@ export class SingleQueryService extends BaseService {
     doc = this.deserializeJsonFields(doc, singleMeta.fields);
     params.captureReferences?.(doc);
     doc = await this.expandUploadFields(doc, singleMeta.fields);
+    // The language this read resolved to, shared by both expansions below so a
+    // related row and a related row inside a component are judged alike.
+    const readLocale = this.resolveLocaleChain(
+      options.locale,
+      options.fallbackLocale
+    )?.[0];
     doc = await this.expandRelationshipFields(
       doc,
       singleMeta.fields,
@@ -804,6 +815,15 @@ export class SingleQueryService extends BaseService {
         // Collects the references a target collection refused, so the
         // completeness check below reads them as absent on purpose.
         withheldByAccess: params.withheldByAccess,
+        // A target collection's read rule may filter on one of its own
+        // localized fields, which is a companion lookup rather than a column.
+        locale: readLocale,
+        // Only "read everything" propagates, and only when asked for: the
+        // admin sends it on every read, a public caller never does.
+        status:
+          options.status === "all" || options.overrideAccess === true
+            ? "all"
+            : undefined,
       },
       strict,
       // The read path threads a caller, so the target collection's field rules
@@ -837,7 +857,13 @@ export class SingleQueryService extends BaseService {
             // too, and the rows of one population share a policy cache.
             withheldByAccess: params.withheldByAccess,
             targetPolicies: new Map(),
+            targetCompanions: new Map(),
             authenticatedScope: options.authenticatedScope,
+            locale: readLocale,
+            status:
+              options.status === "all" || options.overrideAccess === true
+                ? "all"
+                : undefined,
           },
           // Read errors otherwise become empty component values, which reads to a
           // rule exactly like a component that holds nothing.
@@ -1125,7 +1151,9 @@ export class SingleQueryService extends BaseService {
     // first version, its localized defaults) driven by a caller about to be
     // denied. Built in memory; nothing is persisted here, and the row the read
     // goes on to create is judged again on the way out.
-    const prospective = row ? undefined : this.buildDefaultDocument(singleMeta);
+    const prospective = row
+      ? undefined
+      : await this.buildDefaultDocument(singleMeta);
     // Either way the rule is shown the document as the read would render it.
     // A draft's stored form is not that: `buildDefaultDocument` leaves group,
     // repeater and JSON defaults in their serialized form, so a rule reading
@@ -1715,13 +1743,7 @@ export class SingleQueryService extends BaseService {
     doc: Record<string, unknown>,
     locale: string | undefined,
     fallbackLocale: string | false | undefined,
-    statusFilterValue: string | undefined,
-    /**
-     * Surface companion failures rather than reading through them. A swallowed
-     * error leaves the main row's value in place, which a rule cannot tell
-     * apart from a translation that says so.
-     */
-    strict = false
+    statusFilterValue: string | undefined
   ): Promise<void> {
     const localeChain = this.resolveLocaleChain(locale, fallbackLocale);
     if (!localeChain) return;
@@ -1751,7 +1773,8 @@ export class SingleQueryService extends BaseService {
         companion.hasStatus && statusFilterValue
           ? statusFilterValue
           : undefined,
-      strict,
+      // A pooled read, so this may resolve rather than only read what is remembered.
+      readiness: await resolveCompanionSchemaReadiness(this.adapter, companion),
     });
   }
 
@@ -1776,16 +1799,19 @@ export class SingleQueryService extends BaseService {
     strict: boolean
   ): Promise<void> {
     try {
-      await this.populateTranslationMeta(slug, singleMeta, doc, strict);
+      await this.populateTranslationMeta(slug, singleMeta, doc);
     } catch (error) {
-      if (!strict) throw error;
+      // Same reasoning as the overlay above: a failed overview read reaches here, and is
+      // normalized rather than handed to the wire as the driver wrote it.
       throw NextlyError.is(error)
         ? error
         : NextlyError.internal({
             cause: error instanceof Error ? error : undefined,
             logContext: {
               single: slug,
-              reason: "translation-overview-failed-during-authorization",
+              reason: strict
+                ? "translation-overview-failed-during-authorization"
+                : "translation-overview-failed",
             },
           });
     }
@@ -1794,13 +1820,7 @@ export class SingleQueryService extends BaseService {
   private async populateTranslationMeta(
     slug: string,
     singleMeta: DynamicSingleRecord,
-    doc: Record<string, unknown>,
-    /**
-     * Surface a failed overview read instead of leaving the field off. A rule
-     * deciding on `_translations` cannot tell an untranslated Single from one
-     * whose overview could not be loaded.
-     */
-    strict = false
+    doc: Record<string, unknown>
   ): Promise<void> {
     // Gate on THIS single's flag, not just app-level localization — a non-localized single has
     // no companion, so there is no per-locale translation status to attach.
@@ -1823,7 +1843,7 @@ export class SingleQueryService extends BaseService {
       hasStatus: companion.hasStatus,
       // The Single's own row id keys the companion `_parent`, same as the collection path.
       idKey: "id",
-      strict,
+      readiness: await resolveCompanionSchemaReadiness(this.adapter, companion),
     });
   }
 
@@ -1887,7 +1907,7 @@ export class SingleQueryService extends BaseService {
    * without the publish permission) never persists a row it would then have to
    * delete — a delete that could clobber a concurrent writer's row.
    */
-  buildDefaultDocument(singleMeta: DynamicSingleRecord): {
+  async buildDefaultDocument(singleMeta: DynamicSingleRecord): Promise<{
     document: SingleDocument;
     insertValues: Record<string, unknown>;
     /**
@@ -1898,7 +1918,7 @@ export class SingleQueryService extends BaseService {
      * first written.
      */
     localizedDefaults: Record<string, unknown>;
-  } {
+  }> {
     const now = new Date();
     const id = crypto.randomUUID();
 
@@ -1996,17 +2016,15 @@ export class SingleQueryService extends BaseService {
           typeof defaultSource.defaultValue === "function"
             ? defaultSource.defaultValue(logicalDefaults)
             : defaultSource.defaultValue;
-        // A blocks default is checked here rather than only at config load,
-        // because a function default can only be resolved against real data.
-        // This row is inserted directly on first read, without going through
-        // the write path, so nothing downstream would catch a document the
-        // field's own policy rejects — and the admin control is read-only, so
-        // the stored value could not be corrected from the UI.
-        assertValidBlocksDefault(defaultSource, resolved, singleMeta.slug);
         // Same direct-insert reasoning for passwords: this path never runs
         // `hashPasswordFieldValues`, so a resolved password default would persist
         // in plaintext. Refuse it (a password must be set explicitly to be hashed).
         assertNoPasswordDefault(field, singleMeta.slug);
+        // A contributed type's own rules over the resolved value. This row is
+        // inserted directly on first read, so nothing downstream would catch a
+        // value the field's own type rejects — and a contributed control may be
+        // read-only, leaving the stored value uncorrectable from the UI.
+        await assertValidPluginDefault(field, resolved, singleMeta.slug);
         // Clone before exposing: a live STATIC structured default is the object
         // stored on the config, so handing that reference to later dependent
         // defaults (which may sort/mutate it) would corrupt the config itself.
@@ -2152,7 +2170,9 @@ export class SingleQueryService extends BaseService {
       localizedDefaults
     );
     if (!companion) return false;
-    return companionTableExists(this.adapter, companion.companionTableName);
+    // Only `ready` matters here — a seed either goes into the companion or does not — so this
+    // takes the cheap form rather than paying an introspection to learn why it might not be.
+    return isCompanionReady(this.adapter, companion.companionTableName);
   }
 
   /**
@@ -2215,7 +2235,7 @@ export class SingleQueryService extends BaseService {
       insertValues: snakeCaseDefaults,
       document,
       localizedDefaults,
-    } = options?.draft ?? this.buildDefaultDocument(singleMeta);
+    } = options?.draft ?? (await this.buildDefaultDocument(singleMeta));
     const id = snakeCaseDefaults.id as string;
     const status = (document as { status?: string }).status;
 
@@ -2428,24 +2448,7 @@ export class SingleQueryService extends BaseService {
     // collection's fields. Enforcement is opt-in because a caller that has not
     // supplied a user is indistinguishable from an anonymous one here, and
     // enforcing for the former strips protected fields from everybody.
-    access: {
-      enforceFieldAccess?: boolean;
-      /**
-       * Evaluate the target collection's own read rules even when field
-       * redaction is off, so the authorization view is not shown a row the
-       * response will withhold.
-       */
-      enforceCollectionAccess?: boolean;
-      user?: UserContext;
-      overrideAccess?: boolean;
-      /**
-       * The caller's authenticated scope. A scoped API key is judged on its
-       * own grant, so it must not inherit its owner's super-admin bypass when
-       * a related row's collection rules are evaluated.
-       */
-      authenticatedScope?: AuthenticatedScope;
-      withheldByAccess?: Set<string>;
-    } = {},
+    access: RelatedRowReadContext = {},
     /**
      * Propagate expansion failures instead of returning the document
      * unexpanded. A response is better served incomplete than not at all, but a
@@ -2496,10 +2499,12 @@ export class SingleQueryService extends BaseService {
           // rather than having them stripped as if nobody were asking.
           enforceFieldAccess: access.enforceFieldAccess,
           enforceCollectionAccess: access.enforceCollectionAccess,
-          user: access.user as Record<string, unknown> | undefined,
+          user: access.user,
           overrideAccess: access.overrideAccess,
           authenticatedScope: access.authenticatedScope,
           withheldByAccess: access.withheldByAccess,
+          locale: access.locale,
+          status: access.status,
         }
       );
       return expandedDoc as SingleDocument;

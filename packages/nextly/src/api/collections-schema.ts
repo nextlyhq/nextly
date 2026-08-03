@@ -86,6 +86,12 @@ const createCollectionSchema = z.object({
   // Version history opt-in. Default off: capture adds a row to nextly_versions
   // on every save, which no existing caller has asked for.
   versions: z.boolean().optional(),
+  // Retention: durable versions kept per document. `false` = unlimited, a
+  // non-negative integer = keep that many, absent = the default (50). Only
+  // meaningful when `versions` is on.
+  versionsMaxPerDoc: z
+    .union([z.number().int().nonnegative(), z.literal(false)])
+    .optional(),
   // Cache-revalidation opt-out. Default on (absent): writes bust the standard
   // nextly:* tags; false persists the disable config so this collection busts
   // nothing.
@@ -286,8 +292,11 @@ export const POST = withErrorHandler(async (request: Request) => {
     // table is provisioned on the next migrate).
     localized: validated.localized === true,
     // Version history opt-in, normalized to the resolved config the column
-    // holds and every runtime reader tests.
-    versions: resolveBuilderVersions(validated.versions),
+    // holds and every runtime reader tests. Retention rides with the switch.
+    versions: resolveBuilderVersions(
+      validated.versions,
+      validated.versionsMaxPerDoc
+    ),
     // Cache-revalidation opt-out, normalized to the resolved config the write
     // path reads (null = standard tags, { disable: true } = off).
     revalidate: resolveBuilderRevalidate(validated.revalidate),

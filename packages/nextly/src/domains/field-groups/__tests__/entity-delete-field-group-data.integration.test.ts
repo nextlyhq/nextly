@@ -17,6 +17,8 @@
  */
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { createMySqlAdapter } from "@nextlyhq/adapter-mysql";
 import { createPostgresAdapter } from "@nextlyhq/adapter-postgres";
 import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
@@ -131,7 +133,11 @@ for (const entry of DIALECTS) {
       }
       registry.registerDynamicSchema(
         name,
-        schemaService.generateRuntimeSchema(name, fields)
+        // The fixture created this table with the production DDL generator on
+        // the line above, so it carries the spelling that generator writes.
+        schemaService.generateRuntimeSchema(name, fields, {
+          typeColumn: STORAGE_FORMAT.columns.type,
+        })
       );
     }
 

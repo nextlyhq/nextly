@@ -36,7 +36,6 @@ import {
   index as sqliteIndex,
 } from "drizzle-orm/sqlite-core";
 
-import { emptyBlockDocumentJson } from "../../../collections/fields/blocks-document";
 import {
   isTextField,
   isTextareaField,
@@ -54,7 +53,6 @@ import {
   isRepeaterField,
   isGroupField,
   isJSONField,
-  isBlocksField,
   isFieldGroupField,
   isDataField,
 } from "../../../collections/fields/guards";
@@ -65,11 +63,16 @@ import type {
 } from "../../../collections/fields/types";
 import { env } from "../../../lib/env";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import { pluginEmptyColumnDefault } from "../../../shared/lib/plugin-storage";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import {
   DEFAULT_DECIMAL_PRECISION,
   DEFAULT_DECIMAL_SCALE,
 } from "../../schema/services/field-column-descriptor";
+import {
+  isPluginDataField,
+  pluginStorageFieldType,
+} from "../../schema/services/plugin-codegen";
 import { quoteJsonSqlDefault } from "../../schema/utils/sql-literal";
 
 export type SupportedDialect = "postgresql" | "mysql" | "sqlite";
@@ -143,6 +146,22 @@ const TIMESTAMP_DEFAULT: Record<SupportedDialect, string> = {
   sqlite: "DEFAULT (strftime('%s', 'now'))",
 };
 
+/**
+ * What `generateRuntimeSchema` needs beyond the fields.
+ *
+ * `typeColumn` is required rather than defaulted. The storage migration renames
+ * the discriminator, so the right physical name is a property of the database in
+ * front of us, and a default would let a call site that never learned to resolve
+ * it compile and then silently project a column that is not there. Required
+ * makes the type checker the completeness proof. Callers supply either the
+ * resolved name from the catalog or, for a table this process just created,
+ * `STORAGE_FORMAT.columns.type` — the same constant the DDL just wrote.
+ */
+export interface RuntimeSchemaOptions {
+  localized?: boolean;
+  typeColumn: string;
+}
+
 export class FieldGroupSchemaService {
   private readonly dialect: SupportedDialect;
   private readonly q: string;
@@ -208,7 +227,7 @@ export class FieldGroupSchemaService {
     );
 
     for (const field of fields) {
-      if (!isDataField(field)) continue;
+      if (!isDataField(field) && !isPluginDataField(field)) continue;
       // Skip component fields — data lives in the referenced component's table.
       if (isFieldGroupField(field)) continue;
       // i18n: translatable columns live in the companion, not the main comp_ table.
@@ -216,7 +235,7 @@ export class FieldGroupSchemaService {
         continue;
       }
 
-      const columnSQL = this.generateColumnSQL(field);
+      const columnSQL = this.generateColumnSQL(this.asMappableField(field));
       if (columnSQL) {
         lines.push(`  ${columnSQL},`);
       }
@@ -253,7 +272,7 @@ export class FieldGroupSchemaService {
     }
 
     for (const field of fields) {
-      if (!isDataField(field)) continue;
+      if (!isDataField(field) && !isPluginDataField(field)) continue;
       if (isFieldGroupField(field)) continue;
       if (!("name" in field) || !field.name) continue;
       // Localized fields live in the companion, not the main comp_ table — no main index.
@@ -275,7 +294,7 @@ export class FieldGroupSchemaService {
     }
 
     for (const field of fields) {
-      if (!isDataField(field)) continue;
+      if (!isDataField(field) && !isPluginDataField(field)) continue;
       if (isFieldGroupField(field)) continue;
       if (!("name" in field) || !field.name) continue;
       // Localized fields live in the companion, not the main comp_ table — no main index.
@@ -298,7 +317,7 @@ export class FieldGroupSchemaService {
     }
 
     for (const field of fields) {
-      if (!isDataField(field)) continue;
+      if (!isDataField(field) && !isPluginDataField(field)) continue;
       if (isFieldGroupField(field)) continue;
       if (!("name" in field) || !field.name) continue;
       // Localized fields live in the companion, not the main comp_ table — no main index.
@@ -345,7 +364,11 @@ export class FieldGroupSchemaService {
     for (const [name, field] of newFieldMap) {
       if (oldFieldMap.has(name)) continue;
 
-      const columnType = this.getColumnType(field);
+      // Mapped once and reused: the default formatting and the type default
+      // both switch on `type`, so reading the raw plugin token there would
+      // produce a literal for a type the column does not have.
+      const mapped = this.asMappableField(field);
+      const columnType = this.getColumnType(mapped);
       if (!columnType) continue;
 
       const columnName = this.toSnakeCase(name);
@@ -362,9 +385,13 @@ export class FieldGroupSchemaService {
         field.defaultValue !== undefined &&
         typeof field.defaultValue !== "function";
       if (hasConstantDefault) {
-        defaultVal = `DEFAULT ${this.formatDefaultValue(field.defaultValue, field.type)}`;
+        defaultVal = `DEFAULT ${this.formatDefaultValue(field.defaultValue, mapped.type)}`;
       } else if ("required" in field && field.required) {
-        defaultVal = `DEFAULT ${this.getDefaultValueForType(field.type, field)}`;
+        // The MAPPED type drives the switch and the ORIGINAL field carries the
+        // declared token: a contributed type states its own empty value under
+        // its own name, and `mapped` has already replaced that with the storage
+        // primitive.
+        defaultVal = `DEFAULT ${this.getDefaultValueForType(mapped.type, field)}`;
       }
 
       statements.push(
@@ -407,7 +434,10 @@ export class FieldGroupSchemaService {
         if (!this.isFieldModified(oldField, newField)) continue;
 
         const columnName = this.toSnakeCase(name);
-        const newType = this.getColumnType(newField);
+        // Mapped like the added-column path: a field changed to a plugin type
+        // would otherwise resolve no type here and the ALTER would be skipped,
+        // leaving the column as whatever it was.
+        const newType = this.getColumnType(this.asMappableField(newField));
         if (!newType) continue;
 
         statements.push(
@@ -466,7 +496,7 @@ export class FieldGroupSchemaService {
   generateRuntimeSchema(
     tableName: string,
     fields: FieldConfig[],
-    options: { localized?: boolean } = {}
+    options: RuntimeSchemaOptions
   ): unknown {
     // i18n: when the component is localized, its translatable fields live in the
     // companion `comp_<slug>_locales` table and are omitted from the main runtime
@@ -486,13 +516,14 @@ export class FieldGroupSchemaService {
       const name = "name" in f ? (f as { name?: string }).name : undefined;
       return !name || !localizedNames.has(name);
     });
+    const typeColumn = options.typeColumn;
     switch (this.dialect) {
       case "postgresql":
-        return this.generatePostgresSchema(tableName, mainFields);
+        return this.generatePostgresSchema(tableName, mainFields, typeColumn);
       case "mysql":
-        return this.generateMySQLSchema(tableName, mainFields);
+        return this.generateMySQLSchema(tableName, mainFields, typeColumn);
       case "sqlite":
-        return this.generateSQLiteSchema(tableName, mainFields);
+        return this.generateSQLiteSchema(tableName, mainFields, typeColumn);
       default:
         throw new Error(`Unsupported dialect: ${String(this.dialect)}`);
     }
@@ -500,7 +531,8 @@ export class FieldGroupSchemaService {
 
   private generatePostgresSchema(
     tableName: string,
-    fields: FieldConfig[]
+    fields: FieldConfig[],
+    typeColumn: string
   ): unknown {
     // Required by Drizzle: pgTable() expects a `Record<string, PgColumnBuilderBase>`
     // but the column builders returned by helpers (pgText, pgInteger, ...) have
@@ -516,17 +548,23 @@ export class FieldGroupSchemaService {
         length: 255,
       }).notNull(),
       _order: pgInteger(STORAGE_FORMAT.columns.order).default(0),
-      _component_type: pgVarchar(STORAGE_FORMAT.columns.type, { length: 255 }),
+      // 🔴 The Drizzle property key stays `STORAGE_FORMAT.columns.type` while the
+      // physical name is resolved. The adapter addresses columns by property key
+      // everywhere — rows come back keyed by it, `buildDrizzleWhere` and
+      // `orderBy` look columns up by it — so every consumer downstream reads the
+      // same key whichever spelling the storage carries, and keeps reading it
+      // when the constant itself moves.
+      [STORAGE_FORMAT.columns.type]: pgVarchar(typeColumn, { length: 255 }),
       created_at: pgTimestamp("created_at").defaultNow().notNull(),
       updated_at: pgTimestamp("updated_at").defaultNow().notNull(),
     };
 
     for (const field of fields) {
-      if (!isDataField(field)) continue;
+      if (!isDataField(field) && !isPluginDataField(field)) continue;
       if (isFieldGroupField(field)) continue;
       if (!("name" in field) || !field.name) continue;
 
-      const column = this.mapFieldToPostgresColumn(field);
+      const column = this.mapFieldToPostgresColumn(this.asMappableField(field));
       if (column) {
         columns[field.name] = column;
       }
@@ -550,7 +588,8 @@ export class FieldGroupSchemaService {
 
   private generateMySQLSchema(
     tableName: string,
-    fields: FieldConfig[]
+    fields: FieldConfig[],
+    typeColumn: string
   ): unknown {
     const columns: Record<string, unknown> = {
       id: mysqlVarchar("id", { length: 36 }).primaryKey(),
@@ -564,7 +603,7 @@ export class FieldGroupSchemaService {
         length: 255,
       }).notNull(),
       _order: mysqlInt(STORAGE_FORMAT.columns.order).default(0),
-      _component_type: mysqlVarchar(STORAGE_FORMAT.columns.type, {
+      [STORAGE_FORMAT.columns.type]: mysqlVarchar(typeColumn, {
         length: 255,
       }),
       created_at: mysqlTimestamp("created_at").defaultNow().notNull(),
@@ -572,11 +611,11 @@ export class FieldGroupSchemaService {
     };
 
     for (const field of fields) {
-      if (!isDataField(field)) continue;
+      if (!isDataField(field) && !isPluginDataField(field)) continue;
       if (isFieldGroupField(field)) continue;
       if (!("name" in field) || !field.name) continue;
 
-      const column = this.mapFieldToMySQLColumn(field);
+      const column = this.mapFieldToMySQLColumn(this.asMappableField(field));
       if (column) {
         columns[field.name] = column;
       }
@@ -596,7 +635,8 @@ export class FieldGroupSchemaService {
 
   private generateSQLiteSchema(
     tableName: string,
-    fields: FieldConfig[]
+    fields: FieldConfig[],
+    typeColumn: string
   ): unknown {
     const columns: Record<string, unknown> = {
       id: sqliteText("id").primaryKey(),
@@ -604,7 +644,7 @@ export class FieldGroupSchemaService {
       _parent_table: sqliteText(STORAGE_FORMAT.columns.parentTable).notNull(),
       _parent_field: sqliteText(STORAGE_FORMAT.columns.parentField).notNull(),
       _order: sqliteInteger(STORAGE_FORMAT.columns.order).default(0),
-      _component_type: sqliteText(STORAGE_FORMAT.columns.type),
+      [STORAGE_FORMAT.columns.type]: sqliteText(typeColumn),
       created_at: sqliteInteger("created_at", { mode: "timestamp" })
         .notNull()
         .$defaultFn(() => new Date()),
@@ -614,11 +654,11 @@ export class FieldGroupSchemaService {
     };
 
     for (const field of fields) {
-      if (!isDataField(field)) continue;
+      if (!isDataField(field) && !isPluginDataField(field)) continue;
       if (isFieldGroupField(field)) continue;
       if (!("name" in field) || !field.name) continue;
 
-      const column = this.mapFieldToSQLiteColumn(field);
+      const column = this.mapFieldToSQLiteColumn(this.asMappableField(field));
       if (column) {
         columns[field.name] = column;
       }
@@ -636,11 +676,46 @@ export class FieldGroupSchemaService {
     );
   }
 
+  /**
+   * A field as the column mappers below can read it.
+   *
+   * They switch on `field.type`, which for a plugin-contributed type matches no
+   * case. Substituting the storage primitive's built-in type makes them emit
+   * the column that type persists as — the same substitution
+   * `getColumnDescriptor` makes for collections and singles, so a component
+   * column matches what the schema pipeline creates for it.
+   */
+  private asMappableField(field: DataFieldConfig): DataFieldConfig {
+    const storageType = pluginStorageFieldType(field);
+    if (storageType === undefined) return field;
+    const mapped: Record<string, unknown> = {
+      ...(field as unknown as Record<string, unknown>),
+      type: storageType,
+    };
+    // The keys below are how a BUILT-IN field states its physical shape, and
+    // the mappers read them straight off the field. A plugin type's options are
+    // its own and core does not interpret them, so one that happens to be named
+    // `dbType` or `maxLength` would otherwise reshape the column here while the
+    // canonical descriptor — which never sees them — kept mapping the primitive
+    // as declared. The same field would then be one type in a component and
+    // another in a collection.
+    for (const physical of [
+      "dbType",
+      "precision",
+      "scale",
+      "maxLength",
+      "options",
+    ]) {
+      delete mapped[physical];
+    }
+    return mapped as unknown as DataFieldConfig;
+  }
+
   private generateColumnSQL(field: DataFieldConfig): string | null {
     if (!("name" in field) || !field.name) return null;
 
     const columnName = this.toSnakeCase(field.name);
-    const columnType = this.getColumnType(field);
+    const columnType = this.getColumnType(this.asMappableField(field));
     if (!columnType) return null;
 
     const parts = [`${this.q}${columnName}${this.q}`, columnType];
@@ -734,7 +809,7 @@ export class FieldGroupSchemaService {
     if (isRepeaterField(field) || isGroupField(field)) {
       return types.json;
     }
-    if (isJSONField(field) || isBlocksField(field)) {
+    if (isJSONField(field)) {
       return types.json;
     }
 
@@ -780,12 +855,7 @@ export class FieldGroupSchemaService {
     if (isRelationshipField(field) || isUploadField(field)) {
       return pgText(colName);
     }
-    if (
-      isRepeaterField(field) ||
-      isGroupField(field) ||
-      isJSONField(field) ||
-      isBlocksField(field)
-    ) {
+    if (isRepeaterField(field) || isGroupField(field) || isJSONField(field)) {
       return isRequired ? pgJsonb(colName).notNull() : pgJsonb(colName);
     }
 
@@ -837,12 +907,7 @@ export class FieldGroupSchemaService {
     if (isRelationshipField(field) || isUploadField(field)) {
       return mysqlVarchar(colName, { length: 36 });
     }
-    if (
-      isRepeaterField(field) ||
-      isGroupField(field) ||
-      isJSONField(field) ||
-      isBlocksField(field)
-    ) {
+    if (isRepeaterField(field) || isGroupField(field) || isJSONField(field)) {
       return isRequired ? mysqlJson(colName).notNull() : mysqlJson(colName);
     }
 
@@ -889,12 +954,7 @@ export class FieldGroupSchemaService {
     if (isRelationshipField(field) || isUploadField(field)) {
       return sqliteText(colName);
     }
-    if (
-      isRepeaterField(field) ||
-      isGroupField(field) ||
-      isJSONField(field) ||
-      isBlocksField(field)
-    ) {
+    if (isRepeaterField(field) || isGroupField(field) || isJSONField(field)) {
       return isRequired ? sqliteText(colName).notNull() : sqliteText(colName);
     }
 
@@ -962,7 +1022,7 @@ export class FieldGroupSchemaService {
   private buildFieldMap(fields: FieldConfig[]): Map<string, DataFieldConfig> {
     const map = new Map<string, DataFieldConfig>();
     for (const field of fields) {
-      if (!isDataField(field)) continue;
+      if (!isDataField(field) && !isPluginDataField(field)) continue;
       if (isFieldGroupField(field)) continue;
       if (!("name" in field) || !field.name) continue;
       map.set(field.name, field);
@@ -972,6 +1032,18 @@ export class FieldGroupSchemaService {
 
   // Used when adding NOT NULL columns to existing tables.
   private getDefaultValueForType(type: string, field?: FieldConfig): string {
+    // A contributed type states its own backfill before the primitive's is
+    // derived: `{}` satisfies a json column and then fails every read that
+    // expects the structure the type actually stores. Read from the field as
+    // DECLARED — `type` here may already be the storage primitive, under which
+    // the contributed type is not registered and states nothing.
+    const contributed = pluginEmptyColumnDefault(field ?? { type }, type, {
+      json: serialized => quoteJsonSqlDefault(serialized, this.dialect),
+      literal: (value, storageToken) =>
+        this.formatDefaultValue(value, storageToken),
+    });
+    if (contributed !== undefined) return contributed;
+
     switch (type) {
       case "text":
       case "textarea":
@@ -982,13 +1054,6 @@ export class FieldGroupSchemaService {
       case "select":
       case "radio":
         return "''";
-      case "blocks":
-        return quoteJsonSqlDefault(
-          emptyBlockDocumentJson(
-            field && isBlocksField(field) ? field.blocks?.kinds : undefined
-          ),
-          this.dialect
-        );
       case "number":
         return "0";
       case "checkbox":

@@ -12,14 +12,14 @@
  */
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import type { DocumentKind, FieldConfig } from "nextly/config";
-import { emptyBlockDocument } from "nextly/config";
+import type { FieldConfig } from "nextly/config";
 import { useMemo, useCallback, useEffect } from "react";
 import { useForm, type UseFormReturn } from "react-hook-form";
 import { z } from "zod";
 
 import { useCreateEntry } from "@admin/hooks/queries/useCreateEntry";
 import { useDeleteEntry } from "@admin/hooks/queries/useDeleteEntry";
+import { useDiscardWorkingDraft } from "@admin/hooks/queries/useDiscardWorkingDraft";
 import { useUpdateEntry } from "@admin/hooks/queries/useUpdateEntry";
 import { generateClientSchema } from "@admin/lib/field-validation";
 import type { EntryValue } from "@admin/types/collection";
@@ -93,6 +93,14 @@ export interface EntryFormCollection {
    * Backed by the `dynamic_collections.localized` boolean column.
    */
   localized?: boolean;
+  /**
+   * Whether the draft/published working-draft split is enabled (drafts on a
+   * versioned collection). When `true` on a `status` collection, saving an
+   * already-published entry stores a pending working draft instead of writing
+   * the live row; a separate Publish promotes it. Read-only, derived
+   * server-side — only code-first collections enable it.
+   */
+  draftsEnabled?: boolean;
 }
 
 /**
@@ -134,6 +142,16 @@ export interface UseEntryFormOptions {
   onCancel?: () => void;
   /** Active content locale (i18n M7) — the update targets this language's values. */
   locale?: string;
+  /**
+   * Whether the entry was READ with the working-draft overlay (`draft`), so the
+   * update's optimistic cache key matches the query the form is showing. The
+   * full-page editor reads the overlay for a drafts collection; an embedded
+   * editor (relationship quick-edit) reads the live row, so it must say so here
+   * or its optimistic update, rollback, and `cancelQueries` would target a
+   * different `detailScoped` key than the one on screen. Defaults to the
+   * collection's split when unset — the full-page editor's read mode.
+   */
+  readDraft?: boolean;
 }
 
 /**
@@ -150,6 +168,7 @@ export interface UseEntryFormOptions {
 export type EntryFormIntent =
   | "save-draft"
   | "publish"
+  | "save-working-draft"
   | "save-changes"
   | "unpublish";
 
@@ -229,6 +248,12 @@ export function mapIntentToPayload(
       return { ...data, status: "draft" };
     case "publish":
       return { ...data, status: "published" };
+    case "save-working-draft":
+      // A status-less save on a drafts-enabled, already-published entry: the
+      // server stores the pending edit as a working draft and leaves the live
+      // row untouched (draft/published split). Omitting `status` is exactly
+      // what triggers that; a later Publish promotes the draft to live.
+      return data;
     case "save-changes":
       return { ...data, status: "published" };
     case "unpublish":
@@ -236,6 +261,31 @@ export function mapIntentToPayload(
     default:
       return data;
   }
+}
+
+/**
+ * The submit intent a plain save (the keyboard Cmd/Ctrl+S shortcut) uses for an
+ * editor in a given lifecycle state, mirroring the primary Save button.
+ *
+ * `effectiveStatus` is the ACTIVE locale's status (from `effectiveEntryStatus`),
+ * not the main row's: on a non-default language the main row carries the default
+ * language's lifecycle, so keying the shortcut off it could publish or unpublish
+ * the wrong translation. A published document stores a working draft on a drafts
+ * collection or re-asserts published otherwise; any other state saves a draft; a
+ * non-status collection has no lifecycle intent (its single Save button submits
+ * without one).
+ */
+export function resolveDefaultSaveIntent(args: {
+  mode: EntryFormMode;
+  hasStatus: boolean;
+  effectiveStatus: string | undefined;
+  draftsEnabled: boolean;
+}): EntryFormIntent | undefined {
+  if (args.mode !== "edit" || !args.hasStatus) return undefined;
+  if (args.effectiveStatus === "published") {
+    return args.draftsEnabled ? "save-working-draft" : "save-changes";
+  }
+  return "save-draft";
 }
 
 /**
@@ -254,6 +304,11 @@ export interface UseEntryFormReturn {
   ) => Promise<void>;
   /** Handle entry deletion (edit mode only) */
   handleDelete: () => void;
+  /** Discard the pending working draft (draft/published split), reverting the
+   *  editor to the live published row. No-op outside edit mode. Resolves once the
+   *  discard succeeds and REJECTS if it fails, so the confirm dialog can show its
+   *  progress until then and stay open for a retry on failure. */
+  handleDiscardWorkingDraft: () => Promise<void>;
   /** Handle form cancellation */
   handleCancel: () => void;
   /** Whether form is currently submitting */
@@ -451,25 +506,6 @@ function getDefaultValues(
           (field as { defaultValue?: unknown }).defaultValue ?? null;
         break;
 
-      case "blocks": {
-        // The form control for a blocks field is read-only, so a declared
-        // default that was dropped here could not be restored by hand. A
-        // required field with no default gets an empty document rather than
-        // null, or the entry could never be created — and creating it is how
-        // the user reaches the builder to fill it in.
-        const blocksField = field as {
-          defaultValue?: unknown;
-          required?: boolean;
-          blocks?: { kinds?: DocumentKind[] };
-        };
-        defaults[fieldName] =
-          blocksField.defaultValue ??
-          (blocksField.required
-            ? emptyBlockDocument(blocksField.blocks?.kinds)
-            : null);
-        break;
-      }
-
       case "component": {
         // Component fields: get nested defaults from componentFields
         const componentField = field as {
@@ -491,7 +527,13 @@ function getDefaultValues(
       }
 
       default:
-        defaults[fieldName] = null;
+        // A contributed field type reaches here, since the cases above name
+        // only the built-ins. Reading its declared default rather than forcing
+        // null is what lets a plugin field open a create form with the value
+        // its schema author chose; forcing null discarded that and submitted an
+        // explicit empty over it.
+        defaults[fieldName] =
+          (field as { defaultValue?: unknown }).defaultValue ?? null;
     }
   }
 
@@ -548,6 +590,7 @@ export function useEntryForm({
   onDelete,
   onCancel,
   locale,
+  readDraft,
 }: UseEntryFormOptions): UseEntryFormReturn {
   // Get fields from collection (supports both old and new API formats)
   const fields = getCollectionFields(collection);
@@ -616,6 +659,11 @@ export function useEntryForm({
     setError: form.setError,
     // i18n M7: route the save to the active content language.
     locale,
+    // Match the editor's read mode so the optimistic update, rollback, and
+    // cancelQueries key onto the same cached document the form is showing. The
+    // caller passes how it read the entry; absent that, assume the full-page
+    // editor's mode (the working-draft overlay for a drafts collection).
+    draft: readDraft ?? collection.draftsEnabled === true,
   });
 
   // Password fields submit "" to mean "keep the stored hash", so they are
@@ -628,6 +676,11 @@ export function useEntryForm({
   const deleteMutation = useDeleteEntry({
     collectionSlug: collection.name,
     showToast: true,
+  });
+
+  const discardMutation = useDiscardWorkingDraft({
+    collectionSlug: collection.name,
+    entryId: entry?.id ?? "",
   });
 
   // Singular label for UI
@@ -703,6 +756,27 @@ export function useEntryForm({
     }
   }, [mode, entry?.id, deleteMutation, onDelete, onError]);
 
+  // Discard handler (draft/published split). Throws away the pending working
+  // draft and resets the editor to the live published values the discard
+  // returns; the hook also invalidates the entry so the cache refetches the
+  // same row. A no-op outside edit mode or before the entry exists.
+  const handleDiscardWorkingDraft = useCallback(async () => {
+    if (mode !== "edit" || !entry?.id) {
+      return;
+    }
+    try {
+      const result = await discardMutation.mutateAsync();
+      form.reset(getDefaultValues(fields, result.item));
+    } catch (error) {
+      console.error("Discard working draft error:", error);
+      onError?.(error);
+      // Rethrow after surfacing the error so the confirm dialog, which awaits
+      // this, stays open on failure and keeps its retry context rather than
+      // closing as it does on success.
+      throw error;
+    }
+  }, [mode, entry?.id, discardMutation, form, fields, onError]);
+
   // Cancel handler
   const handleCancel = useCallback(() => {
     onCancel?.();
@@ -714,8 +788,14 @@ export function useEntryForm({
     handleDelete: () => {
       void handleDelete();
     },
+    // Returned as a promise (not fire-and-forget) so the confirm dialog can
+    // await the discard and keep its loading state visible until it settles.
+    handleDiscardWorkingDraft: () => handleDiscardWorkingDraft(),
     handleCancel,
-    isSubmitting: createMutation.isPending || updateMutation.isPending,
+    isSubmitting:
+      createMutation.isPending ||
+      updateMutation.isPending ||
+      discardMutation.isPending,
     isDeleting: deleteMutation.isPending,
     isDirty: form.formState.isDirty,
     mode,

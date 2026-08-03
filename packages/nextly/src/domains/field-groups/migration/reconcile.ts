@@ -29,6 +29,7 @@ import type { MigratedObjectsVerification, StorageProbe } from "./guard";
 import {
   MIGRATION_TARGET,
   retargetName,
+  tableRenamesOf,
   type ManifestEntry,
   type RegistryRow,
 } from "./manifest";
@@ -95,8 +96,6 @@ export function reconcilePlan(args: {
   const catalog = indexCatalog(args.tables, identifierCase.tables);
   const columns = indexColumns(args.columns, catalog, identifierCase);
 
-  assertEveryRowHasStorage(rows, catalog);
-
   // A column entry names one fixed spelling of its table, but the table itself
   // moves during the run, so the columns have to be findable under either name.
   // Which of the two is the "other" one depends on direction: going up a column
@@ -115,6 +114,14 @@ export function reconcilePlan(args: {
     linkNames(entry.to, entry.from);
     linkNames(entry.from, entry.to);
   }
+
+  // Built BEFORE the storage check, which needs it. A row's counterpart name
+  // cannot be derived from the row alone: `retargetName` only maps a legacy
+  // spelling forward, so during a rollback torn between a rename and its pointer
+  // update — the registry still naming the migrated table, the catalog already
+  // holding the legacy one — the row's storage looks absent. Only the directed
+  // plan knows both sides of a rename it is undoing.
+  assertEveryRowHasStorage(rows, catalog, otherNames);
 
   return entries.map((entry, index) => {
     const position = index + 1;
@@ -240,12 +247,21 @@ type StorageNaming = "either" | StorageGeneration;
  */
 function expectedStorage(
   row: RegistryRow,
-  naming: StorageNaming
+  naming: StorageNaming,
+  /**
+   * Names the directed plan says this row's table also travels under.
+   *
+   * Only consulted for `either`, which asks whether a row has storage *at all*
+   * rather than whether it is at a particular generation. The other two modes
+   * require one specific spelling, and widening them would let a half-applied
+   * database satisfy a check about a finished one.
+   */
+  alternates?: readonly string[]
 ): ExpectedObject[] {
   const target = retargetName(row);
   const suffix = STORAGE_FORMAT.companionSuffix;
 
-  const base = namesFor(row, target, naming);
+  const base = namesFor(row, target, naming, alternates);
   const objects: ExpectedObject[] = [{ names: base, isBase: true }];
   if (row.hasCompanion) {
     objects.push({
@@ -268,11 +284,21 @@ function expectedStorage(
 function namesFor(
   row: RegistryRow,
   target: string | null,
-  naming: StorageNaming
+  naming: StorageNaming,
+  alternates?: readonly string[]
 ): string[] {
   if (naming === "legacy") return [row.tableName];
   if (naming === "field-groups-v2") return [target ?? row.tableName];
-  return [row.tableName, ...(target === null ? [] : [target])];
+  // `retargetName` maps a legacy spelling forward and returns null for anything
+  // else, so it cannot name where a rollback is taking a migrated table. The
+  // directed plan can, and a torn rollback is exactly the state where the row
+  // and the catalog disagree about which of the two names is current.
+  const names = new Set([
+    row.tableName,
+    ...(target === null ? [] : [target]),
+    ...(alternates ?? []),
+  ]);
+  return [...names];
 }
 
 /**
@@ -354,14 +380,19 @@ function indexColumns(
  */
 function assertEveryRowHasStorage(
   rows: readonly RegistryRow[],
-  catalog: CatalogIndex
+  catalog: CatalogIndex,
+  otherNames: ReadonlyMap<string, string[]>
 ): void {
   const missing: string[] = [];
   const caseVariants: Record<string, string> = {};
   const claim = createClaimLedger();
 
   for (const row of rows) {
-    for (const object of expectedStorage(row, "either")) {
+    for (const object of expectedStorage(
+      row,
+      "either",
+      otherNames.get(row.tableName)
+    )) {
       const found = resolveAny(catalog, object.names);
       if (found === undefined) {
         missing.push(object.names[0]);
@@ -510,56 +541,69 @@ function reconcileRename(
   position: number,
   run: RunRecord
 ): ManifestEntry {
-  const source = resolveCatalogName(catalog, entry.from);
-  const target = resolveCatalogName(catalog, entry.to);
+  // A table entry moves its companion as well as itself, and the two are not
+  // always in the same state: MySQL commits each rename separately, so a crash
+  // between them leaves the base migrated and the companion still under its old
+  // name. The entry only counts as done once every table it moves is done —
+  // marking it satisfied on the base alone would let the step skip a companion
+  // that is still sitting there.
+  let allApplied = true;
 
-  if (source !== undefined && target !== undefined) {
-    throw refuse("migration target name is already in use", {
-      from: entry.from,
-      to: entry.to,
-      occupiedBy: target,
+  for (const rename of tableRenamesOf(entry)) {
+    const source = resolveCatalogName(catalog, rename.from);
+    const target = resolveCatalogName(catalog, rename.to);
+
+    if (source !== undefined && target !== undefined) {
+      throw refuse("migration target name is already in use", {
+        from: rename.from,
+        to: rename.to,
+        occupiedBy: target,
+      });
+    }
+
+    if (source !== undefined) {
+      if (recordedAsDone(position, run)) {
+        throw refuse(
+          "a rename the marker records as verified has not been applied",
+          {
+            from: rename.from,
+            to: rename.to,
+            position,
+            recordedStep: run.recorded ? run.step : null,
+          }
+        );
+      }
+      allApplied = false;
+      continue;
+    }
+
+    if (target !== undefined) {
+      // Source gone, target present. Only progress that reached this position
+      // makes it our own finished work; otherwise it is an object belonging to
+      // something else, sitting on the name this migration wants, and adopting
+      // it would treat a stranger's table as migrated field-group storage.
+      if (!acceptsApplied(position, run)) {
+        throw refuse(
+          "an object using the migrated storage name exists but no recorded progress accounts for it",
+          {
+            from: rename.from,
+            to: rename.to,
+            occupiedBy: target,
+            position,
+            recordedStep: run.recorded ? run.step : null,
+          }
+        );
+      }
+      continue;
+    }
+
+    throw refuse("migration source object is missing", {
+      from: rename.from,
+      to: rename.to,
     });
   }
 
-  if (source !== undefined) {
-    if (recordedAsDone(position, run)) {
-      throw refuse(
-        "a rename the marker records as verified has not been applied",
-        {
-          from: entry.from,
-          to: entry.to,
-          position,
-          recordedStep: run.recorded ? run.step : null,
-        }
-      );
-    }
-    return entry;
-  }
-
-  if (target !== undefined) {
-    // Source gone, target present. Only progress that reached this position
-    // makes it our own finished work; otherwise it is an object belonging to
-    // something else, sitting on the name this migration wants, and adopting it
-    // would treat a stranger's table as migrated field-group storage.
-    if (!acceptsApplied(position, run)) {
-      throw refuse(
-        "an object using the migrated storage name exists but no recorded progress accounts for it",
-        {
-          from: entry.from,
-          to: entry.to,
-          occupiedBy: target,
-          position,
-          recordedStep: run.recorded ? run.step : null,
-        }
-      );
-    }
-    return { ...entry, satisfied: true };
-  }
-
-  throw refuse("migration source object is missing", {
-    from: entry.from,
-    to: entry.to,
-  });
+  return allApplied ? { ...entry, satisfied: true } : entry;
 }
 
 /**

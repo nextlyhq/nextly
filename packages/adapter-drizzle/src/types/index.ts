@@ -103,7 +103,11 @@ export type {
   DatabaseErrorOptions,
 } from "./error";
 
-export { isDatabaseError, createDatabaseError } from "./error";
+export {
+  isDatabaseError,
+  createDatabaseError,
+  isApplicationError,
+} from "./error";
 
 // ============================================================
 // Configuration Types

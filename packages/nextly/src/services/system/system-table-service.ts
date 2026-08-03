@@ -38,6 +38,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { resolveFieldGroupRegistryName } from "../../domains/field-groups/storage/resolve-storage-names";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { BaseService } from "../base-service";
 import type { Logger } from "../shared";
@@ -424,8 +425,11 @@ export class SystemTableService extends BaseService {
     const dynamicCollectionsExists = await this.tableExists(
       "dynamic_collections"
     );
+    // Asked about the registry this database actually holds. Checking the
+    // legacy spelling alone reports a migrated database as missing a system
+    // table, so `allReady` is false and callers conclude the install is broken.
     const dynamicComponentsExists = await this.tableExists(
-      STORAGE_FORMAT.registryTable
+      await resolveFieldGroupRegistryName(this.adapter)
     );
     const nextlyMigrationsExists = await this.tableExists("nextly_migrations");
 
@@ -475,18 +479,21 @@ export class SystemTableService extends BaseService {
         this.logger.info("Created system table 'dynamic_collections'");
       }
 
-      const dcompExists = await this.tableExists(STORAGE_FORMAT.registryTable);
+      // 🔴 Resolved, not assumed. `createDynamicComponentsTable` writes the
+      // legacy spelling, so a database whose registry has been renamed would be
+      // found "missing" and given a second, empty one — which every reader then
+      // prefers, because the rule is legacy-if-present. Resolving first makes
+      // that impossible: the migrated name is only ever returned when the table
+      // is really there, so the create below runs on a database that has none.
+      const registryTable = await resolveFieldGroupRegistryName(this.adapter);
+      const dcompExists = await this.tableExists(registryTable);
       if (dcompExists) {
-        existing.push(STORAGE_FORMAT.registryTable);
-        this.logger.info(
-          `System table '${STORAGE_FORMAT.registryTable}' already exists`
-        );
+        existing.push(registryTable);
+        this.logger.info(`System table '${registryTable}' already exists`);
       } else {
         await this.createDynamicComponentsTable();
-        created.push(STORAGE_FORMAT.registryTable);
-        this.logger.info(
-          `Created system table '${STORAGE_FORMAT.registryTable}'`
-        );
+        created.push(registryTable);
+        this.logger.info(`Created system table '${registryTable}'`);
       }
 
       const nmExists = await this.tableExists("nextly_migrations");

@@ -8,6 +8,7 @@
  */
 
 import type { PaginationMeta } from "../../api/response-shapes";
+import type { HookWarning } from "../../hooks/side-effect-warnings";
 import type { RichTextOutputFormat } from "../../lib/rich-text-html";
 
 import type { FormsConfig } from "./forms";
@@ -65,6 +66,18 @@ export interface MutationResult<T> {
   message: string;
   /** The affected item. */
   item: T;
+  /**
+   * Side effects that failed after the write committed, when any did.
+   *
+   * A post-commit hook cannot un-save the row, so the operation reports
+   * success and the failure travels beside it. Absent when every hook
+   * succeeded, so an ordinary result is unchanged.
+   *
+   * Mirrors the `warnings` field on the wire API's mutation envelope, so the
+   * same failure is equally visible whether the caller came through REST or
+   * called the Direct API in-process.
+   */
+  warnings?: HookWarning[];
 }
 
 /**

@@ -29,7 +29,7 @@ export function validateBuilderFields(
   if (missingRef) {
     return {
       valid: false,
-      errorMessage: `Component field "${missingRef}" must have a component selected`,
+      errorMessage: `Field "${missingRef}" must have a field group selected`,
     };
   }
 

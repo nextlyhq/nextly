@@ -1,18 +1,16 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
-import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import type { FieldConfig } from "../../../collections/fields/types";
 import type { FieldGroupFieldConfig } from "../../../collections/fields/types/component";
 import type { DynamicFieldGroupRecord } from "../../../schemas/dynamic-field-groups/types";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
+import type { RelatedRowReadContext } from "../../../services/collections/related-row-read-context";
 import type { FieldGroupRegistryService } from "../../../services/field-groups/field-group-registry-service";
 import { BaseService } from "../../../shared/base-service";
 import { stripPasswordFieldValues } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
-import type { TargetReadPolicy } from "../../collections/services/collection-relationship-service";
 import {
-  isMissingCompanionTableError,
   populateCompanionFields,
   populateCompanionFieldsAllLocales,
 } from "../../i18n/companion-join";
@@ -23,6 +21,11 @@ import {
   resolveRequestedLocale,
 } from "../../i18n/resolve-locale";
 import { buildCompanionSchema } from "../../i18n/runtime/companion-io";
+import {
+  cachedCompanionReadiness,
+  resolveCompanionSchemaReadiness,
+  type CompanionReadiness,
+} from "../../i18n/runtime/companion-readiness";
 
 import {
   DEFAULT_COMPONENT_DEPTH,
@@ -39,37 +42,14 @@ import {
  * The caller context a component's related rows are judged against, mirroring
  * the relationship service's own options so it can be forwarded unchanged.
  */
-export interface ComponentReadAccess {
-  enforceFieldAccess?: boolean;
-  user?: Record<string, unknown>;
-  overrideAccess?: boolean;
-  /**
-   * The caller's authenticated scope, forwarded to relationship expansion.
-   *
-   * A relationship reached through a field group is populated by the same
-   * service a top-level one is, and a scoped API key must not inherit its
-   * owner's super-admin bypass there either.
-   */
-  authenticatedScope?: AuthenticatedScope;
-  /**
-   * Ids withheld because a target collection refused the caller, so a
-   * completeness check can tell a refusal from a load that failed.
-   */
-  withheldByAccess?: Set<string>;
-  /**
-   * Evaluate the target collection's own read rules even when field redaction
-   * is off, so an authorization view is not shown a row the response withholds.
-   */
-  enforceCollectionAccess?: boolean;
-  /**
-   * Target read policies resolved during this population.
-   *
-   * Component rows are expanded concurrently, and rows pointing at the same
-   * target would otherwise each resolve its policy — so one map is shared
-   * across them all rather than created per row.
-   */
-  targetPolicies?: Map<string, Promise<TargetReadPolicy>>;
-}
+/**
+ * The caller context a component's related rows are judged against.
+ *
+ * A relationship reached through a field group is populated by the same service
+ * a top-level one is, so it carries the same context rather than a parallel
+ * declaration of it.
+ */
+export type ComponentReadAccess = RelatedRowReadContext;
 
 export interface PopulateComponentDataParams {
   /** The entry to populate with component data */
@@ -168,7 +148,48 @@ function isFieldGroupField(field: FieldConfig): field is FieldGroupFieldConfig {
   return field.type === STORAGE_FORMAT.fieldType;
 }
 
+/**
+ * Whether an error is the component's own `comp_*` table simply not existing yet.
+ *
+ * The companion `_locales` reads no longer decide existence this way — they are told, because
+ * catching a failed query is a valid existence check on SQLite and MySQL and aborts the whole
+ * transaction on PostgreSQL. This one is about a DIFFERENT table: the field group's main table,
+ * before its own migration has run. It is the same shape and the same hazard, and closing it needs
+ * readiness for the main table rather than the companion, which is a separate piece of work.
+ */
+function isMissingComponentTableError(err: unknown): boolean {
+  const message = [
+    err instanceof Error ? err.message : String(err),
+    err instanceof Error && err.cause instanceof Error ? err.cause.message : "",
+  ].join(" ");
+  return (
+    message.includes("no such table") ||
+    message.includes("doesn't exist") ||
+    (message.includes("relation") && message.includes("does not exist"))
+  );
+}
+
 export class FieldGroupQueryService extends BaseService {
+  /**
+   * A field group's companion readiness, resolved only where it is safe to.
+   *
+   * `executor` is present when this read runs on a caller's transaction connection. Resolving
+   * there would issue a query, and a query against a missing relation aborts the whole transaction
+   * on PostgreSQL — so that path reads the remembered verdict instead. The write paths resolve
+   * before they open a transaction, so by then the answer is already known.
+   */
+  private companionReadiness(
+    companion: {
+      companionTableName: string;
+      localizedFields: { column: string }[];
+    },
+    executor: unknown
+  ): Promise<CompanionReadiness | undefined> | CompanionReadiness | undefined {
+    return executor === undefined
+      ? resolveCompanionSchemaReadiness(this.adapter, companion)
+      : cachedCompanionReadiness(this.adapter, companion.companionTableName);
+  }
+
   private readonly registryService: FieldGroupRegistryService;
   private relationshipService?: CollectionRelationshipService;
 
@@ -202,10 +223,7 @@ export class FieldGroupQueryService extends BaseService {
     dataArray: Record<string, unknown>[],
     locale: string | undefined,
     fallbackLocale?: string | false,
-    executor?: unknown,
-    // Propagate a real companion read failure (durable webhook/version reads)
-    // instead of swallowing it and leaving translatable fields unresolved.
-    strict = false
+    executor?: unknown
   ): Promise<void> {
     if (
       !this.localization ||
@@ -228,16 +246,28 @@ export class FieldGroupQueryService extends BaseService {
     // language-keyed maps, so mirror that for the embedded component's translatable fields —
     // otherwise they would be missing entirely (the main comp_* table omits those columns).
     if (locale === "all") {
-      await populateCompanionFieldsAllLocales({
-        db: (executor ?? this.adapter.getDrizzle()) as Parameters<
-          typeof populateCompanionFieldsAllLocales
-        >[0]["db"],
-        companionTable: companion.table,
-        localizedFields: companion.localizedFields,
-        rows: dataArray,
-        locales: this.localization.locales.map(l => l.code),
-        idKey: "id",
-      });
+      const allReadiness = await this.companionReadiness(companion, executor);
+      // Read out here: the narrowing the guard above established does not survive into the
+      // closure, and re-asserting it there would be a cast rather than a check.
+      const configuredLocales = this.localization.locales.map(l => l.code);
+      const ran = await this.runContainedOverlay(
+        meta.slug,
+        companion.companionTableName,
+        executor,
+        () =>
+          populateCompanionFieldsAllLocales({
+            db: (executor ?? this.adapter.getDrizzle()) as Parameters<
+              typeof populateCompanionFieldsAllLocales
+            >[0]["db"],
+            companionTable: companion.table,
+            localizedFields: companion.localizedFields,
+            rows: dataArray,
+            locales: configuredLocales,
+            idKey: "id",
+            readiness: allReadiness,
+          })
+      );
+      if (!ran) return;
       this.decodeJsonLocalizedValues(
         meta,
         companion.localizedFields,
@@ -255,23 +285,75 @@ export class FieldGroupQueryService extends BaseService {
       requested,
       fallbackLocale
     );
-    await populateCompanionFields({
-      db: (executor ?? this.adapter.getDrizzle()) as Parameters<
-        typeof populateCompanionFields
-      >[0]["db"],
-      companionTable: companion.table,
-      localizedFields: companion.localizedFields,
-      rows: dataArray,
-      localeChain,
-      idKey: "id",
-      strict,
-    });
+    // Resolved before the overlay runs, because inside a transaction it can only be read and the
+    // read itself must not be what fails.
+    const readiness = await this.companionReadiness(companion, executor);
+    const overlay = () =>
+      populateCompanionFields({
+        db: (executor ?? this.adapter.getDrizzle()) as Parameters<
+          typeof populateCompanionFields
+        >[0]["db"],
+        companionTable: companion.table,
+        localizedFields: companion.localizedFields,
+        rows: dataArray,
+        localeChain,
+        idKey: "id",
+        readiness,
+      });
+
+    const ran = await this.runContainedOverlay(
+      meta.slug,
+      companion.companionTableName,
+      executor,
+      overlay
+    );
+    if (!ran) return;
     this.decodeJsonLocalizedValues(
       meta,
       companion.localizedFields,
       dataArray,
       false
     );
+  }
+
+  /**
+   * Run a companion overlay, containing a failure the caller could not survive.
+   *
+   * Shared by both overlay shapes so they cannot drift, which they already did once: the
+   * single-locale branch was contained and the all-locale branch returned before reaching it.
+   *
+   * Off a transaction, a failure is contained. The overlay runs AFTER the component's shared values
+   * are deserialized, and the component read above replaces the whole field with null or an empty
+   * list when anything throws — so a fault that costs the reader one translation was costing them
+   * the record. Losing the overlay is the smaller loss, and it is logged rather than silent.
+   *
+   * On the caller's transaction connection it propagates. The failure has already aborted that
+   * transaction, so containing it here would only move the error onto whatever statement runs next,
+   * which is the failure mode these reads stopped catching in order to fix.
+   *
+   * Returns whether the overlay ran, so a caller can skip the decoding that depends on it.
+   */
+  private async runContainedOverlay(
+    slug: string,
+    companionTableName: string,
+    executor: unknown,
+    overlay: () => Promise<unknown>
+  ): Promise<boolean> {
+    if (executor !== undefined) {
+      await overlay();
+      return true;
+    }
+    try {
+      await overlay();
+      return true;
+    } catch (error) {
+      this.logger.error(
+        `Could not read translations for component "${slug}" from ` +
+          `${companionTableName}. Its shared values are being returned untranslated: ` +
+          `${error instanceof Error ? error.message : String(error)}`
+      );
+      return false;
+    }
   }
 
   /**
@@ -589,8 +671,7 @@ export class FieldGroupQueryService extends BaseService {
       [data],
       locale,
       fallbackLocale,
-      executor,
-      strict
+      executor
     );
     data = await this.expandComponentRelationships(
       data,
@@ -641,8 +722,7 @@ export class FieldGroupQueryService extends BaseService {
       dataArray,
       locale,
       fallbackLocale,
-      executor,
-      strict
+      executor
     );
 
     dataArray = await this.expandComponentRelationshipsMany(
@@ -720,8 +800,7 @@ export class FieldGroupQueryService extends BaseService {
         [data],
         locale,
         fallbackLocale,
-        executor,
-        strict
+        executor
       );
       data = await this.expandComponentRelationships(
         data,
@@ -963,7 +1042,7 @@ export class FieldGroupQueryService extends BaseService {
       // The comp_* table may not exist yet (a component before its migration
       // runs) — tolerate that and read as empty. In strict mode a real failure
       // (transient/permission/schema) instead propagates.
-      if (strict && !isMissingCompanionTableError(error)) {
+      if (strict && !isMissingComponentTableError(error)) {
         throw error;
       }
       this.logger.debug("Could not query component table", {
@@ -1128,7 +1207,10 @@ export class FieldGroupQueryService extends BaseService {
           overrideAccess: access.overrideAccess,
           authenticatedScope: access.authenticatedScope,
           targetPolicies: access.targetPolicies,
+          targetCompanions: access.targetCompanions,
           withheldByAccess: access.withheldByAccess,
+          locale: access.locale,
+          status: access.status,
         }
       );
 

@@ -31,13 +31,14 @@
  * ```
  */
 
-import type { HookHandler } from "@nextly/hooks/types";
+import type { BeforeOperationHandler, HookHandler } from "@nextly/hooks/types";
 
 import type { CollectionAccessControl } from "../../domains/auth/services/access-control-types";
+import type { WebhookEventType } from "../../domains/webhooks/types";
 import type { RevalidateConfig } from "../../revalidation/types";
 import type { VersionsConfig } from "../../schemas/versions/types";
 import { simplePluralize } from "../../shared/lib/pluralization";
-import type { FieldConfig } from "../fields/types";
+import type { AuthorableFieldConfig, FieldConfig } from "../fields/types";
 
 // Import validation conditionally - only in server environments
 // This prevents client-side bundlers from including the validation code
@@ -453,8 +454,12 @@ export interface CollectionHooks {
   /**
    * Runs before any operation begins.
    * Can modify operation arguments or execute side effects.
+   *
+   * Handlers receive the operation's `args` -- the data, id or where clause it
+   * is about to use -- and returning a modified set replaces them. This is the
+   * only phase shaped that way; every other one receives `data`.
    */
-  beforeOperation?: HookHandler[];
+  beforeOperation?: BeforeOperationHandler[];
 
   /**
    * Runs before validation during create/update.
@@ -765,14 +770,21 @@ export interface CollectionConfig {
    * written inside the same transaction as the write. Omitted = unversioned
    * (zero cost).
    *
-   * Reserved (accepted but NOT yet enforced): the `drafts`, `autosave`, and
-   * `maxPerDoc` retention settings on {@link VersionsConfig} are parsed and
-   * persisted for forward compatibility, but the draft/publish split, autosave
-   * coalescing, and retention pruning are not wired up yet, so at this stage
-   * enabling versioning is capture/history only regardless of those settings.
-   * The deprecated `status: true` alias likewise does not yet drive a version
-   * draft lifecycle; use the separate `status` option for the draft/published
-   * column.
+   * The draft/publish split is active when the collection sets `status: true`
+   * and versioning resolves `drafts.enabled` to true (`versions: true`, where
+   * drafts default on, or `versions: { drafts: true }`; `versions: { drafts:
+   * false }` and `status: true` on its own stay history-only). A status-less
+   * update to a currently published document is then stored as a single
+   * coalesced working draft in `nextly_versions` and the live row is left
+   * unchanged instead of overwriting the published content; a later publish
+   * promotes that draft onto the live row. The split additionally requires the
+   * collection to be non-localized, every reachable component schema to resolve
+   * and be non-localized, and no reachable field to be a password; otherwise a
+   * status-less write goes straight to the live row as before.
+   *
+   * Still accepted but NOT yet enforced: `autosave` coalescing and the
+   * `maxPerDoc` retention pruning on {@link VersionsConfig} are parsed and
+   * persisted for forward compatibility.
    *
    * @default undefined (unversioned)
    */
@@ -790,15 +802,39 @@ export interface CollectionConfig {
 
   /**
    * Webhook recording policy for this collection. When `false` (or
-   * `{ record: false }`), writes to this collection record NO event to the
-   * webhook outbox, so nothing is ever delivered to subscribed endpoints. Used
-   * to keep PII-bearing content — form submissions carry `ipAddress`/`userAgent`
-   * — out of the delivery path. The object form leaves room for finer policy
-   * later without a breaking change.
+   * `{ record: false }`), writes to this collection record NO `entry.*` event to
+   * the webhook outbox, so nothing is ever delivered to subscribed endpoints.
+   * Used to keep PII-bearing content — form submissions carry
+   * `ipAddress`/`userAgent` and free-form answers — out of the delivery path.
+   *
+   * `emit` replaces the suppressed default event with a curated, metadata-only
+   * one: pair `record: false` with `emit` on a PII collection so subscribers
+   * still learn a row was created, carrying only the allowlisted fields.
    *
    * @default true (writes are recorded)
    */
-  webhooks?: boolean | { record?: boolean };
+  webhooks?:
+    | boolean
+    | {
+        /** Whether the default `entry.*` events record. @default true */
+        record?: boolean;
+        /**
+         * Emit a curated event on create instead of relying on the default
+         * `entry.created`. The event carries only the allowlisted `fields`
+         * (default-deny), so a PII collection can notify subscribers of a new
+         * row without ever shipping the row's sensitive content.
+         */
+        emit?: {
+          /** A declared webhook event type, e.g. `"form.submission.created"`. */
+          event: WebhookEventType;
+          /**
+           * Allowlist of document keys copied into the event payload. Only
+           * these keys ship (default-deny); the created row's id is always
+           * included in the event resource. Omit to ship id only.
+           */
+          fields?: readonly string[];
+        };
+      };
 
   /**
    * Admin panel configuration options.
@@ -1027,7 +1063,37 @@ function toTitleCase(str: string): string {
  * });
  * ```
  */
-export function defineCollection(config: CollectionConfig): CollectionConfig {
+/**
+ * A collection as an author writes it.
+ *
+ * Identical to `CollectionConfig` except for the fields array, which also
+ * admits a contributed type declared through `pluginField()`. The widening
+ * lives here rather than in `FieldConfig` because a union member carrying an
+ * index signature widens property access for every internal reader of that
+ * union.
+ */
+
+/**
+ * The authored fields as the rest of the system reads them.
+ *
+ * A contributed declaration is structurally a field — a name, a type, and the
+ * options its own type reads — and every internal consumer dispatches on
+ * `type` as a string. The authoring widening exists so a plugin type can be
+ * written down; it is dropped at this boundary, after validation, rather than
+ * carried into the union every reader shares, where an index-signature member
+ * would widen property access for all of them.
+ */
+function asDeclaredFields(fields: AuthorableFieldConfig[]): FieldConfig[] {
+  return fields as FieldConfig[];
+}
+
+export type CollectionConfigInput = Omit<CollectionConfig, "fields"> & {
+  fields: AuthorableFieldConfig[];
+};
+
+export function defineCollection(
+  config: CollectionConfigInput
+): CollectionConfig {
   // ============================================================
   // Comprehensive Validation
   // ============================================================
@@ -1038,7 +1104,12 @@ export function defineCollection(config: CollectionConfig): CollectionConfig {
   // - Field-specific validation (select options, relationship targets, etc.)
   // - Nested field validation (array, group, blocks)
   // - Access function type validation
-  assertValidCollectionConfig(config);
+  // Validated as declared; the fields are narrowed to the shared union only
+  // after, which is what makes the narrowing safe to make at all.
+  assertValidCollectionConfig({
+    ...config,
+    fields: asDeclaredFields(config.fields),
+  });
 
   // ============================================================
   // Auto-inject system fields (title, slug)
@@ -1084,7 +1155,10 @@ export function defineCollection(config: CollectionConfig): CollectionConfig {
   }
 
   // Prepend system fields so they appear first in the form
-  const fieldsWithSystem = [...systemFields, ...config.fields];
+  const fieldsWithSystem = [
+    ...systemFields,
+    ...asDeclaredFields(config.fields),
+  ];
 
   // ============================================================
   // Apply Defaults
@@ -1123,5 +1197,5 @@ export function defineCollection(config: CollectionConfig): CollectionConfig {
 // ============================================================
 
 export type { FieldConfig };
-export type { HookHandler };
+export type { BeforeOperationHandler, HookHandler };
 export type { CollectionAccessControl };

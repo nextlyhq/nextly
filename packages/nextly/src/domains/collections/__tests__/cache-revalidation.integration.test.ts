@@ -241,11 +241,11 @@ describe("cache revalidation — write path (sqlite)", () => {
     expect(spy.tags).toContain("nextly:redact:slug:hidden-slug");
   });
 
-  it("busts tags for a committed batch item whose afterCreate hook throws", async () => {
+  it("busts tags for a batch item whose afterCreate hook throws, and counts it as written", async () => {
     const entries = await boot([openCollection("hookfail")]);
-    // A code afterCreate hook that always throws. In a batch (stopOnError:false)
-    // the row still commits, so the item's tags must be busted even though it is
-    // reported as a failure — the intent is computed before the hooks run.
+    // A code afterCreate hook that always throws. The row still commits, and a
+    // post-commit phase cannot un-commit it, so the item is reported as the
+    // success it is and its tags are busted.
     const throwingHook: HookHandler = async () => {
       throw NextlyError.internal({ logContext: { reason: "test-hook-throw" } });
     };
@@ -256,8 +256,12 @@ describe("cache revalidation — write path (sqlite)", () => {
         [{ title: "T", slug: "committed" }],
         { stopOnError: false }
       );
-      expect(result.failed).toBe(1); // the hook threw, so the item is a failure
-      // …but the row committed, so its tags were still busted.
+      // The hook threw after the write, which does not make the write a
+      // failure: the row is durable and calling it failed would have a caller
+      // retry and write it twice.
+      expect(result.failed).toBe(0);
+      expect(result.successful).toBe(1);
+      // And the committed row's tags are busted, as they always were.
       expect(spy.tags).toContain("nextly:hookfail:slug:committed");
     } finally {
       unregisterHook("afterCreate", "hookfail", throwingHook);

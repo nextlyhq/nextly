@@ -49,6 +49,59 @@ function capture(run: () => unknown): NextlyError {
   expect.fail("expected a refusal, but the call returned normally");
 }
 
+// 🔴 A rollback torn between a rename and its registry pointer update leaves
+// the row naming the migrated table while the catalog already holds the legacy
+// one. `retargetName` maps a legacy spelling FORWARD and returns null for
+// anything else, so it cannot name where a rollback is taking a migrated table —
+// only the directed plan can, and without it the row's storage reads as absent.
+describe("a rollback torn before its pointer update", () => {
+  const migratedRow = { ...row(), tableName: "fg_hero" };
+  const down = invertManifest(buildMigrationManifest([row()]).entries).entries;
+
+  // Going down the registry renames first and the table last, so reaching the
+  // table step means the two before it are recorded. Its rename then committed
+  // -- MySQL commits DDL as it is issued -- while the registry pointer update
+  // that shares its transaction did not, which is the supported
+  // commit-before-marker window.
+  const TORN_CATALOG = ["dynamic_components", "comp_hero"];
+
+  function reconcileTorn() {
+    return reconcilePlan({
+      entries: down,
+      rows: [migratedRow],
+      tables: TORN_CATALOG,
+      columns: columnsFor(TORN_CATALOG),
+      run: { recorded: true, direction: "down", step: 2 },
+      direction: "down",
+      identifierCase: PRESERVING,
+    });
+  }
+
+  it("recognises the storage the rollback already restored", () => {
+    expect(() => reconcileTorn()).not.toThrow();
+  });
+
+  // Widening must not reach past the plan: a row whose storage is genuinely
+  // absent still has to be refused, or the migration renames around data that
+  // is already gone.
+  it("still refuses a row whose storage is absent under either name", () => {
+    const error = capture(() =>
+      reconcilePlan({
+        entries: down,
+        rows: [migratedRow],
+        tables: ["dynamic_components"],
+        columns: columnsFor(["dynamic_components"]),
+        run: { recorded: true, direction: "down", step: 2 },
+        direction: "down",
+        identifierCase: PRESERVING,
+      })
+    );
+    expect(error.logContext?.reason).toBe(
+      "registry rows name storage that does not exist"
+    );
+  });
+});
+
 describe("field-group migration reconciliation", () => {
   const rows = [row()];
   const plan = buildMigrationManifest(rows).entries;
@@ -734,5 +787,64 @@ describe("ownership on a settled marker", () => {
       probe(PRESERVING, ["dynamic_field_groups", "SHARED", "shared"])
         .migratedObjects
     ).toEqual({ complete: true });
+  });
+});
+
+describe("a registry row repointed at a target the run has not reached", () => {
+  // Two groups, so the plan has a table step well past the crash window.
+  const rows = [
+    row({ slug: "alpha", tableName: "comp_alpha" }),
+    row({ slug: "beta", tableName: "comp_beta" }),
+  ];
+  const entries = buildMigrationManifest(rows).entries;
+  // [table alpha, column alpha, table beta, column beta, registry]
+  const BETA_TABLE_POSITION = 3;
+
+  // The catalog has to agree with the recorded step, or the refusal under test
+  // is masked by a different one: a source still present at a position the
+  // marker calls verified is itself a refusal.
+  function reconcile(step: number, betaPointsAt: string) {
+    const alphaTable = step >= 1 ? "fg_alpha" : "comp_alpha";
+    const alphaColumn = step >= 2 ? TARGET_COLUMN : LEGACY_COLUMN;
+    const tables = ["dynamic_components", alphaTable, betaPointsAt];
+    return reconcilePlan({
+      entries,
+      rows: [
+        { ...rows[0]!, tableName: alphaTable },
+        { ...rows[1]!, tableName: betaPointsAt },
+      ],
+      tables,
+      columns: columnsFor(tables, { [alphaTable]: [alphaColumn] }),
+      run: { recorded: true, direction: "up", step },
+      direction: "up",
+      identifierCase: PRESERVING,
+    });
+  }
+
+  // Repointing a field group's storage leaves its id, slug and companion flag
+  // untouched, so the registry hash still matches and the resume proceeds. What
+  // stops the migration adopting the author's table is that no recorded progress
+  // reaches this position — the same test the catalog side already applies to
+  // objects, which is why no separate pointer check is needed for it.
+  it("refuses when the pointer moved before its step was reached", () => {
+    const refusal = capture(() => reconcile(0, "fg_beta"));
+    expect(refusal.logContext?.reason).toMatch(
+      /no recorded progress accounts for it/
+    );
+    expect(refusal.logContext?.to).toBe("fg_beta");
+    expect(refusal.logContext?.position).toBe(BETA_TABLE_POSITION);
+  });
+
+  // Inside the crash window the pointer having moved is exactly what a committed
+  // step looks like, so it must still resume.
+  it("accepts the pointer at its target once that step is reachable", () => {
+    expect(() => reconcile(BETA_TABLE_POSITION - 1, "fg_beta")).not.toThrow();
+  });
+
+  // MySQL commits DDL implicitly, so within the window a row may still address
+  // its source while the table has already moved. Refusing that would block the
+  // resume that repairs it.
+  it("accepts a pointer that has not moved yet", () => {
+    expect(() => reconcile(0, "comp_beta")).not.toThrow();
   });
 });

@@ -212,13 +212,14 @@ Each operation accepts a function (returning `boolean | Promise<boolean>`), a li
 
 Singles support four lifecycle hooks — a subset of the eight available on collections.
 
-### Four available hooks
+### Five available hooks
 
 | Hook | Triggers on | Can modify |
 |---|---|---|
 | `beforeRead` | Before reading from the database. | Yes (query parameters) |
 | `afterRead` | After reading from the database. | Yes (transform output) |
-| `beforeChange` | Before validation and the database write. | Yes (data) |
+| `beforeValidate` | Before the schema's rules are enforced on an update. | Yes (data) |
+| `beforeChange` | After validation passes, before the database write. | Yes (data) |
 | `afterChange` | After the database write. | No (side effects) |
 
 ### Execution order — read
@@ -229,9 +230,16 @@ Singles support four lifecycle hooks — a subset of the eight available on coll
 
 ### Execution order — update
 
-1. `beforeChange`
-2. **Database update**
-3. `afterChange`
+1. `beforeValidate`
+2. **Validation** - the schema's declared rules are enforced
+3. `beforeChange`
+4. **Database update**
+5. `afterChange`
+
+The validation gate is what separates the two write hooks. Use `beforeValidate`
+to supply or repair a value you want the rules applied to; use `beforeChange` to
+derive the value that gets stored, knowing the document has already passed them.
+What a `beforeChange` handler returns is written without being re-validated.
 
 ### Example: cache invalidation
 
@@ -256,7 +264,8 @@ hooks: {
 
 - `beforeRead` — modify query filters (e.g., scope to the current tenant), audit logging.
 - `afterRead` — compute virtual properties, redact sensitive fields.
-- `beforeChange` — coerce inputs and final mutations before the row is persisted.
+- `beforeValidate` — coerce inputs (trim strings, normalize casing), or supply a value the rules require.
+- `beforeChange` — final mutations before the row is persisted, on data already known to be valid.
 - `afterChange` — cache busting, webhooks, queue jobs.
 
 Throwing inside any hook aborts the operation and rolls back the transaction.

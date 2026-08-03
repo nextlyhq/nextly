@@ -11,24 +11,40 @@ import {
   keysToCamelCase,
 } from "../../../lib/case-conversion";
 import { absolutizeMediaUrls } from "../../../lib/media-variant";
+import { resolveStatusFilter } from "../../../lib/status-filter";
 import {
   AccessControlService,
   DEFAULT_OWNER_FIELD,
 } from "../../../services/access";
-import type { CollectionAccessRules } from "../../../services/access";
 import {
   describeUntranslatableConstraint,
   stripNoOpConstraintMembers,
 } from "../../../services/access/constraint-shape";
-import type { CollectionFileManager } from "../../../services/collection-file-manager";
-import { buildDrizzleCondition } from "../../../services/collections/drizzle-condition";
+import type {
+  CollectionFileManager,
+  CompanionSchema,
+} from "../../../services/collection-file-manager";
+import {
+  buildDrizzleCondition,
+  buildLocalizedWhereExists,
+  type LocalizedQueryContext,
+} from "../../../services/collections/drizzle-condition";
 import {
   buildWhereClause,
   type WhereFilter,
 } from "../../../services/collections/query-operators";
+import type {
+  RelatedRowReadContext,
+  TargetReadPolicy,
+} from "../../../services/collections/related-row-read-context";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
-import { applyFieldReadAccess } from "../../../shared/lib/field-level-registry";
+import { detachData } from "../../../shared/lib/detach";
+import {
+  applyFieldReadAccess,
+  runFieldHooks,
+  type ReadAccessRedactions,
+} from "../../../shared/lib/field-level-registry";
 import {
   hasPasswordField,
   stripPasswordFieldValues,
@@ -39,6 +55,7 @@ import type { DynamicCollectionService } from "../../dynamic-collections";
 
 import { CollectionAccessService } from "./collection-access-service";
 import type { UserContext } from "./collection-types";
+import { decodeJsonFieldValues } from "./collection-utils";
 
 /**
  * System-entity columns that hold secrets and must never ride along a
@@ -59,6 +76,200 @@ export const DEFAULT_RELATIONSHIP_DEPTH = 2;
  */
 export const MAX_RELATIONSHIP_DEPTH = 5;
 
+/** Carried across one read's nested-hook pass. */
+interface NestedHookStateBase {
+  /**
+   * Rows already visited. Batch expansion hands the same object to every parent
+   * that references it, so this is what keeps a transform from compounding
+   * with the reference count; it also breaks a reference cycle.
+   */
+  visited: Set<Record<string, unknown>>;
+  /** One schema read per collection per read, rather than per row per depth. */
+  fields: Map<string, FieldDefinition[]>;
+  /**
+   * Label field per target, keyed by collection AND the field's declared
+   * override, since two relationships can point at one collection and name
+   * different labels. Resolving it costs a metadata read, and the label is
+   * rebuilt for every related row.
+   */
+  labelFields: Map<string, Promise<string>>;
+  /**
+   * The values field access removed from each related row, keyed by the row
+   * object, shared across the whole read. The walk applies access to each row
+   * before its parent's hooks (so a hook cannot read a denied child field to copy
+   * it), recording what it removed here; finalize re-applies access after every
+   * hook, restoring those values as evidence and re-judging the current content,
+   * so anything a hook reintroduced, mutated, or added is caught.
+   */
+  redactions: ReadAccessRedactions;
+  /**
+   * Every related row the pass reached, in visit order, with what is needed to
+   * finish it. These entries drive the finalize step after every hook has run: it
+   * re-applies access to each row (see `redactions`), then rebuilds labels last
+   * from the values that survived.
+   */
+  pending: Array<{
+    row: Record<string, unknown>;
+    collection: string;
+    field: FieldDefinition;
+    /**
+     * How many hops from the document the row was reached at. Expansion honours
+     * the depth remaining when it reaches a row, so the SAME row reached one hop
+     * in and two hops in carries different population: the nearer occurrence has
+     * its own relationships expanded where the deeper one has bare ids.
+     */
+    depth: number;
+  }>;
+  /**
+   * The AUTHORITATIVE version of each related row, keyed by collection and id: a
+   * deep copy taken once the walk and the finalize step have fully sanitized it,
+   * before any source-collection `afterRead` hook can reach it.
+   *
+   * The response's related rows are rebuilt from these rather than inspected for
+   * tampering (see
+   * {@link CollectionRelationshipService.reprojectRelatedRows}). A source hook is
+   * free to clone, reshape, reorder, or write to a related row; whatever it did is
+   * discarded when the row is re-derived, so no reshape has to be DETECTED to be
+   * undone. A related row's presentation is its own collection's authority, so a
+   * source hook cannot change it — including its allowed fields.
+   *
+   * Copies, never the live rows: a hook that mutates a related row in place would
+   * otherwise corrupt the very version this restores from.
+   */
+  sanitized: Map<string, { depth: number; row: Record<string, unknown> }>;
+}
+
+/** The state the walk carries; named separately so the interface reads first. */
+type NestedHookState = NestedHookStateBase;
+
+function createNestedHookState(): NestedHookState {
+  return {
+    visited: new Set(),
+    fields: new Map(),
+    labelFields: new Map(),
+    redactions: new WeakMap(),
+    pending: [],
+    sanitized: new Map(),
+  };
+}
+
+/**
+ * The collection a nested value belongs to, and the row itself.
+ *
+ * A polymorphic relationship is expanded as `{ relationTo, value }`, so the
+ * target is knowable per VALUE even though the field declares several. The
+ * discriminator is validated against what the field declares, so a stored value
+ * naming a collection the field never pointed at cannot direct another
+ * collection's hooks at this row.
+ */
+/**
+ * Whether a field stores its values as the discriminated `{ relationTo, value }`
+ * pair rather than as bare ids.
+ *
+ * Decided by the ARRAY FORM of `relationTo`, not by how many targets it names: a
+ * field declaring a single target as an array (`relationTo: ["posts"]`) uses the
+ * same pair a multi-target field does, because the storage shape follows how the
+ * target was declared. Counting targets instead reads that pair as the row.
+ *
+ * Mirrors {@link declaredTargets}: a many-to-many field resolves its one target
+ * from `options.target` and stores bare ids, whatever `relationTo` says.
+ */
+function isDiscriminatedRelationship(field: FieldDefinition): boolean {
+  if (field.options?.relationType === "manyToMany" && field.options.target) {
+    return false;
+  }
+  return Array.isArray(field.relationTo);
+}
+
+/**
+ * What one relationship value actually holds.
+ *
+ * - `reference` — a bare id, or the pair a discriminated field stores while
+ *   nothing is populated. It carries no fields, so there is nothing to sanitize
+ *   and nothing to rebuild.
+ * - `populated` — an expanded row, with the collection it belongs to.
+ * - `unresolvable` — an expanded row whose collection cannot be established: a
+ *   pair naming a collection the field never declared, or a bare row under a
+ *   field naming several targets, where nothing in the value says which one it
+ *   came from.
+ */
+type RelationshipValueShape =
+  | { kind: "reference" }
+  | { kind: "unresolvable" }
+  | {
+      kind: "populated";
+      collection: string;
+      row: Record<string, unknown>;
+      discriminated: boolean;
+    };
+
+/**
+ * Read a relationship value's shape, once, for every reader that needs it.
+ *
+ * The walk and the response rebuild both have to agree about which values are
+ * discriminated and which collection a row belongs to. Deciding that separately
+ * in each is how they drift: one treating a `{ relationTo, value }` pair as the
+ * row evaluates the target's rules against an object holding neither of its
+ * fields, and the other drops a relationship nothing touched.
+ */
+function readRelationshipValueShape(
+  value: unknown,
+  field: FieldDefinition
+): RelationshipValueShape {
+  if (value === null || value === undefined) return { kind: "reference" };
+  if (typeof value !== "object" || Array.isArray(value)) {
+    return { kind: "reference" };
+  }
+  // The same resolver expansion uses, so a Schema Builder relationship -- whose
+  // target lives in `options.target` with no `relationTo` at all -- is walked
+  // rather than skipped.
+  const targets = declaredTargets(field);
+  if (targets.length === 0) return { kind: "reference" };
+
+  const record = value as Record<string, unknown>;
+  // Only a field that DECLARES the pair shape is read as one, so a target
+  // collection that legitimately defines its own string `relationTo` field is
+  // not mistaken for a wrapper and skipped.
+  if (
+    isDiscriminatedRelationship(field) &&
+    typeof record.relationTo === "string"
+  ) {
+    const inner = record.value;
+    if (inner === null || typeof inner !== "object" || Array.isArray(inner)) {
+      // The pair is still carrying an id: a reference, not an expanded row.
+      return { kind: "reference" };
+    }
+    // Validated against what the field declares: nothing checks the stored slug
+    // on the way in, so an unvalidated one would let a writer aim another
+    // collection's rules and hooks at this row.
+    if (!targets.includes(record.relationTo)) return { kind: "unresolvable" };
+    return {
+      kind: "populated",
+      collection: record.relationTo,
+      row: inner as Record<string, unknown>,
+      discriminated: true,
+    };
+  }
+
+  if (targets.length > 1) return { kind: "unresolvable" };
+  return {
+    kind: "populated",
+    collection: targets[0],
+    row: record,
+    discriminated: false,
+  };
+}
+
+function resolveNestedTarget(
+  row: Record<string, unknown>,
+  field: FieldDefinition
+): { collection: string; row: Record<string, unknown> } | null {
+  const shape = readRelationshipValueShape(row, field);
+  return shape.kind === "populated"
+    ? { collection: shape.collection, row: shape.row }
+    : null;
+}
+
 /**
  * The caller a related row is redacted for.
  *
@@ -66,53 +277,14 @@ export const MAX_RELATIONSHIP_DEPTH = 5;
  * helpers need only these two of its fields, and passing the whole options bag
  * down would let a depth value leak into a redaction decision.
  */
-interface RelatedRowAccess {
-  /**
-   * Whether to evaluate the target collection's field read rules at all.
-   *
-   * Off unless a caller opts in, because "no user supplied" and "anonymous
-   * caller" are indistinguishable here and they demand opposite outcomes: an
-   * anonymous REST read must be judged (and denied), while an expansion entry
-   * point that simply has not been given the caller yet must keep behaving as
-   * it does today rather than start stripping fields from everyone. Every entry
-   * point opts in as its own caller forwarding lands.
-   */
-  enforceFieldAccess?: boolean;
-  /**
-   * Evaluate the TARGET collection's own read rules, independently of whether
-   * this caller redacts fields. A Single's authorization view wants the second
-   * without the first: its rule must read real field values, and must still not
-   * be shown a row the response will withhold.
-   */
-  enforceCollectionAccess?: boolean;
-  user?: Record<string, unknown>;
-  overrideAccess?: boolean;
-  /**
-   * The caller's authenticated scope. A scoped API key is judged on its OWN
-   * stamped grant, never on its owner's roles, so the super-admin bypass and
-   * the owner predicate both have to know about one.
-   */
-  authenticatedScope?: AuthenticatedScope;
-  /**
-   * Ids withheld because the target collection's rules refused this caller.
-   *
-   * A caller that checks its expansion for completeness cannot otherwise tell
-   * a deliberate refusal from a load that failed, and would report the first
-   * as evidence that went missing.
-   */
-  withheldByAccess?: Set<string>;
-  /**
-   * Target read policies already resolved during this expansion, so a
-   * relationship holding many references reads its collection's metadata once
-   * instead of once per value.
-   */
-  targetPolicies?: Map<string, Promise<TargetReadPolicy>>;
-}
-
-/** A target collection's read policy, as one expansion needs it. */
-export interface TargetReadPolicy {
-  rules: CollectionAccessRules | undefined;
-}
+/**
+ * The caller a related row is fetched, judged and redacted for.
+ *
+ * The shared shape, carried unchanged by every layer that can reach a related
+ * row. Kept as a local name because this service refers to it constantly and
+ * "access" reads better at those call sites than the full noun.
+ */
+type RelatedRowAccess = RelatedRowReadContext;
 
 /**
  * Options for relationship expansion.
@@ -166,6 +338,14 @@ export interface RelationshipExpansionOptions {
   enforceCollectionAccess?: boolean;
 
   /**
+   * Defer the target's field read rules to the post-assembly pass. Only a
+   * caller that runs {@link CollectionRelationshipService.applyNestedFieldHooks}
+   * over the finished document may set this. See
+   * {@link RelatedRowAccess.fieldAccessStage}.
+   */
+  fieldAccessStage?: "fetch" | "assembled";
+
+  /**
    * Collects the ids withheld because a target collection refused the caller,
    * so a completeness check can tell a refusal from a failure.
    *
@@ -184,6 +364,14 @@ export interface RelationshipExpansionOptions {
   targetPolicies?: Map<string, Promise<TargetReadPolicy>>;
 
   /**
+   * Companion schemas already looked up during this expansion, carried by a
+   * nested hop for the same reason the policy map is.
+   *
+   * @internal
+   */
+  targetCompanions?: Map<string, Promise<CompanionSchema | null>>;
+
+  /**
    * The caller's authenticated scope, when one applies.
    *
    * A scoped API key is judged on its OWN stamped grant rather than its
@@ -191,6 +379,27 @@ export interface RelationshipExpansionOptions {
    * owner's session would get.
    */
   authenticatedScope?: AuthenticatedScope;
+
+  /**
+   * The caller's Draft/Published intent, when they asked to see everything.
+   *
+   * Deliberately narrow: `"all"` is the only value that propagates into
+   * expansion. It is a statement about the caller's trust — the admin sends it
+   * on every read for exactly that reason — whereas a concrete `draft` or
+   * `published` names the lifecycle of the collection being read and says
+   * nothing about what that collection points at. Absent means a related row is
+   * filtered to the published default, which is what a direct read of it would
+   * do.
+   */
+  status?: "all";
+  /**
+   * The language this read resolved to, forwarded so a target collection's read
+   * rule can be applied when it filters on a localized field.
+   *
+   * Pass the resolved locale, not the raw request parameter: see
+   * {@link RelatedRowAccess.locale}.
+   */
+  locale?: string;
 }
 
 /**
@@ -244,6 +453,25 @@ function parseJsonIfString(data: unknown): unknown {
     }
   }
   return data;
+}
+
+/**
+ * The row objects inside a container value (a `group` object, or a `repeater`
+ * array), parsing a JSON string first. Non-object entries are dropped. Used to
+ * walk an original and its clone in parallel when transferring redaction evidence.
+ */
+function containerRowsOf(value: unknown): Record<string, unknown>[] {
+  const parsed = parseJsonIfString(value);
+  if (Array.isArray(parsed)) {
+    return parsed.filter(
+      (row): row is Record<string, unknown> =>
+        row !== null && typeof row === "object"
+    );
+  }
+  if (parsed !== null && typeof parsed === "object") {
+    return [parsed as Record<string, unknown>];
+  }
+  return [];
 }
 
 /**
@@ -767,6 +995,43 @@ function readRelationshipRef(
 }
 
 /**
+ * The display column a relationship field asks its target for, or "" when it
+ * asks for none and the label is auto-selected.
+ *
+ * Read from both shapes expansion supports — a Schema Builder field keeps it
+ * under `options`, and a field may carry it at its root — so the two readers
+ * that need it (the label rebuild and the snapshot key) cannot disagree about
+ * which column a field asked for.
+ */
+function declaredLabelField(field: FieldDefinition): string {
+  const override =
+    field.options?.targetLabelField ??
+    (field as Record<string, unknown>).targetLabelField;
+  return typeof override === "string" ? override : "";
+}
+
+/**
+ * Identifies a related row AS ONE FIELD PRESENTS IT: the row itself, plus the
+ * display column the field asked for.
+ *
+ * Two relationship fields can point at the same row and ask for different
+ * labels, and batch expansion fetches per field — so each holds its own row
+ * object carrying its own label. Keyed on the row alone, one field's sanitized
+ * version would overwrite the other's and then be restored into both, giving one
+ * of them the wrong label.
+ */
+function relatedRowSnapshotKey(
+  collection: string,
+  id: string,
+  field: FieldDefinition
+): string {
+  // The same NUL separator {@link relationKey} uses, and for the same reason: it
+  // cannot appear in a slug, an id, or a field name, so no two distinct triples
+  // can collapse onto one key.
+  return `${relationKey(collection, id)}\u0000${declaredLabelField(field)}`;
+}
+
+/**
  * Identifies a related row by collection AND id, because an id is only unique
  * within its own collection. A field naming several targets can hold the same
  * id for two of them, and a lookup keyed on the id alone would hand back
@@ -922,6 +1187,20 @@ export type RelationshipDbExecutor = {
   execute?(query: unknown): Promise<unknown>;
 };
 
+// The columns a related-row read reaches for on a target's table.
+//
+// A dynamic collection's Drizzle table is built at runtime from stored field
+// metadata, so there is no compile-time type for it and the loader hands back
+// an untyped value. Naming the two columns that are actually read keeps those
+// accesses checked, and keeps the rest of the table opaque rather than
+// asserting a shape it may not have: `status` is optional because a collection
+// without Draft/Published has no such column, and `id` is `unknown` because it
+// is only ever handed to Drizzle as a column reference, never read as a value.
+type TargetTableColumns = {
+  id: unknown;
+  status?: unknown;
+};
+
 export class CollectionRelationshipService extends BaseService {
   /**
    * Decides whether a caller may read a TARGET collection at all.
@@ -984,6 +1263,125 @@ export class CollectionRelationshipService extends BaseService {
    * has not been given the caller yet would judge everyone anonymous and hide
    * rows from entitled callers.
    */
+  /**
+   * Read the rows a relationship points at, as this caller may see them.
+   *
+   * The only place a related row is fetched. Six call sites used to repeat the
+   * same five steps — resolve the schema, select by id, normalize timestamps,
+   * apply the target collection's read rules, redact its protected fields — and
+   * every capability a related row was missing had to be added to each of them
+   * and then audited for the one that was forgotten. That audit has been run
+   * three times: for the caller's scope, for the read locale, and for two
+   * caches. Behind one seam each of those becomes a single change.
+   *
+   * System entities keep the lean path deliberately: they have no collection
+   * record, so no stored rules and no hooks apply, and their secrets are
+   * stripped by column name during redaction instead.
+   *
+   * Returns only the rows this caller may read. A refused row is simply absent —
+   * one unreadable reference must not refuse the whole parent read — so callers
+   * must not assume the result lines up with the ids they asked for.
+   */
+  /**
+   * The Draft/Published predicate a read of this target resolves to, or
+   * undefined when none applies.
+   *
+   * What propagates from the surrounding read is not a status VALUE but whether
+   * the published-only default was deliberately bypassed. A concrete
+   * `?status=draft` names the lifecycle of the collection being listed, not of
+   * everything it points at — a draft page should still show its published
+   * author — so only "read everything" travels, and it travels because it is a
+   * statement about the caller's trust rather than about the query.
+   *
+   * System entities have no lifecycle and no collection record to ask.
+   */
+  private async resolveTargetStatusValue(
+    targetCollection: string,
+    schema: TargetTableColumns,
+    access: RelatedRowAccess
+  ): Promise<string | undefined> {
+    if (isSystemEntity(targetCollection)) return undefined;
+    // Guarded on the column, not only on the collection's flag: a collection
+    // whose status was switched off keeps the flag until its schema is
+    // reapplied, and naming a column the table lacks fails the whole read.
+    if (!schema.status) return undefined;
+
+    let hasStatus: boolean;
+    try {
+      const policy = await this.resolveTargetReadPolicy(
+        targetCollection,
+        this.resolveAccessService(),
+        access
+      );
+      hasStatus = policy.hasStatus;
+    } catch {
+      // The lifecycle could not be established, so the safe reading is that the
+      // collection has one and the caller gets the published-only default.
+      hasStatus = true;
+    }
+
+    const statusFilter = resolveStatusFilter({
+      collectionHasStatus: hasStatus,
+      overrideAccess: access.overrideAccess === true,
+      explicit: access.status,
+    });
+    return statusFilter?.value;
+  }
+
+  private async readTargetRows(
+    targetCollection: string,
+    ids: string[],
+    access: RelatedRowAccess
+  ): Promise<Record<string, unknown>[]> {
+    if (ids.length === 0) return [];
+
+    const schema = isSystemEntity(targetCollection)
+      ? getSystemEntityTable(targetCollection)
+      : await this.fileManager.loadDynamicSchema(targetCollection);
+    if (!schema) return [];
+
+    // Draft/Published applies to a related row exactly as it applies to a direct
+    // read of it. Without this, a caller who is 404'd asking for an unpublished
+    // row is handed the whole thing — status column included — by populating a
+    // relationship that points at it.
+    const statusValue = await this.resolveTargetStatusValue(
+      targetCollection,
+      schema,
+      access
+    );
+
+    const entries = (await this.db
+      .select()
+      .from(schema)
+      .where(inArray(schema.id, ids))) as Record<string, unknown>[];
+
+    const fetched = entries.map(entry =>
+      convertTimestampsToCamelCase({ ...entry })
+    );
+    // Filtered here rather than in the query above so the rows this removes are
+    // recorded as deliberately withheld. Narrowing the fetch would drop them
+    // before anything could distinguish "exists, wrong lifecycle" from "does
+    // not exist" — and a caller checking its expansion for completeness reads
+    // an unexplained absence as evidence lost and refuses the whole parent.
+    // A row that was never there stays unrecorded, because a dangling
+    // reference is a data problem and must not be dressed up as a refusal.
+    const rows = statusValue
+      ? fetched.filter(row => row.status === statusValue)
+      : fetched;
+    this.recordWithheld(targetCollection, fetched, rows, access);
+
+    const readable = await this.filterRowsByCollectionAccess(
+      targetCollection,
+      rows,
+      access
+    );
+    // Redaction runs before any caller derives a label from a row: a label
+    // copies a field's value under another key, so one taken from an unredacted
+    // row survives the redaction of its own source field.
+    await this.redactRelatedRows(targetCollection, readable, access);
+    return readable;
+  }
+
   private async filterRowsByCollectionAccess(
     targetCollection: string,
     rows: Record<string, unknown>[],
@@ -1070,7 +1468,9 @@ export class CollectionRelationshipService extends BaseService {
         this.narrowByTargetPredicate(
           targetCollection,
           group,
-          predicates.get(key) as Record<string, unknown>
+          predicates.get(key) as Record<string, unknown>,
+          access,
+          policy
         )
       )
     );
@@ -1149,6 +1549,7 @@ export class CollectionRelationshipService extends BaseService {
         rules: accessService.getAccessRules(
           collection as Record<string, unknown>
         ),
+        hasStatus: (collection as { status?: boolean }).status === true,
       };
     })();
     access.targetPolicies?.set(targetCollection, pending);
@@ -1172,7 +1573,9 @@ export class CollectionRelationshipService extends BaseService {
   private async narrowByTargetPredicate(
     targetCollection: string,
     rows: Record<string, unknown>[],
-    constraint: Record<string, unknown>
+    constraint: Record<string, unknown>,
+    access: RelatedRowAccess,
+    policy: TargetReadPolicy
   ): Promise<Record<string, unknown>[] | null> {
     try {
       const schema = isSystemEntity(targetCollection)
@@ -1180,12 +1583,38 @@ export class CollectionRelationshipService extends BaseService {
         : await this.fileManager.loadDynamicSchema(targetCollection);
       if (!schema) return [];
 
+      // The status a read of this target resolves to for this caller, asked of
+      // the helper that owns that decision rather than restated here. It applies
+      // to the row AND to any companion row consulted about it: constraining
+      // only one of the two admits a draft row whose published translation
+      // satisfies the rule.
+      const statusFilter = resolveStatusFilter({
+        collectionHasStatus: policy.hasStatus,
+        overrideAccess: access.overrideAccess === true,
+        // The same intent the fetch honoured. Re-resolving without it re-applies
+        // the published-only default here, so a caller who asked to read
+        // everything loses a draft row that the fetch above admitted.
+        explicit: access.status,
+      });
+
+      const localizedCtx = await this.buildTargetLocalizedContext(
+        targetCollection,
+        schema,
+        access,
+        constraint,
+        statusFilter?.value
+      );
+
       const untranslatable = describeUntranslatableConstraint(
         constraint,
         name => Object.prototype.hasOwnProperty.call(schema, name),
-        // No companion support on this path, so a filter on a localized field
-        // is reported untranslatable here rather than quietly dropped.
-        () => false
+        // A localized field has no column on the main table, so it counts as
+        // translatable only while a companion context is in hand. Without one
+        // it is reported untranslatable and the rows are withheld, rather than
+        // the member being dropped and the read running under a weaker
+        // predicate than the rule states.
+        name =>
+          Boolean(localizedCtx?.localizedFields.some(f => f.name === name))
       );
       if (untranslatable !== null) {
         this.logger.warn(
@@ -1203,7 +1632,9 @@ export class CollectionRelationshipService extends BaseService {
       const condition = buildDrizzleCondition(
         buildWhereClause(restricting as WhereFilter),
         schema,
-        this.adapter.dialect ?? "postgresql"
+        this.adapter.dialect ?? "postgresql",
+        localizedCtx,
+        buildLocalizedWhereExists
       );
       // A constraint that restricts on paper and compiles to nothing would
       // admit every row. Withhold instead: the rule asked to narrow.
@@ -1222,13 +1653,23 @@ export class CollectionRelationshipService extends BaseService {
       // ownership or tenant reassignment that also replaced the contents — the
       // caller would be handed the version that belonged to whoever held it
       // before. Authorization and the data it admits come from one read.
+      // Guarded on the column and not on the flag alone: naming a column the
+      // table does not have fails the whole query, and the catch below would
+      // then withhold every row of the collection.
+      const statusCondition =
+        statusFilter && schema.status
+          ? eq(schema.status, statusFilter.value)
+          : undefined;
       const admitted = (await this.db
         .select()
         .from(schema)
-        .where(and(inArray(schema.id, ids), condition))) as Record<
-        string,
-        unknown
-      >[];
+        .where(
+          and(
+            inArray(schema.id, ids),
+            ...(statusCondition ? [statusCondition] : []),
+            condition
+          )
+        )) as Record<string, unknown>[];
       const fresh = new Map(
         admitted.map(row => {
           const normalized = convertTimestampsToCamelCase({ ...row });
@@ -1248,6 +1689,86 @@ export class CollectionRelationshipService extends BaseService {
       // caller must not report this as a refusal — nothing was decided.
       return null;
     }
+  }
+
+  /**
+   * The target collection's companion schema, looked up once per expansion.
+   *
+   * The PENDING lookup is cached rather than its result: references are
+   * confirmed concurrently, so every one of them reaches this point before the
+   * first has anything to store, and caching only the settled value leaves each
+   * issuing its own metadata read.
+   */
+  private resolveTargetCompanion(
+    targetCollection: string,
+    access: RelatedRowAccess
+  ): Promise<CompanionSchema | null> {
+    const cached = access.targetCompanions?.get(targetCollection);
+    if (cached) return cached;
+    const pending = this.fileManager.loadCompanionSchema(targetCollection);
+    access.targetCompanions?.set(targetCollection, pending);
+    return pending;
+  }
+
+  /**
+   * The companion context a predicate on a localized field of the TARGET
+   * collection needs, or null when there is none to build.
+   *
+   * A localized field has no column on the main table — it lives in the
+   * collection's `_locales` companion, one row per language — so a predicate
+   * naming one can only be applied as a subquery against that table. Without
+   * this the field looked like a column the target does not have, and every row
+   * behind such a rule was withheld from expansion while a list read of the
+   * same collection returned them.
+   *
+   * Null when the target is not localized, or when no locale reached this
+   * expansion: a companion filter has to name one language, and the read that
+   * asked for every language at once (or never said) has no single answer.
+   * Withholding is the outcome then, unchanged from before.
+   *
+   * Also null when the constraint names only columns the target already has.
+   * Looking a companion up costs a collection-metadata read, and the ordinary
+   * case — an owner or tenant predicate on a plain column — has nothing to
+   * resolve there, so a localized application would pay for every target it
+   * populates without a companion filter ever being built.
+   */
+  private async buildTargetLocalizedContext(
+    targetCollection: string,
+    schema: TargetTableColumns,
+    access: RelatedRowAccess,
+    constraint: Record<string, unknown>,
+    /** The status a read of this target resolves to, or undefined for none. */
+    statusValue: string | undefined
+  ): Promise<LocalizedQueryContext | null> {
+    if (!access.locale || isSystemEntity(targetCollection)) return null;
+    // Judged on the raw constraint keys, which is what the untranslatable check
+    // inspects: a member naming something the table does not have is either a
+    // localized field or a mistake, and both have to reach that check with the
+    // same information it would otherwise be missing.
+    const namesNonColumn = Object.keys(constraint).some(
+      field => !Object.prototype.hasOwnProperty.call(schema, field)
+    );
+    if (!namesNonColumn) return null;
+
+    const companion = await this.resolveTargetCompanion(
+      targetCollection,
+      access
+    );
+    if (!companion || companion.localizedFields.length === 0) return null;
+
+    return {
+      companionTableName: companion.companionTableName,
+      localizedFields: companion.localizedFields,
+      // The same table object the confirming query selects FROM, so the
+      // companion's `_parent` correlates against the row being judged.
+      mainIdColumn: schema.id,
+      locale: access.locale,
+      // A companion row in another state must not satisfy the filter: a draft
+      // translation holding the permitted value would otherwise admit a row the
+      // target's own list read, filtering on the same status, excludes. Gated on
+      // the companion having the column, matching the read path.
+      statusValue: companion.hasStatus ? statusValue : undefined,
+    };
   }
 
   /**
@@ -1485,9 +2006,12 @@ export class CollectionRelationshipService extends BaseService {
     const access: RelatedRowAccess = {
       enforceFieldAccess: options.enforceFieldAccess,
       enforceCollectionAccess: options.enforceCollectionAccess,
+      fieldAccessStage: options.fieldAccessStage,
       user: options.user,
       overrideAccess: options.overrideAccess,
       authenticatedScope: options.authenticatedScope,
+      locale: options.locale,
+      status: options.status,
       withheldByAccess: options.withheldByAccess,
       // One per expansion, so a relationship holding many references reads its
       // target's rules once rather than once per value. A nested hop inherits
@@ -1497,6 +2021,10 @@ export class CollectionRelationshipService extends BaseService {
       // the outermost call, because a collection's rules can change between
       // requests.
       targetPolicies: options.targetPolicies ?? new Map(),
+      // Shared and inherited exactly as the policy map is, for the same reason:
+      // a nested hop starting its own would re-read the metadata of a collection
+      // an ancestor already looked up.
+      targetCompanions: options.targetCompanions ?? new Map(),
     };
 
     // Clamp depth to valid range
@@ -1879,24 +2407,11 @@ export class CollectionRelationshipService extends BaseService {
           field.options?.targetLabelField
         );
 
-        // Batch fetch all entries from system entity
-        const entries = await this.db
-          .select()
-          .from(targetSchema)
-          .where(inArray(targetSchema.id, relatedIds));
-
-        // Redact before labelling, for the same reason as the dynamic branch
-        // below: the label copies a field value under another key, so it must
-        // be taken from a row that has already been stripped.
-        const rows = entries.map((entry: Record<string, unknown>) =>
-          convertTimestampsToCamelCase({ ...entry })
-        );
-        const readable = await this.filterRowsByCollectionAccess(
+        const readable = await this.readTargetRows(
           targetCollection,
-          rows,
+          relatedIds,
           access
         );
-        await this.redactRelatedRows(targetCollection, readable, access);
         for (const row of readable) {
           resultMap.set(row.id as string, {
             ...row,
@@ -1905,32 +2420,16 @@ export class CollectionRelationshipService extends BaseService {
         }
       } else {
         // Handle dynamic collections
-        const targetSchema =
-          await this.fileManager.loadDynamicSchema(targetCollection);
         const labelField = await this.getBestLabelField(
           targetCollection,
           field.options?.targetLabelField
         );
 
-        // Batch fetch all entries using Drizzle's inArray helper
-        const entries = await this.db
-          .select()
-          .from(targetSchema)
-          .where(inArray(targetSchema.id, relatedIds));
-
-        // Redact BEFORE deriving the label. The label is a copy of a field's
-        // value under a different key, so a label taken from a row that has not
-        // been redacted yet survives the redaction of its own source field and
-        // hands back the protected value under `label`.
-        const rows = entries.map((entry: Record<string, unknown>) =>
-          convertTimestampsToCamelCase({ ...entry })
-        );
-        const readable = await this.filterRowsByCollectionAccess(
+        const readable = await this.readTargetRows(
           targetCollection,
-          rows,
+          relatedIds,
           access
         );
-        await this.redactRelatedRows(targetCollection, readable, access);
         for (const row of readable) {
           resultMap.set(row.id as string, {
             ...row,
@@ -2028,48 +2527,13 @@ export class CollectionRelationshipService extends BaseService {
         return resultMap;
       }
 
-      // Batch fetch all target entries
-      const targetSchema =
-        await this.fileManager.loadDynamicSchema(targetCollectionName);
       const labelField = await this.getBestLabelField(
         targetCollectionName,
         field.options?.targetLabelField
       );
-
-      console.log(
-        `[ManyToMany Expand] Target collection: ${targetCollectionName}, Label field: ${labelField}`
-      );
-
-      // Batch fetch all target entries using Drizzle's inArray
-      const targetEntries = await this.db
-        .select()
-        .from(targetSchema)
-        .where(inArray(targetSchema.id, allTargetIds));
-
-      console.log(
-        `[ManyToMany Expand] Fetched ${targetEntries.length} target entries`
-      );
-      if (targetEntries.length > 0) {
-        console.log(
-          `[ManyToMany Expand] Sample entry:`,
-          JSON.stringify(targetEntries[0], null, 2)
-        );
-      }
-
-      // Redact before labelling: the label copies a field's value under
-      // another key, so taking it from an unredacted row would return a
-      // protected value that the redaction of its source field cannot reach.
-      const targetRows = targetEntries.map((entry: Record<string, unknown>) =>
-        convertTimestampsToCamelCase({ ...entry })
-      );
-      const readableTargetRows = await this.filterRowsByCollectionAccess(
+      const readableTargetRows = await this.readTargetRows(
         targetCollectionName,
-        targetRows,
-        access
-      );
-      await this.redactRelatedRows(
-        targetCollectionName,
-        readableTargetRows,
+        allTargetIds,
         access
       );
 
@@ -2079,9 +2543,6 @@ export class CollectionRelationshipService extends BaseService {
           // Falls back to the id when the label's source field did not survive
           // redaction.
           const label = row[labelField] || row.id;
-          console.log(
-            `[ManyToMany Expand] Entry ${String(row.id)}: labelField="${labelField}", value="${String(label)}"`
-          );
           return [row.id, { ...row, label }];
         })
       );
@@ -2137,9 +2598,12 @@ export class CollectionRelationshipService extends BaseService {
     const access: RelatedRowAccess = {
       enforceFieldAccess: options.enforceFieldAccess,
       enforceCollectionAccess: options.enforceCollectionAccess,
+      fieldAccessStage: options.fieldAccessStage,
       user: options.user,
       overrideAccess: options.overrideAccess,
       authenticatedScope: options.authenticatedScope,
+      locale: options.locale,
+      status: options.status,
       withheldByAccess: options.withheldByAccess,
       // One per expansion, so a relationship holding many references reads its
       // target's rules once rather than once per value. A nested hop inherits
@@ -2149,6 +2613,10 @@ export class CollectionRelationshipService extends BaseService {
       // the outermost call, because a collection's rules can change between
       // requests.
       targetPolicies: options.targetPolicies ?? new Map(),
+      // Shared and inherited exactly as the policy map is, for the same reason:
+      // a nested hop starting its own would re-read the metadata of a collection
+      // an ancestor already looked up.
+      targetCompanions: options.targetCompanions ?? new Map(),
     };
 
     // Clamp depth to valid range
@@ -2634,7 +3102,773 @@ export class CollectionRelationshipService extends BaseService {
         stripPasswordFieldValues(row, targetFields);
       }
     }
-    await this.applyRelatedRowReadAccess(targetCollection, rows, access);
+    // Secrets above are unconditional and stay here. The target's FIELD rules
+    // are the caller's to place: a read that finishes with the post-assembly
+    // pass defers them there so the row's own masking hooks are judged on a
+    // whole row, which is the order a direct read uses. Every other caller
+    // applies them now, because nothing later will.
+    if (access.fieldAccessStage !== "assembled") {
+      await this.applyRelatedRowReadAccess(targetCollection, rows, access);
+    }
+  }
+
+  /**
+   * Apply each nested related row's OWN collection field `afterRead` hooks,
+   * once the document is fully assembled.
+   *
+   * A field hook is the transforming half of a field's read protections -- the
+   * half that masks a value on the way out. Running it at fetch time would be
+   * wrong: related rows are read BEFORE the recursion that expands their own
+   * relationships, so a hook masking on `data.organization.classification`
+   * would see a raw id. A direct read expands first and runs field hooks last,
+   * and expansion may be stricter than the target's own endpoint but never
+   * looser.
+   *
+   * So this runs once, from the read path, over the finished document.
+   *
+   * `state` is shared across every entry in one read. Batch expansion hands the
+   * SAME row object to every parent that references it, so a per-entry
+   * traversal would run that row's hooks once per reference and compound any
+   * transform that is not idempotent. It also carries the schema cache: without
+   * it a hundred-row listing re-reads the same two collections' fields on every
+   * row, one metadata query at a time.
+   */
+  /** A state a caller can share across every entry in one read. */
+  createNestedHookState(): NestedHookState {
+    return createNestedHookState();
+  }
+
+  async applyNestedFieldHooks(
+    entry: Record<string, unknown>,
+    collectionName: string,
+    access: RelatedRowAccess,
+    state?: NestedHookState
+  ): Promise<void> {
+    // Only a real read applies these. A caller clearing the flag is assembling
+    // the evidence a document-dependent rule is judged on and wants the row
+    // unredacted -- the same reason the access pass is gated on it.
+    if (!access.enforceFieldAccess) return;
+
+    // A caller that shares a state across a listing finishes the rows itself,
+    // once every entry has been walked. One that does not is a single document,
+    // so its walk is already complete here.
+    const shared = state ?? createNestedHookState();
+    await this.walkNestedRows(entry, collectionName, access, shared, 0);
+    if (!state) await this.finalizeRelatedRows(shared, access);
+  }
+
+  /**
+   * Re-apply each related row's field access, then rebuild the labels.
+   *
+   * The walk already applied access to each row (before its parent's hooks, so a
+   * parent hook cannot read a denied child field to copy it). This runs it again
+   * because a hook can REINTRODUCE a denied field onto an already-redacted row
+   * (assigning `data.child.secret` to mask or derive a value), mutate a row in
+   * place, or add/replace/reorder rows -- and without a pass after the hooks that
+   * would be returned. It re-judges the current content (a cached verdict cannot
+   * be trusted once a hook may have changed what a rule reads), restoring from the
+   * shared `redactions` what a prior pass removed from each row so a rule reading
+   * a now-denied sibling as evidence still sees it -- keeping an unchanged verdict
+   * stable, as a direct read's single pass would, while judging everything a hook
+   * touched afresh.
+   *
+   * Called more than once per read, and safe to repeat: once after the related
+   * rows' OWN field hooks (so the source collection's hooks are handed already
+   * sanitized rows), and again after the SOURCE collection's code and stored
+   * afterRead hooks. Those hooks receive the whole assembled document and can
+   * write a denied field straight back onto a related row (`entry.author.secret`);
+   * the root-level read-access pass evaluates only the source collection's schema
+   * and never descends into a related row, so without a pass here after them the
+   * reintroduced value is returned. It leaves `pending` in place for exactly that
+   * repeat; the state is scoped to one read and discarded when it finishes.
+   *
+   * Labels come last of all, from the values that survived: a label copies a
+   * field under another key, so one rebuilt earlier would outlive the removal of
+   * its own source field.
+   */
+  async finalizeRelatedRows(
+    state: NestedHookState,
+    access: RelatedRowAccess
+  ): Promise<void> {
+    if (!access.enforceFieldAccess) return;
+    for (const { row, collection } of state.pending) {
+      await this.applyRelatedRowReadAccess(
+        collection,
+        [row],
+        access,
+        state.redactions
+      );
+    }
+    for (const { row, collection, field } of state.pending) {
+      await this.refreshRelatedRowLabel(row, field, { collection }, state);
+    }
+    // Last, once every related row is fully sanitized and no source hook has run
+    // yet: keep a copy of each as the authoritative version the response is
+    // rebuilt from. Taken here rather than during the walk because a row is not
+    // final until the loops above have re-judged it — a sibling parent's hooks,
+    // in a listing that shares one row object between entries, run before this.
+    for (const { row, collection, field, depth } of state.pending) {
+      if (typeof row.id !== "string") continue;
+      const key = relatedRowSnapshotKey(collection, row.id, field);
+      // The NEAREST occurrence wins. A row reached deeper in the document was
+      // expanded with less depth remaining, so restoring that version into a
+      // shallower field would strip a level of expansion the response had — and
+      // which no hook touched. Occurrences at equal depth expanded alike, so the
+      // first is as good as the last.
+      const recorded = state.sanitized.get(key);
+      if (recorded && recorded.depth <= depth) continue;
+      state.sanitized.set(key, {
+        depth,
+        row: detachData<Record<string, unknown>>(row),
+      });
+    }
+  }
+
+  /**
+   * Rebuild the ASSEMBLED response's related rows from the authoritative versions
+   * the walk produced, discarding whatever a source-collection `afterRead` hook —
+   * code, stored, or field-level — did to them.
+   *
+   * A source hook receives the whole assembled document, and the root read-access
+   * pass evaluates only the SOURCE collection's schema and never descends into a
+   * related row. So a hook can write a denied target field back onto one, clone or
+   * reshape one, append or reorder nested rows inside one, or return a rebuilt
+   * document whose related rows are objects the walk never held. Detecting each of
+   * those and undoing it is unbounded work: every reshape variant has to be
+   * modelled, and a rule that reads a value the reshape moved falls open on the
+   * copy.
+   *
+   * Rebuilding instead makes the question moot. Each populated related row in the
+   * response is replaced by a copy of the sanitized version recorded in
+   * `state.sanitized`, matched on the collection and id the response itself names.
+   * No tampering has to be found, because none of it survives. A related row the
+   * walk never sanitized — one a hook fabricated — has no authoritative version, so
+   * it is reduced to the bare reference rather than returned with unjudged fields.
+   *
+   * Runs after EVERY source hook phase, not only the last: a hook in one phase can
+   * copy a value off a related row it just contaminated onto a SOURCE field, which
+   * the next phase would then read. Restoring between phases means every phase is
+   * handed clean related rows. It costs no query — the versions are already in hand.
+   *
+   * Runs before selection projects rows to slices, so the response holds whole,
+   * consistent related rows at the point selection reads them.
+   */
+  async reprojectRelatedRows(
+    entries: Record<string, unknown>[],
+    collectionName: string,
+    access: RelatedRowAccess,
+    state: NestedHookState
+  ): Promise<void> {
+    // NOT gated on `overrideAccess`. A trusted read skips the field RULES, but
+    // password and system-secret stripping is unconditional even for trusted
+    // reads, so the recorded versions are stripped either way and restoring them
+    // is what removes a secret a source hook wrote back.
+    if (!access.enforceFieldAccess) return;
+    const fields = await this.fieldsForNestedWalk(collectionName, state);
+    // Rows rebuilt during THIS pass, so a row several parents reference stays ONE
+    // object across the response — the sharing batch expansion produced — instead
+    // of becoming a separate copy per reference.
+    const rebuilt = new Map<string, Record<string, unknown>>();
+    for (const entry of entries) {
+      this.reprojectFields(entry, fields, state, rebuilt);
+    }
+  }
+
+  /**
+   * Rebuild every relationship value held at one level of the response, and
+   * descend through `group`/`repeater` containers to reach the ones nested inside
+   * them.
+   *
+   * Container rows belong to the SOURCE collection, so they carry no authoritative
+   * version of their own and are descended into rather than replaced. Only a
+   * relationship value names another collection's row.
+   */
+  private reprojectFields(
+    holder: Record<string, unknown>,
+    fields: FieldDefinition[],
+    state: NestedHookState,
+    rebuilt: Map<string, Record<string, unknown>>
+  ): void {
+    for (const field of fields) {
+      if (!field.name) continue;
+      // A hook can hand a container or a populated hasMany back as the JSON string
+      // storage keeps it as; left a string there is no value here to rebuild.
+      this.decodeJsonBackedFieldInPlace(holder, field);
+      const value = holder[field.name];
+      if (value === null || value === undefined) continue;
+
+      if (isRepeaterOrGroupField(field)) {
+        const nested = getNestedFields(field);
+        if (nested.length === 0) continue;
+        for (const row of containerRowsOf(value)) {
+          this.reprojectFields(row, nested, state, rebuilt);
+        }
+        continue;
+      }
+      // An upload points at the built-in media entity, which registers no field
+      // rules and is never sanitized as a related row.
+      if (!isRelationshipField(field) || isUploadField(field)) continue;
+
+      holder[field.name] = this.reprojectRelationshipValue(
+        value,
+        field,
+        state,
+        rebuilt
+      );
+    }
+  }
+
+  /** Rebuild one relationship field's value, mapping a list one entry at a time so
+   *  each entry is matched against its OWN target collection. */
+  private reprojectRelationshipValue(
+    value: unknown,
+    field: FieldDefinition,
+    state: NestedHookState,
+    rebuilt: Map<string, Record<string, unknown>>
+  ): unknown {
+    const items = readItemArray(value);
+    if (items) {
+      // An entry whose identity cannot be read has no reference left to keep, and
+      // a list must not carry a hole where it stood: expansion drops an entry it
+      // cannot resolve rather than leaving a gap between the ones it did.
+      return items
+        .map(item =>
+          this.reprojectRelationshipItem(item, field, state, rebuilt)
+        )
+        .filter(item => item !== null && item !== undefined);
+    }
+    return this.reprojectRelationshipItem(value, field, state, rebuilt);
+  }
+
+  /**
+   * Rebuild one relationship entry from its authoritative version.
+   *
+   * A value that is still a bare reference is returned untouched: it carries no
+   * fields, so there is nothing that could have been tampered with. A POPULATED row
+   * is replaced by a copy of the sanitized version recorded for the collection and
+   * id it names — and reduced to that bare reference when no such version exists,
+   * because a populated row the walk never judged is one no rule has been applied
+   * to. A row whose identity cannot be read at all (a clone a hook stripped the id
+   * from) has no reference left to keep, so it is dropped.
+   */
+  private reprojectRelationshipItem(
+    item: unknown,
+    field: FieldDefinition,
+    state: NestedHookState,
+    rebuilt: Map<string, Record<string, unknown>>
+  ): unknown {
+    const shape = readRelationshipValueShape(item, field);
+    // A reference carries no fields, so there is nothing here to rebuild — and
+    // replacing it would drop a relationship no hook ever touched.
+    if (shape.kind === "reference") return item;
+    if (shape.kind === "unresolvable") return null;
+
+    const id = extractRelationshipId(shape.row);
+    if (typeof id !== "string") return null;
+    const ref: RelationshipRef = {
+      collection: shape.collection,
+      id,
+      discriminated: shape.discriminated,
+    };
+    const key = relatedRowSnapshotKey(ref.collection, ref.id, field);
+
+    const already = rebuilt.get(key);
+    if (already) return withReferenceIdentity(already, ref);
+
+    const authoritative = state.sanitized.get(key)?.row;
+    if (!authoritative) {
+      return ref.discriminated
+        ? { relationTo: ref.collection, value: ref.id }
+        : ref.id;
+    }
+    // A copy per pass: the recorded version is restored again after the next
+    // source hook phase, and handing out the recorded object itself would let a
+    // hook mutate the very thing that pass restores from.
+    const copy = detachData<Record<string, unknown>>(authoritative);
+    rebuilt.set(key, copy);
+    return withReferenceIdentity(copy, ref);
+  }
+
+  /**
+   * The collection's fields, read once per collection per read.
+   *
+   * A target whose schema will not load runs no hooks, and the read continues.
+   *
+   * That is weaker than a read protection deserves, and it is the only answer
+   * the registry supports: it reports "this is not a registered collection" and
+   * "the lookup failed" the same way, so a relationship pointing at a built-in
+   * entity is indistinguishable from a real failure. Refusing on it would deny
+   * ordinary reads. The failure is logged rather than swallowed.
+   *
+   * Refusing becomes correct once the registry can answer whether a slug IS a
+   * collection separately from what its fields are.
+   */
+  private async fieldsForNestedWalk(
+    collectionName: string,
+    state: NestedHookState
+  ): Promise<FieldDefinition[]> {
+    const cached = state.fields.get(collectionName);
+    if (cached) return cached;
+
+    // A system entity has no dynamic-collection record and registers no field
+    // hooks, so there is nothing to look up.
+    if (isSystemEntity(collectionName)) {
+      state.fields.set(collectionName, []);
+      return [];
+    }
+
+    let fields: FieldDefinition[] = [];
+    try {
+      const collection =
+        await this.collectionService.getCollection(collectionName);
+      const raw =
+        (
+          (collection as Record<string, unknown>).schemaDefinition as
+            | Record<string, unknown>
+            | undefined
+        )?.fields ?? (collection as Record<string, unknown>).fields;
+      fields = Array.isArray(raw) ? (raw as FieldDefinition[]) : [];
+    } catch (error: unknown) {
+      // A relationship can point at something that is not a registered
+      // collection -- `users` behind an author field -- and the lookup reports
+      // that as an untyped "not found", the same shape a genuine failure takes.
+      // Since the two cannot be told apart here, refusing would deny ordinary
+      // reads, so this logs and leaves the target's hooks unrun.
+      console.error(
+        `Nested field hooks skipped for "${collectionName}": its schema could not be read.`,
+        error
+      );
+    }
+
+    state.fields.set(collectionName, fields);
+    return fields;
+  }
+
+  /**
+   * Decode a JSON-backed field held as a string into its objects, in place, so the
+   * walk can descend into the relationships inside or behind it.
+   *
+   * A source `afterRead` hook can return a value as the storage string SQLite keeps
+   * it as (the normal read decodes these before this walk; a hook that reshapes the
+   * document can hand one back as a string). Two field kinds are JSON-backed:
+   * `group`/`repeater` containers, and a POPULATED `hasMany` or polymorphic
+   * relationship, which serializes to a JSON array (`[...]`) or object
+   * (`{"relationTo":...}`). Left a string, {@link walkFieldValue} derives no rows
+   * from it and a denied target field inside would reach the response.
+   *
+   * A relationship is decoded only when the string opens with `[` or `{`: a bare id
+   * is left alone (parsing `"12"` would coerce it to a number), and a Postgres
+   * array literal (`{id,...}`) is not JSON so {@link parseJsonIfString} returns it
+   * unchanged. Writing the decoded value back matches the shape a normal read
+   * returns.
+   */
+  private decodeJsonBackedFieldInPlace(
+    holder: Record<string, unknown>,
+    field: FieldDefinition
+  ): void {
+    const value = holder[field.name];
+    if (typeof value !== "string") return;
+    if (isRepeaterOrGroupField(field)) {
+      holder[field.name] = parseJsonIfString(value);
+    } else if (isRelationshipField(field)) {
+      // A populated `hasMany`/polymorphic relationship serializes to a JSON array
+      // (`[...]`) or object (`{"relationTo":...}`). Detect it by the first
+      // NON-WHITESPACE character, so a hook that hands back pretty-printed JSON
+      // (a leading newline or spaces) is still decoded rather than left a string
+      // the walk cannot descend — otherwise a denied field inside would reach the
+      // response. A bare id or a Postgres array literal is left alone:
+      // parseJsonIfString only replaces the value when JSON.parse succeeds, and
+      // neither is valid JSON.
+      const start = value.trimStart();
+      if (start.startsWith("[") || start.startsWith("{")) {
+        holder[field.name] = parseJsonIfString(value);
+      }
+    }
+  }
+
+  /**
+   * Re-apply field access to the related rows already sanitized beneath `entry`,
+   * after `entry`'s own field hooks ran (first walk only).
+   *
+   * The post-hook re-descent walks NEW children a hook added but skips ones already
+   * visited. A field hook can instead reintroduce a denied field on an EXISTING
+   * child in place; that child would stay contaminated while `entry` unwinds to its
+   * PARENT, whose hooks could copy the value onto an allowed key the later
+   * sanitization no longer looks at. Re-applying the existing children's access here
+   * — without re-running their hooks — re-strips such reintroductions before `entry`
+   * returns to its parent. The re-walk of the assembled response covers reshaped
+   * rows separately.
+   */
+  private async reapplyDescendantAccess(
+    entry: Record<string, unknown>,
+    collectionName: string,
+    access: RelatedRowAccess,
+    state: NestedHookState,
+    depth: number
+  ): Promise<void> {
+    if (depth > MAX_RELATIONSHIP_DEPTH) return;
+    const fields = await this.fieldsForNestedWalk(collectionName, state);
+    for (const field of fields) {
+      await this.reapplyFieldValueAccess(
+        entry[field.name],
+        field,
+        access,
+        state,
+        depth
+      );
+    }
+  }
+
+  /** Reach the related rows inside one field value — a relationship directly, or one
+   *  nested in a group/repeater — and re-apply access to each already-visited row,
+   *  recursing into its own relations. See {@link reapplyDescendantAccess}. */
+  private async reapplyFieldValueAccess(
+    value: unknown,
+    field: FieldDefinition,
+    access: RelatedRowAccess,
+    state: NestedHookState,
+    depth: number
+  ): Promise<void> {
+    if (value === null || value === undefined) return;
+    const rows = (Array.isArray(value) ? value : [value]).filter(
+      (row): row is Record<string, unknown> =>
+        typeof row === "object" && row !== null
+    );
+    if (rows.length === 0) return;
+
+    const nested = getNestedFields(field);
+    if (nested.length > 0) {
+      // A container: its rows belong to THIS collection; descend to reach any
+      // relationship inside them.
+      for (const row of rows) {
+        for (const inner of nested) {
+          await this.reapplyFieldValueAccess(
+            row[inner.name],
+            inner,
+            access,
+            state,
+            depth
+          );
+        }
+      }
+      return;
+    }
+    // An upload points at the built-in media entity, which registers no field rules.
+    if (isUploadField(field)) return;
+
+    for (const row of rows) {
+      const resolved = resolveNestedTarget(row, field);
+      if (!resolved) continue;
+      // Only ALREADY-VISITED children: a new one is handled by the re-descent that
+      // runs the hooks path, and re-applying to it here would be redundant.
+      if (!state.visited.has(resolved.row)) continue;
+      // Deepest first, so a reintroduction nested under this child is re-stripped
+      // before this child's own access re-runs.
+      await this.reapplyDescendantAccess(
+        resolved.row,
+        resolved.collection,
+        access,
+        state,
+        depth + 1
+      );
+      await this.applyRelatedRowReadAccess(
+        resolved.collection,
+        [resolved.row],
+        access,
+        state.redactions
+      );
+      // Secrets a hook could reintroduce, stripped for the same reason the walk
+      // strips them: unconditional, override included.
+      const targetFields = await this.fieldsForNestedWalk(
+        resolved.collection,
+        state
+      );
+      if (hasPasswordField(targetFields)) {
+        stripPasswordFieldValues(resolved.row, targetFields);
+      }
+      if (isSystemEntity(resolved.collection)) {
+        for (const col of SYSTEM_ENTITY_SECRET_COLUMNS) {
+          delete resolved.row[col];
+        }
+      }
+      stripSystemOwnerField(resolved.row);
+      // Rebuild the label from what survived, as the walk does before returning to a
+      // parent: a field hook can mutate an existing child so its label field flips
+      // from allowed to denied, and this access pass removes the field but leaves the
+      // synthetic `label` built earlier — which a parent hook could copy off
+      // `child.label` before the finalize pass rebuilds labels.
+      await this.refreshRelatedRowLabel(
+        resolved.row,
+        field,
+        { collection: resolved.collection },
+        state
+      );
+    }
+  }
+
+  /**
+   * One level of {@link applyNestedFieldHooks}.
+   *
+   * Rows are claimed in {@link walkFieldValue} rather than here, so the claim
+   * covers running a row's hooks as well as descending into it. The depth cap
+   * mirrors the expansion's own maximum.
+   */
+  private async walkNestedRows(
+    entry: Record<string, unknown>,
+    collectionName: string,
+    access: RelatedRowAccess,
+    state: NestedHookState,
+    depth: number
+  ): Promise<void> {
+    if (depth > MAX_RELATIONSHIP_DEPTH) return;
+
+    const fields = await this.fieldsForNestedWalk(collectionName, state);
+    for (const field of fields) {
+      this.decodeJsonBackedFieldInPlace(entry, field);
+      await this.walkFieldValue(entry[field.name], field, access, state, depth);
+    }
+  }
+
+  /**
+   * Visit one field's value, whatever shape it takes.
+   *
+   * A relationship can sit directly on the collection or inside a `group` or
+   * `repeater`, and `expandRelationships` populates it either way, so a walk
+   * that only looked at top-level `relationTo` fields left everything inside a
+   * container unmasked.
+   */
+  private async walkFieldValue(
+    value: unknown,
+    field: FieldDefinition,
+    access: RelatedRowAccess,
+    state: NestedHookState,
+    depth: number
+  ): Promise<void> {
+    if (value === null || value === undefined) return;
+
+    const rows = (Array.isArray(value) ? value : [value]).filter(
+      (row): row is Record<string, unknown> =>
+        typeof row === "object" && row !== null
+    );
+    if (rows.length === 0) return;
+
+    const nested = getNestedFields(field);
+    if (nested.length > 0) {
+      // A container: its rows belong to THIS collection, so they carry no
+      // hooks of their own -- only the relationships inside them do.
+      for (const row of rows) {
+        for (const inner of nested) {
+          this.decodeJsonBackedFieldInPlace(row, inner);
+          await this.walkFieldValue(
+            row[inner.name],
+            inner,
+            access,
+            state,
+            depth
+          );
+        }
+      }
+      return;
+    }
+
+    // An upload points at the built-in media entity, which is not a registered
+    // collection and registers no field hooks. Resolving it would spend a
+    // metadata query per row to be told so, and log the failure, on reads that
+    // are otherwise fine -- and uploads are close to universal.
+    if (isUploadField(field)) return;
+
+    for (const row of rows) {
+      // A discriminated value names its own collection, so a polymorphic
+      // relationship is knowable per value rather than unknowable per field.
+      const resolved = resolveNestedTarget(row, field);
+      if (!resolved) continue;
+
+      // Claimed before anything runs, and the claim covers the hooks as well as
+      // the descent. Guarding only the descent still let a row shared by
+      // several parents be transformed once per parent, which compounds any
+      // transform that is not idempotent.
+      if (state.visited.has(resolved.row)) continue;
+      state.visited.add(resolved.row);
+
+      await this.walkNestedRows(
+        resolved.row,
+        resolved.collection,
+        access,
+        state,
+        depth + 1
+      );
+      // Decoded with the TARGET's schema. The read path decodes using the
+      // source collection's fields, which say nothing about a related row's
+      // own JSON columns, so on SQLite a hook inspecting one would be handed
+      // the storage string.
+      decodeJsonFieldValues(
+        [resolved.row],
+        await this.fieldsForNestedWalk(resolved.collection, state)
+      );
+      // The target's OWN field access, BEFORE its own field hooks. A hook belongs
+      // to one field but is handed the whole row, so given an unredacted one a
+      // hook on an allowed field can read a denied field beside it and return it
+      // as its own value — where the pass after the hooks, which judges each field
+      // by its own rule, has no reason to remove it. A direct read of the
+      // collection applies access before its field hooks for exactly this reason,
+      // and a row reached through a relationship may be redacted more strictly
+      // than the target's own endpoint but never more loosely. What this removes
+      // is recorded in the shared `redactions`, so the pass after the hooks
+      // restores it as evidence and re-judges the row against its current content.
+      await this.applyRelatedRowReadAccess(
+        resolved.collection,
+        [resolved.row],
+        access,
+        state.redactions
+      );
+      // Deepest first, so a hook reading into its own relations sees them
+      // already transformed rather than half-processed.
+      await runFieldHooks({
+        kind: "collection",
+        slug: resolved.collection,
+        phase: "afterRead",
+        data: resolved.row,
+        operation: "read",
+        user: access.user,
+      });
+      // A field hook may have ADDED or REPLACED one of this row's own populated
+      // relationships. That child missed the descent above, so descend again:
+      // a genuinely new child is walked — its denied fields stripped and it
+      // queued — before this row returns to its parent, whose hooks (and the
+      // source collection's) run next and could otherwise read a denied value
+      // off the still-unsanitized child and copy it onto an allowed key the
+      // later pass no longer looks at. Rows already claimed in `visited` are
+      // skipped, so only new children are re-walked.
+      await this.walkNestedRows(
+        resolved.row,
+        resolved.collection,
+        access,
+        state,
+        depth + 1
+      );
+      // Re-apply access to this row's ALREADY-VISITED related descendants. A
+      // field hook above can reintroduce a denied field on an existing child in
+      // place; the re-descent skips it (visited), so without this it stays visible
+      // while this row unwinds to its PARENT, whose hooks could copy it onto an
+      // allowed key the later sanitization no longer looks at.
+      await this.reapplyDescendantAccess(
+        resolved.row,
+        resolved.collection,
+        access,
+        state,
+        depth + 1
+      );
+
+      // Apply THIS row's field access now, before returning to its parent —
+      // whose afterRead hooks run next up the stack. Deferring it (as this once
+      // did) let a parent hook read a child field the caller may not see, and
+      // copy it under an allowed parent key where it outlived the child's own
+      // redaction. The row's own hooks above already ran against its complete
+      // values, and a direct read redacts a nested row before the parent
+      // collection's field hooks for the same reason, so applying it here keeps
+      // the nested path consistent with the direct one. Under `overrideAccess`
+      // this is a no-op, leaving trusted assembly untouched. What it removes is
+      // recorded in the shared `redactions` so `finalizeRelatedRows` can restore
+      // it as evidence and re-judge the row after every hook has run.
+      await this.applyRelatedRowReadAccess(
+        resolved.collection,
+        [resolved.row],
+        access,
+        state.redactions
+      );
+
+      // Rebuild the label from what survived the access pass, NOW, before the
+      // parent's hooks run next up the stack. The fetch derives a row's `label`
+      // from a target field, so a label built from a caller-denied field still
+      // carries that value after the field itself is stripped; a parent hook
+      // reading `data.child.label` would copy the denied value under an allowed
+      // key. The finalize pass rebuilds labels again for hook mutations, but that
+      // runs after the parent hooks and cannot remove a copy they already made.
+      await this.refreshRelatedRowLabel(
+        resolved.row,
+        field,
+        { collection: resolved.collection },
+        state
+      );
+
+      // Queued for the finalize step, which re-applies access after every hook
+      // (restoring the removed evidence and re-judging the current content so a
+      // reintroduced or hook-mutated denied field is caught) and rebuilds labels
+      // last, from the values that survived.
+      state.pending.push({
+        row: resolved.row,
+        collection: resolved.collection,
+        field,
+        depth,
+      });
+
+      // Secrets are stripped from a related row when it is fetched, but a hook
+      // on a sibling field can write one back -- deliberately or by copying the
+      // row -- and the response-level defenses sanitize only the ROOT row,
+      // using the source collection's schema, so they would never look at this
+      // one. Stripped again here for the same reason a direct read strips after
+      // its own hooks.
+      const targetFields = await this.fieldsForNestedWalk(
+        resolved.collection,
+        state
+      );
+      if (hasPasswordField(targetFields)) {
+        stripPasswordFieldValues(resolved.row, targetFields);
+      }
+      // A system entity (users) has no field registry, so the password strip above
+      // — which reads the registry — never sees its secret columns. They are
+      // stripped by name at fetch, but a source hook can reintroduce one onto the
+      // populated row afterward, so re-strip them on every walk, override included.
+      if (isSystemEntity(resolved.collection)) {
+        for (const col of SYSTEM_ENTITY_SECRET_COLUMNS) {
+          delete resolved.row[col];
+        }
+      }
+      stripSystemOwnerField(resolved.row);
+    }
+  }
+
+  /**
+   * Rebuild a related row's display label from the fields that survived.
+   *
+   * The label copies a field's value under another key, so one derived at fetch
+   * outlives the removal of its own source field: a caller denied `internalName`
+   * would still read it as `label`. Rebuilt here, after the hooks and the field
+   * rules, it can only be made of values this caller may see.
+   *
+   * Falls back to the id, which is what the fetch-time derivation does when the
+   * source field is absent, so a row stays identifiable rather than losing its
+   * label entirely.
+   *
+   * Only rows that carry a label are touched. Expansion attaches one; a row
+   * reached some other way has no label to keep honest.
+   */
+  private async refreshRelatedRowLabel(
+    row: Record<string, unknown>,
+    field: FieldDefinition,
+    resolved: { collection: string },
+    state: NestedHookState
+  ): Promise<void> {
+    if (!("label" in row)) return;
+
+    // Read from both shapes expansion supports, through the same reader the
+    // snapshot key uses. A relationship storing the override at the field root
+    // would otherwise have its label rebuilt from an auto-selected field, so the
+    // same row came back labelled differently only because this pass ran.
+    const declared = declaredLabelField(field);
+    const cacheKey = `${resolved.collection}:${declared}`;
+    let pending = state.labelFields.get(cacheKey);
+    if (!pending) {
+      pending = isSystemEntity(resolved.collection)
+        ? Promise.resolve(
+            resolveSystemEntityLabelField(resolved.collection, declared)
+          )
+        : this.getBestLabelField(resolved.collection, declared || undefined);
+      state.labelFields.set(cacheKey, pending);
+    }
+
+    const labelField = await pending;
+    row.label = row[labelField] || row.id;
   }
 
   /**
@@ -2651,18 +3885,25 @@ export class CollectionRelationshipService extends BaseService {
   private async applyRelatedRowReadAccess(
     targetCollection: string,
     rows: Record<string, unknown>[],
-    access: RelatedRowAccess
+    access: RelatedRowAccess,
+    redactions?: ReadAccessRedactions
   ): Promise<void> {
-    if (!access.enforceFieldAccess) return;
-    if (access.overrideAccess) return;
+    if (!access.enforceFieldAccess || access.overrideAccess) return;
+    // Share `redactions` across the passes the walk makes over one row: a later
+    // one restores what an earlier removed as evidence and re-judges the current
+    // content, so a denied field a hook reintroduced or a row it changed is
+    // caught while an unchanged verdict stays put.
     for (const row of rows) {
-      await applyFieldReadAccess({
-        kind: "collection",
-        slug: targetCollection,
-        entry: row,
-        user: access.user,
-        overrideAccess: false,
-      });
+      await applyFieldReadAccess(
+        {
+          kind: "collection",
+          slug: targetCollection,
+          entry: row,
+          user: access.user,
+          overrideAccess: false,
+        },
+        redactions
+      );
     }
   }
 
@@ -2706,55 +3947,15 @@ export class CollectionRelationshipService extends BaseService {
     access: RelatedRowAccess = {}
   ): Promise<Record<string, unknown> | null> {
     try {
-      // Check if this is a system entity (like "users")
-      if (isSystemEntity(collectionName)) {
-        const targetSchema = getSystemEntityTable(collectionName);
-        if (!targetSchema) {
-          return null;
-        }
-
-        const [entry] = await this.db
-          .select()
-          .from(targetSchema)
-          .where(eq(targetSchema.id, entryId))
-          .limit(1);
-
-        if (!entry) return null;
-        const normalized = convertTimestampsToCamelCase({ ...entry });
-        const [readable] = await this.filterRowsByCollectionAccess(
-          collectionName,
-          [normalized],
-          access
-        );
-        // Reads as absent rather than as an error: one unreadable reference
-        // must not refuse the whole parent read, and the caller learns no more
-        // than a reference pointing at nothing would tell them.
-        if (!readable) return null;
-        await this.redactRelatedRows(collectionName, [readable], access);
-        return readable;
-      } else {
-        // Handle dynamic collections
-        const schema = await this.fileManager.loadDynamicSchema(collectionName);
-        const [entry] = await this.db
-          .select()
-          .from(schema)
-          .where(eq(schema.id, entryId))
-          .limit(1);
-
-        if (!entry) return null;
-        const normalized = convertTimestampsToCamelCase({ ...entry });
-        const [readable] = await this.filterRowsByCollectionAccess(
-          collectionName,
-          [normalized],
-          access
-        );
-        // Reads as absent rather than as an error: one unreadable reference
-        // must not refuse the whole parent read, and the caller learns no more
-        // than a reference pointing at nothing would tell them.
-        if (!readable) return null;
-        await this.redactRelatedRows(collectionName, [readable], access);
-        return readable;
-      }
+      const [readable] = await this.readTargetRows(
+        collectionName,
+        [entryId],
+        access
+      );
+      // Reads as absent rather than as an error: one unreadable reference must
+      // not refuse the whole parent read, and the caller learns no more than a
+      // reference pointing at nothing would tell them.
+      return readable ?? null;
     } catch {
       return null;
     }
@@ -2867,32 +4068,15 @@ export class CollectionRelationshipService extends BaseService {
         return [];
       }
 
-      // Fetch the actual entries using MySQL-compatible IN clause
-      const targetSchema =
-        await this.fileManager.loadDynamicSchema(targetCollectionName);
-
-      // Build IN clause with parameterized values for MySQL compatibility
-      const placeholders = sql.join(
-        relatedIds.map((id: string) => sql`${id}`),
-        sql.raw(", ")
-      );
-
-      const entries = await this.db
-        .select()
-        .from(targetSchema)
-        .where(sql`${targetSchema.id} IN (${placeholders})`);
-
-      const normalized = (entries || []).map((entry: Record<string, unknown>) =>
-        convertTimestampsToCamelCase({ ...entry })
-      );
-      const readable = await this.filterRowsByCollectionAccess(
+      // Through the shared reader, which binds the id list with Drizzle's
+      // `inArray` rather than assembling the IN clause by hand. The sibling
+      // many-to-many batch path has always used `inArray` and passes on MySQL,
+      // so the hand-built list this replaces was not buying compatibility.
+      return await this.readTargetRows(
         targetCollectionName,
-        normalized,
+        relatedIds,
         access
       );
-      // Strip related-row secrets before rows are spread into responses.
-      await this.redactRelatedRows(targetCollectionName, readable, access);
-      return readable;
     } catch (error) {
       console.error("Failed to fetch many-to-many relations:", error);
       return [];

@@ -7,6 +7,8 @@ import { useFormContext } from "react-hook-form";
 import { Pencil } from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
 
+import { PublicUrlChangeNotice } from "./PublicUrlChangeNotice";
+
 // Why: thin metadata strip below the system header. Carries the slug (with
 // inline pencil-to-edit) and, when the rail is collapsed, the Draft/Published
 // status pill. When the rail is expanded the status pill renders inside the
@@ -20,6 +22,10 @@ export interface EntryMetaStripProps {
   hasStatus: boolean;
   /** Current entry status ("draft" | "published" | other). Used for the pill. */
   status?: string | null;
+  /** Whether a pending working draft exists over a published entry
+   *  (draft/published split). When true the pill reads "Changed" instead of
+   *  "Published", mirroring the Document panel. Defaults to false. */
+  hasWorkingDraft?: boolean;
   /** Whether the rail is currently collapsed. Pill only renders when true,
    *  since DocumentPanel takes over that role when the rail is expanded. */
   isRailCollapsed: boolean;
@@ -27,14 +33,20 @@ export interface EntryMetaStripProps {
    *  as read-only text with no inline-edit affordance. Defaults to false so
    *  collection entry forms keep the editable slug. */
   lockSlug?: boolean;
+  /** Whether this entry's slug is already a public address, so editing it retires a live URL.
+   *  Resolved by the form via `useHasPublicAddress`, which knows about per-locale publishing and
+   *  collections that have no draft lifecycle at all. */
+  hasPublicAddress?: boolean;
 }
 
 export function EntryMetaStrip({
   slugField,
   hasStatus,
   status,
+  hasWorkingDraft = false,
   isRailCollapsed,
   lockSlug = false,
+  hasPublicAddress = false,
 }: EntryMetaStripProps) {
   const showStatusPill = hasStatus && isRailCollapsed && !!status;
   const showSlug = !!slugField;
@@ -43,29 +55,48 @@ export function EntryMetaStrip({
 
   return (
     <div className="px-6 py-2 border-b border-border flex items-center gap-3 text-xs text-muted-foreground">
-      {showStatusPill && <StatusPill status={status} />}
+      {showStatusPill && (
+        <StatusPill status={status} hasWorkingDraft={hasWorkingDraft} />
+      )}
       {showSlug && (
-        <SlugInlineEditor slugField={slugField} readOnly={lockSlug} />
+        <SlugInlineEditor
+          slugField={slugField}
+          readOnly={lockSlug}
+          warnOnChange={hasPublicAddress}
+        />
       )}
     </div>
   );
 }
 
-function StatusPill({ status }: { status: string }) {
+function StatusPill({
+  status,
+  hasWorkingDraft,
+}: {
+  status: string;
+  hasWorkingDraft: boolean;
+}) {
   const isPublished = status === "published";
+  // A published entry with a pending working draft is Payload's "Changed"
+  // state — the live row stays published while newer edits wait to be promoted.
+  const isChanged = isPublished && hasWorkingDraft;
   return (
     <span
       className={cn(
         "px-1.5 py-0.5 text-xs font-bold tracking-[0.1em] uppercase rounded shrink-0",
         // Why: Mobeen's request — neutral admin palette, not saturated. Use
         // muted bg + foreground/muted-foreground to blend with the rest of
-        // the chrome instead of standing out as candy-colour AI styling.
-        isPublished
-          ? "bg-muted text-foreground"
-          : "bg-muted text-muted-foreground"
+        // the chrome instead of standing out as candy-colour AI styling. The
+        // Changed state reuses the muted amber `warning` token (both modes) to
+        // match the Document panel's pending-changes pill.
+        isChanged
+          ? "bg-warning-100 text-warning-800 dark:bg-warning-950/40 dark:text-warning-200"
+          : isPublished
+            ? "bg-muted text-foreground"
+            : "bg-muted text-muted-foreground"
       )}
     >
-      {isPublished ? "Published" : "Draft"}
+      {isChanged ? "Changed" : isPublished ? "Published" : "Draft"}
     </span>
   );
 }
@@ -73,9 +104,12 @@ function StatusPill({ status }: { status: string }) {
 function SlugInlineEditor({
   slugField,
   readOnly = false,
+  warnOnChange = false,
 }: {
   slugField: FieldConfig;
   readOnly?: boolean;
+  /** Whether this entry's slug is a live public address, so an edit here retires a URL. */
+  warnOnChange?: boolean;
 }) {
   const form = useFormContext();
   const slugName = "name" in slugField ? (slugField.name as string) : "slug";
@@ -164,6 +198,13 @@ function SlugInlineEditor({
         <span className="text-xs text-destructive-600 shrink-0" role="alert">
           {errorMsg}
         </span>
+      )}
+      {!errorMsg && (
+        <PublicUrlChangeNotice
+          slugName={slugName}
+          active={warnOnChange}
+          className="shrink-0"
+        />
       )}
     </div>
   );

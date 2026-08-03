@@ -172,6 +172,36 @@ export const entryKeys = {
   detail: (collectionSlug: string, id: string) =>
     [...entryKeys.detailsByCollection(collectionSlug), id] as const,
 
+  /**
+   * The FULL detail cache identity, including the per-view read dimensions that
+   * change which document the server returns: content locale, fallback locale,
+   * the translation-status overview flag, and draft mode (the working-draft
+   * overlay). The read hook (useEntry) and the mutation hook (useUpdateEntry)
+   * MUST build the key through this one function — React Query hashes the object,
+   * so any divergence makes the optimistic write, rollback, and cancelQueries
+   * silently target a query the editor is not reading. Values are null/false
+   * normalised here so callers cannot drift on `undefined` vs `null`.
+   */
+  detailScoped: (
+    collectionSlug: string,
+    id: string,
+    params: {
+      locale?: string | null;
+      fallbackLocale?: string | null;
+      translationStatus?: boolean;
+      draft?: boolean;
+    }
+  ) =>
+    [
+      ...entryKeys.detail(collectionSlug, id),
+      {
+        locale: params.locale ?? null,
+        fallbackLocale: params.fallbackLocale ?? null,
+        translationStatus: params.translationStatus ?? false,
+        draft: params.draft ?? false,
+      },
+    ] as const,
+
   /** Key for count queries */
   counts: () => [...entryKeys.all, "count"] as const,
 

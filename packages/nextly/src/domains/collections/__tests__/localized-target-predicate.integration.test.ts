@@ -1,0 +1,443 @@
+/**
+ * A target collection's read rule may scope reads by one of its own LOCALIZED
+ * fields. Populating a relationship has to apply that filter the way the
+ * collection's own list read applies it.
+ *
+ * A localized value is not a column on the main table: it lives in the
+ * collection's `_locales` companion, one row per language, and reaches SQL as a
+ * correlated EXISTS. Expansion had no companion context, so such a field looked
+ * like a column the target does not have — the predicate was reported
+ * untranslatable and every row behind the rule was withheld, while a list read
+ * of the same collection by the same caller returned them.
+ *
+ * Withholding was the safe half: a filter that cannot be applied must not be
+ * dropped, or the read runs under a weaker predicate than the rule states. What
+ * was missing is the language, and it can only come from the read that asked.
+ */
+
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { defineCollection, relationship, text } from "../../../config";
+import {
+  createTestNextly,
+  type TestNextly,
+} from "../../../plugins/test-nextly";
+import { CollectionFileManager } from "../../../services/collection-file-manager";
+import type { CollectionsHandler } from "../../../services/collections-handler";
+
+let current: TestNextly | undefined;
+afterEach(async () => {
+  await current?.destroy();
+  current = undefined;
+});
+
+const RULE_PATH = new URL(
+  "./_fixtures/localized-target-read-rule.ts",
+  import.meta.url
+).pathname;
+
+interface Seeded {
+  handler: CollectionsHandler;
+  /** `region` is "emea" in en and "apac" in de. */
+  emeaId: string;
+  /** `region` is "apac" in every locale. */
+  apacId: string;
+  /** Points at both pages through one `hasMany` reference. */
+  refId: string;
+}
+
+/**
+ * `pages` is localized and guarded by a rule filtering on its localized
+ * `region`; `refs` points at two of its rows through one relationship.
+ *
+ * The two pages differ in the language their permitted value lives in, so a
+ * filter applied against the wrong companion row — or against none — gives a
+ * visibly different answer from the right one.
+ */
+async function boot(): Promise<Seeded> {
+  current = await createTestNextly({
+    collections: [
+      defineCollection({
+        slug: "pages",
+        localized: true,
+        fields: [
+          text({ name: "title", localized: false }),
+          text({ name: "region" }),
+        ],
+      }),
+      defineCollection({
+        slug: "refs",
+        fields: [
+          text({ name: "name" }),
+          relationship({ name: "targets", relationTo: "pages", hasMany: true }),
+        ],
+      }),
+    ],
+    localization: { locales: ["en", "de"], defaultLocale: "en" },
+  });
+
+  const handler = current.getService<CollectionsHandler>("collectionsHandler");
+
+  const emea = await handler.createEntry(
+    { collectionName: "pages", overrideAccess: true },
+    { title: "EMEA page", region: "emea" }
+  );
+  const apac = await handler.createEntry(
+    { collectionName: "pages", overrideAccess: true },
+    { title: "APAC page", region: "apac" }
+  );
+  const emeaId = (emea.data as { id: string }).id;
+  const apacId = (apac.data as { id: string }).id;
+
+  // The German translation of the permitted page says something else, so the
+  // language the filter names decides whether it is readable.
+  const translated = await handler.updateEntry(
+    {
+      collectionName: "pages",
+      entryId: emeaId,
+      locale: "de",
+      overrideAccess: true,
+    },
+    { region: "apac" }
+  );
+  expect(translated.success, "the German translation should be written").toBe(
+    true
+  );
+  // Asserted because an absent translation withholds for the same reason a
+  // non-matching one does: without this, a test asserting "German withholds"
+  // would pass on a page that simply has no German row.
+  const german = (
+    (await current.adapter.select("dc_pages_locales")) as Record<
+      string,
+      unknown
+    >[]
+  ).find(row => row._parent === emeaId && row._locale === "de");
+  expect(german?.region).toBe("apac");
+
+  const ref = await handler.createEntry(
+    { collectionName: "refs", overrideAccess: true },
+    { name: "r", targets: [emeaId, apacId] }
+  );
+
+  await current.adapter.update(
+    "dynamic_collections",
+    { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+    { and: [{ column: "slug", op: "=", value: "pages" }] }
+  );
+
+  return { handler, emeaId, apacId, refId: (ref.data as { id: string }).id };
+}
+
+/** The ids that actually became rows, in the order the reference holds them. */
+async function populatedIds(
+  handler: CollectionsHandler,
+  refId: string,
+  userId: string,
+  locale?: string
+): Promise<string[]> {
+  const result = await handler.getEntry({
+    collectionName: "refs",
+    entryId: refId,
+    user: { id: userId },
+    routeAuthorized: true,
+    ...(locale ? { locale } : {}),
+  });
+  expect(result.success).toBe(true);
+  const targets = (result.data as { targets?: unknown[] }).targets ?? [];
+  // An unpopulated reference stays a bare id string; a populated one is the row.
+  return targets
+    .filter(
+      (value): value is { id: string } =>
+        typeof value === "object" && value !== null && "id" in value
+    )
+    .map(row => row.id);
+}
+
+/** The ids the target collection's own list read returns for this caller. */
+async function listedIds(
+  handler: CollectionsHandler,
+  userId: string,
+  locale?: string
+): Promise<string[]> {
+  const result = await handler.listEntries({
+    collectionName: "pages",
+    user: { id: userId },
+    routeAuthorized: true,
+    ...(locale ? { locale } : {}),
+  });
+  expect(result.success).toBe(true);
+  return (result.data!.docs as { id: string }[]).map(doc => doc.id);
+}
+
+/**
+ * A status-enabled localized `pages` guarded by the same rule, with one row that
+ * `refs` points at. The main row's status is the caller's to choose, because
+ * status and per-locale status answer separately and each has to be pinned.
+ */
+async function bootStatusPages(mainStatus: "draft" | "published"): Promise<{
+  handler: CollectionsHandler;
+  pageId: string;
+  refId: string;
+}> {
+  current = await createTestNextly({
+    collections: [
+      defineCollection({
+        slug: "pages",
+        localized: true,
+        status: true,
+        access: { create: () => true, update: () => true },
+        fields: [
+          text({ name: "title", localized: false }),
+          text({ name: "region" }),
+        ],
+      }),
+      defineCollection({
+        slug: "refs",
+        fields: [
+          text({ name: "name" }),
+          relationship({ name: "targets", relationTo: "pages", hasMany: true }),
+        ],
+      }),
+    ],
+    localization: { locales: ["en", "de"], defaultLocale: "en" },
+  });
+  const handler = current.getService<CollectionsHandler>("collectionsHandler");
+
+  const page = await handler.createEntry(
+    { collectionName: "pages", overrideAccess: true },
+    { title: "Page", region: "apac", status: mainStatus }
+  );
+  const pageId = (page.data as { id: string }).id;
+  const ref = await handler.createEntry(
+    { collectionName: "refs", overrideAccess: true },
+    { name: "r", targets: [pageId] }
+  );
+  const refId = (ref.data as { id: string }).id;
+  await current.adapter.update(
+    "dynamic_collections",
+    { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+    { and: [{ column: "slug", op: "=", value: "pages" }] }
+  );
+  return { handler, pageId, refId };
+}
+
+describe("localized target read predicates (integration)", () => {
+  it("populates a row its target's localized predicate admits", async () => {
+    const { handler, emeaId, refId } = await boot();
+
+    // The rule permits exactly this row in the language being read. Without a
+    // companion context the predicate is untranslatable and both rows are
+    // withheld, so the reference comes back as bare ids.
+    expect(await populatedIds(handler, refId, "emea-only")).toEqual([emeaId]);
+  });
+
+  it("still withholds a row the localized predicate excludes", async () => {
+    const { handler, apacId, refId } = await boot();
+
+    // The mirror, and the reason the test above is not simply the gate being
+    // switched off: the row whose translation the rule excludes must stay
+    // unpopulated.
+    expect(await populatedIds(handler, refId, "emea-only")).not.toContain(
+      apacId
+    );
+  });
+
+  it("judges the predicate in the language being read", async () => {
+    const { handler, emeaId, refId } = await boot();
+
+    // Same rule, same row, different language: its German translation says
+    // "apac", so reading in German must not populate it. This is what fails
+    // when a filter is applied against whichever companion row exists rather
+    // than the one for the requested locale.
+    expect(await populatedIds(handler, refId, "emea-only", "en")).toEqual([
+      emeaId,
+    ]);
+    expect(await populatedIds(handler, refId, "emea-only", "de")).toEqual([]);
+  });
+
+  it("agrees with the target collection's own list read", async () => {
+    const { handler, refId } = await boot();
+
+    // What this change exists to establish: for a rule filtering on a localized
+    // field, expansion admits exactly the rows the collection's own list read
+    // admits. Asserted per language, because the rule answers each differently.
+    //
+    // Scoped to that rule deliberately. The two paths still differ elsewhere —
+    // a list read filters main rows by status and expansion does not, and
+    // `getEntry` applies no query predicate at all — so a blanket equality
+    // between them would be asserting something untrue.
+    for (const locale of ["en", "de"]) {
+      expect(await populatedIds(handler, refId, "emea-only", locale)).toEqual(
+        await listedIds(handler, "emea-only", locale)
+      );
+    }
+  });
+
+  it("withholds when the read asked for every language at once", async () => {
+    const { handler, refId } = await boot();
+
+    // `locale=all` returns language-keyed values rather than one translation,
+    // so there is no single language for a companion filter to name. Withholding
+    // is the honest answer: applying the filter to an arbitrary language would
+    // decide the read on a translation the caller never asked about.
+    expect(await populatedIds(handler, refId, "emea-only", "all")).toEqual([]);
+  });
+
+  it("does not admit a row whose permitted translation is only a draft", async () => {
+    // The target's own list read constrains the companion filter by the status
+    // it resolved for this caller, so an unpublished translation cannot satisfy
+    // it. Expansion has to do the same: a draft translation holding the
+    // permitted value would otherwise make population the more permissive way
+    // in, which is the shape of every bug in this area.
+    const { handler, pageId, refId } = await bootStatusPages("published");
+
+    // The German translation carries the permitted value and is NOT published.
+    // Seeded straight into the migration-owned companion through the typed
+    // adapter: the test needs one exact per-locale state, and stating it beats
+    // arranging a sequence of writes that happens to produce it.
+    await current!.adapter.insert("dc_pages_locales", {
+      _parent: pageId,
+      _locale: "de",
+      _status: "draft",
+      region: "emea",
+    });
+
+    // Asserted, not assumed: the row has to be there AND be a draft, or the
+    // withholding below would prove nothing (an absent row withholds too).
+    const seeded = (
+      (await current!.adapter.select("dc_pages_locales")) as Record<
+        string,
+        unknown
+      >[]
+    ).find(row => row._locale === "de");
+    expect(seeded, "the German translation should exist").toBeDefined();
+    expect(seeded!._status).toBe("draft");
+    expect(seeded!.region).toBe("emea");
+
+    expect(await populatedIds(handler, refId, "emea-only", "de")).toEqual([]);
+
+    // Publishing that same translation admits the row, so the withholding above
+    // is about its status and not about the language, the value, or a missing
+    // companion row.
+    await current.adapter.update(
+      "dc_pages_locales",
+      { _status: "published" },
+      {
+        and: [
+          { column: "_parent", op: "=", value: pageId },
+          { column: "_locale", op: "=", value: "de" },
+        ],
+      }
+    );
+
+    expect(await populatedIds(handler, refId, "emea-only", "de")).toEqual([
+      pageId,
+    ]);
+  });
+
+  it("does not admit a draft row whose published translation satisfies the rule", async () => {
+    // The other half of the status question, and the one the first version of
+    // this change got wrong: the companion EXISTS was constrained by the
+    // resolved status while the query selecting the MAIN row was not. A row
+    // whose main record is a draft but whose translation is published then
+    // satisfied the filter and came back, though the target's own list read
+    // excludes it for having a draft main row.
+    const { handler, pageId, refId } = await bootStatusPages("draft");
+
+    await current!.adapter.insert("dc_pages_locales", {
+      _parent: pageId,
+      _locale: "de",
+      _status: "published",
+      region: "emea",
+    });
+
+    // The disagreement, stated as the premise: the collection that owns this row
+    // does not serve it to this caller.
+    expect(await listedIds(handler, "emea-only", "de")).toEqual([]);
+    // So expansion must not serve it either.
+    expect(await populatedIds(handler, refId, "emea-only", "de")).toEqual([]);
+  });
+
+  it("still admits a published row whose published translation satisfies the rule", async () => {
+    // The mirror. Filtering the main row by status must not withhold the rows
+    // that pass it, which is what a status predicate applied to the wrong
+    // column — or to a collection without the column — would do.
+    const { handler, pageId, refId } = await bootStatusPages("published");
+
+    await current!.adapter.insert("dc_pages_locales", {
+      _parent: pageId,
+      _locale: "de",
+      _status: "published",
+      region: "emea",
+    });
+
+    expect(await listedIds(handler, "emea-only", "de")).toEqual([pageId]);
+    expect(await populatedIds(handler, refId, "emea-only", "de")).toEqual([
+      pageId,
+    ]);
+  });
+
+  it("looks the target's companion schema up once for the whole expansion", async () => {
+    // Pinned by measurement rather than by intent. The built companion table is
+    // cached inside the file manager, but every lookup still costs a collection
+    // metadata read — and the single-entry `hasMany` path confirms one reference
+    // at a time, so an uncached lookup scales with the number of references
+    // rather than the number of target collections.
+    const { handler, refId } = await boot();
+    // Spied after boot so only what the read does is counted, and on the
+    // prototype because the file manager is built inside the collection
+    // service's factory rather than registered under its own name.
+    const spy = vi.spyOn(
+      CollectionFileManager.prototype,
+      "loadCompanionSchema"
+    );
+    try {
+      // Both references are confirmed, so the count describes a real walk over
+      // more than one value rather than a single-reference shortcut.
+      expect(await populatedIds(handler, refId, "emea-only")).toHaveLength(1);
+
+      const pagesLookups = spy.mock.calls.filter(
+        call => call[0] === "pages"
+      ).length;
+      expect(pagesLookups).toBe(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("looks up no companion for a predicate naming only real columns", async () => {
+    // The ordinary case, and the one that must stay free: an owner or tenant
+    // predicate on a plain column has nothing to resolve in a companion, so a
+    // localized application should not pay a metadata read per target for the
+    // possibility. Counted rather than reasoned about, for the same reason as
+    // the test above.
+    const { handler, emeaId, refId } = await boot();
+    const spy = vi.spyOn(
+      CollectionFileManager.prototype,
+      "loadCompanionSchema"
+    );
+    try {
+      // The predicate really ran — without this the zero below would also be
+      // satisfied by a rule that never reached the narrowing at all.
+      expect(await populatedIds(handler, refId, "title-only")).toEqual([
+        emeaId,
+      ]);
+
+      expect(spy.mock.calls.filter(call => call[0] === "pages")).toHaveLength(
+        0
+      );
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("withholds a localized predicate that cannot be translated exactly", async () => {
+    const { handler, refId } = await boot();
+
+    // Having a companion context does not make every shape applicable. A dotted
+    // path translates to a comparison against the whole value, which is a
+    // different predicate than the rule states — so it is still refused, and
+    // refusal still reads as an absent relationship rather than an error.
+    expect(await populatedIds(handler, refId, "dotted-localized")).toEqual([]);
+  });
+});

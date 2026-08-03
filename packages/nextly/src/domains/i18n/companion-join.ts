@@ -14,6 +14,8 @@
 
 import { and, eq, inArray, sql, type SQL } from "drizzle-orm";
 
+import type { CompanionReadiness } from "./runtime/companion-readiness";
+
 /** One localized field: its API/row key (camelCase) + its physical companion column (snake_case). */
 export interface LocalizedFieldRef {
   /** Field name — the API/row key (e.g. `metaTitle`). */
@@ -77,38 +79,25 @@ export interface PopulateCompanionArgs {
    */
   statusValue?: string;
   /**
-   * When true, only a MISSING companion table is tolerated; any other read
-   * failure (a transient drop, a permission or schema error) propagates instead
-   * of being swallowed. Callers that have already confirmed the table exists and
-   * whose result feeds a durable write (e.g. a webhook payload) set this so a
-   * real error aborts rather than silently emitting nulled translations.
+   * Whether the companion table is physically there, resolved by the caller.
+   *
+   * This module used to answer that itself by running the join and catching the failure, which is
+   * a valid existence check on SQLite and MySQL and a transaction-killer on PostgreSQL: a query
+   * against a missing relation marks the whole transaction aborted, so the next statement — often
+   * an unrelated one — dies with `current transaction is aborted` and gets the blame. Several of
+   * these reads run inside the caller's write transaction, so the check was doing the damage it
+   * was written to avoid.
+   *
+   * Required rather than optional, and required on every one of these readers, so a new caller
+   * cannot omit it and quietly reintroduce the blind join. Anything other than `ready` skips the
+   * query entirely and the main table's values stand — which is exactly right before a companion
+   * migration has run.
+   *
+   * Callers outside a transaction resolve it with `resolveCompanionReadiness`; callers inside one
+   * read `cachedCompanionReadiness`, which cannot query. Undefined means unresolved, and is
+   * treated as not ready for the same reason.
    */
-  strict?: boolean;
-}
-
-/**
- * Whether an error is the companion `_locales` table simply not existing yet (a
- * localized entity before its companion migration runs), matched the same way
- * the boot sync detects it. Distinguishes the tolerated missing-table case from
- * a real failure (transient drop, permission, schema error). The driver message
- * rides on the error or its cause.
- */
-export function isMissingCompanionTableError(err: unknown): boolean {
-  const message = [
-    err instanceof Error ? err.message : String(err),
-    err instanceof Error && err.cause instanceof Error ? err.cause.message : "",
-  ].join(" ");
-  // Match ONLY a missing table/relation, not any "does not exist" — on Postgres
-  // a missing COLUMN reads `column "x" does not exist`, a real schema error that
-  // strict mode must surface, whereas a missing table reads
-  // `relation "x" does not exist`. SQLite uses `no such table` (its missing
-  // column is `no such column`), and MySQL uses `Table '...' doesn't exist`
-  // (its missing column is `Unknown column`).
-  return (
-    message.includes("no such table") ||
-    message.includes("doesn't exist") ||
-    (message.includes("relation") && message.includes("does not exist"))
-  );
+  readiness: CompanionReadiness | undefined;
 }
 
 /**
@@ -121,6 +110,8 @@ export async function populateCompanionFields(
 ): Promise<void> {
   const { db, companionTable, localizedFields, rows, localeChain } = args;
   const idKey = args.idKey ?? "id";
+  // Not ready means there is nothing to join to, so the main table's values stand.
+  if (args.readiness !== "ready") return;
   if (
     rows.length === 0 ||
     localizedFields.length === 0 ||
@@ -138,30 +129,15 @@ export async function populateCompanionFields(
   const parentCol = table._parent;
   const localeCol = table._locale;
 
-  let companionRows: Record<string, unknown>[];
-  try {
-    companionRows = await db
-      .select()
-      .from(companionTable)
-      .where(
-        and(
-          inArray(parentCol as never, ids),
-          inArray(localeCol as never, localeChain)
-        )
-      );
-  } catch (err) {
-    // The companion table may not physically exist yet — e.g. a localized collection
-    // whose companion migration hasn't been run (dev auto-sync leaves localized columns
-    // on the main table until `migrate`). Leave rows untouched (main-table values stand)
-    // rather than failing the whole read. Mirrors loadDynamicTables' fresh-DB resilience.
-    // In `strict` mode only that missing-table case is tolerated; any other
-    // failure propagates so a durable write is not committed with a silently
-    // incomplete companion read.
-    if (args.strict && !isMissingCompanionTableError(err)) {
-      throw err;
-    }
-    return;
-  }
+  const companionRows: Record<string, unknown>[] = await db
+    .select()
+    .from(companionTable)
+    .where(
+      and(
+        inArray(parentCol as never, ids),
+        inArray(localeCol as never, localeChain)
+      )
+    );
 
   // Index: parentId -> locale -> companion row. A row whose `_status` fails the status filter is
   // dropped here (i18n M6) so it can never be resolved onto a public row — the chain then falls
@@ -212,42 +188,33 @@ interface LimitableDb {
  * Goes through the Drizzle companion table object rather than raw SQL, so the
  * read uses the same typed query builder the populate helpers do. Returns the
  * `_status` string, or `null` when no companion row exists for the pair (or the
- * stored value is not a string). Swallows a missing-companion-table error the
- * same way {@link populateCompanionFields} does, so an entity whose companion
- * migration has not run yet reads as having no per-locale status instead of
- * failing the caller.
+ * stored value is not a string). An entity whose companion migration has not run yet is not
+ * queried at all and reads as having no per-locale status — see `readiness` on
+ * {@link PopulateCompanionArgs}. Everything else propagates: this value drives the
+ * publish/unpublish transition, so reading a real failure as "no per-locale status" would emit a
+ * spurious event.
  */
 export async function readCompanionLocaleStatus(
   db: LimitableDb,
   companionTable: unknown,
   parentId: string | number,
-  locale: string
+  locale: string,
+  readiness: CompanionReadiness | undefined
 ): Promise<string | null> {
+  if (readiness !== "ready") return null;
   const table = companionTable as CompanionTable;
-  try {
-    const rows = await db
-      .select()
-      .from(companionTable)
-      .where(
-        and(
-          eq(table._parent as never, parentId),
-          eq(table._locale as never, locale)
-        )
+  const rows = await db
+    .select()
+    .from(companionTable)
+    .where(
+      and(
+        eq(table._parent as never, parentId),
+        eq(table._locale as never, locale)
       )
-      .limit(1);
-    const status = rows[0]?._status;
-    return typeof status === "string" ? status : null;
-  } catch (err) {
-    // Tolerate ONLY the companion `_locales` table not existing yet (a localized
-    // entity before its companion migration runs). Any other failure (a
-    // transient connection drop, a deadlock) must propagate: this value drives
-    // the publish/unpublish transition, so silently reading it as "no per-locale
-    // status" could emit a spurious event.
-    if (isMissingCompanionTableError(err)) {
-      return null;
-    }
-    throw err;
-  }
+    )
+    .limit(1);
+  const status = rows[0]?._status;
+  return typeof status === "string" ? status : null;
 }
 
 /**
@@ -257,32 +224,29 @@ export async function readCompanionLocaleStatus(
  * translatable value is blank/null, which a value read cannot tell apart from a
  * missing row. Callers deciding whether a snapshot is locale-specific need the
  * row's existence, not its contents. Projects only `_parent` so unrelated
- * companion drift cannot fail the probe, and tolerates a missing companion table
- * (no row) the same way the readers above do.
+ * companion drift cannot fail the probe. A companion that is not there is not queried and reports
+ * no row — see `readiness` on {@link PopulateCompanionArgs}.
  */
 export async function companionRowExists(
   db: LimitableDb,
   companionTable: unknown,
   parentId: string | number,
-  locale: string
+  locale: string,
+  readiness: CompanionReadiness | undefined
 ): Promise<boolean> {
+  if (readiness !== "ready") return false;
   const table = companionTable as CompanionTable;
-  try {
-    const rows = await db
-      .select({ parent: table._parent })
-      .from(companionTable)
-      .where(
-        and(
-          eq(table._parent as never, parentId),
-          eq(table._locale as never, locale)
-        )
+  const rows = await db
+    .select({ parent: table._parent })
+    .from(companionTable)
+    .where(
+      and(
+        eq(table._parent as never, parentId),
+        eq(table._locale as never, locale)
       )
-      .limit(1);
-    return rows.length > 0;
-  } catch (err) {
-    if (isMissingCompanionTableError(err)) return false;
-    throw err;
-  }
+    )
+    .limit(1);
+  return rows.length > 0;
 }
 
 /**
@@ -292,41 +256,33 @@ export async function companionRowExists(
  * the Drizzle companion table returns every stored translation's status, so a
  * publish-all can tell which locales actually transition from the single flip.
  * Only locales that have a companion row appear. Goes through the typed query
- * builder rather than raw SQL, and tolerates a missing companion table the same
- * way the single-locale read and the populate helpers do.
+ * builder rather than raw SQL, and is not run at all against a companion that is not there — see
+ * `readiness` on {@link PopulateCompanionArgs}.
  */
 export async function readCompanionLocaleStatusAll(
   db: SelectableDb,
   companionTable: unknown,
-  parentId: string | number
+  parentId: string | number,
+  readiness: CompanionReadiness | undefined
 ): Promise<Map<string, string | null>> {
   const table = companionTable as CompanionTable;
   const byLocale = new Map<string, string | null>();
-  try {
-    // Project ONLY the columns this scan needs. A bare `.select()` requests
-    // every column of the configured Drizzle table object, which throws a
-    // missing-column error when the companion table is behind its metadata (a
-    // localized field added but its column migration not yet applied) — blocking
-    // an otherwise valid publish. `_parent`/`_locale`/`_status` always exist.
-    const rows = await db
-      .select({ locale: table._locale, status: table._status })
-      .from(companionTable)
-      .where(eq(table._parent as never, parentId));
-    for (const row of rows) {
-      const locale = row.locale;
-      if (typeof locale !== "string") continue;
-      byLocale.set(
-        locale,
-        typeof row.status === "string" ? row.status : null
-      );
-    }
-    return byLocale;
-  } catch (err) {
-    // Tolerate ONLY a companion table that has not been migrated yet; any other
-    // failure propagates, since this drives which locales emit a transition.
-    if (isMissingCompanionTableError(err)) return byLocale;
-    throw err;
+  if (readiness !== "ready") return byLocale;
+  // Project ONLY the columns this scan needs. A bare `.select()` requests
+  // every column of the configured Drizzle table object, which throws a
+  // missing-column error when the companion table is behind its metadata (a
+  // localized field added but its column migration not yet applied) — blocking
+  // an otherwise valid publish. `_parent`/`_locale`/`_status` always exist.
+  const rows = await db
+    .select({ locale: table._locale, status: table._status })
+    .from(companionTable)
+    .where(eq(table._parent as never, parentId));
+  for (const row of rows) {
+    const locale = row.locale;
+    if (typeof locale !== "string") continue;
+    byLocale.set(locale, typeof row.status === "string" ? row.status : null);
   }
+  return byLocale;
 }
 
 export interface PopulateCompanionAllArgs {
@@ -343,19 +299,22 @@ export interface PopulateCompanionAllArgs {
    * draft translation. Undefined = no filter (admin / no per-locale status).
    */
   statusValue?: string;
+  /** See `readiness` on {@link PopulateCompanionArgs}. */
+  readiness: CompanionReadiness | undefined;
 }
 
 /**
  * `locale=all` variant (admin/export): instead of one resolved value, set each localized field
  * to a language-keyed object (`{ en: "...", de: "..." }`) covering every configured locale.
- * Missing translations are `null`. Mutates `rows` in place; resilient to a missing companion
- * table (same as {@link populateCompanionFields}).
+ * Missing translations are `null`. Mutates `rows` in place; a companion that is not there yet is
+ * not queried (same as {@link populateCompanionFields}).
  */
 export async function populateCompanionFieldsAllLocales(
   args: PopulateCompanionAllArgs
 ): Promise<void> {
   const { db, companionTable, localizedFields, rows, locales } = args;
   const idKey = args.idKey ?? "id";
+  if (args.readiness !== "ready") return;
   if (
     rows.length === 0 ||
     localizedFields.length === 0 ||
@@ -369,20 +328,15 @@ export async function populateCompanionFieldsAllLocales(
   if (ids.length === 0) return;
 
   const table = companionTable as CompanionTable;
-  let companionRows: Record<string, unknown>[];
-  try {
-    companionRows = await db
-      .select()
-      .from(companionTable)
-      .where(
-        and(
-          inArray(table._parent as never, ids),
-          inArray(table._locale as never, locales)
-        )
-      );
-  } catch {
-    return; // companion table not present yet — leave rows untouched
-  }
+  const companionRows: Record<string, unknown>[] = await db
+    .select()
+    .from(companionTable)
+    .where(
+      and(
+        inArray(table._parent as never, ids),
+        inArray(table._locale as never, locales)
+      )
+    );
 
   const byParent = new Map<unknown, Record<string, Record<string, unknown>>>();
   for (const cr of companionRows) {
@@ -589,13 +543,8 @@ export interface TranslationStatusArgs {
   /** Whether the companion carries a per-locale `_status` column (i18n M6). */
   hasStatus: boolean;
   idKey?: string;
-  /**
-   * Surface query failures rather than leaving the rows untouched. A caller
-   * judging an access rule on this overview cannot tell "no translations" from
-   * "the read failed", so it needs the failure. A missing companion table is
-   * still tolerated: that is a single before its migration, not a fault.
-   */
-  strict?: boolean;
+  /** See `readiness` on {@link PopulateCompanionArgs}. */
+  readiness: CompanionReadiness | undefined;
   /** Row key to write the per-locale map under (default `_translations`). */
   outKey?: string;
   /**
@@ -610,7 +559,8 @@ export interface TranslationStatusArgs {
  * Translation-status overview (i18n M7): for each result row, set a per-locale map describing
  * which languages are translated and, when the collection has drafts, each language's status.
  * One batched query over the whole page (same cost profile as the other companion populates);
- * mutates `rows` in place; resilient to a missing companion table (dev-before-migrate).
+ * mutates `rows` in place. A companion that is not there yet (dev-before-migrate) is not queried,
+ * so every row reports no translations rather than the read failing.
  *
  * Output shape (under `outKey`, default `_translations`):
  * `{ en: { translated: true, status: "published" }, de: { translated: false } }`
@@ -629,6 +579,7 @@ export async function populateTranslationStatus(
   } = args;
   const idKey = args.idKey ?? "id";
   const outKey = args.outKey ?? "_translations";
+  if (args.readiness !== "ready") return;
   if (rows.length === 0 || locales.length === 0) return;
 
   const ids = rows
@@ -637,21 +588,15 @@ export async function populateTranslationStatus(
   if (ids.length === 0) return;
 
   const table = companionTable as CompanionTable;
-  let companionRows: Record<string, unknown>[];
-  try {
-    companionRows = await db
-      .select()
-      .from(companionTable)
-      .where(
-        and(
-          inArray(table._parent as never, ids),
-          inArray(table._locale as never, locales)
-        )
-      );
-  } catch (error) {
-    if (args.strict && !isMissingCompanionTableError(error)) throw error;
-    return; // companion table not present yet — leave rows untouched
-  }
+  const companionRows: Record<string, unknown>[] = await db
+    .select()
+    .from(companionTable)
+    .where(
+      and(
+        inArray(table._parent as never, ids),
+        inArray(table._locale as never, locales)
+      )
+    );
 
   const byParent = new Map<unknown, Record<string, Record<string, unknown>>>();
   for (const cr of companionRows) {

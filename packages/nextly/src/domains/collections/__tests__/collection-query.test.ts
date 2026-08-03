@@ -524,6 +524,12 @@ describe("CollectionEntryService — Query Contracts", () => {
         // Expansion copies whole related rows in, so it also carries the caller
         // its related rows are redacted for.
         enforceFieldAccess: true,
+        // ...and defers WHEN those rules run, because this path finishes with
+        // the post-assembly pass and a rule that masks on a denied sibling has
+        // to see it first.
+        fieldAccessStage: "assembled",
+        locale: undefined,
+        status: undefined,
         user: undefined,
         overrideAccess: undefined,
       });
@@ -541,6 +547,7 @@ describe("CollectionEntryService — Query Contracts", () => {
       ).toHaveBeenCalledWith(expect.any(Array), "posts", expect.any(Array), {
         depth: undefined,
         enforceFieldAccess: true,
+        fieldAccessStage: "assembled",
         user: undefined,
         overrideAccess: undefined,
       });

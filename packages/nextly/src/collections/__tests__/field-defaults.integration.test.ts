@@ -17,10 +17,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
-  blocks,
   checkbox,
   defineCollection,
   group,
+  json,
   number,
   repeater,
   text,
@@ -37,6 +37,7 @@ afterEach(async () => {
   current = undefined;
 });
 
+/** A structured default on a JSON-backed field, which is what this exercises. */
 const EMPTY_DOC = { formatVersion: 1, kind: "page", nodes: [] };
 
 async function handlerFor(): Promise<CollectionsHandler> {
@@ -51,7 +52,7 @@ async function handlerFor(): Promise<CollectionsHandler> {
           text({ name: "derived", defaultValue: d => `re: ${d.title}` }),
           number({ name: "rank", defaultValue: 7 }),
           checkbox({ name: "featured", defaultValue: true }),
-          blocks({ name: "content", defaultValue: EMPTY_DOC }),
+          json({ name: "content", defaultValue: EMPTY_DOC }),
           group({
             name: "seo",
             fields: [

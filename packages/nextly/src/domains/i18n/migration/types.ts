@@ -27,6 +27,20 @@ export interface LocalizedColumnSpec {
 }
 
 /**
+ * Just enough of a {@link CompanionMigrationSpec} to move values between a main table and its
+ * companion in one named locale.
+ *
+ * The correlated copies in either direction need the two table names, the dialect's quoting and
+ * the locale, and take the columns to copy as an argument. Naming that subset lets a caller that
+ * only wants a copy pass what it actually knows, instead of inventing a column list and a
+ * parent-id DDL type that nothing reads.
+ */
+export type CompanionCopyRef = Pick<
+  CompanionMigrationSpec,
+  "dialect" | "mainTable" | "companionTable" | "defaultLocale"
+>;
+
+/**
  * Everything the generator needs to emit an enable/disable localization migration for
  * one collection. Table names, default locale, and the columns to move are all explicit.
  */

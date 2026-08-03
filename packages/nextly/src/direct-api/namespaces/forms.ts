@@ -9,6 +9,7 @@
  */
 
 import { NextlyError } from "../../errors/nextly-error";
+import { collectingWarnings } from "../../hooks/side-effect-warnings";
 import type { WhereFilter } from "../../services/collections/query-operators";
 import type { PaginatedResponse } from "../../types/pagination";
 import type {
@@ -189,9 +190,11 @@ export function createFormsNamespace(ctx: NextlyContext): FormsNamespace {
         submissionData.userAgent = args.metadata.userAgent;
       }
 
-      const createResult = await ctx.collectionsHandler.createEntry(
-        { collectionName: ctx.submissionsCollectionSlug },
-        submissionData
+      const { result: createResult, warnings } = await collectingWarnings(() =>
+        ctx.collectionsHandler.createEntry(
+          { collectionName: ctx.submissionsCollectionSlug },
+          submissionData
+        )
       );
 
       if (!createResult.success) {
@@ -213,6 +216,7 @@ export function createFormsNamespace(ctx: NextlyContext): FormsNamespace {
         success: true,
         submission: createResult.data as Record<string, unknown>,
         redirect,
+        ...(warnings ? { warnings } : {}),
       };
     },
 
@@ -222,7 +226,8 @@ export function createFormsNamespace(ctx: NextlyContext): FormsNamespace {
       if (!args.form) {
         throw new NextlyError({
           code: "INVALID_INPUT",
-          publicMessage: "'form' (slug or ID) is required for forms.submissions()",
+          publicMessage:
+            "'form' (slug or ID) is required for forms.submissions()",
           statusCode: 400,
         });
       }

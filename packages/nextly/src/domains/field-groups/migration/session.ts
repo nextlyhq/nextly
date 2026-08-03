@@ -25,10 +25,8 @@
 import { randomUUID } from "node:crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import type {
-  TransactionContext,
-  WhereClause,
-} from "@nextlyhq/adapter-drizzle/types";
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+import { sql } from "drizzle-orm";
 
 import { NextlyError } from "../../../errors/nextly-error";
 
@@ -47,16 +45,34 @@ export const MIGRATION_LOCK_TABLE = "nextly_field_group_lock";
 /** The lock is a single row; its key never varies. */
 const LOCK_ROW_ID = 1;
 
-/** The lock row, addressed the way the adapter's query builder expects. */
-function lockRowWhere(owner?: string): WhereClause {
-  const and: WhereClause["and"] = [
-    { column: "id", op: "=", value: LOCK_ROW_ID },
-  ];
-  // Naming the owner as well makes a release affect only a row we still hold.
-  if (owner !== undefined) {
-    and.push({ column: "owner", op: "=", value: owner });
-  }
-  return { and };
+/**
+ * Read the lock row's owner inside a transaction.
+ *
+ * Issued as a Drizzle statement rather than through the typed query builder:
+ * that resolves a table through the schema registry and rejects any name the
+ * ORM does not declare, and this table is created on demand by the migration
+ * rather than declared in the static schema — the same shape the schema
+ * pipeline's own `nextly_migrate_lock` has.
+ */
+async function readOwner(
+  ctx: TransactionContext
+): Promise<{ owner: string | null } | undefined> {
+  const rows = await ctx.queryStatement<{ owner: string | null }>(
+    sql`SELECT ${sql.identifier("owner")}
+        FROM ${sql.identifier(MIGRATION_LOCK_TABLE)}
+        WHERE ${sql.identifier("id")} = ${LOCK_ROW_ID}`
+  );
+  return rows[0];
+}
+
+/** Whether the single lock row is present, read outside any transaction. */
+async function lockRowExists(adapter: DrizzleAdapter): Promise<boolean> {
+  const rows = await adapter.queryStatement(
+    sql`SELECT ${sql.identifier("id")}
+        FROM ${sql.identifier(MIGRATION_LOCK_TABLE)}
+        WHERE ${sql.identifier("id")} = ${LOCK_ROW_ID}`
+  );
+  return rows.length > 0;
 }
 
 /** What a step is handed to do its work. */
@@ -93,7 +109,36 @@ export function getMigrationLockDdl(dialect: MigrationDialect): string[] {
  * two runs would rename the same objects and rewrite the same rows.
  */
 export async function withMigrationSession<T>(
-  args: { adapter: DrizzleAdapter; dialect: MigrationDialect; label: string },
+  args: {
+    adapter: DrizzleAdapter;
+    dialect: MigrationDialect;
+    label: string;
+    /**
+     * Take the lock only if it already exists, and never create it.
+     *
+     * For callers that are not the migration. The lock table is created by the
+     * migration, so its absence means no run has ever happened on this database
+     * and there is nothing to be excluded from. Creating it from those callers
+     * would issue DDL on paths that promise none — `--no-auto-sync` exists
+     * precisely to keep schema changes in migration files, and a role granted
+     * DML but not DDL would be refused outright.
+     */
+    requireExistingLock?: boolean;
+    /**
+     * Release the claim if the process is interrupted.
+     *
+     * For schema syncs only. Watch mode documents Ctrl+C as the way to stop, so
+     * a claim that survived it would block every later sync — but a claim is
+     * only safe to drop on a signal if whatever still holds it is harmless to
+     * run twice, and a migration is not. Releasing a migration's claim would
+     * free the row while its work is still in flight, letting a second process
+     * resume the same run against a database the first is still writing to.
+     *
+     * So the migration keeps the strict behaviour this lock was designed for: an
+     * interrupted run stays held, and an operator clears it.
+     */
+    releaseOnInterrupt?: boolean;
+  },
   fn: (session: MigrationSession) => Promise<T>
 ): Promise<T> {
   const { adapter, dialect, label } = args;
@@ -111,7 +156,19 @@ export async function withMigrationSession<T>(
   // second. Uniqueness by construction removes that whole class of mistake.
   const claim = `${label}#${randomUUID()}`;
 
-  await ensureLockRow(adapter, dialect);
+  const session: MigrationSession = {
+    dialect,
+    inTransaction: work => adapter.transaction(work),
+  };
+
+  if (args.requireExistingLock === true) {
+    // No lock table means no run has ever been recorded here, so there is
+    // nothing to exclude and nothing worth creating a table for.
+    if (!(await adapter.tableExists(MIGRATION_LOCK_TABLE))) return fn(session);
+    await seedLockRow(adapter);
+  } else {
+    await ensureLockRow(adapter, dialect);
+  }
 
   const acquired = await acquire(adapter, claim);
   if (!acquired.ok) {
@@ -129,12 +186,43 @@ export async function withMigrationSession<T>(
     });
   }
 
+  // A terminated process never reaches `finally`, and this lock has no expiry by
+  // design, so an interrupted holder would leave a claim that only an operator
+  // could clear. That is the right trade for a migration, which is rare and
+  // deliberate; it is the wrong one for a schema sync, where the documented way
+  // to stop watch mode is Ctrl+C and a stuck claim would block every later sync.
+  // Releasing on the signal keeps the durable-claim design and removes its cost
+  // on the path people actually interrupt — but only for callers that opt in.
+  const releaseOnSignal = (signal: NodeJS.Signals): void => {
+    // The signal is re-raised whether or not the release succeeded: a pool torn
+    // down by the same interrupt is the likely failure, and an unobserved
+    // rejection there would surface as an unhandled rejection instead of
+    // letting the process stop. A claim left behind by a failed release is the
+    // ordinary stuck-claim case an operator already has a remedy for.
+    void release(adapter, claim)
+      .catch(() => undefined)
+      .finally(() => {
+        process.kill(process.pid, signal);
+      });
+  };
+  const onInterrupt = (): void => releaseOnSignal("SIGINT");
+  const onTerminate = (): void => releaseOnSignal("SIGTERM");
+  // Registered only where the claim is safe to drop mid-flight. The signal does
+  // not stop `fn`, so releasing here hands the row to whoever asks next while
+  // this process is still working — survivable for a sync, which was never
+  // mutually exclusive with another sync, and not for a migration.
+  if (args.releaseOnInterrupt === true) {
+    process.once("SIGINT", onInterrupt);
+    process.once("SIGTERM", onTerminate);
+  }
+
   try {
-    return await fn({
-      dialect,
-      inTransaction: work => adapter.transaction(work),
-    });
+    return await fn(session);
   } finally {
+    // Removed before releasing, so a signal arriving during an orderly release
+    // cannot start a second one.
+    process.off("SIGINT", onInterrupt);
+    process.off("SIGTERM", onTerminate);
     await release(adapter, claim);
   }
 }
@@ -152,13 +240,17 @@ async function ensureLockRow(
   for (const statement of getMigrationLockDdl(dialect)) {
     await adapter.executeQuery(statement);
   }
+  await seedLockRow(adapter);
+}
 
-  const existing = await adapter.transaction(async ctx =>
-    ctx.selectOne<{ id: number }>(MIGRATION_LOCK_TABLE, {
-      where: lockRowWhere(),
-    })
-  );
-  if (existing) return;
+/**
+ * Seed the single lock row, assuming its table is already there.
+ *
+ * Separated from the DDL so a caller that must not issue schema changes can
+ * still establish the row it needs to contend for.
+ */
+async function seedLockRow(adapter: DrizzleAdapter): Promise<void> {
+  if (await lockRowExists(adapter)) return;
 
   try {
     await adapter.transaction(async ctx =>
@@ -172,12 +264,7 @@ async function ensureLockRow(
     // error the row is re-read below and required to exist.
   }
 
-  const seeded = await adapter.transaction(async ctx =>
-    ctx.selectOne<{ id: number }>(MIGRATION_LOCK_TABLE, {
-      where: lockRowWhere(),
-    })
-  );
-  if (!seeded) {
+  if (!(await lockRowExists(adapter))) {
     // Continuing here would leave nothing to lock, and a claim written against
     // an absent row would update nothing while still looking successful.
     throw NextlyError.serviceUnavailable({
@@ -205,28 +292,26 @@ async function acquire(
     // ends, so the read below cannot be overtaken between reading and writing.
     await ctx.lockRow(MIGRATION_LOCK_TABLE, LOCK_ROW_ID);
 
-    const row = await ctx.selectOne<{ owner: string | null }>(
-      MIGRATION_LOCK_TABLE,
-      { where: lockRowWhere() }
-    );
+    const row = await readOwner(ctx);
 
     // Any occupied row refuses, including one that appears to be ours. Claims
     // are unique per invocation, so a match would mean something other than
     // this call wrote it.
-    if (row === null || row.owner !== null) {
+    if (row === undefined || row.owner !== null) {
       return { ok: false, heldBy: row?.owner ?? null };
     }
 
-    await ctx.update(MIGRATION_LOCK_TABLE, { owner: claim }, lockRowWhere());
+    await ctx.runStatement(
+      sql`UPDATE ${sql.identifier(MIGRATION_LOCK_TABLE)}
+          SET ${sql.identifier("owner")} = ${claim}
+          WHERE ${sql.identifier("id")} = ${LOCK_ROW_ID}`
+    );
 
-    // Read back rather than trusting the write. `update` reports affected rows
+    // Read back rather than trusting the write. An update reports affected rows
     // inconsistently across dialects, and an absent row would otherwise update
     // nothing and still look like a successful claim, running the migration
     // with no exclusion at all.
-    const after = await ctx.selectOne<{ owner: string | null }>(
-      MIGRATION_LOCK_TABLE,
-      { where: lockRowWhere() }
-    );
+    const after = await readOwner(ctx);
     if (after?.owner !== claim) {
       return { ok: false, heldBy: after?.owner ?? null };
     }
@@ -238,10 +323,12 @@ async function acquire(
 async function release(adapter: DrizzleAdapter, claim: string): Promise<void> {
   await adapter.transaction(async ctx => {
     await ctx.lockRow(MIGRATION_LOCK_TABLE, LOCK_ROW_ID);
-    await ctx.update(
-      MIGRATION_LOCK_TABLE,
-      { owner: null },
-      lockRowWhere(claim)
+    // Naming the owner as well makes a release affect only a row we still hold.
+    await ctx.runStatement(
+      sql`UPDATE ${sql.identifier(MIGRATION_LOCK_TABLE)}
+          SET ${sql.identifier("owner")} = NULL
+          WHERE ${sql.identifier("id")} = ${LOCK_ROW_ID}
+            AND ${sql.identifier("owner")} = ${claim}`
     );
   });
 }

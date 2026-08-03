@@ -180,6 +180,37 @@ export interface CompanionTransitionArgs {
   newFields: CompanionFieldLike[];
   /** Whether the companion `<tableName>_locales` table currently exists. */
   companionExists: boolean;
+  /**
+   * Localized columns the MAIN table still physically carries.
+   *
+   * Only the disable direction reads it. Unattended provisioning may seed a companion without
+   * dropping the columns it copied from, so a later disable can meet a main table that still has
+   * them: re-adding one fails, and skipping the restore because it is present reverts content to
+   * whatever it held before the entity was localized.
+   *
+   * Omitted means "none of them", which is the shape a transition produced by an explicit toggle
+   * or a migration file leaves behind.
+   */
+  existingMainColumns?: readonly string[];
+  /**
+   * Whether the entity had Draft/Published BEFORE this change.
+   *
+   * A history fact, unlike {@link CompanionTransitionArgs.existingMainColumns}, which describes
+   * only the database in front of you and is deliberately stripped from the migration artefact.
+   * That distinction is what makes this the right signal for the disable restore: it is equally
+   * true for a database that has only ever replayed migrations.
+   *
+   * It answers exactly what that restore needs — did main carry `status` and the companion
+   * `_status` before this save. Deriving it from the DESIRED status instead would emit a copy from
+   * a `_status` the old companion never had, into a `status` main has not been given yet, because a
+   * disable deliberately runs the companion transition before the shared ALTER that adds it.
+   *
+   * REQUIRED rather than optional, and that is the point. An optional history signal is one a
+   * caller can omit without noticing, and the copy it gates then silently stops happening for that
+   * caller alone — which is exactly how this went wrong once already. `undefined` is not a
+   * shorthand for "no status"; a caller that genuinely has none says `false`.
+   */
+  wasStatus: boolean;
   /** Whether the existing companion physically has `_status` (see ReconcileCompanionArgs). */
   companionHasStatus?: boolean;
 }
@@ -297,7 +328,27 @@ export function buildCompanionTransitionStatements(
     // Nothing to restore (no companion, or the entity had no translatable columns).
     if (!spec || !companionExists) return none;
     return {
-      statements: buildLocalizationDownStatements(spec),
+      statements: buildLocalizationDownStatements(spec, {
+        existingMainColumns: args.existingMainColumns,
+        // The PHYSICAL shape, not the desired one. `status` describes what the collection is being
+        // saved as, and a save that disables localization and enables Draft/Published at once
+        // would have this restore read a `_status` the old companion never had — and main receive
+        // it before the shared ALTER that adds `status`, because a disable deliberately runs the
+        // companion transition first. Both columns have to be there already.
+        // The column has to be there BEFORE this save and still be there after.
+        //
+        // Before, because the copy reads the companion's `_status` and writes main's `status`, and
+        // neither exists for an entity that did not have Draft/Published. `existingMainColumns`
+        // cannot answer that: it is built from localized user fields, so it never contains
+        // `status`, and it is cleared for the artefact so a migration file cannot depend on local
+        // introspection.
+        //
+        // After, because turning Draft/Published off in the same save drops main's `status`, and
+        // whether that ALTER lands before or after this plan differs by flow — the single schema
+        // path runs it first, the collection path runs it second. Restoring into a column that is
+        // being removed is pointless in both, and fatal in the one that removes it first.
+        restoreStatus: args.wasStatus === true && status === true,
+      }),
       needsArchive: true,
       companionDropped: true,
     };
@@ -328,4 +379,38 @@ export function buildCompanionTransitionStatements(
   }
 
   return none;
+}
+
+/**
+ * The transition as a replayable migration artefact, and — only when they differ — as the
+ * statements this particular database needs.
+ *
+ * A migration file is replayed against databases that have only ever run migrations, so its
+ * content must follow from history alone. `existingMainColumns` comes from introspecting the
+ * database in front of you, and unattended provisioning retains the columns it copied into a
+ * companion, so a development database can sit in a shape no sequence of migrations produces.
+ * Baking that in emits a disable which skips re-adding columns the target database dropped, and
+ * the restore then addresses columns that are not there.
+ *
+ * Both plans come from one call site so the artefact cannot accidentally be built from local
+ * introspection. `local` is omitted when the two agree — every case but a disable meeting retained
+ * columns — so a caller holding one plan cannot pick the wrong one.
+ */
+export function buildCompanionTransitionPlans(
+  args: CompanionTransitionArgs & {
+    /** What THIS database carries. Never reaches the artefact. */
+    existingMainColumns?: readonly string[];
+  }
+): { artefact: CompanionTransitionPlan; local?: CompanionTransitionPlan } {
+  const artefact = buildCompanionTransitionStatements({
+    ...args,
+    existingMainColumns: undefined,
+  });
+  if (!args.existingMainColumns?.length) return { artefact };
+
+  const local = buildCompanionTransitionStatements(args);
+  const same =
+    local.statements.length === artefact.statements.length &&
+    local.statements.every((s, i) => s === artefact.statements[i]);
+  return same ? { artefact } : { artefact, local };
 }

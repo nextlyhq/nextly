@@ -8,6 +8,10 @@
  * the "nothing to build" shortcut returns before the later validation step and
  * a project can be made entirely of singles and field groups.
  */
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, it, expect, vi, afterEach } from "vitest";
 
 import {
@@ -95,6 +99,84 @@ afterEach(() => {
   loadConfig.mockReset();
 });
 
+describe("nextly build refuses a field type no plugin offers", () => {
+  it("fails on a token nothing registered", async () => {
+    // The `define*` validators defer an unknown token because the config
+    // bundle is evaluated before any plugin registers its types. `loadConfig`
+    // has registered them by the time the command runs, so this is the first
+    // point the question is answerable — and unasked, the command would emit
+    // primitive fallback types for a schema production boot then refuses.
+    stubConfig({
+      collections: [
+        { slug: "posts", fields: [{ name: "body", type: "no-such-type" }] },
+      ],
+      singles: [],
+    });
+
+    const { logger, lines } = createCaptureLogger();
+    const context: CommandContext = { logger, options: {}, cwd: "/tmp" };
+    const exitSpy = stubExit();
+
+    await expect(runBuild({}, context)).rejects.toBeInstanceOf(NextlyError);
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(lines.join("\n")).toContain("no-such-type");
+  });
+
+  it("fails on a type offered only on another surface", async () => {
+    // Registration alone is not authorization: a type that opted into `users`
+    // is not a collection field, and accepting it here would generate a column
+    // for a field the entries surface will not accept.
+    registerFieldType({
+      type: "rating",
+      storage: "number",
+      component: "@acme/ratings/admin#Input",
+      surfaces: ["users"],
+    });
+
+    stubConfig({
+      collections: [
+        { slug: "posts", fields: [{ name: "score", type: "rating" }] },
+      ],
+      singles: [],
+    });
+
+    const { logger, lines } = createCaptureLogger();
+    const context: CommandContext = { logger, options: {}, cwd: "/tmp" };
+    const exitSpy = stubExit();
+
+    await expect(runBuild({}, context)).rejects.toBeInstanceOf(NextlyError);
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(lines.join("\n")).toContain("rating");
+  });
+
+  it("accepts a type that did opt into this surface", async () => {
+    // The refusals above are specific to a type the entries surface does not
+    // accept, so a type that did opt in has to stay accepted — otherwise the
+    // gate would reject every contributed collection field rather than the
+    // wrong-surface ones it exists to catch.
+    registerFieldType({
+      type: "rating",
+      storage: "number",
+      component: "@acme/ratings/admin#Input",
+      surfaces: ["entries"],
+    });
+
+    stubConfig({
+      collections: [
+        { slug: "posts", fields: [{ name: "score", type: "rating" }] },
+      ],
+      singles: [],
+    });
+
+    const { logger } = createCaptureLogger();
+    const context: CommandContext = { logger, options: {}, cwd: "/tmp" };
+    const exitSpy = stubExit();
+
+    await runBuild({ zod: false, types: false }, context);
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+});
+
 describe("nextly build validates every entity kind", () => {
   it("fails a single-only project whose declaration its field type rejects", async () => {
     registerDocument();
@@ -132,7 +214,7 @@ describe("nextly build validates every entity kind", () => {
     expect(lines.join("\n")).toContain("policy.kinds must name a kind");
   });
 
-  it("still reports nothing to build when the entities are valid", async () => {
+  it("builds a project whose only schema is singles", async () => {
     registerDocument();
     stubConfig({
       collections: [],
@@ -145,9 +227,46 @@ describe("nextly build validates every entity kind", () => {
     const context: CommandContext = { logger, options: {}, cwd: "/tmp" };
     const exitSpy = stubExit();
 
-    await runBuild({}, context);
+    // Generation is switched off: what this pins is the gate, and the stub
+    // config carries no output paths for the generators to write to.
+    await runBuild({ zod: false, types: false }, context);
 
     expect(exitSpy).not.toHaveBeenCalled();
+    // The absence of collections is still worth saying, but it no longer stops
+    // the build: the single's types are exactly what this run has to write.
     expect(lines.join("\n")).toContain("No collections defined in config");
+    expect(lines.join("\n")).not.toContain("Add collections to your");
+  });
+
+  it("narrows PermissionSlug in a build with no collections", async () => {
+    // A singles-only project is exactly what the schema gate now builds for,
+    // and it is where the names matter most: without them the written file
+    // declares `PermissionSlug` as bare `string`, so a deployment build widens
+    // what a development run had narrowed.
+    const cwd = mkdtempSync(join(tmpdir(), "nextly-build-"));
+    try {
+      stubConfig({
+        collections: [],
+        singles: [
+          { slug: "homepage", fields: [{ name: "title", type: "text" }] },
+        ],
+        typescript: { outputFile: "nextly-types.ts" },
+      });
+
+      const { logger, lines } = createCaptureLogger();
+      const context: CommandContext = { logger, options: {}, cwd };
+
+      // `generateAllFiles` resolves output against `options.cwd`, not the
+      // command context, so the temp directory has to be passed here.
+      await runBuild({ zod: false, cwd }, context);
+
+      const report = lines.join("\n");
+      expect(report).not.toContain("No schema defined in config");
+      const written = readFileSync(join(cwd, "nextly-types.ts"), "utf-8");
+      expect(written).toContain('"read-homepage"');
+      expect(written).not.toMatch(/PermissionSlug\s*=\s*string\s*;/);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
   });
 });

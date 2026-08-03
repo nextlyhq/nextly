@@ -26,8 +26,12 @@
  */
 
 import { RESERVED_SLUGS } from "../../collections/config/validate-config";
+import { isFieldGroupField } from "../../collections/fields/guards";
+import type { FieldConfig } from "../../collections/fields/types";
 import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
+import { toSnakeCase } from "../../domains/schema/services/field-column-descriptor";
 import { NextlyError } from "../../errors";
+import { isReservedSystemColumn } from "../../lib/system-columns";
 import {
   type BaseValidationError,
   DEFAULT_SQL_KEYWORDS_SET,
@@ -36,8 +40,6 @@ import {
   validateFieldTypeShared,
   validateNumberDecimalDimensionsShared,
   validateRelationshipTargetShared,
-  validateBlocksDefaultShared,
-  validateBlocksPolicyShared,
   validatePluginFieldOptionsShared,
   validateSelectOptionsShared,
   validateSlugShared,
@@ -91,6 +93,9 @@ export type FieldGroupValidationErrorCode =
   | "FIELD_NAME_INVALID_FORMAT"
   | "FIELD_NAME_SQL_KEYWORD"
   | "FIELD_NAME_DUPLICATE"
+  // A name that snake-cases onto a column this group's table already carries. The same code the
+  // collection and single validators report, because it is the same mistake with the same fix.
+  | "FIELD_NAME_RESERVED"
   | "FIELD_TYPE_REQUIRED"
   | "FIELD_TYPE_INVALID"
   // A declared default the field's own rules reject.
@@ -187,6 +192,20 @@ function validateField(
 
   // Plugin types are accepted only when they opted into the entries surface —
   // registration alone is not authorization for a component field.
+  // Whether a name is usable as a column does not depend on the field's type,
+  // and a contributed type has no answer here at all — it defers to boot. Left
+  // behind the type check, a plugin field's name was never checked by anything:
+  // the deferral returns before this, and the boot gate asks only whether the
+  // token was claimed. A duplicate or SQL-reserved name reached schema
+  // generation as a colliding column.
+  validateFieldNameShared(
+    f.name,
+    path,
+    errsBase,
+    seenNames,
+    DEFAULT_SQL_KEYWORDS_SET
+  );
+
   if (
     !validateFieldTypeShared(f.type, path, errsBase, type =>
       isPluginFieldTypeOnSurface(type, "entries")
@@ -195,14 +214,6 @@ function validateField(
     return;
   }
   const fieldType = f.type as string;
-
-  validateFieldNameShared(
-    f.name,
-    path,
-    errsBase,
-    seenNames,
-    DEFAULT_SQL_KEYWORDS_SET
-  );
 
   // A plugin type reaches none of the cases below, so its own declaration
   // checks run here rather than as a case that could never be written for a
@@ -220,8 +231,6 @@ function validateField(
 
     case "blocks":
       // A blocks default must satisfy the same field policy the write applies.
-      validateBlocksPolicyShared(f, path, errsBase);
-      validateBlocksDefaultShared(f, path, errsBase);
       break;
 
     case "relationship":
@@ -308,6 +317,69 @@ function validateFields(
     });
     return;
   }
+
+  // Block names that collide with a column this group's table already carries. Such a field is
+  // emitted alongside the injected column, so the CREATE TABLE declares it twice and the database
+  // refuses the statement — the group could never have been created, and refusing the name reports
+  // that where it is chosen rather than as a migration failure.
+  //
+  // Compared as the PHYSICAL column rather than as a spelling, because a field name reaches the
+  // column through the generator's own conversion: `createdAt` and `CreatedAt` both arrive at
+  // `created_at`, and a set of literal spellings can only ever hold the ones somebody listed.
+  //
+  // A reference to another field group is the ONE field known to emit no column: its data lives in
+  // the table it points at. Every other field is checked, including a contributed type whose
+  // registration has not happened yet — `defineFieldGroup` runs before the plugin registry is
+  // populated, so asking whether such a field emits a column answers "no" for one that will. The
+  // check is therefore written to fail closed: refusing a name that turns out to emit nothing costs
+  // an author a name they had no reason to want, while skipping one that does emit a column costs
+  // a table that cannot be created at all.
+  fields.forEach((field, index) => {
+    if (!field || typeof field !== "object") return;
+    const name = (field as Record<string, unknown>).name;
+    if (typeof name !== "string") return;
+    const column = toSnakeCase(name);
+
+    if (isFieldGroupField(field as FieldConfig)) {
+      // A reference emits no column, but its value still rides on the instance payload, where two
+      // keys are already spoken for — and they are spoken for in different ways.
+      //
+      // The identity is assigned straight onto the payload and read back under the exact key `id`,
+      // so only that literal displaces it. `Id` is a separate property and stays usable.
+      if (name === "id") {
+        errors.push({
+          path: `${path}[${index}].name`,
+          message: `Field name '${name}' is reserved: a field group instance uses 'id' for its own identity`,
+          code: "FIELD_NAME_RESERVED",
+        });
+        return;
+      }
+
+      // The timestamps are the opposite: the read indexes the row's columns by each field's
+      // CONVERTED name, so any spelling that converts to one of them is handed the row's timestamp
+      // in place of the referenced data — which then round-trips back as the reference's value.
+      // `id` is excluded because it is the case above, where conversion does not apply.
+      if (
+        column !== "id" &&
+        isReservedSystemColumn(column, "fieldGroupConfig")
+      ) {
+        errors.push({
+          path: `${path}[${index}].name`,
+          message: `Field name '${name}' is reserved: a field group instance carries '${column}' of its own`,
+          code: "FIELD_NAME_RESERVED",
+        });
+      }
+      return;
+    }
+
+    if (isReservedSystemColumn(column, "fieldGroupConfig")) {
+      errors.push({
+        path: `${path}[${index}].name`,
+        message: `Field name '${name}' is reserved: it becomes the system column '${column}'`,
+        code: "FIELD_NAME_RESERVED",
+      });
+    }
+  });
 
   // An empty fields list is valid for both code-first defines and the
   // modal-driven create flow. A field group's table still gets its id and the

@@ -42,6 +42,7 @@ export {
 // ============================================================
 
 export {
+  buildDynamicFieldGroupsPg,
   dynamicFieldGroupsPg,
   type DynamicFieldGroupPg,
   type DynamicFieldGroupInsertPg,
@@ -52,6 +53,7 @@ export {
 // ============================================================
 
 export {
+  buildDynamicFieldGroupsMysql,
   dynamicFieldGroupsMysql,
   type DynamicFieldGroupMysql,
   type DynamicFieldGroupInsertMysql,
@@ -62,6 +64,7 @@ export {
 // ============================================================
 
 export {
+  buildDynamicFieldGroupsSqlite,
   dynamicFieldGroupsSqlite,
   type DynamicFieldGroupSqlite,
   type DynamicFieldGroupInsertSqlite,

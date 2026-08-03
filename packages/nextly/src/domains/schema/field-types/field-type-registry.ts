@@ -24,11 +24,45 @@ const globalForFieldTypes = globalThis as unknown as {
   __nextly_fieldTypes?: Map<string, PluginFieldType>;
 };
 
-function store(): Map<string, PluginFieldType> {
+/**
+ * Reads the registry the running operation pinned for itself, if any.
+ *
+ * The live set below belongs to whichever config was loaded last. That is right
+ * for serving requests and wrong for work already underway against an earlier
+ * config: `db:sync --watch` reloads on save, and a reload clears and rebuilds
+ * the live set while the previous sync may still be materializing columns.
+ *
+ * Held as an indirection rather than reading an `AsyncLocalStorage` here,
+ * because this module is reachable from `nextly/config` and so ends up in the
+ * browser bundle, where a `node:async_hooks` import cannot resolve. The storage
+ * lives in a Node-only module that installs itself when the CLI loads it; in a
+ * browser nothing installs one and every lookup reads the live set, which is
+ * the only set that exists there.
+ */
+type ScopedFieldTypeReader = () =>
+  | ReadonlyMap<string, PluginFieldType>
+  | undefined;
+
+let readScopedFieldTypes: ScopedFieldTypeReader | undefined;
+
+/** Install the scope reader. Called by the Node-only scope module on load. */
+export function installScopedFieldTypeReader(
+  reader: ScopedFieldTypeReader
+): void {
+  readScopedFieldTypes = reader;
+}
+
+/** The live set, which registration and clearing always act on. */
+function liveStore(): Map<string, PluginFieldType> {
   if (!globalForFieldTypes.__nextly_fieldTypes) {
     globalForFieldTypes.__nextly_fieldTypes = new Map();
   }
   return globalForFieldTypes.__nextly_fieldTypes;
+}
+
+/** What a lookup resolves against: the operation's own set, else the live one. */
+function store(): ReadonlyMap<string, PluginFieldType> {
+  return readScopedFieldTypes?.() ?? liveStore();
 }
 
 /** Register a custom field type. Throws on collision with a built-in or another plugin. */
@@ -38,7 +72,7 @@ export function registerFieldType(def: PluginFieldType): void {
       `NEXTLY_FIELD_TYPE_COLLISION: field type "${def.type}" is a built-in type and cannot be redefined.`
     );
   }
-  const map = store();
+  const map = liveStore();
   if (map.has(def.type)) {
     throw new Error(
       `NEXTLY_FIELD_TYPE_COLLISION: field type "${def.type}" is already registered by another plugin.`
@@ -70,6 +104,19 @@ export function withoutDisabledBehavior(
   const declarative = { ...fieldType };
   delete declarative.validate;
   delete declarative.validateOptions;
+  // `codegen` is behavior too: its callbacks are the plugin's code, run by
+  // `nextly build` and `generate:types`. Left in place, a disabled plugin would
+  // keep shaping generated output and could fail the app's build. Dropping it
+  // makes generation fall back to the storage primitive, which is declarative
+  // and is what the retained schema means.
+  delete declarative.codegen;
+  // `emptyValue` is behavior on the same terms: it is the plugin's code, run
+  // when a column is backfilled and when a single is seeded on first read.
+  // Left in place, disabling a plugin could still fail a migration or a read
+  // through a callback that depends on services the plugin no longer starts.
+  // Dropping it falls back to the storage primitive's own empty, which is the
+  // declarative meaning of a retained schema.
+  delete declarative.emptyValue;
   return declarative;
 }
 
@@ -103,7 +150,7 @@ export function allFieldTypes(): PluginFieldType[] {
 
 /** Drop all registered custom field types (per-boot reset / HMR / tests). */
 export function clearFieldTypes(): void {
-  store().clear();
+  liveStore().clear();
 }
 
 /**
@@ -116,7 +163,7 @@ export function clearFieldTypes(): void {
  * wrong until the next successful load.
  */
 export function snapshotFieldTypes(): ReadonlyMap<string, PluginFieldType> {
-  return new Map(store());
+  return new Map(liveStore());
 }
 
 /**
@@ -129,7 +176,7 @@ export function snapshotFieldTypes(): ReadonlyMap<string, PluginFieldType> {
 export function restoreFieldTypes(
   snapshot: ReadonlyMap<string, PluginFieldType>
 ): void {
-  const map = store();
+  const map = liveStore();
   map.clear();
   for (const [type, definition] of snapshot) {
     map.set(type, definition);
