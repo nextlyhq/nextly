@@ -21,11 +21,15 @@ import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { getDialectTables } from "../../../database/index";
+import { buildAuditLogWriter } from "../../audit/audit-log-writer";
 import { eraseActorPersonalData } from "../../audit/erase-actor-personal-data";
 import { getSQLiteDrizzleKit } from "../../../database/drizzle-kit-lazy";
 import { SchemaRegistry } from "../../../database/schema-registry";
 import { splitStatements } from "../../../domains/schema/pipeline/sql-statement-utils";
-import { activityLog as activityLogSqlite } from "../../../schemas/audit/sqlite";
+import {
+  activityLog as activityLogSqlite,
+  auditLog as auditLogSqlite,
+} from "../../../schemas/audit/sqlite";
 import {
   roles as rolesSqlite,
   userRoles as userRolesSqlite,
@@ -61,6 +65,7 @@ async function ddl(): Promise<string[]> {
       roles: rolesSqlite,
       userRoles: userRolesSqlite,
       activityLog: activityLogSqlite,
+      auditLog: auditLogSqlite,
       // The mutation service records user.created / user.deleted to the outbox
       // whenever recording is active, and that gate is process-wide.
       nextlyEvents: eventsSqlite,
@@ -90,6 +95,7 @@ describe("deleting a user erases them from the activity log without erasing the 
   let adapter: ReturnType<typeof createSqliteAdapter>;
   let users: UserMutationService;
   let activity: ActivityLogService;
+  let auditWriter: ReturnType<typeof buildAuditLogWriter>;
 
   beforeAll(async () => {
     if (!existsSync(TEST_DB_DIR)) mkdirSync(TEST_DB_DIR, { recursive: true });
@@ -116,6 +122,12 @@ describe("deleting a user erases them from the activity log without erasing the 
 
     users = new UserMutationService(adapter, silentLogger);
     activity = new ActivityLogService(adapter, silentLogger);
+    // The production writer, resolved against this adapter, so the columns
+    // under test are the ones the auth handlers actually fill.
+    auditWriter = buildAuditLogWriter((name: string) => {
+      if (name === "adapter") return adapter;
+      throw new Error(`unexpected service request: ${name}`);
+    });
   });
 
   afterAll(async () => {
@@ -137,6 +149,100 @@ describe("deleting a user erases them from the activity log without erasing the 
       [String(userId)]
     );
   }
+
+  interface AuditRow {
+    kind: string;
+    actor_user_id: string | null;
+    ip_address: string | null;
+    user_agent: string | null;
+    identity_erased_at: number | null;
+  }
+
+  async function auditRowsFor(userId: string | number): Promise<AuditRow[]> {
+    return adapter.executeQuery<AuditRow>(
+      `SELECT kind, actor_user_id, ip_address, user_agent, identity_erased_at
+         FROM audit_log WHERE actor_user_id = ? ORDER BY kind`,
+      [String(userId)]
+    );
+  }
+
+  it("still deletes and erases when the auth log is absent entirely", async () => {
+    // Databases like this exist: the SQLite fallback bootstrap created a subset
+    // of the core tables, and nothing repairs an existing one. A missing auth
+    // log must not fail the deletion, and — the part worth pinning — must not
+    // suppress the activity erasure either, which is what asking about the two
+    // tables together would have done.
+    const actor = await users.createLocalUser({
+      email: "no-audit-table@test.local",
+      name: "No Audit",
+      password: "TestPassword123!",
+      isActive: true,
+    });
+    await activity.logActivity({
+      userId: String(actor.id),
+      userName: "No Audit",
+      userEmail: "no-audit-table@test.local",
+      action: "create",
+      collection: "posts",
+      entryId: "p-1",
+      entryTitle: "Kept",
+    });
+    await adapter.executeQuery(
+      "ALTER TABLE audit_log RENAME TO audit_log_gone"
+    );
+
+    try {
+      await users.deleteUser(actor.id);
+
+      const after = await rowsFor(actor.id);
+      expect(after).toHaveLength(1);
+      // The activity erasure still ran, despite the other table being missing.
+      expect(after[0].user_name).toBeNull();
+      expect(after[0].identity_erased_at).not.toBeNull();
+    } finally {
+      await adapter.executeQuery(
+        "ALTER TABLE audit_log_gone RENAME TO audit_log"
+      );
+    }
+  });
+
+  it("scrubs the request identifiers a deleted actor left in the auth log", async () => {
+    // The auth log carries the two fields that identify a person by their
+    // request rather than by their name: the address they connected from and
+    // the client they used. Deleting the account has to remove those the same
+    // way it removes a name, while leaving the security FACT — what happened,
+    // to whom, when — in place.
+    const actor = await users.createLocalUser({
+      email: "audit-erasure@test.local",
+      name: "Audit Actor",
+      password: "TestPassword123!",
+      isActive: true,
+    });
+
+    await auditWriter.write({
+      kind: "password-changed",
+      actorUserId: String(actor.id),
+      ipAddress: "203.0.113.7",
+      userAgent: "Mozilla/5.0 (test)",
+    });
+
+    const before = await auditRowsFor(actor.id);
+    expect(before).toHaveLength(1);
+    expect(before[0].ip_address).toBe("203.0.113.7");
+    expect(before[0].identity_erased_at).toBeNull();
+
+    await users.deleteUser(actor.id);
+
+    const after = await auditRowsFor(actor.id);
+    // The record survives, still attributed and still saying what happened.
+    expect(after).toHaveLength(1);
+    expect(after[0].kind).toBe("password-changed");
+    expect(after[0].actor_user_id).toBe(String(actor.id));
+    // The person is gone from it.
+    expect(after[0].ip_address).toBeNull();
+    expect(after[0].user_agent).toBeNull();
+    expect(after[0].identity_erased_at).not.toBeNull();
+  });
 
   it("keeps the record and scrubs the person", async () => {
     const author = await users.createLocalUser({

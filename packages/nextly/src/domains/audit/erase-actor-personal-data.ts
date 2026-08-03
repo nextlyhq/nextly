@@ -42,10 +42,16 @@ export interface ErasureCapableDb {
 
 /** The audit tables an erasure touches, as the dialect bundle exposes them. */
 export interface ErasableAuditTables {
-  activityLog: Table & {
+  activityLog?: Table & {
     userId: Column;
     userName: Column;
     userEmail: Column;
+    identityErasedAt: Column;
+  };
+  auditLog?: Table & {
+    actorUserId: Column;
+    ipAddress: Column;
+    userAgent: Column;
     identityErasedAt: Column;
   };
 }
@@ -73,33 +79,74 @@ export async function eraseActorPersonalData(
   userId: string,
   erasedAt: Date
 ): Promise<void> {
-  const { activityLog } = tables;
-  await db
-    .update(activityLog)
-    .set({
-      // NULL is the erased state. `identityErasedAt` is what distinguishes it
-      // from a row that simply never carried a name, and it records when the
-      // erasure happened, which is the evidence an erasure request needs. On
-      // this path that is also when the account was deleted, because it runs
-      // inside that transaction.
-      userName: null,
-      userEmail: null,
-      identityErasedAt: erasedAt,
-    })
-    .where(
-      and(
-        eq(activityLog.userId, userId),
-        // Rows already erased are left exactly as they are. This runs more than
-        // once per deletion — once inside the transaction and once after it
-        // commits, to catch an entry that landed in between — and without this
-        // the second pass would rewrite an actor's whole retained history, lock
-        // it again, and move every stamp forward to a later time than the
-        // erasure it actually records.
-        or(
-          isNotNull(activityLog.userName),
-          isNotNull(activityLog.userEmail),
-          isNull(activityLog.identityErasedAt)
+  const { activityLog, auditLog } = tables;
+  // Each surface is erased only when the caller supplied it. A database can
+  // carry one table and not the other, and the caller decides that per table so
+  // a missing one cannot suppress the erasure of the one that is present.
+  if (activityLog) {
+    await db
+      .update(activityLog)
+      .set({
+        // NULL is the erased state. `identityErasedAt` is what distinguishes it
+        // from a row that simply never carried a name, and it records when the
+        // erasure happened, which is the evidence an erasure request needs. On
+        // this path that is also when the account was deleted, because it runs
+        // inside that transaction.
+        userName: null,
+        userEmail: null,
+        identityErasedAt: erasedAt,
+      })
+      .where(
+        and(
+          eq(activityLog.userId, userId),
+          // Rows already erased are left exactly as they are. This runs more than
+          // once per deletion — once inside the transaction and once after it
+          // commits, to catch an entry that landed in between — and without this
+          // the second pass would rewrite an actor's whole retained history, lock
+          // it again, and move every stamp forward to a later time than the
+          // erasure it actually records.
+          or(
+            isNotNull(activityLog.userName),
+            isNotNull(activityLog.userEmail),
+            isNull(activityLog.identityErasedAt)
+          )
         )
-      )
-    );
+      );
+  }
+
+  // The auth log identifies a person by their REQUEST rather than their name:
+  // the address they connected from and the client they used. Those are erased
+  // for the same reason, while `kind`, the actor and target references, and the
+  // timestamp stay — that is the security fact, and it is what a retained trail
+  // is for.
+  //
+  // Keyed on the ACTOR only. `target_user_id` names who an action was performed
+  // ON, and the address on such a row belongs to whoever performed it, so
+  // erasing by target would scrub a different person's data and leave the
+  // subject's own untouched.
+  //
+  // Rows the deleted account produced WITHOUT attribution — a failed login, a
+  // rejected CSRF — are out of reach here by construction, because those are
+  // recorded with no actor precisely so a failure cannot reveal which account
+  // was reached. Nothing links them to a person, which is also why they are not
+  // erasable on request; retention is what bounds them.
+  if (auditLog) {
+    await db
+      .update(auditLog)
+      .set({
+        ipAddress: null,
+        userAgent: null,
+        identityErasedAt: erasedAt,
+      })
+      .where(
+        and(
+          eq(auditLog.actorUserId, userId),
+          or(
+            isNotNull(auditLog.ipAddress),
+            isNotNull(auditLog.userAgent),
+            isNull(auditLog.identityErasedAt)
+          )
+        )
+      );
+  }
 }

@@ -39,6 +39,14 @@ export const auditLog = pgTable(
     createdAt: timestamp("created_at", { withTimezone: false })
       .defaultNow()
       .notNull(),
+    // When this row's request identifiers were erased, and NULL while they
+    // were not. `ip_address` and `user_agent` are nullable for rows that
+    // never carried them, so a bare NULL cannot say whether a person was
+    // removed or was never recorded — which is the evidence an erasure
+    // request needs.
+    identityErasedAt: timestamp("identity_erased_at", {
+      withTimezone: false,
+    }),
   },
   t => [
     index("audit_log_kind_idx").on(t.kind),

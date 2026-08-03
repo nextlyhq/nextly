@@ -324,7 +324,8 @@ export class UserMutationService extends BaseService {
    * that would keep skipping the erasure for the life of the process after the
    * table appeared.
    */
-  private activityLogPresent = false;
+  /** Tables already confirmed to carry the erasure stamp, by table name. */
+  private readonly erasableTables = new Set<string>();
 
   /** Cached merged Zod schemas (lazy, rebuilt when merged fields are available) */
   private createSchema: typeof CreateLocalUserSchema;
@@ -417,12 +418,15 @@ export class UserMutationService extends BaseService {
    * cannot run answers `true`, so an unreadable catalogue leaves the erasure
    * in place and the deletion fails loudly instead of quietly skipping.
    */
-  private async activityLogSupportsErasure(): Promise<boolean> {
-    if (this.activityLogPresent) return true;
+  private async supportsErasure(
+    table: string,
+    whatIsLost: string
+  ): Promise<boolean> {
+    if (this.erasableTables.has(table)) return true;
 
     let tableExists: boolean;
     try {
-      tableExists = await this.adapter.tableExists("activity_log");
+      tableExists = await this.adapter.tableExists(table);
     } catch {
       return true;
     }
@@ -436,21 +440,19 @@ export class UserMutationService extends BaseService {
     // directly and propagates anything that goes wrong, so an unanswerable
     // question fails the deletion instead of silently skipping the erasure.
     const snapshot = await introspectLiveSnapshot(this.db, this.dialect, [
-      "activity_log",
+      table,
     ]);
-    const columns =
-      snapshot.tables.find(t => t.name === "activity_log")?.columns ?? [];
+    const columns = snapshot.tables.find(t => t.name === table)?.columns ?? [];
     if (!columns.some(c => c.name === ERASURE_STAMP_COLUMN)) {
       this.logger.warn(
-        `activity_log predates identity erasure (no ${ERASURE_STAMP_COLUMN} ` +
-          "column); deleting a user will not scrub their name and email from " +
-          "it, and the table's cascading key still removes their entries. Run " +
-          "`nextly migrate` to apply the core schema change."
+        `${table} predates identity erasure (no ${ERASURE_STAMP_COLUMN} ` +
+          `column); deleting a user will not scrub ${whatIsLost} from it. ` +
+          "Run `nextly migrate` to apply the core schema change."
       );
       return false;
     }
 
-    this.activityLogPresent = true;
+    this.erasableTables.add(table);
     return true;
   }
 
@@ -1339,7 +1341,22 @@ export class UserMutationService extends BaseService {
     // the SQLite fallback bootstrap in earlier releases created a subset of
     // the core tables, and neither first-run setup nor boot repairs an
     // existing database that is missing one — they only warn.
-    const activityLogExists = await this.activityLogSupportsErasure();
+    // Asked per table rather than once for all of them. A database can carry
+    // one and not the other — the SQLite fallback bootstrap created a subset of
+    // the core tables — and answering for the pair would let a missing auth log
+    // suppress the activity erasure, leaving behind exactly the names and
+    // emails the deletion exists to remove.
+    const auditTables = this.tables;
+    const erasableAuditTables = {
+      ...((await this.supportsErasure(
+        "activity_log",
+        "their name and email"
+      )) && { activityLog: auditTables.activityLog }),
+      ...((await this.supportsErasure(
+        "audit_log",
+        "the address and client they connected from"
+      )) && { auditLog: auditTables.auditLog }),
+    };
 
     // Delete user and related data in a single Drizzle transaction so that
     // partial deletes can't leave orphaned rows. The tx alias is a structural
@@ -1411,10 +1428,10 @@ export class UserMutationService extends BaseService {
         // still carrying the name and email of someone who asked to be erased.
         // Inside the transaction, so a failed erasure takes the deletion with
         // it rather than leaving the two out of step.
-        if (activityLogExists) {
+        if (Object.keys(erasableAuditTables).length > 0) {
           await eraseActorPersonalData(
             txDb,
-            this.tables,
+            erasableAuditTables,
             String(userId),
             new Date()
           );
@@ -1462,10 +1479,10 @@ export class UserMutationService extends BaseService {
     // exists. Erasing is idempotent, so a second pass over rows already erased
     // costs one indexed update and changes nothing.
     try {
-      if (activityLogExists) {
+      if (Object.keys(erasableAuditTables).length > 0) {
         await eraseActorPersonalData(
           this.db as Parameters<typeof eraseActorPersonalData>[0],
-          this.tables,
+          erasableAuditTables,
           String(userId),
           new Date()
         );

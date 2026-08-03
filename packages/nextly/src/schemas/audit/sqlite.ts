@@ -34,6 +34,12 @@ export const auditLog = sqliteTable(
     createdAt: integer("created_at", { mode: "timestamp" })
       .notNull()
       .$defaultFn(() => new Date()),
+    // When this row's request identifiers were erased, and NULL while they
+    // were not. `ip_address` and `user_agent` are nullable for rows that
+    // never carried them, so a bare NULL cannot say whether a person was
+    // removed or was never recorded — which is the evidence an erasure
+    // request needs.
+    identityErasedAt: integer("identity_erased_at", { mode: "timestamp" }),
   },
   t => [
     index("audit_log_kind_idx").on(t.kind),
