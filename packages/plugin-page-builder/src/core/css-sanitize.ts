@@ -37,13 +37,20 @@ const URL_SCHEME = /^\s*[a-z][a-z0-9+.-]*:/i;
  * `javascript:` and `data:` without naming them, which is the point — a
  * denylist has to predict the next dangerous scheme and this does not.
  *
- * The reason for refusing plain `https:` here, which is safe in a block's own
- * style value, is that custom CSS is the one place where an author controls the
- * SELECTOR as well as the URL. `input[value^="a"] { background: url(...) }`
+ * The reason for refusing plain `https:` here, where a block's own style value
+ * still allows it, is that custom CSS is the one place where an author controls
+ * the SELECTOR as well as the URL. `input[value^="a"] { background: url(...) }`
  * fires a request only when the selector matches, so a page full of them reads
- * a value out one character at a time. Structured style values cannot express a
- * selector, so the same URL is harmless there; it is the combination that
- * leaks, and this is where the combination is possible.
+ * a value out one character at a time.
+ *
+ * What this does NOT prevent is custom CSS modulating a request some other part
+ * of the page already makes. A block's `backgroundImage` may still be remote,
+ * the renderer emits it into the same stylesheet as this output, and a custom
+ * selector that suppresses it conditionally leaks by the request's absence
+ * while containing no URL for this to refuse. Closing that means either
+ * applying the same origin policy to structured style values or constraining
+ * the document with a Content-Security-Policy; neither is decidable here, since
+ * both halves are legitimate on their own and this function sees only one.
  */
 /**
  * The leading and trailing run the URL parser discards.

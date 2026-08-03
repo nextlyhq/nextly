@@ -29,9 +29,16 @@ declaration went and why, with a pointer to the media library.
 This closes a way of reading data off the page. A selector that matches only on
 a prefix, paired with a URL that fires a request when it matches, spells a value
 out one character at a time — `input[value^="a"] { background: url(...) }`,
-repeated. Custom CSS was the only surface where an author controlled both halves;
-a block's own style values cannot express a selector, so images set there are
-unaffected.
+repeated. Custom CSS is the only surface where an author writes both halves, so
+that is where the ban lands; a block's own style values still accept a remote
+image, because they cannot express a selector.
+
+The narrower thing this does not do, stated plainly rather than left implied:
+custom CSS can still modulate a request another part of the page already makes.
+A block background may be remote, and a custom selector that suppresses it
+conditionally leaks by the request's absence while containing no URL to refuse.
+Closing that needs the same origin policy applied to structured style values, or
+a Content-Security-Policy on the rendered document.
 
 Everything the sanitizer removes is now reported rather than dropped silently,
 including at-rules it does not support. A rule that disappears with nothing on
