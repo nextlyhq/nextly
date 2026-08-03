@@ -318,6 +318,28 @@ describe("generateEnv", () => {
     expect(envContent).toContain("DB_DIALECT=postgresql");
   });
 
+  it("enables development diagnostics in the generated env", async () => {
+    // Without this the feature exists and nobody finds it: an author hitting an
+    // error sees the generic public shape and has no reason to suspect there is
+    // a flag that would have named the cause. Setting it is safe in a deployed
+    // app because the gate also requires NODE_ENV to be development.
+    mockPathExists.mockResolvedValue(false as never);
+
+    await generateEnv("/test/project", {
+      type: "sqlite",
+      adapter: "@nextlyhq/adapter-sqlite",
+      databaseDriver: "better-sqlite3",
+      connectionUrl: "file:./nextly.db",
+      envExample: "file:./nextly.db",
+    });
+
+    // Both files, since a contributor working from .env.example should get the
+    // same experience as the person who ran the scaffold.
+    for (const [, content] of mockWriteFile.mock.calls) {
+      expect(content).toContain("NEXTLY_DEV_DIAGNOSTICS=1");
+    }
+  });
+
   it("should not include storage configuration", async () => {
     mockPathExists.mockResolvedValue(false as never);
 

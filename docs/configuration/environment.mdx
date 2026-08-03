@@ -30,6 +30,9 @@ NEXTLY_SECRET=change-me-generate-a-secure-secret
 # Application URL
 NEXT_PUBLIC_APP_URL=http://localhost:3000
 
+# Development diagnostics (development only)
+NEXTLY_DEV_DIAGNOSTICS=1
+
 # Storage (per-adapter — see "Storage" section below)
 ```
 
@@ -79,6 +82,47 @@ SQLITE_PATH=./dev.db
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `NODE_ENV` | No | `development` | Runtime environment: `development`, `production`, or `test`. Affects production-only checks below. |
+
+---
+
+## Development diagnostics
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `NEXTLY_DEV_DIAGNOSTICS` | No | — | Set to `1` to add a `_devDiagnostics` field to error responses, carrying the error's log context and the message of its underlying cause. Ignored unless `NODE_ENV` is `development`. |
+
+An error response is deliberately generic: it carries a code, a public message
+and a request id, and withholds the log context and the underlying cause so a
+response cannot disclose driver output, table names or internal paths. That is
+right for a deployed app and unhelpful while you are building, where the detail
+you need is exactly what was withheld.
+
+With this set, an error in development also carries:
+
+```json
+{
+  "error": {
+    "code": "INTERNAL_ERROR",
+    "message": "An unexpected error occurred.",
+    "requestId": "req_01HQ...",
+    "_devDiagnostics": {
+      "logContext": { "collectionName": "posts", "entryId": "abc123" },
+      "cause": "duplicate key value violates unique constraint posts_slug_key",
+      "flattened": [{ "code": "CONFLICT", "logContext": { "field": "slug" } }]
+    }
+  }
+}
+```
+
+`flattened` lists errors that were rebuilt on the way to the boundary, which is
+what makes an unexpected failure name itself instead of looking like every
+other one.
+
+**It cannot expose anything in production.** The gate requires two independent
+signals: `NODE_ENV` must be `development` **and** this flag must be `1`. One is
+not enough, because `nextly` ships pre-built and stays external to your build,
+so `NODE_ENV` is a runtime value a production deployment can carry by mistake.
+`create-nextly-app` sets the flag for you, and it is safe to leave set.
 
 ---
 
