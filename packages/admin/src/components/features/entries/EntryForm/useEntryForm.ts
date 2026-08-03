@@ -707,7 +707,10 @@ export function useEntryForm({
             );
             // Reset form to mark as clean after successful create
             form.reset(data);
-            onSuccess?.(result);
+            // The entry, not the envelope: the mutation now resolves to the
+            // whole response so the hook can report post-commit failures, and
+            // this callback's contract is the saved row.
+            onSuccess?.(result.item);
           } else {
             if (!entry?.id) {
               throw new Error("Entry ID is required for update");
@@ -718,7 +721,7 @@ export function useEntryForm({
             );
             // Reset form to mark as clean after successful update
             form.reset(data);
-            onSuccess?.(result);
+            onSuccess?.(result.item);
           }
         } catch (error) {
           // Server errors are automatically mapped to form fields via setError

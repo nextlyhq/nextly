@@ -21,14 +21,19 @@
  * @module errors/original-error
  */
 
-import type { NextlyError } from "./nextly-error";
-
 /** Where the pre-envelope error hides on a service result. */
 export const ORIGINAL_ERROR = Symbol.for("nextly.originalError");
 
+/**
+ * Any `Error`, not only a `NextlyError`.
+ *
+ * A raw driver rejection is the case where the chained cause is worth the most
+ * — it is the only thing that names the constraint or the connection failure —
+ * and it is exactly the shape that never reaches the typed branch.
+ */
 /** A result that may be carrying the error it was built from. */
 interface MaybeCarryingOriginal {
-  [ORIGINAL_ERROR]?: NextlyError;
+  [ORIGINAL_ERROR]?: Error;
 }
 
 /**
@@ -39,7 +44,7 @@ interface MaybeCarryingOriginal {
  */
 export function withOriginalError<T extends object>(
   result: T,
-  error: NextlyError
+  error: Error
 ): T {
   Object.defineProperty(result, ORIGINAL_ERROR, {
     value: error,
@@ -51,7 +56,7 @@ export function withOriginalError<T extends object>(
 }
 
 /** The error an envelope was built from, when it still has it. */
-export function originalErrorOf(result: unknown): NextlyError | undefined {
+export function originalErrorOf(result: unknown): Error | undefined {
   if (typeof result !== "object" || result === null) return undefined;
   return (result as MaybeCarryingOriginal)[ORIGINAL_ERROR];
 }

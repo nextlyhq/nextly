@@ -55,6 +55,7 @@ import {
   applyFieldReadAccess,
   applyFieldWriteAccess,
 } from "../../../shared/lib/field-level-registry";
+import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { resolveComponentSchemas, restoreVersion } from "../restore-version";
 
 const user = { id: "u1" };
@@ -255,6 +256,34 @@ describe("restoreVersion", () => {
       code: "NOT_FOUND",
     });
   });
+
+  // A failed restore has five ways to answer and only one of them ran through
+  // the shared converter, so the other four reached the caller naming nothing.
+  // Each outcome is checked for the failure underneath as well as its code.
+  it.each([
+    ["a denied write", 403, undefined, "NOT_FOUND"],
+    ["a missing document", 404, undefined, "NOT_FOUND"],
+    ["a collision", 409, undefined, "CONFLICT"],
+    ["a snapshot today's rules reject", 422, undefined, "VALIDATION_ERROR"],
+    ["a server fault", 500, undefined, "INTERNAL_ERROR"],
+    ["a typed failure", 429, "RATE_LIMITED", "RATE_LIMITED"],
+  ])(
+    "carries the update failure through %s",
+    async (_label, statusCode, code, expectedCode) => {
+      const original = new Error("connection terminated unexpectedly");
+      updateEntrySpy.mockResolvedValue({
+        success: false,
+        statusCode,
+        ...(code ? { code } : {}),
+        ...errorEnvelopeFields(original),
+      });
+
+      await expect(restoreVersion(base)).rejects.toMatchObject({
+        code: expectedCode,
+        cause: original,
+      });
+    }
+  );
 
   it("restores a Single through its own update path", async () => {
     await restoreVersion({ ...base, scopeKind: "single", slug: "settings" });

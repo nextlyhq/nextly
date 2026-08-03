@@ -56,6 +56,10 @@ import {
   parseServerErrorMessage,
 } from "@admin/lib/errors/error-mapping";
 import {
+  toastMutationResult,
+  type MutationResult,
+} from "@admin/lib/mutation-warnings";
+import {
   entryApi,
   entryKeys,
   type UpdateEntryPayload,
@@ -242,7 +246,14 @@ export function useUpdateEntry<
     draft,
   });
 
-  return useMutation<T, Error, UpdateEntryPayload, UpdateContext<T>>({
+  // The mutation resolves to the whole envelope so the success path can report
+  // what failed after the row committed; consumers still receive the entry.
+  return useMutation<
+    MutationResult<T>,
+    Error,
+    UpdateEntryPayload,
+    UpdateContext<T>
+  >({
     mutationFn: async (data: UpdateEntryPayload) => {
       const result = await entryApi.update(
         collectionSlug,
@@ -250,7 +261,7 @@ export function useUpdateEntry<
         data,
         locale ? { locale, fallbackLocale } : undefined
       );
-      return result as T;
+      return result as MutationResult<T>;
     },
 
     // Optimistic update: immediately update cache before server responds
@@ -305,7 +316,8 @@ export function useUpdateEntry<
     },
 
     // On success, invalidate queries to ensure fresh data
-    onSuccess: data => {
+    onSuccess: result => {
+      const data = result.item;
       // Write the server's response into the detail cache the editor reads, so
       // fields it derives server-side are shown at once rather than only after
       // the invalidation below refetches (which may be slow or fail). The
@@ -345,7 +357,10 @@ export function useUpdateEntry<
       void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
 
       if (showToast) {
-        toast.success("Entry updated successfully");
+        // The row IS saved even when a post-commit hook failed, so this stays a
+        // success and names the follow-up failure beside it. Reporting an error
+        // would have the user repeat a write that already took effect.
+        toastMutationResult("Entry updated successfully", result.warnings);
       }
 
       onSuccess?.(data);

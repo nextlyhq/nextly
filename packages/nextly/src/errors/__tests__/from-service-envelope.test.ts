@@ -6,9 +6,11 @@
 
 import { describe, expect, it } from "vitest";
 
+import { originalErrorOf } from "../original-error";
+
 import {
   errorFromServiceEnvelope,
-  typedErrorEnvelopeFields,
+  errorEnvelopeFields,
 } from "../from-service-envelope";
 import { NextlyError } from "../nextly-error";
 
@@ -60,12 +62,12 @@ describe("errorFromServiceEnvelope", () => {
   });
 });
 
-describe("typedErrorEnvelopeFields", () => {
+describe("errorEnvelopeFields", () => {
   it("round-trips a typed error through the envelope and back", () => {
     // The two halves are only useful together: a converter can rebuild nothing
     // the catch did not record.
     const original = NextlyError.rateLimited({ retryAfterSeconds: 15 });
-    const fields = typedErrorEnvelopeFields(original);
+    const fields = errorEnvelopeFields(original);
     expect(fields).not.toBeNull();
 
     const rebuilt = errorFromServiceEnvelope(fields!);
@@ -75,8 +77,17 @@ describe("typedErrorEnvelopeFields", () => {
     expect(rebuilt.publicData).toEqual(original.publicData);
   });
 
-  it("reports nothing for an untyped error, so callers keep their fallback", () => {
-    expect(typedErrorEnvelopeFields(new Error("boom"))).toBeNull();
+  it("lifts no fields from an untyped error, but still carries it", () => {
+    // The contract is now "always spreadable". An untyped error has no code,
+    // status or message worth lifting — inventing one would have the boundary
+    // rebuild a fabricated error — so nothing is lifted. It leaves with the
+    // provenance alone, which is what a raw driver rejection has to offer and
+    // what the typed-only guard used to discard.
+    const raw = new Error("boom");
+    const fields = errorEnvelopeFields(raw);
+
+    expect(Object.keys(fields)).toEqual([]);
+    expect(originalErrorOf(fields)).toBe(raw);
   });
 });
 

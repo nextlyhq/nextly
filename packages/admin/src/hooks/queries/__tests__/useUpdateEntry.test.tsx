@@ -60,11 +60,15 @@ describe("useUpdateEntry", () => {
     // Cached without the flag, as the status-less optimistic merge leaves it.
     client.setQueryData(key, { id: "e1", status: "published", title: "old" });
     // The server's response to a status-less save DOES carry the flag.
+    // Wrapped in the mutation envelope the client returns, so the double is
+    // not looser than the thing it stands in for.
     updateSpy.mockResolvedValue({
-      id: "e1",
-      status: "published",
-      title: "new",
-      _isWorkingDraft: true,
+      item: {
+        id: "e1",
+        status: "published",
+        title: "new",
+        _isWorkingDraft: true,
+      },
     });
 
     const { result } = renderHook(
@@ -104,9 +108,7 @@ describe("useUpdateEntry", () => {
     });
     // Publishing returns the live document WITHOUT the synthetic flag.
     updateSpy.mockResolvedValue({
-      id: "e1",
-      status: "published",
-      title: "new",
+      item: { id: "e1", status: "published", title: "new" },
     });
 
     const { result } = renderHook(
