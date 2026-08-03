@@ -21,7 +21,9 @@ import {
 } from "../../domains/schema/services/field-column-descriptor";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import { SYSTEM_SCHEMA_VERSION } from "../../domains/schema/services/schema-hash";
+import { validateCollectionConfig } from "../../collections/config/validate-config";
 import { validateFieldGroupConfig } from "../../field-groups/config/validate-field-group";
+import { validateSingleConfig } from "../../singles/config/validate-single";
 import type { FieldGroupConfig } from "../../field-groups/config/types";
 import { uiSchemaFieldSchema } from "../../schemas/_zod/ui-schema";
 
@@ -134,9 +136,16 @@ describe("reservation projections", () => {
     );
   });
 
-  it("refuses the owner column and the marker in a code-first collection", () => {
+  it("refuses every unconditionally injected column in a code-first collection", () => {
+    // Not `title`, `slug` or `status`: those step aside for an author's own field, or are taken up
+    // by the lifecycle, so declaring one is supported rather than a collision.
     expect(sorted(reservedSystemFieldNames("collectionConfig"))).toEqual(
       sorted([
+        "id",
+        "created_at",
+        "createdAt",
+        "updated_at",
+        "updatedAt",
         "created_by",
         "createdBy",
         "first_published_at",
@@ -145,10 +154,18 @@ describe("reservation projections", () => {
     );
   });
 
-  it("refuses only the marker in a code-first single", () => {
-    // A single gets no owner column, so `created_by` stays a legal field name there.
+  it("refuses the same set in a code-first single, minus the owner column", () => {
+    // A single's table gets no owner column, so `created_by` stays a legal field name there.
     expect(sorted(reservedSystemFieldNames("singleConfig"))).toEqual(
-      sorted(["first_published_at", "firstPublishedAt"])
+      sorted([
+        "id",
+        "created_at",
+        "createdAt",
+        "updated_at",
+        "updatedAt",
+        "first_published_at",
+        "firstPublishedAt",
+      ])
     );
   });
 
@@ -508,6 +525,76 @@ describe("the validators actually refuse what the projection lists", () => {
     // reports the collision where the name is chosen instead of as a database error.
     expect(fieldNameSchema.safeParse("createdAt").success).toBe(false);
     expect(fieldNameSchema.safeParse("updatedAt").success).toBe(false);
+  });
+});
+
+describe("code-first collections and singles", () => {
+  // These validators run when the config is read, which is at startup. What they refuse was
+  // measured against the schema pipeline rather than chosen: a name is reserved exactly when the
+  // desired table or the runtime schema would end up with the column twice.
+
+  const collection = (name: string) =>
+    (
+      validateCollectionConfig({
+        slug: "probe",
+        fields: [{ name, type: "text" }],
+      } as never).errors ?? []
+    ).filter(e => e.code === "FIELD_NAME_RESERVED");
+
+  const single = (name: string) =>
+    (
+      validateSingleConfig({
+        slug: "probe",
+        fields: [{ name, type: "text" }],
+      } as never).errors ?? []
+    ).filter(e => e.code === "FIELD_NAME_RESERVED");
+
+  it("refuses every spelling that becomes an injected column", () => {
+    // Through the conversion, so a casing nobody listed is caught too.
+    for (const name of [
+      "id",
+      "Id",
+      "createdAt",
+      "created_at",
+      "CreatedAt",
+      "updatedAt",
+      "updated_at",
+      "firstPublishedAt",
+    ]) {
+      expect({ [`collection.${name}`]: collection(name).length }).toEqual({
+        [`collection.${name}`]: 1,
+      });
+      expect({ [`single.${name}`]: single(name).length }).toEqual({
+        [`single.${name}`]: 1,
+      });
+    }
+  });
+
+  it("refuses the owner column on a collection and allows it on a single", () => {
+    // The case `appliesTo` exists for: a single's table has no owner column, so the name is an
+    // ordinary one there. Measured — a single declaring it produces no duplicate.
+    for (const name of ["createdBy", "created_by"]) {
+      expect({ [`collection.${name}`]: collection(name).length }).toEqual({
+        [`collection.${name}`]: 1,
+      });
+      expect({ [`single.${name}`]: single(name).length }).toEqual({
+        [`single.${name}`]: 0,
+      });
+    }
+  });
+
+  it("still accepts the columns an author is meant to be able to declare", () => {
+    // `title` and `slug` step aside for an author's own field by design, and a `status` field is
+    // taken up by the lifecycle rather than duplicated. Reserving any of them would refuse a
+    // configuration that works, which is the failure mode this whole change has to avoid.
+    for (const name of ["title", "slug", "status", "headline", "publishedAt"]) {
+      expect({ [`collection.${name}`]: collection(name).length }).toEqual({
+        [`collection.${name}`]: 0,
+      });
+      expect({ [`single.${name}`]: single(name).length }).toEqual({
+        [`single.${name}`]: 0,
+      });
+    }
   });
 });
 

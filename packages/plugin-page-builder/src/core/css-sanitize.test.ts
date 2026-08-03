@@ -30,14 +30,76 @@ describe("sanitizeCustomCss", () => {
     expect(out).toContain(`.${SCOPE} .a`);
   });
 
-  it("strips raw </style> and <script> tags", () => {
+  it("cannot end the style element it is emitted into", () => {
+    // The property that matters, stated directly. An earlier version of this
+    // test asserted that the text "<script" was absent, which described how the
+    // sanitizer happened to work rather than what it guarantees: it stripped
+    // four literal tag spellings and did nothing about `<img onerror=…>`.
+    //
+    // Nothing can close the element now, so markup left in the text is inert:
+    // inside a `<style>`, only `</style` ends the raw-text run. `<` is not
+    // escaped wholesale because `@media (400px<width)` is valid CSS and
+    // escaping there would break the query.
     const out = sanitizeCustomCss(
       ".hero { color: red } </style><script>alert(1)</script>",
       SCOPE
     );
     expect(out).not.toContain("</style");
-    expect(out).not.toContain("<script");
+    expect(out).not.toContain("</script");
     expect(out).toContain(`.${SCOPE} .hero`);
+  });
+
+  it("escapes markup an author hid behind a CSS escape", () => {
+    // `csstree.generate` decodes escapes, so this reaches the page as literal
+    // `</style>` even though the source contains no markup. Filtering the input
+    // cannot see it; only the generated text can.
+    const out = sanitizeCustomCss(
+      `.a { content: "\\3c /style>\\3c img src=x onerror=alert(1)>" }`,
+      SCOPE
+    );
+    expect(out).not.toContain("</style");
+    expect(out).toContain("\\3c /style>");
+  });
+
+  it("keeps an escaped sequence meaning the same thing", () => {
+    // `\3c` and `<` are one character to a CSS parser, so the author still gets
+    // what they wrote; only the bytes the HTML parser sees change.
+    expect(sanitizeCustomCss(`.a { content: "</div>" }`, SCOPE)).toContain(
+      `content:"\\3c /div>"`
+    );
+  });
+
+  it("leaves the angle brackets that valid CSS needs", () => {
+    expect(sanitizeCustomCss(".a > .b { color: red }", SCOPE)).toContain(
+      ".b{color:red}"
+    );
+    const range = sanitizeCustomCss(
+      "@media (400px < width < 800px) { .a { color: red } }",
+      SCOPE
+    );
+    expect(range).toContain("400px < width < 800px");
+  });
+
+  it("scopes a rule without rewriting what is inside a pseudo-class", () => {
+    // `:not()`, `:is()` and `:has()` hold selectors of their own. Prefixing
+    // those asks a different question than the author did: `.a:has(> .b)`
+    // scoped inside becomes `.a:has(.scope > .b)`, which no longer means "has a
+    // child .b".
+    expect(sanitizeCustomCss(".a:not(.b) { color: red }", SCOPE)).toBe(
+      `.${SCOPE} .a:not(.b){color:red}`
+    );
+    expect(sanitizeCustomCss(".a:is(.b, .c) { color: red }", SCOPE)).toBe(
+      `.${SCOPE} .a:is(.b,.c){color:red}`
+    );
+    expect(sanitizeCustomCss(".a:has(> .b) { color: red }", SCOPE)).toBe(
+      `.${SCOPE} .a:has(>.b){color:red}`
+    );
+  });
+
+  it("scopes every part of a selector list", () => {
+    expect(sanitizeCustomCss(".a, .b { color: red }", SCOPE)).toBe(
+      `.${SCOPE} .a,.${SCOPE} .b{color:red}`
+    );
   });
 
   it("preserves @media and scopes the rules inside it", () => {
