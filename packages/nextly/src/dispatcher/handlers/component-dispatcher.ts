@@ -376,6 +376,15 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
       // preview/apply handlers below. Their own rules cover names and shapes;
       // what none of them can judge is a plugin type's own options, so an
       // unsatisfiable declaration would be stored and fail on every write.
+      // Refused before any DDL runs, for the same reason as the single create path: the
+      // authoritative duplicate check in `registerComponent` happens after the table has been
+      // created, so a create aimed at an existing slug altered that field group's live table first.
+      const slugTaken = await svc.registry.getComponentBySlug(b.slug);
+      if (slugTaken) {
+        throw NextlyError.duplicate({
+          logContext: { reason: "component-slug-conflict", slug: b.slug },
+        });
+      }
       assertValidPluginFieldOptions(b.fields);
 
       const isLocalized = b.localized === true;
@@ -659,6 +668,8 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         // from the component's main table (they live in comp_<slug>_locales, reconciled
         // out-of-band below) — mirrors the collection/single apply path.
         localized: (component as { localized?: boolean }).localized === true,
+        // Authored in the Schema Builder: this is the Builder's own save path.
+        builderOwned: true,
       };
 
       const pipelinePreview = await previewDesiredSchema({
@@ -783,6 +794,8 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         // from the component's main table (they live in comp_<slug>_locales, reconciled
         // out-of-band below) — mirrors the collection/single apply path.
         localized: isLocalized,
+        // Authored in the Schema Builder: this is the Builder's own save path.
+        builderOwned: true,
       };
 
       const promptDispatcher = new BrowserPromptDispatcher(

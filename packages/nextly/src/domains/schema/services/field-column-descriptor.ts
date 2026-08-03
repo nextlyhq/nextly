@@ -215,12 +215,13 @@ export function getColumnDescriptor(
         }
       : undefined;
 
+  const length = lengthForKind(kind);
+
   const dialectType = renderDialectType(kind, dialect, {
-    length: undefined,
+    length,
     precision: decimal?.precision,
     scale: decimal?.scale,
   });
-  const length = lengthForKind(kind);
 
   return {
     name,
@@ -244,6 +245,15 @@ function classifyFieldKind(field: FieldDefinition): ColumnKind {
 
   switch (field.type) {
     case "text":
+      // A text field may state its own width, and only this type may: an email, a password and a
+      // select value are bounded by what they hold, while free text is bounded by nothing.
+      //
+      // Absent, the answer stays what it has always been for this path. The signal exists so a
+      // caller that KNOWS the field is unbounded can say so instead of discovering the ceiling
+      // when a paste is rejected — on MySQL the two render 255 characters apart.
+      if (field.options?.variant === "long") return "longText";
+      return "text";
+
     case "email":
     case "password":
     case "select":
@@ -386,6 +396,11 @@ function renderDialectType(
  * dialect-token rendering and the runtime Drizzle builder.
  */
 function lengthForKind(kind: ColumnKind): number | undefined {
+  // A width the field declares is deliberately NOT read here. `normalize-type.ts` strips the
+  // modifier before the diff compares, so a bounded column's width is invisible to convergence:
+  // rendering a declared width would size a column correctly on creation and then silently ignore
+  // every later edit to it, leaving writes to fail against a column the stored limit says is wide
+  // enough. Resizing needs the diff to compare widths first.
   if (kind === "text") return 255;
   if (kind === "varchar") return 255;
   if (kind === "fkSingle") return 36;

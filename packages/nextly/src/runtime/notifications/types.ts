@@ -8,6 +8,7 @@
 export type MigrationScope =
   | { kind: "collection"; slug: string }
   | { kind: "single"; slug: string }
+  | { kind: "component"; slug: string }
   | { kind: "global"; slug?: string }
   | { kind: "fresh-push" };
 

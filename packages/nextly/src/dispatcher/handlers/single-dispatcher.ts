@@ -633,6 +633,16 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // preview/apply handlers. It keeps its own field rules, but nothing here
       // can judge a plugin type's own options, so an unsatisfiable declaration
       // would be stored and then fail on every write to the single.
+      // Refused before any DDL runs, not after. `registerSingle` makes the authoritative check
+      // inside its own transaction, but that happens once the table has already been created or
+      // altered — so a create aimed at a slug that exists changed that single's live table and was
+      // only then rejected, leaving a table altered for a request that failed.
+      const slugTaken = await svc.registry.getSingleBySlug(b.slug);
+      if (slugTaken) {
+        throw NextlyError.duplicate({
+          logContext: { reason: "single-slug-conflict", slug: b.slug },
+        });
+      }
       assertValidPluginFieldOptions(b.fields);
 
       const schemaHash = calculateSchemaHash(b.fields);
@@ -1482,6 +1492,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // i18n: carry localized so the preview omits translatable columns from the
         // single's main table (mirrors the apply path).
         localized: (single as { localized?: boolean }).localized === true,
+        // Authored in the Schema Builder: this is the Builder's own save path.
+        builderOwned: true,
       };
 
       const pipelinePreview = await previewDesiredSchema({
@@ -1597,6 +1609,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // from the single's main table (they live in single_<slug>_locales, reconciled
         // out-of-band below) — mirrors the collection apply path.
         localized: isLocalized,
+        // Authored in the Schema Builder: this is the Builder's own save path.
+        builderOwned: true,
       };
 
       const promptDispatcher = new BrowserPromptDispatcher(
