@@ -345,41 +345,171 @@ describe("columnsDeclaredBy", () => {
   });
 });
 
-describe("the config factories inject on the column too", () => {
-  it("does not add a system field beside an author's capitalised one", () => {
-    // `defineCollection` prepends `title`/`slug` when the author has not declared them, and it
-    // decided that by exact name. An author writing `Title` owns the same column, so the injected
-    // field arrived beside it and the table declared `title` twice — it could not be created at
-    // all. Validation runs before the injection, so nothing downstream caught it.
-    for (const declared of ["Title", "Slug"]) {
-      const collection = defineCollection({
+describe("a system column may be taken over only under its own name", () => {
+  function codes(result: { errors?: Array<{ code: string }> }, code: string) {
+    return (result.errors ?? []).filter(e => e.code === code).length;
+  }
+
+  const collection = (fields: unknown[], extra: object = {}) =>
+    validateCollectionConfig({
+      slug: "posts",
+      labels: { singular: "Post", plural: "Posts" },
+      fields,
+      ...extra,
+    } as never);
+  const single = (fields: unknown[], extra: object = {}) =>
+    validateSingleConfig({
+      slug: "home",
+      label: "Home",
+      fields,
+      ...extra,
+    } as never);
+
+  it("accepts the exact name, so the documented takeover still works", () => {
+    // `title`/`slug` stepping aside for an author's own field is a feature, not an accident, and
+    // the blog template relies on it. Only the ALIAS is refused.
+    for (const name of ["title", "slug"]) {
+      expect({
+        [`collection.${name}`]: codes(
+          collection([{ type: "text", name }]),
+          "FIELD_NAME_SYSTEM_ALIAS"
+        ),
+        [`single.${name}`]: codes(
+          single([{ type: "text", name }]),
+          "FIELD_NAME_SYSTEM_ALIAS"
+        ),
+      }).toEqual({ [`collection.${name}`]: 0, [`single.${name}`]: 0 });
+    }
+  });
+
+  it("refuses a spelling that only reaches the column after conversion", () => {
+    // `Title` is the same column but a different identity in every payload — the runtime table's
+    // property key, the keys a mutation generates, the response, the generated types. Two names
+    // for one column means the generated value overwrites the author's, silently.
+    for (const name of ["Title", "Slug"]) {
+      expect({
+        [`collection.${name}`]: codes(
+          collection([{ type: "text", name }]),
+          "FIELD_NAME_SYSTEM_ALIAS"
+        ),
+        [`single.${name}`]: codes(
+          single([{ type: "text", name }]),
+          "FIELD_NAME_SYSTEM_ALIAS"
+        ),
+      }).toEqual({ [`collection.${name}`]: 1, [`single.${name}`]: 1 });
+    }
+  });
+
+  it("names the spelling that would work", () => {
+    // The error has to be actionable: an author who wrote `Title` needs to be told `title`.
+    const message = (collection([{ type: "text", name: "Title" }]).errors ?? [])
+      .filter(e => e.code === "FIELD_NAME_SYSTEM_ALIAS")
+      .map(e => e.message)
+      .join("");
+
+    expect(message).toContain("'Title'");
+    expect(message).toContain("'title'");
+  });
+
+  it("leaves an ordinary name alone", () => {
+    // The mirror, so the rule cannot be satisfied by refusing everything capitalised.
+    expect(
+      codes(
+        collection([{ type: "text", name: "Headline" }]),
+        "FIELD_NAME_SYSTEM_ALIAS"
+      )
+    ).toBe(0);
+  });
+});
+
+describe("the publish lifecycle owns its columns while it is on", () => {
+  function lifecycleErrors(fields: unknown[], status: boolean) {
+    return (
+      validateCollectionConfig({
         slug: "posts",
         labels: { singular: "Post", plural: "Posts" },
-        fields: [{ type: "text", name: declared }],
-      } as never) as { fields: Array<{ name?: string }> };
-      const single = defineSingle({
-        slug: "home",
-        label: "Home",
-        fields: [{ type: "text", name: declared }],
-      } as never) as { fields: Array<{ name?: string }> };
+        status,
+        fields,
+      } as never).errors ?? []
+    ).filter(e => e.code === "FIELD_NAME_LIFECYCLE_RESERVED").length;
+  }
 
-      for (const [label, config] of [
-        ["collection", collection],
-        ["single", single],
-      ] as const) {
-        const columns = config.fields
-          .map(field => (typeof field.name === "string" ? field.name : ""))
-          .filter(Boolean)
-          .map(toSnakeCase);
-        const duplicated = columns.filter(
-          (column, index) => columns.indexOf(column) !== index
-        );
+  it("refuses a status field only when the lifecycle is enabled", () => {
+    // Measured across all three generators: with the lifecycle ON a `status` field duplicates the
+    // column in the created table AND the diff's desired state, so the table cannot be created.
+    // With it OFF every generator is clean and `status` is an ordinary, common field name.
+    expect({
+      "status.on": lifecycleErrors([{ type: "text", name: "status" }], true),
+      "status.off": lifecycleErrors([{ type: "text", name: "status" }], false),
+      "Status.on": lifecycleErrors([{ type: "text", name: "Status" }], true),
+      "Status.off": lifecycleErrors([{ type: "text", name: "Status" }], false),
+    }).toEqual({
+      "status.on": 1,
+      "status.off": 0,
+      "Status.on": 1,
+      "Status.off": 0,
+    });
+  });
 
-        expect({ [`${label}.${declared}`]: duplicated }).toEqual({
-          [`${label}.${declared}`]: [],
-        });
-      }
+  it("leaves other fields alone with the lifecycle on", () => {
+    // The mirror: enabling the lifecycle must not refuse an ordinary schema.
+    expect(
+      lifecycleErrors(
+        [
+          { type: "text", name: "headline" },
+          { type: "text", name: "body" },
+        ],
+        true
+      )
+    ).toBe(0);
+  });
+});
+
+describe("the config factories inject on the column too", () => {
+  it("refuses the capitalised alias before the injection can duplicate it", () => {
+    // The factories prepend `title`/`slug` when the author has not declared them. An author
+    // writing `Title` owns the same column, so the injected field arrived beside it and the table
+    // declared `title` twice. That is now refused at validation, which runs first, so the
+    // duplicate can no longer be constructed at all.
+    for (const declared of ["Title", "Slug"]) {
+      expect(() =>
+        defineCollection({
+          slug: "posts",
+          labels: { singular: "Post", plural: "Posts" },
+          fields: [{ type: "text", name: declared }],
+        } as never)
+      ).toThrow();
+      expect(() =>
+        defineSingle({
+          slug: "home",
+          label: "Home",
+          fields: [{ type: "text", name: declared }],
+        } as never)
+      ).toThrow();
     }
+  });
+
+  it("keys the injection on the column for names it does accept", () => {
+    // The factories still have to ask on the column rather than the spelling, because a
+    // column-less field named `Title` is legal and must NOT suppress the system one: its values
+    // live in its own table, so the table still needs `title`.
+    const collection = defineCollection({
+      slug: "posts",
+      labels: { singular: "Post", plural: "Posts" },
+      fields: [
+        { type: "component", name: "Title", component: "hero" },
+        { type: "text", name: "body" },
+      ],
+    } as never) as { fields: Array<{ name?: string }> };
+    const names = collection.fields.map(f => f.name);
+    const columns = names
+      .filter((n): n is string => typeof n === "string")
+      .map(toSnakeCase);
+
+    expect({
+      injectedTitle: names.includes("title"),
+      duplicates: columns.filter((c, i) => columns.indexOf(c) !== i),
+    }).toEqual({ injectedTitle: true, duplicates: ["title"] });
   });
 
   it("still injects the system field when the author declares neither", () => {

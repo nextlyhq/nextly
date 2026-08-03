@@ -28,7 +28,11 @@ import {
   fieldProducesColumn,
   toSnakeCase,
 } from "../../domains/schema/services/field-column-descriptor";
-import { isReservedSystemColumn } from "../../lib/system-columns";
+import {
+  isLifecycleSystemColumn,
+  isOwnableSystemColumn,
+  isReservedSystemColumn,
+} from "../../lib/system-columns";
 import { SYSTEM_RESOURCES } from "../../schemas/_zod/rbac";
 import {
   type BaseValidationError,
@@ -78,6 +82,11 @@ export type SingleValidationErrorCode =
   | "FIELD_NAME_DUPLICATE"
   // A field named after a column the system injects onto the Single's table.
   | "FIELD_NAME_RESERVED"
+  // A name that reaches a system column under a different spelling. Allowed only as the
+  // column's own name, because the declared name stays the identity in every payload.
+  | "FIELD_NAME_SYSTEM_ALIAS"
+  // A name that reaches a column the Draft/Published lifecycle owns, while it is enabled.
+  | "FIELD_NAME_LIFECYCLE_RESERVED"
   | "FIELD_TYPE_REQUIRED"
   | "FIELD_TYPE_INVALID"
   // A declared default the field's own rules reject.
@@ -295,7 +304,8 @@ function validateFieldsArray(
 function validateFields(
   fields: unknown,
   errors: SingleValidationError[],
-  singleLocalized = false
+  singleLocalized = false,
+  lifecycleEnabled = false
 ): void {
   const path = "fields";
 
@@ -344,6 +354,33 @@ function validateFields(
       });
       return;
     }
+    // Everything below is about columns, so a field that occupies none is exempt. A component or
+    // a many-to-many named `Title` takes over nothing: its values live in its own table and its
+    // payload key stays `Title`, distinct from the system field's `title`.
+    if (!fieldProducesColumn(candidate)) return;
+    // A field may take over `title` or `slug` — the documented "user wins" behaviour — but only
+    // under the column's own name. `Title` reaches the same column while staying a different
+    // identity everywhere the declared name is the key, so the two would write one column under
+    // two names and the generated value would overwrite the author's.
+    if (column !== name && isOwnableSystemColumn(column, "single")) {
+      errors.push({
+        path: `${path}[${index}].name`,
+        message: `Field name '${name}' becomes the system column '${column}'. Name the field '${column}' to replace that column, or choose a different name`,
+        code: "FIELD_NAME_SYSTEM_ALIAS",
+      });
+      return;
+    }
+    // The Draft/Published lifecycle owns its columns outright, so any name reaching them is a
+    // collision rather than a takeover. Only when the lifecycle is on — with it off these are
+    // ordinary names.
+    if (lifecycleEnabled && isLifecycleSystemColumn(column, "single")) {
+      errors.push({
+        path: `${path}[${index}].name`,
+        message: `Field name '${name}' becomes the column '${column}', which the Draft/Published lifecycle owns. Rename the field, or turn the lifecycle off`,
+        code: "FIELD_NAME_LIFECYCLE_RESERVED",
+      });
+      return;
+    }
     // Two names that reach one column cannot both be emitted, so the table could never be
     // created. Checked here rather than in the shared field-name rule because only this level has
     // columns at all: a repeater or group keeps its children inside a single JSON column, where
@@ -352,7 +389,6 @@ function validateFields(
     // Column-less field types are exempt for the same reason. A component and a many-to-many
     // relationship store their values in their own tables, keyed by the field's declared name, so
     // two of them whose names converge stay distinct and nothing is emitted twice.
-    if (!fieldProducesColumn(candidate)) return;
     const table = isFieldLocalized(
       candidate as unknown as Parameters<typeof isFieldLocalized>[0],
       singleLocalized
@@ -457,7 +493,8 @@ export function validateSingleConfig(
   validateFields(
     config.fields,
     errors,
-    (config as { localized?: boolean }).localized === true
+    (config as { localized?: boolean }).localized === true,
+    (config as { status?: boolean }).status === true
   );
 
   validateAccess(config.access, errors);
