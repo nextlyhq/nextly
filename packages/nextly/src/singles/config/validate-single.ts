@@ -23,7 +23,10 @@
 
 import { RESERVED_SLUGS } from "../../collections/config/validate-config";
 import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
-import { toSnakeCase } from "../../domains/schema/services/field-column-descriptor";
+import {
+  fieldProducesColumn,
+  toSnakeCase,
+} from "../../domains/schema/services/field-column-descriptor";
 import { isReservedSystemColumn } from "../../lib/system-columns";
 import { SYSTEM_RESOURCES } from "../../schemas/_zod/rbac";
 import {
@@ -319,7 +322,8 @@ function validateFields(
   const columnOwners = new Map<string, string>();
   fields.forEach((field, index) => {
     if (!field || typeof field !== "object") return;
-    const name = (field as Record<string, unknown>).name;
+    const candidate = field as Record<string, unknown>;
+    const name = candidate.name;
     if (typeof name !== "string") return;
     const column = toSnakeCase(name);
     if (isReservedSystemColumn(column, "singleConfig")) {
@@ -334,6 +338,11 @@ function validateFields(
     // created. Checked here rather than in the shared field-name rule because only this level has
     // columns at all: a repeater or group keeps its children inside a single JSON column, where
     // two names that convert alike are simply two keys.
+    //
+    // Column-less field types are exempt for the same reason. A component and a many-to-many
+    // relationship store their values in their own tables, keyed by the field's declared name, so
+    // two of them whose names converge stay distinct and nothing is emitted twice.
+    if (!fieldProducesColumn(candidate)) return;
     const owner = columnOwners.get(column);
     if (owner !== undefined) {
       errors.push({

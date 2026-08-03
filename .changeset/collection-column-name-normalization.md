@@ -31,6 +31,8 @@ Two decisions that depended on the field's declared name now use its column inst
 the conversion does not break configurations that work: a field named `Title` replaces the injected
 `title` column rather than colliding with it, and two fields whose names reach one column (such as
 `foo_bar` and `FooBar`) are reported as duplicates where the names are chosen instead of failing
-during schema application.
+during schema application. Field types that store their values in their own tables, such as a
+component or a many-to-many relationship, are exempt from that duplicate rule: they are keyed by the
+field's declared name, so two of them whose names converge stay distinct.
 
 Emitted SQL is unchanged for every field name the Schema Builder accepts.

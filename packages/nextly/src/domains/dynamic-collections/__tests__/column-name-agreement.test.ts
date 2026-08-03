@@ -14,10 +14,12 @@ import { describe, expect, it } from "vitest";
 
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import {
+  fieldProducesColumn,
   getColumnDescriptor,
   type SupportedDialect,
 } from "../../schema/services/field-column-descriptor";
 import { validateCollectionConfig } from "../../../collections/config/validate-config";
+import { validateSingleConfig } from "../../../singles/config/validate-single";
 import { DynamicCollectionSchemaService } from "../services/dynamic-collection-schema-service";
 
 /** Names that reach a column, including the shapes the Builder refuses but code paths allow. */
@@ -200,5 +202,117 @@ describe("two field names that reach one column", () => {
     expect(
       (result.errors ?? []).filter(e => e.code === "FIELD_NAME_DUPLICATE")
     ).toEqual([]);
+  });
+});
+
+describe("the duplicate-column rule and the generator agree on which fields have a column", () => {
+  it("exempts field types that store their values in their own tables", () => {
+    // A component and a many-to-many relationship are declared on the table but keep their values
+    // elsewhere, keyed by the field's declared name. Two of them whose names converge stay
+    // distinct, so refusing the pair would reject a configuration that works — the same mistake as
+    // applying the rule to nested fields, one level up.
+    const component = (name: string) => ({
+      name,
+      type: "component",
+      component: "hero",
+    });
+    const manyToMany = (name: string) => ({
+      name,
+      type: "relationship",
+      relationTo: "tags",
+      options: { relationTo: "tags", relationType: "manyToMany" },
+    });
+
+    const cases: Array<[string, unknown[]]> = [
+      ["two components", [component("foo_bar"), component("FooBar")]],
+      [
+        "component beside a text field",
+        [component("foo_bar"), { name: "FooBar", type: "text" }],
+      ],
+      ["two many-to-many", [manyToMany("foo_bar"), manyToMany("FooBar")]],
+    ];
+
+    for (const [label, fields] of cases) {
+      const collection = validateCollectionConfig({
+        slug: "probe",
+        fields,
+      } as never);
+      const single = validateSingleConfig({
+        slug: "probe",
+        fields,
+      } as never);
+
+      expect({
+        [`${label} (collection)`]: (collection.errors ?? []).filter(
+          e => e.code === "FIELD_NAME_DUPLICATE"
+        ),
+        [`${label} (single)`]: (single.errors ?? []).filter(
+          e => e.code === "FIELD_NAME_DUPLICATE"
+        ),
+      }).toEqual({
+        [`${label} (collection)`]: [],
+        [`${label} (single)`]: [],
+      });
+    }
+  });
+
+  it("does not exempt a field type it cannot recognise", () => {
+    // An unregistered type falls back to a text column, so the rule has to keep applying to it.
+    // Exempting the unknown case instead would let a plugin whose registration has not run yet
+    // slip a table past validation that the database then refuses.
+    const fields = [
+      { name: "foo_bar", type: "somePluginTypeNotRegisteredYet" },
+      { name: "FooBar", type: "somePluginTypeNotRegisteredYet" },
+    ];
+
+    const result = validateCollectionConfig({ slug: "probe", fields } as never);
+
+    expect(
+      (result.errors ?? []).filter(e => e.code === "FIELD_NAME_DUPLICATE")
+    ).toHaveLength(1);
+  });
+
+  it("says a field has a column exactly when the generator emits one", () => {
+    // The property the exemption depends on. If a new `return null` path appears in the descriptor
+    // without the predicate learning about it, the rule starts refusing a field that has no column
+    // again — which is the defect this describe block exists for.
+    const VARIANTS: Array<Record<string, unknown>> = [
+      {},
+      { required: true },
+      { hasMany: true },
+      { relationTo: "tags" },
+      { relationTo: ["tags", "cats"] },
+      { options: { relationType: "manyToMany" } },
+      { options: { relationType: "oneToMany" } },
+    ];
+    const TYPES = [
+      "text",
+      "number",
+      "checkbox",
+      "date",
+      "relationship",
+      "upload",
+      "repeater",
+      "group",
+      "json",
+      "component",
+      "aTypeNobodyRegistered",
+    ];
+
+    const disagreements: string[] = [];
+    for (const type of TYPES) {
+      for (const [index, variant] of VARIANTS.entries()) {
+        const field = { type, name: "probe", ...variant };
+        for (const dialect of DIALECTS) {
+          const emitsColumn =
+            getColumnDescriptor(field as FieldDefinition, dialect) !== null;
+          if (fieldProducesColumn(field) !== emitsColumn) {
+            disagreements.push(`${type}|v${index}|${dialect}`);
+          }
+        }
+      }
+    }
+
+    expect(disagreements).toEqual([]);
   });
 });
