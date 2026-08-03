@@ -283,23 +283,33 @@ function errorToServiceResult<T = unknown>(
   // The mapping is where a unique or FK violation gains the context that says
   // WHICH constraint; the envelope below drops it, so it is kept here too.
   recordFlattenedError(mapped);
+  // Both mapped branches carry the provenance too. A driver failure is the
+  // case where the chained cause is worth the most — it is the only place the
+  // constraint that actually rejected the write is named.
   if (mapped.code === "INTERNAL_ERROR") {
-    return {
-      success: false,
-      statusCode: fallback.statusCode ?? 500,
-      message: error instanceof Error ? error.message : fallback.defaultMessage,
-      data: null,
-    };
+    return withOriginalError(
+      {
+        success: false,
+        statusCode: fallback.statusCode ?? 500,
+        message:
+          error instanceof Error ? error.message : fallback.defaultMessage,
+        data: null,
+      },
+      mapped
+    );
   }
-  return {
-    success: false,
-    statusCode: mapped.statusCode,
-    // Same passthrough as the NextlyError branch: a unique-violation maps to
-    // DUPLICATE here, and the code keeps that distinction across the envelope.
-    code: mapped.code,
-    message: mapped.publicMessage,
-    data: null,
-  };
+  return withOriginalError(
+    {
+      success: false,
+      statusCode: mapped.statusCode,
+      // Same passthrough as the NextlyError branch: a unique-violation maps to
+      // DUPLICATE here, and the code keeps that distinction across the envelope.
+      code: mapped.code,
+      message: mapped.publicMessage,
+      data: null,
+    },
+    mapped
+  );
 }
 
 /**

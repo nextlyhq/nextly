@@ -11,6 +11,10 @@
 
 import { describe, expect, it } from "vitest";
 
+import {
+  errorFromServiceEnvelope,
+  typedErrorEnvelopeFields,
+} from "../from-service-envelope";
 import { NextlyError } from "../nextly-error";
 import {
   ORIGINAL_ERROR,
@@ -64,5 +68,39 @@ describe("carrying the original error on a public envelope", () => {
         value: new Error("x"),
       });
     }).toThrow();
+  });
+});
+
+describe("every producer carries provenance, not just the one it was built for", () => {
+  it("rides on the shared flattener the read and single paths spread", () => {
+    // The first version attached this at ONE producer and reached only the
+    // collection writes. `typedErrorEnvelopeFields` IS the flattening for the
+    // read paths and the singles — the same reason they record the error here
+    // rather than each remembering to — so the provenance belongs here too.
+    const thrown = NextlyError.internal({
+      cause: new Error("driver: deadlock detected"),
+      logContext: { table: "posts" },
+    });
+
+    const envelope = { success: false, ...typedErrorEnvelopeFields(thrown) };
+
+    expect(originalErrorOf(envelope)).toBe(thrown);
+    expect(JSON.stringify(envelope)).not.toContain("deadlock");
+  });
+
+  it("chains through the validation branch too", () => {
+    // Validation reconstructs down its own path, which forwarded everything
+    // except the cause.
+    const thrown = NextlyError.internal({
+      logContext: { transform: "slugify" },
+    });
+
+    const rebuilt = errorFromServiceEnvelope(
+      { code: "VALIDATION_ERROR", statusCode: 400, message: "Invalid." },
+      {},
+      thrown
+    );
+
+    expect(rebuilt.cause).toBe(thrown);
   });
 });

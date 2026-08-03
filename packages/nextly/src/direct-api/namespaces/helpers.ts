@@ -141,21 +141,28 @@ export function createErrorFromSingleResult(
   // The shared converter, so a Single failure reaches a Direct API caller as
   // the same error a REST caller gets. Rebuilding from status alone dropped the
   // message key and the public data -- a rate limit's retry interval among it.
-  return errorFromServiceEnvelope({
-    ...result,
-    message,
-    // A code-less envelope keeps the status-derived guess this boundary has
-    // always made rather than falling through to a generic internal.
-    code: result.code ?? statusCodeToErrorCode(result.statusCode),
-    // Normalised to the canonical shape; SingleResult still emits `{field}`.
-    errors: result.errors?.map(e => ({
-      path: e.field,
-      // The per-field reason travels with the issue; dropping it here would
-      // have the converter substitute a generic one.
-      code: e.code,
-      message: e.message,
-    })),
-  });
+  return errorFromServiceEnvelope(
+    {
+      ...result,
+      message,
+      // A code-less envelope keeps the status-derived guess this boundary has
+      // always made rather than falling through to a generic internal.
+      code: result.code ?? statusCodeToErrorCode(result.statusCode),
+      // Normalised to the canonical shape; SingleResult still emits `{field}`.
+      errors: result.errors?.map(e => ({
+        path: e.field,
+        // The per-field reason travels with the issue; dropping it here would
+        // have the converter substitute a generic one.
+        code: e.code,
+        message: e.message,
+      })),
+    },
+    {},
+    // Same chaining as the collection converter. A single's failure loses its
+    // private detail through the identical envelope, so leaving it out here
+    // would fix the diagnostics for half the Direct API.
+    originalErrorOf(result)
+  );
 }
 
 /**
