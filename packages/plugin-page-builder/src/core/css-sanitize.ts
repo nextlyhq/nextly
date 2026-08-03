@@ -101,12 +101,22 @@ const TEXT_ARGUMENT_FUNCTIONS = new Set([
   "attr",
   "counter",
   "counters",
-  "var",
-  "env",
   "format",
   "local",
   "symbols",
 ]);
+
+/**
+ * Functions that stand in for a value rather than holding one.
+ *
+ * These are transparent to the question "is this string a URL": what a `var()`
+ * fallback becomes depends entirely on where the `var()` sits, so it inherits
+ * the position rather than defining one. Treating `var` as text-taking hid a
+ * fetch inside `image-set(var(--x, "https://…") 1x)`; treating it as
+ * URL-taking would refuse `content: var(--label, "https://…")`, which is a
+ * caption. Neither is right, because it is neither.
+ */
+const SUBSTITUTION_FUNCTIONS = new Set(["var", "env"]);
 
 /** The first `url()` in a declaration that leaves this origin, if any. */
 function firstRemoteUrl(decl: csstree.Declaration): string | undefined {
@@ -144,54 +154,126 @@ const MAX_RAW_DEPTH = 3;
  */
 function remoteUrlInValue(
   value: csstree.CssNode,
-  depth: number
+  depth: number,
+  outerPosition: readonly string[] = []
 ): string | undefined {
   let found: string | undefined;
-  // `.value` is decoded on both node types, so a scheme spelled with CSS
-  // escapes is read the way a browser resolves it rather than as written.
+  // One walk, maintaining the enclosing-function stack, because all three
+  // shapes below depend on where in the value they sit.
+  const functions: string[] = [];
+  const raws: { text: string; position: string[] }[] = [];
   csstree.walk(value, {
-    visit: "Url",
-    enter(node: csstree.Url) {
-      if (found === undefined && isRemoteUrl(node.value)) found = node.value;
-    },
-  });
-  if (found !== undefined) return found;
-
-  csstree.walk(value, {
-    visit: "String",
-    enter(node: csstree.StringNode) {
+    enter(node: csstree.CssNode) {
+      if (node.type === "Function") functions.push(node.name.toLowerCase());
       if (found !== undefined) return;
-      const fn = this.function;
-      if (fn === null) return;
-      if (TEXT_ARGUMENT_FUNCTIONS.has(fn.name.toLowerCase())) return;
+      // `.value` is decoded on Url and String alike, so a scheme spelled with
+      // CSS escapes is read the way a browser resolves it, not as written.
+      if (node.type === "Url") {
+        if (isRemoteUrl(node.value)) found = node.value;
+        return;
+      }
+      if (node.type === "Raw") {
+        // Carries its position with it: re-parsing loses the surrounding
+        // functions otherwise, and `image-set(var(--x, "https://…") 1x)` is a
+        // fetch precisely BECAUSE of the `image-set` the Raw sits inside.
+        raws.push({
+          text: node.value,
+          position: positionOf(functions, outerPosition),
+        });
+        return;
+      }
+      if (node.type !== "String") return;
+      const position = positionOf(functions, outerPosition);
+      const enclosing = position[position.length - 1];
+      // No enclosing function once substitutions are ignored: the string sits
+      // where a bare string sits, and a bare string is text. `background:
+      // var(--x, "https://…")` is not a URL, because `background: "https://…"`
+      // is not one either.
+      if (enclosing === undefined) return;
+      if (TEXT_ARGUMENT_FUNCTIONS.has(enclosing)) return;
       if (isRemoteUrl(node.value)) found = node.value;
     },
+    leave(node: csstree.CssNode) {
+      if (node.type === "Function") functions.pop();
+    },
   });
   if (found !== undefined) return found;
 
-  const raws: string[] = [];
-  csstree.walk(value, {
-    visit: "Raw",
-    enter(node: csstree.Raw) {
-      raws.push(node.value);
-    },
-  });
   for (const raw of raws) {
-    if (raw.trim() === "") continue;
+    if (raw.text.trim() === "") continue;
     // Unreadable is not the same as safe. This is the one place the check
     // cannot see what it is judging, so it refuses rather than waves it
     // through, and reports the raw text so the author knows which line went.
-    if (depth >= MAX_RAW_DEPTH) return raw.trim();
+    if (depth >= MAX_RAW_DEPTH) return raw.text.trim();
     let reparsed: csstree.CssNode;
     try {
-      reparsed = csstree.parse(raw, { context: "value" });
+      reparsed = csstree.parse(raw.text, { context: "value" });
     } catch {
-      return raw.trim();
+      return raw.text.trim();
     }
-    const nested = remoteUrlInValue(reparsed, depth + 1);
+    const nested = remoteUrlInValue(reparsed, depth + 1, raw.position);
     if (nested !== undefined) return nested;
   }
   return undefined;
+}
+
+/**
+ * The enclosing functions that decide whether a string is a URL.
+ *
+ * Substitutions are dropped because they stand in for a value rather than
+ * holding one, and the outer position is prepended so a re-parsed `Raw` is
+ * judged where it actually sits rather than as though it stood alone.
+ */
+/**
+ * The first remote URL inside a nested rule this parser left as `Raw`.
+ *
+ * Recursive for the same reason the value walk is: an inner rule's OWN nested
+ * rule comes back as `Raw` again, so following one level finds
+ * `.a { .b { url(…) } }` and misses `.a { .b { .c { url(…) } } }`. Bounded, and
+ * a rule deeper than the bound is refused rather than followed.
+ */
+function remoteUrlInRawRule(text: string, depth: number): string | undefined {
+  if (depth >= MAX_RAW_DEPTH) return text.trim();
+  let inner: csstree.CssNode;
+  try {
+    inner = csstree.parse(text, { context: "stylesheet" });
+  } catch {
+    return text.trim();
+  }
+  let remote: string | undefined;
+  csstree.walk(inner, {
+    visit: "Declaration",
+    enter(decl: csstree.Declaration) {
+      if (remote === undefined) remote = firstRemoteUrl(decl);
+    },
+  });
+  if (remote !== undefined) return remote;
+  const deeper: string[] = [];
+  csstree.walk(inner, {
+    visit: "Rule",
+    enter(rule: Rule) {
+      if (rule.block === null) return;
+      for (const child of rule.block.children) {
+        if (child.type === "Raw") deeper.push(child.value);
+      }
+    },
+  });
+  for (const raw of deeper) {
+    if (raw.trim() === "") continue;
+    const nested = remoteUrlInRawRule(raw, depth + 1);
+    if (nested !== undefined) return nested;
+  }
+  return undefined;
+}
+
+function positionOf(
+  functions: readonly string[],
+  outerPosition: readonly string[]
+): string[] {
+  return [
+    ...outerPosition,
+    ...functions.filter(name => !SUBSTITUTION_FUNCTIONS.has(name)),
+  ];
 }
 
 function isDangerousValue(val: string): boolean {
@@ -247,7 +329,19 @@ export function sanitizeCustomCss(
   try {
     ast = csstree.parse(css);
   } catch {
-    return { css: "", warnings: [] };
+    // The header promises everything removed is reported, and losing the whole
+    // sheet in silence is the loudest possible contradiction of that: the
+    // author sees their CSS gone with nothing to read.
+    return {
+      css: "",
+      warnings: [
+        {
+          code: "unsafe-value",
+          message:
+            "This CSS could not be parsed, so none of it was applied. Check for an unclosed brace, quote or comment.",
+        },
+      ],
+    };
   }
 
   // Drop at-rules other than @media / @supports.
@@ -287,6 +381,39 @@ export function sanitizeCustomCss(
           `"${decl.property}" uses a value that is not allowed in custom CSS, so the declaration was removed.`
         );
         list.remove(item);
+      }
+    },
+  });
+
+  // A nested rule is a `Raw` child of its parent's block in css-tree 2.3, not a
+  // Declaration, so the declaration walk above never sees inside it and
+  // `.probe { background: url("https://evil") }` nested in a scoped rule
+  // reached the page untouched. `Raw` is where the parser puts what it did not
+  // read, and every level it appears at has to be followed: the value root, a
+  // fallback nested in a value, and here.
+  csstree.walk(ast, {
+    visit: "Rule",
+    enter(node: Rule) {
+      const block = node.block;
+      if (block === null) return;
+      const items: ListItem<CssNode>[] = [];
+      block.children.forEach((child: CssNode, item: ListItem<CssNode>) => {
+        if (child.type === "Raw") items.push(item);
+      });
+      for (const item of items) {
+        const raw = item.data;
+        if (raw.type !== "Raw" || raw.value.trim() === "") continue;
+        // Judged whole rather than edited: the text is a rule this parser could
+        // not read, so there is no structure to remove a declaration from. If
+        // anything inside it reaches another origin the nested rule goes, which
+        // is the same trade the declaration path makes.
+        const remote = remoteUrlInRawRule(raw.value, 0);
+        if (remote === undefined) continue;
+        warn(
+          "remote-url",
+          `A nested rule refers to "${remote}", which is not on this site. Upload the file to the media library and use its path instead.`
+        );
+        block.children.remove(item);
       }
     },
   });

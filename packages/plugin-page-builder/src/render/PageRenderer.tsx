@@ -53,6 +53,9 @@ export function PageRenderer({
     compileDocumentMotionCss(document),
     compileDocumentCss(document, { breakpoints }),
     compileDocumentBlockCss(document),
+    // `.css` alone: the sanitizer also returns what it removed, and this path
+    // renders rather than edits, so there is nowhere to show a warning. The
+    // editor reads the same result and displays them.
     sanitizeCustomCss(customCss ?? "", PAGE_ROOT_CLASS).css,
   ]
     .filter(Boolean)
