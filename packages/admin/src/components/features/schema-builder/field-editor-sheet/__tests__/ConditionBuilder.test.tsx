@@ -133,6 +133,29 @@ describe("ConditionBuilder -- value editor", () => {
     );
   });
 
+  it("recomputes the operator when the source type changes", async () => {
+    // Switching a text `equals` condition to a checkbox has to STORE the
+    // checkbox's default. Carrying `equals` over stored one operator while the
+    // next render displayed the `isTrue` it fell back to, so what was saved and
+    // what was on screen disagreed and only the saved one was evaluated.
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(
+      <ConditionBuilder
+        condition={{ field: "title", operator: "equals", value: "x" }}
+        siblingFields={siblings}
+        onChange={onChange}
+      />
+    );
+    await user.click(
+      screen.getByRole("combobox", { name: /condition field/i })
+    );
+    await user.click(await screen.findByRole("option", { name: "Active" }));
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({ field: "isActive", operator: "isTrue" })
+    );
+  });
+
   it("offers only the operators the source type supports", async () => {
     // A checkbox has no "is greater than", and offering one builds a condition
     // the evaluator can never satisfy.

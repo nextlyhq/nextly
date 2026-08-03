@@ -53,6 +53,26 @@ const age = {
 // A checkbox is the source type where the kit's default and this plugin's
 // vocabulary genuinely disagree: the kit offers isTrue/isNotTrue, and
 // `evaluateConditions` implements neither.
+const mobile = {
+  id: "f6",
+  name: "mobile",
+  label: "Mobile",
+  type: "phone",
+} as unknown as AnyFormField;
+
+const subjectOnPhone = {
+  id: "f7",
+  name: "subject",
+  label: "Subject",
+  type: "text",
+  conditionalLogic: {
+    enabled: true,
+    action: "show",
+    operator: "AND",
+    conditions: [{ field: "mobile", comparison: "equals", value: "" }],
+  },
+} as unknown as AnyFormField;
+
 const subscribed = {
   id: "f4",
   name: "subscribed",
@@ -90,7 +110,7 @@ function renderEditor(onUpdate: ReturnType<typeof vi.fn>, field = subject) {
   render(
     <ConditionalLogicEditor
       field={field}
-      allFields={[country, age, subscribed, field]}
+      allFields={[country, age, subscribed, mobile, field]}
       onUpdate={onUpdate}
     />
   );
@@ -138,6 +158,22 @@ describe("ConditionalLogicEditor storage contract", () => {
     );
 
     expect(offered).toEqual(["equals", "does not equal"]);
+  });
+
+  it("treats a phone field as text, under its real type name", async () => {
+    // The builder's telephone type is `phone`. A set written against `tel`
+    // matched nothing, so a phone number fell through to the full comparison
+    // list and was offered "greater than".
+    renderEditor(vi.fn(), subjectOnPhone);
+    await userEvent.click(
+      screen.getByRole("combobox", { name: /condition operator/i })
+    );
+    const offered = (await screen.findAllByRole("option")).map(o =>
+      o.textContent?.trim()
+    );
+    expect(offered).toContain("contains");
+    expect(offered).not.toContain("is greater than");
+    expect(offered).not.toContain("is less than");
   });
 
   it("compares a choice field against its own options", async () => {

@@ -275,7 +275,20 @@ export function ConditionRow({
       <Select
         value={condition?.field ?? ""}
         disabled={readOnly}
-        onValueChange={value => emit({ field: value, value: undefined })}
+        onValueChange={value =>
+          // The operator has to be recomputed from the NEW source, not carried
+          // over. Switching a text `equals` condition to a checkbox otherwise
+          // stored `equals` while the next render displayed the `isTrue` it
+          // fell back to, so what was saved and what was on screen disagreed.
+          emit({
+            field: value,
+            operator:
+              operatorsFor(
+                sources.find(entry => entry.name === value)?.type
+              )[0] ?? "equals",
+            value: undefined,
+          })
+        }
       >
         <SelectTrigger aria-label="Condition field">
           <SelectValue placeholder="Choose a field…" />

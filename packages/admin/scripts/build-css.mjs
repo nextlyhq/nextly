@@ -121,7 +121,9 @@ try {
   // minifier runs between them and the file is what ships.
   const built = fs.readFileSync(outputFile, "utf-8");
   const escapedNames = [
-    ...[...built.matchAll(/@(?:-webkit-)?keyframes\s+("[^"]*"|'[^']*'|[\w-]+)/gi)]
+    ...[
+      ...built.matchAll(/@(?:-webkit-)?keyframes\s+("[^"]*"|'[^']*'|[\w-]+)/gi),
+    ]
       .map(match => match[1].replace(/^["']|["']$/g, ""))
       .filter(name => !name.startsWith(NAME_PREFIX))
       .map(name => `@keyframes ${name}`),
@@ -138,6 +140,52 @@ try {
         "document, so a host that uses the same name gets whichever sheet loaded\n" +
         "later. Both namespacing passes run before minification; a name here\n" +
         "means one of them missed a shape it should cover.\n"
+    );
+    process.exit(1);
+  }
+
+  // Step 6: Guard the same invariant from the other side. Steps 4 and 5 read
+  // the stylesheet, and a keyframe name can also be written in JSX — an inline
+  // `animation` style never passes through the rename above, so it silently
+  // names a definition that no longer exists and the element just does not
+  // animate. Nothing in the CSS can show that, so the source is checked too.
+  const defined = new Set(
+    [...built.matchAll(/@(?:-webkit-)?keyframes\s+("[^"]*"|'[^']*'|[\w-]+)/gi)]
+      .map(match => match[1].replace(/^["']|["']$/g, ""))
+      .map(name => name.slice(NAME_PREFIX.length))
+  );
+  const srcDir = path.join(rootDir, "src");
+  const stale = [];
+  const visit = dir => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        visit(full);
+      } else if (/\.tsx?$/.test(entry.name) && !/\.test\./.test(entry.name)) {
+        const text = fs.readFileSync(full, "utf-8");
+        // `animation: "<name> ..."` and `animationName: "<name>"`, the two
+        // shapes an inline style can name a keyframe with.
+        for (const m of text.matchAll(
+          /animation(?:Name)?:\s*[`"']\s*([\w-]+)/g
+        )) {
+          const name = m[1];
+          if (defined.has(name) && !name.startsWith(NAME_PREFIX)) {
+            stale.push(`${path.relative(rootDir, full)}: ${name}`);
+          }
+        }
+      }
+    }
+  };
+  visit(srcDir);
+  if (stale.length) {
+    console.error(
+      `\n❌ ${stale.length} inline style(s) name a keyframe that was namespaced:\n`
+    );
+    for (const entry of stale) console.error("  " + entry);
+    console.error(
+      `\nThe stylesheet defines these as "${NAME_PREFIX}<name>", so the\n` +
+        "unprefixed name matches nothing and the animation silently does not\n" +
+        "run. Prefix the name in the inline style.\n"
     );
     process.exit(1);
   }

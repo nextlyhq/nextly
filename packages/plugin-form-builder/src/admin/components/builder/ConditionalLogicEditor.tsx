@@ -91,13 +91,17 @@ function isSupportedComparison(
   return SUPPORTED_SET.has(operator);
 }
 
+// The field types whose values are text, named as `FormFieldType` spells them.
+// `tel` and `password` were guesses and match nothing; the builder's telephone
+// field is `phone`, so it was falling through to the full comparison set and
+// offering "greater than" for a phone number.
 const TEXT_TYPES = new Set([
   "text",
   "textarea",
   "email",
   "url",
-  "tel",
-  "password",
+  "phone",
+  "hidden",
 ]);
 
 /**
