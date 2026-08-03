@@ -10,7 +10,7 @@ import { toDbError } from "../../../database/errors";
 // still consume the result tuple; only the internal error mapping changed.
 import type { PermissionSeedService } from "../../../domains/auth/services/permission-seed-service";
 import { NextlyError, isProgrammerError } from "../../../errors";
-import { typedErrorEnvelopeFields } from "../../../errors/from-service-envelope";
+import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import type { CollectionFileManager } from "../../../services/collection-file-manager";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
@@ -61,7 +61,7 @@ function errorToMetadataResult(
       // The code above all: a boundary rebuilding from status alone cannot tell
       // a DUPLICATE from a CONFLICT, and an occupied slug would be reported as
       // a stale-resource conflict.
-      ...typedErrorEnvelopeFields(error),
+      ...errorEnvelopeFields(error),
     };
   }
   // Best-effort DbError detection — fromDatabaseError handles both DbError
@@ -101,7 +101,7 @@ function errorToMetadataResult(
     // The mapped error is typed too. Without its code a raw unique violation
     // becomes a code-less 409, which a boundary reads as staleness rather than
     // the duplicate it is, and a mapped timeout loses DATABASE_ERROR.
-    ...typedErrorEnvelopeFields(mapped),
+    ...errorEnvelopeFields(mapped),
   };
 }
 

@@ -23,7 +23,7 @@ import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { isFieldGroupField } from "../../../collections/fields/guards";
 import type { FieldConfig } from "../../../collections/fields/types";
-import { typedErrorEnvelopeFields } from "../../../errors/from-service-envelope";
+import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
 import { getFilterRegistry, FilterSeams } from "../../../filters";
 import { toSnakeCase } from "../../../lib/case-conversion";
@@ -1775,7 +1775,7 @@ export class CollectionQueryService extends BaseService {
         // status alone left a read hook's `rateLimited()` or `authRequired()`
         // arriving at the caller as a generic 500, because the code-keyed
         // rebuild had no code to key on.
-        ...(typedErrorEnvelopeFields(error) ?? {}),
+        ...errorEnvelopeFields(error),
       };
     }
   }
@@ -2228,7 +2228,7 @@ export class CollectionQueryService extends BaseService {
         data: null,
         // Same reason as listEntries: without the code the boundary rebuilds a
         // typed refusal as a generic internal error.
-        ...(typedErrorEnvelopeFields(error) ?? {}),
+        ...errorEnvelopeFields(error),
       };
     }
   }
@@ -3017,7 +3017,7 @@ export class CollectionQueryService extends BaseService {
         // A typed error keeps its own status and code. Hardcoding 500 reported
         // a read hook's refusal as a server fault, and told a caller nothing it
         // could act on.
-        ...(typedErrorEnvelopeFields(error) ?? {}),
+        ...errorEnvelopeFields(error),
       };
     }
   }

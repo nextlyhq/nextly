@@ -33,7 +33,7 @@ import { toDbError } from "../../../database/errors";
 // only the internal error mapping changed. fromDatabaseError keeps driver
 // text out of the wire and routes identifying detail to logContext (§13.8).
 import { NextlyError } from "../../../errors";
-import { typedErrorEnvelopeFields } from "../../../errors/from-service-envelope";
+import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { withOriginalError } from "../../../errors/original-error";
 import type { ValidationPublicData } from "../../../errors/public-data";
 import { emitDocumentEvent } from "../../../events/domain-events";
@@ -4128,7 +4128,7 @@ export class CollectionMutationService extends BaseService {
         // A typed error keeps its own status and code. Hardcoding 500 reported
         // a hook's refusal or rate limit as a server fault, and left a boundary
         // nothing to rebuild it from.
-        ...(typedErrorEnvelopeFields(error) ?? {}),
+        ...errorEnvelopeFields(error),
       };
     }
   }
@@ -6873,7 +6873,7 @@ export class CollectionMutationService extends BaseService {
         // A typed error keeps its own status and code. Hardcoding 500 reported
         // a hook's refusal or rate limit as a server fault, and left a boundary
         // nothing to rebuild it from.
-        ...(typedErrorEnvelopeFields(error) ?? {}),
+        ...errorEnvelopeFields(error),
         eventRecorded,
         revalidationIntent,
         committed: committedWrite,
@@ -8382,7 +8382,7 @@ export class CollectionMutationService extends BaseService {
         // A typed error keeps its own status and code. Hardcoding 500 reported
         // a hook's refusal or rate limit as a server fault, and left a boundary
         // nothing to rebuild it from.
-        ...(typedErrorEnvelopeFields(error) ?? {}),
+        ...errorEnvelopeFields(error),
         revalidationIntent,
       };
     }
@@ -10000,7 +10000,7 @@ export class CollectionMutationService extends BaseService {
         // A typed error keeps its own status and code. Hardcoding 500 reported
         // a hook's refusal or rate limit as a server fault, and left a boundary
         // nothing to rebuild it from.
-        ...(typedErrorEnvelopeFields(error) ?? {}),
+        ...errorEnvelopeFields(error),
         eventRecorded,
         revalidationIntent,
       };

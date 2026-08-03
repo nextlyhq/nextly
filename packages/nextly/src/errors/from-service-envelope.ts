@@ -176,13 +176,23 @@ export function errorFromServiceEnvelope(
  * Returns null for an untyped error, so a caller keeps whatever fallback it
  * already applies to those.
  */
-export function typedErrorEnvelopeFields(
+export function errorEnvelopeFields(
   error: unknown
-): Pick<
-  ServiceErrorEnvelope,
-  "code" | "statusCode" | "message" | "messageKey" | "publicData"
-> | null {
-  if (!NextlyError.is(error)) return null;
+): Partial<
+  Pick<
+    ServiceErrorEnvelope,
+    "code" | "statusCode" | "message" | "messageKey" | "publicData"
+  >
+> {
+  // A raw driver rejection has no typed fields to lift, but it is still the
+  // failure the operator needs to see — so it leaves with the provenance and
+  // nothing else, rather than with nothing at all. Returning an object in both
+  // cases is what stops this being an opt-in: a caller spreads the result and
+  // is covered, instead of each failure branch remembering to attach the
+  // original itself.
+  if (!NextlyError.is(error)) {
+    return error instanceof Error ? withOriginalError({}, error) : {};
+  }
   // Kept for the operator before the detail is dropped. This function IS the
   // flattening for every path that uses it, so recording here covers them all
   // rather than each call site remembering to.
