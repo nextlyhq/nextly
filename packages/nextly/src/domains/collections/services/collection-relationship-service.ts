@@ -112,6 +112,13 @@ interface NestedHookStateBase {
     row: Record<string, unknown>;
     collection: string;
     field: FieldDefinition;
+    /**
+     * How many hops from the document the row was reached at. Expansion honours
+     * the depth remaining when it reaches a row, so the SAME row reached one hop
+     * in and two hops in carries different population: the nearer occurrence has
+     * its own relationships expanded where the deeper one has bare ids.
+     */
+    depth: number;
   }>;
   /**
    * The AUTHORITATIVE version of each related row, keyed by collection and id: a
@@ -129,7 +136,7 @@ interface NestedHookStateBase {
    * Copies, never the live rows: a hook that mutates a related row in place would
    * otherwise corrupt the very version this restores from.
    */
-  sanitized: Map<string, Record<string, unknown>>;
+  sanitized: Map<string, { depth: number; row: Record<string, unknown> }>;
 }
 
 /** The state the walk carries; named separately so the interface reads first. */
@@ -3200,12 +3207,20 @@ export class CollectionRelationshipService extends BaseService {
     // rebuilt from. Taken here rather than during the walk because a row is not
     // final until the loops above have re-judged it — a sibling parent's hooks,
     // in a listing that shares one row object between entries, run before this.
-    for (const { row, collection, field } of state.pending) {
+    for (const { row, collection, field, depth } of state.pending) {
       if (typeof row.id !== "string") continue;
-      state.sanitized.set(
-        relatedRowSnapshotKey(collection, row.id, field),
-        detachData<Record<string, unknown>>(row)
-      );
+      const key = relatedRowSnapshotKey(collection, row.id, field);
+      // The NEAREST occurrence wins. A row reached deeper in the document was
+      // expanded with less depth remaining, so restoring that version into a
+      // shallower field would strip a level of expansion the response had — and
+      // which no hook touched. Occurrences at equal depth expanded alike, so the
+      // first is as good as the last.
+      const recorded = state.sanitized.get(key);
+      if (recorded && recorded.depth <= depth) continue;
+      state.sanitized.set(key, {
+        depth,
+        row: detachData<Record<string, unknown>>(row),
+      });
     }
   }
 
@@ -3360,7 +3375,7 @@ export class CollectionRelationshipService extends BaseService {
     const already = rebuilt.get(key);
     if (already) return withReferenceIdentity(already, ref);
 
-    const authoritative = state.sanitized.get(key);
+    const authoritative = state.sanitized.get(key)?.row;
     if (!authoritative) {
       return ref.discriminated
         ? { relationTo: ref.collection, value: ref.id }
@@ -3768,6 +3783,7 @@ export class CollectionRelationshipService extends BaseService {
         row: resolved.row,
         collection: resolved.collection,
         field,
+        depth,
       });
 
       // Secrets are stripped from a related row when it is fetched, but a hook

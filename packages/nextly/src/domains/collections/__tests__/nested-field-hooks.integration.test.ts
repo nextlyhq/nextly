@@ -95,6 +95,10 @@ async function boot(): Promise<TestNextly> {
         access: { read: () => true, create: () => true, update: () => true },
         fields: [
           text({ name: "name" }),
+          // The org's OWN relationship. Expansion honours the depth left when it
+          // reaches a row, so this is populated for an org reached one hop from the
+          // document and a bare id for the same org reached two hops in.
+          relationship({ name: "steward", relationTo: AUTHORS }),
           // Denied to everyone, and the evidence the author's `clearance` rule
           // masks on. Applying field rules at fetch removed it before that rule
           // could read it.
@@ -568,6 +572,9 @@ async function boot(): Promise<TestNextly> {
         access: { read: () => true, create: () => true, update: () => true },
         fields: [
           text({ name: "title" }),
+          // Declared BEFORE `author`, so the walk reaches this org one hop in and
+          // the SAME org two hops in (via `author.organization`) afterwards.
+          relationship({ name: "patronOrg", relationTo: ORGS }),
           relationship({ name: "author", relationTo: AUTHORS }),
           // A source field-level afterRead hook that writes a denied field back
           // onto a related row. It runs after the related-row sanitization the
@@ -1768,6 +1775,49 @@ describe("a target's field hooks apply to rows reached through a relationship", 
 
     expect(expanded.data!.contributors).toEqual([contributorId]);
     expect(JSON.stringify(expanded.data!.contributors)).not.toContain("LEAKED");
+  });
+
+  it("keeps the deeper occurrence of a row from flattening a shallower one", async () => {
+    // The same org is reached one hop in (`patronOrg`) and two hops in
+    // (`author.organization`). Expansion gives the one-hop occurrence its own
+    // populated `steward` and leaves the two-hop occurrence a bare id, so the two
+    // are the same row with different population shapes. Recording them under one
+    // key lets the deeper, shallower-populated occurrence stand in for the direct
+    // one, which would strip a level of expansion no hook ever touched.
+    const t = await boot();
+    await t.nextly.create({ collection: AUTHORS, data: { name: "steward" } });
+    const stewardId = await onlyId(t, AUTHORS);
+    await t.nextly.create({
+      collection: ORGS,
+      data: { name: "acme", steward: stewardId },
+    });
+    const orgId = await onlyId(t, ORGS);
+    await t.nextly.create({
+      collection: AUTHORS,
+      data: { name: "ada", organization: orgId },
+    });
+    const listed = await handlerOf(t).listEntries({
+      collectionName: AUTHORS,
+      overrideAccess: true,
+    });
+    const authorId = String(listed.data!.docs.find(d => d.name === "ada")!.id);
+    await t.nextly.create({
+      collection: POSTS,
+      data: { title: "p", patronOrg: orgId, author: authorId },
+    });
+    const postId = await onlyId(t, POSTS);
+
+    const expanded = await handlerOf(t).getEntry({
+      collectionName: POSTS,
+      entryId: postId,
+      depth: 2,
+    });
+
+    const patron = expanded.data!.patronOrg as Record<string, unknown>;
+    expect(patron.id).toBe(orgId);
+    // The one-hop occupant keeps the expansion its own depth earned.
+    expect(typeof patron.steward).toBe("object");
+    expect((patron.steward as Record<string, unknown>).id).toBe(stewardId);
   });
 
   it("keeps a one-target polymorphic relationship populated through re-derivation", async () => {
