@@ -28,10 +28,14 @@ Failed logins have been recorded since the audit log shipped; successes were
 not. A trail of failures alone shows that someone tried and not whether they got
 in, which is the first question asked after a credential leak.
 
-The event is written only where a session actually exists. The multi-factor
-challenge and forced-password-change legs both return HTTP 200 without issuing
-one, so recording on status alone would report that an account was reached when
-it was not.
+The event is written where the session is issued, not where the flow began.
+Three handlers issue sessions — password login, second-factor resolution, and
+the forced first-sign-in password change — so recording it in the login handler
+alone would have left every user who completes a second factor absent from the
+success trail, which is the population most worth seeing in it. Recording on an
+HTTP 200 instead would have the opposite fault: the challenge and
+password-change legs answer 200 while issuing no session, so a success would be
+reported for an account that was never reached.
 
 Unlike the failure event it is attributed to the account. Naming the account on
 a failure is the account-state leak the unified error response exists to avoid;

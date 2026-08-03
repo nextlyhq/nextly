@@ -182,22 +182,6 @@ export async function handleLogin(
 
     const response = await issueSession(afterAuth, deps, request, requestId);
     await deps.authHooks.runAfterLogin(afterAuth, deps.pluginCtx);
-    // Recorded only here, where a session actually exists. The challenge and
-    // forced-password-change legs above return without one, so treating them as
-    // successful logins would tell an operator an account was reached when it
-    // was not. Attributed, unlike the failure leg: naming the account is the
-    // account-state leak the unified error shape avoids on failure, and is
-    // precisely the value of the record on success — a failure trail alone
-    // shows that someone tried, not whether they got in.
-    await deps.auditLog.write({
-      kind: "login-succeeded",
-      actorUserId: afterAuth.id,
-      ipAddress: getTrustedClientIp(request, {
-        trustProxy: deps.trustProxy,
-        trustedProxyIps: deps.trustedProxyIps,
-      }),
-      userAgent: request.headers.get("user-agent"),
-    });
     await stallResponse(startTime, deps.loginStallTimeMs);
     return response;
   } catch (err) {

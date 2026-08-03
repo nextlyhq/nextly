@@ -1,4 +1,5 @@
 import { respondAction } from "../../api/response-shapes";
+import type { AuditLogWriter } from "../../domains/audit/audit-log-writer";
 import type { PluginContext } from "../../plugins/plugin-context";
 import type { AuthUser } from "../../types/auth";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
@@ -41,6 +42,12 @@ export interface IssueSessionDeps {
   authHooks: AuthHookRegistry;
   /** The plugin context handed to auth hooks. */
   pluginCtx: PluginContext;
+  /**
+   * Records the successful login. Required rather than optional: a session
+   * issued without one is a login absent from the audit trail, and the point of
+   * recording here is that no path can opt out by forgetting.
+   */
+  auditLog: AuditLogWriter;
 }
 
 /**
@@ -49,6 +56,13 @@ export interface IssueSessionDeps {
  * rotate-in a fresh refresh token, and respond with the canonical login body +
  * HttpOnly cookies (spec §7.6). Extracted from the login handler so the
  * challenge-resolve path issues sessions identically.
+ *
+ * It is also where a successful login is recorded, for that same reason. Three
+ * handlers issue sessions — password login, second-factor resolution, and the
+ * forced first-sign-in password change — and a user who always completes a
+ * second factor never passes through the first. Recording at each call site
+ * left that population out of the trail entirely, so the record belongs where
+ * the session is created rather than where the flow happened to begin.
  */
 export async function issueSession(
   user: AuthUser,
@@ -94,6 +108,20 @@ export async function issueSession(
       trustedProxyIps: deps.trustedProxyIps,
     }),
     expiresAt: new Date(Date.now() + deps.refreshTokenTTL * 1000),
+  });
+
+  // After the refresh token is durable: the session now exists, so the record
+  // describes something that happened rather than something about to. Attributed
+  // on purpose — naming the account is the account-state leak a FAILURE must
+  // avoid, and is the whole value of a success.
+  await deps.auditLog.write({
+    kind: "login-succeeded",
+    actorUserId: user.id,
+    ipAddress: getTrustedClientIp(request, {
+      trustProxy: deps.trustProxy,
+      trustedProxyIps: deps.trustedProxyIps,
+    }),
+    userAgent: request.headers.get("user-agent"),
   });
 
   const cookies = [
