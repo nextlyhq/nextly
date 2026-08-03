@@ -536,11 +536,18 @@ ${allColumnDefs.join(",\n")}
     if (rename) {
       const fromCol = toSnakeCase(rename.from.name);
       const toCol = toSnakeCase(rename.to.name);
-      // RENAME COLUMN syntax is consistent across PG, MySQL 8.0+,
-      // and SQLite 3.25+ — all dialects we support.
-      statements.push(
-        `ALTER TABLE ${this.quoteIdentifier(tableName)} RENAME COLUMN ${this.quoteIdentifier(fromCol)} TO ${this.quoteIdentifier(toCol)};`
-      );
+      // Two spellings of one column — `foo_bar` to `FooBar` — are a rename in the config and no
+      // change at all in the database. Emitting it anyway asks the dialect to rename a column to
+      // its own name, which PostgreSQL rejects because the target already exists, failing an
+      // update that has nothing to do. The pair still skips the add/drop loops below, so the
+      // column is neither dropped nor re-added.
+      if (fromCol !== toCol) {
+        // RENAME COLUMN syntax is consistent across PG, MySQL 8.0+,
+        // and SQLite 3.25+ — all dialects we support.
+        statements.push(
+          `ALTER TABLE ${this.quoteIdentifier(tableName)} RENAME COLUMN ${this.quoteIdentifier(fromCol)} TO ${this.quoteIdentifier(toCol)};`
+        );
+      }
     }
 
     // Find added fields

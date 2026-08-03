@@ -22,6 +22,7 @@
  */
 
 import { RESERVED_SLUGS } from "../../collections/config/validate-config";
+import { isFieldLocalized } from "../../domains/i18n/classify-fields";
 import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
 import {
   fieldProducesColumn,
@@ -293,7 +294,8 @@ function validateFieldsArray(
  */
 function validateFields(
   fields: unknown,
-  errors: SingleValidationError[]
+  errors: SingleValidationError[],
+  singleLocalized = false
 ): void {
   const path = "fields";
 
@@ -319,7 +321,15 @@ function validateFields(
   // validation. Reserved even when the draft/publish lifecycle is off, so
   // enabling it later fails here rather than at migration time. Nested
   // repeater/group fields live inside JSON and are exempt, as for collections.
-  const columnOwners = new Map<string, string>();
+  //
+  // Ownership is tracked per TABLE, not per single. When the single is localized its translatable
+  // fields are emitted into the `_locales` companion instead of the main table, so a shared
+  // `foo_bar` and a localized `FooBar` reach one column name in two different tables and never
+  // collide. One global map would refuse a schema the generators represent correctly.
+  const columnOwners = new Map<string, Map<string, string>>([
+    ["main", new Map()],
+    ["companion", new Map()],
+  ]);
   fields.forEach((field, index) => {
     if (!field || typeof field !== "object") return;
     const candidate = field as Record<string, unknown>;
@@ -343,7 +353,15 @@ function validateFields(
     // relationship store their values in their own tables, keyed by the field's declared name, so
     // two of them whose names converge stay distinct and nothing is emitted twice.
     if (!fieldProducesColumn(candidate)) return;
-    const owner = columnOwners.get(column);
+    const table = isFieldLocalized(
+      candidate as unknown as Parameters<typeof isFieldLocalized>[0],
+      singleLocalized
+    )
+      ? "companion"
+      : "main";
+    const owners = columnOwners.get(table);
+    if (!owners) return;
+    const owner = owners.get(column);
     if (owner !== undefined) {
       errors.push({
         path: `${path}[${index}].name`,
@@ -352,7 +370,7 @@ function validateFields(
       });
       return;
     }
-    columnOwners.set(column, name);
+    owners.set(column, name);
   });
 
   // Why: empty fields list is now valid for both code-first defines and the
@@ -436,7 +454,11 @@ export function validateSingleConfig(
     sqlKeywordsSet: DEFAULT_SQL_KEYWORDS_SET,
   });
 
-  validateFields(config.fields, errors);
+  validateFields(
+    config.fields,
+    errors,
+    (config as { localized?: boolean }).localized === true
+  );
 
   validateAccess(config.access, errors);
 

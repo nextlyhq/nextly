@@ -18,9 +18,12 @@ import { generateRuntimeSchema } from "../../schema/services/runtime-schema-gene
 import {
   fieldProducesColumn,
   getColumnDescriptor,
+  toSnakeCase,
   type SupportedDialect,
 } from "../../schema/services/field-column-descriptor";
+import { defineCollection } from "../../../collections/config/define-collection";
 import { validateCollectionConfig } from "../../../collections/config/validate-config";
+import { defineSingle } from "../../../singles/config/define-single";
 import { validateSingleConfig } from "../../../singles/config/validate-single";
 import { DynamicCollectionSchemaService } from "../services/dynamic-collection-schema-service";
 
@@ -301,6 +304,156 @@ describe("all three descriptions of the main table agree", () => {
         }
       }
     }
+  });
+});
+
+describe("the config factories inject on the column too", () => {
+  it("does not add a system field beside an author's capitalised one", () => {
+    // `defineCollection` prepends `title`/`slug` when the author has not declared them, and it
+    // decided that by exact name. An author writing `Title` owns the same column, so the injected
+    // field arrived beside it and the table declared `title` twice — it could not be created at
+    // all. Validation runs before the injection, so nothing downstream caught it.
+    for (const declared of ["Title", "Slug"]) {
+      const collection = defineCollection({
+        slug: "posts",
+        labels: { singular: "Post", plural: "Posts" },
+        fields: [{ type: "text", name: declared }],
+      } as never) as { fields: Array<{ name?: string }> };
+      const single = defineSingle({
+        slug: "home",
+        label: "Home",
+        fields: [{ type: "text", name: declared }],
+      } as never) as { fields: Array<{ name?: string }> };
+
+      for (const [label, config] of [
+        ["collection", collection],
+        ["single", single],
+      ] as const) {
+        const columns = config.fields
+          .map(field => (typeof field.name === "string" ? field.name : ""))
+          .filter(Boolean)
+          .map(toSnakeCase);
+        const duplicated = columns.filter(
+          (column, index) => columns.indexOf(column) !== index
+        );
+
+        expect({ [`${label}.${declared}`]: duplicated }).toEqual({
+          [`${label}.${declared}`]: [],
+        });
+      }
+    }
+  });
+
+  it("still injects the system field when the author declares neither", () => {
+    // The mirror: the case above must not be satisfied by never injecting anything.
+    const collection = defineCollection({
+      slug: "posts",
+      labels: { singular: "Post", plural: "Posts" },
+      fields: [{ type: "text", name: "headline" }],
+    } as never) as { fields: Array<{ name?: string }> };
+
+    expect(collection.fields.map(field => field.name)).toEqual([
+      "title",
+      "slug",
+      "headline",
+    ]);
+  });
+});
+
+describe("a rename between two spellings of one column", () => {
+  it("emits no statement, because the database has nothing to do", () => {
+    // `foo_bar` to `FooBar` is a rename in the config and a no-op in the table. Emitted anyway it
+    // asks the dialect to rename a column to its own name, which PostgreSQL rejects because the
+    // target already exists — failing an update that had nothing to change.
+    for (const dialect of DIALECTS) {
+      const service = new DynamicCollectionSchemaService(undefined, dialect);
+      const alter = service as unknown as {
+        generateAlterTableMigration: (
+          table: string,
+          oldFields: unknown[],
+          newFields: unknown[]
+        ) => string;
+      };
+
+      const sameColumn = alter.generateAlterTableMigration(
+        "dc_p",
+        [{ name: "foo_bar", type: "text" }],
+        [{ name: "FooBar", type: "text" }]
+      );
+      const realRename = alter.generateAlterTableMigration(
+        "dc_p",
+        [{ name: "foo_bar", type: "text" }],
+        [{ name: "baz_qux", type: "text" }]
+      );
+
+      expect({
+        [`${dialect}.sameColumn`]: sameColumn.includes("RENAME COLUMN"),
+        [`${dialect}.realRename`]: realRename.includes("RENAME COLUMN"),
+        [`${dialect}.sameColumn.dropped`]: sameColumn.includes("DROP COLUMN"),
+        [`${dialect}.sameColumn.added`]: sameColumn.includes("ADD COLUMN"),
+      }).toEqual({
+        [`${dialect}.sameColumn`]: false,
+        [`${dialect}.realRename`]: true,
+        [`${dialect}.sameColumn.dropped`]: false,
+        [`${dialect}.sameColumn.added`]: false,
+      });
+    }
+  });
+});
+
+describe("duplicate columns are judged per table", () => {
+  const pair = [
+    { type: "text", name: "foo_bar", localized: false },
+    { type: "text", name: "FooBar", localized: true },
+  ];
+
+  function duplicates(result: { errors?: Array<{ code: string }> }) {
+    return (result.errors ?? []).filter(e => e.code === "FIELD_NAME_DUPLICATE");
+  }
+
+  it("accepts one shared and one localized field reaching the same column name", () => {
+    // The localized field is emitted into the `_locales` companion and the shared one into the
+    // main table, so the column name occurs once in each. Refusing the pair would reject a schema
+    // the generators represent correctly.
+    expect({
+      collection: duplicates(
+        validateCollectionConfig({
+          slug: "posts",
+          labels: { singular: "Post", plural: "Posts" },
+          localized: true,
+          fields: pair,
+        } as never)
+      ),
+      single: duplicates(
+        validateSingleConfig({
+          slug: "home",
+          label: "Home",
+          localized: true,
+          fields: pair,
+        } as never)
+      ),
+    }).toEqual({ collection: [], single: [] });
+  });
+
+  it("still refuses two fields that land in the same table", () => {
+    // Both localized, so both go to the companion — and an unlocalized collection puts everything
+    // in main, which is the case the rule was written for.
+    const bothLocalized = validateCollectionConfig({
+      slug: "posts",
+      labels: { singular: "Post", plural: "Posts" },
+      localized: true,
+      fields: pair.map(field => ({ ...field, localized: true })),
+    } as never);
+    const notLocalized = validateCollectionConfig({
+      slug: "posts",
+      labels: { singular: "Post", plural: "Posts" },
+      fields: pair,
+    } as never);
+
+    expect({
+      bothLocalized: duplicates(bothLocalized).length,
+      notLocalized: duplicates(notLocalized).length,
+    }).toEqual({ bothLocalized: 1, notLocalized: 1 });
   });
 });
 
