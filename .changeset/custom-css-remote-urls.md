@@ -24,7 +24,8 @@
 
 Custom CSS in the page builder can no longer load anything from another origin.
 A `url()` carrying a scheme or a host is refused, and the editor says which
-declaration went and why, with a pointer to the media library.
+declaration went and why, with a remedy that works whichever storage adapter the
+media library uses.
 
 This closes a way of reading data off the page. A selector that matches only on
 a prefix, paired with a URL that fires a request when it matches, spells a value

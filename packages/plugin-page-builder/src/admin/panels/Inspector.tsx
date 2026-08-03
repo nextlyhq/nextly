@@ -24,7 +24,7 @@ import {
   TabsTrigger,
   Textarea,
 } from "@nextlyhq/ui";
-import { useEffect, useMemo, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useState } from "react";
 
 import { getPath } from "../../core/bindings";
 import { sanitizeCustomCss } from "../../core/css-sanitize";
@@ -657,9 +657,16 @@ function PagePanel() {
   const { state, dispatch } = useEditor();
   // Sanitized here only to read back what it removed; the page <style> is
   // compiled elsewhere from the same function, so this cannot drift from it.
+  //
+  // Deferred, because this parses the whole stylesheet and walks it several
+  // times, and a large one made every keystroke wait for that before the
+  // textarea could repaint. The deferred value lets the character land first
+  // and the warnings catch up, which is the right order: the author is typing,
+  // and a warning about text they have not finished writing is noise anyway.
+  const deferredCss = useDeferredValue(state.customCss);
   const warnings = useMemo(
-    () => sanitizeCustomCss(state.customCss, "nx-pb-page").warnings,
-    [state.customCss]
+    () => sanitizeCustomCss(deferredCss, "nx-pb-page").warnings,
+    [deferredCss]
   );
   return (
     <div style={{ padding: 12 }}>

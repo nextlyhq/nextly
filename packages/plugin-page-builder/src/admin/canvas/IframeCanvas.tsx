@@ -6,7 +6,13 @@
  * actually visible, and page CSS is isolated from the admin shell. The compiled page CSS
  * + a small editor-overlay stylesheet are injected into the iframe <head>.
  */
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useDeferredValue,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { createPortal } from "react-dom";
 
 import { sanitizeCustomCss } from "../../core/css-sanitize";
@@ -122,6 +128,11 @@ export function IframeCanvas({ children }: { children: ReactNode }) {
     return () => observer.disconnect();
   }, [body]);
 
+  // Deferred for the same reason the Inspector's warnings are: sanitizing runs
+  // a full parse and several walks, and on a large stylesheet doing that
+  // synchronously per keystroke made typing wait for the preview to recompile.
+  const deferredCustomCss = useDeferredValue(state.customCss);
+
   // Keep the compiled page CSS in sync with the document.
   useEffect(() => {
     const doc = ref.current?.contentDocument;
@@ -147,8 +158,8 @@ export function IframeCanvas({ children }: { children: ReactNode }) {
       compileDocumentCss(state.document) +
       "\n" +
       // Same sanitize+scope pass as PageRenderer, so the preview is faithful.
-      sanitizeCustomCss(state.customCss, "nx-pb-page").css;
-  }, [state.document, state.customCss, body]);
+      sanitizeCustomCss(deferredCustomCss, "nx-pb-page").css;
+  }, [state.document, deferredCustomCss, body]);
 
   // Selection via a native delegated listener ON THE IFRAME DOCUMENT. React's synthetic
   // events don't cross the portal→iframe boundary, so onClick handlers inside the canvas

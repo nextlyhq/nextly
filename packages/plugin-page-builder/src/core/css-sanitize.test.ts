@@ -526,10 +526,14 @@ describe("custom CSS may not reach off this origin", () => {
     }
   });
 
-  it("says what went and where to put the file instead", () => {
+  it("says what went and offers a remedy that actually works", () => {
     // A declaration that vanished without explanation is the thing authors file
     // bugs about, and their own source still contains the line that did not
     // survive, so there is nothing to read back.
+    //
+    // The remedy has to be reachable, which "upload it to the media library"
+    // was not: with a cloud storage adapter the media record's URL is itself
+    // off-origin, so following that advice produced a URL this refuses again.
     const out = sanitizeCustomCss(
       `.a { background: url("https://fonts.example/x.woff2") }`,
       SCOPE
@@ -537,7 +541,8 @@ describe("custom CSS may not reach off this origin", () => {
     expect(out.warnings).toHaveLength(1);
     expect(out.warnings[0]?.message).toContain("background");
     expect(out.warnings[0]?.message).toContain("fonts.example");
-    expect(out.warnings[0]?.message).toContain("media library");
+    expect(out.warnings[0]?.message).toContain("same-origin path");
+    expect(out.warnings[0]?.message).not.toContain("media library");
   });
 
   it("reports an at-rule it cannot support, rather than dropping it quietly", () => {

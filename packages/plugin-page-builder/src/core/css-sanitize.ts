@@ -493,7 +493,7 @@ export function sanitizeCustomCss(
         if (finding.kind === "remote") {
           warn(
             "remote-url",
-            `"${decl.property}" refers to "${finding.url}", which is not on this site. Upload the file to the media library and use its path instead.`
+            `"${decl.property}" refers to "${finding.url}", which is not on this site. Custom CSS may only load from this site's own origin; use a same-origin path, or set the image through the block's background control, which can load from the hosts your site allows.`
           );
         } else if (finding.reason === "depth") {
           warn(
@@ -555,7 +555,7 @@ export function sanitizeCustomCss(
         if (finding.kind === "remote") {
           warn(
             "remote-url",
-            `A nested rule refers to "${finding.url}", which is not on this site. Upload the file to the media library and use its path instead.`
+            `A nested rule refers to "${finding.url}", which is not on this site. Custom CSS may only load from this site's own origin; use a same-origin path, or set the image through the block's background control, which can load from the hosts your site allows.`
           );
         } else if (finding.reason === "depth") {
           warn(
