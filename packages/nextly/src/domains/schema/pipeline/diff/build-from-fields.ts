@@ -32,6 +32,7 @@ import { resolveLocalizedFieldNames } from "../../../i18n/classify-fields";
 import {
   getColumnDescriptor,
   getSystemColumnDescriptors,
+  toSnakeCase,
 } from "../../services/field-column-descriptor";
 
 import { indexKey } from "./index-util";
@@ -211,10 +212,13 @@ export function buildDesiredTableFromFields(
   // Inject reserved system columns first - mirrors runtime-schema-generator's
   // behavior. title/slug only when a column-producing user field replaces them
   // (user wins). status only when Draft/Published is enabled.
-  const hasTitleField = fields.some(
-    f => f.name === "title" && producesColumn(f)
-  );
-  const hasSlugField = fields.some(f => f.name === "slug" && producesColumn(f));
+  // Matched on the COLUMN the field becomes, so this agrees with the runtime schema and the DDL
+  // generator. Comparing declared names makes `Title` suppress the column in one place and not
+  // the others, and the diff then reconciles a column the table does not have.
+  const declaresColumn = (column: string): boolean =>
+    fields.some(f => toSnakeCase(f.name) === column && producesColumn(f));
+  const hasTitleField = declaresColumn("title");
+  const hasSlugField = declaresColumn("slug");
   for (const reserved of getSystemColumnDescriptors(dialect, {
     hasTitleField,
     hasSlugField,

@@ -316,6 +316,7 @@ function validateFields(
   // validation. Reserved even when the draft/publish lifecycle is off, so
   // enabling it later fails here rather than at migration time. Nested
   // repeater/group fields live inside JSON and are exempt, as for collections.
+  const columnOwners = new Map<string, string>();
   fields.forEach((field, index) => {
     if (!field || typeof field !== "object") return;
     const name = (field as Record<string, unknown>).name;
@@ -327,7 +328,22 @@ function validateFields(
         message: `Field name '${name}' is reserved: it becomes the system column '${column}'`,
         code: "FIELD_NAME_RESERVED",
       });
+      return;
     }
+    // Two names that reach one column cannot both be emitted, so the table could never be
+    // created. Checked here rather than in the shared field-name rule because only this level has
+    // columns at all: a repeater or group keeps its children inside a single JSON column, where
+    // two names that convert alike are simply two keys.
+    const owner = columnOwners.get(column);
+    if (owner !== undefined) {
+      errors.push({
+        path: `${path}[${index}].name`,
+        message: `Field name '${name}' collides with '${owner}': both become the column '${column}'`,
+        code: "FIELD_NAME_DUPLICATE",
+      });
+      return;
+    }
+    columnOwners.set(column, name);
   });
 
   // Why: empty fields list is now valid for both code-first defines and the

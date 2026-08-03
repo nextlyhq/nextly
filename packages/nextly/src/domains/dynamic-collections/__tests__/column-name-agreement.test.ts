@@ -160,6 +160,33 @@ describe("two field names that reach one column", () => {
     }
   });
 
+  it("leaves nested fields alone, because they share one JSON column", () => {
+    // A repeater or group keeps its children inside a single column, so two child names that
+    // convert alike are two keys in one JSON value — nothing collides. Applying a column rule at
+    // a level that has no columns would refuse a configuration that works.
+    for (const type of ["group", "repeater"]) {
+      const result = validateCollectionConfig({
+        slug: "probe",
+        fields: [
+          {
+            name: "wrapper",
+            type,
+            fields: [
+              { name: "foo_bar", type: "text" },
+              { name: "FooBar", type: "text" },
+            ],
+          },
+        ],
+      } as never);
+
+      expect({
+        [type]: (result.errors ?? []).filter(
+          e => e.code === "FIELD_NAME_DUPLICATE"
+        ),
+      }).toEqual({ [type]: [] });
+    }
+  });
+
   it("still accepts two names that reach different columns", () => {
     // The mirror, so the case above cannot be satisfied by refusing every pair.
     const result = validateCollectionConfig({
