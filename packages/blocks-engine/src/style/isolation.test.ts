@@ -517,6 +517,44 @@ describe("names CSS resolves for the whole document", () => {
     expect(withPseudo.map(entry => entry.name)).toEqual(["host"]);
   });
 
+  it("keeps an outer layer's namespace across a conditional wrapper", () => {
+    // `@media` groups rules without renaming them, so the layer above it still
+    // applies: this is `theme.utilities`, not a bare `utilities`. Checking only
+    // the nearest at-rule saw the `@media` and lost the layer.
+    expect(
+      findUnnamespacedGlobals(
+        `@layer ${ns("theme")} { @media (max-width: 1px) { @layer utilities { .a { color: red } } } }`,
+        SCOPE
+      )
+    ).toEqual([]);
+    // The outermost still has to carry it, however deep the nesting goes.
+    expect(
+      findUnnamespacedGlobals(
+        `@layer host { @supports (display: grid) { @layer utilities { .a { color: red } } } }`,
+        SCOPE
+      )
+    ).toHaveLength(1);
+  });
+
+  it("keeps two scopes apart under folding it cannot enumerate", () => {
+    // Marking capitals is not enough: U+212A KELVIN SIGN and "K" both fold to
+    // "k", so two scopes differing only there would still share a font family.
+    // Anything outside the stable alphabet is hashed rather than transcribed.
+    const kelvin = namespacedGlobalName("Fade", "\u212Aarea");
+    const kay = namespacedGlobalName("Fade", "Karea");
+    // The two scopes really do fold together, which is the risk.
+    expect("\u212Aarea".toLowerCase()).toBe("Karea".toLowerCase());
+    expect(kelvin.toLowerCase()).not.toBe(kay.toLowerCase());
+    const accented = namespacedGlobalName("Fade", "Ärea");
+    const accentedLower = namespacedGlobalName("Fade", "ärea");
+    expect(accented.toLowerCase()).not.toBe(accentedLower.toLowerCase());
+    // Still recognised under its own scope, and reported under the other.
+    const face = (name: string): string =>
+      `@font-face { font-family: ${name}; src: url(a.woff2) }`;
+    expect(findUnnamespacedGlobals(face(accented), "Ärea")).toEqual([]);
+    expect(findUnnamespacedGlobals(face(accented), "ärea")).toHaveLength(1);
+  });
+
   it("keeps two scopes apart when only their case differs", () => {
     // A keyframe name is case-sensitive, but a font family is not: it is why
     // `font-family: arial` finds a font installed as "Arial". So "Region" and

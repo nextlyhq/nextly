@@ -41,6 +41,7 @@ import parse from "css-tree/parser";
 import walk from "css-tree/walker";
 
 import { escapeIdentifier } from "./css-value";
+import { hashId } from "./node-class";
 
 /** One rule whose selector can match outside the page root. */
 export interface UnscopedRule {
@@ -175,44 +176,53 @@ export function namespacedGlobalName(name: string, scopeClass: string): string {
  * only odd-length run at the boundary, so distinct pairs cannot meet.
  */
 function escapeScope(scopeClass: string): string {
-  // Escaped as an identifier as well as dash-doubled, because the result is a
-  // NAME and CSS is stricter about those than about the class the scope came
-  // from. `7f3a` is a legal scope and a legal class, but `7f3a-fade` tokenizes
-  // as a dimension rather than an identifier, so an animation by that name is
-  // one CSS never resolves. `\37 f3a-fade` is the same name spelled legally.
-  return escapeIdentifier(encodeCase(scopeClass.replaceAll("-", "--")));
+  // Escaped as an identifier on top of that, because the result is a NAME and
+  // CSS is stricter about those than about the class the scope came from.
+  // `7f3a` is a legal scope and a legal class, but `7f3a-fade` tokenizes as a
+  // dimension rather than an identifier, so an animation by that name is one
+  // CSS never resolves. `\37 f3a-fade` is the same name spelled legally.
+  return escapeIdentifier(escapeScopeText(scopeClass));
 }
 
 /**
- * Case written so it survives a case-insensitive comparison.
+ * Scopes already written in an alphabet that no case folding touches.
+ *
+ * Lowercase ASCII, digits and the two joiners. A scope made only of these means
+ * the same string before and after folding, so it can be carried into a name
+ * verbatim and stay readable.
+ */
+const CASE_STABLE_SCOPE = /^[a-z0-9_-]*$/;
+
+/**
+ * A scope written so that two different scopes cannot meet in one name.
  *
  * Not every name here is compared the same way. A `<custom-ident>` — a keyframe,
  * a counter style, a colour profile — is case-sensitive, but a font family is
  * matched case-insensitively, which is why `font-family: arial` finds a font
- * installed as "Arial". So scopes "Region" and "region" produce two distinct
- * animation names and ONE font family between them, and the document that
- * loaded second gets both.
+ * installed as "Arial". So scopes that differ only by case would produce two
+ * distinct animation names and ONE font family between them, and the document
+ * that loaded second would take it.
  *
- * Marking each capital with a leading `_` moves the distinction into characters
- * that case folding does not touch, so the two scopes stay apart under either
- * comparison. A literal `_` doubles so the marker cannot be forged. Scopes
- * without capitals — which includes the page root — come back unchanged, so the
- * usual name pays nothing for this.
+ * Marking capitals is not enough, because folding is not a function of ASCII
+ * case alone: U+212A KELVIN SIGN and "K" both fold to "k", so two scopes
+ * differing only there would still meet. Anything outside the stable alphabet is
+ * therefore hashed rather than transcribed, which is the only encoding that
+ * survives folding it cannot enumerate.
+ *
+ * The two forms cannot be confused. A verbatim scope doubles its underscores, so
+ * it never begins with a single one; a hashed scope always does. Within the
+ * verbatim form the doubling keeps the boundary findable, which is what makes
+ * the join reversible.
+ *
+ * A scope of lowercase and dashes — which includes the page root and every one
+ * the compiler generates — comes back readable, so the usual name pays nothing
+ * for the guarantee.
  */
-function encodeCase(text: string): string {
-  let out = "";
-  for (const char of text) {
-    if (char === "_") {
-      out += "__";
-      continue;
-    }
-    if (char >= "A" && char <= "Z") {
-      out += `_${char.toLowerCase()}`;
-      continue;
-    }
-    out += char;
+function escapeScopeText(scopeClass: string): string {
+  if (CASE_STABLE_SCOPE.test(scopeClass)) {
+    return scopeClass.replaceAll("_", "__").replaceAll("-", "--");
   }
-  return out;
+  return `_${hashId(scopeClass)}`;
 }
 
 /** Whether a name already carries this document's namespace. */
@@ -400,21 +410,27 @@ export function findUnnamespacedGlobals(
     found.push({ atRule: "", name: "", reason: parsed.reason });
   }
   if (parsed.ast === undefined) return found;
+  // The at-rules enclosing the one being visited, outermost first. css-tree's
+  // walk context names only the NEAREST at-rule, and a layer's namespace can sit
+  // further out than that: `@layer x { @media … { @layer y } }` still defines
+  // `x.y`, because a conditional wrapper groups rules without renaming them.
+  const enclosing: string[] = [];
   walk(parsed.ast, {
     visit: "Atrule",
+    leave() {
+      enclosing.pop();
+    },
     enter(node: Atrule) {
       const atRule = node.name.toLowerCase();
+      const ancestors = [...enclosing];
+      enclosing.push(atRule);
       const facts = AT_RULES[atRule];
       if (facts === undefined) {
         // An at-rule inside a selectorless one is a descriptor of it — the
         // `@styleset` blocks within `@font-feature-values`, say — and is
         // covered by the name check on its parent.
-        const parent = this.atrule;
-        if (
-          parent !== null &&
-          parent !== node &&
-          AT_RULES[parent.name.toLowerCase()]?.selectorless === true
-        ) {
+        const parent = ancestors[ancestors.length - 1];
+        if (parent !== undefined && AT_RULES[parent]?.selectorless === true) {
           return;
         }
         // Default deny. Three named at-rules reached this compiler's output
@@ -435,14 +451,11 @@ export function findUnnamespacedGlobals(
       // still namespaced by the one it sits in. Judging it alone would call a
       // correctly namespaced hierarchy a collision. The outermost layer is the
       // one that has to carry the namespace, and it is checked on its own.
-      if (
-        atRule === "layer" &&
-        this.atrule !== null &&
-        this.atrule !== node &&
-        this.atrule.name.toLowerCase() === "layer"
-      ) {
-        return;
-      }
+      //
+      // Asked of the whole ancestry rather than the nearest at-rule, because a
+      // conditional wrapper does not break the chain: `@media` groups rules
+      // without renaming them, so the layer above it still applies.
+      if (atRule === "layer" && ancestors.includes("layer")) return;
       const readNames = facts.globalNames;
       if (readNames === undefined) return;
       for (const name of readNames(css, node)) {

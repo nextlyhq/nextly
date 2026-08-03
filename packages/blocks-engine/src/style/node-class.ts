@@ -55,7 +55,7 @@ export const BLOCK_TYPE_CLASS_PREFIX = "nx-bt-";
  * two ids chosen to collide gets two different classes rather than one node
  * wearing another's styles.
  */
-function hashId(id: string): string {
+export function hashId(id: string): string {
   let low = 0x811c9dc5;
   let high = 0xc2b2ae35;
   for (let index = 0; index < id.length; index += 1) {
