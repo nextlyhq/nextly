@@ -1604,7 +1604,7 @@ export class CollectionQueryService extends BaseService {
       // of them cannot read that field and copy it onto an allowed source key the
       // final pass no longer looks at. The authoritative pass is idempotent over
       // the shared walk state, so running it after each source phase is safe.
-      await this.relationshipService.resanitizeAssembledRows(
+      await this.relationshipService.reprojectRelatedRows(
         dataAfterCodeHooks as Record<string, unknown>[],
         params.collectionName,
         nestedAccess,
@@ -1644,7 +1644,7 @@ export class CollectionQueryService extends BaseService {
 
       // A stored hook may likewise have reintroduced a denied related field;
       // sanitize before the field-level hooks read the assembled document.
-      await this.relationshipService.resanitizeAssembledRows(
+      await this.relationshipService.reprojectRelatedRows(
         finalData as Record<string, unknown>[],
         params.collectionName,
         nestedAccess,
@@ -1701,7 +1701,7 @@ export class CollectionQueryService extends BaseService {
       // never held; the root access pass above knows only this collection's
       // schema and never descends into a related row. Before selection, so it
       // judges whole rows with their sibling evidence intact.
-      await this.relationshipService.resanitizeAssembledRows(
+      await this.relationshipService.reprojectRelatedRows(
         finalData as Record<string, unknown>[],
         params.collectionName,
         nestedAccess,
@@ -2871,7 +2871,7 @@ export class CollectionQueryService extends BaseService {
       // field; sanitize now, before the stored and field-level hooks run, so one
       // of them cannot read that field and copy it onto an allowed source key the
       // final pass no longer looks at. Idempotent over the shared walk state.
-      await this.relationshipService.resanitizeAssembledRows(
+      await this.relationshipService.reprojectRelatedRows(
         [dataAfterCodeHooks],
         params.collectionName,
         detailNestedAccess,
@@ -2911,7 +2911,7 @@ export class CollectionQueryService extends BaseService {
 
       // A stored hook may likewise have reintroduced a denied related field;
       // sanitize before the field-level hooks read the assembled document.
-      await this.relationshipService.resanitizeAssembledRows(
+      await this.relationshipService.reprojectRelatedRows(
         [finalData],
         params.collectionName,
         detailNestedAccess,
@@ -2961,7 +2961,7 @@ export class CollectionQueryService extends BaseService {
       // return a reshaped document whose related rows are new objects, and the
       // root access pass sees only this collection's schema. Before selection, so
       // it judges whole rows with their sibling evidence intact.
-      await this.relationshipService.resanitizeAssembledRows(
+      await this.relationshipService.reprojectRelatedRows(
         [finalData],
         params.collectionName,
         detailNestedAccess,

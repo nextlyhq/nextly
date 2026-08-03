@@ -387,18 +387,6 @@ export type ReadAccessRedactions = WeakMap<
   Record<string, unknown>
 >;
 
-/**
- * Rows whose redaction provenance could not be established, keyed by the row
- * OBJECT like {@link ReadAccessRedactions}. The nested-read pipeline flags a
- * related-row clone here when it cannot be matched to its source row (a reshaped
- * or id-less clone a hook returned); every field on such a row that carries an
- * `access.read` rule is then denied WITHOUT running the rule, because the rule's
- * evidence — sibling values on an untrusted clone — cannot be relied on. This is
- * the fail-secure default: deny when the inputs to an access decision are not
- * trustworthy, rather than judge on them.
- */
-export type FailClosedRows = WeakSet<Record<string, unknown>>;
-
 /** One value a pass put back purely as evidence: the row it was written onto and
  *  the key, so it can be removed again once the snapshots that needed it are
  *  taken. */
@@ -481,15 +469,8 @@ async function applyReadAccessRec(
   fns: Record<string, FieldFunctions>,
   ctx: { user?: Record<string, unknown>; id?: string },
   redactions: ReadAccessRedactions,
-  restoredByRow: RestoredByRow,
-  failClosed?: FailClosedRows
+  restoredByRow: RestoredByRow
 ): Promise<void> {
-  // A row whose redaction provenance could not be established (a reshaped or
-  // id-less related-row clone). Every access-controlled field on it is denied
-  // without consulting its rule, because the rule's evidence — sibling values on
-  // an untrusted clone — cannot be relied on. Recursion into containers still
-  // runs, so each nested row is judged against this same set individually.
-  const failed = failClosed?.has(entry) ?? false;
   // Taken BEFORE the recursion below replaces nested containers with their
   // redacted serialization: a parent-level rule reading a protected nested
   // value would otherwise find it already removed, and the outcome would turn
@@ -509,8 +490,7 @@ async function applyReadAccessRec(
             fieldFns.fields,
             ctx,
             redactions,
-            restoredByRow,
-            failClosed
+            restoredByRow
           );
         }
         entry[name] = container.serialize();
@@ -518,12 +498,6 @@ async function applyReadAccessRec(
     }
     const fn = fieldFns.access?.read;
     if (!fn) continue;
-    if (failed) {
-      // Fail-closed: deny every access-controlled field on an untrusted row
-      // without running its rule.
-      denied.push(name);
-      continue;
-    }
     let allowed = false;
     try {
       allowed = await fn({
@@ -576,10 +550,6 @@ async function applyReadAccessRec(
  * pass removed from a row as evidence, then re-judges the row against its current
  * content — so a denied field a hook reintroduced or a row it changed is caught,
  * while a field kept only because of a now-removed sibling keeps its verdict.
- *
- * Pass a {@link FailClosedRows} set to deny every access-controlled field on a
- * row whose provenance could not be established (a reshaped or id-less clone),
- * without running its rules.
  */
 export async function applyFieldReadAccess(
   opts: {
@@ -589,8 +559,7 @@ export async function applyFieldReadAccess(
     user?: Record<string, unknown>;
     overrideAccess?: boolean;
   },
-  redactions?: ReadAccessRedactions,
-  failClosed?: FailClosedRows
+  redactions?: ReadAccessRedactions
 ): Promise<void> {
   if (opts.overrideAccess) return;
   const fns = getFieldFunctions(opts.kind, opts.slug);
@@ -613,8 +582,7 @@ export async function applyFieldReadAccess(
       id: typeof opts.entry.id === "string" ? opts.entry.id : undefined,
     },
     store,
-    restoredByRow,
-    failClosed
+    restoredByRow
   );
   // A restored value existed only to feed the snapshots above. The caller was
   // denied it and the post-hook row did not supply it, so it must not appear in
