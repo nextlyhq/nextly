@@ -31,7 +31,7 @@
  *
  * @module style/isolation
  */
-import type { CssNode, Rule, Selector } from "css-tree";
+import type { Atrule, CssNode, Rule, Selector } from "css-tree";
 import parse from "css-tree/parser";
 import walk from "css-tree/walker";
 
@@ -94,8 +94,99 @@ function selectorIsAnchored(selector: Selector, scopeClass: string): boolean {
   return next.name === " " || next.name === ">";
 }
 
+/**
+ * A name that CSS resolves globally, wearing the document's namespace.
+ *
+ * `@keyframes`, `@property`, `@counter-style` and `@font-palette-values` all
+ * define names in one flat per-document space, no matter where the rule sits or
+ * how tightly its selectors are scoped. Two documents on one page — or a
+ * document and its host — that both define `fade` do not get one each: the
+ * later definition wins for BOTH, silently, and which one is later depends on
+ * the order stylesheets happened to load.
+ *
+ * Anchoring cannot help, because these names are not selectors. Namespacing is
+ * the whole mechanism, which is why the invariant below exists before anything
+ * emits one: the moment tokens or animations start defining names, an
+ * un-namespaced one has to be a test failure rather than a rendering mystery
+ * somebody debugs six months later.
+ */
+export function namespacedGlobalName(name: string, scopeClass: string): string {
+  // A custom-property name keeps its leading dashes, since `@property` only
+  // accepts a dashed ident and moving them would produce a name CSS refuses.
+  const custom = name.startsWith("--");
+  const bare = custom ? name.slice(2) : name;
+  return `${custom ? "--" : ""}${scopeClass}-${bare}`;
+}
+
+/** At-rules that define a globally-resolved name in their prelude. */
+const GLOBAL_NAME_AT_RULES = new Set([
+  "keyframes",
+  "property",
+  "counter-style",
+  "font-palette-values",
+]);
+
+/** One at-rule defining a name that is not namespaced to this document. */
+export interface GlobalName {
+  /** The at-rule, e.g. "keyframes". */
+  atRule: string;
+  /** The name it defines. */
+  name: string;
+  /** Why it is a problem, in a sentence a person can act on. */
+  reason: string;
+}
+
+/**
+ * Every globally-resolved name a stylesheet defines without the namespace.
+ *
+ * Separate from {@link findUnscopedRules} because it is a different failure:
+ * that one is a rule matching elements it does not own, this one is a NAME
+ * colliding with someone else's. A sheet can be perfectly anchored and still
+ * rename the host's animation.
+ */
+export function findUnnamespacedGlobals(
+  css: string,
+  scopeClass: string
+): GlobalName[] {
+  const found: GlobalName[] = [];
+  let ast: CssNode;
+  try {
+    ast = parse(css, { positions: true });
+  } catch {
+    return [];
+  }
+  walk(ast, {
+    visit: "Atrule",
+    enter(node: Atrule) {
+      const atRule = node.name.toLowerCase();
+      if (!GLOBAL_NAME_AT_RULES.has(atRule)) return;
+      const prelude = node.prelude;
+      if (prelude === null) return;
+      const name =
+        prelude.type === "Raw"
+          ? prelude.value.trim()
+          : sourceTextOf(css, prelude);
+      if (name === "") return;
+      if (namespacedGlobalName(name, scopeClass) === name) return;
+      const bare = name.startsWith("--") ? name.slice(2) : name;
+      if (bare.startsWith(`${scopeClass}-`)) return;
+      found.push({
+        atRule,
+        name,
+        reason: `"@${atRule} ${name}" defines a name CSS resolves for the whole document, so it collides with any other definition of that name on the page.`,
+      });
+    },
+  });
+  return found;
+}
+
 /** One node's own text, exactly as the stylesheet spells it. */
 function sourceText(css: string, node: Selector): string {
+  return sourceTextOf(css, node);
+}
+
+/** The same, for any node that carries a position. */
+function sourceTextOf(css: string, node: CssNode): string {
   const loc = node.loc;
   if (loc === undefined) return "";
   return css.slice(loc.start.offset, loc.end.offset).trim();

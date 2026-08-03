@@ -7,7 +7,11 @@ import {
 } from "../validation.fixtures";
 
 import { compilePageCss } from "./compile-page";
-import { findUnscopedRules } from "./isolation";
+import {
+  findUnnamespacedGlobals,
+  findUnscopedRules,
+  namespacedGlobalName,
+} from "./isolation";
 import { PAGE_ROOT_CLASS, PAGE_ROOT_SELECTOR } from "./node-class";
 
 const SCOPE = PAGE_ROOT_CLASS;
@@ -236,5 +240,60 @@ describe("the override contract, as a user would meet it", () => {
     const [, oursClasses] = specificity(ours);
     const [, theirsClasses] = specificity(deliberate);
     expect(theirsClasses).toBeGreaterThan(oursClasses);
+  });
+});
+
+describe("names CSS resolves for the whole document", () => {
+  it("namespaces an animation name, and a custom property keeps its dashes", () => {
+    expect(namespacedGlobalName("fade", SCOPE)).toBe(`${SCOPE}-fade`);
+    // `@property` only accepts a dashed ident, so moving the dashes would
+    // produce a name CSS refuses outright.
+    expect(namespacedGlobalName("--gap", SCOPE)).toBe(`--${SCOPE}-gap`);
+  });
+
+  it("reports a global name defined without the namespace", () => {
+    // Two documents on one page that both define `fade` do not get one each:
+    // the later definition wins for BOTH, and which is later depends on the
+    // order stylesheets happened to load.
+    const found = findUnnamespacedGlobals(
+      `@keyframes fade { from { opacity: 0 } }`,
+      SCOPE
+    );
+    expect(found).toHaveLength(1);
+    expect(found[0]?.name).toBe("fade");
+  });
+
+  it("accepts one that carries the namespace", () => {
+    expect(
+      findUnnamespacedGlobals(
+        `@keyframes ${SCOPE}-fade { from { opacity: 0 } }`,
+        SCOPE
+      )
+    ).toEqual([]);
+    expect(
+      findUnnamespacedGlobals(`@property --${SCOPE}-gap { syntax: "*" }`, SCOPE)
+    ).toEqual([]);
+  });
+
+  it("ignores at-rules that define no global name", () => {
+    // `@media` and `@container` scope rules; they name nothing.
+    expect(
+      findUnnamespacedGlobals(
+        `@media (max-width: 1px) { .a { color: red } }`,
+        SCOPE
+      )
+    ).toEqual([]);
+  });
+
+  it("holds over the corpus: the compiler defines no un-namespaced name", () => {
+    // Nothing emits these yet. The invariant is here FIRST so that the moment
+    // tokens or animations begin defining names, an un-namespaced one is a test
+    // failure rather than a rendering mystery somebody debugs much later.
+    for (const fixture of VALIDATION_FIXTURES) {
+      const out = compilePageCss(fixture.doc, {
+        breakpoints: FIXTURE_BREAKPOINTS,
+      });
+      expect(findUnnamespacedGlobals(out.css, SCOPE)).toEqual([]);
+    }
   });
 });
