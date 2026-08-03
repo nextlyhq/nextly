@@ -11,6 +11,8 @@
 
 import { describe, expect, it } from "vitest";
 
+import { buildSingleErrorResult } from "../../domains/singles/services/single-utils";
+
 import {
   errorFromServiceEnvelope,
   errorEnvelopeFields,
@@ -139,5 +141,38 @@ describe("a raw driver failure keeps its provenance too", () => {
     // something spreadable rather than a null it has to guard.
     expect(Object.keys(errorEnvelopeFields("nope"))).toEqual([]);
     expect(originalErrorOf(errorEnvelopeFields("nope"))).toBeUndefined();
+  });
+});
+
+describe("a single's failure result carries provenance on every branch", () => {
+  it("keeps a raw database rejection", () => {
+    // The branch that returned early. A single's raw failure had nothing to
+    // lift into the envelope and so skipped the helper entirely, which is the
+    // one case where the error itself is all the boundary has to chain.
+    const raw = new Error("driver: could not serialize access");
+
+    const result = buildSingleErrorResult(raw, "Failed.");
+
+    expect(originalErrorOf(result)).toBe(raw);
+    expect(result.statusCode).toBe(500);
+    // The provenance itself stays off the wire. This path separately puts the
+    // driver's own message into `message`, which predates this and is not what
+    // is being asserted here.
+    expect(Object.keys(result)).toEqual(["success", "statusCode", "message"]);
+  });
+
+  it("keeps a typed failure too, so neither branch is the special one", () => {
+    const typed = NextlyError.internal({ logContext: { single: "site" } });
+
+    expect(originalErrorOf(buildSingleErrorResult(typed, "Failed."))).toBe(
+      typed
+    );
+  });
+
+  it("carries nothing for a thrown non-Error, without throwing itself", () => {
+    const result = buildSingleErrorResult("not an error", "Failed.");
+
+    expect(originalErrorOf(result)).toBeUndefined();
+    expect(result.success).toBe(false);
   });
 });

@@ -692,17 +692,26 @@ export function buildSingleErrorResult(
     };
   }
 
+  // Every branch routes through the helper, including the ones with no typed
+  // fields to lift. A raw database rejection has nothing to contribute to the
+  // envelope except itself, and that is precisely what the boundary needs to
+  // chain — a branch that returns early is a branch that silently opts out.
   if (error instanceof Error) {
     return {
       success: false,
       statusCode: 500,
       message: error.message || defaultMessage,
+      ...errorEnvelopeFields(error),
     };
   }
 
+  // A thrown non-Error carries no provenance, and the helper says so by
+  // returning nothing — spread here anyway so the shape of this function is
+  // the same on every path.
   return {
     success: false,
     statusCode: 500,
     message: defaultMessage,
+    ...errorEnvelopeFields(error),
   };
 }
