@@ -28,3 +28,8 @@ resolved for the whole document regardless of the scoping on its selectors, so
 a host defining `spin`, `fade-in` or the same `--tw-*` registrations shared them
 with the admin and the later stylesheet won. Both are namespaced now, and the
 build fails if either escapes again.
+
+`@nextlyhq/ui`'s Tailwind preset keeps its named-plus-default export shape,
+which the build warns about. That shape is deliberate and now says so at the
+build config as well as beside the code: a preset is consumed as a value, so
+`require()` has to return it, and silencing the warning would change it back.
