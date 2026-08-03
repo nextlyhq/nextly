@@ -6,8 +6,12 @@ import { Activity } from "@admin/types/dashboard/activity";
 
 import { RecentActivity } from "./RecentActivity";
 
-// Mock the useRecentActivity hook
-vi.mock("../../hooks/queries/useRecentActivity", () => ({
+// Mocked through the SAME specifier the component imports. A relative path
+// from here resolves to `src/components/hooks/...`, which does not exist, so
+// the mock registered against a module nobody loads: the real hook stayed in
+// place and `vi.mocked()` wrapped a plain function, leaving every case below
+// asserting nothing.
+vi.mock("@admin/hooks/queries/useRecentActivity", () => ({
   useRecentActivity: vi.fn(),
 }));
 
@@ -88,7 +92,10 @@ describe("RecentActivity", () => {
     render(<RecentActivity />);
 
     expect(
-      screen.getByText(/failed to load recent activity/i)
+      // Asserted against what the component actually renders. These three
+      // expectations had drifted from the copy years of edits moved on from,
+      // and the broken mock meant nothing ever noticed.
+      screen.getByText(/failed to fetch activity stream/i)
     ).toBeInTheDocument();
   });
 
@@ -105,7 +112,9 @@ describe("RecentActivity", () => {
     render(<RecentActivity />);
 
     await waitFor(() => {
-      expect(screen.getByText(/no recent activity/i)).toBeInTheDocument();
+      expect(
+        screen.getByText(/activity log is currently silent/i)
+      ).toBeInTheDocument();
     });
   });
 
@@ -210,7 +219,7 @@ describe("RecentActivity", () => {
 
     await waitFor(() => {
       // Header should be present
-      expect(screen.getByText("Recent Activity")).toBeInTheDocument();
+      expect(screen.getByText("System Event Log")).toBeInTheDocument();
 
       // Content should be visible
       expect(screen.getByText("John Doe")).toBeVisible();
