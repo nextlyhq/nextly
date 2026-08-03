@@ -63,6 +63,13 @@ export interface UnscopedRule {
  * `@keyframes` holds percentage steps, `@font-face` and `@property` hold
  * descriptors. Asking whether those are anchored is a category error. Their risk
  * is a document-global NAME, which is what `globalNames` reads.
+ *
+ * The table is TOTAL: an at-rule with no entry here is reported rather than
+ * skipped. Enumerating only the dangerous ones means whoever adds an at-rule has
+ * to remember a list kept somewhere else, and three separate named at-rules
+ * reached this compiler's output that way, each found after the previous one was
+ * taken for the last. Reporting the unclassified ones turns that into a question
+ * asked at the point of the change.
  */
 interface AtRuleFacts {
   /** Its contents match no elements, so anchoring does not apply to them. */
@@ -72,11 +79,23 @@ interface AtRuleFacts {
 }
 
 const AT_RULES: Record<string, AtRuleFacts> = {
+  // Wrap ordinary rules and name nothing: the rules inside are checked for
+  // anchoring like any other, and there is no name to collide.
+  media: { selectorless: false },
+  supports: { selectorless: false },
+  container: { selectorless: false },
+  scope: { selectorless: false },
+  "starting-style": { selectorless: false },
+  // Wraps ordinary rules AND names its layers. A host layer of the same name is
+  // the same layer, which merges two orderings that were meant to be separate.
+  layer: { selectorless: false, globalNames: commaSeparatedNames },
+  // Match no elements; define a name CSS resolves for the whole document.
   keyframes: { selectorless: true, globalNames: preludeNames },
   property: { selectorless: true, globalNames: preludeNames },
   "counter-style": { selectorless: true, globalNames: preludeNames },
   "font-palette-values": { selectorless: true, globalNames: preludeNames },
   "position-try": { selectorless: true, globalNames: preludeNames },
+  "color-profile": { selectorless: true, globalNames: preludeNames },
   "font-face": { selectorless: true, globalNames: fontFaceFamilies },
   page: { selectorless: true, globalNames: pageNames },
   "font-feature-values": {
@@ -185,10 +204,18 @@ function pageNames(css: string, node: Atrule): string[] {
  * later definition wins for both.
  */
 function featureValueFamilies(css: string, node: Atrule): string[] {
+  return commaSeparatedNames(css, node);
+}
+
+/**
+ * Every name in a comma-separated prelude.
+ *
+ * Split on commas rather than read token by token, so an unquoted multi-word
+ * font family stays one name instead of being reported a word at a time.
+ */
+function commaSeparatedNames(css: string, node: Atrule): string[] {
   const text = preludeNames(css, node)[0];
   if (text === undefined) return [];
-  // Split on commas rather than reading tokens, so an unquoted multi-word
-  // family stays one name instead of being reported word by word.
   return text
     .split(",")
     .map(part => unquote(part.trim()))
@@ -247,7 +274,33 @@ export function findUnnamespacedGlobals(
     visit: "Atrule",
     enter(node: Atrule) {
       const atRule = node.name.toLowerCase();
-      const readNames = AT_RULES[atRule]?.globalNames;
+      const facts = AT_RULES[atRule];
+      if (facts === undefined) {
+        // An at-rule inside a selectorless one is a descriptor of it — the
+        // `@styleset` blocks within `@font-feature-values`, say — and is
+        // covered by the name check on its parent.
+        const parent = this.atrule;
+        if (
+          parent !== null &&
+          parent !== node &&
+          AT_RULES[parent.name.toLowerCase()]?.selectorless === true
+        ) {
+          return;
+        }
+        // Default deny. Three named at-rules reached this compiler's output
+        // before anyone classified them, each found separately and each after
+        // the last was called the last. Enumerating the dangerous ones asks
+        // whoever adds an at-rule to remember a list in another file; reporting
+        // the unclassified ones asks them to answer a question. A finding here
+        // means "decide what this rule does", not "this rule is wrong".
+        found.push({
+          atRule,
+          name: "",
+          reason: `"@${atRule}" is not classified, so whether it defines a document-global name is unknown. Add it to the at-rule table.`,
+        });
+        return;
+      }
+      const readNames = facts.globalNames;
       if (readNames === undefined) return;
       for (const name of readNames(css, node)) {
         if (isNamespaced(name, scopeClass)) continue;

@@ -456,6 +456,51 @@ describe("names CSS resolves for the whole document", () => {
     ).toEqual([]);
   });
 
+  it("reports a colour profile, which resolves by name like the rest", () => {
+    const found = findUnnamespacedGlobals(
+      `@color-profile --brand { src: url(a.icc) }`,
+      SCOPE
+    );
+    expect(found).toHaveLength(1);
+    expect(found[0]?.name).toBe("--brand");
+    expect(
+      findUnnamespacedGlobals(
+        `@color-profile --${SCOPE}-brand { src: url(a.icc) }`,
+        SCOPE
+      )
+    ).toEqual([]);
+  });
+
+  it("reports every layer a prelude names", () => {
+    // A host layer of the same name is the same layer, so two orderings that
+    // were meant to be independent merge into one.
+    const found = findUnnamespacedGlobals(`@layer base, components;`, SCOPE);
+    expect(found.map(entry => entry.name)).toEqual(["base", "components"]);
+  });
+
+  it("reports an at-rule nobody has classified", () => {
+    // The gap that produced three separate findings: an at-rule absent from the
+    // table was skipped by the naming check AND, being selectorless, by the
+    // anchoring one. Unknown now means "answer the question", not "carry on".
+    const found = findUnnamespacedGlobals(
+      `@invented-rule --x { color: red }`,
+      SCOPE
+    );
+    expect(found).toHaveLength(1);
+    expect(found[0]?.atRule).toBe("invented-rule");
+  });
+
+  it("does not ask a descriptor block to classify itself", () => {
+    // `@styleset` is part of `@font-feature-values`, not a rule of its own, and
+    // the family name on its parent is what could collide.
+    expect(
+      findUnnamespacedGlobals(
+        `@font-feature-values ${SCOPE}-Fade { @styleset { nice: 1 } }`,
+        SCOPE
+      )
+    ).toEqual([]);
+  });
+
   it("holds over the corpus: the compiler defines no un-namespaced name", () => {
     // Nothing emits these yet. The invariant is here FIRST so that the moment
     // tokens or animations begin defining names, an un-namespaced one is a test
