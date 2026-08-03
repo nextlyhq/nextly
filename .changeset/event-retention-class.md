@@ -41,6 +41,13 @@ convention that has spread into the wider discourse. 90 days is where comparable
 products land for content activity. A deployment genuinely in PCI scope should
 raise `auditEventsMaxAgeMs`, which is a decision only the operator can make.
 
+`auditEventsMaxAgeMs` is now raised to `eventsMaxAgeMs` whenever the webhook
+window is the longer of the two, including when it is `false`. A row admitted by
+both the audit seam and an endpoint is labelled `audit` because that is the
+longest retention it needs, so a shorter audit window would have pruned it
+earlier than the webhook setting allows — irreversibly, and in a supported
+configuration.
+
 No behaviour changes for an existing deployment: the audit seam is off unless
 `webhookAuditEnabled` is set, so rows continue to be recorded webhook-class and
 pruned on the same schedule as before.

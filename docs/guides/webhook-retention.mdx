@@ -15,7 +15,7 @@ When recording is active these tables fill continuously and are pruned automatic
 Retention runs **opportunistically on content writes** and as part of the delivery **drain** — you do not need to schedule anything for it to work. Each pass deletes:
 
 - **Terminal deliveries** (`delivered` / `failed`) older than `deliveriesMaxAgeMs`.
-- **Events** older than `eventsMaxAgeMs`, once they have been fanned out and no delivery still references them. (A separate, longer window governs audit-class events — see the note below the table.)
+- **Events** older than `eventsMaxAgeMs`, once they have been fanned out and no delivery still references them. (A separate window governs audit-class events, and is never shorter than this one — see the note below the table.)
 
 Passes are bounded so a single write never turns into an unbounded delete.
 
@@ -28,7 +28,7 @@ export default defineConfig({
   webhooks: {
     retention: {
       eventsMaxAgeMs: 30 * 24 * 60 * 60 * 1000, // webhook events — default 30 days
-      auditEventsMaxAgeMs: 365 * 24 * 60 * 60 * 1000, // audit events — default 365 days
+      auditEventsMaxAgeMs: 90 * 24 * 60 * 60 * 1000, // audit events — default 90 days
       deliveriesMaxAgeMs: 7 * 24 * 60 * 60 * 1000, // terminal deliveries — default 7 days
       intervalMs: 60 * 60 * 1000, // min gap between AUTOMATIC passes — default 1 hour
       batchSize: 500, // rows per delete batch — default 500
@@ -41,13 +41,17 @@ export default defineConfig({
 | Field | Default | Meaning |
 |---|---|---|
 | `eventsMaxAgeMs` | 30 days | Age after which a fanned-out `webhook`-class event is prunable. `false` keeps events forever. |
-| `auditEventsMaxAgeMs` | 365 days | Age for `audit`-class events. `false` keeps them forever. See the note below. |
+| `auditEventsMaxAgeMs` | 90 days | Age for `audit`-class events. `false` keeps them forever. Raised to `eventsMaxAgeMs` if that is longer — see the note below. |
 | `deliveriesMaxAgeMs` | 7 days | Age after which a `delivered`/`failed` delivery row is prunable. `false` keeps them forever. |
 | `intervalMs` | 1 hour | Minimum gap between **automatic** retention passes (the opportunistic and drain-driven ones). Does not affect `nextly webhooks:prune`, which always runs a pass when invoked. |
 | `batchSize` | 500 | Rows deleted per batch (capped at 900). |
 | `maxBatchesPerRun` | 20 | Batches per pass, so one write never triggers an unbounded delete. |
 
-**On the audit class:** every event today is recorded with the default `webhook` retention class, so `eventsMaxAgeMs` governs all pruning. The `audit` class and its longer `auditEventsMaxAgeMs` window are reserved for a future audit-log producer and are dormant until then — do not rely on the 365-day window to retain events longer.
+**On the audit class:** an event's class follows from why it was recorded. A write admitted only because a webhook endpoint exists is `webhook`-class and pruned on `eventsMaxAgeMs`. A write admitted by the audit seam — `webhooks.audit`, which records events whether or not anything is subscribed — is `audit`-class and pruned on `auditEventsMaxAgeMs`. A write that is both takes the audit window, because that is the longest retention the row needs and evicting it on the delivery schedule would lose history nothing can reconstruct.
+
+Because of that promise, `auditEventsMaxAgeMs` is **raised to `eventsMaxAgeMs` whenever the webhook window is longer** (including `false`, which means forever). Configuring a shorter audit window than webhook window would otherwise prune a dual-purpose row earlier than your webhook setting allows. The cost is that a row which is audit-only is kept as long as the webhook window in that configuration — retention errs toward keeping an audit trail rather than losing one.
+
+The audit seam is **off** unless you enable it, so an install that has not turned it on records only `webhook`-class rows and is pruned exactly as before.
 
 Set `webhooks.retention: false` to disable pruning entirely. Both the automatic passes **and** `nextly webhooks:prune` then do nothing, so the tables grow until you either re-enable retention or clean them up at the database level yourself.
 

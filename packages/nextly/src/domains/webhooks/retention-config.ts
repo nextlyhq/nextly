@@ -174,9 +174,19 @@ export function resolveWebhookRetentionConfig(
     input.eventsMaxAgeMs,
     DEFAULT_EVENTS_MAX_AGE_MS
   );
-  const auditEventsMaxAgeMs = maxAge(
-    input.auditEventsMaxAgeMs,
-    DEFAULT_AUDIT_EVENTS_MAX_AGE_MS
+  // Raised to the webhook window when it is the shorter of the two. The class a
+  // row carries is decided from why it was recorded, and a row admitted by both
+  // the audit seam and an endpoint is labelled `audit` because that is the
+  // longest retention it needs — but the two windows are configured
+  // independently, so nothing stops an audit window shorter than the webhook
+  // one. Left alone, that combination prunes a dual-purpose row earlier than the
+  // webhook setting allows, which is the opposite of what its class promises and
+  // is not recoverable. Clamping here keeps the promise true for every
+  // configuration rather than only the ones where audit happens to be longer,
+  // and mirrors how `deliveriesMaxAgeMs` is bounded by the windows above it.
+  const auditEventsMaxAgeMs = longestEventWindow(
+    eventsMaxAgeMs,
+    maxAge(input.auditEventsMaxAgeMs, DEFAULT_AUDIT_EVENTS_MAX_AGE_MS)
   );
 
   // A delivery row is removed by cascade when its event goes, so a window
