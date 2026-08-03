@@ -287,6 +287,30 @@ function remoteUrlInValue(
  * `.a { .b { url(…) } }` and misses `.a { .b { .c { url(…) } } }`. Bounded, and
  * a rule deeper than the bound is refused rather than followed.
  */
+/**
+ * Every `Raw` sitting directly in a block, wherever that block hangs.
+ *
+ * Both rules and at-rules have blocks, and a rule nested inside either comes
+ * back as `Raw`. Reading only `Rule` blocks let one through:
+ * `.a { @media (…) { .probe { url(…) } } }` is valid nested CSS, and its inner
+ * rule is a `Raw` child of the `@media`, not of `.a`. What decides whether a
+ * `Raw` needs reading is that it is in a block at all, not what kind of node
+ * the block belongs to.
+ */
+function rawBlockChildren(root: csstree.CssNode): string[] {
+  const found: string[] = [];
+  csstree.walk(root, {
+    enter(node: csstree.CssNode) {
+      if (node.type !== "Rule" && node.type !== "Atrule") return;
+      if (node.block == null) return;
+      for (const child of node.block.children) {
+        if (child.type === "Raw") found.push(child.value);
+      }
+    },
+  });
+  return found;
+}
+
 function remoteUrlInRawRule(
   text: string,
   depth: number
@@ -306,16 +330,7 @@ function remoteUrlInRawRule(
     },
   });
   if (remote !== undefined) return remote;
-  const deeper: string[] = [];
-  csstree.walk(inner, {
-    visit: "Rule",
-    enter(rule: Rule) {
-      if (rule.block === null) return;
-      for (const child of rule.block.children) {
-        if (child.type === "Raw") deeper.push(child.value);
-      }
-    },
-  });
+  const deeper = rawBlockChildren(inner);
   for (const raw of deeper) {
     if (raw.trim() === "") continue;
     const nested = remoteUrlInRawRule(raw, depth + 1);
@@ -463,11 +478,16 @@ export function sanitizeCustomCss(
   // reached the page untouched. `Raw` is where the parser puts what it did not
   // read, and every level it appears at has to be followed: the value root, a
   // fallback nested in a value, and here.
+  //
+  // Both rules and at-rules are walked, because both have blocks and a rule
+  // nested in either arrives as `Raw`. Reading only `Rule` blocks let
+  // `.a { @media (…) { .probe { url(…) } } }` through untouched: its inner rule
+  // is a `Raw` child of the `@media`, not of `.a`.
   csstree.walk(ast, {
-    visit: "Rule",
-    enter(node: Rule) {
+    enter(node: CssNode) {
+      if (node.type !== "Rule" && node.type !== "Atrule") return;
       const block = node.block;
-      if (block === null) return;
+      if (block == null) return;
       const items: ListItem<CssNode>[] = [];
       block.children.forEach((child: CssNode, item: ListItem<CssNode>) => {
         if (child.type === "Raw") items.push(item);

