@@ -61,6 +61,12 @@ export interface ConditionRange {
   max?: string | number;
 }
 
+/** One choice a source field accepts, when it accepts a fixed set. */
+export interface ConditionSourceOption {
+  value: string;
+  label?: string;
+}
+
 /** A field this condition may be based on, as this component needs it. */
 export interface ConditionSource {
   /** The stored name, used as the condition's `field`. */
@@ -73,6 +79,15 @@ export interface ConditionSource {
    * operators, which every type supports.
    */
   type?: string;
+  /**
+   * The values this field accepts, when it accepts a fixed set.
+   *
+   * Given, the value editor becomes a dropdown of exactly these. A select or
+   * radio field compares against one of its own options and nothing else, so
+   * typing the value by hand is a way to misspell it into a condition that
+   * never matches, with nothing on screen to say why.
+   */
+  options?: readonly ConditionSourceOption[];
 }
 
 /** One condition, in the shape this component reads and writes. */
@@ -94,6 +109,15 @@ export interface ConditionRowProps {
    * {@link operatorsForType}; pass one to narrow or extend a surface's set.
    */
   operatorsFor?: (sourceType: string | undefined) => ConditionOperatorName[];
+  /**
+   * Layout for the three controls, replacing the default grid.
+   *
+   * The row is composed into containers of very different widths — a full
+   * width settings tab and a narrow card in a builder sidebar — and three
+   * equal columns that read well in one are cramped in the other. The surface
+   * that owns the container is the only thing that knows which it is.
+   */
+  className?: string;
   /** Called with the edited condition, or undefined when the source clears. */
   onChange: (next: ConditionValue | undefined) => void;
 }
@@ -206,6 +230,7 @@ export function ConditionRow({
   sources,
   readOnly = false,
   operatorsFor = operatorsForType,
+  className = "grid grid-cols-1 gap-2 sm:grid-cols-3",
   onChange,
 }: ConditionRowProps) {
   const source = sources.find(entry => entry.name === condition?.field);
@@ -235,11 +260,18 @@ export function ConditionRow({
   const takesValue = operatorTakesValue(operator);
   const numeric = source?.type === "number";
   const dated = source?.type === "date";
+  // An empty option list is treated as no list at all: a dropdown with nothing
+  // in it is a dead control, and falling back to free text at least lets the
+  // condition be written while the source field is still being defined. A
+  // range compares two ends and never picks from the set, so it keeps its
+  // inputs whatever the source offers.
+  const choices =
+    operator !== "between" && source?.options && source.options.length > 0
+      ? source.options
+      : undefined;
 
   return (
-    <div
-      style={{ display: "grid", gap: 6, gridTemplateColumns: "1fr 1fr 1fr" }}
-    >
+    <div className={className}>
       <Select
         value={condition?.field ?? ""}
         disabled={readOnly}
@@ -280,9 +312,7 @@ export function ConditionRow({
       </Select>
 
       {takesValue && operator === "between" ? (
-        <div
-          style={{ display: "grid", gap: 4, gridTemplateColumns: "1fr 1fr" }}
-        >
+        <div className="grid grid-cols-2 gap-1">
           <Input
             type={numeric ? "number" : dated ? "date" : "text"}
             aria-label="Condition value from"
@@ -312,6 +342,23 @@ export function ConditionRow({
             }
           />
         </div>
+      ) : takesValue && choices !== undefined ? (
+        <Select
+          value={scalar(condition?.value)}
+          disabled={readOnly || condition === undefined}
+          onValueChange={value => emit({ value })}
+        >
+          <SelectTrigger aria-label="Condition value">
+            <SelectValue placeholder="Pick a value…" />
+          </SelectTrigger>
+          <SelectContent>
+            {choices.map(choice => (
+              <SelectItem key={choice.value} value={choice.value}>
+                {choice.label ?? choice.value}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       ) : takesValue ? (
         <Input
           type={numeric ? "number" : dated ? "date" : "text"}

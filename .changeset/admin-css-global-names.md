@@ -33,3 +33,18 @@ build fails if either escapes again.
 which the build warns about. That shape is deliberate and now says so at the
 build config as well as beside the code: a preset is consumed as a value, so
 `require()` has to return it, and silencing the warning would change it back.
+
+The field-UI kit gains `ConditionRow` (@experimental), exported from
+`@nextlyhq/plugin-sdk/admin` alongside `operatorsForType` and
+`operatorTakesValue`. It edits one condition as source / operator / value,
+choosing the operators and the value editor from the source field's type, and a
+source carrying an option list is compared against a dropdown of exactly those
+rather than free text. It owns the row and not the container, so a surface keeps
+its own chrome; pass `operatorsFor` to narrow the offered operators to the ones
+your runtime can evaluate.
+
+Both first-party condition editors now compose it. The schema builder's gains
+nothing an author will notice beyond the value dropdown; the form builder's
+gains type-aware comparisons, a dropdown for choice fields, and typed number and
+date inputs. Stored shapes are unchanged in both, including the form builder's
+`comparison` key and its seven-comparison vocabulary.

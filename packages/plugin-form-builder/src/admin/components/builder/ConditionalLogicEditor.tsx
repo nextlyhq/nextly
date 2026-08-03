@@ -13,8 +13,12 @@
 "use client";
 
 import {
+  ConditionRow,
+  type ConditionOperatorName,
+  type ConditionSource,
+} from "@nextlyhq/plugin-sdk/admin";
+import {
   FormLabelWithTooltip,
-  Input,
   Button,
   Checkbox,
   Select,
@@ -48,33 +52,122 @@ export interface ConditionalLogicEditorProps {
 // Constants
 // ============================================================================
 
-const COMPARISON_OPERATORS: Array<{
-  value: ConditionalLogicCondition["comparison"];
-  label: string;
-}> = [
-  { value: "equals", label: "Equals" },
-  { value: "notEquals", label: "Does not equal" },
-  { value: "contains", label: "Contains" },
-  { value: "isEmpty", label: "Is empty" },
-  { value: "isNotEmpty", label: "Is not empty" },
-  { value: "greaterThan", label: "Greater than" },
-  { value: "lessThan", label: "Less than" },
-];
+/**
+ * The comparisons `evaluateConditions` implements.
+ *
+ * The shared row offers seventeen operators, and this runtime understands
+ * seven of them. Every operator offered has to be one this evaluator can
+ * answer: a field configured with `isTrue` would store fine, render fine, and
+ * then never match at form time, with nothing anywhere to say why. So the
+ * vocabulary is pinned here rather than taken from the row's default.
+ *
+ * Typed as the shared row's operator names AND as this module's stored
+ * comparisons, so the day either list moves the other stops compiling.
+ */
+const SUPPORTED_COMPARISONS = [
+  "equals",
+  "notEquals",
+  "contains",
+  "isEmpty",
+  "isNotEmpty",
+  "greaterThan",
+  "lessThan",
+] as const satisfies readonly ConditionOperatorName[] &
+  readonly ConditionalLogicCondition["comparison"][];
+
+const SUPPORTED_SET: ReadonlySet<string> = new Set(SUPPORTED_COMPARISONS);
+
+/**
+ * Whether an operator the row reported is one this runtime can evaluate.
+ *
+ * `operatorsFor` already narrows what the row offers, so this should always
+ * hold; it is a guard rather than an assertion so that if the two ever drift,
+ * the condition is left as it was instead of stored in a shape the evaluator
+ * will not understand.
+ */
+function isSupportedComparison(
+  operator: string
+): operator is ConditionalLogicCondition["comparison"] {
+  return SUPPORTED_SET.has(operator);
+}
+
+const TEXT_TYPES = new Set([
+  "text",
+  "textarea",
+  "email",
+  "url",
+  "tel",
+  "password",
+]);
+
+/**
+ * The comparisons worth offering for a source type, within what the evaluator
+ * supports.
+ *
+ * Narrower than the full seven where the type makes some of them meaningless:
+ * "contains" on a number compares substrings of a formatted value, which is
+ * not what anyone building that condition means.
+ */
+function comparisonsForType(
+  sourceType: string | undefined
+): ConditionOperatorName[] {
+  if (sourceType === "checkbox") return ["equals", "notEquals"];
+  if (sourceType === "number") {
+    return ["equals", "notEquals", "greaterThan", "lessThan"];
+  }
+  if (sourceType !== undefined && TEXT_TYPES.has(sourceType)) {
+    return ["equals", "notEquals", "contains", "isEmpty", "isNotEmpty"];
+  }
+  return [...SUPPORTED_COMPARISONS];
+}
 
 // ============================================================================
 // Helpers
 // ============================================================================
 
 /**
- * Coerce a condition's `value` (stored as `unknown`) into a string
- * suitable for the controlled `<Input>`. Objects are JSON-stringified
- * so we never render `[object Object]`.
+ * A form field as the shared row needs to see it.
+ *
+ * Choice fields hand over their options so the value editor becomes a dropdown
+ * of exactly those, rather than a text box in which an option can be misspelled
+ * into a condition that never matches.
  */
-function conditionValueToString(value: unknown): string {
-  if (value === null || value === undefined) return "";
-  if (typeof value === "object") return JSON.stringify(value);
-  // eslint-disable-next-line @typescript-eslint/no-base-to-string -- value narrowed to primitive above; rule doesn't follow control flow on unknown
-  return String(value);
+function toSource(field: AnyFormField): ConditionSource {
+  // Only the choice field types carry an option list, and `AnyFormField` is a
+  // union over every type, so the property has to be probed rather than read.
+  // An option with an empty value is dropped: a Select cannot render one, and
+  // it is a placeholder row in the editor rather than a value to compare with.
+  const options =
+    "options" in field && Array.isArray(field.options)
+      ? field.options
+          .filter(option => option.value !== "")
+          .map(option => ({ value: option.value, label: option.label }))
+      : undefined;
+  return {
+    name: field.name,
+    label: field.label || field.name,
+    type: field.type,
+    options,
+  };
+}
+
+/**
+ * A stored condition's value as the row edits it.
+ *
+ * Storage types this `unknown`, and the row edits scalars. An object that got
+ * in some other way is shown as nothing rather than as `[object Object]`,
+ * which is not a value anyone typed and not one the evaluator can use.
+ */
+function toRowValue(value: unknown): string | number | boolean | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return value;
+  }
+  return undefined;
 }
 
 // ============================================================================
@@ -168,11 +261,6 @@ export function ConditionalLogicEditor({
     [logic.conditions, updateLogic]
   );
 
-  // Check if comparison needs a value input
-  const needsValue = (comparison: ConditionalLogicCondition["comparison"]) => {
-    return comparison !== "isEmpty" && comparison !== "isNotEmpty";
-  };
-
   return (
     <div className="space-y-6 pt-2">
       {/* Enable toggle */}
@@ -242,65 +330,29 @@ export function ConditionalLogicEditor({
                   key={index}
                   className="flex flex-col gap-2 p-3 rounded-none bg-muted border border-border relative group"
                 >
-                  <div className="grid grid-cols-1 gap-2">
-                    {/* Field selector */}
-                    <Select
-                      value={condition.field}
-                      onValueChange={value =>
-                        handleUpdateCondition(index, { field: value })
-                      }
-                    >
-                      <SelectTrigger className="w-full bg-transparent border-input dark:bg-muted/50">
-                        <SelectValue placeholder="Select field" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {availableFields.map(f => (
-                          <SelectItem key={f.name} value={f.name}>
-                            {f.label || f.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-
-                    <div className="flex gap-2">
-                      {/* Comparison operator */}
-                      <Select
-                        value={condition.comparison}
-                        onValueChange={value =>
-                          handleUpdateCondition(index, {
-                            comparison:
-                              value as ConditionalLogicCondition["comparison"],
-                          })
-                        }
-                      >
-                        <SelectTrigger className="flex-1 h-9 bg-transparent border-input dark:bg-muted/50">
-                          <SelectValue placeholder="Compare operator" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {COMPARISON_OPERATORS.map(op => (
-                            <SelectItem key={op.value} value={op.value}>
-                              {op.label}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-
-                      {/* Value input (if needed) */}
-                      {needsValue(condition.comparison) && (
-                        <Input
-                          type="text"
-                          value={conditionValueToString(condition.value)}
-                          onChange={e =>
-                            handleUpdateCondition(index, {
-                              value: e.target.value,
-                            })
-                          }
-                          placeholder="Value"
-                          className="flex-1 h-9 bg-transparent"
-                        />
-                      )}
-                    </div>
-                  </div>
+                  {/* Source, comparison and value, shared with the schema
+                      builder. Stacked rather than in three columns: this card
+                      sits in a builder sidebar, where three columns leave each
+                      control too narrow to read its own selection. */}
+                  <ConditionRow
+                    className="grid grid-cols-1 gap-2"
+                    condition={{
+                      field: condition.field,
+                      operator: condition.comparison,
+                      value: toRowValue(condition.value),
+                    }}
+                    sources={availableFields.map(toSource)}
+                    operatorsFor={comparisonsForType}
+                    onChange={next => {
+                      if (!next || !isSupportedComparison(next.operator))
+                        return;
+                      handleUpdateCondition(index, {
+                        field: next.field,
+                        comparison: next.operator,
+                        value: toRowValue(next.value),
+                      });
+                    }}
+                  />
 
                   {/* Remove button */}
                   <Button

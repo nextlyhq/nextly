@@ -86,6 +86,12 @@ export type {
  *   values, CSV/JSON import, and whole-batch duplicate reporting;
  *   `withOptionIds` seeds drag ids onto plain `{label,value}` data.
  * - `FieldDefaultValueInput` — a type-aware default-value input.
+ * - `ConditionRow` — one condition as source / operator / value, with the
+ *   operators and value editor chosen from the source's type. It owns the ROW
+ *   and not the container, so your surface keeps its own chrome; pass
+ *   `operatorsFor` to narrow the set to what your runtime can evaluate, since
+ *   offering an operator it cannot evaluate builds a condition that silently
+ *   never matches.
  * - `usePluginFieldTypeEntries` — catalog rows for the plugin field types
  *   offered on a picker surface, to merge after your surface's built-in
  *   `entries` so contributed types appear in the picker, surface-filtered.
@@ -99,6 +105,9 @@ export {
   FieldOptionsEditor,
   withOptionIds,
   usePluginFieldTypeEntries,
+  ConditionRow,
+  operatorsForType,
+  operatorTakesValue,
 } from "@nextlyhq/admin";
 export type {
   FieldTypePickerProps,
@@ -106,6 +115,12 @@ export type {
   FieldDefaultOption,
   FieldOption,
   FieldOptionsEditorProps,
+  ConditionOperatorName,
+  ConditionRange,
+  ConditionRowProps,
+  ConditionSource,
+  ConditionSourceOption,
+  ConditionValue,
 } from "@nextlyhq/admin";
 
 // The declarative `contributes.admin` contract types (the same ones exported

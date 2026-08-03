@@ -45,5 +45,6 @@ export type {
   ConditionRange,
   ConditionRowProps,
   ConditionSource,
+  ConditionSourceOption,
   ConditionValue,
 } from "./ConditionRow";
