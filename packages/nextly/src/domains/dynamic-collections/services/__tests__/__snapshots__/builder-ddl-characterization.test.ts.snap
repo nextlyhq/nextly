@@ -1,0 +1,439 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`builder DDL — pinned as it is today > mysql > emits the same CREATE for a collection 1`] = `
+"-- Create dynamic collection: single_pinned
+CREATE TABLE IF NOT EXISTS \`single_pinned\` (
+  \`id\` varchar(36) PRIMARY KEY NOT NULL,
+  \`slug\` varchar(255) NOT NULL,
+  \`created_at\` timestamp DEFAULT CURRENT_TIMESTAMP,
+  \`updated_at\` timestamp DEFAULT CURRENT_TIMESTAMP,
+\`title\` text NOT NULL,
+\`slug_key\` text  UNIQUE,
+\`summary\` text,
+\`views\` integer,
+\`rating\` decimal(10,2),
+\`published\` boolean,
+\`published_at\` timestamp,
+\`payload\` json,
+\`lookup_code\` text
+);
+--> statement-breakpoint
+CREATE INDEX \`idx_single_pinned_lookup_code\` ON \`single_pinned\`(\`lookup_code\`);
+--> statement-breakpoint
+CREATE INDEX \`idx_single_pinned_created_at\` ON \`single_pinned\`(\`created_at\` DESC);
+--> statement-breakpoint
+CREATE UNIQUE INDEX \`idx_single_pinned_slug\` ON \`single_pinned\`(\`slug\`);"
+`;
+
+exports[`builder DDL — pinned as it is today > mysql > emits the same CREATE for a localized single 1`] = `
+"-- Create dynamic collection: single_pinned
+CREATE TABLE IF NOT EXISTS \`single_pinned\` (
+  \`id\` varchar(36) PRIMARY KEY NOT NULL,
+  \`slug\` varchar(255) NOT NULL,
+  \`created_at\` timestamp DEFAULT CURRENT_TIMESTAMP,
+  \`updated_at\` timestamp DEFAULT CURRENT_TIMESTAMP,
+\`views\` integer,
+\`rating\` decimal(10,2),
+\`published\` boolean,
+\`published_at\` timestamp,
+\`payload\` json
+);
+--> statement-breakpoint
+CREATE INDEX \`idx_single_pinned_created_at\` ON \`single_pinned\`(\`created_at\` DESC);
+--> statement-breakpoint
+CREATE UNIQUE INDEX \`idx_single_pinned_slug\` ON \`single_pinned\`(\`slug\`);"
+`;
+
+exports[`builder DDL — pinned as it is today > mysql > emits the same CREATE for a single 1`] = `
+"-- Create dynamic collection: single_pinned
+CREATE TABLE IF NOT EXISTS \`single_pinned\` (
+  \`id\` varchar(36) PRIMARY KEY NOT NULL,
+  \`slug\` varchar(255) NOT NULL,
+  \`created_at\` timestamp DEFAULT CURRENT_TIMESTAMP,
+  \`updated_at\` timestamp DEFAULT CURRENT_TIMESTAMP,
+\`title\` text NOT NULL,
+\`slug_key\` text  UNIQUE,
+\`summary\` text,
+\`views\` integer,
+\`rating\` decimal(10,2),
+\`published\` boolean,
+\`published_at\` timestamp,
+\`payload\` json,
+\`lookup_code\` text
+);
+--> statement-breakpoint
+CREATE INDEX \`idx_single_pinned_lookup_code\` ON \`single_pinned\`(\`lookup_code\`);
+--> statement-breakpoint
+CREATE INDEX \`idx_single_pinned_created_at\` ON \`single_pinned\`(\`created_at\` DESC);
+--> statement-breakpoint
+CREATE UNIQUE INDEX \`idx_single_pinned_slug\` ON \`single_pinned\`(\`slug\`);"
+`;
+
+exports[`builder DDL — pinned as it is today > mysql > emits the same CREATE for a single with Draft/Published 1`] = `
+"-- Create dynamic collection: single_pinned
+CREATE TABLE IF NOT EXISTS \`single_pinned\` (
+  \`id\` varchar(36) PRIMARY KEY NOT NULL,
+  \`slug\` varchar(255) NOT NULL,
+  \`created_at\` timestamp DEFAULT CURRENT_TIMESTAMP,
+  \`updated_at\` timestamp DEFAULT CURRENT_TIMESTAMP,
+  \`status\` varchar(20) DEFAULT 'draft' NOT NULL,
+  \`first_published_at\` timestamp,
+\`title\` text NOT NULL,
+\`slug_key\` text  UNIQUE,
+\`summary\` text,
+\`views\` integer,
+\`rating\` decimal(10,2),
+\`published\` boolean,
+\`published_at\` timestamp,
+\`payload\` json,
+\`lookup_code\` text
+);
+--> statement-breakpoint
+CREATE INDEX \`idx_single_pinned_lookup_code\` ON \`single_pinned\`(\`lookup_code\`);
+--> statement-breakpoint
+CREATE INDEX \`idx_single_pinned_created_at\` ON \`single_pinned\`(\`created_at\` DESC);
+--> statement-breakpoint
+CREATE UNIQUE INDEX \`idx_single_pinned_slug\` ON \`single_pinned\`(\`slug\`);"
+`;
+
+exports[`builder DDL — pinned as it is today > postgresql > emits the same CREATE for a collection 1`] = `
+"-- Create dynamic collection: single_pinned
+CREATE TABLE IF NOT EXISTS "single_pinned" (
+  "id" text PRIMARY KEY NOT NULL,
+  "slug" text NOT NULL,
+  "created_at" timestamp DEFAULT now(),
+  "updated_at" timestamp DEFAULT now(),
+"title" text NOT NULL,
+"slug_key" text  UNIQUE,
+"summary" text,
+"views" integer,
+"rating" decimal(10,2),
+"published" boolean,
+"published_at" timestamp,
+"payload" jsonb,
+"lookup_code" text
+);
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_single_pinned_lookup_code" ON "single_pinned"("lookup_code");
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_single_pinned_created_at" ON "single_pinned"("created_at" DESC);
+--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS "idx_single_pinned_slug" ON "single_pinned"("slug");"
+`;
+
+exports[`builder DDL — pinned as it is today > postgresql > emits the same CREATE for a localized single 1`] = `
+"-- Create dynamic collection: single_pinned
+CREATE TABLE IF NOT EXISTS "single_pinned" (
+  "id" text PRIMARY KEY NOT NULL,
+  "slug" text NOT NULL,
+  "created_at" timestamp DEFAULT now(),
+  "updated_at" timestamp DEFAULT now(),
+"views" integer,
+"rating" decimal(10,2),
+"published" boolean,
+"published_at" timestamp,
+"payload" jsonb
+);
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_single_pinned_created_at" ON "single_pinned"("created_at" DESC);
+--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS "idx_single_pinned_slug" ON "single_pinned"("slug");"
+`;
+
+exports[`builder DDL — pinned as it is today > postgresql > emits the same CREATE for a single 1`] = `
+"-- Create dynamic collection: single_pinned
+CREATE TABLE IF NOT EXISTS "single_pinned" (
+  "id" text PRIMARY KEY NOT NULL,
+  "slug" text NOT NULL,
+  "created_at" timestamp DEFAULT now(),
+  "updated_at" timestamp DEFAULT now(),
+"title" text NOT NULL,
+"slug_key" text  UNIQUE,
+"summary" text,
+"views" integer,
+"rating" decimal(10,2),
+"published" boolean,
+"published_at" timestamp,
+"payload" jsonb,
+"lookup_code" text
+);
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_single_pinned_lookup_code" ON "single_pinned"("lookup_code");
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_single_pinned_created_at" ON "single_pinned"("created_at" DESC);
+--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS "idx_single_pinned_slug" ON "single_pinned"("slug");"
+`;
+
+exports[`builder DDL — pinned as it is today > postgresql > emits the same CREATE for a single with Draft/Published 1`] = `
+"-- Create dynamic collection: single_pinned
+CREATE TABLE IF NOT EXISTS "single_pinned" (
+  "id" text PRIMARY KEY NOT NULL,
+  "slug" text NOT NULL,
+  "created_at" timestamp DEFAULT now(),
+  "updated_at" timestamp DEFAULT now(),
+  "status" varchar(20) DEFAULT 'draft' NOT NULL,
+  "first_published_at" timestamp,
+"title" text NOT NULL,
+"slug_key" text  UNIQUE,
+"summary" text,
+"views" integer,
+"rating" decimal(10,2),
+"published" boolean,
+"published_at" timestamp,
+"payload" jsonb,
+"lookup_code" text
+);
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_single_pinned_lookup_code" ON "single_pinned"("lookup_code");
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_single_pinned_created_at" ON "single_pinned"("created_at" DESC);
+--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS "idx_single_pinned_slug" ON "single_pinned"("slug");"
+`;
+
+exports[`builder DDL — pinned as it is today > sqlite > emits the same CREATE for a collection 1`] = `
+"-- Create dynamic collection: single_pinned
+CREATE TABLE IF NOT EXISTS "single_pinned" (
+  "id" text PRIMARY KEY NOT NULL,
+  "slug" text NOT NULL,
+  "created_at" integer DEFAULT (strftime('%s', 'now')),
+  "updated_at" integer DEFAULT (strftime('%s', 'now')),
+"title" text NOT NULL,
+"slug_key" text  UNIQUE,
+"summary" text,
+"views" integer,
+"rating" real,
+"published" integer,
+"published_at" integer,
+"payload" text,
+"lookup_code" text
+);
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_single_pinned_lookup_code" ON "single_pinned"("lookup_code");
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_single_pinned_created_at" ON "single_pinned"("created_at");
+--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS "idx_single_pinned_slug" ON "single_pinned"("slug");"
+`;
+
+exports[`builder DDL — pinned as it is today > sqlite > emits the same CREATE for a localized single 1`] = `
+"-- Create dynamic collection: single_pinned
+CREATE TABLE IF NOT EXISTS "single_pinned" (
+  "id" text PRIMARY KEY NOT NULL,
+  "slug" text NOT NULL,
+  "created_at" integer DEFAULT (strftime('%s', 'now')),
+  "updated_at" integer DEFAULT (strftime('%s', 'now')),
+"views" integer,
+"rating" real,
+"published" integer,
+"published_at" integer,
+"payload" text
+);
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_single_pinned_created_at" ON "single_pinned"("created_at");
+--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS "idx_single_pinned_slug" ON "single_pinned"("slug");"
+`;
+
+exports[`builder DDL — pinned as it is today > sqlite > emits the same CREATE for a single 1`] = `
+"-- Create dynamic collection: single_pinned
+CREATE TABLE IF NOT EXISTS "single_pinned" (
+  "id" text PRIMARY KEY NOT NULL,
+  "slug" text NOT NULL,
+  "created_at" integer DEFAULT (strftime('%s', 'now')),
+  "updated_at" integer DEFAULT (strftime('%s', 'now')),
+"title" text NOT NULL,
+"slug_key" text  UNIQUE,
+"summary" text,
+"views" integer,
+"rating" real,
+"published" integer,
+"published_at" integer,
+"payload" text,
+"lookup_code" text
+);
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_single_pinned_lookup_code" ON "single_pinned"("lookup_code");
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_single_pinned_created_at" ON "single_pinned"("created_at");
+--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS "idx_single_pinned_slug" ON "single_pinned"("slug");"
+`;
+
+exports[`builder DDL — pinned as it is today > sqlite > emits the same CREATE for a single with Draft/Published 1`] = `
+"-- Create dynamic collection: single_pinned
+CREATE TABLE IF NOT EXISTS "single_pinned" (
+  "id" text PRIMARY KEY NOT NULL,
+  "slug" text NOT NULL,
+  "created_at" integer DEFAULT (strftime('%s', 'now')),
+  "updated_at" integer DEFAULT (strftime('%s', 'now')),
+  "status" text DEFAULT 'draft' NOT NULL,
+  "first_published_at" integer,
+"title" text NOT NULL,
+"slug_key" text  UNIQUE,
+"summary" text,
+"views" integer,
+"rating" real,
+"published" integer,
+"published_at" integer,
+"payload" text,
+"lookup_code" text
+);
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_single_pinned_lookup_code" ON "single_pinned"("lookup_code");
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_single_pinned_created_at" ON "single_pinned"("created_at");
+--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS "idx_single_pinned_slug" ON "single_pinned"("slug");"
+`;
+
+exports[`field group DDL — pinned as it is today > mysql > emits the same CREATE for a field group 1`] = `
+"-- Create component data table: comp_pinned
+CREATE TABLE IF NOT EXISTS \`comp_pinned\` (
+  \`id\` varchar(36) PRIMARY KEY NOT NULL,
+  \`_parent_id\` varchar(36) NOT NULL,
+  \`_parent_table\` VARCHAR(255) NOT NULL,
+  \`_parent_field\` VARCHAR(255) NOT NULL,
+  \`_order\` INT DEFAULT 0,
+  \`_component_type\` VARCHAR(255),
+  \`title\` TEXT NOT NULL,
+  \`slug_key\` TEXT,
+  \`summary\` TEXT,
+  \`views\` INT,
+  \`rating\` DOUBLE,
+  \`published\` BOOLEAN,
+  \`published_at\` DATETIME,
+  \`payload\` JSON,
+  \`lookup_code\` TEXT,
+  \`created_at\` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  \`updated_at\` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+--> statement-breakpoint
+CREATE INDEX \`idx_comp_pinned_parent\` ON \`comp_pinned\`(\`_parent_id\`, \`_parent_table\`, \`_parent_field\`);
+--> statement-breakpoint
+CREATE INDEX \`idx_comp_pinned_lookup_code\` ON \`comp_pinned\`(\`lookup_code\`);
+--> statement-breakpoint
+CREATE UNIQUE INDEX \`uq_comp_pinned_slug_key\` ON \`comp_pinned\`(\`slug_key\`);"
+`;
+
+exports[`field group DDL — pinned as it is today > mysql > emits the same CREATE for a localized field group 1`] = `
+"-- Create component data table: comp_pinned
+CREATE TABLE IF NOT EXISTS \`comp_pinned\` (
+  \`id\` varchar(36) PRIMARY KEY NOT NULL,
+  \`_parent_id\` varchar(36) NOT NULL,
+  \`_parent_table\` VARCHAR(255) NOT NULL,
+  \`_parent_field\` VARCHAR(255) NOT NULL,
+  \`_order\` INT DEFAULT 0,
+  \`_component_type\` VARCHAR(255),
+  \`views\` INT,
+  \`rating\` DOUBLE,
+  \`published\` BOOLEAN,
+  \`published_at\` DATETIME,
+  \`payload\` JSON,
+  \`created_at\` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  \`updated_at\` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+--> statement-breakpoint
+CREATE INDEX \`idx_comp_pinned_parent\` ON \`comp_pinned\`(\`_parent_id\`, \`_parent_table\`, \`_parent_field\`);"
+`;
+
+exports[`field group DDL — pinned as it is today > postgresql > emits the same CREATE for a field group 1`] = `
+"-- Create component data table: comp_pinned
+CREATE TABLE IF NOT EXISTS "comp_pinned" (
+  "id" text PRIMARY KEY NOT NULL,
+  "_parent_id" text NOT NULL,
+  "_parent_table" VARCHAR(255) NOT NULL,
+  "_parent_field" VARCHAR(255) NOT NULL,
+  "_order" INTEGER DEFAULT 0,
+  "_component_type" VARCHAR(255),
+  "title" TEXT NOT NULL,
+  "slug_key" TEXT,
+  "summary" TEXT,
+  "views" INTEGER,
+  "rating" DOUBLE PRECISION,
+  "published" BOOLEAN,
+  "published_at" TIMESTAMP,
+  "payload" JSONB,
+  "lookup_code" TEXT,
+  "created_at" TIMESTAMP NOT NULL DEFAULT NOW(),
+  "updated_at" TIMESTAMP NOT NULL DEFAULT NOW()
+);
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_comp_pinned_parent" ON "comp_pinned"("_parent_id", "_parent_table", "_parent_field");
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_comp_pinned_lookup_code" ON "comp_pinned"("lookup_code");
+--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS "uq_comp_pinned_slug_key" ON "comp_pinned"("slug_key");"
+`;
+
+exports[`field group DDL — pinned as it is today > postgresql > emits the same CREATE for a localized field group 1`] = `
+"-- Create component data table: comp_pinned
+CREATE TABLE IF NOT EXISTS "comp_pinned" (
+  "id" text PRIMARY KEY NOT NULL,
+  "_parent_id" text NOT NULL,
+  "_parent_table" VARCHAR(255) NOT NULL,
+  "_parent_field" VARCHAR(255) NOT NULL,
+  "_order" INTEGER DEFAULT 0,
+  "_component_type" VARCHAR(255),
+  "views" INTEGER,
+  "rating" DOUBLE PRECISION,
+  "published" BOOLEAN,
+  "published_at" TIMESTAMP,
+  "payload" JSONB,
+  "created_at" TIMESTAMP NOT NULL DEFAULT NOW(),
+  "updated_at" TIMESTAMP NOT NULL DEFAULT NOW()
+);
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_comp_pinned_parent" ON "comp_pinned"("_parent_id", "_parent_table", "_parent_field");"
+`;
+
+exports[`field group DDL — pinned as it is today > sqlite > emits the same CREATE for a field group 1`] = `
+"-- Create component data table: comp_pinned
+CREATE TABLE IF NOT EXISTS "comp_pinned" (
+  "id" text PRIMARY KEY NOT NULL,
+  "_parent_id" text NOT NULL,
+  "_parent_table" TEXT NOT NULL,
+  "_parent_field" TEXT NOT NULL,
+  "_order" INTEGER DEFAULT 0,
+  "_component_type" TEXT,
+  "title" TEXT NOT NULL,
+  "slug_key" TEXT,
+  "summary" TEXT,
+  "views" INTEGER,
+  "rating" REAL,
+  "published" INTEGER,
+  "published_at" INTEGER,
+  "payload" TEXT,
+  "lookup_code" TEXT,
+  "created_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+  "updated_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+);
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_comp_pinned_parent" ON "comp_pinned"("_parent_id", "_parent_table", "_parent_field");
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_comp_pinned_lookup_code" ON "comp_pinned"("lookup_code");
+--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS "uq_comp_pinned_slug_key" ON "comp_pinned"("slug_key");"
+`;
+
+exports[`field group DDL — pinned as it is today > sqlite > emits the same CREATE for a localized field group 1`] = `
+"-- Create component data table: comp_pinned
+CREATE TABLE IF NOT EXISTS "comp_pinned" (
+  "id" text PRIMARY KEY NOT NULL,
+  "_parent_id" text NOT NULL,
+  "_parent_table" TEXT NOT NULL,
+  "_parent_field" TEXT NOT NULL,
+  "_order" INTEGER DEFAULT 0,
+  "_component_type" TEXT,
+  "views" INTEGER,
+  "rating" REAL,
+  "published" INTEGER,
+  "published_at" INTEGER,
+  "payload" TEXT,
+  "created_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+  "updated_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+);
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_comp_pinned_parent" ON "comp_pinned"("_parent_id", "_parent_table", "_parent_field");"
+`;
