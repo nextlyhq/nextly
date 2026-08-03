@@ -11,6 +11,7 @@
 
 import { errorFromServiceEnvelope } from "../../errors/from-service-envelope";
 import { NextlyError } from "../../errors/nextly-error";
+import { originalErrorOf } from "../../errors/original-error";
 import type { RequestContext } from "../../shared/types/index";
 import type {
   DirectAPIConfig,
@@ -89,6 +90,13 @@ export function createErrorFromResult(result: ServiceResultLike): NextlyError {
   // The shared converter, so a Direct API caller and a REST caller are handed
   // the same error for the same failure. Its code-keyed rebuild carries the
   // message key and public data that this boundary used to drop.
+  // The rebuilt error is right for the caller and blind for whoever debugs it:
+  // the driver error underneath and the identifiers the thrower attached were
+  // dropped on the way through the public envelope. Chaining the original as
+  // `cause` restores them through the standard mechanism, so an in-process
+  // caller's stack reads back to the real failure. Only ever the object this
+  // envelope actually came from — never a lookup that could pick a different
+  // error that happens to share a code.
   return errorFromServiceEnvelope(
     {
       ...result,
@@ -98,7 +106,8 @@ export function createErrorFromResult(result: ServiceResultLike): NextlyError {
     },
     result.data !== undefined && result.data !== null
       ? { resultData: result.data }
-      : {}
+      : {},
+    originalErrorOf(result)
   );
 }
 

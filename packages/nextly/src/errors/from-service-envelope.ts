@@ -110,7 +110,12 @@ function validationFromEnvelope(
  */
 export function errorFromServiceEnvelope(
   envelope: ServiceErrorEnvelope,
-  logContext: Record<string, unknown> = {}
+  logContext: Record<string, unknown> = {},
+  // The error this envelope was built from, when the caller still has it.
+  // Chained rather than assigned afterwards because `cause` is read-only once
+  // a NextlyError exists — and it belongs to the error's identity, not to
+  // something bolted on after the fact.
+  cause?: Error
 ): NextlyError {
   // Read from the canonical map rather than repeated literals: this converter
   // exists so one place decides how a status and a code correspond, and a
@@ -134,6 +139,7 @@ export function errorFromServiceEnvelope(
       messageKey: envelope.messageKey,
       publicData: envelope.publicData as PublicData | undefined,
       logContext,
+      ...(cause !== undefined ? { cause } : {}),
     });
   }
 
