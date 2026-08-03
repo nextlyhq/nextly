@@ -22,11 +22,15 @@
 "@nextlyhq/tsconfig": patch
 ---
 
-Create a Schema Builder collection's columns under the same names the rest of the framework uses.
-A field whose name began with a capital was created with an extra leading underscore, while the
-runtime schema and the schema diff both addressed it without one — so the table and every read of
-it disagreed, and the diff reported the column missing on every apply.
+Resolve a field name to its database column the same way everywhere. A Schema Builder collection
+created a field whose name began with a capital under an extra leading underscore, while the
+runtime schema and the schema diff addressed it without one — so the table and every read of it
+disagreed, and the diff reported the column missing on every apply.
 
-No collection is affected: the Schema Builder already refuses a field name beginning with a
-capital, which is why the divergence had gone unnoticed. Emitted SQL is unchanged for every name
-it accepts.
+Two decisions that depended on the field's declared name now use its column instead, so correcting
+the conversion does not break configurations that work: a field named `Title` replaces the injected
+`title` column rather than colliding with it, and two fields whose names reach one column (such as
+`foo_bar` and `FooBar`) are reported as duplicates where the names are chosen instead of failing
+during schema application.
+
+Emitted SQL is unchanged for every field name the Schema Builder accepts.

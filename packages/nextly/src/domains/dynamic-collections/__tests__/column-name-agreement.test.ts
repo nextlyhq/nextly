@@ -17,6 +17,7 @@ import {
   getColumnDescriptor,
   type SupportedDialect,
 } from "../../schema/services/field-column-descriptor";
+import { validateCollectionConfig } from "../../../collections/config/validate-config";
 import { DynamicCollectionSchemaService } from "../services/dynamic-collection-schema-service";
 
 /** Names that reach a column, including the shapes the Builder refuses but code paths allow. */
@@ -98,5 +99,79 @@ describe("collection column names agree across the generators", () => {
         });
       }
     }
+  });
+
+  it("lets an author's own capitalised title or slug replace the injected one", () => {
+    // Converting the name is only half the job: the injected `title` steps aside for an author's
+    // own field, and that decision has to be made on the COLUMN too. Comparing declared names
+    // would inject `title` beside a field named `Title` — two columns of one name, which no
+    // dialect creates.
+    for (const dialect of DIALECTS) {
+      const service = new DynamicCollectionSchemaService(undefined, dialect);
+      const generate = service as unknown as {
+        generateMigrationSQL: (
+          name: string,
+          fields: unknown[],
+          options?: unknown
+        ) => string;
+      };
+
+      for (const name of ["Title", "Slug"]) {
+        for (const table of ["dc_agree", "single_agree"]) {
+          const columns = declaredColumns(
+            generate.generateMigrationSQL(table, [{ name, type: "text" }], {
+              hasStatus: false,
+            })
+          );
+          const duplicated = columns.filter(
+            (column, index) => columns.indexOf(column) !== index
+          );
+
+          expect({ [`${dialect}.${table}.${name}`]: duplicated }).toEqual({
+            [`${dialect}.${table}.${name}`]: [],
+          });
+        }
+      }
+    }
+  });
+});
+
+describe("two field names that reach one column", () => {
+  it("are refused as duplicates before any DDL is generated", () => {
+    // `foo_bar` and `FooBar` are different names that become the same column, so a table carrying
+    // both cannot be created. Caught where the names are chosen rather than by the database.
+    // `foo_bar`/`fooBar` was already broken this way and went unreported.
+    for (const pair of [
+      ["foo_bar", "FooBar"],
+      ["foo_bar", "fooBar"],
+      ["fooBar", "foobar"],
+    ]) {
+      const result = validateCollectionConfig({
+        slug: "probe",
+        fields: pair.map(name => ({ name, type: "text" })),
+      } as never);
+      const duplicates = (result.errors ?? []).filter(
+        e => e.code === "FIELD_NAME_DUPLICATE"
+      );
+
+      expect({ [pair.join("+")]: duplicates.length }).toEqual({
+        [pair.join("+")]: 1,
+      });
+    }
+  });
+
+  it("still accepts two names that reach different columns", () => {
+    // The mirror, so the case above cannot be satisfied by refusing every pair.
+    const result = validateCollectionConfig({
+      slug: "probe",
+      fields: [
+        { name: "alpha", type: "text" },
+        { name: "beta", type: "text" },
+      ],
+    } as never);
+
+    expect(
+      (result.errors ?? []).filter(e => e.code === "FIELD_NAME_DUPLICATE")
+    ).toEqual([]);
   });
 });

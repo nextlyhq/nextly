@@ -33,6 +33,7 @@ import {
   getColumnDescriptor,
   getSystemColumnDescriptors,
   renderSystemColumnSql,
+  toSnakeCase,
 } from "../../schema/services/field-column-descriptor";
 import { quoteJsonSqlDefault } from "../../schema/utils/sql-literal";
 
@@ -64,26 +65,6 @@ export class DynamicCollectionSchemaService {
   }
 
   /**
-   * Convert a field name to its column name (e.g., publishedAt -> published_at).
-   *
-   * The trailing strip is what every other copy of this conversion does, including the one the
-   * runtime schema and the diff are built from. Without it a name beginning with a capital keeps
-   * the underscore the substitution introduces, so this generator created `_published_at` while
-   * both of those addressed `published_at`: the table and every read of it would disagree, and the
-   * diff would report a column missing forever.
-   *
-   * A name beginning with a lowercase letter never grows a leading underscore, so this changes
-   * nothing for any name the Schema Builder accepts — its own pattern already refuses a leading
-   * capital, which is why the divergence had not surfaced.
-   */
-  private toSnakeCase(str: string): string {
-    return str
-      .replace(/([A-Z])/g, "_$1")
-      .toLowerCase()
-      .replace(/^_/, "");
-  }
-
-  /**
    * The column type for a declared `slug`, taken from the canonical
    * descriptor rather than this class's own type map.
    *
@@ -100,7 +81,7 @@ export class DynamicCollectionSchemaService {
    * `mapFieldTypeToSQL`.
    */
   private canonicalSlugType(field: FieldDefinition): string | null {
-    if (this.toSnakeCase(field.name) !== "slug") return null;
+    if (toSnakeCase(field.name) !== "slug") return null;
     return getColumnDescriptor(field, this.dialect)?.dialectType ?? null;
   }
 
@@ -221,11 +202,11 @@ export class DynamicCollectionSchemaService {
 
             if (this.dialect === "mysql") {
               checks.push(
-                `${this.quoteIdentifier(this.toSnakeCase(f.name))} REGEXP '${escapedRegex}'`
+                `${this.quoteIdentifier(toSnakeCase(f.name))} REGEXP '${escapedRegex}'`
               );
             } else {
               checks.push(
-                `${this.quoteIdentifier(this.toSnakeCase(f.name))} ~ '${escapedRegex}'`
+                `${this.quoteIdentifier(toSnakeCase(f.name))} ~ '${escapedRegex}'`
               );
             }
           }
@@ -249,7 +230,7 @@ export class DynamicCollectionSchemaService {
               f.options.onUpdate || "no action"
             );
 
-            const fkColName = this.toSnakeCase(f.name);
+            const fkColName = toSnakeCase(f.name);
             constraints.push(
               `  CONSTRAINT ${this.quoteIdentifier(`fk_${tableName}_${fkColName}`)} FOREIGN KEY (${this.quoteIdentifier(fkColName)}) REFERENCES ${this.quoteIdentifier(targetTable)}(${this.quoteIdentifier("id")}) ON DELETE ${onDelete} ON UPDATE ${onUpdate}`
             );
@@ -258,7 +239,7 @@ export class DynamicCollectionSchemaService {
 
         // Convert camelCase field names to snake_case for column names
         // (matches the convention used by CollectionEntryService)
-        const colName = this.toSnakeCase(f.name);
+        const colName = toSnakeCase(f.name);
         return `  ${this.quoteIdentifier(colName)} ${type} ${nullable} ${unique} ${defaultVal}`.trim();
       })
       .filter(Boolean)
@@ -279,12 +260,19 @@ export class DynamicCollectionSchemaService {
     //
     // A component named "title" produces no column, so it must not suppress the system title
     // column; the same holds for "slug".
-    const hasTitleField = fields.some(
-      f => f.name === "title" && f.type !== STORAGE_FORMAT.fieldType
-    );
-    const hasSlugField = fields.some(
-      f => f.name === "slug" && f.type !== STORAGE_FORMAT.fieldType
-    );
+    //
+    // Matched on the COLUMN the field becomes rather than on its declared name. An author writing
+    // `Title` means the same column, and comparing the raw name would inject the system one beside
+    // it — two columns of the same name, which no dialect will create.
+    const declaresColumn = (column: string) =>
+      fields.some(
+        f =>
+          typeof f.name === "string" &&
+          toSnakeCase(f.name) === column &&
+          f.type !== STORAGE_FORMAT.fieldType
+      );
+    const hasTitleField = declaresColumn("title");
+    const hasSlugField = declaresColumn("slug");
     // A single is one global row, so owner-only ownership is meaningless and it gets no
     // `created_by`. Prefer the explicit flag, but fall back to the `single_` table prefix so this
     // stays in lockstep with the runtime schema and the diff, which derive it from the name, even
@@ -351,7 +339,7 @@ ${allColumnDefs.join(",\n")}
         // Use the snake_case column name for both the index name and the
         // indexed column so this matches the actual physical column (created
         // snake_cased) and the migrate:create desired-state index naming.
-        const col = this.toSnakeCase(f.name);
+        const col = toSnakeCase(f.name);
         const indexName = `idx_${tableName}_${col}`;
         if (this.dialect === "mysql") {
           indexStatements.push(
@@ -375,7 +363,7 @@ ${allColumnDefs.join(",\n")}
         f.type !== "relationship" &&
         f.type !== STORAGE_FORMAT.fieldType
       ) {
-        const col = this.toSnakeCase(f.name);
+        const col = toSnakeCase(f.name);
         const indexName = `idx_${tableName}_${col}`;
         if (this.dialect === "mysql") {
           indexStatements.push(
@@ -542,8 +530,8 @@ ${allColumnDefs.join(",\n")}
     const renamedFromName = rename?.from.name ?? null;
     const renamedToName = rename?.to.name ?? null;
     if (rename) {
-      const fromCol = this.toSnakeCase(rename.from.name);
-      const toCol = this.toSnakeCase(rename.to.name);
+      const fromCol = toSnakeCase(rename.from.name);
+      const toCol = toSnakeCase(rename.to.name);
       // RENAME COLUMN syntax is consistent across PG, MySQL 8.0+,
       // and SQLite 3.25+ — all dialects we support.
       statements.push(
@@ -588,7 +576,7 @@ ${allColumnDefs.join(",\n")}
           defaultVal = `DEFAULT ${this.getDefaultValueForType(field.type, field)}`;
         }
 
-        const addColName = this.toSnakeCase(field.name);
+        const addColName = toSnakeCase(field.name);
         statements.push(
           `ALTER TABLE ${this.quoteIdentifier(tableName)} ADD COLUMN ${this.quoteIdentifier(addColName)} ${type} ${nullable} ${defaultVal};`.trim()
         );
@@ -630,7 +618,7 @@ ${allColumnDefs.join(",\n")}
       if (field.type === STORAGE_FORMAT.fieldType) continue;
       const oldField = oldFieldMap.get(field.name);
       if (oldField && oldField.index !== field.index) {
-        const idxCol = this.toSnakeCase(field.name);
+        const idxCol = toSnakeCase(field.name);
         const indexName = `idx_${tableName}_${idxCol}`;
         if (field.index) {
           // Add index
@@ -667,7 +655,7 @@ ${allColumnDefs.join(",\n")}
       // (and SQLite's DROP COLUMN has no IF EXISTS to tolerate the absence).
       if (field.type === STORAGE_FORMAT.fieldType) continue;
       if (!newFieldMap.has(field.name)) {
-        const dropCol = this.toSnakeCase(field.name);
+        const dropCol = toSnakeCase(field.name);
         // SQLite doesn't support IF EXISTS on DROP COLUMN
         if (this.dialect === "sqlite") {
           statements.push(
@@ -690,7 +678,7 @@ ${allColumnDefs.join(",\n")}
         if (field.type === STORAGE_FORMAT.fieldType) continue;
         const oldField = oldFieldMap.get(field.name);
         if (oldField && this.isFieldModified(oldField, field)) {
-          const alterCol = this.toSnakeCase(field.name);
+          const alterCol = toSnakeCase(field.name);
           const type = this.mapFieldTypeToSQL(field.type, field.length);
           statements.push(
             `ALTER TABLE ${this.quoteIdentifier(tableName)} ALTER COLUMN ${this.quoteIdentifier(alterCol)} TYPE ${type};`

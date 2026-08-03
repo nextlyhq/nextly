@@ -20,6 +20,8 @@
  * @since 1.0.0
  */
 
+import { toSnakeCase } from "../domains/schema/services/field-column-descriptor";
+
 import { pluginFieldOptionIssues } from "./lib/plugin-field-options";
 import { RESERVED_SLUGS, SQL_RESERVED_KEYWORDS } from "./sql-reserved";
 
@@ -290,8 +292,13 @@ export function validateFieldNameShared(
     });
   }
 
+  // Two keys per field, because two different things can collide. The lower-cased name catches a
+  // repeat an author would read as the same field, and the column the name becomes catches one the
+  // DATABASE would read as the same field: `foo_bar` and `FooBar` are distinct names that reach one
+  // column, and emitting both produces a CREATE TABLE no dialect will accept.
   const nameLower = name.toLowerCase();
-  if (seenNames.has(nameLower)) {
+  const columnName = toSnakeCase(name);
+  if (seenNames.has(nameLower) || seenNames.has(`column:${columnName}`)) {
     errors.push({
       path: `${path}.name`,
       message: `Duplicate field name '${name}' at this level`,
@@ -299,6 +306,7 @@ export function validateFieldNameShared(
     });
   } else {
     seenNames.add(nameLower);
+    seenNames.add(`column:${columnName}`);
   }
 }
 
