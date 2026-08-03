@@ -40,7 +40,6 @@ import type { Atrule, CssNode, Rule, Selector } from "css-tree";
 import parse from "css-tree/parser";
 import walk from "css-tree/walker";
 
-import { escapeIdentifier } from "./css-value";
 import { hashId } from "./node-class";
 
 /** One rule whose selector can match outside the page root. */
@@ -160,78 +159,47 @@ export function namespacedGlobalName(name: string, scopeClass: string): string {
   // accepts a dashed ident and moving them would produce a name CSS refuses.
   const custom = name.startsWith("--");
   const bare = custom ? name.slice(2) : name;
-  return `${custom ? "--" : ""}${escapeScope(scopeClass)}-${bare}`;
+  return `${custom ? "--" : ""}${scopeToken(scopeClass)}-${bare}`;
 }
 
 /**
- * The scope with its own dashes doubled, so joining it to a name is reversible.
+ * The scope as a fixed-shape token: a letter prefix and a hash, nothing else.
  *
- * `${scope}-${name}` on its own is not injective, and the collision is the exact
- * one this function exists to prevent: scope "a" with name "b-c" and scope "a-b"
- * with name "c" both spell "a-b-c". Two documents differing only that way would
- * define one animation between them, and the later definition would win for
- * both — a namespace that reintroduces the collision it was added to remove.
+ * Carrying the scope's own text into the name is what three separate collisions
+ * came from, and each fix left the next one intact. Doubling the scope's dashes
+ * made `a` + `b-c` and `a-b` + `c` distinct but not `a` + `-b-c` and `a-b` + `c`,
+ * because the NAME's leading dashes merge with the separator just as the
+ * scope's trailing ones do. Escaping both sides does not close it either: two
+ * adjacent runs of variable length cannot be told apart by one separator, so
+ * `a-` + `b` and `a` + `-b` collide however carefully each side is escaped.
  *
- * Doubling every dash in the scope leaves the single dash that follows it as the
- * only odd-length run at the boundary, so distinct pairs cannot meet.
+ * A hash removes the boundary problem instead of encoding around it. The token
+ * contains no dash, so the FIRST dash is unambiguously the separator whatever
+ * the name does, and the name needs no escaping at all. It is also immune to the
+ * other two hazards this encoding met: base36 is unchanged by case folding, so
+ * scopes differing only in case — or only by U+212A against "K" — stay apart,
+ * and the token always begins with a letter, so a scope like `7f3a` cannot
+ * produce a name that tokenizes as a dimension.
+ *
+ * The cost is that the scope is no longer legible in the name. That is a real
+ * loss and it is the right trade: the scope is an internal detail, the author's
+ * own name is still there to recognise, and the readable spelling bought three
+ * rounds of collisions.
+ *
+ * Reuses the document's existing hash, whose collision analysis lives with it.
+ * Two distinct scopes hashing together would share a namespace — the very thing
+ * this prevents — but at 53 bits, with a handful of documents on a page, that
+ * sits far below the rate at which anything else here fails.
  */
-function escapeScope(scopeClass: string): string {
-  // Escaped as an identifier on top of that, because the result is a NAME and
-  // CSS is stricter about those than about the class the scope came from.
-  // `7f3a` is a legal scope and a legal class, but `7f3a-fade` tokenizes as a
-  // dimension rather than an identifier, so an animation by that name is one
-  // CSS never resolves. `\37 f3a-fade` is the same name spelled legally.
-  return escapeIdentifier(escapeScopeText(scopeClass));
-}
-
-/**
- * Scopes already written in an alphabet that no case folding touches.
- *
- * Lowercase ASCII, digits and the two joiners. A scope made only of these means
- * the same string before and after folding, so it can be carried into a name
- * verbatim and stay readable.
- */
-const CASE_STABLE_SCOPE = /^[a-z0-9_-]*$/;
-
-/**
- * A scope written so that two different scopes cannot meet in one name.
- *
- * Not every name here is compared the same way. A `<custom-ident>` — a keyframe,
- * a counter style, a colour profile — is case-sensitive, but a font family is
- * matched case-insensitively, which is why `font-family: arial` finds a font
- * installed as "Arial". So scopes that differ only by case would produce two
- * distinct animation names and ONE font family between them, and the document
- * that loaded second would take it.
- *
- * Marking capitals is not enough, because folding is not a function of ASCII
- * case alone: U+212A KELVIN SIGN and "K" both fold to "k", so two scopes
- * differing only there would still meet. Anything outside the stable alphabet is
- * therefore hashed rather than transcribed, which is the only encoding that
- * survives folding it cannot enumerate.
- *
- * The two forms cannot be confused. A verbatim scope doubles its underscores, so
- * it never begins with a single one; a hashed scope always does. Within the
- * verbatim form the doubling keeps the boundary findable, which is what makes
- * the join reversible.
- *
- * A scope of lowercase and dashes — which includes the page root and every one
- * the compiler generates — comes back readable, so the usual name pays nothing
- * for the guarantee.
- */
-function escapeScopeText(scopeClass: string): string {
-  if (CASE_STABLE_SCOPE.test(scopeClass)) {
-    return scopeClass.replaceAll("_", "__").replaceAll("-", "--");
-  }
-  return `_${hashId(scopeClass)}`;
+function scopeToken(scopeClass: string): string {
+  return `nx${hashId(scopeClass)}`;
 }
 
 /** Whether a name already carries this document's namespace. */
 function isNamespaced(name: string, scopeClass: string): boolean {
-  const prefix = `${escapeScope(scopeClass)}-`;
-  // Both spellings, rather than stripping a leading `--` as the custom-property
-  // marker: a scope may itself begin with a dash, which doubling turns into
-  // `--`, so a plain name under scope "-r" also starts that way and stripping
-  // would look for the scope in the wrong place.
+  const prefix = `${scopeToken(scopeClass)}-`;
+  // Both spellings, because a custom property carries `--` in front of the
+  // namespace and the plain form does not.
   return name.startsWith(prefix) || name.startsWith(`--${prefix}`);
 }
 

@@ -129,12 +129,25 @@ if your CSS lives in an `@layer` — Tailwind's does.
 }
 ```
 
-**Use `!important`.** Blunt, and it always works, because the builder never uses
-it:
+**Use `!important`.** Blunt, and it wins every specificity contest, because the
+builder never uses it:
 
 ```css
 .prose h1 {
   color: rebeccapurple !important;
+}
+```
+
+There is exactly one thing that outranks it, and it is not us: **a transition in
+progress.** While a property is transitioning, the transitioned value beats even
+an important author declaration, so if the block sets `transition` on the
+property you are overriding, your rule takes effect only once the transition
+finishes. Override the transition too if that matters:
+
+```css
+.prose h1 {
+  color: rebeccapurple !important;
+  transition: none !important;
 }
 ```
 
@@ -221,7 +234,11 @@ In order, these explain nearly every case:
 1. **Something of yours is more specific.** Check the winning rule in devtools;
    if it has more classes than `.nx-pb-page.nx-pb-page .nx-pb-xxxx`, that is why.
 2. **Something of yours uses `!important`.** The builder never does, so an
-   `!important` in your stylesheet always wins.
-3. **The builder refused the value and said so.** Compilation returns warnings
+   `!important` in your stylesheet wins every specificity contest.
+3. **The property is mid-transition.** A transitioning value outranks every
+   author declaration, `!important` included, until the transition ends. If the
+   block sets `transition` on the property you are changing, add
+   `transition: none !important` to your rule and see whether it applies then.
+4. **The builder refused the value and said so.** Compilation returns warnings
    for everything it declined to write, each naming the exact position in the
    document. A value that is missing from the page is never missing silently.

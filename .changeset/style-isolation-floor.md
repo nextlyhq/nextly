@@ -22,10 +22,14 @@
 "@nextlyhq/tsconfig": patch
 ---
 
-Page-builder rules now sit one specificity notch higher, so ordinary site CSS no
-longer beats a value set in the builder by accident. A rule like
-`.content .card h1` used to win over a block's own colour and leave the author
-with a style that silently did not appear.
+Stylesheets compiled by `@nextlyhq/blocks-engine` now sit one specificity notch
+higher, so ordinary site CSS no longer beats a value set in the builder by
+accident. A rule like `.content .card h1` used to win over a block's own colour
+and leave the author with a style that silently did not appear.
+
+This applies to that engine's output. `@nextlyhq/plugin-page-builder` renders
+through a compiler of its own that does not yet follow these weights, so pages
+rendered through it are unchanged by this release.
 
 Overriding on purpose still works. An unlayered selector with more classes takes
 precedence, and `!important` always does, because the compiler deliberately never

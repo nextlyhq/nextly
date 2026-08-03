@@ -569,9 +569,41 @@ describe("names CSS resolves for the whole document", () => {
     expect(findUnnamespacedGlobals(face(upper), "region")).toHaveLength(1);
   });
 
-  it("leaves a scope without capitals alone", () => {
-    // The common case, including the page root, pays nothing for the encoding.
-    expect(namespacedGlobalName("fade", "region")).toBe("region-fade");
+  it("keeps the author's own name legible in the result", () => {
+    // The scope is an internal detail and is not carried through, but the name
+    // the author chose is what someone reads in devtools to recognise the rule.
+    expect(namespacedGlobalName("fade", "region")).toContain("fade");
+    expect(namespacedGlobalName("--gap", "region")).toContain("gap");
+  });
+
+  it("puts the boundary somewhere no name can move it", () => {
+    // The scope's token holds no dash, so the FIRST dash is the separator
+    // whatever the name does with its own. That is what makes the pair
+    // recoverable without escaping either side.
+    const produced = namespacedGlobalName("fade", "region");
+    expect(produced.slice(0, produced.indexOf("-"))).not.toContain("-");
+  });
+
+  it("keeps a name that begins with a dash out of the boundary", () => {
+    // The collision the previous encoding could not close: the name's leading
+    // dashes merged with the separator exactly as the scope's trailing ones
+    // did, so `a` + `-b-c` and `a-b` + `c` met. Two runs of variable length
+    // cannot be told apart by one separator, however carefully each is escaped.
+    expect(namespacedGlobalName("-b-c", "a")).not.toBe(
+      namespacedGlobalName("c", "a-b")
+    );
+    expect(namespacedGlobalName("b", "a-")).not.toBe(
+      namespacedGlobalName("-b", "a")
+    );
+    // Each is still recognised under its own scope, and reported under the other.
+    const frames = (name: string): string =>
+      `@keyframes ${name} { from { opacity: 0 } }`;
+    expect(
+      findUnnamespacedGlobals(frames(namespacedGlobalName("-b-c", "a")), "a")
+    ).toEqual([]);
+    expect(
+      findUnnamespacedGlobals(frames(namespacedGlobalName("-b-c", "a")), "a-b")
+    ).toHaveLength(1);
   });
 
   it("does not split a family name on a comma inside its quotes", () => {
@@ -710,5 +742,16 @@ describe("names CSS resolves for the whole document", () => {
       });
       expect(findUnnamespacedGlobals(out.css, SCOPE)).toEqual([]);
     }
+  });
+});
+
+describe("the override contract is importable, not just documented", () => {
+  it("exports the selector that defines it from the package entry", async () => {
+    // The repetition count IS the contract, so it lives in one constant. That
+    // only holds if a consumer can reach the constant: an integration that has
+    // to retype `.nx-pb-page.nx-pb-page` has its own copy, and the two drift
+    // the moment the weight changes.
+    const entry: Record<string, unknown> = await import("../index");
+    expect(entry.PAGE_ROOT_SELECTOR).toBe(PAGE_ROOT_SELECTOR);
   });
 });
