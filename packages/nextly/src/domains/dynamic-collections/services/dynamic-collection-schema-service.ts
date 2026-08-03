@@ -63,9 +63,24 @@ export class DynamicCollectionSchemaService {
     return `"${name}"`;
   }
 
-  /** Convert camelCase to snake_case (e.g., publishedAt → published_at) */
+  /**
+   * Convert a field name to its column name (e.g., publishedAt -> published_at).
+   *
+   * The trailing strip is what every other copy of this conversion does, including the one the
+   * runtime schema and the diff are built from. Without it a name beginning with a capital keeps
+   * the underscore the substitution introduces, so this generator created `_published_at` while
+   * both of those addressed `published_at`: the table and every read of it would disagree, and the
+   * diff would report a column missing forever.
+   *
+   * A name beginning with a lowercase letter never grows a leading underscore, so this changes
+   * nothing for any name the Schema Builder accepts — its own pattern already refuses a leading
+   * capital, which is why the divergence had not surfaced.
+   */
   private toSnakeCase(str: string): string {
-    return str.replace(/([A-Z])/g, "_$1").toLowerCase();
+    return str
+      .replace(/([A-Z])/g, "_$1")
+      .toLowerCase()
+      .replace(/^_/, "");
   }
 
   /**
