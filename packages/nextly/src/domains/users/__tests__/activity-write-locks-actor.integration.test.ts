@@ -253,9 +253,11 @@ describeMaybe(
         expect(settled).toBe(false);
       } finally {
         // Released even when the assertion throws. Without this the holding
-        // transaction keeps its exclusive lock, the activity write never
-        // settles, and `afterAll` blocks forever on disconnect — turning one
-        // reportable failure into a hung suite that says nothing about why.
+        // transaction keeps its exclusive lock on the account row, so the
+        // activity write never settles and teardown's `DELETE FROM users`
+        // waits on that same row — the deletes run before `disconnect`, which
+        // is therefore never reached. Releasing here keeps a failed assertion
+        // a reported failure rather than a stalled one.
         release();
         await holder;
       }
