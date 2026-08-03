@@ -837,25 +837,27 @@ function validateClasses(
     // that never block a publish. Spending the structural allowance on them
     // would stop the checks that do decide validity, and the marker for
     // stopping those is an error.
-    // The reporting allowance stops the whole loop: nothing more can be
-    // returned, so there is nothing to be gained by reading on.
-    if (siteAllowanceSpent(budget)) {
-      issues.push(...siteTruncationNotice(budget, pointer(path, "classes")));
-      break;
-    }
     const id = node.classes[index];
     if (typeof id !== "string") continue;
-    // The lookup allowance stops only this NAME, and only when answering it
-    // would ask the caller something new. An id already resolved this run comes
-    // from the cache for nothing, and skipping it would drop a free warning
-    // while claiming the id went unchecked when it had been checked already.
+    // Whether this id can be answered at all: from the cache for nothing, or by
+    // asking the caller while there are lookups left to spend and an answer
+    // could still be reported.
     if (!canResolveName(lookup, id, budget)) {
       issues.push(...siteTruncationNotice(budget, pointer(path, "classes")));
       continue;
     }
+    // A KNOWN id is not a finding, so it truncates nothing. Resolving it first
+    // and asking about the allowance second is what keeps the marker honest:
+    // announced before the answer is known, it would claim names went unchecked
+    // on a document whose every name checked out.
     if (lookup.has(id)) continue;
+    const issuePath = pointer(pointer(path, "classes"), index);
+    if (siteAllowanceSpent(budget)) {
+      issues.push(...siteTruncationNotice(budget, issuePath));
+      continue;
+    }
     const issue: ValidationIssue = {
-      path: pointer(pointer(path, "classes"), index),
+      path: issuePath,
       code: "unknown-class",
       severity: "warning",
       message: `The class "${describeValue(id)}" is not defined by this site.`,

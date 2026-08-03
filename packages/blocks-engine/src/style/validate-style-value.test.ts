@@ -6,6 +6,8 @@ import { checkColorValue, checkCssValue, checkUrlValue } from "./css-value";
 import {
   MAX_SITE_ISSUES,
   MAX_STYLE_ISSUES,
+  MAX_STYLE_ISSUE_PATH_BYTES,
+  memoizeTokenLookup,
   newStyleIssueBudget,
   speculativeBudget,
   validateStyleValues,
@@ -3088,5 +3090,72 @@ describe("an expression of bare numbers is a number", () => {
     expect(codes({ lineHeight: "calc(1 + 0.5)" })).toEqual([]);
     expect(codes({ lineHeight: "1.5rem" })).toEqual([]);
     expect(codes({ lineHeight: 1.5 })).toEqual([]);
+  });
+});
+
+describe("the truncation marker only claims what really went unchecked", () => {
+  it("stays silent when a cached name resolves cleanly after the allowance is spent", () => {
+    // The marker means "some names were not checked". A name this run already
+    // resolved is answered from the cache for nothing, and a KNOWN one produces
+    // no warning, so it truncates nothing. Announced anyway, it tells a consumer
+    // to expect dangling references that a clean document does not have.
+    const budget = newStyleIssueBudget(
+      MAX_STYLE_ISSUES,
+      MAX_STYLE_ISSUE_PATH_BYTES,
+      // One reporting slot, so the unknown name below spends the lot.
+      1
+    );
+    const tokens = memoizeTokenLookup(
+      {
+        kindOf: (name: string) =>
+          name === "ok" ? ("color" as const) : undefined,
+      },
+      budget
+    );
+    const check = (value: string, path: string) =>
+      validateStyleValues(
+        { color: { $token: value } },
+        path,
+        "strict",
+        budget,
+        false,
+        tokens
+      );
+
+    // Known: resolves, reports nothing, and is now cached.
+    expect(check("ok", "/a")).toEqual([]);
+    // Unknown: reports, and spends the single slot.
+    expect(check("gone", "/b").map(issue => issue.code)).toEqual([
+      "unknown-token",
+    ]);
+    // The same known name again: answered from the cache, still fine, and NOT
+    // a reason to say anything went unchecked.
+    expect(check("ok", "/c")).toEqual([]);
+  });
+
+  it("still says so when a name that would have warned cannot be reported", () => {
+    // The other half: the marker has to fire when a warning really is being
+    // withheld, or a truncated report would read as a clean one.
+    const budget = newStyleIssueBudget(
+      MAX_STYLE_ISSUES,
+      MAX_STYLE_ISSUE_PATH_BYTES,
+      1
+    );
+    const tokens = memoizeTokenLookup({ kindOf: () => undefined }, budget);
+    const check = (value: string, path: string) =>
+      validateStyleValues(
+        { color: { $token: value } },
+        path,
+        "strict",
+        budget,
+        false,
+        tokens
+      );
+    expect(check("gone", "/a").map(issue => issue.code)).toEqual([
+      "unknown-token",
+    ]);
+    expect(check("alsoGone", "/b").map(issue => issue.code)).toEqual([
+      "site-issues-truncated",
+    ]);
   });
 });

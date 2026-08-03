@@ -319,10 +319,36 @@ export function canResolveName(
   budget: ReadyStyleIssueBudget | undefined
 ): boolean {
   if (budget === undefined) return true;
-  if (siteAllowanceSpent(budget)) return false;
-  if (budget.siteLookups > 0) return true;
+  // A name already resolved this run is answered from the cache, and that costs
+  // nothing under any allowance — so it is answered even once reporting has
+  // stopped. Knowing the answer is what lets the run tell "a warning I cannot
+  // report" apart from "a name that is perfectly fine", and only the first is
+  // something the truncation marker should ever be claiming.
   const seen = lookup === undefined ? undefined : lookupCaches.get(lookup);
-  return seen !== undefined && seen.has(name);
+  if (seen !== undefined && seen.has(name)) return true;
+  // Uncached: asking is only worth the caller's time if the answer could still
+  // be reported, and only allowed while there are lookups left to spend.
+  if (siteAllowanceSpent(budget)) return false;
+  return budget.siteLookups > 0;
+}
+
+/**
+ * Report one site finding, or say once that reporting stopped.
+ *
+ * The allowance is checked HERE rather than before resolution, because whether
+ * a name needs reporting at all is not known until it has been resolved. A
+ * name that resolves cleanly produces nothing and truncates nothing, and
+ * announcing otherwise tells a consumer that names went unchecked when every
+ * one of them was checked.
+ */
+function reportSiteIssue(
+  budget: ReadyStyleIssueBudget | undefined,
+  issue: ValidationIssue
+): ValidationIssue[] {
+  if (siteAllowanceSpent(budget)) {
+    return siteTruncationNotice(budget, issue.path);
+  }
+  return charged(budget, issue);
 }
 
 /**
@@ -523,7 +549,7 @@ function leafIssues(
     }
     const kind = tokens.kindOf(name);
     if (kind === undefined) {
-      return charged(budget, {
+      return reportSiteIssue(budget, {
         path,
         code: "unknown-token",
         severity: "warning",
@@ -532,7 +558,7 @@ function leafIssues(
       });
     }
     if (!leaf.tokenKinds.includes(kind)) {
-      return charged(budget, {
+      return reportSiteIssue(budget, {
         path,
         code: "token-kind-mismatch",
         severity: "warning",
@@ -864,7 +890,7 @@ function shapeIssues(
           }
           const kind = tokens.kindOf(value.$token);
           if (kind !== undefined && !kinds.includes(kind)) {
-            return charged(budget, {
+            return reportSiteIssue(budget, {
               path,
               code: "token-kind-mismatch",
               severity: "warning",
