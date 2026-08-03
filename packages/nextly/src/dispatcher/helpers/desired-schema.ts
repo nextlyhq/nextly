@@ -16,6 +16,7 @@
  * pre-populates the rest so the schema handed to drizzle-kit is complete.
  */
 
+import { isCodeOwned } from "../../domains/schema/pipeline/registered-collections";
 import type { DesiredSchema } from "../../domains/schema/pipeline/types";
 
 import {
@@ -49,9 +50,10 @@ export async function buildFullDesiredSchema(): Promise<DesiredSchema> {
           // Carry ownership so a UI save can be prevented from emitting DDL
           // against a code-first/plugin-owned table.
           locked: (c as { locked?: boolean }).locked === true,
-          // An unlocked registry row is one the Schema Builder authored. This is the only builder
-          // that reads the flag, so it is the one that states the origin the diff needs.
-          builderOwned: (c as { locked?: boolean }).locked !== true,
+          // Provenance, not just the lock flag: a row written before `locked` was populated can be
+          // code- or plugin-owned while leaving it unset, and reading it as the Builder's would let
+          // an unrelated save rewrite that table's columns.
+          builderOwned: !isCodeOwned(c),
         };
       }
     } catch {
@@ -74,7 +76,7 @@ export async function buildFullDesiredSchema(): Promise<DesiredSchema> {
           // single's main table (they live in single_<slug>_locales).
           localized: (s as { localized?: boolean }).localized === true,
           locked: (s as { locked?: boolean }).locked === true,
-          builderOwned: (s as { locked?: boolean }).locked !== true,
+          builderOwned: !isCodeOwned(s),
         };
       }
     } catch {
@@ -96,9 +98,10 @@ export async function buildFullDesiredSchema(): Promise<DesiredSchema> {
           // component's main table (they live in comp_<slug>_locales).
           localized: (c as { localized?: boolean }).localized === true,
           locked: (c as { locked?: boolean }).locked === true,
-          // An unlocked registry row is one the Schema Builder authored. This is the only builder
-          // that reads the flag, so it is the one that states the origin the diff needs.
-          builderOwned: (c as { locked?: boolean }).locked !== true,
+          // Provenance, not just the lock flag: a row written before `locked` was populated can be
+          // code- or plugin-owned while leaving it unset, and reading it as the Builder's would let
+          // an unrelated save rewrite that table's columns.
+          builderOwned: !isCodeOwned(c),
         };
       }
     } catch {

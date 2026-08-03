@@ -126,9 +126,11 @@ function statesWidth(
   options: Record<string, unknown>,
   signal: "variant" | "maxLength"
 ): boolean {
-  return signal === "maxLength"
-    ? field.maxLength !== undefined
-    : options.variant !== undefined;
+  if (signal === "variant") return options.variant !== undefined;
+  // Only for the built-in type. `asMappableField` strips `maxLength` from a contributed field
+  // before the component creator maps it, so on one of those the key states nothing about the
+  // column and honouring it would leave the field bounded against an unbounded table.
+  return field.type === "text" && field.maxLength !== undefined;
 }
 
 export function withResolvedBuilderTextWidths(

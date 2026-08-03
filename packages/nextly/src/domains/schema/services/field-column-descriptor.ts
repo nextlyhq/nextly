@@ -97,6 +97,7 @@ export const DEFAULT_DECIMAL_SCALE = 2;
 export type ColumnKind =
   | "text" // PG: text, MySQL: varchar(255), SQLite: text
   | "longText" // PG: text, MySQL: text, SQLite: text — for textarea/richtext
+  | "shortText" // PG/MySQL: varchar(N), SQLite: text — a text field explicitly declared short
   | "varchar" // varchar(N) explicitly (uses `length`)
   | "boolean" // PG: bool, MySQL: tinyint(1), SQLite: integer(boolean mode)
   | "integer" // PG: int4, MySQL: int, SQLite: integer
@@ -244,15 +245,27 @@ function classifyFieldKind(field: FieldDefinition): ColumnKind {
   if (!fieldProducesColumn(field)) return "skip";
 
   switch (field.type) {
-    case "text":
+    case "text": {
       // A text field may state its own width, and only this type may: an email, a password and a
       // select value are bounded by what they hold, while free text is bounded by nothing.
       //
       // Absent, the answer stays what it has always been for this path. The signal exists so a
       // caller that KNOWS the field is unbounded can say so instead of discovering the ceiling
       // when a paste is rejected — on MySQL the two render 255 characters apart.
-      if (field.options?.variant === "long") return "longText";
+      const options = field.options;
+      if (options?.variant === "long") return "longText";
+      // Declared short, so bounded on every dialect that has a bounded string. Its own kind rather
+      // than the existing `varchar` one, which renders PostgreSQL `text` and is what the system
+      // `status` column uses — widening that to a real varchar would make every existing status
+      // column read as a type change.
+      if (options?.variant === "short") return "shortText";
+      // `options` is the choice list on a select, and the payload schema permits that shape on any
+      // field. A text field carrying one states no width, and every generator reads it the same
+      // way — as unbounded — so reading it as bounded here would report an untouched column as a
+      // narrowing on every diff.
+      if (Array.isArray(options)) return "longText";
       return "text";
+    }
 
     case "email":
     case "password":
@@ -360,6 +373,12 @@ function renderDialectType(
     if (dialect === "mysql") return "text";
     return "text"; // sqlite
   }
+  if (kind === "shortText") {
+    // SQLite has one string type, so a short field is `text` there and the bound lives in
+    // validation alone — which is what the generators emit for it too.
+    if (dialect === "sqlite") return "text";
+    return `varchar(${length ?? 255})`;
+  }
   if (kind === "varchar") {
     if (dialect === "postgresql") return "text";
     if (dialect === "mysql") return `varchar(${length ?? 255})`;
@@ -410,6 +429,7 @@ function lengthForKind(kind: ColumnKind): number | undefined {
   // every later edit to it, leaving writes to fail against a column the stored limit says is wide
   // enough. Resizing needs the diff to compare widths first.
   if (kind === "text") return 255;
+  if (kind === "shortText") return 255;
   if (kind === "varchar") return 255;
   if (kind === "fkSingle") return 36;
   return undefined;

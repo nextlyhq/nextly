@@ -8,6 +8,7 @@ import {
 import { buildDesiredTableFromFields } from "../../pipeline/diff/build-from-fields";
 import type { DesiredSchema } from "../../pipeline/types";
 import { withResolvedBuilderTextWidths } from "../builder-text-width";
+import { getColumnDescriptor } from "../field-column-descriptor";
 
 function textField(extra: Record<string, unknown> = {}) {
   return { name: "body", type: "text", ...extra };
@@ -239,6 +240,61 @@ describe("withResolvedBuilderTextWidths", () => {
     );
 
     expect(bodyType(resolved)).toBe("text");
+  });
+
+  // The payload schema permits an options ARRAY on any field. A text field carrying one states no
+  // width, and every generator reads that as unbounded, so the descriptor has to agree or an
+  // untouched column is reported as a narrowing on every diff.
+  it("treats a text field whose options is an array as unbounded", () => {
+    const desired = schemaWith({
+      fields: [
+        { name: "body", type: "text", options: [{ label: "A", value: "a" }] },
+      ] as never,
+    });
+
+    expect(bodyType(desired)).toBe("text");
+  });
+
+  // Explicitly short means bounded on every dialect that HAS a bounded string, PostgreSQL included
+  // — its legacy creator emits varchar there, and rendering plain text would drop the width bound.
+  it.each([
+    ["mysql", "varchar(255)"],
+    ["postgresql", "varchar(255)"],
+    ["sqlite", "text"],
+  ])("renders an explicitly short field bounded on %s", (dialect, expected) => {
+    const descriptor = getColumnDescriptor(
+      { name: "code", type: "text", options: { variant: "short" } },
+      dialect as Parameters<typeof getColumnDescriptor>[1]
+    );
+
+    expect(descriptor?.dialectType).toBe(expected);
+  });
+
+  // `asMappableField` strips maxLength from a contributed field before the component creator maps
+  // it, so on one of those the key says nothing about the column.
+  it("ignores a contributed type's maxLength on a field group", () => {
+    registerFieldType({
+      type: "swatch-2",
+      storage: "text",
+      component: "@acme/swatch/admin#ColorSwatch",
+    });
+
+    const resolved = withResolvedBuilderTextWidths({
+      collections: {},
+      singles: {},
+      components: {
+        hero: {
+          slug: "hero",
+          tableName: "comp_hero",
+          fields: [{ name: "sw", type: "swatch-2", maxLength: 40 }] as never,
+          builderOwned: true,
+        },
+      },
+    });
+
+    expect(resolved.components.hero.fields[0]).toMatchObject({
+      options: { variant: "long" },
+    });
   });
 
   it("does not widen a type whose width is settled by what it holds", () => {

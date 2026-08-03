@@ -445,6 +445,12 @@ function buildPgColumnFromKind(
     case "longText":
     case "varchar":
       return nullable ? pgText(name) : pgText(name).notNull();
+    case "shortText": {
+      // The one string kind PostgreSQL bounds. The others render `text` there, so binding this as
+      // text too would leave the ORM describing a column the DDL declared with a width.
+      const col = pgVarchar(name, { length: desc.length ?? 255 });
+      return nullable ? col : col.notNull();
+    }
     case "boolean":
       return nullable ? pgBoolean(name) : pgBoolean(name).notNull();
     case "integer":
@@ -477,6 +483,7 @@ function buildMysqlColumnFromKind(
 ): unknown {
   switch (kind) {
     case "text":
+    case "shortText":
     case "varchar": {
       const col = mysqlVarchar(name, { length: length ?? 255 });
       return nullable ? col : col.notNull();
@@ -512,6 +519,7 @@ function buildSqliteColumnFromKind(
   switch (kind) {
     case "text":
     case "longText":
+    case "shortText":
     case "varchar":
       return nullable ? sqliteText(name) : sqliteText(name).notNull();
     case "boolean":

@@ -12,6 +12,7 @@ export interface LocalizedColumnSpec {
   kind:
     | "text"
     | "longText"
+    | "shortText"
     | "boolean"
     | "integer"
     | "double"
