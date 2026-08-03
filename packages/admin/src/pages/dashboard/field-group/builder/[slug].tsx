@@ -447,7 +447,7 @@ export default function FieldGroupBuilderEditPage({
             Field Group Not Found
           </h2>
           <p className="text-muted-foreground">
-            No component slug was provided.
+            No field group slug was provided.
           </p>
         </div>
       </div>
@@ -719,7 +719,7 @@ export default function FieldGroupBuilderEditPage({
 
       {(isSaving || isApplyingSchema) && (
         <div aria-live="polite" className="sr-only">
-          Saving component changes…
+          Saving field group changes…
         </div>
       )}
     </div>

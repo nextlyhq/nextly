@@ -8,6 +8,9 @@
 
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
+import { storageTypeToken } from "../../../shared/lib/plugin-storage";
+import { isFieldLocalized } from "../../i18n/classify-fields";
+
 /**
  * Field types that are always stored as JSON in the database.
  */
@@ -58,7 +61,13 @@ export function isJsonFieldType(
   fieldType: string,
   field?: { hasMany?: boolean; relationTo?: unknown }
 ): boolean {
-  if (ALWAYS_JSON_TYPES.has(fieldType)) return true;
+  // A plugin type is classified by what it stores: its own token names none of
+  // the built-in branches, so a json-backed field would be written as a live
+  // object into the JSON column its descriptor created. None of the storage
+  // primitives is `select`, `relationship` or `upload`, so the branches below
+  // keep reading the declared type.
+  if (ALWAYS_JSON_TYPES.has(storageTypeToken({ type: fieldType }) ?? fieldType))
+    return true;
 
   if (
     (fieldType === "select" ||
@@ -356,4 +365,73 @@ export function getMinSearchLength(
     ((collection.schemaDefinition as Record<string, unknown> | undefined)
       ?.search as Record<string, unknown> | undefined);
   return (searchConfig?.minSearchLength as number) ?? 2;
+}
+
+/**
+ * Turn storage-encoded JSON columns back into the values the field was
+ * configured with.
+ *
+ * SQLite has no JSON type, so richtext, blocks, array, group and json fields
+ * come back as strings. Every consumer after this point -- hooks, field-level
+ * access, the caller -- is documented against the configured value, so the
+ * decode belongs before the first of them.
+ *
+ * The `locale=all` shape is a language-keyed map, but only a LOCALIZED field
+ * is ever read that way, and localization is a CLASSIFICATION rather than a
+ * flag: text-like types (including `richText`) localize by default in a
+ * localized collection without ever materializing `localized: true`. Reading
+ * the raw flag would leave those maps encoded. The master switch is passed as
+ * enabled because a shared field still classifies as not localized, so a
+ * collection that never opted in has no maps to mistake. A shared JSON field is a plain object on a driver that
+ * parses JSON, so treating every object as a locale map would parse its own
+ * string properties and hand back values the row never held.
+ *
+ * Runs exactly once per read. A second pass cannot tell an already-decoded
+ * string from storage encoding, so a field holding the string `"123"` would
+ * decode to the number `123` on the second visit; `"true"` and `"null"` fail
+ * the same way.
+ */
+export function decodeJsonFieldValues(
+  entries: Record<string, unknown>[],
+  fields: {
+    name: string;
+    type: string;
+    hasMany?: boolean;
+    relationTo?: unknown;
+    localized?: boolean;
+  }[],
+  locale?: string
+): void {
+  for (const entry of entries) {
+    for (const field of fields) {
+      if (!isJsonFieldType(field.type, field)) continue;
+      const value = entry[field.name];
+      if (typeof value === "string") {
+        try {
+          entry[field.name] = JSON.parse(value);
+        } catch {
+          // Not JSON after all; the stored string is the value.
+        }
+      } else if (
+        locale === "all" &&
+        isFieldLocalized(field, true) &&
+        value !== null &&
+        typeof value === "object"
+      ) {
+        // `locale=all` yields a language-keyed map of raw companion values, so
+        // each locale's string is decoded to match the shape a single-locale
+        // read returns.
+        const keyed = value as Record<string, unknown>;
+        for (const code of Object.keys(keyed)) {
+          if (typeof keyed[code] === "string") {
+            try {
+              keyed[code] = JSON.parse(keyed[code]);
+            } catch {
+              // Not JSON after all; the stored string is the value.
+            }
+          }
+        }
+      }
+    }
+  }
 }

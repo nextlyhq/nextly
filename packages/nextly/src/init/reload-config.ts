@@ -21,8 +21,14 @@
 //     which the pipeline maps to CONFIRMATION_REQUIRED_NO_TTY. We log
 //     that and keep the dev server alive.
 
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+import { type SQL } from "drizzle-orm";
 
+import type { CollectionHooks } from "../collections/config/define-collection";
+import { withMigrationExcluded } from "../domains/field-groups/migration/sync-guard";
+import { chooseTypeColumns } from "../domains/field-groups/storage/resolve-storage-names";
+import type { I18nTransitionKind } from "../domains/i18n/migration/transition-state";
 import { createApplyDesiredSchema } from "../domains/schema/pipeline/apply";
 import { RealClassifier } from "../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../domains/schema/pipeline/database-url";
@@ -55,10 +61,9 @@ import type {
 } from "../domains/schema/pipeline/types";
 import { DrizzleStatementExecutor } from "../domains/schema/services/drizzle-statement-executor";
 import { generateRuntimeSchema } from "../domains/schema/services/runtime-schema-generator";
-import {
-  resolveCollectionTableName,
-  resolveComponentTableName,
-} from "../domains/schema/utils/resolve-table-name";
+import { readIdentifierCaseRules } from "../domains/schema/utils/read-identifier-case";
+import type { IdentifierCaseRules } from "../domains/schema/utils/resolve-catalog-name";
+import { resolveCollectionTableName } from "../domains/schema/utils/resolve-table-name";
 // Resolve the versioning config on the HMR sync path so a `versions` change
 // while `next dev` is running persists without a restart (parity with di/register).
 import { resolveVersionsConfig } from "../domains/versions/resolve-config";
@@ -71,12 +76,24 @@ import {
 } from "../domains/webhooks/recording-policy";
 import { collectPluginContributedSlugs } from "../domains/webhooks/recording-provenance";
 import { resolveWebhookRecording } from "../domains/webhooks/resolve-recording-config";
-import type { PluginFieldType } from "../plugins/contributions";
+import { describeError } from "../errors/index";
+import { NextlyError } from "../errors/nextly-error";
+import { getActiveHookRegistry } from "../hooks/hook-registry";
+import { reregisterCollectionHooks } from "../hooks/register-collection-hooks";
+import {
+  reregisterSingleHooks,
+  singleHookNamespace,
+} from "../hooks/register-single-hooks";
+import type { HookOwner } from "../hooks/types";
+import { getInitializedPlugins } from "../plugins/initialized-plugins";
 import type { RevalidateConfig } from "../revalidation/types";
 import { getProductionNotifier } from "../runtime/notifications/index";
+import { STORAGE_FORMAT } from "../schemas/storage-format";
 import type { VersionsConfig } from "../schemas/versions/types";
 import { FieldGroupSchemaService } from "../services/field-groups/field-group-schema-service";
+import type { SingleHooks } from "../singles/config/types";
 
+import { planFieldGroupReload } from "./field-group-reload-plan";
 import { clearLiveSnapshots, setLiveSnapshot } from "./schema-snapshot-cache";
 
 // Service-resolver shape. Defaulted to the real getService at runtime;
@@ -98,13 +115,26 @@ type LoggerLike = {
 // adapter-drizzle would couple this module to the adapter package.
 interface AdapterLike {
   readonly dialect: "postgresql" | "mysql" | "sqlite";
-  getDrizzle(): unknown;
+  getDrizzle<T = unknown>(): T;
+  // Needed to resolve which field-group registry this database holds: the
+  // storage migration renames it, so the name is read from the catalog rather
+  // than spelled here.
+  listTables(): Promise<string[]>;
+  // The registry read goes through the adapter's statement path so the driver
+  // envelopes are normalised in one place rather than per caller.
+  queryStatement<T = Record<string, unknown>>(statement: SQL): Promise<T[]>;
+  // Needed to provision the localized companion below: creating the table and adding
+  // columns to it are both DDL, and the status backfill that accompanies a new `_status`
+  // column is a write.
+  executeQuery<T = unknown>(sql: string, params?: unknown[]): Promise<T[]>;
 }
 
 type CollectionDef = {
   slug?: string;
   tableName?: string;
   fields?: unknown[];
+  /** Declared lifecycle hooks; re-registered from the reloaded config. */
+  hooks?: CollectionHooks;
   labels?: { singular?: string; plural?: string };
   description?: string;
   timestamps?: boolean;
@@ -124,6 +154,8 @@ type CollectionDef = {
 type SingleDef = {
   slug?: string;
   fields?: unknown[];
+  /** Declared lifecycle hooks; re-registered from the reloaded config. */
+  hooks?: SingleHooks;
   label?: { singular?: string } | string;
   description?: string;
   admin?: unknown;
@@ -385,7 +417,18 @@ async function syncCodeFirstMetadataOnly(
     fieldGroups?: ComponentDef[];
   },
   logger?: LoggerLike
-): Promise<{ collections: boolean; singles: boolean; components: boolean }> {
+): Promise<{
+  collections: boolean;
+  singles: boolean;
+  components: boolean;
+  /**
+   * Singles whose metadata was refused individually. The sync keeps their prior
+   * snapshot rather than failing the whole scope, so the scope flag stays true
+   * while these particular entities still describe themselves the old way.
+   */
+  failedSingles: ReadonlySet<string>;
+}> {
+  let failedSingles: ReadonlySet<string> = new Set<string>();
   let collections = true;
   let singles = true;
   let components = true;
@@ -414,6 +457,7 @@ async function syncCodeFirstMetadataOnly(
         await singleReg.syncCodeFirstSingles(payload)
       );
     }
+    failedSingles = failedSlugs;
     // Refresh the live default source after the sync: successful singles adopt
     // the new config; a single whose sync failed keeps its prior snapshot so its
     // new fields never pair with stale serialized metadata.
@@ -445,7 +489,7 @@ async function syncCodeFirstMetadataOnly(
       }`
     );
   }
-  return { collections, singles, components };
+  return { collections, singles, components, failedSingles };
 }
 
 /**
@@ -480,9 +524,14 @@ function publishScopeRecording(
     pluginSlugs.has(slug) ? "plugin" : "code";
 
   // Opt-outs first, always: safe regardless of sync state (recording is off).
+  // The curated `emit` is NOT attached here: it reads the field tree to strip
+  // secrets from its payload, so it waits on `synced` exactly like an opt-in
+  // (attached below). Otherwise a reload that adds `emit` while making a field
+  // newly sensitive could ship the stale field's value unstripped.
   for (const e of entities) {
     if (!e.slug) continue;
-    if (resolveWebhookRecording(e.webhooks).record === false) {
+    const resolved = resolveWebhookRecording(e.webhooks);
+    if (resolved.record === false) {
       setWebhookRecording(scope, e.slug, false, sourceOf(e.slug));
     }
   }
@@ -496,8 +545,19 @@ function publishScopeRecording(
   pruneRemovedCodeFirstRecording(scope, present);
   for (const e of entities) {
     if (!e.slug) continue;
-    if (resolveWebhookRecording(e.webhooks).record === true) {
-      setWebhookRecording(scope, e.slug, true, sourceOf(e.slug));
+    const resolved = resolveWebhookRecording(e.webhooks);
+    if (resolved.record === true) {
+      setWebhookRecording(scope, e.slug, true, sourceOf(e.slug), resolved.emit);
+    } else if (resolved.emit) {
+      // Re-publish the opt-out WITH its curated emit now that the field tree is
+      // in step, so the curated payload strips against current metadata.
+      setWebhookRecording(
+        scope,
+        e.slug,
+        false,
+        sourceOf(e.slug),
+        resolved.emit
+      );
     }
   }
 }
@@ -550,6 +610,488 @@ function republishRecordingPolicies(
     pluginSingles,
     scopes.singles
   );
+}
+
+/**
+ * Build the hook work a reloaded config implies, WITHOUT applying any of it.
+ *
+ * Returned as a thunk the caller runs only once the reload has landed. Applying
+ * it up front would publish a handler before the schema it was written against
+ * exists: peer requests keep being served from the cached instance while a
+ * reload is in flight, so one of them can run the new hook against the old
+ * table -- reading a field the save has only just added, say -- and no later
+ * rollback can undo a request that has already been answered. Deferring shrinks
+ * that window to the gap between the DDL landing and this thunk running.
+ *
+ * Nothing here is optimistic, so an abandoned reload needs no undo: it simply
+ * never calls the thunk.
+ */
+/**
+ * Whether a reload advanced the runtime in every dimension it touched, which is
+ * the condition for publishing the config's hook edits.
+ *
+ * A reload reapplies part of a boot, and the parts fail independently: a diff
+ * can be refused for one entity while the rest apply, and a field-tree sync can
+ * fail for a scope or for individual singles while the DDL lands. Each failure
+ * leaves some state behind the config the handlers were written against -- a
+ * refused diff leaves a table without the column a handler sets, an unsynced
+ * field tree leaves the mutation services validating and serializing against
+ * the previous fields, so a value a handler supplies for a new field is
+ * dropped. Publishing into any of those states runs a handler against state it
+ * does not match.
+ *
+ * So this is deliberately all-or-nothing rather than a per-entity judgement.
+ * The dimensions are not per-entity to begin with -- a component-tree or
+ * collection-scope sync failure covers every entity at once -- and a rule that
+ * publishes one entity's handlers while withholding another's has to assume the
+ * two cannot interact, which nothing enforces. The cost is that a hook edit
+ * sharing a save with a refused schema change waits for the next save; a hook
+ * edit alone changes no table, so its reload is clean and it applies
+ * immediately, which is the case the dev loop is built around.
+ */
+function reloadAdvancedEverything(dimensions: {
+  /** Entities whose schema change the diff gate refused. Absent where no schema apply ran. */
+  deferredEntities?: ReadonlySet<string>;
+  /** The collection field-tree sync completed. */
+  collections: boolean;
+  /** The single field-tree sync completed. */
+  singles: boolean;
+  /** The component (field-group) tree synced; a failure here taints both scopes. */
+  components: boolean;
+  /** Singles the sync reported individually as failed. */
+  failedSingles: ReadonlySet<string>;
+}): boolean {
+  return (
+    (dimensions.deferredEntities?.size ?? 0) === 0 &&
+    dimensions.collections &&
+    dimensions.singles &&
+    dimensions.components &&
+    dimensions.failedSingles.size === 0
+  );
+}
+
+function stageConfigHooks(newConfig: {
+  collections?: CollectionDef[];
+  singles?: SingleDef[];
+  plugins?: unknown[];
+}): () => void {
+  const disabledPlugins = (newConfig.plugins ?? []).filter(
+    plugin => (plugin as { enabled?: boolean }).enabled === false
+  );
+
+  // A slug is what the registry keys on, so an entity without one cannot have
+  // had hooks registered for it and has nothing to replace.
+  // `init` does not re-run on a reload, so a plugin switched from disabled to
+  // enabled has no services and no subscriptions -- registering the hooks its
+  // collections declare would put handlers live that depend on both. Enabled in
+  // the config is not the same as running in this process, and only the second
+  // makes its hooks safe. An unknown set (registration has not happened yet)
+  // means no basis to exclude anyone.
+  // Only reconciled when the config actually carries a plugin list. An absent
+  // key is no information, and treating it as "every plugin is gone" would
+  // suspend the lot -- a far worse failure than the one being fixed. An EMPTY
+  // list is information, and does mean they are all gone.
+  const declaredPlugins = Array.isArray(newConfig.plugins)
+    ? newConfig.plugins
+    : undefined;
+
+  const initialized = getInitializedPlugins();
+  const runningNames = declaredPlugins
+    ? declaredPlugins
+        .filter(plugin => (plugin as { enabled?: boolean }).enabled !== false)
+        .map(plugin => (plugin as { name?: string }).name)
+        .filter((name): name is string => !!name)
+        .filter(name => initialized?.has(name) ?? true)
+    : undefined;
+  const stillRunning = runningNames
+    ? new Set(runningNames.map((name): HookOwner => `plugin:${name}`))
+    : undefined;
+  // Entities contributed by a plugin the config enables but the process never
+  // started are left out too, alongside the ones it disables.
+  const notRunning = declaredPlugins
+    ? declaredPlugins.filter(plugin => {
+        const name = (plugin as { name?: string }).name;
+        if (!name) return false;
+        return !runningNames?.includes(name);
+      })
+    : [];
+
+  const disabledCollections = collectPluginContributedSlugs(
+    notRunning.length > 0 ? notRunning : disabledPlugins,
+    "collections"
+  );
+  const collections = (newConfig.collections ?? []).filter(
+    (collection): collection is CollectionDef & { slug: string } =>
+      !!collection.slug && !disabledCollections.has(collection.slug)
+  );
+
+  const disabledSingles = collectPluginContributedSlugs(
+    notRunning.length > 0 ? notRunning : disabledPlugins,
+    "singles"
+  );
+  const singles = (newConfig.singles ?? []).filter(
+    (single): single is SingleDef & { slug: string } =>
+      !!single.slug && !disabledSingles.has(single.slug)
+  );
+
+  // A plugin that is no longer running must stop running EVERYTHING it
+  // contributed. Its declarations are handled by leaving them out of the
+  // rebuild below. Its `ctx.hooks.on` registrations cannot be: `init` does not
+  // re-run on a config reload, so removing them would leave re-enabling the
+  // plugin in the same session short of its handlers until a restart. They are
+  // suspended instead, so both directions work without one.
+  //
+  // Which plugins are still running is decided by the new config; WHICH OWNERS
+  // EXIST is not, and cannot be. A plugin deleted from the config outright is
+  // absent from it entirely, so a set derived from the config alone could never
+  // name it and it would keep running -- and, worse, deleting a plugin that was
+  // previously disabled would actively resume it. So the candidates come from
+  // the registry and the config only says which of them survive.
+
+  return () => {
+    // The registry service registration actually bound its handlers to, which
+    // is not always the process-global singleton: a caller may supply its own,
+    // and replacing handlers anywhere else would leave the live registry
+    // running the ones it was supposed to lose while the edited ones sit where
+    // nothing reads them. Resolved at commit time, so a registration that
+    // happened during the reload is still the one that gets written to.
+    const registry = getActiveHookRegistry();
+
+    // What the re-registration below is going to rebuild: every entity the
+    // config declares, because this thunk runs only for a reload that advanced
+    // every dimension.
+    const rebuilt = new Set<string>([
+      ...collections.map(collection => collection.slug),
+      ...singles.map(single => singleHookNamespace(single.slug)),
+    ]);
+
+    // Everything else the config currently owns handlers for, which the
+    // re-registration will NOT put back and so has to remove.
+    //
+    // Two ways a namespace lands here. An entity deleted or renamed in the
+    // config keeps its handlers, and its table is deliberately retained rather
+    // than dropped -- `nextly prune` is what removes an orphan -- so it stays
+    // addressable and would go on running hooks the config no longer declares.
+    // A plugin switched to `enabled: false` is the same shape: its declarations
+    // registered under the config's ownership while it was enabled, and merely
+    // leaving it out of the rebuild removes nothing.
+    for (const namespace of registry.collectionsOwnedBy("code")) {
+      if (!rebuilt.has(namespace)) {
+        registry.clearCollectionOwnedBy(namespace, "code");
+      }
+    }
+
+    reregisterCollectionHooks(collections, registry);
+    reregisterSingleHooks(singles, registry);
+
+    // Recomputed whole rather than mutated, so an owner that is running again
+    // resumes by simply not appearing -- nothing has to remember what a
+    // previous reload suspended, and the set cannot drift.
+    if (stillRunning) {
+      // Two sources, because neither alone is complete. The registry names
+      // owners that hold registrations, which is what catches a plugin deleted
+      // from the config entirely. The initialized list names plugins that ran
+      // `init`, which is what catches one whose FIRST `ctx.hooks.on` call has
+      // not happened yet -- a plugin registering lazily from a route or a timer
+      // would otherwise be absent here and its later handler would run despite
+      // being switched off.
+      const candidates = new Set<HookOwner>([
+        ...registry
+          .registeredOwners()
+          .filter((owner): owner is HookOwner => owner.startsWith("plugin:")),
+        ...[...(initialized ?? [])].map((name): HookOwner => `plugin:${name}`),
+      ]);
+      registry.setSuspendedOwners(
+        [...candidates].filter(owner => !stillRunning.has(owner))
+      );
+    }
+  };
+}
+
+/**
+ * Create, and bring into step, the `_locales` companion of every localized collection, single
+ * and field group in the reloaded config.
+ *
+ * It does NOT seed existing content into the companion. `ensureCompanionTable` is
+ * creation-only and leaves whatever is already on the main table where it is, so a successful
+ * reload is not evidence that default-locale data has been carried across — enabling
+ * localization on an entity that already has content still leaves that content unreadable
+ * until the transition seeds it. Copying it is the gated pipeline's job.
+ *
+ * The reload path is the `next dev` counterpart to the CLI's `ensureLocalizedCompanions`: it is
+ * where a config edit lands when the app is running under plain `next dev` rather than
+ * `nextly db:sync --watch`. `ensureCompanionTable` is idempotent, so entities that already have
+ * their companion cost one introspection each.
+ *
+ * Never throws: a companion that cannot be provisioned must not take down a config reload. The
+ * write guard in the mutation services is what protects content in the meantime.
+ */
+async function ensureLocalizedCompanionsForReload(
+  adapter: AdapterLike,
+  config: {
+    collections?: unknown[];
+    singles?: unknown[];
+    fieldGroups?: unknown[];
+    localization?: { defaultLocale?: string };
+  },
+  /**
+   * Stored physical table name per field-group slug.
+   *
+   * 🔴 A companion is named after the table it belongs to, so deriving the main
+   * table's name here derives the companion's too — and after the storage
+   * migration that names `comp_<slug>_locales` beside a live `fg_<slug>`,
+   * provisioning an empty companion the entity's reads never consult while the
+   * real one is left to drift. The reload already resolved these once; this is
+   * that answer, not a second guess at it.
+   */
+  fieldGroupTables: ReadonlyMap<string, string>,
+  // `<kind>:<slug>` for every entity whose schema change was classified unsafe (or whose diff
+  // threw) this cycle, so it was NOT applied. Those must be skipped: creating a companion for
+  // a transition that has not happened is worse than leaving it absent. The Schema Builder
+  // later applies the real transition, and `buildCompanionTransitionStatements` decides
+  // whether to SEED the existing main-table values by looking at whether the companion is
+  // already there. Finding one — empty, created from a config that was never applied — sends
+  // it down the plain reconcile branch instead, and the default-locale content is lost.
+  //
+  // Deliberately per entity rather than a single "something was deferred" flag: entities whose
+  // schema IS in step still need provisioning on this pass, and skipping them wholesale
+  // reintroduces the missing-companion window this function exists to close.
+  deferred: ReadonlySet<string> = new Set(),
+  /**
+   * Which side of the schema apply this pass runs on.
+   *
+   * `beforeApply` exists because enabling localization removes the translatable columns from the
+   * entity's desired main table, so the apply wants to DROP them. Running only afterwards means
+   * the copy either never happens (the drop was classified destructive and the entity deferred)
+   * or happens too late (the operator confirmed, and the values are already gone). This pass
+   * therefore copies first, which makes the drop that follows harmless.
+   *
+   * It is restricted to entities whose main table already exists, because those are the only ones
+   * that can hold content worth copying — and because a companion carries a foreign key to its
+   * main table, which a brand-new entity does not have until the apply creates it. Those are left
+   * to `afterApply`, which is also where column reconciliation belongs: the apply is what adds the
+   * columns a reconcile would be looking for.
+   */
+  phase: "beforeApply" | "afterApply" = "afterApply"
+): Promise<{
+  preservationFailed: string[];
+  restoreFailed: string[];
+  schemaChanged: boolean;
+}> {
+  // Entities whose content could not be copied into their companion. The caller must not let the
+  // apply run for these: the copy is the only thing standing between the apply's DROP and the
+  // values it would take with it.
+  const preservationFailed: string[] = [];
+  // Entities whose content could not be copied BACK onto main when localization was turned off.
+  // The caller must not publish the non-localized configuration for these: the app would read the
+  // stale main values, accept edits on them, and a later successful retry would copy the
+  // companion's older values over the top.
+  const restoreFailed: string[] = [];
+  // Whether this pass altered any main table. A transition can relax a retained column, and on
+  // SQLite — which cannot change nullability at all — it drops one instead. The caller cached a
+  // live snapshot before this ran, and the pipeline reuses it, so an apply working from that
+  // snapshot would re-emit a DROP for a column that is already gone.
+  let schemaChanged = false;
+  // Same policy the CLI applies: production schema changes belong to `nextly migrate`.
+  if (process.env.NODE_ENV === "production")
+    return { preservationFailed, restoreFailed, schemaChanged };
+
+  const {
+    ensureCompanionTable,
+    reconcileCompanionColumns,
+    mainTableExists,
+    resolveCompanionSeedDebt,
+  } = await import("../domains/i18n/runtime/companion-io");
+  const { resolveCollectionTableName, resolveComponentTableName } =
+    await import("../domains/schema/utils/resolve-table-name");
+  const { resolveSingleTableName } = await import(
+    "../domains/singles/services/resolve-single-table-name"
+  );
+
+  type Localizable = {
+    slug?: string;
+    dbName?: string;
+    localized?: boolean;
+    status?: boolean;
+    fields?: { name: string; type: string; localized?: boolean }[];
+  };
+  // The kind prefixes the `deferred` keys, because a collection and a single may share a slug
+  // and only one of them may have been deferred. It is also part of the transition record's
+  // key, for the same reason, so it is typed rather than left an open string.
+  const groups: [
+    I18nTransitionKind,
+    Localizable[],
+    (e: Localizable) => string,
+  ][] = [
+    [
+      "collection",
+      (config.collections ?? []) as Localizable[],
+      e => resolveCollectionTableName(e.slug!, e.dbName),
+    ],
+    [
+      "single",
+      (config.singles ?? []) as Localizable[],
+      e => resolveSingleTableName({ slug: e.slug!, dbName: e.dbName }),
+    ],
+    [
+      "fieldGroup",
+      (config.fieldGroups ?? []) as Localizable[],
+      e => fieldGroupTables.get(e.slug!) ?? resolveComponentTableName(e.slug!),
+    ],
+  ];
+
+  // Where transitions are recorded. Resolved whether or not the app names a default locale: an app
+  // that has just removed its `localization` block still has companions to unwind, and asking for a
+  // locale first would hide exactly those entities.
+  const { bindTransitionRecorder, resolveTransitionStore } = await import(
+    "../domains/i18n/migration/transition-recorder"
+  );
+  const { beginI18nTransition, settleI18nTransition } = await import(
+    "../domains/i18n/migration/transition-state"
+  );
+  const transitionStore = await resolveTransitionStore(adapter);
+  // The same store, plus the locale a newly created companion gets recorded with.
+  const transitions = bindTransitionRecorder(transitionStore, config);
+
+  for (const [kind, entities, resolveTableName] of groups) {
+    for (const entity of entities) {
+      if (!entity.slug) continue;
+      if (deferred.has(`${kind}:${entity.slug}`)) continue;
+      if (entity.localized !== true) {
+        // Turning localization off is a transition too. Only the Schema Builder used to perform
+        // it, so an entity localized from configuration and then un-localized kept its content in
+        // a companion nothing reads any more, and fell back to whatever the main table held before
+        // it was localized. Restoring runs after the apply, which is what puts those columns back.
+        if (phase === "afterApply") {
+          const { restoreDisabledCompanion } = await import(
+            "../domains/i18n/runtime/restore-companion"
+          );
+          await restoreDisabledCompanion(
+            adapter,
+            {
+              kind,
+              slug: entity.slug,
+              tableName: resolveTableName(entity),
+              fields: entity.fields ?? [],
+              dialect: adapter.dialect,
+              defaultLocale: transitions?.defaultLocale,
+              store: transitionStore,
+            },
+            error => {
+              restoreFailed.push(entity.slug!);
+              console.error(
+                `[nextly] Could not restore "${entity.slug}" from its translations table after ` +
+                  `localization was turned off. Its content is still in ` +
+                  `${resolveTableName(entity)}_locales: ` +
+                  `${error instanceof Error ? error.message : String(error)}`
+              );
+            }
+          );
+        }
+        continue;
+      }
+      const tableName = resolveTableName(entity);
+      if (
+        phase === "beforeApply" &&
+        !(await mainTableExists(adapter, tableName))
+      ) {
+        // Nothing to preserve and nothing to hang a foreign key on yet. The post-apply pass
+        // creates this entity's companion once the apply has produced its main table.
+        continue;
+      }
+      const provisioned = await ensureCompanionTable(
+        adapter,
+        {
+          slug: entity.slug,
+          tableName,
+          fields: entity.fields ?? [],
+          dialect: adapter.dialect,
+          status: entity.status === true,
+          // Turns creation into a transition: content already on the main table is
+          // copied in as this locale's rows, instead of being left behind an empty
+          // companion that reads null.
+          sourceLocale: transitions?.defaultLocale,
+          // Written before the DDL rather than after a successful return: MySQL commits DDL
+          // implicitly, so a crash in between would leave a companion the next run treats as
+          // pre-existing and never records. It is also what makes a failed copy recoverable.
+          recordTransition: transitions
+            ? () =>
+                beginI18nTransition(transitions, {
+                  kind,
+                  slug: entity.slug!,
+                  sourceLocale: transitions.defaultLocale,
+                })
+            : undefined,
+          // Lets an existing companion be finished rather than skipped. `enabling` means an
+          // earlier run created the table and did not complete the copy; `restored` means the
+          // companion outlived a disable, so its default-locale rows describe a main table that
+          // has been authoritative ever since and must be overwritten rather than trusted.
+          seedIncomplete: transitions
+            ? () =>
+                resolveCompanionSeedDebt(transitions, kind, entity.slug!, {
+                  defaultLocale: transitions.defaultLocale,
+                })
+            : undefined,
+          settleTransition: transitions
+            ? token =>
+                settleI18nTransition(transitions, {
+                  kind,
+                  slug: entity.slug!,
+                  // The claim this settles, handed back by whichever of the two callbacks above
+                  // made it. A settlement that did not name one would close whatever claim it
+                  // found, including one taken over while this copy ran.
+                  token,
+                })
+            : undefined,
+        },
+        error => {
+          if (phase === "beforeApply") preservationFailed.push(entity.slug!);
+          console.warn(
+            `[nextly] Could not prepare the translations table for "${entity.slug}". ` +
+              `Writes in a non-default locale will be refused until it exists: ` +
+              `${error instanceof Error ? error.message : String(error)}`
+          );
+        }
+      );
+      // Creating the table is not enough on its own: `ensureCompanionTable` returns
+      // immediately when one already exists, so marking a FURTHER field localized on an
+      // already-localized entity takes the no-DDL path, syncs its metadata, and leaves the
+      // companion a column short — the write then splits that value into a column that is not
+      // there. The CLI sync reconciles for the same reason; the HMR path needs it too.
+      //
+      // Safe here despite issuing DDL, because the production guard at the top of this
+      // function has already returned: this runs only under `next dev`. The reconcile is
+      // additive, so it never removes a column even when a field stops being localized.
+      //
+      // A transition ran, so the main table may no longer look the way the caller's cached
+      // snapshot says. Only tracked before the apply — afterwards there is no apply left to
+      // mislead.
+      if (provisioned && phase === "beforeApply") schemaChanged = true;
+      // Skipped before the apply, which is what creates the columns a reconcile would be looking
+      // for. Running it early would compare the companion against a main table the apply has not
+      // finished shaping.
+      if (phase === "beforeApply") continue;
+      await reconcileCompanionColumns(
+        adapter,
+        {
+          slug: entity.slug,
+          tableName: resolveTableName(entity),
+          fields: entity.fields ?? [],
+          dialect: adapter.dialect,
+          status: entity.status === true,
+        },
+        error => {
+          console.warn(
+            `[nextly] Could not update the translations table for "${entity.slug}". ` +
+              `Newly translatable fields may fail to save until it is in step: ` +
+              `${error instanceof Error ? error.message : String(error)}`
+          );
+        }
+      );
+    }
+  }
+
+  return { preservationFailed, restoreFailed, schemaChanged };
 }
 
 // Reload entry point. resolver is optional and exists primarily for tests.
@@ -615,7 +1157,84 @@ function startReload(opts?: {
   return started;
 }
 
+/**
+ * Run a reload with a field-group storage migration excluded throughout.
+ *
+ * `next dev` routes config edits here rather than through the CLI watcher, so
+ * this is the schema-applying path most users are on: it builds field-group
+ * diffs, applies DDL, and its pre-cleanup issues UPDATE and DELETE.
+ * Mid-migration that work reads a database where some tables carry pre-rename
+ * names and some post-rename, with the registry pointers moving one step at a
+ * time.
+ *
+ * The exclusion is *held* rather than sampled, because a migration starting
+ * between a check and the apply leaves exactly the same window open. Holding is
+ * safe here specifically because reloads are already serialized in this process
+ * — `reloadNextlyConfig` keeps one in flight and queues the next — so taking
+ * the lock cannot make a concurrent edit lose its turn.
+ *
+ * A refusal abandons the reload rather than throwing: the previous config stays
+ * in place, whereas an exception escaping here reaches the dev server and turns
+ * every later request into a 500.
+ */
 async function runReload(opts?: {
+  resolver?: ServiceResolver;
+  dispatcher?: PromptDispatcher;
+}): Promise<void> {
+  const resolveService = (name: string): unknown =>
+    opts?.resolver ? opts.resolver(name) : defaultResolver(name);
+
+  let adapter: AdapterLike | undefined;
+  let logger: LoggerLike | undefined;
+  try {
+    logger = (await resolveService("logger")) as LoggerLike;
+    adapter = (await resolveService("adapter")) as AdapterLike;
+  } catch {
+    // DI is not up yet. `applyReload` resolves again and abandons on its own,
+    // so there is nothing to exclude against and nothing to report here.
+  }
+  if (!adapter) return applyReload(opts);
+
+  // Tells a refused exclusion apart from a failure inside the reload itself,
+  // which must propagate exactly as it did before this wrapper existed.
+  let reloadStarted = false;
+  try {
+    await withMigrationExcluded(
+      {
+        // `AdapterLike` is a narrow view of the registered adapter, which is a
+        // `DrizzleAdapter` at runtime.
+        adapter: adapter as unknown as DrizzleAdapter,
+        logger: logger as unknown as Parameters<
+          typeof withMigrationExcluded
+        >[0]["logger"],
+        label: "hmr reload",
+        // This path applies DDL by design, so it may establish the lock table
+        // rather than proceeding unprotected without one.
+        mayCreateLock: true,
+      },
+      () => {
+        reloadStarted = true;
+        return applyReload(opts);
+      }
+    );
+  } catch (error) {
+    if (reloadStarted) throw error;
+    // Logged apart on purpose: a refusal is routine and expected, while a check
+    // that could not run at all would otherwise disable schema applies silently
+    // and look like nothing happened.
+    if (NextlyError.is(error)) {
+      logger?.warn(
+        `[Nextly HMR] schema reload skipped: ${describeError(error)}`
+      );
+    } else {
+      logger?.error(
+        `[Nextly HMR] could not establish migration state, skipping schema reload: ${describeError(error)}`
+      );
+    }
+  }
+}
+
+async function applyReload(opts?: {
   resolver?: ServiceResolver;
   dispatcher?: PromptDispatcher;
 }): Promise<void> {
@@ -636,12 +1255,23 @@ async function runReload(opts?: {
         singles?: SingleDef[];
         fieldGroups?: ComponentDef[];
         webhookAuditEnabled?: boolean;
+        localization?: { defaultLocale?: string };
+        /**
+         * The resolved plugin list. Needed to tell a plugin's contribution
+         * apart from the app's own, since the loader folds contributed
+         * collections and singles into the lists above.
+         */
+        plugins?: unknown[];
       }
     | undefined;
-  let previousFieldTypes: PluginFieldType[] | undefined;
-  let restoreFieldTypes: (() => void) | undefined;
   /**
-   * Put the field-type registry back when a reload does not take effect.
+   * Undo steps for work a reload applies before it knows whether it will land,
+   * registered as that work happens and run together on abandonment.
+   */
+  const reloadUndo: Array<() => void> = [];
+  /**
+   * Put the field-type registry and the config's hooks back when a reload does
+   * not take effect.
    *
    * `loadConfig` swaps the process-global registry as it reads the new config,
    * but a reload can still be abandoned after that — DI not ready, the live
@@ -650,11 +1280,18 @@ async function runReload(opts?: {
    * the abandoned reload's `validate`, storage mapping and `validateOptions`
    * against a schema that never changed.
    *
+   * The config's hooks are applied on the same optimistic terms and come back
+   * the same way. A save can carry a hook edit AND a schema change, and when the
+   * schema change is refused the previous schema is what the database still has:
+   * a handler written against a field that was renamed or added in the refused
+   * edit would read something that is not there. Restoring them together is what
+   * keeps the two from ever disagreeing about which config is in effect.
+   *
    * Not called on the paths that simply had nothing to do: there the new config
-   * IS the live one, and its types belong in the registry.
+   * IS the live one, and its types and handlers belong in place.
    */
   const abandonReload = (): void => {
-    restoreFieldTypes?.();
+    for (const undo of reloadUndo) undo();
   };
   try {
     const { loadConfig, clearConfigCache } = await import(
@@ -668,13 +1305,13 @@ async function runReload(opts?: {
     // definitions installed under the retained config — writes would run the
     // refused reload's `validate` and storage mapping until the next good one.
     // The previous set is captured here and put back if anything below fails.
-    previousFieldTypes = allFieldTypes();
-    restoreFieldTypes = () => {
+    const previousFieldTypes = allFieldTypes();
+    reloadUndo.push(() => {
       clearFieldTypes();
-      for (const fieldType of previousFieldTypes ?? []) {
+      for (const fieldType of previousFieldTypes) {
         registerFieldType(fieldType);
       }
-    };
+    });
     clearConfigCache();
     const result = await loadConfig();
     newConfig = (
@@ -684,6 +1321,7 @@ async function runReload(opts?: {
           singles?: SingleDef[];
           fieldGroups?: ComponentDef[];
           webhookAuditEnabled?: boolean;
+          plugins?: unknown[];
         };
       }
     ).config;
@@ -749,6 +1387,18 @@ async function runReload(opts?: {
   // process-global flag that reads no field tree, so — like a recording opt-out
   // — it is safe to apply immediately, before the schema diff is synced.
   setWebhookAuditEnabled(newConfig.webhookAuditEnabled ?? false);
+
+  // Worked out here and applied only where the reload lands, by `commitReload`.
+  // A hook edit changes no table, so the reload it triggers often finds no diff
+  // and returns early -- which is why the commit has to sit on the no-change
+  // paths as well as after a successful apply, not on the apply alone.
+  const commitConfigHooks = stageConfigHooks(newConfig);
+  let committed = false;
+  const commitReload = (): void => {
+    if (committed) return;
+    committed = true;
+    commitConfigHooks();
+  };
 
   // databaseAdapter doubles as our DI-readiness probe. We don't need any
   // other service from DI in this path — the new gate gets prior-state
@@ -855,16 +1505,47 @@ async function runReload(opts?: {
     fields: MinimalField[];
     localized?: boolean;
   }> = [];
-  for (const c of newConfig.fieldGroups ?? []) {
-    if (!c.slug) continue;
-    componentTargets.push({
-      slug: c.slug,
-      tableName: resolveComponentTableName(c.slug),
-      fields: (c.fields ?? []) as MinimalField[],
-      // i18n: carry `localized` so the HMR diff omits translatable columns from the
-      // component's main table and registers its companion.
-      localized: (c as { localized?: boolean }).localized === true,
-    });
+  // 🔴 The STORED physical name wins over the one derived from the slug, and
+  // that decision is made ONCE for the whole reload — see the plan module.
+  const fieldGroupPlan = await planFieldGroupReload(
+    adapter,
+    newConfig.fieldGroups ?? []
+  );
+  componentTargets.push(...fieldGroupPlan.targets);
+  /** Field groups left out of this reload because their storage is unknown. */
+  const skippedComponentSlugs = fieldGroupPlan.skipped;
+  /** The same resolution, keyed for the companion provisioning below. */
+  const fieldGroupTables = new Map(
+    fieldGroupPlan.targets.map(target => [target.slug, target.tableName])
+  );
+  if (!fieldGroupPlan.usable) {
+    logger?.warn(
+      "[Nextly HMR] Could not read stored field-group table names" +
+        (fieldGroupPlan.reason ? `: ${fieldGroupPlan.reason}` : "") +
+        ". Deferring the field-group apply to the next reload."
+    );
+  }
+
+  // 🔴 Checked BEFORE the empty-target branch below. `loadConfig` has already
+  // replaced the process-global field-type registry, so returning without
+  // restoring it leaves the deferred config's validators and storage mappings
+  // live against a schema this reload chose not to touch. The empty-target
+  // branch is for a config that genuinely declares nothing; a config whose
+  // entities were all SKIPPED is a different state and must unwind.
+  if (
+    skippedComponentSlugs.size > 0 &&
+    componentTargets.length === 0 &&
+    targets.length === 0 &&
+    singleTargets.length === 0
+  ) {
+    // Only when NOTHING survives. A field-group deferral is not a reason to
+    // strand a collection or single whose storage this reload can address
+    // perfectly well — the registry read that failed says nothing about them.
+    logger?.warn(
+      "[Nextly HMR] Every target was deferred; abandoning this reload."
+    );
+    abandonReload();
+    return;
   }
 
   if (
@@ -883,6 +1564,11 @@ async function runReload(opts?: {
     republishRecordingPolicies(newConfig, { collections: true, singles: true });
     // The live default snapshot was already pruned to the (now empty) present
     // set above, so a removed single's stale defaults are gone by here.
+    //
+    // Nothing was managed, so there is no schema change to wait for and the new
+    // config IS the live one -- this is a landing, and its hooks belong in
+    // place.
+    commitReload();
     return;
   }
 
@@ -912,8 +1598,23 @@ async function runReload(opts?: {
   // (collections + singles). If the call fails, abort the reload entirely —
   // it's a connection-level failure, not a per-table problem.
   let liveSnapshot: NextlySchemaSnapshot;
+  // 🔴 Both probes run HERE, before the apply, and both abort it on failure.
+  //
+  // The identifier rules are read alongside the snapshot rather than where they
+  // are used, because where they are used is *after* the DDL has committed —
+  // inside a block whose catch is documented "non-fatal" and skips every runtime
+  // schema refresh. A transient failure there would leave the registry metadata
+  // synchronized and this process still holding the pre-change Drizzle
+  // descriptors, so component reads and writes would address columns that no
+  // longer exist until another reload or a restart. Failing before anything
+  // commits is the only version of that failure a reload can recover from.
+  //
+  // Free on Postgres and SQLite, where the rules follow from the dialect alone;
+  // only MySQL issues a query, and only MySQL can fail here.
+  let identifierCase: IdentifierCaseRules;
   try {
     liveSnapshot = await introspectLiveSnapshot(db, dialect, managedTableNames);
+    identifierCase = await readIdentifierCaseRules(adapter);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger?.error(
@@ -948,7 +1649,17 @@ async function runReload(opts?: {
   // registry's `fields` would disagree with the physical table, so the no-DDL
   // metadata-only sync below must be skipped rather than persist unmigrated
   // schema metadata; it retries on the next clean reload or restart.
-  let deferredSchemaChange = false;
+  let deferredSchemaChange = skippedComponentSlugs.size > 0;
+  // Which entities were deferred, as `<kind>:<slug>`. The flag above answers "may the
+  // metadata-only sync run at all"; this answers "may THIS entity be provisioned", which is a
+  // per-entity question — see `ensureLocalizedCompanionsForReload`.
+  const deferredEntities = new Set<string>(
+    // `fieldGroup:` — the prefix every other producer and consumer of this set
+    // uses. A deferral recorded under a different key is not a deferral: the
+    // localization helper checks membership and would carry on deriving the
+    // obsolete name for an entity this reload deliberately skipped.
+    [...skippedComponentSlugs].map(slug => `fieldGroup:${slug}`)
+  );
 
   const desiredCollections: Record<string, DesiredCollection> = {};
   for (const target of targets) {
@@ -993,6 +1704,7 @@ async function runReload(opts?: {
             `Builder to confirm with resolutions, or revert the config edit.`
         );
         deferredSchemaChange = true;
+        deferredEntities.add(`collection:${target.slug}`);
         desiredCollections[target.slug] = entry;
         continue;
       }
@@ -1004,6 +1716,7 @@ async function runReload(opts?: {
         `[Nextly HMR] Skipping '${target.slug}' due to error during diff: ${msg}`
       );
       deferredSchemaChange = true;
+      deferredEntities.add(`collection:${target.slug}`);
     }
   }
 
@@ -1045,6 +1758,7 @@ async function runReload(opts?: {
             `Builder to confirm with resolutions, or revert the config edit.`
         );
         deferredSchemaChange = true;
+        deferredEntities.add(`single:${target.slug}`);
         desiredSingles[target.slug] = entry;
         continue;
       }
@@ -1056,6 +1770,7 @@ async function runReload(opts?: {
         `[Nextly HMR] Skipping single '${target.slug}' due to error during diff: ${msg}`
       );
       deferredSchemaChange = true;
+      deferredEntities.add(`single:${target.slug}`);
     }
   }
 
@@ -1093,6 +1808,7 @@ async function runReload(opts?: {
             `Builder to confirm with resolutions, or revert the config edit.`
         );
         deferredSchemaChange = true;
+        deferredEntities.add(`fieldGroup:${target.slug}`);
         desiredComponents[target.slug] = entry;
         continue;
       }
@@ -1104,6 +1820,7 @@ async function runReload(opts?: {
         `[Nextly HMR] Skipping component '${target.slug}' due to error during diff: ${msg}`
       );
       deferredSchemaChange = true;
+      deferredEntities.add(`fieldGroup:${target.slug}`);
     }
   }
 
@@ -1113,6 +1830,34 @@ async function runReload(opts?: {
   // returning, otherwise a metadata-only edit (e.g. toggling `versions`) would
   // not persist until the dev server restarts.
   if (!hasChanges) {
+    // Provisioning for the path where nothing is applied. It has to be INSIDE this branch: a
+    // disable that needs DDL to put the main columns back reaches here before the apply has added
+    // them, so a restore run now would find nothing to copy, copy nothing, and still record the
+    // transition as finished — after which the post-apply pass skips it and the recreated columns
+    // stay empty while the content sits in a companion nothing reads.
+    //
+    // A missing `_locales` table produces no schema diff either, because companion tables are
+    // excluded from it, so `hasChanges` stays false and this is the only pass that repairs it.
+    const noDdlProvisioning = await ensureLocalizedCompanionsForReload(
+      adapter,
+      newConfig,
+      fieldGroupTables,
+      deferredEntities
+    );
+
+    // The same gate the post-apply path applies. A failed restore would otherwise reach
+    // `syncCodeFirstMetadataOnly` below and publish the non-localized metadata anyway — pointing
+    // reads at main while its values are still the pre-localization ones.
+    if (noDdlProvisioning.restoreFailed.length > 0) {
+      logger?.error(
+        `[nextly] Localization stays on for ${noDdlProvisioning.restoreFailed.join(", ")}: their ` +
+          `content could not be copied back out of the translations table. Fix the error above ` +
+          `and save again — the content is intact where it is.`
+      );
+      abandonReload();
+      return;
+    }
+
     // Only sync when the schema is genuinely in step (every entity had a zero-op
     // diff). If a real schema change was deferred (unsafe/needs review) or a diff
     // threw, syncing would persist `fields` that disagree with the physical
@@ -1137,6 +1882,37 @@ async function runReload(opts?: {
         collections: synced.collections && synced.components,
         singles: synced.singles && synced.components,
       });
+
+      // A landing, and the one a hook-only edit takes: nothing about the tables
+      // changed, so the new config IS the live one and there is no DDL for the
+      // handlers to wait on. Without this the central case -- edit a hook, save
+      // -- would stage the replacement and never apply it, which is the state
+      // this whole change exists to end.
+      //
+      // A metadata-only save can still fail per scope or per single, and the
+      // sync deliberately keeps the prior snapshot for those -- so their
+      // validation and serialization still run against the old field tree, and
+      // a handler written for a field only the new tree has would have it
+      // ignored. Judged on the same dimensions as the post-DDL path. The
+      // deferred set is empty here -- this branch is gated on
+      // `!deferredSchemaChange`, which every deferral sets -- and is passed
+      // anyway so the condition is read from the set itself rather than from
+      // an invariant maintained at six other sites.
+      // Withheld by not committing, and without the field-type rollback: the
+      // sync that failed here is the metadata one, and this path is reached
+      // only when every diff was empty, so the live schema already matches what
+      // the new field types describe.
+      if (
+        reloadAdvancedEverything({
+          deferredEntities,
+          collections: synced.collections,
+          singles: synced.singles,
+          components: synced.components,
+          failedSingles: synced.failedSingles,
+        })
+      ) {
+        commitReload();
+      }
     } else {
       // A real schema change was deferred (unsafe / needs review) or a diff
       // threw, so the field metadata must NOT be synced — the physical table
@@ -1152,6 +1928,16 @@ async function runReload(opts?: {
       // The physical tables still match the PREVIOUS config, so the previous
       // field types are the ones that describe them.
       abandonReload();
+
+      // Publishes NOTHING, deliberately, and not per entity. This branch skips
+      // `syncCodeFirstMetadataOnly` for EVERY entity, not just the deferred
+      // one, so nobody's field tree was refreshed -- an unaffected collection's
+      // edited handler would run against its old serialized metadata, which is
+      // the same mismatch the deferred entity is being protected from. Holding
+      // one entity's hooks back while publishing another's would need the
+      // sync to run per entity first, and this branch does not run it at all.
+      //
+      // Their edits land on the next clean reload, which is one save away.
     }
     return;
   }
@@ -1286,11 +2072,92 @@ async function runReload(opts?: {
     readNewSchemaVersionsForSlugs: () => Promise.resolve({}),
   });
 
+  // Before the apply, so an entity gaining localization has its existing content copied into the
+  // companion while the main table still carries it. The apply's DROP of those columns is then a
+  // cleanup rather than a loss, and it no longer matters whether the operator confirms it.
+  const preservation = await ensureLocalizedCompanionsForReload(
+    adapter,
+    newConfig,
+    fieldGroupTables,
+    deferredEntities,
+    "beforeApply"
+  );
+
+  // The apply is what removes the translatable columns from the main table. Running it after a
+  // copy that did not complete would take the only remaining copy of those values with it, and no
+  // later resume could reconstruct them — introspection would no longer find the columns to read.
+  // So the whole apply waits rather than proceeding entity by entity: the schema stays as it is,
+  // the content stays where it is, and the next save retries the copy from a position that still
+  // has everything.
+  if (preservation.preservationFailed.length > 0) {
+    const names = preservation.preservationFailed.join(", ");
+    logger.error(
+      `[nextly] Schema changes were not applied: existing content could not be copied into the ` +
+        `translations table for ${names}. Applying now would drop the columns holding that ` +
+        `content. Fix the error above and save again.`
+    );
+    // The schema and metadata never landed, so the previous config is still the
+    // one describing the database, and the work applied ahead of the schema
+    // pass has to come back with it.
+    abandonReload();
+    return;
+  }
+
+  // The snapshot registered above was taken before the pass ran, and the pipeline reuses it rather
+  // than introspecting again. A transition can relax a retained column — and on SQLite, which
+  // cannot change nullability, it drops one — so an apply working from that snapshot re-emits a
+  // DROP for a column that is already gone and fails. Dropping the cache costs one introspection,
+  // and only in the cycle where a transition actually happened.
+  if (preservation.schemaChanged) clearLiveSnapshots();
+
   const applyResult = await apply(desired, "code", {
     promptChannel: "terminal",
   });
 
   if (applyResult.success) {
+    // Create the `_locales` companion of every localized entity, now that the apply
+    // has produced their main tables. `next dev` routes config edits here rather
+    // than through the CLI watcher, so without this an entity turned localized under
+    // ordinary HMR had its companion registered in the runtime registry while the
+    // database had no such table — non-default writes were then refused until a
+    // restart. Runs after the apply because the companion carries a foreign key to
+    // its main table, which a brand-new entity does not have before it.
+    const postApply = await ensureLocalizedCompanionsForReload(
+      adapter,
+      newConfig,
+      fieldGroupTables,
+      deferredEntities
+    );
+
+    // An entity whose content could not be copied back onto main is left alone, exactly as the
+    // pre-apply pass leaves an entity whose content could not be copied INTO its companion.
+    // Publishing the non-localized configuration now would point reads at main while its values
+    // are still the pre-localization ones, let editors write on top of them, and then let a later
+    // successful retry copy the companion's older values over those edits. The registry keeps
+    // describing the entity as localized until the copy succeeds, so reads keep resolving through
+    // the companion that still holds the content.
+    if (postApply.restoreFailed.length > 0) {
+      logger.error(
+        `[nextly] Localization stays on for ${postApply.restoreFailed.join(", ")}: their content ` +
+          `could not be copied back out of the translations table. Fix the error above and save ` +
+          `again — the content is intact where it is.`
+      );
+      // Deliberately publishes NOTHING. The DDL landed, so the previous field
+      // types are not restored either -- they describe tables that now exist.
+      // But this returns ahead of the metadata sync and the runtime-schema
+      // refresh below, so `SchemaRegistry` and `CollectionsHandler` still hold
+      // every entity's pre-change descriptor: a handler published here would
+      // reach for a column the runtime cannot see yet, which is the same
+      // mismatch one layer along from the one this branch exists to prevent.
+      //
+      // Leaving the handlers as they are keeps them in step with the runtime
+      // that is actually installed. Publishing per-entity here would mean
+      // refreshing per-entity first, and the surrounding i18n publish is
+      // all-or-nothing by design -- changing that belongs with that code, not
+      // with a hooks change.
+      return;
+    }
+
     // Publish each scope's recording policy only AFTER its field-tree metadata
     // sync succeeds (see the assignment after the syncs below): the DDL applied,
     // but if a sync then fails, activating the new decision while the mutation
@@ -1299,6 +2166,9 @@ async function runReload(opts?: {
     // singles fail) does not block the committed scope's decisions.
     let collectionSynced = true;
     let singleSynced = true;
+    // The singles sync reports per-slug failures rather than rejecting, and
+    // those entities keep serialising against their previous field tree.
+    let failedSingleMetadata = new Set<string>();
     let componentSynced = true;
     // Sync dynamic_collections metadata so the fields JSON reflects the
     // new config. The pipeline above only applies DDL to dc_<slug>; without
@@ -1350,6 +2220,7 @@ async function runReload(opts?: {
         failedSlugs = failedSingleSlugs(
           await singleReg.syncCodeFirstSingles(codeFirstSingleConfigs)
         );
+        failedSingleMetadata = failedSlugs;
 
         // registerSingle defaults migration_status to 'pending'. The
         // pipeline above just created any missing physical tables, so
@@ -1383,8 +2254,17 @@ async function runReload(opts?: {
       const compReg = (await resolve(
         "fieldGroupRegistryService"
       )) as ComponentRegistrySurface;
+      // 🔴 Deferred groups are excluded here too, not only from the DDL.
+      //
+      // Skipping a group's schema change and then persisting its new `fields`
+      // is the worst of both: the registry would describe columns the table
+      // does not have, and the next restart would build a runtime schema from
+      // that description and fail every read and write for it. The metadata and
+      // the storage it describes move together or not at all.
       const codeFirstComponentConfigs = buildComponentSyncPayload(
-        newConfig.fieldGroups ?? []
+        (newConfig.fieldGroups ?? []).filter(
+          group => !skippedComponentSlugs.has(group.slug ?? "")
+        )
       );
       if (codeFirstComponentConfigs.length > 0) {
         await compReg.syncCodeFirstComponents(codeFirstComponentConfigs);
@@ -1486,6 +2366,20 @@ async function runReload(opts?: {
       // breaking every component read (filter by _parent_id) and write (insert
       // _parent_*) after an HMR config reload.
       const fieldGroupSchemaService = new FieldGroupSchemaService(dialect);
+      // The discriminator each component table actually carries, taken from the
+      // batched snapshot this reload already read rather than probed again. That
+      // snapshot covers every managed table including the component ones, so a
+      // second introspection here would be a duplicate round trip on the HMR
+      // path — and `chooseTypeColumns` needs nothing the snapshot does not hold.
+      const componentTypeColumns = chooseTypeColumns(
+        liveSnapshot.tables.map(table => ({
+          table: table.name,
+          columns: table.columns.map(column => column.name),
+        })),
+        Object.values(desiredComponents).map(comp => comp.tableName),
+        // Read before the apply, not here: see the probe block above.
+        identifierCase
+      );
       for (const comp of Object.values(desiredComponents)) {
         // i18n: a localized component omits its translatable columns from the main
         // comp_ runtime table and registers the companion `comp_<slug>_locales` table.
@@ -1493,7 +2387,12 @@ async function runReload(opts?: {
         const table = fieldGroupSchemaService.generateRuntimeSchema(
           comp.tableName,
           comp.fields,
-          { localized }
+          {
+            localized,
+            typeColumn:
+              componentTypeColumns.get(comp.tableName) ??
+              STORAGE_FORMAT.columns.type,
+          }
         );
         componentFreshTables.set(comp.tableName, table);
         if (localized) {
@@ -1567,6 +2466,30 @@ async function runReload(opts?: {
       broadcastDevReload();
     } catch {
       // Non-fatal.
+    }
+
+    // Handlers go in only when every dimension of this reload advanced: the
+    // DDL applied for every entity, and the collection, single and component
+    // metadata all synced. This is also the path a save that changes only a
+    // hook takes -- its diff is empty, the apply has nothing to do and reports
+    // success, so every dimension is trivially clean and the edit lands.
+    // Withholding is simply not committing: nothing is applied until the thunk
+    // runs, so the previous handlers stay in place on their own. It must NOT
+    // take the field-type rollback with it -- this branch is inside
+    // `applyResult.success`, so the DDL and the runtime schema caches were
+    // generated FROM the newly loaded field types, and putting the previous
+    // ones back would leave validation and storage transforms running the old
+    // definitions against the landed schema.
+    if (
+      reloadAdvancedEverything({
+        deferredEntities,
+        collections: collectionSynced,
+        singles: singleSynced,
+        components: componentSynced,
+        failedSingles: failedSingleMetadata,
+      })
+    ) {
+      commitReload();
     }
   }
 

@@ -11,6 +11,7 @@ import { Pencil } from "lucide-react";
 
 import { formatRelativeTime } from "@admin/components/features/notifications/relative-time";
 import { Badge } from "@admin/components/ui";
+import { useLocalization } from "@admin/hooks/useLocalization";
 import { formatDateTime } from "@admin/lib/dates/format";
 import { cn } from "@admin/lib/utils";
 import type { VersionMeta } from "@admin/services/versionApi";
@@ -34,6 +35,15 @@ export function VersionRow({
   // so it is shown but not offered as something to open — or to name.
   const selectable = typeof version.versionNo === "number";
 
+  // A localized document captures a version per locale, so each row names the
+  // language it holds. Only shown when the app is localized and this version
+  // carries a locale; its human label (falling back to the code) is the title.
+  const { enabled: localized, getLocale } = useLocalization();
+  const localeCode = version.locale;
+  const localeLabel =
+    localeCode !== null ? (getLocale(localeCode)?.label ?? localeCode) : null;
+  const showLocale = localized && localeCode !== null;
+
   // What the row is called. `version.label` is the editor's own name for it;
   // the number is the fallback, and stays visible either way so two versions
   // sharing a name are still tellable apart.
@@ -44,6 +54,20 @@ export function VersionRow({
   // Attribution is absent for a system write rather than missing, so it reads
   // as "nobody signed this" instead of looking like a failed lookup.
   const author = version.author?.name ?? "Unknown author";
+
+  // A restore records the version it was made from, so this row can show its
+  // lineage. Absent (null) for an ordinary edit, in which case nothing shows.
+  const restoredFrom = version.sourceVersionNo;
+
+  // The accessible name mirrors what the row shows: name/ordinal, status, the
+  // language, the restore lineage when present, then the author.
+  const ariaLabel =
+    (named
+      ? `${title}, ${ordinal}, ${version.status}`
+      : `${title}, ${version.status}`) +
+    (showLocale ? `, ${localeLabel}` : "") +
+    (restoredFrom !== null ? `, restored from version ${restoredFrom}` : "") +
+    `, by ${author}`;
 
   const canRename = selectable && onRename !== undefined;
 
@@ -65,11 +89,7 @@ export function VersionRow({
         // visually: two versions may share a name, and a screen-reader user
         // would otherwise have no way to tell them apart that a sighted user
         // does.
-        aria-label={
-          named
-            ? `${title}, ${ordinal}, ${version.status}, by ${author}`
-            : `${title}, ${version.status}, by ${author}`
-        }
+        aria-label={ariaLabel}
         aria-current={active ? "true" : undefined}
         className={cn(
           "flex-1 min-w-0 text-left px-4 py-3",
@@ -91,6 +111,24 @@ export function VersionRow({
           <Badge variant="outline" className="shrink-0">
             {version.status}
           </Badge>
+          {/* Language: names which translation this version holds, so an editor
+              scanning a mixed-locale history can tell them apart. */}
+          {showLocale && (
+            <Badge
+              variant="outline"
+              className="shrink-0 uppercase"
+              title={localeLabel ?? undefined}
+            >
+              {localeCode}
+            </Badge>
+          )}
+          {/* Lineage: a restored version names the one it was made from, so an
+              editor can see at a glance that this entry came from a rollback. */}
+          {restoredFrom !== null && (
+            <Badge variant="default" className="shrink-0">
+              Restored from v{restoredFrom}
+            </Badge>
+          )}
           <span
             className="ml-auto text-xs text-muted-foreground shrink-0"
             // The relative label is scannable; the exact time is what an editor

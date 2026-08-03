@@ -15,17 +15,20 @@
  * KNOWN LIMITATION (v1): metadata-only edits produce no DDL operation, so no
  * migration is generated and the change is not propagated until a schema
  * change co-occurs. This covers labels, and equally the `status`, `localized`,
- * `versions`, `revalidate` and `webhooks` flags: flipping one alone leaves the
- * deployed registry row on its previous value until the next migration for that
- * table.
+ * `versions`, `versionsMaxPerDoc` (retention), `revalidate` and `webhooks`
+ * flags: changing one alone leaves the deployed registry row on its previous
+ * value until the next migration for that table.
  *
- * `webhooks` carries the sharpest consequence of that limitation, because the
- * flag governs whether content reaches the outbox: turning recording off in the
- * Builder opts the development database out while a deployed environment keeps
- * recording and delivering until a schema change ships alongside it. Until
- * metadata-only edits generate their own migration, an operator who needs the
- * opt-out in production should set `webhooks: false` in code-first config, which
- * is republished on every boot and needs no migration.
+ * `webhooks` and `versionsMaxPerDoc` carry the sharpest consequences of that
+ * limitation. `webhooks` governs whether content reaches the outbox: turning
+ * recording off in the Builder opts the development database out while a
+ * deployed environment keeps recording and delivering until a schema change
+ * ships alongside it. `versionsMaxPerDoc` governs how much history is kept:
+ * lowering the cap (or leaving a finite one in place instead of "keep all") in
+ * the Builder does not reach a deployed environment, which keeps pruning to its
+ * old cap. Until metadata-only edits generate their own migration, an operator
+ * who needs either change in production should set it in code-first config,
+ * which is republished on every boot and needs no migration.
  *
  * @module domains/schema/ui-schema/metadata-sql
  * @since v0.0.3-alpha (Plan D2b)
@@ -80,9 +83,10 @@ function jsonLiteral(value: unknown, dialect: Dialect): string {
  */
 function versionsLiteral(
   versions: boolean | undefined,
+  maxPerDoc: number | false | undefined,
   dialect: Dialect
 ): string {
-  const resolved = resolveBuilderVersions(versions);
+  const resolved = resolveBuilderVersions(versions, maxPerDoc);
   return resolved === null ? "NULL" : jsonLiteral(resolved, dialect);
 }
 
@@ -237,7 +241,11 @@ export function buildCollectionMetadataUpsert(
       // the column, and a column left out of the upsert is untouched by its
       // DO UPDATE SET.
       name: "versions",
-      value: versionsLiteral(entity.versions, dialect),
+      value: versionsLiteral(
+        entity.versions,
+        entity.versionsMaxPerDoc,
+        dialect
+      ),
       update: true,
     },
     {
@@ -305,7 +313,11 @@ export function buildSingleMetadataUpsert(
       // the column, and a column left out of the upsert is untouched by its
       // DO UPDATE SET.
       name: "versions",
-      value: versionsLiteral(entity.versions, dialect),
+      value: versionsLiteral(
+        entity.versions,
+        entity.versionsMaxPerDoc,
+        dialect
+      ),
       update: true,
     },
     {

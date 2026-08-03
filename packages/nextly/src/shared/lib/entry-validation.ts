@@ -26,8 +26,6 @@
 import safeRegex from "safe-regex2";
 
 import { STORAGE_PRIMITIVE_AS_FIELD_TYPE } from "../../collections/fields/catalog";
-import type { DocumentKind } from "../../collections/fields/types/blocks";
-import { validateBlocksValue } from "../../collections/fields/validators/blocks-validator";
 import { getFieldType } from "../../domains/schema/field-types/field-type-registry";
 import type { ValidationPublicData } from "../../errors/public-data";
 import type { PluginFieldType } from "../../plugins/contributions";
@@ -91,6 +89,21 @@ export interface ValidateEntryOptions {
    * required LOCALIZED field pass because it falls back to the default language.
    */
   enforceLocalizedRequired?: boolean;
+  /**
+   * Whether an empty value is the value being judged rather than an omission.
+   *
+   * A submission that arrives empty means "not provided", so only `required`
+   * has anything to say about it. A resolved DEFAULT that is empty is different:
+   * it is what the config states the column will hold, so it still has to
+   * satisfy that column. Without this an empty default reaches the insert with
+   * neither the storage-primitive check nor the type's own `validate` having
+   * run — a number-backed `defaultValue: () => ""` fails at the database, or
+   * stores the wrong representation on SQLite.
+   *
+   * `null` and `undefined` are unaffected: they mean no value under either
+   * reading, and the callers that seed defaults filter them out first.
+   */
+  emptyIsAValue?: boolean;
 }
 
 /** Flat-or-nested rule lookup (builder writes `validation.*`, code-first is flat). */
@@ -248,7 +261,14 @@ async function validateFieldValue(
     Array.isArray(value) &&
     !field.hasMany &&
     (field.type === "select" || field.type === "radio");
-  if (isEmpty(value) && !isProvidedEmptyList && !isScalarChoiceArray) {
+  const emptyIsOmission =
+    !options.emptyIsAValue || value === null || value === undefined;
+  if (
+    isEmpty(value) &&
+    emptyIsOmission &&
+    !isProvidedEmptyList &&
+    !isScalarChoiceArray
+  ) {
     if (isRequired(field) && requiredIsEnforced(field, path, options)) {
       issues.push({
         path,
@@ -560,23 +580,6 @@ async function validateFieldValue(
       break;
     }
 
-    case "blocks": {
-      // The document format has one validator and it lives in the engine; this
-      // case adapts it rather than restating any of its rules.
-      const options = field as {
-        blocks?: { allow?: string[]; kinds?: DocumentKind[] };
-      };
-      issues.push(
-        ...validateBlocksValue(
-          value,
-          path,
-          label ?? "This field",
-          options.blocks ?? {}
-        )
-      );
-      break;
-    }
-
     case "json": {
       // A json column holds whatever JSON can represent, and a bigint or a
       // cycle is not that: serialization throws on it further down the write,
@@ -733,7 +736,10 @@ async function validateFields(
   for (const field of fields) {
     if (!field.name) continue;
     const path = basePath ? `${basePath}.${field.name}` : field.name;
-    const provided = field.name in data;
+    // Own keys only. Field names may be camelCase, so `toString` is a legal
+    // one, and `in` would answer for the prototype: the field would read as
+    // present on every update and carry the inherited function as its value.
+    const provided = Object.hasOwn(data, field.name);
 
     // PATCH semantics: an absent key on update is untouched. On create,
     // absent required fields must still fail.
@@ -741,7 +747,7 @@ async function validateFields(
 
     await validateFieldValue(
       field,
-      data[field.name],
+      provided ? data[field.name] : undefined,
       path,
       data,
       write,

@@ -296,10 +296,14 @@ describe("teardownEntityComponentData registry read failures", () => {
 });
 
 describe("teardownEntityComponentData catalog case folding", () => {
-  it("matches a registered name against a differently-cased catalog entry", async () => {
-    // MySQL with lower_case_table_names reports the folded name.
-    const deleted: string[] = [];
-    const adapter = {
+  /**
+   * A MySQL server that reports `lowerCaseTableNames` for the variable query and
+   * a zero count for every other one. Whether the stored `SEO_META` and the
+   * catalog's `seo_meta` are one table is decided by that setting, so the mock
+   * has to answer it rather than leaving the code to assume.
+   */
+  function mysqlAdapter(lowerCaseTableNames: number, deleted: string[]) {
+    return {
       dialect: "mysql" as const,
       listTables: vi.fn().mockResolvedValue(["seo_meta", "dynamic_components"]),
       tableExists: vi.fn().mockResolvedValue(false),
@@ -308,6 +312,107 @@ describe("teardownEntityComponentData catalog case folding", () => {
         return 1;
       }),
       executeQuery: vi.fn().mockResolvedValue([{ n: 0 }]),
+      // The variable read goes through Drizzle's `sql` template, so the mock
+      // answers on the Drizzle handle and returns the mysql2 `[rows, fields]`
+      // shape the real driver produces.
+      getDrizzle: vi.fn(() => ({
+        execute: vi.fn(async () => [
+          [{ lower_case_table_names: lowerCaseTableNames }],
+          [],
+        ]),
+      })),
+      select: vi.fn(async (table: string) => {
+        if (table === "dynamic_components") {
+          return [{ slug: "seo", table_name: "SEO_META" }];
+        }
+        return [{ id: `${table}-1` }];
+      }),
+    };
+  }
+
+  it("matches a registered name against a differently-cased catalog entry", async () => {
+    // lower_case_table_names=1 lowercases names on creation, so the catalog's
+    // `seo_meta` is the table the registry recorded as `SEO_META`.
+    const deleted: string[] = [];
+    const result = await teardownEntityComponentData({
+      adapter: mysqlAdapter(1, deleted) as never,
+      parentTable: "dc_posts",
+    });
+
+    expect(result.tablesTouched).toContain("seo_meta");
+    expect(deleted).toContain("seo_meta");
+  });
+
+  // The same catalog on a case-sensitive server: `seo_meta` is a different table
+  // from the registered `SEO_META`, and deleting its rows would delete another
+  // table's data.
+  it("leaves a differently-cased table alone on a case-sensitive server", async () => {
+    const deleted: string[] = [];
+    const result = await teardownEntityComponentData({
+      adapter: mysqlAdapter(0, deleted) as never,
+      parentTable: "dc_posts",
+    });
+
+    expect(result.tablesTouched).not.toContain("seo_meta");
+    expect(deleted).not.toContain("seo_meta");
+  });
+
+  // The registry is found by the same rules as the tables it names. Gating on an
+  // exact match while resolving its rows case-insensitively would skip registry
+  // discovery entirely here, leaving every custom-named component out of the
+  // sweep and its rows orphaned once the parent is deleted.
+  // A malformed row pointing back at the registry resolves to whatever spelling
+  // the catalog reports, so excluding only the exact constant would let the
+  // registry be probed as an instance table — where a missing `_parent_table`
+  // column breaks the delete and a permissive adapter could damage metadata.
+  it("never treats the registry as component storage, whatever its case", async () => {
+    const deleted: string[] = [];
+    const adapter = {
+      dialect: "mysql" as const,
+      listTables: vi
+        .fn()
+        .mockResolvedValue(["DYNAMIC_COMPONENTS", "comp_hero"]),
+      tableExists: vi.fn().mockResolvedValue(false),
+      delete: vi.fn(async (table: string) => {
+        deleted.push(table);
+        return 1;
+      }),
+      executeQuery: vi.fn().mockResolvedValue([{ n: 0 }]),
+      getDrizzle: vi.fn(() => ({
+        execute: vi.fn(async () => [[{ lower_case_table_names: 1 }], []]),
+      })),
+      select: vi.fn(async (table: string) => {
+        if (table === "dynamic_components") {
+          // The malformed row: it points at the registry itself.
+          return [{ slug: "broken", table_name: "dynamic_components" }];
+        }
+        return [{ id: `${table}-1` }];
+      }),
+    };
+
+    const result = await teardownEntityComponentData({
+      adapter: adapter as never,
+      parentTable: "dc_posts",
+    });
+
+    expect(result.tablesTouched).not.toContain("DYNAMIC_COMPONENTS");
+    expect(deleted).not.toContain("DYNAMIC_COMPONENTS");
+  });
+
+  it("discovers the registry when the catalog reports it in another case", async () => {
+    const deleted: string[] = [];
+    const adapter = {
+      dialect: "mysql" as const,
+      listTables: vi.fn().mockResolvedValue(["seo_meta", "DYNAMIC_COMPONENTS"]),
+      tableExists: vi.fn().mockResolvedValue(false),
+      delete: vi.fn(async (table: string) => {
+        deleted.push(table);
+        return 1;
+      }),
+      executeQuery: vi.fn().mockResolvedValue([{ n: 0 }]),
+      getDrizzle: vi.fn(() => ({
+        execute: vi.fn(async () => [[{ lower_case_table_names: 1 }], []]),
+      })),
       select: vi.fn(async (table: string) => {
         if (table === "dynamic_components") {
           return [{ slug: "seo", table_name: "SEO_META" }];

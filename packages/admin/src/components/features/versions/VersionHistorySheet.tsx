@@ -35,6 +35,7 @@ import type { VersionScope } from "@admin/services/versionApi";
 import { VersionDiffView } from "./diff/VersionDiffView";
 import { RestoreConfirmDialog } from "./RestoreConfirmDialog";
 import { VersionLabelDialog } from "./VersionLabelDialog";
+import { VersionLocaleFilter } from "./VersionLocaleFilter";
 import { VersionPreview } from "./VersionPreview";
 import { VersionRow } from "./VersionRow";
 
@@ -62,6 +63,13 @@ export interface VersionHistorySheetProps {
    * about whether this change is publicly visible.
    */
   liveStatus?: string | null;
+  /**
+   * Whether the document's entity is localized. This is the authoritative
+   * signal for the locale filter: a localized document can record shared-field
+   * writes with a null locale, so the loaded rows alone cannot prove one way or
+   * the other. Absent, the panel falls back to inferring it from the rows.
+   */
+  entityLocalized?: boolean;
 }
 
 function ListSkeleton() {
@@ -87,6 +95,7 @@ export function VersionHistorySheet({
   fields,
   canRestore = false,
   liveStatus = null,
+  entityLocalized,
 }: VersionHistorySheetProps) {
   const [selected, setSelected] = useState<number | null>(null);
   // The version pair being compared (older -> newer), or null when not
@@ -99,6 +108,11 @@ export function VersionHistorySheet({
   // The version being renamed, which is not necessarily the one being previewed
   // — an editor can name a row without opening it.
   const [renaming, setRenaming] = useState<number | null>(null);
+  // Active locale filter for the listing, or undefined for every locale. Only
+  // meaningful for a localized document; the filter control hides otherwise.
+  const [localeFilter, setLocaleFilter] = useState<string | undefined>(
+    undefined
+  );
 
   // Reopening the panel should start at the list. Without this the previously
   // previewed version would still be showing, which reads as a stale panel.
@@ -111,6 +125,9 @@ export function VersionHistorySheet({
       // does not close it. Left set, it would stay on screen over a dismissed
       // panel, or reappear the moment the panel was reopened.
       setRenaming(null);
+      // Start every open showing all locales rather than a filter left from a
+      // previous document.
+      setLocaleFilter(undefined);
     }
   }, [open]);
 
@@ -135,9 +152,12 @@ export function VersionHistorySheet({
     setComparing(null);
     setConfirmingRestore(false);
     setRenaming(null);
+    // A different document may not have the previously filtered locale at all,
+    // so the filter resets with the rest of the panel's per-document state.
+    setLocaleFilter(undefined);
   }
 
-  const list = useVersions({ scope, enabled: open });
+  const list = useVersions({ scope, enabled: open, locale: localeFilter });
   // Destructured so the boundary-fetch effect can depend on the paging members
   // by identity rather than on the whole query object, which changes each render.
   // `isRefetching` is a whole-list revalidation (not a page fetch), during which
@@ -180,6 +200,17 @@ export function VersionHistorySheet({
   });
 
   const versions = list.data?.pages.flatMap(page => page.items) ?? [];
+
+  // Whether THIS document is localized, not just whether the app is. The
+  // authoritative signal is the entity's own localization flag: a localized
+  // document can record shared-field writes with a null locale, so a loaded page
+  // that happens to hold only such rows (or only one locale) cannot prove it
+  // either way. When the flag is not supplied, fall back to inferring it — any
+  // locale present in the history, or an active filter (which could not have
+  // been set on a non-localized document).
+  const isLocalizedDocument =
+    entityLocalized ??
+    (localeFilter !== undefined || versions.some(v => v.locale !== null));
 
   // Compare targets for the version being previewed. A comparison must stay
   // within one locale (the server rejects a cross-locale pair), so both the
@@ -317,13 +348,31 @@ export function VersionHistorySheet({
         className="w-[480px] sm:max-w-[480px] p-0 flex flex-col"
       >
         <SheetHeader className="p-4 border-b border-border">
-          <SheetTitle>
-            {comparing !== null
-              ? `Compare ${comparing.from} → ${comparing.to}`
-              : selected === null
-                ? "Version history"
-                : `Version ${selected}`}
-          </SheetTitle>
+          <div className="flex items-center justify-between gap-2">
+            <SheetTitle>
+              {comparing !== null
+                ? `Compare ${comparing.from} → ${comparing.to}`
+                : selected === null
+                  ? "Version history"
+                  : `Version ${selected}`}
+            </SheetTitle>
+            {/* Locale filter, only while browsing the list (a chosen version or
+                a compare pair is already locale-fixed) and only for a document
+                whose own history carries locales — so it never appears on a
+                non-localized document in an otherwise localized app. */}
+            {comparing === null && selected === null && isLocalizedDocument && (
+              <VersionLocaleFilter
+                value={localeFilter}
+                onChange={locale => {
+                  // Changing the visible locale set can drop the previewed or
+                  // compared version out of view, so clear both modes.
+                  setLocaleFilter(locale);
+                  setSelected(null);
+                  setComparing(null);
+                }}
+              />
+            )}
+          </div>
           <SheetDescription className="sr-only">
             Past versions of this document, newest first.
           </SheetDescription>
@@ -379,6 +428,7 @@ export function VersionHistorySheet({
               error={detail.error}
               onRetry={() => void detail.refetch()}
               locale={detail.data?.locale ?? null}
+              sourceVersionNo={detail.data?.sourceVersionNo ?? null}
             />
           ) : list.isLoading ? (
             <ListSkeleton />

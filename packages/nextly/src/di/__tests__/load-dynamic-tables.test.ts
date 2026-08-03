@@ -13,6 +13,12 @@
  */
 import { describe, it, expect, vi } from "vitest";
 
+import { MIGRATION_TARGET } from "../../domains/field-groups/migration/manifest";
+import {
+  forgetFieldGroupStorageNames,
+  resolveFieldGroupRegistryName,
+} from "../../domains/field-groups/storage/resolve-storage-names";
+import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { loadDynamicTables } from "../load-dynamic-tables";
 
 function makeAdapter(rows: unknown[], opts: { throwOnSelect?: boolean } = {}) {
@@ -217,5 +223,104 @@ describe("loadDynamicTables — fault tolerance", () => {
       "SELECT table_name, fields, slug, status FROM dynamic_collections"
     );
     expect(register).toHaveBeenCalledWith("dc_pages", [], true, false);
+  });
+});
+
+/**
+ * 🔴 The boot pass has to address the registry that is actually there.
+ *
+ * `loadDynamicTables` treats a failed read as the fresh-database case — correct
+ * for a database that has no registry yet, and silent for one whose registry
+ * has been renamed. Addressing the legacy name on a migrated database therefore
+ * registers NOTHING and raises nothing, leaving every field-group table
+ * unaddressable until someone notices reads coming back empty.
+ */
+describe("loadDynamicTables — the field-group registry is resolved, not assumed", () => {
+  function catalogAdapter(tables: string[], rows: unknown[]) {
+    const selected: string[] = [];
+    return {
+      selected,
+      adapter: {
+        dialect: "sqlite" as const,
+        listTables: vi.fn(async () => tables),
+        getDrizzle: <T>(): T => ({}) as T,
+        executeQuery: vi.fn(async (sql: string) => {
+          selected.push(sql);
+          // Only the table this database actually has answers; anything else
+          // fails the way a real driver fails, which is what the boot pass
+          // swallows.
+          const target = tables.find(table => sql.includes(table));
+          if (target === undefined) throw new Error("no such table");
+          return rows;
+        }),
+      },
+    };
+  }
+
+  const componentRow = {
+    table_name: "fg_hero",
+    fields: JSON.stringify([{ name: "heading", type: "text" }]),
+    slug: "hero",
+    localized: 0,
+  };
+
+  it("registers components from the migrated registry after a rename", async () => {
+    forgetFieldGroupStorageNames();
+    const { adapter, selected } = catalogAdapter(
+      [MIGRATION_TARGET.registryTable],
+      [componentRow]
+    );
+    const register = vi.fn(async () => {});
+
+    await loadDynamicTables(
+      adapter as unknown as Parameters<typeof loadDynamicTables>[0],
+      await resolveFieldGroupRegistryName(adapter),
+      register
+    );
+
+    expect(register).toHaveBeenCalledTimes(1);
+    expect(register).toHaveBeenCalledWith(
+      "fg_hero",
+      [{ name: "heading", type: "text" }],
+      false,
+      false
+    );
+    expect(selected.join("\n")).toContain(MIGRATION_TARGET.registryTable);
+  });
+
+  // The migrated registry has no `status` column either, so a branch that only
+  // recognises the legacy spelling would select one that is not there.
+  it("never selects a status column from the migrated registry", async () => {
+    forgetFieldGroupStorageNames();
+    const { adapter, selected } = catalogAdapter(
+      [MIGRATION_TARGET.registryTable],
+      [componentRow]
+    );
+
+    await loadDynamicTables(
+      adapter as unknown as Parameters<typeof loadDynamicTables>[0],
+      await resolveFieldGroupRegistryName(adapter),
+      async () => {}
+    );
+
+    expect(selected.join("\n")).not.toContain("status");
+  });
+
+  it("still addresses the legacy registry on a database that has not migrated", async () => {
+    forgetFieldGroupStorageNames();
+    const { adapter, selected } = catalogAdapter(
+      [STORAGE_FORMAT.registryTable],
+      [{ ...componentRow, table_name: "comp_hero" }]
+    );
+    const register = vi.fn(async () => {});
+
+    await loadDynamicTables(
+      adapter as unknown as Parameters<typeof loadDynamicTables>[0],
+      await resolveFieldGroupRegistryName(adapter),
+      register
+    );
+
+    expect(register).toHaveBeenCalledTimes(1);
+    expect(selected.join("\n")).toContain(STORAGE_FORMAT.registryTable);
   });
 });

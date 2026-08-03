@@ -18,7 +18,10 @@
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { buildFieldGroupRegistryTable } from "../domains/field-groups/storage/registry-schemas";
 import type { NextlySchemaSnapshot } from "../domains/schema/pipeline/diff/types";
+import { MANAGED_TABLE_PREFIXES } from "../domains/schema/pipeline/managed-tables";
+import { NextlyError } from "../errors/nextly-error";
 
 import { drizzleTableToTableSpec } from "./_internal/drizzle-to-tablespec";
 import { apiKeyTables } from "./api-keys";
@@ -64,15 +67,88 @@ import { webhookTables } from "./webhooks";
 // =============================================================================
 
 /**
+ * Which field-group registry a particular database holds.
+ *
+ * 🔴 The core schema is a DESIRED shape, and a desired shape that names a table
+ * the database does not have is an instruction to create it. The storage
+ * migration renames the registry, so a caller holding a real database resolves
+ * the name from the catalog and passes it here; omitting it keeps the legacy
+ * spelling, which is correct for a fresh database and for every caller that has
+ * no database to ask.
+ *
+ * Without this, reconciling a migrated database creates an EMPTY legacy
+ * registry beside the populated migrated one — and every reader prefers the
+ * legacy name when it is present, so the site's field groups silently vanish.
+ */
+export interface CoreSchemaOptions {
+  /** Defaults to the legacy spelling this release's DDL writes. */
+  fieldGroupRegistryTable?: string;
+}
+
+/**
+ * The field-group registry object for a dialect, under whichever name applies.
+ *
+ * Returns the module-level constant unchanged for the legacy name so the common
+ * path keeps object identity, and builds one only when a database really has
+ * been migrated.
+ */
+function fieldGroupRegistryFor(
+  dialect: SupportedDialect,
+  options?: CoreSchemaOptions
+): unknown {
+  const name = options?.fieldGroupRegistryTable;
+  if (name === undefined || name === STORAGE_FORMAT.registryTable) {
+    switch (dialect) {
+      case "postgresql":
+        return dynamicFieldGroupsPg;
+      case "mysql":
+        return dynamicFieldGroupsMysql;
+      case "sqlite":
+        return dynamicFieldGroupsSqlite;
+      default: {
+        const exhaustive: never = dialect;
+        throw NextlyError.internal({
+          logContext: {
+            reason: "cannot build the field-group registry for this dialect",
+            dialect: String(exhaustive),
+          },
+        });
+      }
+    }
+  }
+  return buildFieldGroupRegistryTable(dialect, name);
+}
+
+/**
+ * Snake-case names of every core table the framework manages.
+ *
+ * Takes the same options as {@link getCoreSchema} for the same reason: the two
+ * are read together — one names the tables to introspect, the other the shape to
+ * compare them against — so a mismatch between them asks the database about a
+ * table that is not there and then diffs the answer against one that is.
+ */
+export function getCoreTableNames(options?: CoreSchemaOptions): string[] {
+  return CORE_TABLE_NAMES.map(name =>
+    name === STORAGE_FORMAT.registryTable
+      ? (options?.fieldGroupRegistryTable ?? name)
+      : name
+  );
+}
+
+/**
  * Canonical core schema snapshot for the given dialect.
  *
  * Consumed by every pipeline entry point (boot-apply, db:sync, migrate Phase 1,
  * migrate:check) to drive introspect-and-diff.
  *
- * @param _dialect - the runtime dialect to compile the snapshot for
+ * @param dialect - the runtime dialect to compile the snapshot for
+ * @param options - which field-group registry this database actually holds
  * @returns a frozen snapshot of all framework-managed tables for that dialect
  */
-export function getCoreSchema(dialect: SupportedDialect): NextlySchemaSnapshot {
+export function getCoreSchema(
+  dialect: SupportedDialect,
+  options?: CoreSchemaOptions
+): NextlySchemaSnapshot {
   const tables = [
     ...Object.values(userTables(dialect)),
     ...Object.values(authTokenTables(dialect)),
@@ -100,13 +176,15 @@ export function getCoreSchema(dialect: SupportedDialect): NextlySchemaSnapshot {
     ...Object.values(webhookTables(dialect)),
   ];
 
+  const fieldGroupRegistry = fieldGroupRegistryFor(dialect, options);
+
   // Per-dialect tables for feature groups whose dialect subdirs predate Plan A.
   switch (dialect) {
     case "postgresql":
       tables.push(
         dynamicCollectionsPg,
         dynamicSinglesPg,
-        dynamicFieldGroupsPg,
+        fieldGroupRegistry,
         siteSettingsPg,
         userFieldDefinitionsPg,
         emailProvidersPg,
@@ -117,7 +195,7 @@ export function getCoreSchema(dialect: SupportedDialect): NextlySchemaSnapshot {
       tables.push(
         dynamicCollectionsMysql,
         dynamicSinglesMysql,
-        dynamicFieldGroupsMysql,
+        fieldGroupRegistry,
         siteSettingsMysql,
         userFieldDefinitionsMysql,
         emailProvidersMysql,
@@ -128,7 +206,7 @@ export function getCoreSchema(dialect: SupportedDialect): NextlySchemaSnapshot {
       tables.push(
         dynamicCollectionsSqlite,
         dynamicSinglesSqlite,
-        dynamicFieldGroupsSqlite,
+        fieldGroupRegistry,
         siteSettingsSqlite,
         userFieldDefinitionsSqlite,
         emailProvidersSqlite,
@@ -137,7 +215,12 @@ export function getCoreSchema(dialect: SupportedDialect): NextlySchemaSnapshot {
       break;
     default: {
       const _exhaustive: never = dialect;
-      throw new Error(`Unsupported dialect: ${String(_exhaustive)}`);
+      throw NextlyError.internal({
+        logContext: {
+          reason: "cannot build the core schema for this dialect",
+          dialect: String(_exhaustive),
+        },
+      });
     }
   }
 
@@ -183,12 +266,15 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "nextly_webhook_deliveries",
 ] as const;
 
-/** Prefixes that identify managed user tables (dc_, single_, comp_). */
-export const CORE_TABLE_PREFIXES: readonly string[] = [
-  "dc_",
-  "single_",
-  STORAGE_FORMAT.tablePrefix,
-];
+/**
+ * Prefixes that identify managed user tables.
+ *
+ * Derived from the pipeline's own filter rather than restated, so the two
+ * cannot disagree about what Nextly manages. They did: this list named three
+ * prefixes while the filter named four, and a table the filter manages but this
+ * list does not is one the CLI treats as foreign.
+ */
+export const CORE_TABLE_PREFIXES: readonly string[] = MANAGED_TABLE_PREFIXES;
 
 // =============================================================================
 // Transitional re-exports — kept so existing consumers keep building during

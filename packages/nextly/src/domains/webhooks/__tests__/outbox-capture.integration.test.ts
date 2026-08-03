@@ -6,7 +6,7 @@
  * reach the payload, and the row is written for versioned and non-versioned
  * collections alike (webhooks are independent of versioning).
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   fieldGroup,
@@ -30,6 +30,10 @@ let current: TestNextly | undefined;
 afterEach(async () => {
   await current?.destroy();
   current = undefined;
+  // The post-commit-hook cases silence `console.error` to assert against it.
+  // This config does not restore mocks between tests, so without this every
+  // later test in the file would run with errors muted.
+  vi.restoreAllMocks();
 });
 
 /** A `nextly_events` row as read back (Drizzle camelCases the columns). */
@@ -53,6 +57,23 @@ function envelopeOf(row: EventRow): WebhookEvent {
   return (
     typeof row.payload === "string" ? JSON.parse(row.payload) : row.payload
   ) as WebhookEvent;
+}
+
+/**
+ * The error the registry logged alongside its phase line.
+ *
+ * `console.error` is called with the phase line AND the normalized exception,
+ * so an assertion that reads only the first argument cannot tell a logged
+ * failure from a logged label. `normalizeHookError` wraps an untyped throw, so
+ * the thrown text arrives as the wrapper's `cause` rather than its message; a
+ * typed throw arrives as itself, carrying its `logContext`. All three are
+ * rendered so a test can name the original failure whichever way it was thrown.
+ */
+function loggedFailure(spy: { mock: { calls: unknown[][] } }): string {
+  const error = spy.mock.calls[0]?.[1];
+  const cause = (error as { cause?: unknown } | undefined)?.cause;
+  const context = (error as { logContext?: unknown } | undefined)?.logContext;
+  return `${String(error)} ${String(cause ?? "")} ${JSON.stringify(context ?? {})}`;
 }
 
 async function events(handle: TestNextly): Promise<EventRow[]> {
@@ -101,9 +122,12 @@ describe("webhook outbox capture (integration)", () => {
 
   it("flags eventRecorded when the write commits but a post-commit hook throws", async () => {
     // The event is appended inside the write transaction; afterCreate hooks run
-    // after it commits. A throwing hook surfaces success:false on an already
-    // committed write, so the result must still report `eventRecorded` — that is
-    // the signal the fast drain + retention key off, not `success`.
+    // after it commits, so a throw there cannot undo either. The write reports
+    // success and the hook failure is reported separately — raising it instead
+    // would describe a durable row as a failure and invite a retry that writes a
+    // second one. `eventRecorded` is what the fast drain + retention key off, and
+    // it stays true independently of how the hook fared.
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     current = await createTestNextly({
       collections: [
         defineCollection({
@@ -124,9 +148,19 @@ describe("webhook outbox capture (integration)", () => {
       { title: "hello" }
     );
 
-    // The hook failure is surfaced, but the entry + event committed.
-    expect(created.success).toBe(false);
+    // The entry + event committed, and that is what the caller is told.
+    expect(created.success).toBe(true);
     expect(created.eventRecorded).toBe(true);
+
+    // Asserted, not merely allowed to happen: the operation reports success, so
+    // this log is the only trace an operator gets. Dropping the assertion would
+    // let a regression that swallows the hook error entirely still pass.
+    expect(logged).toHaveBeenCalled();
+    expect(String(logged.mock.calls[0][0])).toContain("afterCreate");
+    // The exception, not only the phase line: an implementation that logged
+    // the label and dropped the error would satisfy the assertion above while
+    // losing the operator's only diagnostic for a write reported successful.
+    expect(loggedFailure(logged)).toContain("afterCreate observer failed");
 
     const rows = await events(current);
     expect(rows).toHaveLength(1);
@@ -135,9 +169,11 @@ describe("webhook outbox capture (integration)", () => {
 
   it("flags eventRecorded on a bulk result when a committed item's hook throws", async () => {
     // A bulk delete runs each item through the per-item mutation, which commits
-    // the row + event and then runs afterDelete. A throwing hook makes that item
-    // a failure (successCount stays 0), but the event is durable — so the bulk
-    // result must still report eventRecorded, or the batch would skip the drain.
+    // the row + event and then runs afterDelete. The item counts as a success
+    // because it IS one — the row is gone and the event durable — and a batch
+    // that counted it a failure would invite a retry against a row that no
+    // longer exists. `eventRecorded` stays true so the batch still drains.
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     current = await createTestNextly({
       collections: [
         defineCollection({
@@ -165,9 +201,18 @@ describe("webhook outbox capture (integration)", () => {
       overrideAccess: true,
     });
 
-    // The item is counted a failure, yet the delete + event committed.
-    expect(result.successCount).toBe(0);
+    // The delete + event committed, so the item counts as done.
+    expect(result.successCount).toBe(1);
     expect(result.eventRecorded).toBe(true);
+
+    // The hook failure still has to leave a trace, or a batch could report a
+    // clean run while every item's side effect quietly broke.
+    expect(logged).toHaveBeenCalled();
+    expect(String(logged.mock.calls[0][0])).toContain("afterDelete");
+    // The exception, not only the phase line: an implementation that logged
+    // the label and dropped the error would satisfy the assertion above while
+    // losing the operator's only diagnostic for a write reported successful.
+    expect(loggedFailure(logged)).toContain("afterDelete observer failed");
 
     const rows = await events(current);
     expect(rows.map(r => r.type).sort()).toEqual([

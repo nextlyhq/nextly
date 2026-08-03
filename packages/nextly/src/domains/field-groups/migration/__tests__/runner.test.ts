@@ -2,8 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
 import type { MetaService } from "../../../meta/services/meta-service";
+import { hashManifest, type ManifestEntry } from "../manifest";
 import { runMigrationSteps, type MigrationStep } from "../runner";
 import type { MigrationSession } from "../session";
+import { MIGRATION_MARKER_VERSION } from "../state";
 
 const SESSION = {
   dialect: "postgresql",
@@ -14,10 +16,17 @@ const SESSION = {
 function step(
   id: string,
   events: string[],
-  options: { verifies?: boolean; throws?: boolean } = {}
+  options: {
+    verifies?: boolean;
+    throws?: boolean;
+    recordsProgress?: boolean;
+  } = {}
 ): MigrationStep {
   return {
     id,
+    ...(options.recordsProgress === undefined
+      ? {}
+      : { recordsProgress: options.recordsProgress }),
     run: vi.fn(async () => {
       events.push(`run:${id}`);
       if (options.throws) {
@@ -32,16 +41,24 @@ function step(
 }
 
 // `advanceStep` reads the marker before writing, so the fake has to behave like
+// The marker carries the plan it is executing, and the read verifies that plan
+// against its recorded hash, so a stand-in marker has to carry both.
+const MARKER_PLAN: ManifestEntry[] = [
+  { kind: "registry", from: "dynamic_components", to: "dynamic_field_groups" },
+];
+const MARKER_PLAN_HASH = hashManifest(MARKER_PLAN);
+
 // a real marker rather than just recording calls.
 function markerMeta(events: string[], migrationId: string) {
   let stored: Record<string, unknown> = {
-    version: 1,
+    version: MIGRATION_MARKER_VERSION,
     status: "migrating",
     direction: "up",
     migrationId,
     step: 0,
-    manifestHash: "h",
-    planHash: "p",
+    registryHash: "s",
+    manifestHash: MARKER_PLAN_HASH,
+    appliedManifest: MARKER_PLAN,
   };
   return {
     getEntry: vi.fn(async () => ({ present: true, value: stored })),
@@ -138,13 +155,14 @@ describe("field-group migration runner", () => {
     const meta = markerMeta(events, "run-1");
     // The marker already reports step 1 done.
     await meta.set("k", {
-      version: 1,
+      version: MIGRATION_MARKER_VERSION,
       status: "migrating",
       direction: "up",
       migrationId: "run-1",
       step: 1,
-      manifestHash: "h",
-      planHash: "p",
+      registryHash: "s",
+      manifestHash: MARKER_PLAN_HASH,
+      appliedManifest: MARKER_PLAN,
     });
     events.length = 0;
     await runMigrationSteps({
@@ -223,5 +241,94 @@ describe("field-group migration runner", () => {
       })
     ).rejects.toThrowError(NextlyError);
     expect(meta.set).not.toHaveBeenCalled();
+  });
+});
+
+describe("steps that are gates rather than progress", () => {
+  // 🔴 A gate's position is never written. Recording it would let the next run
+  // step over the check, which is the opposite of what a check placed at the
+  // end of a plan is for.
+  it("runs and verifies a gate without recording it", async () => {
+    const events: string[] = [];
+    const meta = markerMeta(events, "run-1");
+    await runMigrationSteps({
+      session: SESSION,
+      meta,
+      migrationId: "run-1",
+      steps: [
+        step("a", events),
+        step("gate", events, { recordsProgress: false }),
+      ],
+      fromStep: 1,
+    });
+
+    expect(events).toEqual([
+      "run:a",
+      "verify:a",
+      "record:1",
+      "run:gate",
+      "verify:gate",
+    ]);
+  });
+
+  // 🔴 The case a recorded gate makes unrecoverable. With the gate's position in
+  // the marker, a resume would either step over the check or replay it and ask
+  // `advanceStep` to write a position it already holds, which it refuses - so
+  // every later attempt would fail identically. Left unrecorded, the marker
+  // still points at the last real work and the resume simply re-enters the gate.
+  it("re-enters the gate on a resume, having recorded nothing past the work", async () => {
+    const events: string[] = [];
+    const meta = markerMeta(events, "run-1");
+    const steps = [
+      step("a", events),
+      step("gate", events, { recordsProgress: false }),
+    ];
+    await runMigrationSteps({
+      session: SESSION,
+      meta,
+      migrationId: "run-1",
+      steps,
+      fromStep: 1,
+    });
+
+    events.length = 0;
+    // The marker records one step, so this is exactly where a resume lands.
+    await runMigrationSteps({
+      session: SESSION,
+      meta,
+      migrationId: "run-1",
+      steps,
+      fromStep: 2,
+    });
+
+    expect(events).toEqual(["run:gate", "verify:gate"]);
+  });
+
+  // A gate records nothing, so a recording step after one would have to advance
+  // the marker across the position it skipped, and `advanceStep` accepts only
+  // exactly one more than it holds. Refused when the plan is handed over rather
+  // than discovered as an unrecoverable marker after the first interruption.
+  it("refuses a plan that records progress after a gate", async () => {
+    const events: string[] = [];
+    const meta = markerMeta(events, "run-1");
+    await expect(
+      runMigrationSteps({
+        session: SESSION,
+        meta,
+        migrationId: "run-1",
+        steps: [
+          step("gate", events, { recordsProgress: false }),
+          step("later", events),
+        ],
+        fromStep: 1,
+      })
+    ).rejects.toMatchObject({
+      logContext: {
+        reason: "a migration plan records progress after a gate",
+        gate: "gate",
+        step: "later",
+      },
+    });
+    expect(events).toEqual([]);
   });
 });

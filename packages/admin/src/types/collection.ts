@@ -253,6 +253,14 @@ export interface Collection {
    */
   status?: boolean;
   /**
+   * Whether the draft/published working-draft split is enabled (drafts on a
+   * versioned collection). Derived server-side; read-only. When true on a
+   * `status` collection, saving a published entry stores a pending working
+   * draft instead of writing live. Only code-first collections enable it — the
+   * Schema Builder always resolves drafts off.
+   */
+  draftsEnabled?: boolean;
+  /**
    * Resolved cache-revalidation config, or null/absent when revalidation is on
    * with no override. The server normalizes the Schema Builder's on/off switch
    * into this shape (off → `{ disable: true }`), so reads carry the object while
@@ -350,6 +358,13 @@ export interface CreateCollectionPayload {
   localized?: boolean;
   /** Whether every save is recorded as a restorable version. Default false. */
   versions?: boolean;
+  /** Durable versions kept per document. `false` = unlimited, a number = keep
+   *  that many, undefined = the default (50). Ignored when `versions` is off. */
+  versionsMaxPerDoc?: number | false;
+  /** Whether the draft/published working-draft split is enabled (drafts on a
+   *  versioned collection). Derived server-side; read-only. Only code-first
+   *  collections enable it — the Schema Builder always resolves drafts off. */
+  draftsEnabled?: boolean;
   /** Whether writes bust cache tags. Default true; false opts the collection out. */
   revalidate?: boolean;
   /** Whether writes are recorded to the webhook outbox. Default true; false
@@ -377,6 +392,9 @@ export interface UpdateCollectionPayload {
   status?: boolean;
   /** Toggle version history. Every save is recorded as a restorable version. */
   versions?: boolean;
+  /** Durable versions kept per document. `false` = unlimited, a number = keep
+   *  that many, undefined = the default (50). Ignored when `versions` is off. */
+  versionsMaxPerDoc?: number | false;
   /** Toggle cache revalidation. Default true; false opts the collection out. */
   revalidate?: boolean;
   /** Toggle webhook recording. Default true; false keeps the collection's

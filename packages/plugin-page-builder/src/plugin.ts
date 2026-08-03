@@ -1,7 +1,21 @@
 import { definePlugin } from "@nextlyhq/plugin-sdk";
 
+// Imported rather than read at runtime so it can never drift from the published
+// package: a hardcoded literal had fallen eight releases behind, and
+// `validatePluginVersions` checks a contributor's `dependsOn` range against THIS
+// value. A static JSON import is inlined by the bundler, so unlike a
+// `createRequire` lookup it adds no Node builtin to this entry — which is
+// isomorphic and reachable from a browser bundle.
+import { version as PLUGIN_VERSION } from "../package.json";
+
+import {
+  BLOCK_SERVICE,
+  createBlockRegistrationService,
+  registerDeclaredBlocks,
+} from "./blocks/registration-service";
 import { PAGE_BUILDER_FIELD_TYPE } from "./collections/pageBuilderEntry";
 import { pagesCollection } from "./collections/pages";
+import { BLOCKS_FIELD_TYPE } from "./fields/blocksField";
 
 export interface PageBuilderOptions {
   /** Disable behavior while still applying schema. Default true. */
@@ -15,8 +29,13 @@ export interface PageBuilderOptions {
 export const pageBuilder = (opts: PageBuilderOptions = {}) =>
   definePlugin({
     name: "@nextlyhq/plugin-page-builder",
-    version: "0.0.2-alpha.29",
-    nextly: ">=0.0.2-alpha.21",
+    version: PLUGIN_VERSION,
+    // `blocks()` builds its field with `pluginField`, which core first exports
+    // in alpha.49. Against an earlier core that import resolves to `undefined`
+    // and every `blocks()` call throws while the config is evaluated, so the
+    // floor states the version carrying the API rather than the one this plugin
+    // was first published against.
+    nextly: ">=0.0.2-alpha.49",
     // Identity metadata for the admin plugins page, mirroring package.json.
     author: "Nextly",
     homepage: "https://nextlyhq.com",
@@ -29,9 +48,26 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) =>
       description:
         "Build pages visually from blocks with drag-and-drop editing",
     },
+    // Registers what other plugins DECLARED, and resolves the registry service
+    // on the way, which is what empties it for the boot. The service is lazy:
+    // on a boot where nothing contributes, nobody else resolves it and the
+    // previous boot's blocks would survive. Doing it here makes the reset
+    // unconditional, and cannot wipe a contributor whose `init` ran first,
+    // because the factory is memoized for the boot and clears only on its
+    // first resolution.
+    init: ctx => {
+      registerDeclaredBlocks(ctx);
+    },
     contributes: {
+      // The channel another plugin adds blocks through. Core carries no
+      // `contributes.blocks` key — a plugin contributing blocks is contributing
+      // to the page builder, not to Nextly — so the registry is offered here and
+      // reached via `ctx.services.plugins`.
+      services: {
+        [BLOCK_SERVICE]: () => createBlockRegistrationService(),
+      },
       collections: [pagesCollection()],
-      fieldTypes: [PAGE_BUILDER_FIELD_TYPE],
+      fieldTypes: [PAGE_BUILDER_FIELD_TYPE, BLOCKS_FIELD_TYPE],
       // No `publish` permission. One was declared here and nothing ever read
       // it: publishing a page is a status change on the entry, which
       // `update-pages` already covers, and no code path asked whether the user

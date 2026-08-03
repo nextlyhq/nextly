@@ -4,6 +4,7 @@
  *
  * @module shared/lib/detach
  */
+import { defineOwnProperty } from "./own-property";
 
 /**
  * Copy plain containers deeply, pass everything else through by reference.
@@ -131,7 +132,9 @@ function detachValue(value: unknown, seen: WeakMap<object, unknown>): unknown {
   const out: Record<string, unknown> = {};
   seen.set(value, out);
   for (const [key, entry] of Object.entries(value)) {
-    out[key] = detachValue(entry, seen);
+    // Defined for the same reason the keyed copy above defines: assignment
+    // would resolve `__proto__` against the prototype and drop the key.
+    defineOwnProperty(out, key, detachValue(entry, seen));
   }
   return out;
 }

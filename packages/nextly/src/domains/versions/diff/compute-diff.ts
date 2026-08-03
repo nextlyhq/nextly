@@ -23,6 +23,7 @@ import { dequal } from "dequal";
 
 import type { FieldConfig } from "../../../collections/fields/types";
 import { normalizeStoredValue } from "../../../shared/lib/normalize-stored-value";
+import { defineOwnProperty } from "../../../shared/lib/own-property";
 
 import { reconcileById, type ItemMatch } from "./reconcile-list";
 import { diffText } from "./text-diff";
@@ -217,7 +218,9 @@ function maskSecret(value: unknown): unknown {
   if (value !== null && typeof value === "object") {
     const out: Record<string, unknown> = {};
     for (const [key, inner] of Object.entries(value)) {
-      out[key] = maskSecret(inner);
+      // Defined, not assigned: a stored JSON value can carry a `__proto__` key,
+      // and assigning it would silently drop it from the diff.
+      defineOwnProperty(out, key, maskSecret(inner));
     }
     return out;
   }

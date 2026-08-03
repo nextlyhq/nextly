@@ -21,6 +21,7 @@ import { generateSqliteCoreTableStatements } from "../../database/sqlite-core-ta
 // MySQL because it has no caller-supplied URL. Once F8 PR 2/3 collapses
 // the two paths, this can collapse back to a single import.
 import { CollectionRegistryService } from "../../domains/collections/services/collection-registry-service";
+import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
 import { createApplyDesiredSchema } from "../../domains/schema/pipeline/apply";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
@@ -245,8 +246,13 @@ export async function performAutoSync(
   // here to wire `setTableResolver` so adapter CRUD on dynamic tables
   // works for the rest of this CLI invocation (seed scripts, etc.).
   const schemaRegistry = new SchemaRegistry(dialect);
-  const staticSchemas = getDialectTables(dialect);
-  schemaRegistry.registerStaticSchemas(staticSchemas);
+  // Both spellings of the field-group registry: the schema registry keys a
+  // table by the physical name its Drizzle object carries, so a database whose
+  // storage migration has run has no handle for its registry otherwise.
+  schemaRegistry.registerStaticSchemas({
+    ...getDialectTables(dialect),
+    ...getFieldGroupRegistryAliases(dialect),
+  });
 
   // F8 PR 1: collections flow through the F2 applyDesiredSchema pipeline
   // (rename detection + classifier + pre-cleanup + pushSchema, all inside

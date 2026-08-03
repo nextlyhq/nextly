@@ -61,6 +61,12 @@ export interface UserFieldDefinitionRecord {
   maxValue: number | null;
   placeholder: string | null;
   description: string | null;
+  /**
+   * Options a contributed field type declared for itself. Core models no
+   * column for these keys, so they arrive whole and are spread back onto the
+   * field config the plugin's own editor is rendered with.
+   */
+  pluginOptions?: Record<string, unknown> | null;
   sortOrder: number;
   source: UserFieldSource;
   isActive: boolean;

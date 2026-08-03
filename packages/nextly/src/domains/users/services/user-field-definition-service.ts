@@ -31,6 +31,8 @@ import type {
 } from "../../../schemas/user-field-definitions/types";
 import { BaseService } from "../../../services/base-service";
 import type { Logger } from "../../../services/shared";
+import { carriedUserFieldOptions } from "../../../shared/lib/user-field-plugin-options";
+import type { UserFieldConfig } from "../../../users";
 import {
   checkUserFieldName,
   checkUserFieldType,
@@ -519,6 +521,14 @@ export class UserFieldDefinitionService extends BaseService {
         const minValue = (field.min as number) ?? null;
         const maxValue = (field.max as number) ?? null;
         const sortOrder = i;
+        // Whatever the field declared beyond the modelled columns, folded the
+        // same way codegen folds it. A contributed type states what it needs to
+        // render — a rating's scale, a picker's source — and those keys have no
+        // column of their own, so without this the admin rebuilds the field
+        // from this row and hands the plugin's editor a stripped declaration.
+        const pluginOptions = carriedUserFieldOptions(
+          field as unknown as UserFieldConfig
+        );
 
         const existing = existingByName.get(name);
 
@@ -537,6 +547,8 @@ export class UserFieldDefinitionService extends BaseService {
             (existing.maxLength ?? null) !== maxLength ||
             (existing.minValue ?? null) !== minValue ||
             (existing.maxValue ?? null) !== maxValue ||
+            JSON.stringify(existing.pluginOptions ?? null) !==
+              JSON.stringify(pluginOptions) ||
             existing.sortOrder !== sortOrder;
 
           if (changed) {
@@ -555,6 +567,7 @@ export class UserFieldDefinitionService extends BaseService {
                 maxLength,
                 minValue,
                 maxValue,
+                pluginOptions,
                 sortOrder,
                 updatedAt: now,
               })
@@ -577,6 +590,7 @@ export class UserFieldDefinitionService extends BaseService {
             maxLength,
             minValue,
             maxValue,
+            pluginOptions,
             sortOrder,
             source: "code",
             isActive: true,

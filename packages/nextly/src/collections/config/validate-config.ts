@@ -25,6 +25,8 @@
  */
 
 import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
+import { toSnakeCase } from "../../domains/schema/services/field-column-descriptor";
+import { isReservedSystemColumn } from "../../lib/system-columns";
 import { SYSTEM_RESOURCES } from "../../schemas/_zod/rbac";
 import {
   type BaseValidationError,
@@ -34,8 +36,6 @@ import {
   validateFieldTypeShared,
   validateNumberDecimalDimensionsShared,
   validateRelationshipTargetShared,
-  validateBlocksDefaultShared,
-  validateBlocksPolicyShared,
   validatePluginFieldOptionsShared,
   validateSelectOptionsShared,
   validateSlugShared,
@@ -166,19 +166,22 @@ const RESERVED_SLUGS_SET: Set<string> = new Set<string>([
   ...SYSTEM_RESOURCES,
 ]);
 
-// The owner column `created_by` is injected as a system column on every
-// collection table (both the snake_case name and its camelCase alias, which
-// snake-cases to the same column). A code-first collection therefore must not
-// declare a top-level field with either name, or its DDL would collide with the
-// injected column and the owner stamp / response strip would consume a user
-// field. Reserved for collections only — singles are a single global row and
-// components embed in JSON, so neither carries this column and both may use the
-// name freely. Nested repeater/group fields are stored inside JSON, not as
-// table columns, so the reservation applies to the top level only.
-const COLLECTION_RESERVED_FIELD_NAMES: Set<string> = new Set([
-  "created_by",
-  "createdBy",
-]);
+// System columns injected onto a collection table, under both the snake_case
+// name and the camelCase alias that snake-cases to the same column. A code-first
+// collection must not declare a top-level field with either name, or its DDL
+// would collide with the injected column and the system's own stamp would
+// consume a user field.
+//
+// `created_by` is the owner column. `first_published_at` records the first
+// transition into published; it is injected only when the draft/publish
+// lifecycle is enabled, but it is reserved unconditionally, because a
+// collection can enable that lifecycle later and the field would collide the
+// moment it did — failing at migration time rather than at config validation,
+// which is much further from the mistake.
+//
+// Components embed in JSON and carry neither column, so they may use both names
+// freely. Nested repeater/group fields are stored inside JSON, not as table
+// columns, so the reservation applies to the top level only.
 
 // ============================================================
 // Index Validation (collection-specific)
@@ -367,6 +370,20 @@ function validateField(
 
   // Plugin types are accepted only when they opted into the entries surface —
   // registration alone is not authorization for a collection field.
+  // Whether a name is usable as a column does not depend on the field's type,
+  // and a contributed type has no answer here at all — it defers to boot. Left
+  // behind the type check, a plugin field's name was never checked by anything:
+  // the deferral returns before this, and the boot gate asks only whether the
+  // token was claimed. A duplicate or SQL-reserved name reached schema
+  // generation as a colliding column.
+  validateFieldNameShared(
+    f.name,
+    path,
+    errsBase,
+    seenNames,
+    DEFAULT_SQL_KEYWORDS_SET
+  );
+
   if (
     !validateFieldTypeShared(f.type, path, errsBase, type =>
       isPluginFieldTypeOnSurface(type, "entries")
@@ -375,14 +392,6 @@ function validateField(
     return;
   }
   const fieldType = f.type as string;
-
-  validateFieldNameShared(
-    f.name,
-    path,
-    errsBase,
-    seenNames,
-    DEFAULT_SQL_KEYWORDS_SET
-  );
 
   // A plugin type reaches none of the cases below, so its own declaration
   // checks run here rather than as a case that could never be written for a
@@ -400,8 +409,6 @@ function validateField(
 
     case "blocks":
       // A blocks default must satisfy the same field policy the write applies.
-      validateBlocksPolicyShared(f, path, errsBase);
-      validateBlocksDefaultShared(f, path, errsBase);
       break;
 
     case "relationship":
@@ -510,16 +517,29 @@ function validateFields(
     return;
   }
 
-  // Block the injected owner column at the top level before per-field
-  // validation. Nested fields are validated recursively inside
-  // validateFieldsArray and are intentionally exempt (JSON-stored, no column).
+  // Block names that become a column the table already carries. Such a field is emitted alongside
+  // the injected one, so the table declares the column twice and the database refuses the
+  // statement — a collection carrying one could never have been created.
+  //
+  // Compared as the PHYSICAL column, through the same conversion schema generation uses, because a
+  // field name reaches its column that way: `createdAt`, `created_at` and `CreatedAt` all arrive at
+  // `created_at`, and a set of literal spellings can only hold the ones somebody listed.
+  //
+  // `title`, `slug` and `status` are deliberately absent. The first two step aside for an author's
+  // own field by design, and a `status` field is accepted by the lifecycle rather than duplicated;
+  // reserving any of them would refuse a configuration that works today.
+  //
+  // Nested fields are validated recursively inside validateFieldsArray and are intentionally
+  // exempt: they are stored inside JSON and never become columns of their own.
   fields.forEach((field, index) => {
     if (!field || typeof field !== "object") return;
     const name = (field as Record<string, unknown>).name;
-    if (typeof name === "string" && COLLECTION_RESERVED_FIELD_NAMES.has(name)) {
+    if (typeof name !== "string") return;
+    const column = toSnakeCase(name);
+    if (isReservedSystemColumn(column, "collectionConfig")) {
       errors.push({
         path: `${path}[${index}].name`,
-        message: `Field name '${name}' is reserved for the system owner column`,
+        message: `Field name '${name}' is reserved: it becomes the system column '${column}'`,
         code: "FIELD_NAME_RESERVED",
       });
     }

@@ -7,6 +7,7 @@
  *  - !hasStatus → single Save / Create button
  *
  */
+import userEvent from "@testing-library/user-event";
 import { useForm, FormProvider } from "react-hook-form";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -32,20 +33,25 @@ beforeEach(() => {
 interface HarnessProps {
   mode: "create" | "edit";
   hasStatus?: boolean;
+  draftsEnabled?: boolean;
   entry?: {
     id: string;
     status?: string;
     title?: string;
     slug?: string;
+    _isWorkingDraft?: boolean;
   } | null;
   isDirty?: boolean;
+  onDiscardWorkingDraft?: () => void | Promise<void>;
 }
 
 function Harness({
   mode,
   hasStatus = true,
+  draftsEnabled = false,
   entry = null,
   isDirty = false,
+  onDiscardWorkingDraft,
 }: HarnessProps) {
   const methods = useForm({ defaultValues: { title: entry?.title ?? "" } });
   return (
@@ -53,13 +59,16 @@ function Harness({
       <EntrySystemHeader
         mode={mode}
         hasStatus={hasStatus}
+        draftsEnabled={draftsEnabled}
         isDirty={isDirty}
         entry={entry}
         collectionSlug="posts"
         onSaveDraft={vi.fn()}
         onPublish={vi.fn()}
         onSaveChanges={vi.fn()}
+        onSaveWorkingDraft={vi.fn()}
         onUnpublish={vi.fn()}
+        onDiscardWorkingDraft={onDiscardWorkingDraft ?? vi.fn()}
       />
     </FormProvider>
   );
@@ -156,6 +165,137 @@ describe("EntrySystemHeader — button matrix", () => {
     expect(
       screen.queryByRole("button", { name: /^unpublish$/i })
     ).not.toBeInTheDocument();
+  });
+});
+
+describe("EntrySystemHeader — drafts-enabled working-draft matrix", () => {
+  it("published + drafts on, no pending draft → Save (not Save changes), Unpublish, no Publish", () => {
+    render(
+      <Harness
+        mode="edit"
+        draftsEnabled
+        entry={{ id: "x", status: "published", title: "Live" }}
+        isDirty
+      />
+    );
+    // The primary save on a drafts collection stores a working draft, so it
+    // reads "Save" rather than "Save changes"; nothing is pending to promote.
+    expect(screen.getByRole("button", { name: /^save$/i })).toBeEnabled();
+    expect(
+      screen.queryByRole("button", { name: /^save changes$/i })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /^publish$/i })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /^unpublish$/i })
+    ).toBeInTheDocument();
+  });
+
+  it("published + drafts on + pending working draft → Save + Publish + Unpublish", () => {
+    render(
+      <Harness
+        mode="edit"
+        draftsEnabled
+        entry={{
+          id: "x",
+          status: "published",
+          title: "Live",
+          _isWorkingDraft: true,
+        }}
+      />
+    );
+    // A pending working draft can be promoted, so Publish appears alongside the
+    // status-less Save and the Unpublish action.
+    expect(screen.getByRole("button", { name: /^save$/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /^publish$/i })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /^unpublish$/i })
+    ).toBeInTheDocument();
+  });
+});
+
+describe("EntrySystemHeader — discard working draft menu", () => {
+  it("offers Discard draft in the More menu for a Changed document", async () => {
+    const user = userEvent.setup();
+    render(
+      <Harness
+        mode="edit"
+        draftsEnabled
+        entry={{ id: "x", status: "published", _isWorkingDraft: true }}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: /more actions/i }));
+    expect(
+      screen.getByRole("menuitem", { name: /discard draft/i })
+    ).toBeInTheDocument();
+  });
+
+  it("hides Discard draft when there is no pending working draft", async () => {
+    const user = userEvent.setup();
+    render(
+      <Harness
+        mode="edit"
+        draftsEnabled
+        entry={{ id: "x", status: "published" }}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: /more actions/i }));
+    expect(
+      screen.queryByRole("menuitem", { name: /discard draft/i })
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps Discard draft without the flat update permission, since a code-first rule may grant it", async () => {
+    // The working-draft split is code-first only, so update can be granted by a
+    // collection `access.update` rule the flat `update-posts` permission does not
+    // list. Gating on that permission would hide Discard from an editor who can
+    // save the very draft it reverts; the server authorizes the discard as an
+    // update, and the sibling Save affordances are not gated on it either.
+    canFor.mockImplementation((slug: string) => slug !== "update-posts");
+    const user = userEvent.setup();
+    render(
+      <Harness
+        mode="edit"
+        draftsEnabled
+        entry={{ id: "x", status: "published", _isWorkingDraft: true }}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: /more actions/i }));
+    expect(
+      screen.getByRole("menuitem", { name: /discard draft/i })
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the confirm dialog open when the discard fails, for a retry", async () => {
+    // The discard handler rejects on failure, and the header closes the dialog
+    // only on success — so a failed destructive request keeps its confirmation
+    // (and the error toast from the mutation explains what went wrong).
+    const onDiscardWorkingDraft = vi.fn().mockRejectedValue(new Error("nope"));
+    const user = userEvent.setup();
+    render(
+      <Harness
+        mode="edit"
+        draftsEnabled
+        entry={{ id: "x", status: "published", _isWorkingDraft: true }}
+        onDiscardWorkingDraft={onDiscardWorkingDraft}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: /more actions/i }));
+    await user.click(screen.getByRole("menuitem", { name: /discard draft/i }));
+    await user.click(screen.getByRole("button", { name: /^Discard draft$/ }));
+
+    expect(onDiscardWorkingDraft).toHaveBeenCalledOnce();
+    // Still open: the rejection was caught and the dialog was not closed.
+    expect(
+      await screen.findByRole("alertdialog", { name: /discard draft for/i })
+    ).toBeInTheDocument();
   });
 });
 

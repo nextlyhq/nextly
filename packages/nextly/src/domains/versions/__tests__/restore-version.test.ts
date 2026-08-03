@@ -55,7 +55,7 @@ import {
   applyFieldReadAccess,
   applyFieldWriteAccess,
 } from "../../../shared/lib/field-level-registry";
-import { restoreVersion } from "../restore-version";
+import { resolveComponentSchemas, restoreVersion } from "../restore-version";
 
 const user = { id: "u1" };
 const base = {
@@ -542,6 +542,7 @@ describe("restoreVersion", () => {
     vi.mocked(applyFieldReadAccess).mockImplementation(
       async ({ entry }: { entry: Record<string, unknown> }) => {
         delete entry.secret;
+        return undefined;
       }
     );
 
@@ -577,6 +578,7 @@ describe("restoreVersion", () => {
       async ({ entry }: { entry: Record<string, unknown> }) => {
         const meta = entry.meta as Record<string, unknown> | undefined;
         if (meta) delete meta.secret;
+        return undefined;
       }
     );
 
@@ -594,6 +596,7 @@ describe("restoreVersion", () => {
     vi.mocked(applyFieldReadAccess).mockImplementation(
       async ({ entry }: { entry: Record<string, unknown> }) => {
         seenId = entry.id;
+        return undefined;
       }
     );
 
@@ -663,5 +666,40 @@ describe("restoreVersion", () => {
     ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
 
     expect(getVersionSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("resolveComponentSchemas", () => {
+  const fieldsWithComponent: Parameters<typeof resolveComponentSchemas>[0] = [
+    { name: "hero", type: "component", component: "heroBlock" },
+  ];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("propagates a registry lookup failure instead of marking the component unresolved", async () => {
+    // A thrown lookup is not proof the component is gone. Collapsing it into an
+    // "unresolved" marker lets a transient registry failure masquerade as a
+    // missing component, and callers then drop or expose that subtree.
+    componentSpy.mockRejectedValue(new Error("registry offline"));
+
+    await expect(
+      resolveComponentSchemas(fieldsWithComponent)
+    ).rejects.toThrow();
+  });
+
+  it("marks a genuinely missing component unresolved without throwing", async () => {
+    // A null record is a confirmed absence, not an error: the subtree is treated
+    // as unknown and dropped, and the call still succeeds.
+    componentSpy.mockResolvedValue(null);
+
+    const schemas = await resolveComponentSchemas(fieldsWithComponent);
+
+    expect(schemas.get("heroBlock")).toEqual({
+      fields: [],
+      localized: false,
+      resolved: false,
+    });
   });
 });

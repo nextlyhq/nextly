@@ -26,6 +26,15 @@
  * lockstep automatically.
  */
 
+import {
+  SYSTEM_COLUMNS,
+  systemColumnDefaultSql,
+  systemColumnDialectType,
+  type SystemColumnDefault,
+  type SystemColumnEntity,
+  type SystemColumnKind,
+  type SystemColumnPresence,
+} from "../../../lib/system-columns";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { getFieldType } from "../field-types/field-type-registry";
 
@@ -223,7 +232,6 @@ function classifyFieldKind(field: FieldDefinition): ColumnKind {
     case "group":
     case "json":
     case "chips":
-    case "blocks":
       return "json";
 
     case "component":
@@ -366,6 +374,14 @@ export interface SystemColumnSet {
 
 export interface SystemColumnDescriptor {
   name: string;
+  /**
+   * The column family, for consumers that build a column rather than describe one.
+   *
+   * The runtime Drizzle generator dispatches on this. It used to dispatch on the NAME, with a
+   * fall-through that made every unrecognised column non-null text, so a newly declared timestamp
+   * would be created as a timestamp and read through a text column.
+   */
+  kind: SystemColumnKind;
   dialectType: string;
   length?: number;
   nullable: boolean;
@@ -374,199 +390,100 @@ export interface SystemColumnDescriptor {
   // Must match what runtime-schema-generator.ts emits so the diff doesn't
   // classify ADD COLUMN as an interactive "required field with no default."
   default?: string;
+  /** The same default, before it was rendered as DDL, for callers that need the value itself. */
+  defaultValue?: SystemColumnDefault;
 }
 
+/**
+ * Whether a declared column is part of a table built with `opts`.
+ *
+ * `title` and `slug` step aside for an author's own fields of those names, and the lifecycle pair
+ * exists only where Draft/Published is enabled.
+ */
+function isPresent(
+  presence: SystemColumnPresence,
+  opts: SystemColumnSet
+): boolean {
+  switch (presence) {
+    case "always":
+      return true;
+    case "unlessAuthorDeclaredTitle":
+      return !opts.hasTitleField;
+    case "unlessAuthorDeclaredSlug":
+      return !opts.hasSlugField;
+    case "withStatusLifecycle":
+      return opts.hasStatus === true;
+  }
+}
+
+/**
+ * The system columns of one table, in declaration order.
+ *
+ * A projection of `SYSTEM_COLUMNS` rather than a per-dialect listing of its own: the three dialect
+ * branches this replaced restated the same eight columns three times, so a column added to one
+ * could be missed in another, and the set was invisible to every consumer that is not a DDL
+ * generator.
+ */
 export function getSystemColumnDescriptors(
   dialect: SupportedDialect,
   opts: SystemColumnSet
 ): SystemColumnDescriptor[] {
-  const cols: SystemColumnDescriptor[] = [];
-  if (dialect === "postgresql") {
-    cols.push({
-      name: "id",
-      dialectType: "text",
-      nullable: false,
-      primaryKey: true,
-    });
-    if (!opts.hasTitleField) {
-      cols.push({
-        name: "title",
-        dialectType: "text",
-        nullable: false,
-        primaryKey: false,
-      });
-    }
-    if (!opts.hasSlugField) {
-      cols.push({
-        name: "slug",
-        dialectType: "text",
-        nullable: false,
-        primaryKey: false,
-      });
-    }
-    // Timestamp defaults must mirror runtime-schema-generator's
-    // pgTimestamp(...).defaultNow() — otherwise the diff sees a phantom
-    // change_column_default (now() → undefined) on every apply and routes
-    // around the fast-path DDL emitter.
-    cols.push({
-      name: "created_at",
-      dialectType: "timestamp",
-      nullable: true,
-      primaryKey: false,
-      default: "now()",
-    });
-    cols.push({
-      name: "updated_at",
-      dialectType: "timestamp",
-      nullable: true,
-      primaryKey: false,
-      default: "now()",
-    });
-    // Owner of the row, stamped with the creating user's id. Collections only
-    // (never singles). Nullable: existing rows and system/seed creates have no
-    // user. Mirrors runtime-schema-generator's pgText("created_by") (text,
-    // matching the id column type).
-    if (!opts.isSingle) {
-      cols.push({
-        name: "created_by",
-        dialectType: "text",
-        nullable: true,
-        primaryKey: false,
-      });
-    }
-    if (opts.hasStatus) {
-      // Must mirror runtime-schema-generator's
-      // pgVarchar("status", { length: 20 }).notNull().default("draft").
-      // information_schema reports udt_name=varchar for that DDL, so
-      // emitting "text" here would cause a phantom change_column_type
-      // on every apply.
-      cols.push({
-        name: "status",
-        dialectType: "varchar",
-        length: 20,
-        nullable: false,
-        primaryKey: false,
-        default: "'draft'",
-      });
-    }
-  } else if (dialect === "mysql") {
-    cols.push({
-      name: "id",
-      dialectType: "varchar(36)",
-      length: 36,
-      nullable: false,
-      primaryKey: true,
-    });
-    if (!opts.hasTitleField) {
-      cols.push({
-        name: "title",
-        dialectType: "varchar(255)",
-        length: 255,
-        nullable: false,
-        primaryKey: false,
-      });
-    }
-    if (!opts.hasSlugField) {
-      cols.push({
-        name: "slug",
-        dialectType: "varchar(255)",
-        length: 255,
-        nullable: false,
-        primaryKey: false,
-      });
-    }
-    cols.push({
-      name: "created_at",
-      dialectType: "timestamp",
-      nullable: true,
-      primaryKey: false,
-    });
-    cols.push({
-      name: "updated_at",
-      dialectType: "timestamp",
-      nullable: true,
-      primaryKey: false,
-    });
-    // Owner of the row (creating user's id, NOT the row id). Collections only
-    // (never singles). Sized to match the MySQL users.id column (varchar(191),
-    // Auth.js-compatible), not the varchar(36) row id — a longer user id would
-    // otherwise be truncated. Nullable; mirrors runtime-schema-generator's
-    // created_by column.
-    if (!opts.isSingle) {
-      cols.push({
-        name: "created_by",
-        dialectType: "varchar(191)",
-        length: 191,
-        nullable: true,
-        primaryKey: false,
-      });
-    }
-    if (opts.hasStatus) {
-      cols.push({
-        name: "status",
-        dialectType: "varchar(20)",
-        length: 20,
-        nullable: false,
-        primaryKey: false,
-        default: "'draft'",
-      });
-    }
-  } else {
-    // sqlite
-    cols.push({
-      name: "id",
-      dialectType: "text",
-      nullable: false,
-      primaryKey: true,
-    });
-    if (!opts.hasTitleField) {
-      cols.push({
-        name: "title",
-        dialectType: "text",
-        nullable: false,
-        primaryKey: false,
-      });
-    }
-    if (!opts.hasSlugField) {
-      cols.push({
-        name: "slug",
-        dialectType: "text",
-        nullable: false,
-        primaryKey: false,
-      });
-    }
-    cols.push({
-      name: "created_at",
-      dialectType: "integer",
-      nullable: true,
-      primaryKey: false,
-    });
-    cols.push({
-      name: "updated_at",
-      dialectType: "integer",
-      nullable: true,
-      primaryKey: false,
-    });
-    // Owner of the row (creating user's id). Collections only (never singles).
-    // Nullable; mirrors runtime-schema-generator's sqliteText("created_by")
-    // (matching the id column type).
-    if (!opts.isSingle) {
-      cols.push({
-        name: "created_by",
-        dialectType: "text",
-        nullable: true,
-        primaryKey: false,
-      });
-    }
-    if (opts.hasStatus) {
-      cols.push({
-        name: "status",
-        dialectType: "text",
-        nullable: false,
-        primaryKey: false,
-        default: "'draft'",
-      });
-    }
-  }
-  return cols;
+  const entity: SystemColumnEntity = opts.isSingle ? "single" : "collection";
+
+  return SYSTEM_COLUMNS.filter(
+    column =>
+      column.appliesTo.includes(entity) && isPresent(column.presence, opts)
+  ).map(column => {
+    const shape = column.shape[dialect];
+    const defaultSql = systemColumnDefaultSql(shape, dialect);
+    return {
+      name: column.name,
+      kind: shape.kind,
+      dialectType: systemColumnDialectType(shape, dialect),
+      ...(shape.length !== undefined ? { length: shape.length } : {}),
+      nullable: shape.nullable,
+      primaryKey: shape.primaryKey === true,
+      ...(defaultSql !== undefined ? { default: defaultSql } : {}),
+      ...(shape.default !== undefined ? { defaultValue: shape.default } : {}),
+    };
+  });
+}
+
+/**
+ * Spell one system-column descriptor as the column definition of a `CREATE TABLE`.
+ *
+ * The module that owns what the columns ARE owns how they are written, so a DDL generator can
+ * iterate `getSystemColumnDescriptors` instead of restating the set. Restating it is what let a
+ * newly added system column reach the runtime schema and miss the physical table, which makes
+ * every read of that entity select a column that is not there.
+ *
+ * `quoteIdentifier` is the caller's, because quoting is a property of the generator's dialect
+ * handling rather than of the column.
+ *
+ * Clause order is `type [DEFAULT x] [PRIMARY KEY] [NOT NULL]`, which is what the generators
+ * already emitted by hand. A default is a literal DDL expression (`now()`, `'draft'`), not a
+ * value to be escaped: the descriptor stores it exactly as it must appear.
+ */
+export function renderSystemColumnSql(
+  column: SystemColumnDescriptor,
+  quoteIdentifier: (name: string) => string
+): string {
+  // `length` is redundant on some dialects and load-bearing on others: MySQL's descriptors carry
+  // the size inside `dialectType` ("varchar(36)") as well as in `length`, while PostgreSQL's
+  // status column is "varchar" with the 20 held only in `length`. Appending unconditionally would
+  // emit "varchar(36)(36)", so the size is added only when the type does not already state one.
+  const statesItsOwnSize = column.dialectType.includes("(");
+  const type =
+    column.length === undefined || statesItsOwnSize
+      ? column.dialectType
+      : `${column.dialectType}(${column.length})`;
+
+  const clauses = [quoteIdentifier(column.name), type];
+  if (column.default !== undefined) clauses.push(`DEFAULT ${column.default}`);
+  if (column.primaryKey) clauses.push("PRIMARY KEY");
+  // A primary key is already NOT NULL on every dialect, and the generators spelled it out. Kept
+  // so the emitted text does not change for the columns that were not the point of this.
+  if (!column.nullable) clauses.push("NOT NULL");
+
+  return clauses.join(" ");
 }

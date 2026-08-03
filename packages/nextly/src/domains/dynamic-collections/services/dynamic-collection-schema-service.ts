@@ -22,11 +22,18 @@
 
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
-import { emptyBlockDocumentJson } from "../../../collections/fields/blocks-document";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { env } from "../../../shared/lib/env";
+import {
+  pluginEmptyColumnDefault,
+  storageTypeToken,
+} from "../../../shared/lib/plugin-storage";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
-import { getColumnDescriptor } from "../../schema/services/field-column-descriptor";
+import {
+  getColumnDescriptor,
+  getSystemColumnDescriptors,
+  renderSystemColumnSql,
+} from "../../schema/services/field-column-descriptor";
 import { quoteJsonSqlDefault } from "../../schema/utils/sql-literal";
 
 import { DynamicCollectionValidationService } from "./dynamic-collection-validation-service";
@@ -249,70 +256,41 @@ export class DynamicCollectionSchemaService {
     // comma before the timestamp section, producing invalid SQL.
     const allColumnDefs: string[] = [];
 
-    // id
-    if (this.dialect === "mysql") {
-      allColumnDefs.push(
-        `  ${this.quoteIdentifier("id")} varchar(36) PRIMARY KEY NOT NULL`
-      );
-    } else {
-      allColumnDefs.push(
-        `  ${this.quoteIdentifier("id")} text PRIMARY KEY NOT NULL`
-      );
-    }
-
-    // title (only if not user-defined). A component named "title" produces no
-    // column, so it must not suppress the system title column.
+    // System columns, rendered from the one list that defines them rather than restated here.
+    // Restating them is how a newly added system column reached the runtime schema and missed the
+    // physical table: the generated SELECT then names a column that does not exist and every read
+    // of the entity fails. Iterating the list — rather than sourcing each column in place — is
+    // what makes that impossible, since a new entry needs no edit here to be created.
+    //
+    // A component named "title" produces no column, so it must not suppress the system title
+    // column; the same holds for "slug".
     const hasTitleField = fields.some(
       f => f.name === "title" && f.type !== STORAGE_FORMAT.fieldType
     );
-    if (!hasTitleField) {
-      if (this.dialect === "mysql") {
-        allColumnDefs.push(
-          `  ${this.quoteIdentifier("title")} varchar(255) NOT NULL`
-        );
-      } else {
-        allColumnDefs.push(`  ${this.quoteIdentifier("title")} text NOT NULL`);
-      }
-    }
-
-    // slug (only if not user-defined). Same column-less exclusion as title.
     const hasSlugField = fields.some(
       f => f.name === "slug" && f.type !== STORAGE_FORMAT.fieldType
     );
-    if (!hasSlugField) {
-      if (this.dialect === "mysql") {
-        allColumnDefs.push(
-          `  ${this.quoteIdentifier("slug")} varchar(255) NOT NULL`
-        );
-      } else {
-        allColumnDefs.push(`  ${this.quoteIdentifier("slug")} text NOT NULL`);
-      }
+    // A single is one global row, so owner-only ownership is meaningless and it gets no
+    // `created_by`. Prefer the explicit flag, but fall back to the `single_` table prefix so this
+    // stays in lockstep with the runtime schema and the diff, which derive it from the name, even
+    // when a caller omits the option.
+    const isSingleTable =
+      _options?.isSingle === true || tableName.startsWith("single_");
+
+    for (const systemColumn of getSystemColumnDescriptors(this.dialect, {
+      hasTitleField,
+      hasSlugField,
+      hasStatus: _options?.hasStatus === true,
+      isSingle: isSingleTable,
+    })) {
+      allColumnDefs.push(
+        `  ${renderSystemColumnSql(systemColumn, name => this.quoteIdentifier(name))}`
+      );
     }
 
     // user-defined columns (may be multi-line, already comma-separated internally)
     if (columns.length > 0) {
       allColumnDefs.push(columns);
-    }
-
-    // Status system column: only emitted when the collection / single opts
-    // into the Draft/Published lifecycle. Default 'draft' is critical —
-    // every existing row gets it on enable so writes don't violate NOT NULL.
-    if (_options?.hasStatus) {
-      if (this.dialect === "sqlite") {
-        // SQLite has no varchar; text + default is the equivalent.
-        allColumnDefs.push(
-          `  ${this.quoteIdentifier("status")} text DEFAULT 'draft' NOT NULL`
-        );
-      } else if (this.dialect === "mysql") {
-        // varchar(20) leaves headroom over "published" (9 chars).
-        allColumnDefs.push(
-          `  ${this.quoteIdentifier("status")} varchar(20) DEFAULT 'draft' NOT NULL`
-        );
-      } else {
-        allColumnDefs.push(
-          `  ${this.quoteIdentifier("status")} varchar(20) DEFAULT 'draft' NOT NULL`
-        );
-      }
     }
 
     // CHECK constraints
@@ -325,47 +303,6 @@ export class DynamicCollectionSchemaService {
     // FK constraints (each already indented)
     for (const c of constraints) {
       allColumnDefs.push(c);
-    }
-
-    // timestamp columns
-    if (this.dialect === "sqlite") {
-      allColumnDefs.push(
-        `  ${this.quoteIdentifier("created_at")} integer DEFAULT (strftime('%s', 'now')) NOT NULL`
-      );
-      allColumnDefs.push(
-        `  ${this.quoteIdentifier("updated_at")} integer DEFAULT (strftime('%s', 'now')) NOT NULL`
-      );
-    } else if (this.dialect === "mysql") {
-      allColumnDefs.push(
-        `  ${this.quoteIdentifier("created_at")} timestamp DEFAULT CURRENT_TIMESTAMP NOT NULL`
-      );
-      allColumnDefs.push(
-        `  ${this.quoteIdentifier("updated_at")} timestamp DEFAULT CURRENT_TIMESTAMP NOT NULL`
-      );
-    } else {
-      allColumnDefs.push(
-        `  ${this.quoteIdentifier("created_at")} timestamp DEFAULT now() NOT NULL`
-      );
-      allColumnDefs.push(
-        `  ${this.quoteIdentifier("updated_at")} timestamp DEFAULT now() NOT NULL`
-      );
-    }
-
-    // Owner column — COLLECTIONS ONLY. A single is one global row, so
-    // owner-only ownership is meaningless; singles never stamp or query it.
-    // Nullable with no default (matches getSystemColumnDescriptors) so existing
-    // rows and system creates stay null; sized to the users.id column on MySQL
-    // since it holds a user id, not the row id.
-    // Prefer the explicit flag, but also fall back to the `single_` table
-    // prefix so this stays in lockstep with the runtime schema / diff (which
-    // derive it from the name) even if a caller omits the option.
-    const isSingleTable =
-      _options?.isSingle === true || tableName.startsWith("single_");
-    if (!isSingleTable) {
-      const ownerType = this.dialect === "mysql" ? "varchar(191)" : "text";
-      allColumnDefs.push(
-        `  ${this.quoteIdentifier("created_by")} ${ownerType}`
-      );
     }
 
     let sql = `-- Create dynamic collection: ${tableName}
@@ -536,15 +473,35 @@ ${allColumnDefs.join(",\n")}
     // caller can't accidentally strip Draft/Published.
     const wasStatus = options?.wasStatus === true;
     const hasStatus = options?.hasStatus === true;
-    if (!wasStatus && hasStatus) {
-      const statusType = this.dialect === "sqlite" ? "text" : "varchar(20)";
-      statements.push(
-        `ALTER TABLE ${this.quoteIdentifier(tableName)} ADD COLUMN ${this.quoteIdentifier("status")} ${statusType} DEFAULT 'draft' NOT NULL;`
+    if (
+      wasStatus !== hasStatus &&
+      (hasStatus || options?.hasStatus === false)
+    ) {
+      // The columns the lifecycle owns, derived by asking the descriptor for the set with the
+      // lifecycle on and again with it off: whatever only the first has is what enabling adds and
+      // disabling removes. Naming `status` here instead is how the first-publication marker came
+      // to be expected by the runtime schema while this toggle never created it — the runtime
+      // schema reads the same descriptor, so a column added there arrives here for free.
+      const isSingleTable = tableName.startsWith("single_");
+      const forFlag = (flag: boolean) =>
+        getSystemColumnDescriptors(this.dialect, {
+          hasTitleField: false,
+          hasSlugField: false,
+          hasStatus: flag,
+          isSingle: isSingleTable,
+        });
+      const withoutLifecycle = new Set(forFlag(false).map(c => c.name));
+      const lifecycleColumns = forFlag(true).filter(
+        c => !withoutLifecycle.has(c.name)
       );
-    } else if (wasStatus && options?.hasStatus === false) {
-      statements.push(
-        `ALTER TABLE ${this.quoteIdentifier(tableName)} DROP COLUMN ${this.quoteIdentifier("status")};`
-      );
+
+      for (const column of lifecycleColumns) {
+        statements.push(
+          hasStatus
+            ? `ALTER TABLE ${this.quoteIdentifier(tableName)} ADD COLUMN ${renderSystemColumnSql(column, name => this.quoteIdentifier(name))};`
+            : `ALTER TABLE ${this.quoteIdentifier(tableName)} DROP COLUMN ${this.quoteIdentifier(column.name)};`
+        );
+      }
     }
 
     const oldFieldMap = new Map(oldFields.map(f => [f.name, f]));
@@ -989,11 +946,18 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
    * consolidation rather than with a per-column patch.
    */
   mapFieldTypeToSQL(
-    type: string,
+    declaredType: string,
     length?: number,
     options?: FieldDefinition["options"],
     validation?: FieldDefinition["validation"]
   ): string {
+    // A contributed type persists as its storage primitive, and this map has
+    // never heard of the token it is declared under. Left unresolved it falls
+    // through to `text`, so the column the DDL creates and the column the ORM
+    // binds describe different things. The same resolution `getColumnDescriptor`
+    // and the missing-column scan already make.
+    const type = storageTypeToken({ type: declaredType }) ?? declaredType;
+
     if (this.dialect === "sqlite") {
       // SQLite type mapping. SQLite has dynamic typing, so types are simplified.
       const sqliteTypeMap: Record<string, string> = {
@@ -1008,7 +972,6 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
         richText: "text",
         json: "text", // JSON stored as text in SQLite
         chips: "text", // Chips stored as JSON text in SQLite
-        blocks: "text", // A page document is JSON, stored as text in SQLite
         relationship: "text", // Store foreign key as text (UUID or ID)
       };
       return sqliteTypeMap[type] || "text";
@@ -1031,7 +994,6 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
         richText: "text",
         json: "json", // MySQL uses 'json' type, not 'jsonb'
         chips: "json", // Chips stored as JSON array
-        blocks: "json", // A page document is one JSON value
         relationship: "varchar(36)", // Store foreign key as varchar(36) for UUIDs
       };
       return mysqlTypeMap[type] || "text";
@@ -1053,7 +1015,6 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
       richText: "text",
       json: "jsonb",
       chips: "jsonb", // Chips stored as JSON array
-      blocks: "jsonb", // A page document is one JSON value
       relationship: "text", // Store foreign key as text (UUID or ID)
     };
     return typeMap[type] || "text";
@@ -1065,8 +1026,20 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
    */
   private getDefaultValueForType(
     type: string,
-    field?: Pick<FieldDefinition, "blocks">
+    field?: Partial<FieldDefinition>
   ): string {
+    // A contributed type states its own backfill before the primitive's is
+    // derived: `{}` satisfies a json column and then fails every read that
+    // expects the structure the type actually stores. Read from the field as
+    // DECLARED — `type` here may already be the storage primitive, under which
+    // the contributed type is not registered and states nothing.
+    const contributed = pluginEmptyColumnDefault(field ?? { type }, type, {
+      json: serialized => quoteJsonSqlDefault(serialized, this.dialect),
+      literal: (value, storageToken) =>
+        this.formatDefaultValue(value, storageToken),
+    });
+    if (contributed !== undefined) return contributed;
+
     switch (type) {
       case "text":
       case "textarea":
@@ -1088,13 +1061,6 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
       case "repeater":
       case "group":
         return quoteJsonSqlDefault("{}", this.dialect);
-      case "blocks":
-        // A required blocks column needs a document, not an empty object: the
-        // generic `{}` has no formatVersion, kind, or nodes.
-        return quoteJsonSqlDefault(
-          emptyBlockDocumentJson(field?.blocks?.kinds),
-          this.dialect
-        );
       case "chips":
         return quoteJsonSqlDefault("[]", this.dialect);
       case "relationship":
@@ -1112,7 +1078,12 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
   /**
    * Format a default value for SQL (dialect-aware)
    */
-  formatDefaultValue(value: unknown, type: string): string {
+  formatDefaultValue(value: unknown, declaredType: string): string {
+    // Resolved for the same reason the type map is: a contributed token names
+    // none of the branches below, so a structured default would fall through
+    // to the string arm and be written as `[object Object]`.
+    const type = storageTypeToken({ type: declaredType }) ?? declaredType;
+
     // Handle string-like types (need quotes in SQL)
     if (
       type === "text" ||
@@ -1136,7 +1107,7 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
     }
 
     // Handle JSON (needs to be a quoted JSON string)
-    if (type === "json" || type === "blocks") {
+    if (type === "json") {
       return quoteJsonSqlDefault(
         typeof value === "string" ? value : JSON.stringify(value),
         this.dialect

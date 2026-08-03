@@ -191,9 +191,27 @@ export class AuthService extends BaseService {
     // with the silent-success pattern (§13.8).
     let newUser;
     try {
+      // Registration records `user.created`, so this service is built with the
+      // same post-commit hooks the DI-registered and facade-built ones get.
+      // Without them the event a self-registration produces waits for the
+      // scheduled drain, which an install running on Next's `after()` alone
+      // never triggers, and the outbox it lands in is never pruned from here.
+      const { resolveWebhookWritePathInfra } = await import(
+        "../../webhooks/write-path-infra"
+      );
+      const { fastDrainScheduler, retentionRunner } =
+        resolveWebhookWritePathInfra(this.adapter, this.logger);
       const userService = new (
         await import("../../../services/users")
-      ).UsersService(this.adapter, this.logger);
+      ).UsersService(
+        this.adapter,
+        this.logger,
+        undefined,
+        undefined,
+        undefined,
+        fastDrainScheduler,
+        retentionRunner
+      );
       newUser = await userService.createLocalUser({
         email: userData.email,
         name: userData.name ?? "User",

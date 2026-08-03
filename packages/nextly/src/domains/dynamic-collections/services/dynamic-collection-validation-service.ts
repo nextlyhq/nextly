@@ -10,6 +10,9 @@ import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
  * vector for hiding catastrophic-backtracking constructs that defeat
  * static analyzers.
  */
+
+import { reservedSystemFieldNames } from "../../../lib/system-columns";
+
 const MAX_REGEX_PATTERN_LENGTH = 200;
 
 /**
@@ -95,19 +98,16 @@ export const RESERVED_COLLECTION_NAMES = [
 ] as const;
 
 /** Reserved field names (added automatically). */
-export const RESERVED_FIELD_NAMES = [
-  "id",
-  "title",
-  "slug",
-  "created_at",
-  "updated_at",
-  // System owner column, auto-added and stamped on create. Both the physical
-  // snake_case name and the camelCase alias are reserved: config validation
-  // accepts camelCase field names and snake-cases them to the same column, so
-  // a `createdBy` field would otherwise collide with the system owner column.
-  "created_by",
-  "createdBy",
-] as const;
+/**
+ * Field names the Schema Builder refuses, in both spellings.
+ *
+ * A projection of the columns declared reserved on this surface. Config validation accepts a
+ * camelCase field name and snake-cases it, so the two spellings reach the same column and
+ * reserving one alone reserves nothing — a field named `createdAt` lands in the same CREATE TABLE
+ * as the injected `created_at`, which the database refuses.
+ */
+export const RESERVED_FIELD_NAMES: readonly string[] =
+  reservedSystemFieldNames("builder");
 
 export const collectionNameSchema = z
   .string()
@@ -145,7 +145,7 @@ export const fieldNameSchema = z
     /^[a-z][a-z0-9_]*$/,
     "Field name must start with lowercase letter and contain only lowercase letters, numbers, and underscores"
   )
-  .refine((name: string) => !RESERVED_FIELD_NAMES.includes(name as never), {
+  .refine((name: string) => !RESERVED_FIELD_NAMES.includes(name), {
     message: "Field name is reserved",
   })
   .refine(

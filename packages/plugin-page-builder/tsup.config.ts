@@ -42,6 +42,7 @@ function distJsFiles(dir: string): string[] {
 export default defineConfig({
   entry: [
     "src/index.ts",
+    "src/blocks/index.ts",
     "src/admin/index.ts",
     "src/render/index.ts",
     "src/render/ErrorBoundary.tsx",

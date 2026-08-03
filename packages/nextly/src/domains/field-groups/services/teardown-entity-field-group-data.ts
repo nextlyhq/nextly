@@ -35,12 +35,27 @@ import { NextlyError } from "../../../errors";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { q } from "../../i18n/migration/ddl-types";
 import { isCompanionTable } from "../../schema/pipeline/managed-tables";
+import { readIdentifierCaseRules } from "../../schema/utils/read-identifier-case";
+import {
+  indexCatalog,
+  resolveCatalogName,
+} from "../../schema/utils/resolve-catalog-name";
+import { MIGRATION_TARGET } from "../migration/manifest";
+import { resolveRegistryTableName } from "../storage/resolve-storage-names";
 
 /** Bound on how deep component nesting is followed; mirrors MAX_FIELD_GROUP_NESTING_DEPTH. */
 const DEFAULT_MAX_DEPTH = 10;
 
-/** Registry table holding one row per component, including its physical table name. */
-const REGISTRY_TABLE = STORAGE_FORMAT.registryTable;
+/**
+ * Registry table holding one row per component, including its physical table
+ * name. Resolved rather than constant: the field-group storage migration
+ * renames it, so which of the two names a database holds is an observation.
+ */
+async function registryTableName(
+  adapter: TeardownComponentDataAdapter
+): Promise<string> {
+  return resolveRegistryTableName(adapter);
+}
 
 /**
  * Chunk size for `IN (...)` lists. Keeps a very large entity from exceeding a driver's
@@ -57,6 +72,7 @@ export interface TeardownComponentDataAdapter {
   ): Promise<T[]>;
   delete(table: string, where: WhereClause): Promise<number>;
   executeQuery<T = unknown>(sql: string, params?: unknown[]): Promise<T[]>;
+  getDrizzle<T = unknown>(): T;
   tableExists(tableName: string): Promise<boolean>;
   listTables(): Promise<string[]>;
 }
@@ -205,8 +221,36 @@ async function listRegisteredComponentTables(
   adapter: TeardownComponentDataAdapter,
   discovered: string[]
 ): Promise<string[]> {
-  if (!discovered.includes(REGISTRY_TABLE)) return [];
+  // Exact-first, then case-insensitive only where the server folds. Deleting
+  // rows from a table resolved by folding a name the server treats as distinct
+  // would delete another table's rows, so the comparison rules come from the
+  // server rather than being assumed. The reasoning lives with the resolver.
+  //
+  // Built before the registry itself is looked up, so the registry is found by
+  // the same rules as the tables it names. Gating on an exact match while
+  // resolving its rows case-insensitively would skip registry discovery on a
+  // server that reports the registry in another case, and every custom-named
+  // component would then be left out of the sweep.
+  const catalog = indexCatalog(
+    discovered,
+    (await readIdentifierCaseRules(adapter)).tables
+  );
+  // Two different questions, deliberately answered with two different names.
+  //
+  // *Which catalog entry is the registry* is physical identity, so it is resolved
+  // through the server's comparison rules and the answer is the spelling the
+  // catalog reports. That spelling is what the metadata exclusion below needs.
+  const declared = await registryTableName(adapter);
+  const registryTable = resolveCatalogName(catalog, declared);
+  if (registryTable === undefined) return [];
 
+  // *How to address the registry through the ORM* is a different question with a
+  // different answer: the schema registry keys static schemas by the name the
+  // Drizzle table declares and looks them up exactly, so it only ever knows the
+  // canonical name. Addressing it by the catalog's spelling would be reported as
+  // unregistered on a folding server, and this function would return nothing —
+  // silently dropping every custom-named component from the sweep.
+  //
   // Consulted only when the ORM can address it. An executor with no schema
   // registered for the registry — a hand-built adapter carrying just its own
   // tables — has no schema for any component table either, so it could not
@@ -214,31 +258,10 @@ async function listRegisteredComponentTables(
   // stays complete for everything such an executor can reach. Probing rather
   // than catching keeps genuine read failures propagating instead of being
   // mistaken for "nothing registered".
-  if (!(await isResolvable(adapter, REGISTRY_TABLE))) return [];
+  if (!(await isResolvable(adapter, declared))) return [];
 
-  const rows = await adapter.select<Record<string, unknown>>(
-    REGISTRY_TABLE,
-    {}
-  );
+  const rows = await adapter.select<Record<string, unknown>>(declared, {});
 
-  // Resolved exactly first, then case-insensitively. MySQL with
-  // `lower_case_table_names` reports a verbatim `SEO_META` as `seo_meta`, so an
-  // exact-only match would discard the registered table and orphan its rows.
-  // Folding unconditionally is equally wrong: PostgreSQL, and MySQL with
-  // `lower_case_table_names=0`, can hold `SEO_META` and `seo_meta` as distinct
-  // quoted tables, and collapsing them would sweep only one. Preferring the
-  // exact hit keeps those distinct, while the fallback still finds a folded
-  // catalog entry — and either way the resolved value is the name the catalog
-  // reported, which is what later statements must address.
-  const catalog = new Set(discovered);
-  const foldedCatalog = new Map<string, string>();
-  for (const name of discovered) {
-    const key = name.toLowerCase();
-    // First writer wins so an ambiguous fold cannot silently retarget a table.
-    if (!foldedCatalog.has(key)) foldedCatalog.set(key, name);
-  }
-  const resolveCatalogName = (name: string): string | undefined =>
-    catalog.has(name) ? name : foldedCatalog.get(name.toLowerCase());
   return (
     rows
       .map(row => row.table_name ?? row.tableName)
@@ -247,8 +270,14 @@ async function listRegisteredComponentTables(
       // whose migration is pending or failed. Probing one raises a missing-table
       // error, and because this sweep precedes every entity delete, a single
       // unmaterialized component would block all of them.
-      .map(name => resolveCatalogName(name))
+      .map(name => resolveCatalogName(catalog, name))
       .filter((name): name is string => name !== undefined)
+      // The registry is metadata, never component storage. A malformed row
+      // pointing back at it resolves to whatever spelling the catalog reports,
+      // so excluding it here — where that spelling is known — is what keeps it
+      // out; a caller comparing against the constant alone would miss a
+      // case-different spelling and probe the registry as an instance table.
+      .filter(name => name !== registryTable)
   );
 }
 
@@ -273,16 +302,25 @@ export async function teardownEntityComponentData(
   // scanned as parents).
   const discovered = await adapter.listTables();
   const registered = await listRegisteredComponentTables(adapter, discovered);
+  const registry = await registryTableName(adapter);
   const componentTables = [
     ...new Set([
-      ...discovered.filter(name => name.startsWith(STORAGE_FORMAT.tablePrefix)),
+      // Both prefixes. The registry-derived list below cannot recover a table
+      // whose metadata row is exactly what went missing, so prefix discovery is
+      // the only route to an orphan — and after the storage migration a
+      // generated table carries `fg_`, not `comp_`.
+      ...discovered.filter(
+        name =>
+          name.startsWith(STORAGE_FORMAT.tablePrefix) ||
+          name.startsWith(MIGRATION_TARGET.tablePrefix)
+      ),
       ...registered,
     ]),
     // The registry itself is metadata, never component storage. A row pointing
     // at it would otherwise be probed as an instance table, where a missing
     // `_parent_table` column breaks the delete and a permissive adapter could
     // damage the metadata.
-  ].filter(name => name !== REGISTRY_TABLE && !isCompanionTable(name));
+  ].filter(name => name !== registry && !isCompanionTable(name));
 
   if (componentTables.length === 0) {
     return { instancesDeleted: 0, tablesTouched: [], skippedTables: [] };

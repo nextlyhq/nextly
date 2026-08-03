@@ -6,7 +6,11 @@ import { migrateCore } from "../migrate";
 function deps(over: Record<string, unknown> = {}) {
   return {
     dialect: "postgresql" as const,
-    db: {},
+    // Answers the catalog probe the way a database with no field-group
+    // registry does. Inert would let the resolution throw, and this orchestration
+    // suite would then be asserting on an error from a collaborator rather than
+    // on what `migrateCore` does with its steps.
+    db: { execute: async () => ({ rows: [] }) },
     adapter: {} as never,
     migrationsDir: "/tmp/migrations",
     logger: createLogger({ quiet: true }),

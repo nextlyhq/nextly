@@ -32,7 +32,10 @@ import {
   respondMutation,
 } from "../../api/response-shapes";
 import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
-import { companionHasStatusColumn } from "../../domains/i18n/runtime/companion-io";
+import {
+  companionHasStatusColumn,
+  localizedColumnsOnMain,
+} from "../../domains/i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { createApplyDesiredSchema } from "../../domains/schema/pipeline/apply";
@@ -112,6 +115,7 @@ import type { MethodHandler, Params } from "../types";
 // all three entity kinds, so a stale UI save is rejected before any DDL runs.
 import { assertSchemaVersionMatch } from "./schema-version-guard";
 import {
+  discardWorkingDraftForDocument,
   getVersionDiffForDocument,
   getVersionForDocument,
   restoreVersionForDocument,
@@ -178,6 +182,7 @@ export const COLLECTION_VERSION_METHODS: Record<
         authenticatedScope: readAuthenticatedScope(p),
         limit: p.limit !== undefined ? Number(p.limit) : undefined,
         cursor: p.cursor !== undefined ? Number(p.cursor) : undefined,
+        locale: p.locale !== undefined ? String(p.locale) : undefined,
       });
       return respondList(result.items, result.meta);
     },
@@ -210,6 +215,18 @@ export const COLLECTION_VERSION_METHODS: Record<
         params: p,
       });
       return respondAction("Version restored.", result);
+    },
+  },
+  discardWorkingDraft: {
+    execute: async (_svc, p) => {
+      const item = await discardWorkingDraftForDocument({
+        scopeKind: "collection",
+        slug: String(p.collectionName ?? ""),
+        entryId: String(p.entryId ?? ""),
+        user: userFromParams(p),
+        params: p,
+      });
+      return respondMutation("Working draft discarded.", item);
     },
   },
   getEntryVersion: {
@@ -786,10 +803,24 @@ const COLLECTIONS_METHODS: Record<
             status: collection.status === true,
             wasLocalized,
             isLocalized,
+            // The PERSISTED status, which is what the disable restore needs: it decides whether
+            // main carried `status` and the companion `_status` before this apply. `collection`
+            // here is the registry record, so this is the prior state for the same reason
+            // `wasLocalized` above is.
+            wasStatus: collection.status === true,
             oldFields,
             newFields,
             companionExists,
             companionHasStatus,
+            // Which translatable columns the main table still carries. A disable must not re-add
+            // one that is already there, and must still restore it: presence says the column
+            // exists, never that its value is current, because every localized write went to the
+            // companion alone.
+            existingMainColumns: await localizedColumnsOnMain(
+              adapter,
+              tableName,
+              oldFields
+            ).then(cols => cols.map(c => c.name)),
           });
           // A disable archives non-default translations, so ensure the archive
           // table exists first. Run each statement individually (executeQuery is
@@ -814,6 +845,29 @@ const COLLECTIONS_METHODS: Record<
           }
           for (const stmt of plan.statements) {
             await adapter.executeQuery(stmt);
+          }
+
+          // The transition record describes a companion that no longer exists, so it stops being true
+          // the moment the disable succeeds. Left behind, it would refuse the next enable's real
+          // source locale — the check that protects a live transition would block a legitimate one.
+          if (plan.companionDropped) {
+            // The other half of "this companion is gone": readiness remembers only that one
+            // exists.
+            const { forgetCompanionReadiness } = await import(
+              "../../domains/i18n/runtime/companion-readiness"
+            );
+            forgetCompanionReadiness(adapter, `${tableName}_locales`);
+            const { resolveTransitionStore } = await import(
+              "../../domains/i18n/migration/transition-recorder"
+            );
+            const { forgetI18nTransition } = await import(
+              "../../domains/i18n/migration/transition-state"
+            );
+            await forgetI18nTransition(
+              await resolveTransitionStore(adapter),
+              "collection",
+              String(p.collectionName)
+            );
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
@@ -1144,6 +1198,11 @@ const COLLECTIONS_METHODS: Record<
         select: parseSelectParam(p.select),
         richTextFormat: parseRichTextFormat(p.richTextFormat),
         status,
+        // `?draft=true` overlays the pending working draft in place of the live
+        // row (draft/published split), matching Payload's read-side `draft`
+        // parameter. The service gates it on an update-capability probe, so a
+        // read-only caller passing it still receives the published row.
+        includeWorkingDraft: isTruthyParam(p.draft),
         // i18n M4: `?locale=` selects the content language; `?fallback-locale=none`
         // disables fallback. Non-localized collections ignore both.
         locale: p.locale,

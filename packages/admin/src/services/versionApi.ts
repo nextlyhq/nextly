@@ -86,6 +86,8 @@ export interface ListVersionsParams {
    * not an opaque token.
    */
   cursor?: number;
+  /** Scope the listing to one locale's versions. Absent lists every locale. */
+  locale?: string;
 }
 
 /** Base path for a scope's history. */
@@ -112,6 +114,12 @@ export interface SetVersionLabelResponse {
   item: VersionMeta;
 }
 
+/** What a discard reports back: the live published document, now authoritative. */
+export interface DiscardWorkingDraftResponse {
+  message: string;
+  item: Record<string, unknown>;
+}
+
 export const versionApi = {
   list: (
     scope: VersionScope,
@@ -123,6 +131,8 @@ export const versionApi = {
     // so an absent one must stay absent rather than become "undefined".
     if (params.cursor !== undefined)
       search.set("cursor", String(params.cursor));
+    // Only sent when a locale filter is active; absent lists every locale.
+    if (params.locale !== undefined) search.set("locale", params.locale);
 
     const query = search.toString();
     return protectedApi.get<VersionListResponse>(
@@ -162,6 +172,21 @@ export const versionApi = {
     protectedApi.patch<SetVersionLabelResponse>(
       `${basePath(scope)}/${versionNo}`,
       { label }
+    ),
+
+  /**
+   * Discard a collection entry's pending working draft (draft/published split),
+   * reverting the editor to the live published row. A DELETE on the sidecar
+   * sub-resource; the response carries the live published document.
+   *
+   * Collection-only: the split gives a published document a separate draft head,
+   * which a Single — one row, no published/draft pair — never has.
+   */
+  discardWorkingDraft: (
+    scope: Extract<VersionScope, { kind: "collection" }>
+  ): Promise<DiscardWorkingDraftResponse> =>
+    protectedApi.delete<DiscardWorkingDraftResponse>(
+      `${basePath(scope)}/working-draft`
     ),
 
   /**

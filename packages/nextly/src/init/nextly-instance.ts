@@ -269,17 +269,26 @@ export interface Nextly {
   /**
    * Update a Single document.
    *
+   * Returns the same `{ message, item }` envelope the collection mutations do.
+   * `warnings` is present only when a hook failed after the write committed:
+   * the document is saved either way, so this reports a side effect that did
+   * not run rather than a failed write.
+   *
    * @example
    * ```typescript
-   * const updated = await nextly.updateSingle({
+   * const { item, warnings } = await nextly.updateSingle({
    *   slug: 'site-settings',
    *   data: { siteName: 'My Site' },
    * });
+   * item.siteName;
+   * if (warnings) {
+   *   // saved, but a post-commit hook threw
+   * }
    * ```
    */
   updateSingle: <TSlug extends SingleSlug>(
     args: UpdateSingleArgs<TSlug>
-  ) => Promise<DataFromSingleSlug<TSlug>>;
+  ) => Promise<MutationResult<DataFromSingleSlug<TSlug>>>;
 
   /**
    * List all registered Single type definitions.

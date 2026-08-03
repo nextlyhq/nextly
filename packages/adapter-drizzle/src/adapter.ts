@@ -12,7 +12,7 @@
  */
 
 import { asc, desc, getColumns } from "drizzle-orm";
-import type { AnyRelations } from "drizzle-orm";
+import type { AnyRelations, SQL } from "drizzle-orm";
 
 import { buildDrizzleWhere } from "./drizzle-where";
 import type {
@@ -170,11 +170,29 @@ export abstract class DrizzleAdapter {
    * The transaction is automatically committed on success or rolled back on error.
    * Supports nested transactions via savepoints on databases that support them.
    *
+   * Two kinds of error leave this method, and a caller has to be able to tell
+   * them apart. An error carrying the Nextly application brand — see
+   * `isApplicationError` — arrives exactly as it was thrown, because that is
+   * the application refusing the write rather than the database failing to
+   * perform it, and rewriting it would discard the code and payload the caller
+   * is meant to act on.
+   *
+   * Everything else arrives as a `DatabaseError` with its kind classified, and
+   * that deliberately includes an unbranded error the callback itself threw:
+   * the brand is the only thing distinguishing a deliberate refusal from a
+   * driver failure that surfaced through callback code, and guessing from the
+   * throw site would put raw driver text on the wire under a caller's own
+   * error shape.
+   *
+   * The rollback is the same either way.
+   *
    * @param callback - Function to execute within transaction
    * @param options - Transaction options
    * @returns Result from the callback
    *
-   * @throws {DatabaseError} If transaction fails
+   * @throws {DatabaseError} If the transaction itself fails, or if the callback
+   * threw an error that does not carry the application brand
+   * @throws The callback's own error, unchanged, when it carries that brand
    */
   abstract transaction<T>(
     callback: (ctx: TransactionContext) => Promise<T>,
@@ -247,6 +265,59 @@ export abstract class DrizzleAdapter {
    */
   protected getTableObject(tableName: string): unknown {
     return this.tableResolver?.getTable(tableName) ?? null;
+  }
+
+  /**
+   * Run a Drizzle-built statement and return its rows.
+   *
+   * @remarks
+   * The CRUD methods resolve their table through the schema registry and reject
+   * any name it does not declare, which leaves no way to read from a table the
+   * ORM does not know — one mid-rename, above all — except by assembling SQL and
+   * quoting identifiers by hand. This takes Drizzle's `sql` template instead, so
+   * the dialect in use decides the quoting and the parameter binding.
+   *
+   * Concrete rather than abstract so existing adapters keep working unchanged.
+   * The three drivers disagree about both the call and the result: node-postgres
+   * returns `{ rows }`, mysql2 a `[rows, fields]` tuple, and better-sqlite3 has
+   * no `execute` at all and answers `all`. Keeping that here rather than at each
+   * call site is the point — a caller reasoning about it would be reasoning
+   * about a driver it cannot see.
+   *
+   * @param statement - Drizzle `sql` template to run
+   * @returns Rows the statement produced
+   */
+  async queryStatement<T = Record<string, unknown>>(
+    statement: SQL
+  ): Promise<T[]> {
+    if (this.getCapabilities().dialect === "sqlite") {
+      const db = this.getDrizzle<{ all(query: SQL): T[] | Promise<T[]> }>();
+      return await db.all(statement);
+    }
+    const db = this.getDrizzle<{ execute(query: SQL): Promise<unknown> }>();
+    const result = await db.execute(statement);
+    // `{ rows }` is node-postgres. A bare array is mysql2's `[rows, fields]`
+    // tuple, told apart by its first element being an array — the only test that
+    // does not depend on trusting one driver to keep its shape.
+    if (Array.isArray(result)) {
+      return (Array.isArray(result[0]) ? result[0] : result) as T[];
+    }
+    if (
+      typeof result === "object" &&
+      result !== null &&
+      Array.isArray((result as { rows?: unknown }).rows)
+    ) {
+      return (result as { rows: T[] }).rows;
+    }
+    // Refused rather than reported as no rows. All three drivers answer one of
+    // the shapes above, so anything else means the result was not understood —
+    // and "I could not read this" must not reach a caller as "there is nothing
+    // there", which is an answer it would act on.
+    throw this.createDatabaseError(
+      "query",
+      "Drizzle statement returned a result shape this adapter does not recognise; refusing to report it as an empty result.",
+      undefined
+    );
   }
 
   /**

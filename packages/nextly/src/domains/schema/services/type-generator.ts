@@ -35,7 +35,6 @@ import {
   isRepeaterField,
   isGroupField,
   isJSONField,
-  isBlocksField,
   isChipsField,
   isFieldGroupField,
   isDataField,
@@ -46,6 +45,17 @@ import type { DynamicFieldGroupRecord } from "../../../schemas/dynamic-field-gro
 import type { DynamicSingleRecord } from "../../../schemas/dynamic-singles/types";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { UserFieldDefinitionRecord } from "../../../schemas/user-field-definitions/types";
+
+import {
+  asScalarStorageField,
+  pluginDeclaredImportNames,
+  asStorageEquivalentField,
+  isPluginDataField,
+  pluginCodegenImports,
+  pluginStorageFieldType,
+  pluginTsType,
+  reserveAppliedGlobals,
+} from "./plugin-codegen";
 
 // ============================================================
 // Types
@@ -63,6 +73,15 @@ export interface GeneratedTypeInterface {
 
   /** Interface name (e.g., "Post", "User") */
   interfaceName: string;
+  /**
+   * `import type` lines the code needs, when a plugin field type declared them.
+   *
+   * A bare interface cannot carry its own imports without becoming
+   * unconcatenable, so they are returned alongside for a caller assembling a
+   * file itself. `generateTypesFile` collects and dedupes these across every
+   * entity and emits them once, so it ignores this.
+   */
+  imports: string[];
 }
 
 /**
@@ -77,6 +96,34 @@ export interface GeneratedSingleTypeInterface {
 
   /** Interface name (e.g., "SiteSettings", "Header") */
   interfaceName: string;
+  /**
+   * `import type` lines the code needs, when a plugin field type declared them.
+   *
+   * A bare interface cannot carry its own imports without becoming
+   * unconcatenable, so they are returned alongside for a caller assembling a
+   * file itself. `generateTypesFile` collects and dedupes these across every
+   * entity and emits them once, so it ignores this.
+   */
+  imports: string[];
+}
+
+/**
+ * Result of generating the `User` interface.
+ *
+ * Carries no slug or interface name: there is exactly one User type and its
+ * name is fixed, so only the code and what it has to import vary.
+ */
+export interface GeneratedUserInterface {
+  /** Generated TypeScript interface code */
+  code: string;
+
+  /**
+   * `import type` lines the code needs, when a plugin user field type
+   * declared them. Returned rather than inlined for the same reason the
+   * entity interfaces do it: a bare interface carrying imports cannot be
+   * concatenated into a file.
+   */
+  imports: string[];
 }
 
 /**
@@ -91,6 +138,15 @@ export interface GeneratedComponentTypeInterface {
 
   /** Interface name (e.g., "SeoComponent", "HeroComponent") */
   interfaceName: string;
+  /**
+   * `import type` lines the code needs, when a plugin field type declared them.
+   *
+   * A bare interface cannot carry its own imports without becoming
+   * unconcatenable, so they are returned alongside for a caller assembling a
+   * file itself. `generateTypesFile` collects and dedupes these across every
+   * entity and emits them once, so it ignores this.
+   */
+  imports: string[];
 }
 
 /**
@@ -182,15 +238,6 @@ function uniqueSorted(values: string[]): string[] {
   return Array.from(new Set(values)).sort();
 }
 
-/** Whether a blocks field appears anywhere in a field tree, at any depth. */
-function hasBlocksField(fields: readonly unknown[]): boolean {
-  return fields.some(entry => {
-    const field = entry as { type?: unknown; fields?: unknown };
-    if (field?.type === "blocks") return true;
-    return Array.isArray(field?.fields) && hasBlocksField(field.fields);
-  });
-}
-
 export class TypeGenerator {
   private readonly includeComments: boolean;
   private readonly generateInputTypes: boolean;
@@ -198,6 +245,32 @@ export class TypeGenerator {
   private readonly generateModuleAugmentation: boolean;
   private readonly filename: string;
   private readonly moduleToAugment: string;
+
+  /**
+   * Expressions the plugin callbacks returned during this run.
+   *
+   * Imports are filtered to the names these reference. Searching the whole
+   * generated body instead would match the generator's own declarations — a
+   * collection interface named `Posts` makes an unused `Posts` import look
+   * used — so only what the plugins emitted is considered.
+   */
+  private pluginExpressions = new Map<object, string>();
+
+  /**
+   * Every expression a plugin emitted, in emission order and with repeats.
+   *
+   * `pluginExpressions` is keyed by field object so each field's own text can
+   * be found when deciding whether it references an import. That makes it the
+   * wrong thing to count with: two entities can share one field object, which
+   * is how a shared field definition is normally written, and the map then
+   * holds one entry for two emissions. Subtracting the map's occurrences from
+   * the body would credit the generator with the difference and reserve a
+   * global only the plugin ever wrote.
+   */
+  private pluginEmissions: Array<{
+    expression: string;
+    imported: ReadonlySet<string>;
+  }> = [];
 
   constructor(options: TypeGeneratorOptions = {}) {
     this.includeComments = options.includeComments ?? true;
@@ -231,6 +304,8 @@ export class TypeGenerator {
     eventNames: string[] = []
   ): GeneratedTypesFile {
     const lines: string[] = [];
+    this.pluginExpressions = new Map();
+    this.pluginEmissions = [];
 
     // File header
     lines.push("/* tslint:disable */");
@@ -246,14 +321,9 @@ export class TypeGenerator {
     lines.push(" */");
     lines.push("");
 
-    // A blocks field is typed as the engine's document. The import is emitted
-    // only when one is present, and from `nextly` rather than the engine
-    // package directly, so the generated file resolves against the dependency
-    // every app already has.
-    if (this.usesBlocksField(collections, singles, components)) {
-      lines.push('import type { BlockDocument } from "nextly";');
-      lines.push("");
-    }
+    // Imports are decided after the body exists, so they can be filtered to
+    // the names it actually references; they are spliced in here.
+    const importSlot = lines.length;
 
     this.assertNoInterfaceNameCollisions(collections, singles, components);
 
@@ -288,7 +358,7 @@ export class TypeGenerator {
 
     // Generate User interface
     const userInterface = this.generateUserInterface(userFields);
-    lines.push(userInterface);
+    lines.push(userInterface.code);
     lines.push("");
 
     // Generate input types if enabled
@@ -328,6 +398,47 @@ export class TypeGenerator {
       lines.push("");
     }
 
+    // Only what this run declares or imports for itself is reserved, so a
+    // plugin naming something a different configuration would have emitted is
+    // not refused for a collision that cannot happen here.
+    const reserved = this.declaredInterfaceNames(
+      collections,
+      singles,
+      components
+    );
+
+    // Globals the emitted code relies on resolving. An import of one shadows it
+    // for the whole file — a non-generic `Partial` makes every `Partial<Post>`
+    // fail to compile — but only the ones this output actually wrote are worth
+    // reserving, so a name no construct here uses stays free.
+    // Reserved only where the generator itself wrote them. A plugin expression
+    // naming `Partial<Model>` is the plugin using its own import, so its uses
+    // are subtracted rather than removed from the text — deleting them would
+    // also erase core's own `Partial<Post>` and reserve nothing.
+    this.reserveGlobalsWritten(lines.slice(importSlot).join("\n"), reserved);
+
+    const imports: string[] = [];
+    // A blocks field is typed as the engine's document, imported from `nextly`
+    // rather than the engine package so the generated file resolves against the
+    // dependency every app already has.
+    // User fields are a flat list rather than an entity, so they are wrapped to
+    // be scanned alongside the rest: a plugin type used only there still names
+    // types the generated `User` interface has to import.
+    imports.push(
+      ...pluginCodegenImports(
+        [...collections, ...singles, ...components, { fields: userFields }],
+        reserved,
+        "tsImports",
+        this.pluginExpressions,
+        // What this file imports on its own behalf: a plugin naming the same
+        // binding from the same module is asking for the one already there.
+        // Empty now that no built-in brings a type of its own into the file —
+        // a contributed type declares its imports through `codegen.tsImports`.
+        new Map<string, string>()
+      )
+    );
+    if (imports.length > 0) lines.splice(importSlot, 0, ...imports, "");
+
     return {
       code: lines.join("\n"),
       filename: this.filename,
@@ -347,6 +458,7 @@ export class TypeGenerator {
     allCollections: DynamicCollectionRecord[] = [],
     allComponents: DynamicFieldGroupRecord[] = []
   ): GeneratedTypeInterface {
+    const outerExpressions = this.beginOwnExpressions();
     const interfaceName = this.toPascalCase(collection.slug);
     const lines: string[] = [];
 
@@ -369,7 +481,7 @@ export class TypeGenerator {
 
     // Generate field types
     for (const field of collection.fields) {
-      if (!isDataField(field)) continue;
+      if (!isDataField(field) && !isPluginDataField(field)) continue;
 
       const fieldType = this.generateFieldType(
         field,
@@ -393,6 +505,11 @@ export class TypeGenerator {
       collectionSlug: collection.slug,
       code: lines.join("\n"),
       interfaceName,
+      imports: this.endOwnExpressions(
+        outerExpressions,
+        interfaceName,
+        lines.join("\n")
+      ),
     };
   }
 
@@ -423,6 +540,7 @@ export class TypeGenerator {
     allCollections: DynamicCollectionRecord[] = [],
     allComponents: DynamicFieldGroupRecord[] = []
   ): GeneratedSingleTypeInterface {
+    const outerExpressions = this.beginOwnExpressions();
     const interfaceName = this.toPascalCase(single.slug);
     const lines: string[] = [];
 
@@ -445,7 +563,7 @@ export class TypeGenerator {
 
     // Generate field types
     for (const field of single.fields) {
-      if (!isDataField(field)) continue;
+      if (!isDataField(field) && !isPluginDataField(field)) continue;
 
       const fieldType = this.generateFieldType(
         field,
@@ -466,6 +584,11 @@ export class TypeGenerator {
       singleSlug: single.slug,
       code: lines.join("\n"),
       interfaceName,
+      imports: this.endOwnExpressions(
+        outerExpressions,
+        interfaceName,
+        lines.join("\n")
+      ),
     };
   }
 
@@ -498,6 +621,7 @@ export class TypeGenerator {
     allComponents: DynamicFieldGroupRecord[] = [],
     allCollections: DynamicCollectionRecord[] = []
   ): GeneratedComponentTypeInterface {
+    const outerExpressions = this.beginOwnExpressions();
     const interfaceName = this.toComponentInterfaceName(component.slug);
     const lines: string[] = [];
 
@@ -522,7 +646,7 @@ export class TypeGenerator {
 
     // Generate field types
     for (const field of component.fields) {
-      if (!isDataField(field)) continue;
+      if (!isDataField(field) && !isPluginDataField(field)) continue;
 
       const fieldType = this.generateFieldType(
         field,
@@ -540,6 +664,11 @@ export class TypeGenerator {
       componentSlug: component.slug,
       code: lines.join("\n"),
       interfaceName,
+      imports: this.endOwnExpressions(
+        outerExpressions,
+        interfaceName,
+        lines.join("\n")
+      ),
     };
   }
 
@@ -565,10 +694,18 @@ export class TypeGenerator {
    * Includes hardcoded base fields (id, email, name, etc.) plus any
    * custom fields from user field definitions.
    *
+   * Returns the imports beside the code, as the collection, single and
+   * component methods do: a plugin user field's type can name something only
+   * an import brings into scope, and a caller given the code alone would hold
+   * a interface referring to identifiers it has no way to resolve.
+   *
    * @param userFields - Array of custom user field definition records
-   * @returns Generated User interface code
+   * @returns Generated User interface code and the imports it relies on
    */
-  generateUserInterface(userFields: UserFieldDefinitionRecord[] = []): string {
+  generateUserInterface(
+    userFields: UserFieldDefinitionRecord[] = []
+  ): GeneratedUserInterface {
+    const outerExpressions = this.beginOwnExpressions();
     const lines: string[] = [];
 
     if (this.includeComments) {
@@ -609,7 +746,11 @@ export class TypeGenerator {
 
     lines.push("}");
 
-    return lines.join("\n");
+    const code = lines.join("\n");
+    return {
+      code,
+      imports: this.endOwnExpressions(outerExpressions, "User", code),
+    };
   }
 
   // ============================================================
@@ -705,17 +846,39 @@ export class TypeGenerator {
     else if (isChipsField(field)) {
       tsType = "string[]";
     }
-    // Blocks fields (one page-builder document)
-    else if (isBlocksField(field)) {
-      tsType = "BlockDocument";
-    }
     // Component fields
     else if (isFieldGroupField(field)) {
       tsType = this.buildComponentType(field, allComponents);
     }
-    // Unknown field type
+    // Anything the built-ins above did not claim. A plugin-contributed type may
+    // state its own rendering; asked once, because the callback is plugin code
+    // and nothing requires it to be pure.
     else {
-      tsType = "unknown";
+      const contributed = pluginTsType(field);
+      if (contributed !== undefined) {
+        this.pluginExpressions.set(field, contributed);
+        this.pluginEmissions.push({
+          expression: contributed,
+          imported: pluginDeclaredImportNames(field, "tsImports"),
+        });
+        tsType = contributed;
+      } else {
+        // No rendering of its own, but the registry still knows what it stores.
+        // Re-entered as the storage primitive's built-in type so the branch
+        // above emits it, rather than degrading a number-backed type to
+        // `unknown` for want of a callback.
+        const storageType = pluginStorageFieldType(field);
+        const asStorage =
+          storageType === undefined
+            ? null
+            : this.generateFieldType(
+                this.asScalarStorageField(field, storageType),
+                allCollections,
+                allComponents
+              );
+        if (asStorage !== null) return asStorage;
+        tsType = "unknown";
+      }
     }
 
     return `  ${fieldName}${optional}: ${tsType};`;
@@ -773,27 +936,44 @@ export class TypeGenerator {
         }
         break;
 
-      default:
+      case "json":
+        // A JSON column hands back whatever was stored — object, array or
+        // scalar — so the field cannot be narrowed further. Reached through the
+        // storage fallback below when a `json`-backed plugin type declares no
+        // rendering of its own; without a case here it fell to the unknown-type
+        // default and generated `string`.
+        tsType = "unknown";
+        break;
+
+      default: {
+        // A plugin-contributed type renders itself; failing that, what the
+        // registry says it stores. `string` remains the fallback only for a
+        // type nothing in the process knows about, which is what a UI-authored
+        // field of a since-removed plugin type is.
+        const contributed = pluginTsType(field);
+        if (contributed !== undefined) {
+          this.pluginExpressions.set(field, contributed);
+          this.pluginEmissions.push({
+            expression: contributed,
+            imported: pluginDeclaredImportNames(field, "tsImports"),
+          });
+          tsType = contributed;
+          break;
+        }
+        const storageType = pluginStorageFieldType(field);
+        const asStorage =
+          storageType === undefined
+            ? null
+            : this.generateUserFieldType(
+                asStorageEquivalentField(field, storageType)
+              );
+        if (asStorage !== null) return asStorage;
         tsType = "string";
         break;
+      }
     }
 
     return `  ${field.name}${optional}: ${tsType};`;
-  }
-
-  /**
-   * Whether any entity declares a blocks field, which decides if the generated
-   * file needs the document type imported. Nested fields count: a blocks field
-   * inside a group or repeater is emitted as `BlockDocument` too, so a shallow
-   * check would leave the generated file referencing a name it never imported.
-   */
-  private usesBlocksField(
-    collections: DynamicCollectionRecord[],
-    singles: DynamicSingleRecord[],
-    components: DynamicFieldGroupRecord[]
-  ): boolean {
-    const entities = [...collections, ...singles, ...components];
-    return entities.some(entity => hasBlocksField(entity.fields ?? []));
   }
 
   /**
@@ -1044,7 +1224,7 @@ ${properties}
     const lines: string[] = [];
 
     for (const field of fields) {
-      if (!isDataField(field)) continue;
+      if (!isDataField(field) && !isPluginDataField(field)) continue;
 
       const fieldType = this.generateFieldType(
         field,
@@ -1270,6 +1450,137 @@ ${properties}
    */
   private toComponentInterfaceName(slug: string): string {
     return this.toPascalCase(slug) + "FieldGroup";
+  }
+
+  /**
+   * A plugin field retyped as the scalar its storage primitive writes.
+   *
+   * `hasMany` goes with it: the primitive maps to one column, so generating a
+   * list would promise a shape the table cannot hold — the column mapper and
+   * the Zod fallback both emit the scalar.
+   */
+  /**
+   * Start recording plugin expressions for one interface, returning the map to
+   * restore afterwards.
+   *
+   * The recorder is swapped rather than diffed: the same generator can produce
+   * an interface twice, and two interfaces can share a field object, either of
+   * which makes "what was added since" report nothing for the later call.
+   */
+  private beginOwnExpressions(): {
+    expressions: Map<object, string>;
+    emissions: Array<{ expression: string; imported: ReadonlySet<string> }>;
+  } {
+    const outer = {
+      expressions: this.pluginExpressions,
+      emissions: this.pluginEmissions,
+    };
+    this.pluginExpressions = new Map();
+    // Scoped with them: this interface reserves against what IT wrote, so
+    // emissions from an earlier call would make it credit the generator with
+    // text that is not in this body and under-reserve.
+    this.pluginEmissions = [];
+    return outer;
+  }
+
+  /**
+   * Finish that recording: the imports this interface's own expressions need,
+   * with its entries merged back so `generateTypesFile` keeps accumulating
+   * across entities — which it needs both for the file's imports and to tell
+   * its own use of a global utility apart from a plugin's.
+   *
+   * `declares` is the interface's own name, the one binding a lone interface
+   * introduces and one an import of that name would conflict with. `body` is
+   * the emitted source, read for the globals it relies on.
+   */
+  private endOwnExpressions(
+    outer: {
+      expressions: Map<object, string>;
+      emissions: Array<{ expression: string; imported: ReadonlySet<string> }>;
+    },
+    declares: string,
+    body: string
+  ): string[] {
+    const own = this.pluginExpressions;
+    // The globals this one interface wrote, on the same terms the whole-file
+    // path uses: an import landing beside it shadows them just as surely.
+    const reserved = new Set([declares]);
+    this.reserveGlobalsWritten(body, reserved);
+    const imports = pluginCodegenImports(
+      [{ fields: [...own.keys()] }],
+      reserved,
+      "tsImports",
+      own
+    );
+    for (const [field, expression] of own) {
+      outer.expressions.set(field, expression);
+    }
+    // Concatenated rather than merged: a repeat is the thing the whole-file
+    // reservation has to see.
+    outer.emissions.push(...this.pluginEmissions);
+    this.pluginExpressions = outer.expressions;
+    this.pluginEmissions = outer.emissions;
+    return imports;
+  }
+
+  /**
+   * Reserve the globals this output relies on resolving, so no import shadows
+   * them. Shared with the Zod generator, which emits different files from the
+   * same expressions and needs the identical rule.
+   */
+  private reserveGlobalsWritten(body: string, reserved: Set<string>): void {
+    reserveAppliedGlobals(body, this.pluginEmissions, reserved);
+  }
+
+  private asScalarStorageField(
+    field: DataFieldConfig,
+    storageType: Parameters<typeof asStorageEquivalentField>[1]
+  ): DataFieldConfig {
+    // Delegated so this and the Zod generator drop `hasMany` by the same rule;
+    // two copies of it is how the storage fallbacks drifted apart before.
+    return asScalarStorageField(field, storageType);
+  }
+
+  /**
+   * Every top-level name this run will declare.
+   *
+   * An import sharing one of these conflicts with the local declaration
+   * (TS2440), so the import scan is given them to refuse the clash before the
+   * file is written. `User` is always emitted, `Config` when the config
+   * interface is generated, and the rest are one interface per entity plus the
+   * input aliases when those are generated — a collection declares
+   * `<Name>CreateInput` and `<Name>UpdateInput`, a single `<Name>UpdateInput`.
+   */
+  private declaredInterfaceNames(
+    collections: DynamicCollectionRecord[],
+    singles: DynamicSingleRecord[],
+    components: DynamicFieldGroupRecord[]
+  ): Set<string> {
+    // `GeneratedTypes` is deliberately absent: it is only ever declared inside
+    // `declare module`, which creates no top-level binding, so an import of
+    // that name coexists with it. `Config` is declared only when the config
+    // interface is generated.
+    const names = new Set<string>(["User"]);
+    if (this.generateConfig) names.add("Config");
+
+    for (const collection of collections) {
+      const name = this.toPascalCase(collection.slug);
+      names.add(name);
+      if (this.generateInputTypes) {
+        names.add(`${name}CreateInput`);
+        names.add(`${name}UpdateInput`);
+      }
+    }
+    for (const single of singles) {
+      const name = this.toPascalCase(single.slug);
+      names.add(name);
+      // Singles are update-only; there is no create input for them.
+      if (this.generateInputTypes) names.add(`${name}UpdateInput`);
+    }
+    for (const component of components) {
+      names.add(this.toComponentInterfaceName(component.slug));
+    }
+    return names;
   }
 
   /**

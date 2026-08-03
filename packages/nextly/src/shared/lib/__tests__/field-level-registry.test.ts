@@ -13,6 +13,7 @@ import {
   attachFieldValidators,
   clearFieldFunctions,
   getFieldFunctions,
+  type ReadAccessRedactions,
   registerFieldFunctions,
   runFieldHooks,
 } from "../field-level-registry";
@@ -702,5 +703,62 @@ describe("field-level registry", () => {
     });
     expect(data.meta).toEqual({ slug: "HI" });
     expect(data.rows).toEqual([{ slug: "ONE" }, { slug: "TWO" }]);
+  });
+
+  it("clears a field's stale redaction once a later pass supplies and allows it", async () => {
+    // A field denied in one pass, then supplied by a hook and ALLOWED in a later
+    // pass, must clear its recorded removed value. Otherwise a still-later pass
+    // restores that stale value as evidence and a NEW protected field whose rule
+    // reads it is wrongly allowed. Three passes over one row with a shared
+    // redaction store reproduce the sequence the nested-read pipeline runs.
+    registerFieldFunctions("collection", "posts", [
+      { name: "flag", type: "text" },
+      {
+        name: "secret",
+        type: "text",
+        access: {
+          read: ({ data }: { data: Record<string, unknown> }) =>
+            data.flag === "on",
+        },
+      },
+      {
+        name: "derived",
+        type: "text",
+        access: {
+          read: ({ data }: { data: Record<string, unknown> }) =>
+            data.secret === "stale",
+        },
+      },
+    ]);
+    const redactions: ReadAccessRedactions = new WeakMap();
+
+    // Pass 1: flag off, so `secret` is denied and its value recorded as evidence.
+    const entry: Record<string, unknown> = { flag: "off", secret: "stale" };
+    await applyFieldReadAccess(
+      { kind: "collection", slug: "posts", entry },
+      redactions
+    );
+    expect(entry.secret).toBeUndefined();
+
+    // Pass 2 (a hook set flag on and supplied a fresh `secret`): it is allowed
+    // now, so its stale evidence must be discarded rather than kept.
+    entry.flag = "on";
+    entry.secret = "fresh";
+    await applyFieldReadAccess(
+      { kind: "collection", slug: "posts", entry },
+      redactions
+    );
+    expect(entry.secret).toBe("fresh");
+
+    // Pass 3 (a later hook deleted `secret` and added `derived`, whose rule reads
+    // the OLD secret value): with the stale evidence cleared, nothing restores
+    // `secret`, so `derived`'s rule sees none and it is withheld.
+    delete entry.secret;
+    entry.derived = "leak";
+    await applyFieldReadAccess(
+      { kind: "collection", slug: "posts", entry },
+      redactions
+    );
+    expect(entry.derived).toBeUndefined();
   });
 });

@@ -39,19 +39,35 @@ export function splitStatements(sqlStatements: string[]): string[] {
  * idempotent reconcile should tolerate. The match is anchored to the
  * documented DDL wordings ONLY — "already exists" (all dialects), SQLite's
  * "duplicate column name", MySQL's "Duplicate key name"/"Duplicate column
- * name". It must NEVER match MySQL's `Duplicate entry ... for key` (error
- * 1062): that is a runtime DATA error from a rebuild's INSERT..SELECT, and
- * swallowing it would let the subsequent DROP destroy the rows that failed
+ * name", and MySQL's `Can't DROP '<name>'; check that column/key exists`
+ * (error 1091). It must NEVER match MySQL's `Duplicate entry ... for key`
+ * (error 1062): that is a runtime DATA error from a rebuild's INSERT..SELECT,
+ * and swallowing it would let the subsequent DROP destroy the rows that failed
  * to copy. v1 wraps driver errors in DrizzleQueryError with the original on
  * `.cause`, so both messages are checked.
+ *
+ * Idempotency runs in BOTH directions. "Already there" on a create and
+ * "already gone" on a drop are the same fact — the schema is in the state the
+ * statement was asking for — and only the first direction was covered here,
+ * so a reconcile that removed anything could still fail on a redundant drop.
+ * Dropping a MySQL foreign key is exactly that case: drizzle-kit emits
+ * `DROP CONSTRAINT` followed by a `DROP INDEX` for the index MySQL maintains
+ * behind the key, and the first statement has already removed it.
+ *
+ * Error 1091 is matched by its full wording rather than a bare "does not
+ * exist", which on PostgreSQL is also what a statement referencing a genuinely
+ * missing table reports — swallowing that would hide a real broken reconcile.
  */
 export function isIdempotencyError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
   const causeMsg =
     err instanceof Error && err.cause instanceof Error ? err.cause.message : "";
   return [msg, causeMsg].some(m =>
-    [/already exists/i, /duplicate column name/i, /duplicate key name/i].some(
-      p => p.test(m)
-    )
+    [
+      /already exists/i,
+      /duplicate column name/i,
+      /duplicate key name/i,
+      /check that column\/key exists/i,
+    ].some(p => p.test(m))
   );
 }

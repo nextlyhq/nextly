@@ -4,7 +4,7 @@
  * Pure helper functions extracted from the monolithic SingleEntryService.
  * These functions handle field type detection, default value generation,
  * JSON serialization, media ID normalization, and recursive media expansion
- * for nested fields (group, repeater, blocks).
+ * for nested fields (group, repeater).
  *
  * All functions in this module are pure — they accept their dependencies
  * as arguments and perform no direct side effects. This allows them to be
@@ -15,14 +15,19 @@
  * @since 1.0.0
  */
 
-import type { DocumentKind } from "@nextlyhq/blocks-engine";
-
-import { emptyBlockDocumentJson } from "../../../collections/fields/blocks-document";
 import type { FieldConfig } from "../../../collections/fields/types";
-import { validateBlocksValue } from "../../../collections/fields/validators/blocks-validator";
 import { NextlyError } from "../../../errors";
+import { typedErrorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
+import type { ValidatableField } from "../../../shared/lib/entry-validation";
+import { validateEntryData } from "../../../shared/lib/entry-validation";
+import { toJsonColumnValue } from "../../../shared/lib/json-column-value";
+import {
+  pluginEmptyValue,
+  storageTypeToken,
+} from "../../../shared/lib/plugin-storage";
 import type { Logger } from "../../../shared/types";
+import { getFieldType } from "../../schema/field-types/field-type-registry";
 import type { SingleDocument, SingleResult } from "../types";
 
 // ============================================================
@@ -62,9 +67,13 @@ export const EMPTY_LEXICAL_DOCUMENT: string = JSON.stringify({
  * Mirrors the logic in RuntimeSchemaGenerator to ensure consistent handling.
  */
 export function shouldTreatAsJson(field: FieldConfig): boolean {
+  // Classified by what a plugin type stores rather than by its own token,
+  // which names none of these: a json-backed field would otherwise reach its
+  // JSON column as a live object. No storage primitive is `select`,
+  // `relationship` or `upload`, so the branches below read the declared type.
   if (
-    ["json", "repeater", "group", "richText", "chips", "blocks"].includes(
-      field.type
+    ["json", "repeater", "group", "richText", "chips"].includes(
+      storageTypeToken(field) ?? field.type
     )
   ) {
     return true;
@@ -100,51 +109,67 @@ export function shouldTreatAsJson(field: FieldConfig): boolean {
   return false;
 }
 
-/** The subset of a blocks field's policy the value validator reads. */
-type BlocksPolicy = { allow?: string[]; kinds?: DocumentKind[] };
-
 /**
- * Rejects a blocks default the field's own policy would not accept.
+ * Run a contributed type's own `validate` over a resolved default.
  *
- * A single is auto-created on first read by inserting its defaults directly,
- * so this value never passes through the write path that validates ordinary
- * writes. A static default is already caught when the config loads, but a
+ * A single's row is auto-created on first read by inserting its defaults
+ * directly, so this value never passes through the write path that validates
+ * ordinary writes. A static default is caught when the config loads, but a
  * function default produces its value only when resolved against real data,
- * which first happens here. Left unchecked it would be persisted, and the
- * admin's blocks control is read-only, so the row could not then be repaired
+ * which first happens here. Left unchecked it is persisted by a READ, and a
+ * contributed control may be read-only — so the row could not then be repaired
  * from the UI.
+ *
+ * The value is checked against the type's declared STORAGE PRIMITIVE and then
+ * against the type's own rules — the same order, and the same implementation,
+ * the write path uses. Checking only the type's own rules would let a type that
+ * declares none accept anything: a `number`-backed default resolving to
+ * `"not-a-number"` would reach the insert and fail at the database on a strict
+ * dialect, or store the wrong representation on SQLite.
+ *
+ * Two rules are deliberately NOT applied, by handing the walker a declaration
+ * without them. `required` cannot be violated by a default, which IS the value.
+ * The field's own `validate` is the author's rule about submitted content; it
+ * has never run against a default, and applying it now would newly refuse
+ * configs that boot today. Everything else is kept, because a contributed
+ * type's rule reads the field's own options — which kinds a document accepts —
+ * and would judge an unrestricted policy if handed only a name and a type.
  */
-export function assertValidBlocksDefault(
-  field: FieldConfig,
+export async function assertValidPluginDefault(
+  field: { name?: string; type?: string },
   value: unknown,
   singleSlug: string
-): void {
-  if (field.type !== "blocks") return;
-  // `validateBlocksValue` treats an absent value as an empty field and leaves
-  // requiredness to the shared rules, which this path never reaches: the row
-  // is inserted straight from these defaults. A required column would take the
-  // null and fail at the database, reporting a constraint rather than the
-  // configuration that caused it.
-  if (value === null || value === undefined) {
-    if (!("required" in field && field.required)) return;
-    throw NextlyError.validation({
-      errors: [
-        {
-          path: field.name,
-          code: "REQUIRED",
-          message: `${field.name} is required, but its default produced no document.`,
-        },
-      ],
-      logContext: { single: singleSlug, field: field.name, reason: "default" },
-    });
+): Promise<void> {
+  if (typeof field.type !== "string" || value === null || value === undefined) {
+    return;
   }
-  const policy = (field as { blocks?: BlocksPolicy }).blocks ?? {};
-  const issues = validateBlocksValue(value, field.name, field.name, policy);
+  // Nothing to say about a type core does not know: an unregistered token is
+  // refused by the boot gate, not here.
+  if (!getFieldType(field.type)) return;
+
+  const name = field.name ?? "";
+  const {
+    required: _required,
+    validate: _validate,
+    ...checked
+  } = field as ValidatableField;
+
+  const issues = await validateEntryData({ [name]: value }, [checked], {
+    mode: "create",
+    // The value IS the default, so an empty one is what the column will hold
+    // rather than a field the writer left alone. Judged as an omission it
+    // skipped both the primitive check and the type's own rules.
+    emptyIsAValue: true,
+  });
+
   if (issues.length === 0) return;
-  // The engine's own issue codes are carried through unchanged, so one defect
-  // keeps one name wherever it surfaces.
+
   throw NextlyError.validation({
-    errors: issues,
+    errors: issues.map(issue => ({
+      path: issue.path || name,
+      code: issue.code,
+      message: issue.message,
+    })),
     logContext: { single: singleSlug, field: field.name, reason: "default" },
   });
 }
@@ -152,13 +177,10 @@ export function assertValidBlocksDefault(
 /**
  * Reject a `defaultValue` declared on a password field.
  *
- * A single's defaults are inserted straight onto the auto-created row, bypassing
- * the write path that runs `hashPasswordFieldValues`. A resolved password
- * default would therefore be persisted in PLAINTEXT, so it is refused here
- * rather than silently stored. (A fixed/seeded default password is itself a
- * security anti-pattern; a password must be set explicitly through the write
- * path so it is hashed.) Checked on the same direct-insert path as
- * {@link assertValidBlocksDefault}.
+ * A single's defaults are inserted straight onto the auto-created row,
+ * bypassing the write path that runs `hashPasswordFieldValues`. A resolved
+ * password default would therefore be persisted in PLAINTEXT, so it is refused
+ * here rather than silently stored.
  */
 export function assertNoPasswordDefault(
   field: { name?: string; type?: string },
@@ -190,12 +212,14 @@ export function getDefaultValue(field: FieldConfig): unknown {
     return EMPTY_LEXICAL_DOCUMENT;
   }
 
-  if (field.type === "blocks") {
-    // The kind is read from the field's own policy: seeding a page document
-    // into a field that only accepts templates would violate its own rule.
-    const kinds = (field as { blocks?: { kinds?: DocumentKind[] } }).blocks
-      ?.kinds;
-    return emptyBlockDocumentJson(kinds);
+  // A contributed type states what it holds when empty, the same declaration
+  // the DDL backfill reads, so a structured type is seeded with its own shape
+  // rather than the primitive's `{}`. Serialized only where the column stores
+  // JSON as text — a boolean-backed type's `false` must reach the driver as a
+  // boolean, not as the truthy string "false".
+  const contributed = pluginEmptyValue(field);
+  if (contributed !== undefined) {
+    return shouldTreatAsJson(field) ? JSON.stringify(contributed) : contributed;
   }
 
   if (shouldTreatAsJson(field)) {
@@ -205,7 +229,11 @@ export function getDefaultValue(field: FieldConfig): unknown {
     return "{}";
   }
 
-  switch (field.type) {
+  // Seeded by what the column holds, as the JSON predicate above already is: a
+  // plugin type names none of the cases below, so it would fall through to the
+  // text default and put `""` into a numeric or boolean column, or a value
+  // `new Date()` cannot read.
+  switch (storageTypeToken(field) ?? field.type) {
     case "text":
     case "textarea":
     case "email":
@@ -233,7 +261,12 @@ export function getDefaultValue(field: FieldConfig): unknown {
       return "";
 
     case "date":
-      return null;
+      // A required field's column is NOT NULL — `getColumnDescriptor` derives
+      // that from `required` — so seeding null there fails the insert and the
+      // single is never auto-created on first read. The other required
+      // primitives seed an empty value of their own kind; for a timestamp the
+      // only bindable one is a real date.
+      return "required" in field && field.required ? new Date() : null;
 
     case "relationship":
     case "upload":
@@ -554,10 +587,7 @@ export function serializeJsonFields(
     if (!("name" in field) || !field.name) continue;
 
     if (shouldTreatAsJson(field) && result[field.name] != null) {
-      const value = result[field.name];
-      if (typeof value === "object") {
-        result[field.name] = JSON.stringify(value);
-      }
+      result[field.name] = toJsonColumnValue(result[field.name]);
     }
   }
 
@@ -628,7 +658,13 @@ export function buildSingleErrorResult(
       error.code === "VALIDATION_ERROR"
         ? (
             error.publicData as
-              | { errors?: Array<{ path: string; message: string }> }
+              | {
+                  errors?: Array<{
+                    path: string;
+                    code?: string;
+                    message: string;
+                  }>;
+                }
               | undefined
           )?.errors
         : undefined;
@@ -640,10 +676,19 @@ export function buildSingleErrorResult(
         ? {
             errors: validationErrors.map(e => ({
               field: e.path,
+              // The per-field reason travels with the issue. Without it a
+              // boundary normalising this array has to invent one, and a
+              // hook's `REQUIRED` arrives at the client as a generic
+              // `INVALID`.
+              ...(e.code !== undefined ? { code: e.code } : {}),
               message: e.message,
             })),
           }
         : {}),
+      // Without the code, a Single hook's `authRequired()` or `rateLimited()`
+      // took the boundary's status fallback and reached the caller as a
+      // generic 500, losing the rate-limit backoff with it.
+      ...typedErrorEnvelopeFields(error),
     };
   }
 

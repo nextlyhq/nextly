@@ -342,7 +342,7 @@ export function ComponentRow<TFieldValues extends FieldValues = FieldValues>({
               })()
             ) : (
               <div className="text-sm text-muted-foreground text-center py-4">
-                No fields configured for this component.
+                No fields configured for this field group.
               </div>
             )}
           </CardContent>

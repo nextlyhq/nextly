@@ -157,6 +157,13 @@ export function createMockComponentDataService(): MockRecord {
       ),
     saveComponentData: vi.fn().mockResolvedValue(undefined),
     saveComponentDataInTransaction: vi.fn().mockResolvedValue(undefined),
+    // Asked before the caller opens its transaction, and its result is handed
+    // to `saveComponentDataInTransaction`. An empty map is what production
+    // returns when no localization is configured, which is the shape these
+    // suites exercise. Built per call so one test cannot mutate another's.
+    assertLocalizedFieldGroupsWritable: vi
+      .fn()
+      .mockImplementation(async () => new Map<string, boolean>()),
     deleteComponentData: vi.fn().mockResolvedValue(undefined),
     // The webhook field tree expands component references to find nested
     // secrets; null = no nested component schema for this slug in the mock.

@@ -245,6 +245,7 @@ export type {
   TypeGeneratorOptions,
   GeneratedTypeInterface,
   GeneratedSingleTypeInterface,
+  GeneratedUserInterface,
   GeneratedTypesFile,
 } from "./domains/schema/services/type-generator";
 
@@ -357,9 +358,34 @@ export type {
 } from "./services/shared";
 export { SYSTEM_CONTEXT, consoleLogger } from "./services/shared";
 
+// Validating loose values against field declarations, for plugins that store
+// structured content of their own and must apply the same rules a write does.
+export {
+  validateFieldValues,
+  type ValidateFieldValuesOptions,
+  type FieldValueDeclaration,
+  type FieldValueDeclarationInput,
+  type ValidationIssue,
+} from "./plugins/validate-field-values";
+
+// The block manifest's published contract. Exported from the package root
+// because a schema nothing can import promises nothing: the file is read by an
+// editor build, a docs page or an agent, and none of them can reach an internal
+// module through the export map.
+export {
+  BLOCK_MANIFEST_FILENAME,
+  BLOCK_MANIFEST_VERSION,
+  blockManifestJsonSchema,
+  blockManifestSchema,
+  blockManifestEntrySchema,
+  type BlockManifest,
+  type BlockManifestEntry,
+} from "./plugins/codegen/block-manifest";
+
 // Plugin System - Types and helpers for creating plugins
 export {
   AdminPlacement,
+  collectDeclarations,
   definePlugin,
   createPluginContext,
   type PluginAdminAppearance,
@@ -367,6 +393,7 @@ export {
   type PluginCategory,
   type PluginContext,
   type PluginContributions,
+  type PluginDeclaration,
   type PluginDefinition,
   type PluginPermission,
   type PluginRole,
@@ -377,6 +404,8 @@ export {
   type PluginFieldInstance,
   type PluginFieldIssue,
   type PluginFieldValidationResult,
+  type PluginFieldCodegen,
+  type PluginFieldCodegenImport,
   type FieldSurface,
   type ScheduledTask,
   type PermissionSlug,
@@ -404,15 +433,6 @@ export {
   isPluginFieldTypeOnSurface,
   getFieldType as getPluginFieldType,
 } from "./domains/schema/field-types/field-type-registry";
-
-// The stored page-builder document. Re-exported so an app can name the value a
-// blocks field holds without depending on the engine package directly, and so
-// generated types resolve against the dependency it already has.
-export type {
-  BlockDocument,
-  BlockNode,
-  DocumentKind,
-} from "@nextlyhq/blocks-engine";
 
 // Block props on the field system — a block's prop declarations become
 // ordinary field configs, so block values validate through the same pass
@@ -622,6 +642,21 @@ export {
 // Component field type (also exported from ./collections/fields via barrel export)
 export type { FieldGroupFieldConfig } from "./collections/fields/types/component";
 
+// Declares an entry field whose type a plugin contributed. `FieldConfig` is a
+// closed union whose arms carry each built-in type's own errors, so it cannot
+// admit a contributed type without losing them; the brand opens the authoring
+// surfaces alone. The users surface solves the same problem the same way with
+// `pluginUserField` below.
+export {
+  pluginField,
+  pluginFieldBrand,
+} from "./collections/fields/types/plugin-field";
+export type {
+  AuthorableFieldConfig,
+  PluginDataFieldConfig,
+  PluginFieldInput,
+} from "./collections/fields/types/plugin-field";
+
 // ============================================================
 // USER MANAGEMENT
 // ============================================================
@@ -630,9 +665,16 @@ export type { FieldGroupFieldConfig } from "./collections/fields/types/component
 export type {
   UserConfig,
   UserFieldConfig,
+  UserPluginFieldConfig,
+  UserPluginFieldInput,
   UserFieldType,
   UserAdminOptions,
 } from "./users";
+
+// Declares a user field whose type a plugin contributed, which the built-in
+// arms of `UserFieldConfig` cannot be widened to admit without losing their
+// own errors.
+export { pluginUserField, pluginUserFieldBrand } from "./users";
 
 // User config validation
 export {

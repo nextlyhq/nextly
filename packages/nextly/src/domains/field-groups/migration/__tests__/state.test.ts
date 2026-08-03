@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
 import type { MetaService } from "../../../meta/services/meta-service";
-import { buildMigrationManifest } from "../manifest";
+import {
+  buildMigrationManifest,
+  hashManifest,
+  type ManifestEntry,
+} from "../manifest";
 import {
   advanceStep,
   MAX_MIGRATION_STEP,
@@ -10,6 +14,7 @@ import {
   beginMigration,
   FIELD_GROUP_MIGRATION_KEY,
   MIGRATION_MARKER_VERSION,
+  MIN_READABLE_MANIFEST_VERSION,
   readMigrationState,
   settleMigration,
 } from "../state";
@@ -41,6 +46,21 @@ function createMeta(initial: unknown = ABSENT): {
   return { meta, read: () => stored };
 }
 
+/**
+ * A minimal canonical plan. `parseAppliedManifest` requires exactly one registry
+ * entry in the applied direction, so a fixture without it is not a plan the
+ * marker will accept.
+ */
+const PLAN_ENTRIES: ManifestEntry[] = [
+  { kind: "table", from: "comp_hero", to: "fg_hero" },
+  { kind: "registry", from: "dynamic_components", to: "dynamic_field_groups" },
+];
+/** The hash has to describe the plan actually stored, so it is computed. */
+const PLAN_IDENTITY = {
+  registryHash: "slugs-1",
+  manifestHash: hashManifest(PLAN_ENTRIES),
+};
+
 describe("field-group migration marker", () => {
   it("reads an absent marker as untouched legacy storage", async () => {
     const { meta } = createMeta();
@@ -56,14 +76,16 @@ describe("field-group migration marker", () => {
     await beginMigration(meta, {
       direction: "up",
       migrationId: "run-1",
-      plan: { manifestHash: "hash-1", planHash: "plan-1" },
+      plan: PLAN_IDENTITY,
+      appliedManifest: PLAN_ENTRIES,
     });
     await expect(readMigrationState(meta)).resolves.toEqual({
       status: "migrating",
       direction: "up",
       migrationId: "run-1",
       step: 0,
-      plan: { manifestHash: "hash-1", planHash: "plan-1" },
+      plan: PLAN_IDENTITY,
+      appliedManifest: PLAN_ENTRIES,
     });
   });
 
@@ -74,11 +96,13 @@ describe("field-group migration marker", () => {
     await beginMigration(meta, {
       direction: "up",
       migrationId: "run-1",
-      plan: { manifestHash: "hash-1", planHash: "plan-1" },
+      plan: PLAN_IDENTITY,
+      appliedManifest: PLAN_ENTRIES,
     });
     await advanceStep(meta, { migrationId: "run-1", step: 1 });
     await expect(readMigrationState(meta)).resolves.toMatchObject({
-      plan: { manifestHash: "hash-1", planHash: "plan-1" },
+      plan: PLAN_IDENTITY,
+      appliedManifest: PLAN_ENTRIES,
     });
   });
 
@@ -86,9 +110,9 @@ describe("field-group migration marker", () => {
   // identifier would succeed and then be rejected by the very next read,
   // turning a successful begin into an unavailable database.
   it.each([
-    ["migrationId", { migrationId: "", manifestHash: "h", planHash: "p" }],
-    ["manifestHash", { migrationId: "r", manifestHash: "", planHash: "p" }],
-    ["planHash", { migrationId: "r", manifestHash: "h", planHash: "" }],
+    ["migrationId", { migrationId: "", registryHash: "s", manifestHash: "h" }],
+    ["registryHash", { migrationId: "r", registryHash: "", manifestHash: "h" }],
+    ["manifestHash", { migrationId: "r", registryHash: "s", manifestHash: "" }],
   ])("refuses to begin a run with an empty %s", async (_label, fields) => {
     const { meta, read } = createMeta();
     await expect(
@@ -96,9 +120,10 @@ describe("field-group migration marker", () => {
         direction: "up",
         migrationId: fields.migrationId,
         plan: {
+          registryHash: fields.registryHash,
           manifestHash: fields.manifestHash,
-          planHash: fields.planHash,
         },
+        appliedManifest: PLAN_ENTRIES,
       })
     ).rejects.toThrowError(NextlyError);
     // Nothing may reach storage: a marker written here is exactly the
@@ -115,7 +140,8 @@ describe("field-group migration marker", () => {
     await beginMigration(meta, {
       direction: "up",
       migrationId: "run-1",
-      plan: { manifestHash: "hash-1", planHash: "plan-1" },
+      plan: PLAN_IDENTITY,
+      appliedManifest: PLAN_ENTRIES,
     });
     expect(read()).toMatchObject({ status: "migrating", step: 0 });
     expect(meta.set).toHaveBeenCalledWith(
@@ -129,7 +155,8 @@ describe("field-group migration marker", () => {
     await beginMigration(meta, {
       direction: "up",
       migrationId: "run-1",
-      plan: { manifestHash: "hash-1", planHash: "plan-1" },
+      plan: PLAN_IDENTITY,
+      appliedManifest: PLAN_ENTRIES,
     });
     await advanceStep(meta, { migrationId: "run-1", step: 1 });
     await advanceStep(meta, { migrationId: "run-1", step: 2 });
@@ -144,7 +171,8 @@ describe("field-group migration marker", () => {
     await beginMigration(meta, {
       direction: "up",
       migrationId: "run-1",
-      plan: { manifestHash: "hash-1", planHash: "plan-1" },
+      plan: PLAN_IDENTITY,
+      appliedManifest: PLAN_ENTRIES,
     });
     await expect(
       advanceStep(meta, { migrationId: "run-1", step: 2 })
@@ -165,8 +193,9 @@ describe("field-group migration marker", () => {
       direction: "up",
       migrationId: "run-1",
       step: MAX_MIGRATION_STEP,
-      manifestHash: "hash-1",
-      planHash: "plan-1",
+      registryHash: "slugs-1",
+      manifestHash: PLAN_IDENTITY.manifestHash,
+      appliedManifest: PLAN_ENTRIES,
     });
     const before = read();
     await expect(
@@ -182,7 +211,8 @@ describe("field-group migration marker", () => {
     await beginMigration(meta, {
       direction: "up",
       migrationId: "run-1",
-      plan: { manifestHash: "hash-1", planHash: "plan-1" },
+      plan: PLAN_IDENTITY,
+      appliedManifest: PLAN_ENTRIES,
     });
     await expect(
       advanceStep(meta, { migrationId: "run-2", step: 1 })
@@ -194,7 +224,8 @@ describe("field-group migration marker", () => {
     await beginMigration(meta, {
       direction: "up",
       migrationId: "run-1",
-      plan: { manifestHash: "hash-1", planHash: "plan-1" },
+      plan: PLAN_IDENTITY,
+      appliedManifest: PLAN_ENTRIES,
     });
     await settleMigration(meta, {
       generation: "field-groups-v2",
@@ -237,7 +268,9 @@ describe("field-group migration marker", () => {
     await beginMigration(meta, {
       direction: "down",
       migrationId: "run-1",
-      plan: { manifestHash: "hash-1", planHash: "plan-1" },
+      // The recorded hash has to describe the plan being stored, so it is
+      // computed from that plan rather than reused from another fixture.
+      plan: { registryHash: "slugs-1", manifestHash: hashManifest(applied) },
       appliedManifest: applied,
     });
     await expect(readMigrationState(meta)).resolves.toMatchObject({
@@ -338,7 +371,9 @@ describe("field-group migration marker", () => {
       beginMigration(meta, {
         direction: "down",
         migrationId: "run-1",
-        plan: { manifestHash: "h", planHash: "p" },
+        // A valid identity, so the refusal is attributable to the bad entry
+        // rather than to the identity check that runs before it.
+        plan: { registryHash: "s", manifestHash: "h" },
         // Otherwise valid: the registry entry is present, so the refusal is
         // attributable to the bad entry rather than to a missing registry.
         appliedManifest: [
@@ -461,15 +496,17 @@ describe("field-group migration marker", () => {
   it.each([
     ["not an object", "nonsense"],
     [
-      "unknown version",
-      { version: 99, status: "settled", generation: "legacy" },
+      "unknown generation",
+      { version: MIGRATION_MARKER_VERSION, status: "settled", generation: "?" },
     ],
-    ["unknown generation", { version: 1, status: "settled", generation: "?" }],
-    ["unknown status", { version: 1, status: "elsewhere" }],
+    [
+      "unknown status",
+      { version: MIGRATION_MARKER_VERSION, status: "elsewhere" },
+    ],
     [
       "in-flight without a direction",
       {
-        version: 1,
+        version: MIGRATION_MARKER_VERSION,
         status: "migrating",
         migrationId: "r",
         step: 0,
@@ -479,7 +516,7 @@ describe("field-group migration marker", () => {
     [
       "in-flight without an id",
       {
-        version: 1,
+        version: MIGRATION_MARKER_VERSION,
         status: "migrating",
         direction: "up",
         step: 0,
@@ -489,7 +526,7 @@ describe("field-group migration marker", () => {
     [
       "in-flight with a fractional step",
       {
-        version: 1,
+        version: MIGRATION_MARKER_VERSION,
         status: "migrating",
         direction: "up",
         migrationId: "r",
@@ -500,12 +537,23 @@ describe("field-group migration marker", () => {
     [
       "in-flight without a manifest hash",
       {
-        version: 1,
+        version: MIGRATION_MARKER_VERSION,
         status: "migrating",
         direction: "up",
         migrationId: "r",
         step: 0,
-        planHash: "p",
+        registryHash: "s",
+      },
+    ],
+    [
+      "in-flight without a registry identity hash",
+      {
+        version: MIGRATION_MARKER_VERSION,
+        status: "migrating",
+        direction: "up",
+        migrationId: "r",
+        step: 0,
+        manifestHash: "h",
       },
     ],
     [
@@ -514,7 +562,7 @@ describe("field-group migration marker", () => {
       // position, whatever `Number.isInteger` says about it.
       "in-flight with a step beyond the safe integer range",
       {
-        version: 1,
+        version: MIGRATION_MARKER_VERSION,
         status: "migrating",
         direction: "up",
         migrationId: "r",
@@ -529,7 +577,7 @@ describe("field-group migration marker", () => {
       // rejected by the next read -- a marker with no way forward.
       "in-flight at the safe integer ceiling",
       {
-        version: 1,
+        version: MIGRATION_MARKER_VERSION,
         status: "migrating",
         direction: "up",
         migrationId: "r",
@@ -541,7 +589,7 @@ describe("field-group migration marker", () => {
     [
       "in-flight without a plan hash",
       {
-        version: 1,
+        version: MIGRATION_MARKER_VERSION,
         status: "migrating",
         direction: "up",
         migrationId: "r",
@@ -559,6 +607,162 @@ describe("field-group migration marker", () => {
     await expect(readMigrationState(meta)).rejects.toMatchObject({
       code: "SERVICE_UNAVAILABLE",
     });
+  });
+
+  // `step` is a position in a step list, and only the build that produced that
+  // list can say what position N addressed. A marker from another version is
+  // therefore refused — and refused as a version mismatch rather than as
+  // corruption, because the bytes are intact and the operator's remedy is to
+  // finish or roll back the run with the version that started it.
+  // The version says how a recorded *step* is read, and a settled marker has
+  // none. Gating it would make the next bump reject every marker the previous
+  // release settled, so every already-migrated installation would start
+  // refusing reads the moment it upgraded.
+  it("still reads a settled marker written by a different version", async () => {
+    const { meta } = createMeta({
+      version: MIGRATION_MARKER_VERSION - 1,
+      status: "settled",
+      generation: "field-groups-v2",
+    });
+    // The version travels with the state: a generation means whatever the build
+    // that wrote it made it mean, and only the version says which build that
+    // was. Dropping it here is what let an older marker be read as this build's
+    // completeness claim.
+    await expect(readMigrationState(meta)).resolves.toEqual({
+      status: "settled",
+      generation: "field-groups-v2",
+      recorded: true,
+      version: MIGRATION_MARKER_VERSION - 1,
+    });
+  });
+
+  // 🔴 The two versions answer different questions. The marker version says how
+  // a recorded *step* is read and moves whenever the entries-to-steps mapping
+  // changes; the entry shape moves only when the persisted entries themselves
+  // do. Answering both with one number silently strips the rollback plan from
+  // every installation that already migrated, the moment a step-list bump
+  // ships — and nothing else can supply that plan, because no property of the
+  // database says which `fg_*` names this migration created.
+  it("keeps a settled plan whose entry shape this build still reads", async () => {
+    const { meta } = createMeta({
+      version: MIN_READABLE_MANIFEST_VERSION,
+      status: "settled",
+      generation: "field-groups-v2",
+      appliedManifest: PLAN_ENTRIES,
+    });
+    await expect(readMigrationState(meta)).resolves.toEqual({
+      status: "settled",
+      generation: "field-groups-v2",
+      recorded: true,
+      version: MIN_READABLE_MANIFEST_VERSION,
+      appliedManifest: PLAN_ENTRIES,
+    });
+  });
+
+  // Below the floor the entry shape genuinely differs, so the plan is dropped
+  // rather than parsed: a rollback then refuses on a plan it does not have,
+  // instead of every read refusing on one it cannot parse.
+  it("drops a recorded plan older than the readable entry shape", async () => {
+    const { meta } = createMeta({
+      version: MIN_READABLE_MANIFEST_VERSION - 1,
+      status: "settled",
+      generation: "field-groups-v2",
+      // The shape that predates the floor, which this build no longer accepts.
+      appliedManifest: [
+        { kind: "companion", from: "comp_hero_locales", to: "fg_hero_locales" },
+      ],
+    });
+    const state = await readMigrationState(meta);
+    expect(state.status).toBe("settled");
+    expect(
+      (state as { appliedManifest?: unknown }).appliedManifest
+    ).toBeUndefined();
+  });
+
+  // Bounded above as well: a marker from a newer build may record an entry
+  // shape this one has never seen, and reading it optimistically would hand a
+  // rollback a plan this build cannot honour.
+  it("drops a recorded plan written by a newer build", async () => {
+    const { meta } = createMeta({
+      version: MIGRATION_MARKER_VERSION + 1,
+      status: "settled",
+      generation: "field-groups-v2",
+      appliedManifest: PLAN_ENTRIES,
+    });
+    const state = await readMigrationState(meta);
+    expect(state.status).toBe("settled");
+    expect(
+      (state as { appliedManifest?: unknown }).appliedManifest
+    ).toBeUndefined();
+  });
+
+  // 🔴 Version 3 recorded the settlement position as work; this build treats
+  // settlement as gates and appends a second one, so position N in a version 3
+  // marker addresses different steps here. A resume computed from it would begin
+  // AFTER the ledger check and never re-enter it, letting a legacy write
+  // committed during the interruption settle unseen. Pinned to the literal 3
+  // rather than to an offset, because the offset moves with the constant and
+  // would keep passing if the bump were reverted.
+  it("refuses an in-flight marker from the build that recorded settlement as work", async () => {
+    const { meta } = createMeta({
+      version: 3,
+      status: "migrating",
+      direction: "up",
+      migrationId: "r",
+      step: 9,
+      registryHash: "s",
+      manifestHash: "h",
+    });
+
+    const error = await readMigrationState(meta).catch((e: unknown) => e);
+    expect(NextlyError.is(error)).toBe(true);
+    if (NextlyError.is(error)) {
+      expect(error.logContext?.reason).toBe(
+        "migration marker version is not this build's"
+      );
+      expect(error.logContext?.recordedVersion).toBe(3);
+    }
+  });
+
+  // A settled marker is READ whatever wrote it, including one this build will go
+  // on to refuse as incomplete. The two questions are deliberately separate: the
+  // read layer reports what the marker says and hands over its version, and the
+  // run decides what that version is worth. Collapsing them would strip the
+  // recorded rollback plan from markers a later build could still reverse.
+  it("still reads a settled marker from that build, version and all", async () => {
+    const { meta } = createMeta({
+      version: 3,
+      status: "settled",
+      generation: "field-groups-v2",
+    });
+
+    const state = await readMigrationState(meta);
+    expect(state.status).toBe("settled");
+    expect((state as { version?: number }).version).toBe(3);
+  });
+
+  it("refuses a marker written by a different version of Nextly", async () => {
+    const { meta } = createMeta({
+      version: MIGRATION_MARKER_VERSION - 1,
+      status: "migrating",
+      direction: "up",
+      migrationId: "r",
+      step: 2,
+      registryHash: "s",
+      manifestHash: "h",
+    });
+
+    const error = await readMigrationState(meta).catch((e: unknown) => e);
+    expect(NextlyError.is(error)).toBe(true);
+    if (NextlyError.is(error)) {
+      expect(error.logContext?.reason).toBe(
+        "migration marker version is not this build's"
+      );
+      expect(error.logContext?.recordedVersion).toBe(
+        MIGRATION_MARKER_VERSION - 1
+      );
+      expect(error.logContext?.supportedVersion).toBe(MIGRATION_MARKER_VERSION);
+    }
   });
 
   // A row whose value is SQL NULL, and a row holding the JSON literal `null`,
@@ -609,29 +813,106 @@ describe("field-group migration plan guard", () => {
   });
 
   // The application's schema moved: step N now names different objects.
-  it("refuses a resume whose object map changed", () => {
-    const refusal = refusalFrom({ ...PLAN, manifestHash: "hash-2" });
+  it("refuses a resume whose field group set changed", () => {
+    const refusal = refusalFrom({ ...PLAN, registryHash: "slugs-2" });
     expect(refusal.code).toBe("SERVICE_UNAVAILABLE");
-    expect(refusal.logContext?.reason).toMatch(/object map changed/);
+    expect(refusal.logContext?.reason).toMatch(/set of field groups changed/);
   });
 
-  // Nextly itself was upgraded and its steps were added, removed or reordered.
-  // The database's own objects are untouched, so the manifest hash still
-  // matches; only the plan hash catches this, and without it a resume would
-  // continue at a step number that now means a different operation.
-  it("refuses a resume whose step list changed under an unchanged object map", () => {
-    const refusal = refusalFrom({ ...PLAN, planHash: "plan-2" });
-    expect(refusal.code).toBe("SERVICE_UNAVAILABLE");
-    expect(refusal.logContext?.reason).toMatch(/step list changed/);
+  // A field group added or removed mid-run is storage the recorded plan never
+  // mentions, which is the whole reason this comparison exists.
+  it("accepts a resume whose field group set is unchanged", () => {
+    expect(() =>
+      assertPlanUnchanged({ recorded: PLAN, current: { ...PLAN } })
+    ).not.toThrow();
   });
 
-  // The two causes are reported separately because they send an operator to
-  // different places: their own schema history, or the Nextly upgrade.
-  it("names which half of the plan moved", () => {
-    expect(
-      refusalFrom({ ...PLAN, manifestHash: "hash-2" }).logContext?.reason
-    ).not.toEqual(
-      refusalFrom({ ...PLAN, planHash: "plan-2" }).logContext?.reason
+  // The plan itself is read back rather than rebuilt, so a rename that has
+  // already committed changes table names without changing the set of slugs.
+  // Comparing names here would refuse every resume past the first step.
+  it("does not compare anything that a committed rename would change", () => {
+    expect(() =>
+      assertPlanUnchanged({
+        recorded: PLAN,
+        current: { ...PLAN, manifestHash: "a-different-plan-hash" },
+      })
+    ).not.toThrow();
+  });
+});
+
+describe("the persisted plan is the resume's authority", () => {
+  // The plan is read back rather than rebuilt, so its integrity on read is the
+  // only thing standing between a corrupted blob and a run that executes it.
+  it("refuses a plan that does not match its recorded hash", async () => {
+    const { meta } = createMeta({
+      version: MIGRATION_MARKER_VERSION,
+      status: "migrating",
+      direction: "up",
+      migrationId: "run-1",
+      step: 0,
+      registryHash: "slugs-1",
+      manifestHash: "a-hash-of-something-else",
+      appliedManifest: PLAN_ENTRIES,
+    });
+    await expect(readMigrationState(meta)).rejects.toSatisfy(
+      error =>
+        NextlyError.is(error) &&
+        /does not match its recorded hash/.test(
+          String(error.logContext?.reason)
+        )
     );
+  });
+
+  // A run in flight cannot proceed without the plan it is executing, in either
+  // direction, so an absent one is corruption rather than an optional field.
+  it.each(["up", "down"] as const)(
+    "refuses an in-flight %s marker carrying no plan",
+    async direction => {
+      const { meta } = createMeta({
+        version: MIGRATION_MARKER_VERSION,
+        status: "migrating",
+        direction,
+        migrationId: "run-1",
+        step: 0,
+        registryHash: "slugs-1",
+        manifestHash: PLAN_IDENTITY.manifestHash,
+      });
+      await expect(readMigrationState(meta)).rejects.toSatisfy(
+        error =>
+          NextlyError.is(error) &&
+          /carries no plan/.test(String(error.logContext?.reason))
+      );
+    }
+  );
+
+  // The writer holds itself to the reader's invariant: recording a hash that
+  // describes a different plan would make every later read refuse, stranding a
+  // run that had already begun.
+  it("refuses to begin a run whose recorded hash describes another plan", async () => {
+    const { meta, read } = createMeta();
+    await expect(
+      beginMigration(meta, {
+        direction: "up",
+        migrationId: "run-1",
+        plan: { registryHash: "slugs-1", manifestHash: "not-this-plan" },
+        appliedManifest: PLAN_ENTRIES,
+      })
+    ).rejects.toThrowError(NextlyError);
+    expect(read()).toBe(ABSENT);
+  });
+
+  it("round-trips the plan a run is executing", async () => {
+    const { meta } = createMeta();
+    await beginMigration(meta, {
+      direction: "up",
+      migrationId: "run-1",
+      plan: PLAN_IDENTITY,
+      appliedManifest: PLAN_ENTRIES,
+    });
+    await expect(readMigrationState(meta)).resolves.toMatchObject({
+      status: "migrating",
+      appliedManifest: PLAN_ENTRIES,
+      plan: PLAN_IDENTITY,
+    });
   });
 });

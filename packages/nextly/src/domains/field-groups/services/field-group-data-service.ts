@@ -131,6 +131,23 @@ export class FieldGroupDataService {
     return this.mutationService.saveComponentDataInTransaction(tx, params);
   }
 
+  /**
+   * Verify every localized field group in a payload can be written, BEFORE the caller opens its
+   * transaction. See {@link FieldGroupMutationService.assertLocalizedFieldGroupsWritable} — this
+   * cannot run inside the transaction without risking pool starvation, and answering it first
+   * keeps a refusal exactly as raised.
+   *
+   * Not optional bookkeeping: it is also what resolves each field group's readiness, which the
+   * in-transaction write then reads. Skipping it leaves the write with no way to learn whether a
+   * companion exists short of probing for one, which aborts the transaction on PostgreSQL when it
+   * does not.
+   */
+  assertLocalizedFieldGroupsWritable(
+    params: Pick<SaveComponentDataParams, "fields" | "data" | "locale">
+  ): Promise<void> {
+    return this.mutationService.assertLocalizedFieldGroupsWritable(params);
+  }
+
   deleteComponentData(params: DeleteComponentDataParams): Promise<void> {
     return this.mutationService.deleteComponentData(params);
   }
