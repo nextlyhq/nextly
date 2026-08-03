@@ -171,15 +171,31 @@ export function fieldProducesColumn(field: {
   if (field.type === "component") return false;
   // A many-to-many relationship stores its links in a dedicated junction table, not on the parent
   // row. Every other relationship shape does get a column.
-  if (field.type === "relationship" || field.type === "upload") {
-    const options: unknown = field.options;
-    const relationType =
-      typeof options === "object" && options !== null
-        ? (options as { relationType?: unknown }).relationType
-        : undefined;
-    return relationType !== "manyToMany";
-  }
+  if (usesJunctionTable(field)) return false;
   return true;
+}
+
+/**
+ * Whether a field's values live in a junction table instead of a column on its own row.
+ *
+ * The DDL generator asks this to decide whether to emit a junction table, and `fieldProducesColumn`
+ * asks it to decide there is no parent column — one rule, so the two cannot disagree about the same
+ * field. They did: the generator matched `type === "relationship"` alone, while the descriptor and
+ * the runtime's own many-to-many read path treat the option as type-agnostic, so an `upload` field
+ * with `relationType: "manyToMany"` was created as a parent column that nothing addressed and got
+ * no junction table to read from.
+ */
+export function usesJunctionTable(field: {
+  type?: unknown;
+  options?: unknown;
+}): boolean {
+  if (field.type !== "relationship" && field.type !== "upload") return false;
+  const options: unknown = field.options;
+  const relationType =
+    typeof options === "object" && options !== null
+      ? (options as { relationType?: unknown }).relationType
+      : undefined;
+  return relationType === "manyToMany";
 }
 
 /**

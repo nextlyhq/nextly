@@ -47,7 +47,9 @@ const DIALECTS: SupportedDialect[] = ["postgresql", "mysql", "sqlite"];
  * Read off `Symbol("drizzle:Columns")` rather than through drizzle-orm's column-listing helper,
  * which is deprecated on v1 yet still compiles — `scripts/check-drizzle-v1-legacy.cjs` refuses it
  * for exactly that reason. `filter-unsafe-statements.ts` reads `Symbol("drizzle:Name")` the same
- * way. If the symbol ever moves, the set comes back empty and the assertions below fail loudly.
+ * way. An empty result is asserted against at each call site: a "no duplicates" check passes
+ * trivially on an empty list, so emptiness has to be refused explicitly rather than assumed to
+ * surface.
  */
 function runtimeColumnNames(table: unknown): string[] {
   const symbol = Object.getOwnPropertySymbols(table as object).find(
@@ -60,7 +62,12 @@ function runtimeColumnNames(table: unknown): string[] {
   );
 }
 
-/** The identifiers declared in the CREATE TABLE body, before any index statement. */
+/**
+ * The identifiers declared in the CREATE TABLE body, before any index statement.
+ *
+ * Returns an empty list if the statement does not match — which every "declares no column twice"
+ * assertion would then satisfy without comparing anything, so callers assert it is non-empty.
+ */
 function declaredColumns(sql: string): string[] {
   const body = sql.split("--> statement-breakpoint")[0];
   return [...body.matchAll(/^\s*[`"]([A-Za-z_][A-Za-z0-9_]*)[`"]/gm)].map(
@@ -121,8 +128,12 @@ describe("collection column names agree across the generators", () => {
           (column, index) => columns.indexOf(column) !== index
         );
 
-        expect({ [`${dialect}.${name}`]: duplicated }).toEqual({
-          [`${dialect}.${name}`]: [],
+        expect({
+          [`${dialect}.${name}.duplicated`]: duplicated,
+          [`${dialect}.${name}.extracted`]: columns.length > 0,
+        }).toEqual({
+          [`${dialect}.${name}.duplicated`]: [],
+          [`${dialect}.${name}.extracted`]: true,
         });
       }
     }
@@ -154,8 +165,12 @@ describe("collection column names agree across the generators", () => {
             (column, index) => columns.indexOf(column) !== index
           );
 
-          expect({ [`${dialect}.${table}.${name}`]: duplicated }).toEqual({
-            [`${dialect}.${table}.${name}`]: [],
+          expect({
+            [`${dialect}.${table}.${name}.duplicated`]: duplicated,
+            [`${dialect}.${table}.${name}.extracted`]: columns.length > 0,
+          }).toEqual({
+            [`${dialect}.${table}.${name}.duplicated`]: [],
+            [`${dialect}.${table}.${name}.extracted`]: true,
           });
         }
       }
@@ -200,6 +215,14 @@ describe("all three descriptions of the main table agree", () => {
         localized: options.localized,
       }).table
     );
+
+    // Every comparison below asserts three lists are equal, which an empty extraction satisfies
+    // without comparing a single column. Refused here, once, rather than at each call site.
+    if (created.length === 0 || runtime.length === 0 || desired.length === 0) {
+      throw new Error(
+        `column extraction produced nothing: created=${created.length} desired=${desired.length} runtime=${runtime.length}`
+      );
+    }
 
     return {
       created: [...created].sort(),
@@ -632,6 +655,60 @@ describe("duplicate columns are judged globally, not per table", () => {
         } as never)
       )
     ).toEqual([]);
+  });
+});
+
+describe("a junction-backed field is the same shape whatever its type", () => {
+  // `relationship` and `upload` both carry `relationType: "manyToMany"`, and the descriptor and the
+  // runtime's own many-to-many read path both key on the option alone. The DDL generator keyed on
+  // `type === "relationship"`, so an upload was created as a parent column that nothing addressed
+  // and given no junction table to read from — the created table and the addressed table
+  // disagreeing again, in a corner the earlier fixes did not reach.
+  const m2m = (type: string) => ({
+    name: "gallery",
+    type,
+    options: { relationType: "manyToMany", target: "media" },
+  });
+
+  it("emits no parent column and one junction table, for either type", () => {
+    for (const dialect of DIALECTS) {
+      for (const type of ["relationship", "upload"]) {
+        const service = new DynamicCollectionSchemaService(undefined, dialect);
+        const generate = service as unknown as {
+          generateMigrationSQL: (
+            name: string,
+            fields: unknown[],
+            options?: unknown
+          ) => string;
+        };
+        const sql = generate.generateMigrationSQL("dc_p", [m2m(type)], {
+          hasStatus: false,
+        });
+        const at = `${dialect}.${type}`;
+
+        expect({
+          [`${at}.parentColumn`]: declaredColumns(sql).includes("gallery"),
+          [`${at}.descriptorColumn`]:
+            getColumnDescriptor(m2m(type) as never, dialect) !== null,
+          [`${at}.createTables`]: (sql.match(/CREATE TABLE/g) ?? []).length,
+        }).toEqual({
+          [`${at}.parentColumn`]: false,
+          [`${at}.descriptorColumn`]: false,
+          [`${at}.createTables`]: 2,
+        });
+      }
+    }
+  });
+
+  it("still gives a single-target upload its own column", () => {
+    // The mirror: only the many-to-many option moves storage off the row. An ordinary upload is
+    // still a foreign key on the parent, and must not be swept up by the type check.
+    const single = { name: "cover", type: "upload", relationTo: "media" };
+
+    expect({
+      descriptor: getColumnDescriptor(single as never, "postgresql")?.name,
+      producesColumn: fieldProducesColumn(single),
+    }).toEqual({ descriptor: "cover", producesColumn: true });
   });
 });
 

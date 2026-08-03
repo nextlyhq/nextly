@@ -31,6 +31,7 @@ import {
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import {
   fieldProducesColumn,
+  usesJunctionTable,
   getColumnDescriptor,
   getSystemColumnDescriptors,
   renderSystemColumnSql,
@@ -135,11 +136,10 @@ export class DynamicCollectionSchemaService {
 
     const columns = mainFields
       .map(f => {
-        // Skip many-to-many fields as they don't create columns in the main table
-        if (
-          f.type === "relationship" &&
-          f.options?.relationType === "manyToMany"
-        ) {
+        // Skip many-to-many fields as they don't create columns in the main table. Asked
+        // through the shared predicate, which is type-agnostic: an `upload` carries the same
+        // option and the runtime's own read path treats it as junction-backed too.
+        if (usesJunctionTable(f)) {
           return null;
         }
 
@@ -319,11 +319,7 @@ ${allColumnDefs.join(",\n")}
 
     // Generate many-to-many junction tables
     fields.forEach(f => {
-      if (
-        f.type === "relationship" &&
-        f.options?.relationType === "manyToMany" &&
-        f.options?.target
-      ) {
+      if (usesJunctionTable(f) && f.options?.target) {
         const junctionTableSQL = this.generateJunctionTable(tableName, f);
         junctionTables.push(junctionTableSQL);
       }
@@ -557,10 +553,7 @@ ${allColumnDefs.join(",\n")}
       if (field.name === renamedToName) continue;
       if (!oldFieldMap.has(field.name)) {
         // Skip manyToMany fields - they don't get columns, they get junction tables
-        if (
-          field.type === "relationship" &&
-          field.options?.relationType === "manyToMany"
-        ) {
+        if (usesJunctionTable(field)) {
           // Generate junction table instead
           const junctionSQL = this.generateJunctionTable(tableName, field);
           statements.push(junctionSQL);
@@ -826,7 +819,7 @@ ${allColumnDefs.join(",\n")}
     // handling. The caller's add/drop loop will do drop-junction +
     // add-junction (data loss for the join) — admin UI ideally warns
     // before this kind of edit.
-    if (a.type === "relationship" && a.options?.relationType === "manyToMany") {
+    if (usesJunctionTable(a)) {
       return false;
     }
     if (a.type === "relationship") {
