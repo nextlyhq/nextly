@@ -17,9 +17,22 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
-import { findUnscopedRules, scopeCss } from "@nextlyhq/admin-css";
+import {
+  findUnscopedRules,
+  namespaceInternalProperties,
+  prefixKeyframes,
+  scopeCss,
+} from "@nextlyhq/admin-css";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+/**
+ * Prefix for the names this sheet publishes document-wide.
+ *
+ * Short and shared by both namespacing passes, so a keyframe and a custom
+ * property that came from the same build are recognisable as one origin.
+ */
+const NAME_PREFIX = "nx-";
 const rootDir = path.resolve(__dirname, "..");
 
 const inputFile = path.join(rootDir, "src/styles/globals.css");
@@ -48,6 +61,21 @@ try {
 
   // Apply scoping
   css = scopeCss(css);
+
+  // Scoping selectors is not the whole job. Two kinds of name in this sheet are
+  // resolved for the whole DOCUMENT no matter which selector accompanies them,
+  // so a perfectly scoped stylesheet still reaches the host through them.
+  //
+  // `@keyframes` names are global: this sheet defines `spin`, `pulse` and
+  // `fade-in`, and a host that defines its own gets whichever loaded later.
+  //
+  // `@property` registrations are global too, and worse, because registering a
+  // name changes its semantics everywhere — an inherited custom property
+  // becomes non-inheriting and gains an initial value. A host running Tailwind
+  // itself registers the same `--tw-*` names, and the two registrations are
+  // not required to agree.
+  css = prefixKeyframes(css, NAME_PREFIX);
+  css = namespaceInternalProperties(css, NAME_PREFIX);
 
   // Write scoped CSS to temp file
   const scopedTempFile = path.join(outputDir, "globals.scoped.css");
@@ -82,6 +110,34 @@ try {
       "\nEvery selector must be scoped. Selector lists are scoped per-selector,\n" +
         "so this usually means a new preflight/base selector shape reached\n" +
         "scopeSelector() unhandled.\n"
+    );
+    process.exit(1);
+  }
+
+  // Step 5: Guard the naming invariant, for the same reason and on the same
+  // terms. A selector that escapes restyles the host page; a NAME that escapes
+  // is resolved for the whole document and changes what the host's own rules
+  // mean. Reading the built file rather than the in-memory string, because the
+  // minifier runs between them and the file is what ships.
+  const built = fs.readFileSync(outputFile, "utf-8");
+  const escapedNames = [
+    ...[...built.matchAll(/@(?:-webkit-)?keyframes\s+("[^"]*"|'[^']*'|[\w-]+)/gi)]
+      .map(match => match[1].replace(/^["']|["']$/g, ""))
+      .filter(name => !name.startsWith(NAME_PREFIX))
+      .map(name => `@keyframes ${name}`),
+    ...[...built.matchAll(/(?<![\w-])--tw-[\w-]+/g)].map(match => match[0]),
+  ];
+  if (escapedNames.length) {
+    const unique = [...new Set(escapedNames)];
+    console.error(
+      `\n❌ ${unique.length} name(s) escaped the "${NAME_PREFIX}" namespace:\n`
+    );
+    for (const name of unique.slice(0, 20)) console.error("  " + name);
+    console.error(
+      "\nAnimation names and @property registrations resolve for the whole\n" +
+        "document, so a host that uses the same name gets whichever sheet loaded\n" +
+        "later. Both namespacing passes run before minification; a name here\n" +
+        "means one of them missed a shape it should cover.\n"
     );
     process.exit(1);
   }
