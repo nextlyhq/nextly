@@ -130,3 +130,32 @@ describe("adding a declared-short text field to an existing table", () => {
     expect(fieldToColumnDef(plain, "mysql")).toMatch(/TEXT/i);
   });
 });
+
+/**
+ * A contributed type keeps the unbounded column its creator builds.
+ *
+ * The field-group creator deletes `options` from a contributed type before mapping it — a plugin's
+ * options are its own, and one that happens to be named `variant` must not reshape the column — so
+ * it builds such a field as TEXT. Reading the option here bounded a column the creator had just made
+ * unbounded, reporting a type change on it.
+ */
+describe("adding a contributed text field that carries a width option", () => {
+  it("keeps TEXT rather than reading the plugin's own option", () => {
+    registerFieldType({
+      type: "acme-swatch",
+      storage: "text",
+      component: "@acme/swatch/admin#Swatch",
+      surfaces: ["entries", "singles", "components"],
+    });
+
+    const field = {
+      name: "swatch",
+      type: "acme-swatch",
+      options: { variant: "short" },
+      validation: { maxLength: 64 },
+    } as unknown as FieldConfig;
+
+    expect(fieldToColumnDef(field, "postgresql")).toMatch(/TEXT/i);
+    expect(fieldToColumnDef(field, "mysql")).toMatch(/TEXT/i);
+  });
+});

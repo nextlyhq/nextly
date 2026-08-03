@@ -25,6 +25,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { FieldConfig } from "../../../collections/fields/types/index";
+import { isBuiltInFieldType } from "../../../schemas/_zod/ui-schema";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections/legacy-types";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { Logger } from "../../../shared/types/index";
@@ -87,6 +88,16 @@ function ddlTypeForKind(
       // The one string kind that is not TEXT everywhere. Stated here because a column this path
       // adds to an existing table is read back by the same descriptor the ORM binds: emitting TEXT
       // for it left the next preview reporting a type change on a column boot had just created.
+      //
+      // Only for a type this schema names. A field group's creator deletes `options` from a
+      // contributed type before mapping it — a plugin's options are its own, and one that happens
+      // to be called `variant` must not reshape the column — so it builds such a field as TEXT.
+      // Bounding it here would report a type change on the column that creator had just made, which
+      // is the same defect in the opposite direction. Deciding it correctly needs to know which
+      // entity is being built, which this helper is not told.
+      if (!("type" in field) || !isBuiltInFieldType(String(field.type))) {
+        return undefined;
+      }
       // SQLite has one string type, so the bound lives in validation there and TEXT is correct.
       if (dialect === "sqlite") return "TEXT";
       return `VARCHAR(${descriptor.length ?? 255})`;
