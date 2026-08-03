@@ -85,7 +85,10 @@ import {
   isCompanionReady,
   resolveCompanionSchemaReadiness,
 } from "../../i18n/runtime/companion-readiness";
-import { getColumnDescriptor } from "../../schema/services/field-column-descriptor";
+import {
+  getColumnDescriptor,
+  isTextStorageKind,
+} from "../../schema/services/field-column-descriptor";
 import { captureInTx } from "../../versions/capture-in-tx";
 import { VersionCaptureService } from "../../versions/version-capture-service";
 import { withVersionConflictRetry } from "../../versions/version-conflict";
@@ -115,15 +118,6 @@ import {
  * the system column or receives a wrong-typed default.
  */
 const SINGLE_IDENTITY_FIELDS = new Set(["title", "slug"]);
-
-/**
- * Column-descriptor kinds that store text, so the label/slug string seed for a
- * reserved identity field is valid for them. Covers plain text (text/email/
- * password/select/radio) and long text (textarea/richText/code), plus explicit
- * varchar. Non-text kinds (number, json, fkSingle, ...) fall through to the
- * field's own default instead, so a label string never lands in them.
- */
-const IDENTITY_TEXT_COLUMN_KINDS = new Set(["text", "varchar", "longText"]);
 
 /**
  * A Single's default document, built but not yet written. The read path judges
@@ -2055,8 +2049,12 @@ export class SingleQueryService extends BaseService {
           field as unknown as FieldDefinition,
           this.adapter.dialect
         );
-        if (!desc || IDENTITY_TEXT_COLUMN_KINDS.has(desc.kind)) {
-          continue; // keep the seeded label/slug for a text-storage column
+        // Keep the seeded label/slug whenever the column stores text. The descriptor answers that
+        // rather than a list of kind names kept here: a list restated locally judged a kind added
+        // later as non-text, replacing a Single's seeded identity with an empty default on the
+        // first read that created it.
+        if (!desc || isTextStorageKind(desc.kind)) {
+          continue;
         }
         if ("required" in field && field.required) {
           defaults[field.name] = getDefaultValue(field);

@@ -94,3 +94,39 @@ describe("built-in columns agree with the descriptor the ORM binds", () => {
     expect(fieldToColumnDef(date, "mysql")).toMatch(/DATETIME/i);
   });
 });
+
+/**
+ * A text field that declared its own width gets the bounded column the descriptor binds.
+ *
+ * This helper stated TEXT for every string field, so a short field added to an existing table got a
+ * column the ORM then described as a varchar — and the next preview reported a type change on a
+ * column this path had just created.
+ */
+describe("adding a declared-short text field to an existing table", () => {
+  const shortField = {
+    name: "short_code",
+    type: "text",
+    options: { variant: "short" },
+    validation: { maxLength: 120 },
+  } as unknown as FieldConfig;
+
+  it.each([
+    ["postgresql", /VARCHAR\(120\)/i],
+    ["mysql", /VARCHAR\(120\)/i],
+  ] as const)("bounds the column on %s", (dialect, expected) => {
+    expect(fieldToColumnDef(shortField, dialect)).toMatch(expected);
+  });
+
+  // SQLite has one string type, so TEXT is what the descriptor says for it there too.
+  it("stays TEXT on sqlite", () => {
+    expect(fieldToColumnDef(shortField, "sqlite")).toMatch(/TEXT/i);
+  });
+
+  // A field that declares no width keeps the type this path has always emitted; only the declared
+  // case changes, so existing columns are not re-described.
+  it("leaves an undeclared text field as TEXT", () => {
+    const plain = { name: "body", type: "text" } as unknown as FieldConfig;
+    expect(fieldToColumnDef(plain, "postgresql")).toMatch(/TEXT/i);
+    expect(fieldToColumnDef(plain, "mysql")).toMatch(/TEXT/i);
+  });
+});

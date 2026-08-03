@@ -83,6 +83,14 @@ function ddlTypeForKind(
         ? `DECIMAL${dimensions}`
         : `NUMERIC${dimensions}`;
     }
+    case "shortText": {
+      // The one string kind that is not TEXT everywhere. Stated here because a column this path
+      // adds to an existing table is read back by the same descriptor the ORM binds: emitting TEXT
+      // for it left the next preview reporting a type change on a column boot had just created.
+      // SQLite has one string type, so the bound lives in validation there and TEXT is correct.
+      if (dialect === "sqlite") return "TEXT";
+      return `VARCHAR(${descriptor.length ?? 255})`;
+    }
     case "timestamp":
       // Only SQLite routes here; it stores a timestamp as an integer.
       return dialect === "sqlite" ? "INTEGER" : undefined;
@@ -136,7 +144,10 @@ export function fieldToColumnDef(
     case "email":
     case "code":
     case "textarea":
-      columnType = "TEXT";
+      // A field that declared its own width gets the bounded column the descriptor binds and a
+      // freshly created table gets; every other string field keeps TEXT, which is what the
+      // descriptor says for them on all three dialects.
+      columnType = ddlTypeForKind(field, dialect) ?? "TEXT";
       break;
 
     case "number":

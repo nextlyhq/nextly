@@ -67,11 +67,15 @@ function modifierOptions(
 /**
  * Resolve the width of every unstated text field in a Builder-owned entity's field list.
  *
- * Only an explicit `variant` counts as stating the width. A `maxLength` or a `length` deliberately
- * does NOT, because the descriptor renders neither: treating one as authoritative would leave a
- * field declaring 500 characters in a `varchar(255)` column, rejecting values the stored validation
- * limit accepts. Until a width can survive the diff, the honest reading of an unstated field is
- * unbounded — wider than a bounded column, and never narrower than the data it is asked to hold.
+ * What counts as stating the width is whatever the entity's own generator acts on, which is not the
+ * same key for both — see `statesWidth`. A field that states nothing its generator reads is filled
+ * in as unbounded, which is the honest reading: wider than a bounded column, and never narrower
+ * than the data the field is asked to hold.
+ *
+ * A field that DOES state a width keeps it, and the descriptor renders that width rather than a
+ * fixed 255, so a field declaring 500 characters gets a column that accepts what its own stored
+ * validation accepts. What a declared width still cannot do is survive a later EDIT: the diff
+ * strips length modifiers before comparing, so widening an existing column emits no resize.
  *
  * Idempotent: a field this has resolved states a variant, so a second pass leaves it alone. Returns
  * the original array when nothing needed resolving.
