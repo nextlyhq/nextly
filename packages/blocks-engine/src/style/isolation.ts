@@ -29,6 +29,11 @@
  * import graph, and reports what the stylesheet actually SAYS — which is what
  * someone reading the finding needs to go and look at.
  *
+ * Both checks below return findings rather than throwing, and an empty result
+ * means the sheet is clean on that axis — never that it could not be read. CSS
+ * parses tolerantly, so "could not be read" is a real outcome and is reported
+ * as a finding of its own; see {@link parseStylesheet}.
+ *
  * @module style/isolation
  */
 import type { Atrule, CssNode, Rule, Selector } from "css-tree";
@@ -44,23 +49,41 @@ export interface UnscopedRule {
 }
 
 /**
- * At-rules whose prelude is not a selector list and whose contents are not
- * page-scoped by nesting.
+ * What each at-rule means to the two invariants below.
  *
- * `@keyframes` holds percentage selectors, `@font-face` and `@property` hold
- * descriptors, and none of them match elements at all — so asking whether their
- * contents are anchored is a category error. They carry a different risk, which
- * namespacing answers rather than anchoring: their names are document-global.
+ * One table rather than two lists, because both questions are asked of the same
+ * set of at-rules and an entry present in one list but missing from the other is
+ * an at-rule that NEITHER check looks at. That is not hypothetical: a named
+ * `@page` was skipped for anchoring, correctly, because it holds no selectors
+ * that match elements — and then skipped for naming too, because it was absent
+ * from the second list. A rule exempted from one check has to answer the other,
+ * and a table makes that a missing field rather than a missing line.
+ *
+ * `selectorless` marks the at-rules whose contents match no element at all:
+ * `@keyframes` holds percentage steps, `@font-face` and `@property` hold
+ * descriptors. Asking whether those are anchored is a category error. Their risk
+ * is a document-global NAME, which is what `globalNames` reads.
  */
-const NON_SELECTOR_AT_RULES = new Set([
-  "keyframes",
-  "font-face",
-  "property",
-  "counter-style",
-  "page",
-  "font-feature-values",
-  "font-palette-values",
-]);
+interface AtRuleFacts {
+  /** Its contents match no elements, so anchoring does not apply to them. */
+  selectorless: boolean;
+  /** The document-global names it defines, if it defines any. */
+  globalNames?: (css: string, node: Atrule) => string[];
+}
+
+const AT_RULES: Record<string, AtRuleFacts> = {
+  keyframes: { selectorless: true, globalNames: preludeNames },
+  property: { selectorless: true, globalNames: preludeNames },
+  "counter-style": { selectorless: true, globalNames: preludeNames },
+  "font-palette-values": { selectorless: true, globalNames: preludeNames },
+  "position-try": { selectorless: true, globalNames: preludeNames },
+  "font-face": { selectorless: true, globalNames: fontFaceFamilies },
+  page: { selectorless: true, globalNames: pageNames },
+  "font-feature-values": {
+    selectorless: true,
+    globalNames: featureValueFamilies,
+  },
+};
 
 /**
  * Whether one selector is anchored inside the scope class.
@@ -118,19 +141,58 @@ export function namespacedGlobalName(name: string, scopeClass: string): string {
   return `${custom ? "--" : ""}${scopeClass}-${bare}`;
 }
 
-/** At-rules that define a globally-resolved name in their PRELUDE. */
-const GLOBAL_NAME_AT_RULES = new Set([
-  "keyframes",
-  "property",
-  "counter-style",
-  "font-palette-values",
-  "position-try",
-]);
-
 /** Whether a name already carries this document's namespace. */
 function isNamespaced(name: string, scopeClass: string): boolean {
   const bare = name.startsWith("--") ? name.slice(2) : name;
   return bare.startsWith(`${scopeClass}-`);
+}
+
+/** A family name without its quotes; the name is the same either way. */
+function unquote(name: string): string {
+  return name.replace(/^["']|["']$/g, "");
+}
+
+/** The whole prelude, for the at-rules whose prelude IS the name they define. */
+function preludeNames(css: string, node: Atrule): string[] {
+  const prelude = node.prelude;
+  if (prelude === null) return [];
+  const name =
+    prelude.type === "Raw" ? prelude.value.trim() : sourceTextOf(css, prelude);
+  return name === "" ? [] : [name];
+}
+
+/**
+ * The page name a `@page` rule defines, which is optional.
+ *
+ * `@page :first` names nothing: it selects the first page of a flow that
+ * already exists. `@page cover` defines "cover", and `@page cover:first`
+ * defines it too while selecting one of its pages. Only a leading identifier is
+ * a name, so the pseudo-class comes off before the comparison.
+ */
+function pageNames(css: string, node: Atrule): string[] {
+  const text = preludeNames(css, node)[0];
+  if (text === undefined) return [];
+  const name = /^-{0,2}[A-Za-z_][A-Za-z0-9_-]*/.exec(text);
+  return name === null ? [] : [name[0]];
+}
+
+/**
+ * The font families an `@font-feature-values` rule attaches values to.
+ *
+ * Its prelude is a family list rather than a name it invents, but the collision
+ * is the same one: the feature values inside attach to those families for the
+ * whole document, so ours and a host's for one family are a single set and the
+ * later definition wins for both.
+ */
+function featureValueFamilies(css: string, node: Atrule): string[] {
+  const text = preludeNames(css, node)[0];
+  if (text === undefined) return [];
+  // Split on commas rather than reading tokens, so an unquoted multi-word
+  // family stays one name instead of being reported word by word.
+  return text
+    .split(",")
+    .map(part => unquote(part.trim()))
+    .filter(part => part !== "");
 }
 
 /**
@@ -141,18 +203,16 @@ function isNamespaced(name: string, scopeClass: string): boolean {
  * defines "Fade" for the whole document, so a host font and ours by the same
  * name are one font, and which one it is depends on load order.
  */
-function fontFaceFamily(css: string, node: Atrule): string | undefined {
+function fontFaceFamilies(css: string, node: Atrule): string[] {
   const block = node.block;
-  if (block === null) return undefined;
+  if (block === null) return [];
   for (const child of block.children) {
     if (child.type !== "Declaration") continue;
     if (child.property.toLowerCase() !== "font-family") continue;
-    const raw = sourceTextOf(css, child.value).trim();
-    // A family may be quoted or a bare identifier; the name is the same either
-    // way, so the quotes come off before it is compared.
-    return raw.replace(/^["']|["']$/g, "");
+    const family = unquote(sourceTextOf(css, child.value).trim());
+    return family === "" ? [] : [family];
   }
-  return undefined;
+  return [];
 }
 
 /** One at-rule defining a name that is not namespaced to this document. */
@@ -177,42 +237,26 @@ export function findUnnamespacedGlobals(
   css: string,
   scopeClass: string
 ): GlobalName[] {
+  const parsed = parseStylesheet(css);
   const found: GlobalName[] = [];
-  let ast: CssNode;
-  try {
-    ast = parse(css, { positions: true });
-  } catch {
-    return [];
+  if (parsed.reason !== "") {
+    found.push({ atRule: "", name: "", reason: parsed.reason });
   }
-  walk(ast, {
+  if (parsed.ast === undefined) return found;
+  walk(parsed.ast, {
     visit: "Atrule",
     enter(node: Atrule) {
       const atRule = node.name.toLowerCase();
-      if (atRule === "font-face") {
-        const family = fontFaceFamily(css, node);
-        if (family === undefined || family === "") return;
-        if (isNamespaced(family, scopeClass)) return;
+      const readNames = AT_RULES[atRule]?.globalNames;
+      if (readNames === undefined) return;
+      for (const name of readNames(css, node)) {
+        if (isNamespaced(name, scopeClass)) continue;
         found.push({
           atRule,
-          name: family,
-          reason: `"@font-face" declaring "font-family: ${family}" defines a font name CSS resolves for the whole document, so it collides with any other font of that name on the page.`,
+          name,
+          reason: `"@${atRule}" defines the name "${name}", which CSS resolves for the whole document, so it collides with any other definition of that name on the page.`,
         });
-        return;
       }
-      if (!GLOBAL_NAME_AT_RULES.has(atRule)) return;
-      const prelude = node.prelude;
-      if (prelude === null) return;
-      const name =
-        prelude.type === "Raw"
-          ? prelude.value.trim()
-          : sourceTextOf(css, prelude);
-      if (name === "") return;
-      if (isNamespaced(name, scopeClass)) return;
-      found.push({
-        atRule,
-        name,
-        reason: `"@${atRule} ${name}" defines a name CSS resolves for the whole document, so it collides with any other definition of that name on the page.`,
-      });
     },
   });
   return found;
@@ -221,6 +265,60 @@ export function findUnnamespacedGlobals(
 /** One node's own text, exactly as the stylesheet spells it. */
 function sourceText(css: string, node: Selector): string {
   return sourceTextOf(css, node);
+}
+
+/**
+ * The stylesheet's AST, or the reason it cannot be checked.
+ *
+ * css-tree parses in tolerant mode: a malformed stylesheet does not throw, it
+ * RECOVERS, keeping what it could read and turning what it could not into `Raw`
+ * nodes. A `try`/`catch` therefore catches almost nothing, and the recovered
+ * tree is missing exactly the parts most worth checking.
+ *
+ * That matters because browsers recover too, and differently. Given
+ * `.nx-pb-page .a{} } body { color:red }` css-tree reports "Selector is
+ * expected" and hands back a rule with a `Raw` prelude, while a browser drops
+ * the stray brace and applies `body { color: red }` to the host page. Checking
+ * the recovered tree would find nothing and report the sheet clean.
+ *
+ * So recovery is treated as a failure of the check rather than a success. This
+ * compiler generates its own CSS, so a parse error here is a defect in this
+ * package, not in anyone's content — and an invariant that cannot read its
+ * input has to say so rather than return "nothing found".
+ *
+ * At-rule preludes are deliberately left unparsed. Their internal grammar is
+ * not what this module reads — selectors are — and css-tree validates each one
+ * against a grammar it ships, which lags CSS itself: it rejects every
+ * `@container` query as malformed, a feature this compiler emits routinely, and
+ * would reject each new at-rule until css-tree caught up. Skipping that
+ * grammar keeps the errors that remain meaningful, leaves the preludes readable
+ * as text for the names below, and still parses the rules INSIDE those at-rules
+ * so anchoring is checked there too.
+ */
+function parseStylesheet(css: string): { ast?: CssNode; reason: string } {
+  const errors: string[] = [];
+  let ast: CssNode;
+  try {
+    ast = parse(css, {
+      positions: true,
+      parseAtrulePrelude: false,
+      onParseError: (error: Error) => errors.push(error.message),
+    });
+  } catch {
+    return {
+      reason: "The stylesheet could not be parsed, so it was not checked.",
+    };
+  }
+  // The recovered tree comes back even when it recovered, so a caller can
+  // report what the parser DID manage to read alongside the fact that it had to
+  // guess. Stopping at the first problem would hide the rest of them.
+  return {
+    ast,
+    reason:
+      errors.length > 0
+        ? `The stylesheet did not parse cleanly (${errors[0]}), so what a browser would make of it cannot be checked.`
+        : "",
+  };
 }
 
 /** The same, for any node that carries a position. */
@@ -245,32 +343,34 @@ export function findUnscopedRules(
   css: string,
   scopeClass: string
 ): UnscopedRule[] {
+  const parsed = parseStylesheet(css);
   const offenders: UnscopedRule[] = [];
-  let ast: CssNode;
-  try {
-    ast = parse(css, { positions: true });
-  } catch {
+  if (parsed.reason !== "") {
     // Unparsable output is a failure of this compiler, not of the document, and
     // it is not something a caller can be told to fix in their content. Report
-    // it as one finding rather than pretending the sheet was checked.
-    return [
-      {
-        selector: "",
-        reason: "The stylesheet could not be parsed, so it was not checked.",
-      },
-    ];
+    // it as a finding rather than pretending the sheet was checked.
+    offenders.push({ selector: "", reason: parsed.reason });
   }
+  if (parsed.ast === undefined) return offenders;
 
-  walk(ast, {
+  walk(parsed.ast, {
     visit: "Rule",
     enter(node: Rule) {
       // A rule inside `@keyframes` has percentage "selectors" that match no
       // element; anchoring does not apply to it.
       const inNonSelectorAtRule = this.atrule
-        ? NON_SELECTOR_AT_RULES.has(this.atrule.name.toLowerCase())
+        ? AT_RULES[this.atrule.name.toLowerCase()]?.selectorless === true
         : false;
       if (inNonSelectorAtRule) return;
-      if (node.prelude.type !== "SelectorList") return;
+      if (node.prelude.type !== "SelectorList") {
+        // A prelude css-tree could not read is a prelude this check cannot
+        // vouch for, and a browser may well match elements with it.
+        offenders.push({
+          selector: sourceTextOf(css, node.prelude),
+          reason: `This selector could not be parsed, so whether it stays inside ".${scopeClass}" is unknown.`,
+        });
+        return;
+      }
       for (const selector of node.prelude.children) {
         if (selector.type !== "Selector") continue;
         if (selectorIsAnchored(selector, scopeClass)) continue;

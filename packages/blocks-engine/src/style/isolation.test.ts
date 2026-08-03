@@ -107,6 +107,86 @@ describe("what counts as anchored", () => {
       )
     ).toEqual([]);
   });
+
+  it("checks inside every at-rule that wraps ordinary rules", () => {
+    // Each of these holds real selectors, so a leak can hide in any of them.
+    // `@container` is the one this compiler emits most.
+    for (const prelude of [
+      "@container (max-width: 100px)",
+      "@supports (display: grid)",
+      "@scope (.a) to (.b)",
+    ]) {
+      expect(
+        findUnscopedRules(`${prelude} { body { color: red } }`, SCOPE)
+      ).toHaveLength(1);
+      expect(
+        findUnscopedRules(`${prelude} { .${SCOPE} .a { color: red } }`, SCOPE)
+      ).toEqual([]);
+    }
+  });
+
+  it("does not call a valid at-rule prelude a leak", () => {
+    // css-tree validates at-rule preludes against a grammar it ships, and that
+    // grammar rejects every `@container` query. Reporting those as findings
+    // would condemn a feature this compiler emits on any responsive document.
+    expect(
+      findUnscopedRules(
+        `@container card (min-width: 1px) and (max-width: 320px) { .${SCOPE} .a { color: red } }`,
+        SCOPE
+      )
+    ).toEqual([]);
+    expect(
+      findUnnamespacedGlobals(
+        `@container (max-width: 320px) { .${SCOPE} .a { color: red } }`,
+        SCOPE
+      )
+    ).toEqual([]);
+  });
+});
+
+describe("a stylesheet that does not parse cleanly is not a clean stylesheet", () => {
+  // css-tree parses tolerantly: a malformed sheet recovers rather than
+  // throwing, so a `try`/`catch` alone reports nothing and the recovered tree
+  // is missing the very parts worth checking.
+  const RECOVERED = [
+    // A stray closing brace. The browser drops it and applies `body`.
+    `.${SCOPE} .a{} } body { color:red }`,
+    `} body { color:red }`,
+    `.${SCOPE} .a{}} .b { color:red }`,
+  ];
+
+  it("reports a rule the parser recovered past", () => {
+    for (const css of RECOVERED) {
+      expect(findUnscopedRules(css, SCOPE).length).toBeGreaterThan(0);
+    }
+  });
+
+  it("reports it on the naming axis too", () => {
+    // Both invariants read the same sheet; one of them silently returning
+    // "nothing found" for input it could not read is the same hole twice.
+    for (const css of RECOVERED) {
+      expect(findUnnamespacedGlobals(css, SCOPE).length).toBeGreaterThan(0);
+    }
+  });
+
+  it("names the selector it could not read, not just the sheet", () => {
+    // Reporting only "this did not parse" leaves the reader to find the rule
+    // themselves. The prelude the parser gave up on is the thing to go and
+    // look at, so it is reported alongside.
+    const found = findUnscopedRules(`.a, { color: red }`, SCOPE);
+    expect(found.map(entry => entry.selector)).toContain(".a,");
+  });
+
+  it("keeps checking the rules it could read", () => {
+    // A sheet that recovered is still worth walking: the parse error and the
+    // leak it recovered into are two separate things to fix, and stopping at
+    // the first hides the second.
+    const found = findUnscopedRules(
+      `.a, { color: red } body { color: blue }`,
+      SCOPE
+    );
+    expect(found.map(entry => entry.selector)).toContain("body");
+  });
 });
 
 describe("the compiler cannot emit a rule that escapes the page root", () => {
@@ -310,6 +390,67 @@ describe("names CSS resolves for the whole document", () => {
     expect(
       findUnnamespacedGlobals(
         `@media (max-width: 1px) { .a { color: red } }`,
+        SCOPE
+      )
+    ).toEqual([]);
+  });
+
+  it("reports a named page, which no other check looks at", () => {
+    // `@page` is exempt from anchoring because it holds no element selectors.
+    // That exemption is exactly why its name has to be checked here: a rule
+    // skipped by both invariants is a rule nothing looks at.
+    const found = findUnnamespacedGlobals(`@page cover { margin: 1cm }`, SCOPE);
+    expect(found).toHaveLength(1);
+    expect(found[0]?.name).toBe("cover");
+    expect(
+      findUnnamespacedGlobals(`@page ${SCOPE}-cover { margin: 1cm }`, SCOPE)
+    ).toEqual([]);
+  });
+
+  it("reads the name off a page that also selects one of its pages", () => {
+    const found = findUnnamespacedGlobals(
+      `@page cover:first { margin: 1cm }`,
+      SCOPE
+    );
+    expect(found).toHaveLength(1);
+    expect(found[0]?.name).toBe("cover");
+  });
+
+  it("does not invent a name for a page that defines none", () => {
+    // `@page :first` selects the first page of a flow that already exists; it
+    // names nothing, so there is nothing to collide.
+    expect(findUnnamespacedGlobals(`@page { margin: 1cm }`, SCOPE)).toEqual([]);
+    expect(
+      findUnnamespacedGlobals(`@page :first { margin: 1cm }`, SCOPE)
+    ).toEqual([]);
+  });
+
+  it("reports each font family a feature-values rule attaches to", () => {
+    const found = findUnnamespacedGlobals(
+      `@font-feature-values Fade { @styleset { nice: 1 } }`,
+      SCOPE
+    );
+    expect(found).toHaveLength(1);
+    expect(found[0]?.name).toBe("Fade");
+    expect(
+      findUnnamespacedGlobals(
+        `@font-feature-values ${SCOPE}-Fade { @styleset { nice: 1 } }`,
+        SCOPE
+      )
+    ).toEqual([]);
+  });
+
+  it("keeps an unquoted multi-word family together", () => {
+    // Read token by token, `Fade Two` would be reported as two names, and a
+    // namespaced family followed by a second word would be a false finding.
+    const found = findUnnamespacedGlobals(
+      `@font-feature-values "Fade Two", Other { @styleset { nice: 1 } }`,
+      SCOPE
+    );
+    expect(found.map(entry => entry.name)).toEqual(["Fade Two", "Other"]);
+    expect(
+      findUnnamespacedGlobals(
+        `@font-feature-values ${SCOPE}-Fade Two { @styleset { nice: 1 } }`,
         SCOPE
       )
     ).toEqual([]);
