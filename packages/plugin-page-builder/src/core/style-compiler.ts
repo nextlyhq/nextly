@@ -33,6 +33,12 @@ export const DEFAULT_BREAKPOINTS: BreakpointDef[] = [
 
 export interface CompileOptions {
   breakpoints?: BreakpointDef[];
+  /**
+   * Hosts a block's images may be loaded from. Empty or absent means
+   * same-origin only, which is the default because an undeclared host is a
+   * request a custom-CSS selector can gate on a secret.
+   */
+  remotePatterns?: readonly RemotePattern[];
 }
 
 /**
@@ -100,12 +106,105 @@ function safeValue(v: string): string | null {
   }
 }
 
-/** Validate a URL for url(). css-tree accepts quoted `javascript:` urls, so check the scheme. */
-function safeUrl(url: string): string | null {
+/**
+ * One host a block image may be loaded from.
+ *
+ * Deliberately the shape of Next.js's `images.remotePatterns`, because a Nextly
+ * app already declares the same thing there for `next/image` and copying the
+ * entry across should just work. `**` at the start of a hostname matches any
+ * depth of subdomain; `*` matches one label. A pathname ending `/**` matches
+ * any path beneath it.
+ */
+export interface RemotePattern {
+  protocol?: "http" | "https";
+  hostname: string;
+  port?: string;
+  pathname?: string;
+}
+
+function hostnameMatches(pattern: string, hostname: string): boolean {
+  if (pattern === hostname) return true;
+  // `**.example.com` matches any depth of subdomain but not the bare apex,
+  // which is what Next.js does and what people expect from the extra star.
+  if (pattern.startsWith("**.")) return hostname.endsWith(pattern.slice(2));
+  if (pattern.startsWith("*.")) {
+    const rest = hostname.slice(0, -(pattern.length - 1));
+    return (
+      hostname.endsWith(pattern.slice(1)) && rest !== "" && !rest.includes(".")
+    );
+  }
+  return false;
+}
+
+function pathnameMatches(
+  pattern: string | undefined,
+  pathname: string
+): boolean {
+  if (pattern === undefined) return true;
+  if (pattern.endsWith("/**")) return pathname.startsWith(pattern.slice(0, -2));
+  return pattern === pathname;
+}
+
+/**
+ * Whether a remote image URL is one this site has declared it loads from.
+ *
+ * Closed by default: with no patterns configured, nothing off-origin is
+ * allowed. That is the same posture as `next/image`, and it is the posture the
+ * page builder needs, because a remote image URL is a request whose firing can
+ * be made conditional by a custom-CSS selector — so an undeclared host is a
+ * channel out, not merely an unexpected image.
+ */
+export function isAllowedRemoteUrl(
+  url: string,
+  patterns: readonly RemotePattern[]
+): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  return patterns.some(pattern => {
+    if (
+      pattern.protocol !== undefined &&
+      `${pattern.protocol}:` !== parsed.protocol
+    ) {
+      return false;
+    }
+    if (!hostnameMatches(pattern.hostname, parsed.hostname)) return false;
+    if (pattern.port !== undefined && pattern.port !== parsed.port)
+      return false;
+    return pathnameMatches(pattern.pathname, parsed.pathname);
+  });
+}
+
+/**
+ * Validate a URL for url().
+ *
+ * Two separate jobs. The syntactic one is unchanged: css-tree accepts a quoted
+ * `javascript:` url, and a quote or paren in the value would break out of the
+ * `url()` this is interpolated into.
+ *
+ * The other is where the request may go. A same-origin path is always fine; a
+ * URL that leaves this origin is allowed only from a declared host. Custom CSS
+ * is emitted into the same stylesheet as this output and can suppress a
+ * declaration conditionally, so an image on an arbitrary host is a request an
+ * author can gate on a secret-dependent selector and read back by its absence.
+ * Refusing here is what makes that gate point at nothing.
+ */
+function safeUrl(
+  url: string,
+  remotePatterns: readonly RemotePattern[]
+): string | null {
   const u = url.trim();
   if (/^(javascript|data|vbscript):/i.test(u)) return null;
   if (/["')\\]/.test(u) || /[\n\r]/.test(u)) return null; // avoid url() breakout
-  return u;
+  // A scheme or a leading `//` means another origin may be reached; anything
+  // else resolves against this document and needs no allowlist.
+  const leavesOrigin = /^[a-z][a-z0-9+.-]*:/i.test(u) || u.startsWith("//");
+  if (!leavesOrigin) return u;
+  const absolute = u.startsWith("//") ? `https:${u}` : u;
+  return isAllowedRemoteUrl(absolute, remotePatterns) ? u : null;
 }
 
 const SIMPLE: [keyof StyleValues, string][] = [
@@ -143,7 +242,10 @@ const SIMPLE: [keyof StyleValues, string][] = [
   ["transition", "transition"],
 ];
 
-function compileStyleValues(sv: StyleValues): string[] {
+function compileStyleValues(
+  sv: StyleValues,
+  remotePatterns: readonly RemotePattern[]
+): string[] {
   const out: string[] = [];
 
   const box = (prop: "margin" | "padding") => {
@@ -167,7 +269,7 @@ function compileStyleValues(sv: StyleValues): string[] {
   }
 
   if (sv.backgroundImage != null) {
-    const url = safeUrl(resolveScalar(sv.backgroundImage));
+    const url = safeUrl(resolveScalar(sv.backgroundImage), remotePatterns);
     if (url) out.push(`background-image: url("${url}")`);
   }
 
@@ -215,7 +317,7 @@ function compileStyleValues(sv: StyleValues): string[] {
   if (sv.backgroundImageObj) {
     const bg = sv.backgroundImageObj;
     if (bg.url != null) {
-      const url = safeUrl(resolveScalar(bg.url));
+      const url = safeUrl(resolveScalar(bg.url), remotePatterns);
       if (url) out.push(`background-image: url("${url}")`);
     }
     for (const [k, cssName] of [
@@ -252,6 +354,7 @@ export function compileNodeCss(
   opts: CompileOptions = {}
 ): string {
   const bps = opts.breakpoints ?? DEFAULT_BREAKPOINTS;
+  const remotePatterns = opts.remotePatterns ?? [];
   const cls = nodeClass(node.id);
   const blocks: string[] = [];
 
@@ -261,11 +364,13 @@ export function compileNodeCss(
 
   const emit = (style: ResponsiveStyle | undefined, suffix: string): void => {
     if (!style) return;
-    const base = style.base ? compileStyleValues(style.base) : [];
+    const base = style.base
+      ? compileStyleValues(style.base, remotePatterns)
+      : [];
     if (base.length) blocks.push(`.${cls}${suffix} { ${base.join("; ")}; }`);
     for (const bp of bps) {
       const sv = style[bp.id];
-      const decls = sv ? compileStyleValues(sv) : [];
+      const decls = sv ? compileStyleValues(sv, remotePatterns) : [];
       if (decls.length) {
         blocks.push(
           `@media (max-width: ${bp.maxWidth}px) { .${cls}${suffix} { ${decls.join("; ")}; } }`

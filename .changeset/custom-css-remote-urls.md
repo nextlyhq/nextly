@@ -33,12 +33,30 @@ repeated. Custom CSS is the only surface where an author writes both halves, so
 that is where the ban lands; a block's own style values still accept a remote
 image, because they cannot express a selector.
 
-The narrower thing this does not do, stated plainly rather than left implied:
-custom CSS can still modulate a request another part of the page already makes.
-A block background may be remote, and a custom selector that suppresses it
-conditionally leaks by the request's absence while containing no URL to refuse.
-Closing that needs the same origin policy applied to structured style values, or
-a Content-Security-Policy on the rendered document.
+Banning it in custom CSS alone would not have closed the channel, because the
+two halves need not be written in the same place. A block's background image is
+compiled into the same stylesheet, so a remote image there plus a custom
+selector that suppresses it conditionally still leaks by the request's ABSENCE,
+with no URL in the custom CSS to refuse.
+
+So a block's images are now same-origin by default too, and a site declares the
+hosts it loads from:
+
+```ts
+<PageRenderer
+  document={doc}
+  remotePatterns={[
+    { protocol: "https", hostname: "cdn.example.com", pathname: "/img/**" },
+  ]}
+/>
+```
+
+BREAKING for pages using a remote block background: it stops rendering until its
+host is declared. The shape is Next.js's `images.remotePatterns`, so an entry can
+be copied straight across from `next.config`, and the posture matches
+`next/image` — nothing off-origin unless you said so. `**.example.com` matches
+any depth of subdomain, `*.example.com` exactly one, and a `pathname` ending
+`/**` any path beneath it.
 
 Everything the sanitizer removes is now reported rather than dropped silently,
 including at-rules it does not support. A rule that disappears with nothing on

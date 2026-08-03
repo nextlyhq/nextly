@@ -43,14 +43,14 @@ const URL_SCHEME = /^\s*[a-z][a-z0-9+.-]*:/i;
  * fires a request only when the selector matches, so a page full of them reads
  * a value out one character at a time.
  *
- * What this does NOT prevent is custom CSS modulating a request some other part
- * of the page already makes. A block's `backgroundImage` may still be remote,
- * the renderer emits it into the same stylesheet as this output, and a custom
- * selector that suppresses it conditionally leaks by the request's absence
- * while containing no URL for this to refuse. Closing that means either
- * applying the same origin policy to structured style values or constraining
- * the document with a Content-Security-Policy; neither is decidable here, since
- * both halves are legitimate on their own and this function sees only one.
+ * Refusing it here is only half of the boundary, because the other half of the
+ * pair does not have to be written here. A block's `backgroundImage` is
+ * compiled into the same stylesheet as this output, so a remote image there
+ * plus a custom selector that suppresses it conditionally leaks by the
+ * request's ABSENCE, with no URL in the custom CSS for this to refuse. That is
+ * why `style-compiler.ts` applies the same origin rule to structured style
+ * values, allowing only hosts the site has declared. Neither half is a channel
+ * without the other, and each is checked where it is written.
  */
 /**
  * The leading and trailing run the URL parser discards.

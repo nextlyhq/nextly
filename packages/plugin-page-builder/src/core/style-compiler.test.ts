@@ -5,6 +5,7 @@ import {
   compileNodeCss,
   compileDocumentCss,
   compileTokensCss,
+  isAllowedRemoteUrl,
   DEFAULT_BREAKPOINTS,
 } from "./style-compiler";
 import { makeNode } from "./tree";
@@ -101,6 +102,45 @@ describe("style compiler", () => {
       )
     );
     expect(bad).not.toContain("javascript:");
+  });
+
+  it("refuses a remote background image unless its host is declared", () => {
+    // A remote image is a REQUEST, and custom CSS lands in the same stylesheet
+    // and can suppress the declaration conditionally — so an image on an
+    // undeclared host is a channel an author can gate on a secret selector and
+    // read back by the request's absence, not merely an unexpected picture.
+    const node = makeNode(
+      "core/container",
+      {},
+      { base: { backgroundImage: "https://evil.example/a.png" } }
+    );
+    expect(compileNodeCss(node)).not.toContain("evil.example");
+
+    // Declared, so allowed: the escape hatch has to work or the restriction is
+    // just a removed feature.
+    expect(
+      compileNodeCss(node, {
+        remotePatterns: [{ protocol: "https", hostname: "evil.example" }],
+      })
+    ).toContain('background-image: url("https://evil.example/a.png")');
+
+    // Same-origin never needs declaring.
+    expect(
+      compileNodeCss(
+        makeNode("core/container", {}, { base: { backgroundImage: "/a.jpg" } })
+      )
+    ).toContain('background-image: url("/a.jpg")');
+  });
+
+  it("refuses a protocol-relative url, which reaches another host too", () => {
+    // `//evil.example/a.png` carries no scheme and still leaves the origin,
+    // inheriting only the page's protocol.
+    const node = makeNode(
+      "core/container",
+      {},
+      { base: { backgroundImage: "//evil.example/a.png" } }
+    );
+    expect(compileNodeCss(node)).not.toContain("evil.example");
   });
 
   it("compileDocumentCss includes rules for every node", () => {
@@ -278,5 +318,64 @@ describe("compileNodeCss — width alignment + link colors", () => {
     );
     expect(css).toMatch(/\.nx-pb-[a-z0-9]+ a \{ color: #f00; \}/);
     expect(css).toMatch(/\.nx-pb-[a-z0-9]+ a:hover \{ color: #0f0; \}/);
+  });
+});
+
+describe("isAllowedRemoteUrl", () => {
+  it("matches protocol, host, port and path as Next.js does", () => {
+    const p = [
+      {
+        protocol: "https" as const,
+        hostname: "cdn.example.com",
+        pathname: "/img/**",
+      },
+    ];
+    expect(isAllowedRemoteUrl("https://cdn.example.com/img/a.png", p)).toBe(
+      true
+    );
+    // Wrong protocol, wrong host, and a path outside the declared prefix.
+    expect(isAllowedRemoteUrl("http://cdn.example.com/img/a.png", p)).toBe(
+      false
+    );
+    expect(isAllowedRemoteUrl("https://other.example.com/img/a.png", p)).toBe(
+      false
+    );
+    expect(isAllowedRemoteUrl("https://cdn.example.com/other/a.png", p)).toBe(
+      false
+    );
+  });
+
+  it("does not let a declared host be a suffix of an attacker's", () => {
+    // The check that a naive `endsWith` fails: `evilexample.com` ends with
+    // neither a dot nor the declared label boundary, and
+    // `cdn.example.com.evil.test` is a different site entirely.
+    const p = [{ hostname: "example.com" }];
+    expect(isAllowedRemoteUrl("https://evilexample.com/a.png", p)).toBe(false);
+    expect(isAllowedRemoteUrl("https://example.com.evil.test/a.png", p)).toBe(
+      false
+    );
+    expect(isAllowedRemoteUrl("https://example.com/a.png", p)).toBe(true);
+  });
+
+  it("treats * as one label and ** as any depth", () => {
+    expect(
+      isAllowedRemoteUrl("https://a.example.com/x", [
+        { hostname: "*.example.com" },
+      ])
+    ).toBe(true);
+    expect(
+      isAllowedRemoteUrl("https://a.b.example.com/x", [
+        { hostname: "*.example.com" },
+      ])
+    ).toBe(false);
+    expect(
+      isAllowedRemoteUrl("https://a.b.example.com/x", [
+        { hostname: "**.example.com" },
+      ])
+    ).toBe(true);
+  });
+
+  it("allows nothing when nothing is declared", () => {
+    expect(isAllowedRemoteUrl("https://cdn.example.com/a.png", [])).toBe(false);
   });
 });

@@ -14,6 +14,7 @@ import {
   compileDocumentMotionCss,
   compileTokensCss,
   type BreakpointDef,
+  type RemotePattern,
 } from "../core/style-compiler";
 import type { BlockDocument, BlockNode } from "../core/types";
 
@@ -29,6 +30,14 @@ export interface PageRendererProps {
   dataProvider?: DataProvider;
   customCss?: string;
   breakpoints?: BreakpointDef[];
+  /**
+   * Hosts this page may load block images from, in the shape of Next.js's
+   * `images.remotePatterns` so an entry can be copied across from
+   * `next.config`. Absent means same-origin only: a remote image is a request,
+   * and custom CSS in the same stylesheet can make that request conditional on
+   * a selector, so an undeclared host is a way out rather than a broken image.
+   */
+  remotePatterns?: readonly RemotePattern[];
   /** Design-token overrides (`{ "color.primary": "#..." }`). Defaults ship a palette. */
   tokens?: Record<string, string>;
   /** Reserved (i18n, spec §13) — threaded through but ignored in the MVP. */
@@ -43,6 +52,7 @@ export function PageRenderer({
   dataProvider,
   customCss,
   breakpoints,
+  remotePatterns,
   tokens,
   refs,
 }: PageRendererProps): ReactNode {
@@ -51,7 +61,7 @@ export function PageRenderer({
   const css = [
     compileTokensCss(PAGE_ROOT_CLASS, tokens),
     compileDocumentMotionCss(document),
-    compileDocumentCss(document, { breakpoints }),
+    compileDocumentCss(document, { breakpoints, remotePatterns }),
     compileDocumentBlockCss(document),
     // `.css` alone: the sanitizer also returns what it removed, and this path
     // renders rather than edits, so there is nowhere to show a warning. The
