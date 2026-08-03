@@ -14,6 +14,12 @@ apply?" always has an answer you can check rather than guess at.
 **Builder rules beat ordinary site CSS; your CSS beats the builder whenever you
 mean it to.**
 
+"Ordinary" is doing real work in that sentence. Specificity is only one rung of
+the cascade, and three things sit above it entirely: a **transition** in
+progress, an **animation**, and `!important`. None of them is a contest the
+builder can win by weighing more, and none is a bug when it happens — see
+[what outranks specificity](#what-outranks-specificity-altogether).
+
 ---
 
 ## What this applies to
@@ -183,8 +189,48 @@ the builder emits, so repeating it adds nothing. Put an ancestor in front of it:
 } /* 0-5-0 — yes */
 ```
 
+One exception to that tie, if you use `@scope`. Source order is not the next
+tiebreaker after specificity — **scope proximity is**, and a rule with no
+scoping root counts as infinitely far away. So a tied rule of yours inside an
+`@scope` rooted near the element beats the builder's unscoped one, even though
+ours comes later:
+
+```css
+@scope (.my-region) {
+  /* 0-4-0, the same as the builder's — and this one wins, because it is
+     scoped and ours is not */
+  .nx-pb-page.nx-pb-page .nx-pb-a1b2 {
+    color: rebeccapurple;
+  }
+}
+```
+
 Class order inside a compound carries no weight; only the count does. When in
 doubt, add one more class than the builder's selector has, or use `!important`.
+
+### What outranks specificity altogether
+
+Specificity decides between declarations only once the cascade has run out of
+earlier tiebreakers. Ranked highest first, the ones that matter here:
+
+| Beats everything below it | Applies when                                       |
+| ------------------------- | -------------------------------------------------- |
+| A transition in progress  | the property is mid-transition                     |
+| `!important`              | any author rule that uses it                       |
+| An animation              | a `@keyframes` animation is running the property   |
+| Normal declarations       | everything else, where specificity finally decides |
+
+Two consequences worth knowing, because both look like the builder ignoring you:
+
+**An animation of yours beats the builder outright.** If your theme animates
+`color`, that animation outranks the builder's normal `color` declaration no
+matter how many classes either selector carries. Repeating the page-root class
+buys nothing against it. Stop the animation on that element, or set the value
+from within it.
+
+**A transition delays your override.** Covered under `!important` below: while a
+property is transitioning, the transitioning value wins even against
+`!important`, until it finishes.
 
 ### If your CSS is in a cascade layer
 
@@ -252,10 +298,13 @@ In order, these explain nearly every case:
    selector after tying at three. Counting classes alone finds neither.
 2. **Something of yours uses `!important`.** The builder never does, so an
    `!important` in your stylesheet wins every specificity contest.
-3. **The property is mid-transition.** A transitioning value outranks every
+3. **Something of yours animates the property.** An animation outranks every
+   normal declaration, so no amount of specificity on the builder's side wins
+   against it. Look for a running `@keyframes` on that element.
+4. **The property is mid-transition.** A transitioning value outranks every
    author declaration, `!important` included, until the transition ends. If the
    block sets `transition` on the property you are changing, add
    `transition: none !important` to your rule and see whether it applies then.
-4. **The builder refused the value and said so.** Compilation returns warnings
+5. **The builder refused the value and said so.** Compilation returns warnings
    for everything it declined to write, each naming the exact position in the
    document. A value that is missing from the page is never missing silently.

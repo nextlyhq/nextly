@@ -505,7 +505,14 @@ function fontFaceFamilies(css: string, node: Atrule): string[] {
     // the LAST one. Stopping at the first would let
     // `font-family: safe; font-family: Host` pass the namespace check while
     // defining "Host".
-    family = unquote(sourceTextOf(css, child.value).trim());
+    const raw = sourceTextOf(css, child.value).trim();
+    // The last VALID one, though. This descriptor takes a single family, unlike
+    // the property that shares its name, so a value naming two is invalid and a
+    // browser drops it — leaving the previous descriptor in force. Reading it
+    // anyway would let an invalid namespaced decoy stand in front of the name
+    // that really lands.
+    if (splitTopLevel(raw).length !== 1) continue;
+    family = unquote(raw);
   }
   return family === undefined || family === "" ? [] : [family];
 }

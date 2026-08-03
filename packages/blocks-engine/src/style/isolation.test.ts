@@ -815,6 +815,26 @@ describe("names CSS resolves for the whole document", () => {
     }
   });
 
+  it("ignores a trailing descriptor that is not valid", () => {
+    // The `@font-face` descriptor takes ONE family, unlike the property that
+    // shares its name. A value naming two is invalid, so a browser drops it and
+    // the previous descriptor stays in force — an invalid namespaced value
+    // cannot be used to hide the name that really lands.
+    const found = findUnnamespacedGlobals(
+      `@font-face { font-family: Host; font-family: ${ns("safe")}, Other; src: url(a.woff2) }`,
+      SCOPE
+    );
+    expect(found).toHaveLength(1);
+    expect(found[0]?.name).toBe("Host");
+    // A VALID trailing descriptor still wins, which is the case above it.
+    expect(
+      findUnnamespacedGlobals(
+        `@font-face { font-family: Host; font-family: ${ns("safe")}; src: url(a.woff2) }`,
+        SCOPE
+      )
+    ).toEqual([]);
+  });
+
   it("reads the font family a face actually defines", () => {
     // A later descriptor wins inside a block, so the family this rule defines
     // is the last one. Stopping at the first lets a namespaced decoy stand in
