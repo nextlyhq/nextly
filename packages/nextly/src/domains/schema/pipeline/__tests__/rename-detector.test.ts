@@ -220,3 +220,67 @@ describe("RegexRenameDetector - plan-v3 Appendix D worked example (10-field rena
     expect(ageToDob?.typesCompatible).toBe(false);
   });
 });
+
+describe("RegexRenameDetector - the pre-#507 leading-underscore column", () => {
+  // Before #507 the Schema Builder's DDL generator named user columns with a copy of the
+  // field-name conversion that had lost its final step, so a field named `PublishedAt` was created
+  // as `_published_at` while the runtime schema and the diff both address `published_at`. Such a
+  // table was never readable, and #507 corrects only newly created ones.
+  //
+  // Repairing the existing ones needs no new machinery: the drop/add pair this produces is already
+  // a rename candidate, and the suggestion is `rename`, which moves the data rather than discarding
+  // it. This test exists so that stays true — narrowing the detector would silently remove the only
+  // path by which an affected table can be recovered with its contents.
+  it("offers to rename the legacy column onto its canonical name", () => {
+    const candidates = detector.detect(
+      [
+        drop("single_settings", "_published_at", "timestamp"),
+        add("single_settings", "published_at", "timestamp"),
+      ] as Operation[],
+      "postgresql"
+    );
+
+    expect(candidates).toEqual([
+      {
+        tableName: "single_settings",
+        fromColumn: "_published_at",
+        toColumn: "published_at",
+        fromType: "timestamp",
+        toType: "timestamp",
+        typesCompatible: true,
+        defaultSuggestion: "rename",
+      },
+    ]);
+  });
+
+  it("offers the rename for every shape the drifted mapper could produce", () => {
+    // The old mapper prefixed an underscore whenever the name began with a capital, so the legacy
+    // spelling is always the canonical one with `_` in front — whatever the column's type.
+    const legacy = (canonical: string) => `_${canonical}`;
+    const cases: Array<[string, string]> = [
+      ["published_at", "timestamp"],
+      ["body_text", "text"],
+      ["title", "varchar(255)"],
+    ];
+
+    for (const [canonical, type] of cases) {
+      const candidates = detector.detect(
+        [
+          drop("dc_posts", legacy(canonical), type),
+          add("dc_posts", canonical, type),
+        ] as Operation[],
+        "postgresql"
+      );
+
+      expect({
+        [canonical]: candidates.map(c => [
+          c.fromColumn,
+          c.toColumn,
+          c.defaultSuggestion,
+        ]),
+      }).toEqual({
+        [canonical]: [[legacy(canonical), canonical, "rename"]],
+      });
+    }
+  });
+});
