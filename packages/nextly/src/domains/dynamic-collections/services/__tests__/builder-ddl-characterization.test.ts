@@ -4,9 +4,12 @@
  * These assert nothing about what the SQL *should* be. They record what it *is*, so that a change
  * which is meant to leave the emitted DDL alone can be shown to have done so rather than assumed to.
  *
- * That distinction matters because the generators are called from several places with their
- * arguments assembled differently, and an option dropped at one call site changes the table while
- * every test asserting a column *exists* still passes.
+ * Scope, stated precisely so it is not mistaken for more than it is: these call the generators
+ * directly with the options spelled out, so they pin what each generator RENDERS for a given set of
+ * options. They do not pin what any caller PASSES — a caller that stops forwarding `localized`,
+ * `hasStatus` or `isSingle` still reaches these assertions with the options hard-coded correctly and
+ * they still pass. Covering that belongs with whichever entry point assembles the options, asserted
+ * from a request payload rather than from an options object.
  *
  * Whole strings rather than substrings, on purpose: the failure worth catching is a column quietly
  * changing type, losing NOT NULL, or gaining a default, and a substring assertion sees none of those.
@@ -28,9 +31,24 @@ type Dialect = "postgresql" | "mysql" | "sqlite";
  * whole number, a fractional number, a boolean, a date, structured data, and the two column-level
  * constraints the Builder can set.
  */
+/**
+ * A field of every shape these generators treat differently: free text, a bounded string, a whole
+ * number, a fractional number, a boolean, a date, structured data, and the two column-level
+ * constraints the Builder can set.
+ *
+ * The two generators read a declared width from different places — this one from
+ * `options.variant` plus `validation.maxLength`, the field-group one from a top-level `maxLength` —
+ * so a bounded column needs a fixture per generator or the `VARCHAR(n)` branch goes unrecorded.
+ */
 const FIELDS: FieldDefinition[] = [
   { name: "title", type: "text", required: true },
   { name: "slugKey", type: "text", unique: true },
+  {
+    name: "shortCode",
+    type: "text",
+    options: { variant: "short" },
+    validation: { maxLength: 120 },
+  },
   { name: "summary", type: "textarea" },
   { name: "views", type: "number" },
   { name: "rating", type: "number", options: { format: "float" } },
@@ -39,6 +57,13 @@ const FIELDS: FieldDefinition[] = [
   { name: "payload", type: "json" },
   { name: "lookupCode", type: "text", index: true },
 ];
+
+/** The same shapes, with the width stated the way the field-group generator reads it. */
+const FIELD_GROUP_FIELDS = FIELDS.map(field =>
+  field.name === "shortCode"
+    ? { name: "shortCode", type: "text", maxLength: 120 }
+    : field
+);
 
 /**
  * The table name carries the case, not just the option: `generateMigrationSQL` treats any
@@ -72,8 +97,9 @@ describe("builder DDL — pinned as it is today", () => {
       ).toMatchSnapshot();
     });
 
-    // Translatable columns move to the companion table, so the main CREATE must lose them. A
-    // relocation that drops this option would recreate them on main and strand the companion.
+    // A localized entity keeps its translatable columns in the companion `_locales` table, so the
+    // main CREATE must omit them. Emitting them on main instead leaves two homes for one value and
+    // the companion holding nothing.
     it("emits the same CREATE for a localized single", () => {
       expect(
         generate(dialect, SINGLE_TABLE, { isSingle: true, localized: true })
@@ -90,13 +116,13 @@ describe("builder DDL — pinned as it is today", () => {
 
 describe("field group DDL — pinned as it is today", () => {
   describe.each<Dialect>(["postgresql", "mysql", "sqlite"])("%s", dialect => {
-    // A field group's table carries its own system columns (parent linkage, ordering, the type
-    // discriminator) rather than a collection's, and a different generator renders them. It moves
-    // in the same relocation, so it is pinned the same way.
+    // A field group's table carries its own system columns — parent linkage, ordering, and the type
+    // discriminator — rather than a collection's, and a separate generator renders them. Its output
+    // is recorded for the same reason and to the same depth.
     it("emits the same CREATE for a field group", () => {
       const sql = new FieldGroupSchemaService(dialect).generateMigrationSQL(
         "comp_pinned",
-        FIELDS as unknown as FieldConfig[]
+        FIELD_GROUP_FIELDS as unknown as FieldConfig[]
       );
 
       expect(sql.trim()).toMatchSnapshot();
@@ -105,7 +131,7 @@ describe("field group DDL — pinned as it is today", () => {
     it("emits the same CREATE for a localized field group", () => {
       const sql = new FieldGroupSchemaService(dialect).generateMigrationSQL(
         "comp_pinned",
-        FIELDS as unknown as FieldConfig[],
+        FIELD_GROUP_FIELDS as unknown as FieldConfig[],
         { localized: true }
       );
 
