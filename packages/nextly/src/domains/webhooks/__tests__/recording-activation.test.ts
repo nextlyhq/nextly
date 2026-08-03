@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   endpointsPresent,
+  resolveEventRetentionClass,
   isWebhookAuditEnabled,
   refreshEndpointPresence,
   resetWebhookActivation,
@@ -175,5 +176,32 @@ describe("endpoint presence flag", () => {
     await flush();
     expect(refresher).toHaveBeenCalledTimes(2);
     expect(endpointsPresent()).toBe(false);
+  });
+});
+
+/**
+ * Which retention window a recorded row falls under follows WHY it was
+ * recorded. The class records the longest retention the row needs, so a row
+ * that is both audit-relevant and deliverable is audit-class.
+ */
+describe("resolveEventRetentionClass", () => {
+  it("marks a row recorded for audit as audit-class", () => {
+    expect(
+      resolveEventRetentionClass({ auditEnabled: true, hasEndpoints: false })
+    ).toBe("audit");
+  });
+
+  it("marks a row recorded only for delivery as webhook-class", () => {
+    expect(
+      resolveEventRetentionClass({ auditEnabled: false, hasEndpoints: true })
+    ).toBe("webhook");
+  });
+
+  it("takes the longer window when the row is both", () => {
+    // Audit history outlives outbox hygiene, so a row needed for both must not
+    // be evicted on the delivery schedule.
+    expect(
+      resolveEventRetentionClass({ auditEnabled: true, hasEndpoints: true })
+    ).toBe("audit");
   });
 });

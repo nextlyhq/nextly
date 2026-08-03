@@ -20,6 +20,10 @@ import type {
 
 import { webhookTables } from "../../schemas/webhooks";
 
+import {
+  DEFAULT_EVENT_RETENTION_CLASS,
+  type EventRetentionClass,
+} from "./retention-config";
 import { DEFAULT_EVENT_OUTCOME, type WebhookEvent } from "./types";
 
 /**
@@ -28,7 +32,11 @@ import { DEFAULT_EVENT_OUTCOME, type WebhookEvent } from "./types";
  * bypasses Drizzle's runtime `$defaultFn`, so a NOT NULL timestamp must be
  * provided rather than left to the column default.
  */
-function eventRow(envelope: WebhookEvent, now: Date): Record<string, unknown> {
+function eventRow(
+  envelope: WebhookEvent,
+  now: Date,
+  retentionClass: EventRetentionClass
+): Record<string, unknown> {
   return {
     id: envelope.id,
     type: envelope.type,
@@ -56,6 +64,10 @@ function eventRow(envelope: WebhookEvent, now: Date): Record<string, unknown> {
     actor_id: envelope.actor?.id ?? null,
     // Absent means the action completed; see WebhookEvent.outcome.
     outcome: envelope.outcome ?? DEFAULT_EVENT_OUTCOME,
+    // Storage policy, not envelope content: which window prunes this row. Kept
+    // off the envelope deliberately — a subscriber has no use for it, and the
+    // delivered payload should not carry the host's retention decisions.
+    retention_class: retentionClass,
     created_at: now,
   };
 }
@@ -67,14 +79,22 @@ function eventRow(envelope: WebhookEvent, now: Date): Record<string, unknown> {
  */
 export async function recordEvent(
   tx: TransactionContext,
-  params: { envelope: WebhookEvent }
+  params: { envelope: WebhookEvent; retentionClass?: EventRetentionClass }
 ): Promise<void> {
   // Project to `id` only: the result is ignored, and the default insert would
   // otherwise RETURN * (or select the row back), forcing the large JSON payload
   // we just wrote to be read and decoded again inside the content transaction.
-  await tx.insert("nextly_events", eventRow(params.envelope, new Date()), {
-    returning: ["id"],
-  });
+  await tx.insert(
+    "nextly_events",
+    eventRow(
+      params.envelope,
+      new Date(),
+      params.retentionClass ?? DEFAULT_EVENT_RETENTION_CLASS
+    ),
+    {
+      returning: ["id"],
+    }
+  );
 }
 
 /**
@@ -83,7 +103,10 @@ export async function recordEvent(
  * json/jsonb codec serializes it per dialect, and `createdAt`/`retentionClass`
  * are left to the column defaults the Drizzle insert applies.
  */
-function eventRowForDrizzle(envelope: WebhookEvent): Record<string, unknown> {
+function eventRowForDrizzle(
+  envelope: WebhookEvent,
+  retentionClass: EventRetentionClass
+): Record<string, unknown> {
   return {
     id: envelope.id,
     type: envelope.type,
@@ -100,6 +123,8 @@ function eventRowForDrizzle(envelope: WebhookEvent): Record<string, unknown> {
     actorId: envelope.actor?.id ?? null,
     // Absent means the action completed; see WebhookEvent.outcome.
     outcome: envelope.outcome ?? DEFAULT_EVENT_OUTCOME,
+    // See eventRow: storage policy, kept off the envelope.
+    retentionClass,
   };
 }
 
@@ -124,8 +149,15 @@ export interface DrizzleEventTx {
 export async function recordEventInTx(
   tx: DrizzleEventTx,
   dialect: SupportedDialect,
-  params: { envelope: WebhookEvent }
+  params: { envelope: WebhookEvent; retentionClass?: EventRetentionClass }
 ): Promise<void> {
   const { nextlyEvents } = webhookTables(dialect);
-  await tx.insert(nextlyEvents).values(eventRowForDrizzle(params.envelope));
+  await tx
+    .insert(nextlyEvents)
+    .values(
+      eventRowForDrizzle(
+        params.envelope,
+        params.retentionClass ?? DEFAULT_EVENT_RETENTION_CLASS
+      )
+    );
 }

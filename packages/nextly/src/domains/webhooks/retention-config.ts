@@ -77,8 +77,24 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  */
 export const DEFAULT_EVENTS_MAX_AGE_MS = 30 * DAY_MS;
 
-/** 365 days. Audit history is kept in years; SOC 2 practice is a one-year floor. */
-export const DEFAULT_AUDIT_EVENTS_MAX_AGE_MS = 365 * DAY_MS;
+/**
+ * 90 days. Audit history is measured in months where outbox hygiene is measured
+ * in days, and 90 is where comparable products land for CONTENT activity —
+ * Directus, Strapi, Sanity's mid tier, Vercel and Datadog all default there.
+ *
+ * An earlier note here put this at a year on the grounds that "SOC 2 practice is
+ * a one-year floor". That does not hold up: neither SOC 2 nor ISO 27001 A.8.15
+ * mandates a period — both require that retention be defined and risk-based —
+ * and the ubiquitous twelve-month figure is PCI DSS convention (10.5.1) that has
+ * been imported into the wider discourse. A deployment genuinely in PCI scope
+ * should raise `auditEventsMaxAgeMs` accordingly; that is a decision only the
+ * operator can make, so the default follows the norm rather than the strictest
+ * regime anyone might be under.
+ *
+ * Auth and security events are governed separately and kept longer; they live in
+ * their own table because they carry evidence content activity does not.
+ */
+export const DEFAULT_AUDIT_EVENTS_MAX_AGE_MS = 90 * DAY_MS;
 
 /**
  * 7 days. Deliveries are the faster-growing table (events x matching endpoints)
