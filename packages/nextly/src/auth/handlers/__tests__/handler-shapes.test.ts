@@ -258,12 +258,13 @@ describe("login handler: respondAction shape", () => {
     );
   });
 
-  it("does not record a success when an afterLogin hook rejects", async () => {
-    // The hook runs after the session is created but before the client has the
-    // token body or cookies. If it throws, the handler returns an error and
-    // records a failure — so a success recorded earlier would leave the trail
-    // asserting both outcomes for one attempt, and claiming the user got in
-    // when nothing was ever delivered to them.
+  /**
+   * Drive a login whose `afterLogin` hook rejects with the given failure, and
+   * hand back what was recorded. The hook belongs to plugin code, so the
+   * failure it raises is whatever that author chose — which is why this is
+   * parameterised rather than fixed to one error type.
+   */
+  async function loginWithRejectingAfterLogin(failure: unknown) {
     const passwordHash = await hashPassword("Pass1234!");
     const fakeUser = {
       id: "u1",
@@ -291,7 +292,7 @@ describe("login handler: respondAction shape", () => {
     });
     pipeline.authHooks.add({
       afterLogin: () => {
-        throw new Error("afterLogin exploded");
+        throw failure;
       },
     } as never);
     const deps = {
@@ -313,22 +314,50 @@ describe("login handler: respondAction shape", () => {
       ...pipeline,
     };
 
-    const req = makeRequest("POST", {
-      email: "a@example.com",
-      password: "Pass1234!",
-    });
-    const res = await handleLogin(req, deps);
-    expect(res.status).toBeGreaterThanOrEqual(400);
+    const res = await handleLogin(
+      makeRequest("POST", {
+        email: "a@example.com",
+        password: "Pass1234!",
+      }),
+      deps
+    );
+    return { res, write: pipeline.auditLog.write };
+  }
 
-    const write = pipeline.auditLog.write;
-    expect(write).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: "login-failed" })
-    );
-    // Exactly one outcome for one attempt.
-    expect(write).not.toHaveBeenCalledWith(
-      expect.objectContaining({ kind: "login-succeeded" })
-    );
-  });
+  // The hook runs after the session is created but before the client has the
+  // token body or cookies. If it throws, the handler returns an error and
+  // records a failure — so a success recorded earlier would leave the trail
+  // asserting both outcomes for one attempt, and claiming the account was
+  // reached when nothing was ever delivered to it.
+  //
+  // Both error shapes are covered because the handler's catch branches on them:
+  // a typed failure keeps its own status, while anything else is wrapped as an
+  // internal error. The invariant under test — exactly one outcome per attempt —
+  // must hold on both branches, and a plugin author is bound by neither our
+  // error convention nor our types.
+  it.each([
+    [
+      "an untyped failure, as third-party plugin code raises",
+      new Error("afterLogin exploded"),
+    ],
+    [
+      "a typed failure",
+      NextlyError.internal({ logContext: { from: "afterLogin" } }),
+    ],
+  ])(
+    "does not record a success when an afterLogin hook rejects with %s",
+    async (_label, failure) => {
+      const { res, write } = await loginWithRejectingAfterLogin(failure);
+
+      expect(res.status).toBeGreaterThanOrEqual(400);
+      expect(write).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "login-failed" })
+      );
+      expect(write).not.toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "login-succeeded" })
+      );
+    }
+  );
 
   it("returns password_change_required with a pending token (no session) for a must-change account", async () => {
     const passwordHash = await hashPassword("Pass1234!");
