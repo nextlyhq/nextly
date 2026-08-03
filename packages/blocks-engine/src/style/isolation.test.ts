@@ -275,6 +275,36 @@ describe("names CSS resolves for the whole document", () => {
     ).toEqual([]);
   });
 
+  it("reports a font family, which names itself in a descriptor", () => {
+    // `@font-face` is the one at-rule that names itself in a DESCRIPTOR rather
+    // than a prelude. The name is every bit as global: a host font and ours by
+    // the same name are one font, and which one depends on load order.
+    const found = findUnnamespacedGlobals(
+      `@font-face { font-family: Fade; src: url(a.woff2) }`,
+      SCOPE
+    );
+    expect(found).toHaveLength(1);
+    expect(found[0]?.name).toBe("Fade");
+  });
+
+  it("reads a quoted family name the same as a bare one", () => {
+    const found = findUnnamespacedGlobals(
+      `@font-face { font-family: "Fade"; src: url(a.woff2) }`,
+      SCOPE
+    );
+    expect(found).toHaveLength(1);
+    expect(found[0]?.name).toBe("Fade");
+  });
+
+  it("accepts a namespaced font family", () => {
+    expect(
+      findUnnamespacedGlobals(
+        `@font-face { font-family: "${SCOPE}-Fade"; src: url(a.woff2) }`,
+        SCOPE
+      )
+    ).toEqual([]);
+  });
+
   it("ignores at-rules that define no global name", () => {
     // `@media` and `@container` scope rules; they name nothing.
     expect(

@@ -36,10 +36,10 @@ and fails if any emitted selector could match an element outside
 `.nx-pb-page`.
 
 **Nothing the builder emits defines a name that collides with yours.**
-`@keyframes`, `@property` and their relatives resolve names across the whole
-document regardless of scoping, so the builder namespaces every one it defines.
-An animation you call `fade` and one the builder calls `fade` are different
-animations.
+`@keyframes`, `@property`, `@counter-style` and `@font-face` all define names
+that CSS resolves across the whole document regardless of scoping, so the
+builder namespaces every one it defines. An animation you call `fade` and one the
+builder calls `fade` are different animations; so are two fonts called `Inter`.
 
 ---
 
@@ -93,13 +93,27 @@ it:
 ```
 
 **Style through a scope you control.** If you render the document with a scope,
-that class is yours to select on:
+that class is yours to select on — but the scope is already part of the selector
+the builder emits, so repeating it adds nothing. Put an ancestor in front of it:
 
 ```css
+/* The builder already emits this when the document has a scope: */
+/* .nx-pb-page.nx-pb-page.my-region .nx-pb-a1b2 { color: teal }  (0-4-0) */
+
+/* So this TIES, and loses on source order — the builder's inline
+   <style> comes after your stylesheet: */
 .my-region.nx-pb-page.nx-pb-page .nx-pb-a1b2 {
   color: rebeccapurple;
-}
+} /* 0-4-0 — no */
+
+/* This wins: */
+.my-theme .my-region.nx-pb-page.nx-pb-page .nx-pb-a1b2 {
+  color: rebeccapurple;
+} /* 0-5-0 — yes */
 ```
+
+Class order inside a compound carries no weight; only the count does. When in
+doubt, add one more class than the builder's selector has, or use `!important`.
 
 ---
 

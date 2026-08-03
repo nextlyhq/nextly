@@ -118,13 +118,42 @@ export function namespacedGlobalName(name: string, scopeClass: string): string {
   return `${custom ? "--" : ""}${scopeClass}-${bare}`;
 }
 
-/** At-rules that define a globally-resolved name in their prelude. */
+/** At-rules that define a globally-resolved name in their PRELUDE. */
 const GLOBAL_NAME_AT_RULES = new Set([
   "keyframes",
   "property",
   "counter-style",
   "font-palette-values",
+  "position-try",
 ]);
+
+/** Whether a name already carries this document's namespace. */
+function isNamespaced(name: string, scopeClass: string): boolean {
+  const bare = name.startsWith("--") ? name.slice(2) : name;
+  return bare.startsWith(`${scopeClass}-`);
+}
+
+/**
+ * The family name an `@font-face` declares, unquoted.
+ *
+ * `@font-face` is the one at-rule that names itself in a DESCRIPTOR rather than
+ * a prelude, and the name is every bit as global: `font-family: Fade` inside it
+ * defines "Fade" for the whole document, so a host font and ours by the same
+ * name are one font, and which one it is depends on load order.
+ */
+function fontFaceFamily(css: string, node: Atrule): string | undefined {
+  const block = node.block;
+  if (block === null) return undefined;
+  for (const child of block.children) {
+    if (child.type !== "Declaration") continue;
+    if (child.property.toLowerCase() !== "font-family") continue;
+    const raw = sourceTextOf(css, child.value).trim();
+    // A family may be quoted or a bare identifier; the name is the same either
+    // way, so the quotes come off before it is compared.
+    return raw.replace(/^["']|["']$/g, "");
+  }
+  return undefined;
+}
 
 /** One at-rule defining a name that is not namespaced to this document. */
 export interface GlobalName {
@@ -159,6 +188,17 @@ export function findUnnamespacedGlobals(
     visit: "Atrule",
     enter(node: Atrule) {
       const atRule = node.name.toLowerCase();
+      if (atRule === "font-face") {
+        const family = fontFaceFamily(css, node);
+        if (family === undefined || family === "") return;
+        if (isNamespaced(family, scopeClass)) return;
+        found.push({
+          atRule,
+          name: family,
+          reason: `"@font-face" declaring "font-family: ${family}" defines a font name CSS resolves for the whole document, so it collides with any other font of that name on the page.`,
+        });
+        return;
+      }
       if (!GLOBAL_NAME_AT_RULES.has(atRule)) return;
       const prelude = node.prelude;
       if (prelude === null) return;
@@ -167,9 +207,7 @@ export function findUnnamespacedGlobals(
           ? prelude.value.trim()
           : sourceTextOf(css, prelude);
       if (name === "") return;
-      if (namespacedGlobalName(name, scopeClass) === name) return;
-      const bare = name.startsWith("--") ? name.slice(2) : name;
-      if (bare.startsWith(`${scopeClass}-`)) return;
+      if (isNamespaced(name, scopeClass)) return;
       found.push({
         atRule,
         name,
