@@ -69,8 +69,10 @@ export type { NodeLocation, TreePosition } from "./tree";
 export { validate, ISSUE_CODES } from "./validation";
 export type {
   BlockTypeLookup,
+  ClassLookup,
   IssueCode,
   IssueSeverity,
+  TokenLookup,
   ValidationContext,
   ValidationIssue,
   ValidationMode,
@@ -152,6 +154,10 @@ export {
   validateStyleValues,
   newStyleIssueBudget,
   MAX_STYLE_ISSUES,
+  MAX_STYLE_ISSUE_PATH_BYTES,
+  MAX_SITE_ISSUES,
+  MAX_SITE_ISSUE_PATH_BYTES,
+  MAX_SITE_LOOKUPS,
   tokenKindAllowedAt,
   tokenKindsForProperty,
 } from "./style/validate-style-value";

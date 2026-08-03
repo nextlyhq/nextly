@@ -4,8 +4,12 @@ import type { StyleValues } from "../document";
 import { ISSUE_CODES } from "../validation";
 import { checkColorValue, checkCssValue, checkUrlValue } from "./css-value";
 import {
+  MAX_SITE_ISSUES,
   MAX_STYLE_ISSUES,
+  MAX_STYLE_ISSUE_PATH_BYTES,
+  memoizeTokenLookup,
   newStyleIssueBudget,
+  speculativeBudget,
   validateStyleValues,
 } from "./validate-style-value";
 
@@ -17,6 +21,360 @@ function check(values: StyleValues) {
 function codes(values: StyleValues): string[] {
   return check(values).map(issue => issue.code);
 }
+
+describe("a design token reference is checked against the site", () => {
+  const tokens = {
+    kindOf: (name: string) =>
+      name === "color.primary"
+        ? ("color" as const)
+        : name === "space.4"
+          ? ("dimension" as const)
+          : undefined,
+  };
+  const strict = (values: StyleValues, ctx?: typeof tokens) =>
+    validateStyleValues(values, "/styles", "strict", undefined, false, ctx);
+
+  it("says nothing at all when no site context was supplied", () => {
+    // A check that fires only once a lookup appears would mean defining a
+    // site's FIRST token invalidates every other reference already in storage.
+    // Not being given the data means not answering.
+    expect(strict({ color: { $token: "nope.nothing" } })).toEqual([]);
+    expect(strict({ color: { $token: "color.primary" } })).toEqual([]);
+  });
+
+  it("accepts a token the site defines with the kind the value takes", () => {
+    expect(strict({ color: { $token: "color.primary" } }, tokens)).toEqual([]);
+    expect(strict({ gap: { $token: "space.4" } }, tokens)).toEqual([]);
+  });
+
+  it("warns, and never errors, when the site defines no such token", () => {
+    const issues = strict({ color: { $token: "color.nope" } }, tokens);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.code).toBe("unknown-token");
+    // Asserted in STRICT mode on purpose: an unresolved token costs one
+    // declaration, so renaming a token must never make stored documents
+    // unpublishable. A later change that escalates this fails here.
+    expect(issues[0]?.severity).toBe("warning");
+    expect(issues[0]?.path).toBe("/styles/color");
+  });
+
+  it("warns when the token exists but is the wrong kind", () => {
+    const issues = strict({ gap: { $token: "color.primary" } }, tokens);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.code).toBe("token-kind-mismatch");
+    expect(issues[0]?.severity).toBe("warning");
+    expect(issues[0]?.message).toContain("color");
+  });
+
+  it("keeps refusing a token where the value takes only literals", () => {
+    // Decidable from the catalog alone, so it stays an error and needs no
+    // site context: no configuration makes this leaf accept a token.
+    const issues = strict({ display: { $token: "color.primary" } }, tokens);
+    expect(issues[0]?.code).toBe("token-not-allowed");
+    expect(issues[0]?.severity).toBe("error");
+  });
+
+  it("stays a warning where the catalog lists the value two ways", () => {
+    // `fontWeight` is a keyword OR a number. The keyword arm forbids tokens
+    // outright and reports an error; the number arm accepts one and reports the
+    // unresolved name as a warning. Both land on the same path, so a selection
+    // that ranked them only by depth would return the refusal and block a
+    // publish over a value the site can simply define.
+    const issues = strict({ fontWeight: { $token: "weight.bold" } }, tokens);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.code).toBe("unknown-token");
+    expect(issues[0]?.severity).toBe("warning");
+  });
+
+  it("reaches a token nested inside a composite", () => {
+    const issues = strict(
+      { padding: { blockStart: { $token: "space.nope" } } },
+      tokens
+    );
+    expect(issues[0]?.code).toBe("unknown-token");
+    expect(issues[0]?.path).toBe("/styles/padding/blockStart");
+  });
+});
+
+describe("a union says which kinds it really accepts", () => {
+  it("names every arm's kinds, not the first one to refuse", () => {
+    // `lineHeight` takes a number OR a dimension token. Reporting the first
+    // refusing arm's list would tell an author the property takes only numbers
+    // and steer them away from a spelling that works.
+    const issues = validateStyleValues(
+      { lineHeight: { $token: "brand.primary" } },
+      "/styles",
+      "strict",
+      undefined,
+      false,
+      { kindOf: () => "color" as const }
+    );
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.code).toBe("token-kind-mismatch");
+    expect(issues[0]?.message).toContain("number");
+    expect(issues[0]?.message).toContain("dimension");
+  });
+});
+
+describe("the union token shortcut respects the checks around it", () => {
+  it("refuses a malformed reference rather than warning about its kind", () => {
+    // A reference stands in for the whole value, so anything beside `$token` is
+    // data a reader discards in silence. Taking the kind shortcut first would
+    // let that through with a warning where the leaf refuses it outright.
+    const issues = validateStyleValues(
+      { lineHeight: { $token: "x", extra: true } },
+      "/styles",
+      "strict",
+      undefined,
+      false,
+      { kindOf: () => "color" as const }
+    );
+    expect(issues.map(i => i.severity)).toEqual(["error"]);
+  });
+
+  it("asks the caller's lookup once per name, however often it is consulted", () => {
+    // A union asks before choosing an arm, each arm asks while being tried, and
+    // the winning arm asks again when it is re-run. `kindOf` is the caller's
+    // code and may be expensive, and whether a name resolves cannot change
+    // inside one run.
+    let asked = 0;
+    validateStyleValues(
+      { lineHeight: { $token: "gone" } },
+      "/styles",
+      "strict",
+      newStyleIssueBudget(),
+      false,
+      {
+        kindOf: () => {
+          asked += 1;
+          return undefined;
+        },
+      }
+    );
+    expect(asked).toBe(1);
+  });
+
+  it("does not call the lookup once name checking has stopped", () => {
+    // `kindOf` is the caller's code. A run that has already said it stopped
+    // checking names must stop calling it, not call it and discard the answer.
+    let asked = 0;
+    const budget = newStyleIssueBudget(200, 50_000, 0);
+    validateStyleValues(
+      { lineHeight: { $token: "x" } },
+      "/styles",
+      "strict",
+      budget,
+      false,
+      {
+        kindOf: () => {
+          asked += 1;
+          return "color" as const;
+        },
+      }
+    );
+    expect(asked).toBe(0);
+  });
+
+  it("stops asking the lookup before a union arm is chosen, not only after", () => {
+    // The lookup allowance is distinct from the reporting allowance: a name the
+    // run has not yet answered costs the caller, and the run may keep room to
+    // REPORT while having no room left to ASK. The leaf reference honours that
+    // distinction; the union shortcut must too, or a token on `lineHeight` calls
+    // `kindOf` past the cap and the caller is billed for an answer the run was
+    // meant to stop requesting.
+    let asked = 0;
+    const budget = newStyleIssueBudget(200, 50_000, 50, 50_000, 0);
+    validateStyleValues(
+      { lineHeight: { $token: "x" } },
+      "/styles",
+      "strict",
+      budget,
+      false,
+      {
+        kindOf: () => {
+          asked += 1;
+          return "color" as const;
+        },
+      }
+    );
+    expect(asked).toBe(0);
+  });
+});
+
+describe("a budget that predates the site allowance", () => {
+  it("bounds name resolution it never knew it had", () => {
+    // The structural half of this shape has been public since it shipped, so a
+    // caller can legitimately hand back an object carrying only those fields.
+    // The site allowance is missing from such an object, and an allowance read
+    // as `undefined` bounds nothing: `undefined <= 0` is false, and charging it
+    // reaches NaN, which is never spent either. Filling it in is what keeps the
+    // bound, and validation reports rather than throwing on the way.
+    const legacy = { remaining: 200, pathBytes: 50_000, truncated: false };
+    const styles: Record<string, unknown> = { color: { $token: "gone" } };
+    const issues = validateStyleValues(
+      styles,
+      "/styles",
+      "strict",
+      legacy as never,
+      false,
+      { kindOf: () => undefined }
+    );
+    // One warning, and the allowance it came out of now exists on the object.
+    expect(issues.map(i => i.code)).toEqual(["unknown-token"]);
+    expect(typeof (legacy as { siteRemaining?: number }).siteRemaining).toBe(
+      "number"
+    );
+    expect((legacy as { siteRemaining: number }).siteRemaining).toBe(
+      MAX_SITE_ISSUES - 1
+    );
+  });
+});
+
+describe("the site allowance bounds what name resolution reports", () => {
+  const nothingResolves = { kindOf: () => undefined };
+  /** A run whose site allowance holds exactly `n` findings. */
+  const withSiteRoom = (n: number) => newStyleIssueBudget(200, 50_000, n);
+
+  it("says it stopped only when a reference really went unchecked", () => {
+    // One unknown token spends the last slot; what follows is a literal, so
+    // nothing more was skipped and there is nothing to announce. Claiming
+    // otherwise would report unresolved names on a document that has none.
+    const budget = withSiteRoom(1);
+    const issues = validateStyleValues(
+      { color: { $token: "gone" }, textAlign: "start", display: "block" },
+      "/styles",
+      "strict",
+      budget,
+      false,
+      nothingResolves
+    );
+    expect(issues.map(i => i.code)).toEqual(["unknown-token"]);
+  });
+
+  it("says it stopped when the next reference is the one skipped", () => {
+    const budget = withSiteRoom(1);
+    const issues = validateStyleValues(
+      { color: { $token: "gone" }, backgroundColor: { $token: "also-gone" } },
+      "/styles",
+      "strict",
+      budget,
+      false,
+      nothingResolves
+    );
+    expect(issues.map(i => i.code)).toEqual([
+      "unknown-token",
+      "site-issues-truncated",
+    ]);
+    // Reported where the skipped reference is, not at the document root.
+    expect(issues[1]?.path).toBe("/styles/backgroundColor");
+    expect(issues[1]?.severity).toBe("warning");
+  });
+
+  it("holds inside a composite, not only between properties", () => {
+    // One property is a whole composite. An allowance charged only when the
+    // property returns lets every token-bearing side of a box report first,
+    // which is not a bound.
+    const budget = withSiteRoom(1);
+    const issues = validateStyleValues(
+      {
+        padding: {
+          blockStart: { $token: "a" },
+          blockEnd: { $token: "b" },
+          inlineStart: { $token: "c" },
+          inlineEnd: { $token: "d" },
+        },
+      },
+      "/styles",
+      "strict",
+      budget,
+      false,
+      nothingResolves
+    );
+    expect(issues.map(i => i.code)).toEqual([
+      "unknown-token",
+      "site-issues-truncated",
+    ]);
+  });
+
+  it("gates a speculative arm while keeping nothing it spends", () => {
+    // Both halves matter and they pull in opposite directions. Handing an arm
+    // no allowance stops it billing anything, and also stops it stopping: a
+    // composite arm walks every key it was given and would build an issue for
+    // each one before anything looked at the result. Handing it the real
+    // allowance bounds it and lets a discarded arm spend.
+    //
+    // Tested here rather than through the returned issues because the waste is
+    // transient: the winning arm is re-run against the real budget either way,
+    // so the reported issues are identical and only the work differs.
+    const real = newStyleIssueBudget(5, 100, 3, 50);
+    const speculative = speculativeBudget(real);
+    expect(speculative?.remaining).toBe(5);
+    expect(speculative?.pathBytes).toBe(100);
+    expect(speculative?.siteRemaining).toBe(3);
+    if (speculative === undefined) throw new Error("expected a budget");
+    speculative.remaining -= 5;
+    speculative.truncated = true;
+    speculative.siteRemaining -= 3;
+    speculative.siteTruncated = true;
+    expect(real.remaining).toBe(5);
+    expect(real.truncated).toBe(false);
+    expect(real.siteRemaining).toBe(3);
+    expect(real.siteTruncated).toBe(false);
+  });
+
+  it("keeps the reported issues bounded whichever arm wins", () => {
+    const corners: Record<string, string> = {};
+    for (let i = 0; i < 5000; i += 1) corners[`corner${i}`] = "1px";
+    const issues = validateStyleValues(
+      { borderRadius: corners },
+      "/styles",
+      "strict",
+      newStyleIssueBudget()
+    );
+    expect(issues.length).toBeLessThanOrEqual(MAX_STYLE_ISSUES + 1);
+  });
+
+  it("charges a union once, not once per arm it tried", () => {
+    // `lineHeight` is a union whose arms both take a token. Trying an arm is
+    // speculative; spending the allowance is not. Billing per arm would empty
+    // the allowance faster than the document uses it, and a discarded arm's
+    // truncation marker would suppress the one a later reference was going to
+    // get.
+    const budget = withSiteRoom(2);
+    const issues = validateStyleValues(
+      { lineHeight: { $token: "gone" }, color: { $token: "also-gone" } },
+      "/styles",
+      "strict",
+      budget,
+      false,
+      nothingResolves
+    );
+    expect(issues.map(i => i.code)).toEqual(["unknown-token", "unknown-token"]);
+    expect(issues.map(i => i.path)).toEqual([
+      "/styles/lineHeight",
+      "/styles/color",
+    ]);
+  });
+
+  it("leaves structural checking untouched once it has stopped", () => {
+    // The whole point of a separate allowance: running out of room to talk
+    // about names must not cost the checks that decide whether the document is
+    // valid at all.
+    const budget = withSiteRoom(0);
+    const issues = validateStyleValues(
+      { color: { $token: "gone" }, textAlign: "sideways" },
+      "/styles",
+      "strict",
+      budget,
+      false,
+      nothingResolves
+    );
+    expect(issues.some(i => i.code === "style-issues-truncated")).toBe(false);
+    const structural = issues.filter(i => i.severity === "error");
+    expect(structural).toHaveLength(1);
+    expect(structural[0]?.path).toBe("/styles/textAlign");
+  });
+});
 
 describe("unknown properties", () => {
   it("is an error under strict validation", () => {
@@ -2732,5 +3090,72 @@ describe("an expression of bare numbers is a number", () => {
     expect(codes({ lineHeight: "calc(1 + 0.5)" })).toEqual([]);
     expect(codes({ lineHeight: "1.5rem" })).toEqual([]);
     expect(codes({ lineHeight: 1.5 })).toEqual([]);
+  });
+});
+
+describe("the truncation marker only claims what really went unchecked", () => {
+  it("stays silent when a cached name resolves cleanly after the allowance is spent", () => {
+    // The marker means "some names were not checked". A name this run already
+    // resolved is answered from the cache for nothing, and a KNOWN one produces
+    // no warning, so it truncates nothing. Announced anyway, it tells a consumer
+    // to expect dangling references that a clean document does not have.
+    const budget = newStyleIssueBudget(
+      MAX_STYLE_ISSUES,
+      MAX_STYLE_ISSUE_PATH_BYTES,
+      // One reporting slot, so the unknown name below spends the lot.
+      1
+    );
+    const tokens = memoizeTokenLookup(
+      {
+        kindOf: (name: string) =>
+          name === "ok" ? ("color" as const) : undefined,
+      },
+      budget
+    );
+    const check = (value: string, path: string) =>
+      validateStyleValues(
+        { color: { $token: value } },
+        path,
+        "strict",
+        budget,
+        false,
+        tokens
+      );
+
+    // Known: resolves, reports nothing, and is now cached.
+    expect(check("ok", "/a")).toEqual([]);
+    // Unknown: reports, and spends the single slot.
+    expect(check("gone", "/b").map(issue => issue.code)).toEqual([
+      "unknown-token",
+    ]);
+    // The same known name again: answered from the cache, still fine, and NOT
+    // a reason to say anything went unchecked.
+    expect(check("ok", "/c")).toEqual([]);
+  });
+
+  it("still says so when a name that would have warned cannot be reported", () => {
+    // The other half: the marker has to fire when a warning really is being
+    // withheld, or a truncated report would read as a clean one.
+    const budget = newStyleIssueBudget(
+      MAX_STYLE_ISSUES,
+      MAX_STYLE_ISSUE_PATH_BYTES,
+      1
+    );
+    const tokens = memoizeTokenLookup({ kindOf: () => undefined }, budget);
+    const check = (value: string, path: string) =>
+      validateStyleValues(
+        { color: { $token: value } },
+        path,
+        "strict",
+        budget,
+        false,
+        tokens
+      );
+    expect(check("gone", "/a").map(issue => issue.code)).toEqual([
+      "unknown-token",
+    ]);
+    expect(check("alsoGone", "/b").map(issue => issue.code)).toEqual([
+      "site-issues-truncated",
+    ]);
   });
 });

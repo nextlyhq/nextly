@@ -30,8 +30,9 @@ import {
   trimCssWhitespace,
 } from "./css-value";
 import {
-  budgetSpent,
   newStyleIssueBudget,
+  normalizeStyleIssueBudget,
+  structuralAllowanceSpent,
   validateStyleValues,
 } from "./validate-style-value";
 import type { StyleIssueBudget } from "./validate-style-value";
@@ -352,12 +353,16 @@ export function compileStyleValues(
   // this is reached. Without it an untrusted map produced a warning for every
   // invalid property, each repeating `basePath`, and a caller compiling one map
   // at a time — the natural two-argument form — had no bound at all.
-  const budget = suppliedBudget ?? newStyleIssueBudget();
-  const spentBefore = budgetSpent(budget);
+  // Normalized, not merely defaulted: the structural fields have been public
+  // since this type shipped, so a caller may hand back an object carrying only
+  // those, and reading a missing site allowance would bound nothing.
+  const budget =
+    normalizeStyleIssueBudget(suppliedBudget) ?? newStyleIssueBudget();
+  const spentBefore = structuralAllowanceSpent(budget);
   const issues = validateStyleValues(values, basePath, "strict", budget);
   const stopped =
     spentBefore ||
-    budgetSpent(budget) ||
+    structuralAllowanceSpent(budget) ||
     issues.some(issue => issue.code === "style-issues-truncated");
   if (stopped) {
     return {

@@ -41,9 +41,16 @@ and the pure operations over it.
 - **Delivery** of the stylesheet: where the CSS is written, cached or attached
   to a page is the renderer's concern. The compiler returns bytes and a class
   map and has no opinion about either.
-- Checks that need site-level context: whether a `$token` reference names a
-  token that exists, or a class id resolves. Validation here is what a document
-  can be judged on by itself.
+- Reading site-level data. Whether a `$token` reference names a token that
+  exists, or a class id resolves, IS checked — but only against a lookup the
+  caller supplies on the validation context, never by reaching for a database.
+  Without one, those names are not checked at all, so a document is judged
+  against what it was given and never against what it might have been.
+
+  Those two checks are always warnings, in either mode. A document is data and
+  a token table is configuration: an unresolved reference costs one declaration
+  and the element renders with what it inherits, so renaming a token must never
+  make stored documents unpublishable.
 
 ## Stability
 

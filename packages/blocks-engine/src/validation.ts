@@ -20,11 +20,19 @@ import { describeValue, pointer } from "./issue-text";
 import { DEFAULT_LIMITS, LIMIT_WARNING_RATIO } from "./limits";
 import type { DocumentLimits } from "./limits";
 import { isPlainRecord } from "./plain-record";
+import type { TokenKind } from "./style/catalog-types";
 import {
+  canResolveName,
+  chargeIssueBudget,
+  memoizeTokenLookup,
+  registerLookupCache,
   newStyleIssueBudget,
+  siteAllowanceSpent,
+  siteTruncationNotice,
+  structuralAllowanceSpent,
   validateStyleValues,
 } from "./style/validate-style-value";
-import type { StyleIssueBudget } from "./style/validate-style-value";
+import type { ReadyStyleIssueBudget } from "./style/validate-style-value";
 
 /** Severity of a validation issue. `error` blocks a strict publish. */
 export type IssueSeverity = "error" | "warning";
@@ -55,6 +63,67 @@ export interface BlockTypeLookup {
 }
 
 /**
+ * The site's design tokens, for checking the NAMES a document references.
+ *
+ * Supplying this states that the caller can answer for EVERY token the site
+ * defines. A lookup that knows only some of them reports the rest as unknown,
+ * which is survivable only because an unknown name is a warning and never an
+ * error — see `unknown-token` in the issue table.
+ *
+ * `kindOf` answers with the kind rather than a boolean so one call settles both
+ * questions a reference raises: whether the token exists, and whether it is the
+ * kind this leaf accepts. Two methods would let a caller check existence and
+ * forget the kind.
+ */
+export interface TokenLookup {
+  /** The kind of the named token, or undefined when the site defines none. */
+  kindOf(name: string): TokenKind | undefined;
+}
+
+/** The site's named classes, for checking the ids a node lists. */
+export interface ClassLookup {
+  has(id: string): boolean;
+}
+
+/** Wrappers made here, so one is never wrapped twice. */
+const memoizedClassLookups = new WeakSet<ClassLookup>();
+
+/**
+ * A class lookup that asks the caller's at most once per id.
+ *
+ * The same reasoning as the token lookup: `has` is caller-supplied and may be
+ * expensive, an id repeats freely across a document, and a KNOWN id produces no
+ * issue and so is never charged the allowance that bounds everything else. A
+ * document applying twenty site classes across five thousand nodes would
+ * otherwise ask a hundred thousand times to report nothing at all.
+ */
+function memoizeClassLookup(
+  classes: ClassLookup | undefined,
+  budget?: ReadyStyleIssueBudget
+): ClassLookup | undefined {
+  if (classes === undefined) return undefined;
+  if (memoizedClassLookups.has(classes)) return classes;
+  const seen = new Map<string, boolean>();
+  const lookup: ClassLookup = {
+    has(id: string): boolean {
+      const cached = seen.get(id);
+      if (cached !== undefined) return cached;
+      // Charged for what the caller was really asked, as the token lookup is: a
+      // repeated id is answered from this cache, and only a new one costs them
+      // anything. Distinct ids are what memoizing cannot collapse, and a known
+      // one is not a finding, so nothing else counts them.
+      if (budget !== undefined) budget.siteLookups -= 1;
+      const known = classes.has(id);
+      seen.set(id, known);
+      return known;
+    },
+  };
+  memoizedClassLookups.add(lookup);
+  registerLookupCache(lookup, seen);
+  return lookup;
+}
+
+/**
  * Everything validation needs beyond the document itself. The engine never
  * reads storage: the caller supplies the site breakpoints and mode, and
  * optionally a block-type lookup and non-default limits.
@@ -64,6 +133,13 @@ export interface ValidationContext {
   mode: ValidationMode;
   registry?: BlockTypeLookup;
   limits?: DocumentLimits;
+  /**
+   * The site's tokens and classes. Both are optional, and absent means the
+   * corresponding names are not checked at all — a document is validated
+   * against what it was given, never against what it might have been.
+   */
+  tokens?: TokenLookup;
+  classes?: ClassLookup;
 }
 
 /**
@@ -110,12 +186,19 @@ export const ISSUE_CODES = {
     "A component-instance node does not reference a component.",
   "unknown-style-property":
     "A style values key is not a property in the style catalog.",
+  "unknown-token":
+    "A design token reference names a token the site does not define.",
+  "token-kind-mismatch":
+    "A design token is not the kind of value its property accepts.",
+  "unknown-class": "A node lists a class id the site does not define.",
   "invalid-style-value":
     "A style value does not match the shape its property declares.",
   "token-not-allowed":
     "A design-token reference is used where only literal values are accepted.",
   "style-issues-truncated":
     "More style problems were found than the validation reports.",
+  "site-issues-truncated":
+    "Some token and class names were not checked against the site, so any that do not resolve are not reported.",
   "invalid-scope":
     "The compile scope is not a single class, so the document's rules were not scoped.",
 } as const;
@@ -205,19 +288,38 @@ export function validate(
 
   const beforeLimits = issues.length;
   checkLimits(doc, limits, issues);
-  const oversized = issues
+  // Any limit rejection, not the byte one alone. A forest over the node or
+  // depth cap is refused BEFORE its bytes are measured, so asking only about
+  // size would leave the expensive per-value work running on a document already
+  // known to be invalid.
+  const overLimits = issues
     .slice(beforeLimits)
-    .some(issue => issue.code === "document-too-large");
+    .some(
+      issue =>
+        issue.code === "document-too-large" ||
+        issue.code === "node-count-exceeded" ||
+        issue.code === "depth-exceeded"
+    );
 
+  const styleBudget = newStyleIssueBudget();
   const nodeState: NodeCheckState = {
-    ctx,
+    // Both site lookups are wrapped once here rather than per node or per style
+    // envelope, so a name repeated across the document costs the caller one
+    // answer for the whole walk. Nothing else bounds that repetition: a name
+    // that RESOLVES produces no issue, so it is never charged the allowance
+    // that stops the rest of the per-value work.
+    ctx: {
+      ...ctx,
+      tokens: memoizeTokenLookup(ctx.tokens, styleBudget),
+      classes: memoizeClassLookup(ctx.classes, styleBudget),
+    },
     issues,
     knownBreakpoints,
     unknownSeverity,
     seenIds: new Map<string, string>(),
     seenDomIds: new Map<string, string>(),
-    skipValueParsing: oversized,
-    styleBudget: newStyleIssueBudget(),
+    skipValueParsing: overLimits,
+    styleBudget,
   };
 
   // Document-level styles use the same envelope as node styles but have no
@@ -494,7 +596,7 @@ interface NodeCheckState {
   /** Non-empty DOM ids seen so far (from `cssId` or `attributes.id`) → pointer. */
   seenDomIds: Map<string, string>;
   /** Shared across the whole document, so the limit is not per node. */
-  styleBudget: StyleIssueBudget;
+  styleBudget: ReadyStyleIssueBudget;
   /**
    * Set when the document already failed the byte cap. Its style values are
    * still walked for shape, which is cheap, but not PARSED: parsing every
@@ -592,7 +694,14 @@ function validateNode(
   }
 
   validateSlots(node, path, state);
-  validateClasses(node, path, issues);
+  validateClasses(
+    node,
+    path,
+    issues,
+    state.ctx,
+    state.styleBudget,
+    state.skipValueParsing
+  );
   validateAttributes(node, path, issues);
   validateStyles(node, path, state);
   validateVisibility(node, path, state);
@@ -680,7 +789,10 @@ function validateSlots(
 function validateClasses(
   node: BlockNode,
   path: string,
-  issues: ValidationIssue[]
+  issues: ValidationIssue[],
+  ctx: ValidationContext,
+  budget?: ReadyStyleIssueBudget,
+  overLimits = false
 ): void {
   if (node.classes === undefined) return;
   // Index-based, not `.every` (which skips array holes), so a sparse classes
@@ -701,6 +813,60 @@ function validateClasses(
       severity: "error",
       message: "A node classes field must be an array of class-id strings.",
     });
+    return;
+  }
+  const lookup = ctx.classes;
+  if (lookup === undefined) return;
+  // A document a limit already refused is not read further, and the shape above
+  // is all that is worth reading of it. Resolving names means handing every
+  // class string to a lookup that hashes it, and a known id spends no allowance
+  // to stop that, so a rejected document made of very many known ids would be
+  // read in full right after a limit said not to read it.
+  if (overLimits) return;
+  // A WARNING in both modes, never an error. A class the site no longer defines
+  // costs the element that class's styling and nothing else, and a document is
+  // data while a class library is site configuration: deleting a class must not
+  // make every document that used it unpublishable.
+  for (let index = 0; index < node.classes.length; index += 1) {
+    // A node may list as many class ids as a document has room for, and each
+    // unknown one costs a lookup and an allocated issue. Bounded by the run's
+    // SITE allowance, and by both of its dimensions: the count keeps one node
+    // from turning a small document into a long report, and the path bytes keep
+    // a node nested under a very long slot key from repeating that key in every
+    // warning, which bounds how many are returned without bounding how large.
+    //
+    // The site allowance, not the structural one, because these are warnings
+    // that never block a publish. Spending the structural allowance on them
+    // would stop the checks that do decide validity, and the marker for
+    // stopping those is an error.
+    const id = node.classes[index];
+    if (typeof id !== "string") continue;
+    // Whether this id can be answered at all: from the cache for nothing, or by
+    // asking the caller while there are lookups left to spend and an answer
+    // could still be reported.
+    if (!canResolveName(lookup, id, budget)) {
+      issues.push(...siteTruncationNotice(budget, pointer(path, "classes")));
+      continue;
+    }
+    // A KNOWN id is not a finding, so it truncates nothing. Resolving it first
+    // and asking about the allowance second is what keeps the marker honest:
+    // announced before the answer is known, it would claim names went unchecked
+    // on a document whose every name checked out.
+    if (lookup.has(id)) continue;
+    const issuePath = pointer(pointer(path, "classes"), index);
+    if (siteAllowanceSpent(budget)) {
+      issues.push(...siteTruncationNotice(budget, issuePath));
+      continue;
+    }
+    const issue: ValidationIssue = {
+      path: issuePath,
+      code: "unknown-class",
+      severity: "warning",
+      message: `The class "${describeValue(id)}" is not defined by this site.`,
+      suggestion: "Create the class, or remove it from this node.",
+    };
+    chargeIssueBudget(budget, [issue]);
+    issues.push(issue);
   }
 }
 
@@ -788,6 +954,19 @@ function styleBudgetExhausted(
   ];
 }
 
+/**
+ * Record one style-envelope issue and charge the run for it.
+ *
+ * Both dimensions of the allowance, never the count alone: these paths carry
+ * the node's own pointer, so a node nested under a very long slot key repeats
+ * that key in every issue reported beneath it, and a count-only charge bounds
+ * how many are returned without bounding how large they are.
+ */
+function pushStyleIssue(state: NodeCheckState, issue: ValidationIssue): void {
+  state.issues.push(issue);
+  chargeIssueBudget(state.styleBudget, [issue]);
+}
+
 function validateStyleEnvelope(
   styles: unknown,
   stylesPath: string,
@@ -797,17 +976,16 @@ function validateStyleEnvelope(
     // Charged like every other style issue, and checked first: one per node
     // sounds bounded until a document carries thousands of nodes, and the cap
     // is document-wide rather than per node.
-    if (state.styleBudget.remaining <= 0) {
+    if (structuralAllowanceSpent(state.styleBudget)) {
       state.issues.push(...styleBudgetExhausted(state, stylesPath));
       return;
     }
-    state.issues.push({
+    pushStyleIssue(state, {
       path: stylesPath,
       code: "invalid-style-values",
       severity: "error",
       message: "A styles field must be an object.",
     });
-    state.styleBudget.remaining -= 1;
     return;
   }
   // Enumerated lazily: `Object.entries` would build a pair for every state name
@@ -828,30 +1006,28 @@ function validateStyleEnvelope(
       stateKey as (typeof STYLE_STATES)[number]
     );
     const stateHasOwnIssue = !stateIsKnown || !isPlainRecord(byBreakpoint);
-    if (state.styleBudget.remaining <= 0 && stateHasOwnIssue) {
+    if (structuralAllowanceSpent(state.styleBudget) && stateHasOwnIssue) {
       state.issues.push(...styleBudgetExhausted(state, stylesPath));
       return;
     }
     const statePath = pointer(stylesPath, stateKey);
     if (!stateIsKnown) {
-      state.issues.push({
+      pushStyleIssue(state, {
         path: statePath,
         code: "invalid-style-state",
         severity: "error",
         message: `"${describeValue(stateKey)}" is not a known style state.`,
         suggestion: `Use one of: ${STYLE_STATES.join(", ")}.`,
       });
-      state.styleBudget.remaining -= 1;
       continue;
     }
     if (!isPlainRecord(byBreakpoint)) {
-      state.issues.push({
+      pushStyleIssue(state, {
         path: statePath,
         code: "invalid-style-values",
         severity: "error",
         message: `Style state "${describeValue(stateKey)}" must map breakpoint ids to values.`,
       });
-      state.styleBudget.remaining -= 1;
       continue;
     }
     for (const breakpointId in byBreakpoint) {
@@ -866,19 +1042,18 @@ function validateStyleEnvelope(
       const noValuesHere = isPlainRecord(values) && !hasOwnKey(values);
       const nothingLeftHere =
         noValuesHere && state.knownBreakpoints.has(breakpointId);
-      if (state.styleBudget.remaining <= 0 && !nothingLeftHere) {
+      if (structuralAllowanceSpent(state.styleBudget) && !nothingLeftHere) {
         state.issues.push(...styleBudgetExhausted(state, statePath));
         return;
       }
       const bpPath = pointer(statePath, breakpointId);
       if (!state.knownBreakpoints.has(breakpointId)) {
-        state.issues.push({
+        pushStyleIssue(state, {
           path: bpPath,
           code: "unknown-breakpoint",
           severity: state.unknownSeverity,
           message: `Breakpoint "${describeValue(breakpointId)}" is not defined for this site.`,
         });
-        state.styleBudget.remaining -= 1;
       }
       // Rechecked between the two: an unknown breakpoint and a malformed value
       // are independently chargeable, so the first can spend the last slot and
@@ -886,18 +1061,17 @@ function validateStyleEnvelope(
       // Nothing is skipped when this breakpoint holds no values, though, and
       // the marker is an error — claiming a document went unchecked when it did
       // not would reject it for having been fully read.
-      if (state.styleBudget.remaining <= 0 && !noValuesHere) {
+      if (structuralAllowanceSpent(state.styleBudget) && !noValuesHere) {
         state.issues.push(...styleBudgetExhausted(state, bpPath));
         return;
       }
       if (!isPlainRecord(values)) {
-        state.issues.push({
+        pushStyleIssue(state, {
           path: bpPath,
           code: "invalid-style-values",
           severity: "error",
           message: `Style values at "${describeValue(breakpointId)}" must be an object.`,
         });
-        state.styleBudget.remaining -= 1;
         continue;
       }
       // The envelope's shape is only half of what makes a style block valid:
@@ -912,7 +1086,8 @@ function validateStyleEnvelope(
           bpPath,
           state.ctx.mode,
           state.styleBudget,
-          state.skipValueParsing
+          state.skipValueParsing,
+          state.ctx.tokens
         )
       );
     }
