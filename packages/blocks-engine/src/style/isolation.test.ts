@@ -151,6 +151,50 @@ describe("what counts as anchored", () => {
     ).toEqual([]);
   });
 
+  it("judges a scope root by what its pseudo-classes mean", () => {
+    // A root may carry a pseudo-class of its own. Reading every Selector under
+    // it would judge `.disabled` as if it were a second root and reject a scope
+    // that confines its contents perfectly well.
+    expect(
+      findUnscopedRules(
+        `@scope (.${SCOPE}:not(.disabled)) { .child { color: red } }`,
+        SCOPE
+      )
+    ).toEqual([]);
+    // `:is()` matches when ANY branch does, so it anchors only when every
+    // branch anchors.
+    expect(
+      findUnscopedRules(
+        `@scope (:is(.${SCOPE})) { .child { color: red } }`,
+        SCOPE
+      )
+    ).toEqual([]);
+    expect(
+      findUnscopedRules(
+        `@scope (:is(.${SCOPE}, body)) { .child { color: red } }`,
+        SCOPE
+      )
+    ).toHaveLength(1);
+  });
+
+  it("does not mistake a negation or a descendant test for an anchor", () => {
+    // Being NOT the page root guarantees an element is outside it, and
+    // `:has(.page)` matches things that CONTAIN the root — the host page most
+    // obviously. Neither confines anything.
+    expect(
+      findUnscopedRules(
+        `@scope (:not(.${SCOPE})) { .child { color: red } }`,
+        SCOPE
+      )
+    ).toHaveLength(1);
+    expect(
+      findUnscopedRules(
+        `@scope (:has(.${SCOPE})) { .child { color: red } }`,
+        SCOPE
+      )
+    ).toHaveLength(1);
+  });
+
   it("does not take an unanchored scope for an anchor", () => {
     // A scope rooted somewhere else confines its contents to somewhere else.
     expect(

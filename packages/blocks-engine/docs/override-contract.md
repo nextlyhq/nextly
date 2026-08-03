@@ -243,8 +243,13 @@ _predictable and overridable_, not _sealed_.
 
 In order, these explain nearly every case:
 
-1. **Something of yours is more specific.** Check the winning rule in devtools;
-   if it has more classes than `.nx-pb-page.nx-pb-page .nx-pb-xxxx`, that is why.
+1. **Something of yours is more specific.** Read the winning rule's specificity
+   in devtools and compare it to the builder's column by column, left to right:
+   ids first, then classes and pseudo-classes, then element names. The first
+   column that differs decides it, and a later column never makes up for an
+   earlier one. `#app h1` beats `.nx-pb-page.nx-pb-page .nx-pb-a1b2` on its one
+   id despite having no classes at all, and `.a .b .c h1` beats it on the type
+   selector after tying at three. Counting classes alone finds neither.
 2. **Something of yours uses `!important`.** The builder never does, so an
    `!important` in your stylesheet wins every specificity contest.
 3. **The property is mid-transition.** A transitioning value outranks every

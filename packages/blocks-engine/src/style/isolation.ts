@@ -163,13 +163,17 @@ function scopeRootIsAnchored(prelude: string, scopeClass: string): boolean {
   } catch {
     return false;
   }
+  // The list's own entries, not every Selector in the tree. Walking reaches the
+  // selectors held by a pseudo-class as well, so `(.nx-pb-page:not(.disabled))`
+  // would be judged on `.disabled` too and rejected — a scope that confines its
+  // contents perfectly well. What each pseudo-class means to anchoring is
+  // {@link partAnchors}'s question, asked once per root rather than per
+  // selector found anywhere beneath it.
+  if (ast.type !== "SelectorList") return false;
   const roots: Selector[] = [];
-  walk(ast, {
-    visit: "Selector",
-    enter(node: Selector) {
-      roots.push(node);
-    },
-  });
+  for (const node of ast.children) {
+    if (node.type === "Selector") roots.push(node);
+  }
   // EVERY root has to be anchored, and there has to be one. A scope rooted at
   // `.nx-pb-page, body` confines its contents to either, and the second confines
   // nothing.
@@ -179,15 +183,51 @@ function scopeRootIsAnchored(prelude: string, scopeClass: string): boolean {
 
 function selectorIsAnchored(selector: Selector, scopeClass: string): boolean {
   const parts = selector.children.toArray();
-  const index = parts.findIndex(
-    part => part.type === "ClassSelector" && part.name === scopeClass
-  );
+  const index = parts.findIndex(part => partAnchors(part, scopeClass));
   if (index === -1) return false;
   // Everything after the scope's own compound belongs to the subtree only if
   // the step leaving it is a descendant or child step.
   const next = parts.slice(index + 1).find(part => part.type === "Combinator");
   if (next === undefined) return true;
   return next.name === " " || next.name === ">";
+}
+
+/**
+ * Whether one part of a compound puts its own element at or inside the page
+ * root.
+ *
+ * The scope's class is the ordinary case. The other one is a pseudo-class that
+ * holds selectors, and which of those anchor follows from what each MEANS
+ * rather than from the fact that it contains a selector:
+ *
+ * `:is()` and `:where()` match when ANY branch does, so they anchor only when
+ * EVERY branch anchors — `:is(.nx-pb-page)` is the page root, `:is(.nx-pb-page,
+ * body)` is either and so confines nothing.
+ *
+ * `:not()` is the opposite of anchoring: being NOT the page root is the one
+ * thing that guarantees an element is outside it.
+ *
+ * `:has()` asks about an element's descendants, not about the element, so
+ * `:has(.nx-pb-page)` matches things that CONTAIN the page root — the host page
+ * itself, most obviously.
+ */
+function partAnchors(part: CssNode, scopeClass: string): boolean {
+  if (part.type === "ClassSelector") return part.name === scopeClass;
+  if (part.type !== "PseudoClassSelector") return false;
+  const name = part.name.toLowerCase();
+  if (name !== "is" && name !== "where" && name !== "matches") return false;
+  const children = part.children;
+  if (children === null) return false;
+  const branches: Selector[] = [];
+  for (const child of children) {
+    if (child.type !== "SelectorList") continue;
+    for (const branch of child.children) {
+      if (branch.type === "Selector") branches.push(branch);
+    }
+  }
+  // An empty `:is()` matches nothing, which is not the same as anchoring.
+  if (branches.length === 0) return false;
+  return branches.every(branch => selectorIsAnchored(branch, scopeClass));
 }
 
 /**
