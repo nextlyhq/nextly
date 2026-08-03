@@ -91,7 +91,7 @@ function chargeBudget(
 }
 
 /** Whether a run has spent either allowance and must stop. */
-function budgetSpent(budget: StyleIssueBudget): boolean {
+export function budgetSpent(budget: StyleIssueBudget): boolean {
   return budget.remaining <= 0 || budget.pathBytes <= 0;
 }
 
