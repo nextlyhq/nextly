@@ -47,12 +47,13 @@ export async function buildFullDesiredSchema(): Promise<DesiredSchema> {
           // translatable columns from the main table (they live in the
           // companion `_locales` table) instead of re-adding them.
           localized: (c as { localized?: boolean }).localized === true,
-          // Carry ownership so a UI save can be prevented from emitting DDL
-          // against a code-first/plugin-owned table.
-          locked: (c as { locked?: boolean }).locked === true,
-          // Provenance, not just the lock flag: a row written before `locked` was populated can be
-          // code- or plugin-owned while leaving it unset, and reading it as the Builder's would let
-          // an unrelated save rewrite that table's columns.
+          // Both answers come from provenance, not from the stored flag alone. A row written
+          // before `locked` was populated can be code- or plugin-owned while leaving it unset, and
+          // the two consumers ask the same question in opposite directions: the exclusion that
+          // stops a UI save emitting DDL against such a table reads `locked`, while the width rule
+          // reads `builderOwned`. Deriving one from the flag and the other from provenance left
+          // that table protected from a width change and unprotected from a column rewrite.
+          locked: isCodeOwned(c),
           builderOwned: !isCodeOwned(c),
         };
       }
@@ -75,7 +76,7 @@ export async function buildFullDesiredSchema(): Promise<DesiredSchema> {
           // i18n: carry localized so the diff omits translatable columns from the
           // single's main table (they live in single_<slug>_locales).
           localized: (s as { localized?: boolean }).localized === true,
-          locked: (s as { locked?: boolean }).locked === true,
+          locked: isCodeOwned(s),
           builderOwned: !isCodeOwned(s),
         };
       }
@@ -97,7 +98,7 @@ export async function buildFullDesiredSchema(): Promise<DesiredSchema> {
           // i18n: carry localized so the diff omits translatable columns from the
           // component's main table (they live in comp_<slug>_locales).
           localized: (c as { localized?: boolean }).localized === true,
-          locked: (c as { locked?: boolean }).locked === true,
+          locked: isCodeOwned(c),
           // Provenance, not just the lock flag: a row written before `locked` was populated can be
           // code- or plugin-owned while leaving it unset, and reading it as the Builder's would let
           // an unrelated save rewrite that table's columns.

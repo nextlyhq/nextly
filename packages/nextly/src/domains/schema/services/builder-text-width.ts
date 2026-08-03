@@ -156,6 +156,11 @@ function resolveFieldWidths<T>(
  * module owns the fact that two generators ask it in two different words. Teaching the descriptor to
  * read `maxLength` would also bound every COLLECTION field carrying one, which that generator leaves
  * unbounded.
+ *
+ * A stated `maxLength` wins over any variant the field already carries, because the generator this
+ * translates for reads the width and nothing else: a field saying `{ maxLength: 120, variant: "long" }`
+ * is created `varchar(120)`, so honouring the variant would describe as unbounded a column that was
+ * built bounded. Idempotence comes from recognising this function's own output instead.
  */
 function canonicalBoundedWidth<T extends WidthSignals>(
   field: T,
@@ -164,11 +169,13 @@ function canonicalBoundedWidth<T extends WidthSignals>(
 ): T | undefined {
   // A collection or single already states its width the way the descriptor reads it.
   if (signal !== "maxLength") return undefined;
-  // Already canonical, so rewriting would be the second pass changing what the first settled.
-  if (options.variant !== undefined) return undefined;
   const declared = field.maxLength;
   if (typeof declared !== "number") return undefined;
   if (!Number.isInteger(declared) || declared <= 0) return undefined;
+  // Already canonical — the second pass would rewrite what the first settled, to the same value.
+  if (options.variant === "short" && field.validation?.maxLength === declared) {
+    return undefined;
+  }
 
   return {
     ...field,

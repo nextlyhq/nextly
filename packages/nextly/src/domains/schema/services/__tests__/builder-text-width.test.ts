@@ -270,6 +270,64 @@ describe("withResolvedBuilderTextWidths", () => {
     });
   });
 
+  // The field-group generator reads the width and nothing else, so a variant the field already
+  // carries settles nothing there: `{ maxLength: 120, variant: "long" }` is created varchar(120),
+  // and honouring the variant described as unbounded a column that was built bounded.
+  it("lets a field group's maxLength win over a variant it already carries", () => {
+    const resolved = withResolvedBuilderTextWidths({
+      collections: {},
+      singles: {},
+      components: {
+        hero: {
+          slug: "hero",
+          tableName: "comp_hero",
+          fields: [
+            {
+              name: "body",
+              type: "text",
+              maxLength: 120,
+              options: { variant: "long" },
+            },
+          ] as never,
+          builderOwned: true,
+        },
+      },
+    });
+
+    const columnType = (dialect: "postgresql" | "mysql") =>
+      buildDesiredTableFromFields(
+        "comp_hero",
+        resolved.components.hero.fields as unknown as Parameters<
+          typeof buildDesiredTableFromFields
+        >[1],
+        dialect
+      ).columns.find(c => c.name === "body")?.type;
+
+    expect(columnType("postgresql")).toBe("varchar(120)");
+    expect(columnType("mysql")).toBe("varchar(120)");
+  });
+
+  // Running twice must settle on the same answer, which is what lets preview and apply agree.
+  it("is idempotent over a field group's declared width", () => {
+    const schema = {
+      collections: {},
+      singles: {},
+      components: {
+        hero: {
+          slug: "hero",
+          tableName: "comp_hero",
+          fields: [{ name: "body", type: "text", maxLength: 120 }] as never,
+          builderOwned: true,
+        },
+      },
+    };
+
+    const once = withResolvedBuilderTextWidths(schema);
+    const twice = withResolvedBuilderTextWidths(once);
+
+    expect(twice.components.hero.fields).toBe(once.components.hero.fields);
+  });
+
   it("still widens a collection field carrying only a maxLength", () => {
     const resolved = withResolvedBuilderTextWidths(
       schemaWith({
