@@ -28,6 +28,10 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { toast } from "@admin/components/ui";
+import {
+  toastMutationResult,
+  type MutationResult,
+} from "@admin/lib/mutation-warnings";
 import { entryApi, entryKeys } from "@admin/services/entryApi";
 import type { Entry } from "@admin/types/collection";
 
@@ -150,13 +154,16 @@ export function useDeleteEntry<T = Entry>({
 }: UseDeleteEntryOptions<T>) {
   const queryClient = useQueryClient();
 
-  return useMutation<T, Error, string>({
+  // The mutation resolves to the whole envelope so the success path can report
+  // what failed after the row committed; consumers still receive the entry.
+  return useMutation<MutationResult<T>, Error, string>({
     mutationFn: async (entryId: string) => {
       const result = await entryApi.delete(collectionSlug, entryId);
-      return result as T;
+      return result as MutationResult<T>;
     },
 
-    onSuccess: (data, entryId) => {
+    onSuccess: (result, entryId) => {
+      const data = result.item;
       // Invalidate entry list queries for this collection
       void queryClient.invalidateQueries({
         queryKey: entryKeys.listsByCollection(collectionSlug),
@@ -176,7 +183,9 @@ export function useDeleteEntry<T = Entry>({
       void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
 
       if (showToast) {
-        toast.success("Entry deleted successfully");
+        // The row IS written even when a post-commit hook failed, so this stays
+        // a success and names the follow-up failure beside it.
+        toastMutationResult("Entry deleted successfully", result.warnings);
       }
 
       onSuccess?.(data);

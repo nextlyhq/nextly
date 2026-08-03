@@ -46,6 +46,10 @@ import {
   parseServerErrorMessage,
 } from "@admin/lib/errors/error-mapping";
 import {
+  toastMutationResult,
+  type MutationResult,
+} from "@admin/lib/mutation-warnings";
+import {
   entryApi,
   entryKeys,
   type CreateEntryPayload,
@@ -180,13 +184,16 @@ export function useCreateEntry<
 }: UseCreateEntryOptions<T, TFieldValues>) {
   const queryClient = useQueryClient();
 
-  return useMutation<T, Error, CreateEntryPayload>({
+  // The mutation resolves to the whole envelope so the success path can report
+  // what failed after the row committed; consumers still receive the entry.
+  return useMutation<MutationResult<T>, Error, CreateEntryPayload>({
     mutationFn: async (data: CreateEntryPayload) => {
       const result = await entryApi.create(collectionSlug, data);
-      return result as T;
+      return result as MutationResult<T>;
     },
 
-    onSuccess: data => {
+    onSuccess: result => {
+      const data = result.item;
       // Invalidate entry list queries for this collection
       void queryClient.invalidateQueries({
         queryKey: entryKeys.listsByCollection(collectionSlug),
@@ -201,7 +208,9 @@ export function useCreateEntry<
       void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
 
       if (showToast) {
-        toast.success("Entry created successfully");
+        // The row IS written even when a post-commit hook failed, so this stays
+        // a success and names the follow-up failure beside it.
+        toastMutationResult("Entry created successfully", result.warnings);
       }
 
       onSuccess?.(data);
