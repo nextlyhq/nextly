@@ -71,6 +71,7 @@ import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
 import { reconcileSingleCompanion } from "../../domains/singles/services/reconcile-single-companion";
 import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
 import type { SingleEntryService } from "../../domains/singles/services/single-entry-service";
+import type { SingleMetadataService } from "../../domains/singles/services/single-metadata-service";
 import type { SingleRegistryService } from "../../domains/singles/services/single-registry-service";
 import { resolveBuilderVersions } from "../../domains/versions/builder-versions";
 import { resolveBuilderWebhooks } from "../../domains/webhooks/builder-webhooks";
@@ -97,6 +98,7 @@ import {
   getMigrationJournalFromDI,
   getSchemaRegistryFromDI,
   getSingleEntryServiceFromDI,
+  getSingleMetadataServiceFromDI,
   getSingleRegistryFromDI,
 } from "../helpers/di";
 import {
@@ -219,6 +221,8 @@ async function executeMigrationStatements(
 interface SinglesServices {
   registry: SingleRegistryService;
   entry: SingleEntryService;
+  /** Owns the pairing of a table change with the registry write that records it. */
+  metadata: SingleMetadataService;
 }
 
 // ============================================================
@@ -495,159 +499,37 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         });
       }
 
-      // Generate migration SQL for the Single's data table. Passing
-      // isSingle: true skips the slug column and auto-adds updated_at.
-      // Pass hasStatus so the data table also gets a `status` column
-      // when the user opted into Draft/Published — without it the
-      // runtime schema would expect a column the DDL never created.
-      // The dialect comes from the adapter that will run this DDL, not from
-      // the service's own DB_DIALECT default — that variable is optional and
-      // falls back to "postgresql", so an app configured with only a MySQL or
-      // SQLite DATABASE_URL would create this table as PostgreSQL.
-      //
-      // Read the same optional way the execution below reads it: with no
-      // adapter registered the statements are generated and never run, so the
-      // service keeps its own default rather than this path demanding a
-      // connection it is not going to use.
-      const createDialect = container.has("adapter")
-        ? container.get<DrizzleAdapter>("adapter").getCapabilities().dialect
-        : undefined;
-      const schemaService = new DynamicCollectionSchemaService(
-        undefined,
-        createDialect
-      );
-      const isLocalized = b.localized === true;
-      const migrationSQL = schemaService.generateMigrationSQL(
-        tableName,
-        b.fields as unknown as FieldDefinition[],
-        // i18n: omit translatable columns from the main table when localized — they live in the
-        // companion single_<slug>_locales table (provisioned below), mirroring collections.
-        { isSingle: true, hasStatus: b.status === true, localized: isLocalized }
-      );
-
-      // Run migration immediately (same semantics as Collections).
-      let migrationStatus: "pending" | "applied" | "failed" = "pending";
-
-      try {
-        if (container.has("adapter")) {
-          const adapter = container.get<DrizzleAdapter>("adapter");
-
-          await executeMigrationStatements(adapter, migrationSQL);
-
-          const tableExists = await adapter.tableExists(tableName);
-          if (tableExists) {
-            migrationStatus = "applied";
-
-            // Register runtime schema so the adapter can resolve this
-            // table immediately without a server restart.
-            try {
-              const { generateRuntimeSchema } = await import(
-                "../../domains/schema/services/runtime-schema-generator"
-              );
-              const dialect = adapter.getCapabilities().dialect;
-              const { table: runtimeTable } = generateRuntimeSchema(
-                tableName,
-                b.fields as unknown as FieldDefinition[],
-                dialect,
-                // i18n: main runtime table omits translatable columns for a localized single.
-                { status: b.status === true, localized: isLocalized }
-              );
-              const resolver = (
-                adapter as unknown as {
-                  tableResolver?: {
-                    registerDynamicSchema?: (
-                      name: string,
-                      table: unknown
-                    ) => void;
-                  };
-                }
-              ).tableResolver;
-              if (
-                resolver &&
-                typeof resolver.registerDynamicSchema === "function"
-              ) {
-                resolver.registerDynamicSchema(tableName, runtimeTable);
-              }
-            } catch {
-              // Non-fatal: schema will be registered on next server restart.
-            }
-
-            // i18n: provision the companion single_<slug>_locales table for a localized single
-            // (create-only — the single is brand new) and register its runtime table. The push
-            // pipeline excludes companions, so this is the only place it gets created on create.
-            try {
-              await reconcileSingleCompanion({
-                slug: b.slug,
-                tableName,
-                oldFields: [],
-                newFields: b.fields as unknown as FieldDefinition[],
-                localized: isLocalized,
-                // A brand-new single was never localized before, so a localized create is a
-                // create-only companion (no seed/drop) rather than an enable transition.
-                wasLocalized: false,
-                // A single being created has no prior state at all.
-                wasStatus: false,
-                status: b.status === true,
-                adapter,
-              });
-            } catch (companionErr) {
-              migrationStatus = "failed";
-              const m =
-                companionErr instanceof Error
-                  ? companionErr.message
-                  : String(companionErr);
-              console.error(
-                `[Singles] Companion provisioning failed for "${tableName}": ${m}`
-              );
-            }
-          } else {
-            migrationStatus = "failed";
-            console.error(
-              `[Singles] Table "${tableName}" was not created after migration`
-            );
-          }
-        } else {
-          console.warn(
-            "[Singles] No adapter found in container, migration not executed"
-          );
-        }
-      } catch (migrationError) {
-        migrationStatus = "failed";
-        const message =
-          migrationError instanceof Error
-            ? migrationError.message
-            : String(migrationError);
-        console.error("[Singles] Migration execution failed:", message);
-        console.error("[Singles] Migration SQL was:", migrationSQL);
-      }
-
-      const single = await svc.registry.registerSingle({
-        slug: b.slug,
-        label: b.label,
-        tableName,
-        description: b.description,
-        fields: b.fields,
-        admin: b.admin,
-        source: "ui",
-        locked: false,
-        // Forward the Draft/Published flag so admin-created Singles that
-        // opt in light up the Save Draft / Publish split.
-        status: b.status === true,
-        // i18n: persist the Internationalization flag so the single reads/writes per language.
-        localized: isLocalized,
-        // Persist version history from the create payload; without it a Single
-        // created with the switch on is written unversioned and the switch
-        // reads as off the moment the editor loads. Retention rides along.
-        versions: resolveBuilderVersions(b.versions, b.versionsMaxPerDoc),
-        // Cache-revalidation opt-out from the create payload (null = standard
-        // tags, { disable: true } = off), so the write path reads it back.
-        revalidate: resolveBuilderRevalidate(b.revalidate),
-        // Webhook recording opt-out from the create payload (null = record,
-        // { record: false } = off), so boot reads it back after a restart.
-        webhooks: resolveBuilderWebhooks(b.webhooks),
-        schemaHash,
-        migrationStatus,
-      });
+      // The table change and the registry row are one operation, so they are issued as one:
+      // the service persists the intent, applies the DDL, provisions the localized companion
+      // and records the outcome. Splitting them here is what left a created table with no row
+      // describing it whenever the process stopped in between.
+      const { record: single, migrationStatus } =
+        await svc.metadata.createSingle({
+          slug: b.slug,
+          label: b.label,
+          tableName,
+          description: b.description,
+          fields: b.fields,
+          admin: b.admin,
+          source: "ui",
+          locked: false,
+          // Forward the Draft/Published flag so admin-created Singles that
+          // opt in light up the Save Draft / Publish split.
+          status: b.status === true,
+          // i18n: persist the Internationalization flag so the single reads/writes per language.
+          localized: b.localized === true,
+          // Persist version history from the create payload; without it a Single
+          // created with the switch on is written unversioned and the switch
+          // reads as off the moment the editor loads. Retention rides along.
+          versions: resolveBuilderVersions(b.versions, b.versionsMaxPerDoc),
+          // Cache-revalidation opt-out from the create payload (null = standard
+          // tags, { disable: true } = off), so the write path reads it back.
+          revalidate: resolveBuilderRevalidate(b.revalidate),
+          // Webhook recording opt-out from the create payload (null = record,
+          // { record: false } = off), so boot reads it back after a restart.
+          webhooks: resolveBuilderWebhooks(b.webhooks),
+          schemaHash,
+        });
 
       // Auto-seed read/update permissions for the new single.
       if (container.has("permissionSeedService")) {
@@ -1651,11 +1533,13 @@ export function dispatchSingles(
 ): Promise<unknown> {
   const singleRegistry = getSingleRegistryFromDI();
   const singleEntryService = getSingleEntryServiceFromDI();
+  const singleMetadataService = getSingleMetadataServiceFromDI();
 
-  if (!singleRegistry || !singleEntryService) {
+  if (!singleRegistry || !singleEntryService || !singleMetadataService) {
     const missing: string[] = [];
     if (!singleRegistry) missing.push("singleRegistryService");
     if (!singleEntryService) missing.push("singleEntryService");
+    if (!singleMetadataService) missing.push("singleMetadataService");
 
     let containerStatus = "unknown";
     try {
@@ -1676,7 +1560,11 @@ export function dispatchSingles(
   const handler = SINGLES_METHODS[method];
   if (!handler) throw new Error(`Unknown method: ${method}`);
   return handler.execute(
-    { registry: singleRegistry, entry: singleEntryService },
+    {
+      registry: singleRegistry,
+      entry: singleEntryService,
+      metadata: singleMetadataService,
+    },
     params,
     body
   );

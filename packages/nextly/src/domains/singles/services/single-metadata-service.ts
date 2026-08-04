@@ -33,39 +33,56 @@
  * That query already exists: `SingleRegistryService.getPendingMigrations()`. It had no callers
  * before this service, because nothing ever left a row in `pending`.
  *
- * 🔴 Everything that can REJECT a create has to run before the intent is written, or a rejected
- * request strands a `pending` row. Validation, the reserved-slug check and the table-name conflict
- * check all belong to the caller and all happen first.
+ * The ordering also moves the registry's own rejections (a taken slug, a name reserved by a global
+ * resource) to BEFORE the DDL rather than after it. Those checks used to run once the table had
+ * already been created.
+ *
+ * 🔴 Everything else that can REJECT a create has to run before `createSingle` is called, or a
+ * rejected request strands a `pending` row. Field validation, the reserved-slug check and the
+ * table-name conflict check all belong to the caller and all happen first.
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
-import type { FieldConfig } from "../../../collections/fields/types";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import type {
+  DynamicSingleInsert,
+  DynamicSingleRecord,
+  SingleMigrationStatus,
+} from "../../../schemas/dynamic-singles/types";
 import type { Logger } from "../../../shared/types";
 import { DynamicCollectionSchemaService } from "../../dynamic-collections/services/dynamic-collection-schema-service";
 import { splitStatements } from "../../schema/pipeline/sql-statement-utils";
+import { generateRuntimeSchema } from "../../schema/services/runtime-schema-generator";
 
+import { reconcileSingleCompanion } from "./reconcile-single-companion";
 import type { SingleRegistryService } from "./single-registry-service";
 
-/** What a create needs to know, after the caller has validated it. */
-export interface CreateSingleInput {
-  slug: string;
-  label: string;
-  tableName: string;
-  fields: FieldConfig[];
-  description?: string;
-  admin?: Record<string, unknown>;
-  status?: boolean;
-  localized?: boolean;
-  versions?: boolean;
-  revalidate?: boolean;
-}
+/**
+ * The registry row to create, minus the one field this service owns.
+ *
+ * Deliberately the registry's own insert type rather than a hand-listed subset: a bespoke input
+ * shape silently drops whatever it forgets, and the fields most easily forgotten here (version
+ * retention, revalidation, webhook recording) are the ones whose absence is invisible until a
+ * user notices a switch reading as off.
+ */
+export type CreateSingleInput = Omit<DynamicSingleInsert, "migrationStatus">;
 
 /** What the caller gets back: the row, and how far the schema change actually got. */
 export interface SchemaChangeResult<T> {
   record: T;
-  migrationStatus: "pending" | "applied" | "failed";
+  migrationStatus: SingleMigrationStatus;
+}
+
+/**
+ * The resolver the adapter uses to answer table lookups.
+ *
+ * Registering a freshly created table with it is what lets the very next read resolve without a
+ * server restart. Declared structurally because the adapter holds it as a protected member; this
+ * names the one method used rather than reaching in untyped.
+ */
+interface DynamicSchemaResolver {
+  registerDynamicSchema?: (name: string, table: unknown) => void;
 }
 
 export class SingleMetadataService {
@@ -101,34 +118,24 @@ export class SingleMetadataService {
    */
   async createSingle(
     input: CreateSingleInput
-  ): Promise<SchemaChangeResult<unknown>> {
-    const isLocalized = input.localized === true;
-
+  ): Promise<SchemaChangeResult<DynamicSingleRecord>> {
     // 1. INTENT. Durable before anything is touched, so an interruption from here on leaves a row
     // that `getPendingMigrations()` can find and finish.
     const record = await this.registry.registerSingle({
-      slug: input.slug,
-      label: input.label,
-      tableName: input.tableName,
-      description: input.description,
-      fields: input.fields,
-      admin: input.admin,
-      source: "ui",
-      locked: false,
-      status: input.status === true,
-      localized: isLocalized,
-      versions: input.versions,
-      revalidate: input.revalidate,
+      ...input,
       migrationStatus: "pending",
-    } as Parameters<SingleRegistryService["registerSingle"]>[0]);
+    });
 
     // 2. APPLY.
-    const migrationStatus = await this.applyCreateDdl(input, isLocalized);
+    const migrationStatus = await this.applyCreateDdl(input);
 
     // 3. CONFIRM. Recorded against the row written in step 1.
     await this.registry.updateMigrationStatus(input.slug, migrationStatus);
 
-    return { record, migrationStatus };
+    // The row as it now stands. `migrationStatus` is the only field of it a caller reads that the
+    // confirm write changed, so it is carried over rather than re-fetched; returning the step-1
+    // copy unchanged would report every applied create as still pending.
+    return { record: { ...record, migrationStatus }, migrationStatus };
   }
 
   /**
@@ -139,9 +146,11 @@ export class SingleMetadataService {
    * before this service existed, and it is what makes the state repairable instead of lost.
    */
   private async applyCreateDdl(
-    input: CreateSingleInput,
-    isLocalized: boolean
-  ): Promise<"pending" | "applied" | "failed"> {
+    input: CreateSingleInput
+  ): Promise<SingleMigrationStatus> {
+    const isLocalized = input.localized === true;
+    const hasStatus = input.status === true;
+    const fields = input.fields as unknown as FieldDefinition[];
     const schemaService = new DynamicCollectionSchemaService(
       undefined,
       this.dialect
@@ -149,19 +158,17 @@ export class SingleMetadataService {
 
     const migrationSQL = schemaService.generateMigrationSQL(
       input.tableName,
-      input.fields as unknown as FieldDefinition[],
+      fields,
       // i18n: translatable columns are omitted from the main table when localized — they live in
-      // the companion `<table>_locales`, provisioned below.
-      {
-        isSingle: true,
-        hasStatus: input.status === true,
-        localized: isLocalized,
-      }
+      // the companion `<table>_locales`, provisioned below. `isSingle` skips the slug column and
+      // adds `updated_at`; `hasStatus` adds the column the runtime schema expects when the user
+      // opted into Draft/Published.
+      { isSingle: true, hasStatus, localized: isLocalized }
     );
 
     const adapter = this.adapter;
     if (!adapter) {
-      this.logger.warn?.(
+      this.logger.warn(
         "[Singles] No adapter registered, migration not executed"
       );
       return "pending";
@@ -174,7 +181,7 @@ export class SingleMetadataService {
         await adapter.executeQuery(statement);
       }
     } catch (error) {
-      this.logger.error?.(
+      this.logger.error(
         `[Singles] Migration execution failed for "${input.tableName}": ${
           error instanceof Error ? error.message : String(error)
         }`
@@ -184,12 +191,80 @@ export class SingleMetadataService {
 
     // Observed, not assumed. "Applied" has to mean the table is there.
     if (!(await adapter.tableExists(input.tableName))) {
-      this.logger.error?.(
+      this.logger.error(
         `[Singles] Table "${input.tableName}" was not created after migration`
       );
       return "failed";
     }
 
+    this.registerRuntimeSchema(input, fields, adapter, hasStatus, isLocalized);
+
+    // The companion is the other half of a localized single's storage, so failing to provision it
+    // leaves translatable values with nowhere to live. Reported as a failed migration rather than
+    // thrown: the main table exists and the row describes it, which is what makes a retry possible.
+    try {
+      await reconcileSingleCompanion({
+        slug: input.slug,
+        tableName: input.tableName,
+        oldFields: [],
+        newFields: fields,
+        localized: isLocalized,
+        // A brand-new single was never localized before, so a localized create is a create-only
+        // companion (no seed/drop) rather than an enable transition.
+        wasLocalized: false,
+        // A single being created has no prior state at all.
+        wasStatus: false,
+        status: hasStatus,
+        adapter,
+      });
+    } catch (error) {
+      this.logger.error(
+        `[Singles] Companion provisioning failed for "${input.tableName}": ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+      return "failed";
+    }
+
     return "applied";
+  }
+
+  /**
+   * Bind the new table to the running server so the next read resolves it.
+   *
+   * Best-effort by design: the registry is rebuilt from the database on the next boot, so a
+   * failure here costs a restart rather than the table. Taken from the adapter that ran the DDL
+   * rather than from the container, because that adapter is the one whose reads have to resolve
+   * the name and a caller may hold one the container has never seen.
+   */
+  private registerRuntimeSchema(
+    input: CreateSingleInput,
+    fields: FieldDefinition[],
+    adapter: DrizzleAdapter,
+    hasStatus: boolean,
+    isLocalized: boolean
+  ): void {
+    try {
+      const { table } = generateRuntimeSchema(
+        input.tableName,
+        fields,
+        adapter.getCapabilities().dialect,
+        // i18n: the main runtime table omits translatable columns for a localized single, matching
+        // the DDL above.
+        { status: hasStatus, localized: isLocalized }
+      );
+      const resolver = (
+        adapter as unknown as { tableResolver?: DynamicSchemaResolver }
+      ).tableResolver;
+      if (resolver && typeof resolver.registerDynamicSchema === "function") {
+        resolver.registerDynamicSchema(input.tableName, table);
+      }
+    } catch (error) {
+      this.logger.warn(
+        `[Singles] Runtime schema registration failed for "${input.tableName}": ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
   }
 }
