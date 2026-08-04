@@ -618,6 +618,37 @@ describe("an index name every dialect accepts", () => {
     expect(sql).toContain("DROP COLUMN");
   });
 
+  it("stays within 63, which is where postgres truncates rather than refuses", () => {
+    // MySQL refuses over 64; PostgreSQL silently truncates at 63. A 64-character name is
+    // therefore not a name PostgreSQL keeps, so bounding at 64 would let two names that differ
+    // only in their last character arrive as one identifier — defeating the hash entirely.
+    const svc = service("postgresql");
+    const names = [
+      ...svc.plannedAttachments(longTable, [
+        field({ name: `${"c".repeat(45)}alpha`, type: "number", index: true }),
+      ]).indexNames,
+    ];
+    for (const name of names) expect(name.length).toBeLessThanOrEqual(63);
+  });
+
+  it("keeps two names apart that postgres would otherwise truncate together", () => {
+    const svc = service("postgresql");
+    const nameFor = (column: string) => {
+      const system = [...svc.plannedAttachments(longTable, []).indexNames];
+      return [
+        ...svc.plannedAttachments(longTable, [
+          field({ name: column, type: "number", index: true }),
+        ]).indexNames,
+      ].find(n => !system.includes(n));
+    };
+    // Two valid field names sharing a long prefix: truncation alone would collapse them.
+    const first = nameFor(`${"d".repeat(44)}alpha`);
+    const second = nameFor(`${"d".repeat(44)}omega`);
+
+    expect(first).not.toEqual(second);
+    expect(first!.slice(0, 63)).not.toEqual(second!.slice(0, 63));
+  });
+
   it("leaves a short name readable and unhashed", () => {
     expect(
       service("mysql")

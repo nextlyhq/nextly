@@ -161,7 +161,12 @@ export class DynamicCollectionSchemaService {
    */
   private indexName(tableName: string, column: string): string {
     const full = `idx_${tableName}_${column}`;
-    if (full.length <= 64) return full;
+    // 63, not 64. MySQL refuses anything longer than 64, but PostgreSQL silently TRUNCATES at
+    // 63 — so a 64-character name is not a name PostgreSQL keeps, and two that differ only in
+    // their last character arrive as one identifier. Bounding at the smaller of the two limits
+    // is what makes the hash below the thing that tells names apart, rather than a decoration
+    // on a name the database has already collapsed.
+    if (full.length <= 63) return full;
     // FNV-1a over the full name. Not for secrecy — only to tell apart two names that a plain
     // truncation would make identical.
     let hash = 0x811c9dc5;
@@ -170,7 +175,7 @@ export class DynamicCollectionSchemaService {
       hash = Math.imul(hash, 0x01000193) >>> 0;
     }
     const suffix = hash.toString(36).padStart(7, "0");
-    return `${full.slice(0, 64 - suffix.length - 1)}_${suffix}`;
+    return `${full.slice(0, 63 - suffix.length - 1)}_${suffix}`;
   }
 
   /**

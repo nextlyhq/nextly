@@ -195,10 +195,30 @@ export class DynamicCollectionService extends BaseService {
       readForeignKeyColumns(db, this.adapter.dialect, tableName),
       readIndexNames(db, this.adapter.dialect, tableName),
     ]);
+
+    // What the table carries, PLUS what the saved schema says it should — because artefacts
+    // replay in order and this one runs last. Two edits saved before a deployment are two
+    // artefacts: adding a relationship and then removing it leaves a live table with no index
+    // while the first artefact is still queued to create one, and reading only the live table
+    // emits a removal that meets the index the deployment just added. The saved fields are
+    // exactly what the queued artefacts build, so the union is the state this one will find.
+    //
+    // In the ordinary case the two agree, because an applied edit is already in the table.
+    const planned = this.schemaService.plannedAttachments(
+      tableName,
+      pendingFields
+    );
+    const foreignKeysByColumn = new Map<string, readonly string[]>(foreignKeys);
+    for (const [column, names] of planned.foreignKeysByColumn) {
+      if (!foreignKeysByColumn.has(column)) {
+        foreignKeysByColumn.set(column, names);
+      }
+    }
+
     return {
       tableHasRows: hasRows,
-      foreignKeysByColumn: foreignKeys,
-      indexNames: indexes,
+      foreignKeysByColumn,
+      indexNames: new Set([...indexes, ...planned.indexNames]),
     };
   }
 
