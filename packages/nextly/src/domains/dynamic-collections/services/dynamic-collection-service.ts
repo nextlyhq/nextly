@@ -170,6 +170,19 @@ export class DynamicCollectionService extends BaseService {
     foreignKeysByColumn: ReadonlyMap<string, readonly string[]>;
     indexNames: ReadonlySet<string>;
   }> {
+    // A collection whose creation migration has not been deployed yet has a registry record and
+    // no table. Reading from it throws, which would block every follow-up edit to a collection
+    // the author has only just created. There is nothing to conflict with in that state: no
+    // rows to backfill, no constraint or index to remove, and the artefact this save produces
+    // runs after the one that creates the table.
+    if (!(await this.adapter.tableExists(tableName))) {
+      return {
+        tableHasRows: false,
+        foreignKeysByColumn: new Map(),
+        indexNames: new Set(),
+      };
+    }
+
     const db = this.adapter.getDrizzle();
     const [hasRows, foreignKeys, indexes] = await Promise.all([
       tableHasRows(db, this.adapter.dialect, tableName),

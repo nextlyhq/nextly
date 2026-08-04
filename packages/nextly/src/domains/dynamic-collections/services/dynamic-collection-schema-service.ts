@@ -146,11 +146,16 @@ export class DynamicCollectionSchemaService {
     tableName: string,
     column: string,
     columnType: string
-  ): string {
+  ): string | null {
     const name = this.quoteIdentifier(`idx_${tableName}_${column}`);
     const table = this.quoteIdentifier(tableName);
     const quoted = this.quoteIdentifier(column);
     if (this.dialect === "mysql") {
+      // A JSON column cannot be indexed at all: MySQL answers "supports indexing only via
+      // generated columns on a specified JSON path". Emitting the statement fails the migration
+      // after the ADD COLUMN before it may already have committed, so no index is emitted here.
+      // The other dialects index the value, so the field means the same thing everywhere it can.
+      if (/\bjson\b/i.test(columnType)) return null;
       const target = /\b(text|blob)\b/i.test(columnType)
         ? `${quoted}(191)`
         : quoted;
@@ -439,13 +444,12 @@ ${allColumnDefs.join(",\n")}
         // indexed column so this matches the actual physical column (created
         // snake_cased) and the migrate:create desired-state index naming.
         const col = toSnakeCase(f.name);
-        indexStatements.push(
-          this.createIndexSql(
-            tableName,
-            col,
-            this.mapFieldTypeToSQL(f.type, f.length, f.options, f.validation)
-          )
+        const indexSql = this.createIndexSql(
+          tableName,
+          col,
+          this.mapFieldTypeToSQL(f.type, f.length, f.options, f.validation)
         );
+        if (indexSql) indexStatements.push(indexSql);
       }
     });
 
@@ -749,7 +753,8 @@ ${allColumnDefs.join(",\n")}
         // at the same moment as the column nor the one a relationship always carries was created
         // by either.
         if (this.columnIsIndexed(field)) {
-          statements.push(this.createIndexSql(tableName, addColName, type));
+          const addIndexSql = this.createIndexSql(tableName, addColName, type);
+          if (addIndexSql) statements.push(addIndexSql);
         }
       }
     }
@@ -768,13 +773,12 @@ ${allColumnDefs.join(",\n")}
       if (oldField.index !== field.index) {
         const idxCol = toSnakeCase(field.name);
         if (field.index) {
-          statements.push(
-            this.createIndexSql(
-              tableName,
-              idxCol,
-              this.mapFieldTypeToSQL(field.type, field.length)
-            )
+          const toggleIndexSql = this.createIndexSql(
+            tableName,
+            idxCol,
+            this.mapFieldTypeToSQL(field.type, field.length)
           );
+          if (toggleIndexSql) statements.push(toggleIndexSql);
         } else {
           // Same guard as the removal path: turning an index off that the table never carried
           // aborts on MySQL, which cannot express `DROP INDEX IF EXISTS`.
@@ -812,16 +816,6 @@ ${allColumnDefs.join(",\n")}
         // inside the index rather than as the removal it refused. PostgreSQL and MySQL drop the
         // index with the column, so removing it first is redundant there and never wrong.
         //
-        // Asked of the live table, not of the field: an index is created by whichever path
-        // added the column, so a field that looks indexed may have none. MySQL cannot guard the
-        // drop itself, so without the answer it is not attempted there.
-        const indexName = `idx_${tableName}_${dropCol}`;
-        const indexIsKnown = options?.indexNames !== undefined;
-        const indexExists = options?.indexNames?.has(indexName) === true;
-        if (indexIsKnown ? indexExists : this.dialect !== "mysql") {
-          statements.push(this.dropIndexSql(tableName, dropCol));
-        }
-
         const foreignKeys = options?.foreignKeysByColumn?.get(dropCol);
         if (foreignKeys !== undefined) {
           if (this.dialect === "sqlite") {
@@ -847,6 +841,21 @@ ${allColumnDefs.join(",\n")}
               );
             }
           }
+        }
+
+        // After the constraint, before the column. MySQL enforces a foreign key THROUGH an
+        // index and refuses to drop the one supporting it ("Cannot drop index: needed in a
+        // foreign key constraint"), so the constraint has to go first; SQLite refuses to drop a
+        // column an index still names, so the index has to go before that.
+        //
+        // Asked of the live table, not of the field: an index is created by whichever path
+        // added the column, so a field that looks indexed may have none. MySQL cannot guard the
+        // drop itself, so without the answer it is not attempted there.
+        const indexName = `idx_${tableName}_${dropCol}`;
+        const indexIsKnown = options?.indexNames !== undefined;
+        const indexExists = options?.indexNames?.has(indexName) === true;
+        if (indexIsKnown ? indexExists : this.dialect !== "mysql") {
+          statements.push(this.dropIndexSql(tableName, dropCol));
         }
 
         // SQLite doesn't support IF EXISTS on DROP COLUMN

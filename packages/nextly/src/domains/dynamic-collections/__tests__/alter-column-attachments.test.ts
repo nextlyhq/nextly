@@ -392,6 +392,67 @@ describe("an index the dialect can actually accept", () => {
     }
   );
 
+  it.each(["json", "chips"] as const)(
+    "emits no index for a mysql %s column, which mysql cannot index at all",
+    type => {
+      const sql = unquote(
+        service("mysql").generateAlterTableMigration(
+          TABLE,
+          [],
+          [field({ name: "payload", type, index: true })],
+          { tableHasRows: false }
+        )
+      );
+      // "JSON column supports indexing only via generated columns on a specified JSON path" —
+      // the statement fails after the ADD COLUMN before it may already have committed.
+      expect(sql).toContain("ADD COLUMN payload");
+      expect(sql).not.toContain("idx_dc_probe_payload");
+    }
+  );
+
+  it.each(["postgresql", "sqlite"] as const)(
+    "still indexes a json column where the dialect can (%s)",
+    dialect => {
+      const sql = unquote(
+        service(dialect).generateAlterTableMigration(
+          TABLE,
+          [],
+          [field({ name: "payload", type: "json", index: true })],
+          { tableHasRows: false }
+        )
+      );
+      expect(sql).toContain("ON dc_probe(payload)");
+    }
+  );
+
+  it("drops a mysql foreign key before the index that supports it", () => {
+    const sql = unquote(
+      service("mysql").generateAlterTableMigration(
+        TABLE,
+        [
+          field({
+            name: "author",
+            type: "relationship",
+            options: { target: "authors", relationType: "manyToOne" },
+          }),
+        ],
+        [],
+        {
+          foreignKeysByColumn: new Map([["author", ["fk_dc_probe_author"]]]),
+          indexNames: new Set(["idx_dc_probe_author"]),
+        }
+      )
+    );
+    // MySQL enforces a foreign key THROUGH an index and refuses to drop the supporting one:
+    // "Cannot drop index 'idx_...': needed in a foreign key constraint".
+    const fk = sql.indexOf("DROP FOREIGN KEY");
+    const idx = sql.indexOf("DROP INDEX");
+    const col = sql.indexOf("DROP COLUMN");
+    expect(fk).toBeGreaterThan(-1);
+    expect(fk).toBeLessThan(idx);
+    expect(idx).toBeLessThan(col);
+  });
+
   it("does not drop an index the live table does not carry", () => {
     const indexed = field({
       name: "author",
