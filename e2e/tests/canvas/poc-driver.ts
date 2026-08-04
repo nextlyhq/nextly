@@ -17,9 +17,25 @@ import type { CanvasDriver, CanvasFixture, Point, Rect } from "./driver";
  */
 const DROP_ZONES = ".nx-pb-dropzone, .nx-pb-dropzone-empty";
 
+/**
+ * Block-level insertion targets. A grid registers insert-before and append
+ * droppables on the block element itself and signals them with these classes
+ * rather than with `data-active` on a separate zone element, so they are a
+ * different SHAPE of target, not another zone.
+ *
+ * They are out of this driver's ordinal model, which counts gap zones. Rather
+ * than report -1 while such a target is visibly active, the readers below
+ * throw: a silent -1 would let a scenario conclude "no target" about a canvas
+ * that is showing the user one.
+ */
+const BLOCK_LEVEL_TARGET = ".nx-pb-drop-before, .nx-pb-drop-append";
+
 /** The active zone, in either shape. */
 const ACTIVE_ZONE =
   ".nx-pb-dropzone[data-active], .nx-pb-dropzone-empty[data-active]";
+
+/** The editor shell's root element. */
+const EDITOR_ROOT = ".nx-pb-editor";
 
 /** A library entry in the left panel; the drag source for a cross-frame drag. */
 const LIBRARY_ITEM = ".nx-pb-lib-item";
@@ -107,6 +123,13 @@ export function createPocDriver(page: Page): CanvasDriver {
       );
     },
 
+    async isEditorPresent() {
+      return page.evaluate(
+        selector => !!document.querySelector(selector),
+        EDITOR_ROOT
+      );
+    },
+
     async frameOrigin() {
       const box = await page.locator("iframe").boundingBox();
       if (!box) throw new Error("canvas iframe has no box");
@@ -167,12 +190,31 @@ export function createPocDriver(page: Page): CanvasDriver {
     },
 
     async readActiveZoneOwner() {
-      return canvasFrame().evaluate(active => {
-        const zone = document.querySelector(active);
-        if (!zone) return null;
-        const owner = zone.parentElement?.closest("[data-nx-id]");
-        return owner?.getAttribute("data-nx-id") ?? null;
-      }, ACTIVE_ZONE);
+      return canvasFrame().evaluate(
+        ([active, blockLevel]) => {
+          const outOfModel = document.querySelectorAll(blockLevel);
+          if (outOfModel.length > 0) {
+            throw new Error(
+              `${outOfModel.length} block-level drop target(s) are active; this driver models gap zones only`
+            );
+          }
+          // Exclusivity is checked in every reader, not only the two that
+          // return geometry: this is the sole reader the nested-container test
+          // uses, so a stale outer zone active alongside an inner one would
+          // otherwise read as clean ownership.
+          const zones = document.querySelectorAll(active);
+          if (zones.length > 1) {
+            throw new Error(
+              `${zones.length} drop zones are active at once; exactly one may be`
+            );
+          }
+          const zone = zones[0];
+          if (!zone) return null;
+          const owner = zone.parentElement?.closest("[data-nx-id]");
+          return owner?.getAttribute("data-nx-id") ?? null;
+        },
+        [ACTIVE_ZONE, BLOCK_LEVEL_TARGET] as const
+      );
     },
 
     async startDragAt(point: Point) {
@@ -240,7 +282,13 @@ export function createPocDriver(page: Page): CanvasDriver {
 
     async readActiveTarget() {
       return canvasFrame().evaluate(
-        ([all, active]) => {
+        ([all, active, blockLevel]) => {
+          const outOfModel = document.querySelectorAll(blockLevel);
+          if (outOfModel.length > 0) {
+            throw new Error(
+              `${outOfModel.length} block-level drop target(s) are active; this driver models gap zones only`
+            );
+          }
           const zones = Array.from(document.querySelectorAll(all));
           const activeIndexes = zones
             .map((el, index) => (el.matches(active) ? index : -1))
@@ -257,45 +305,54 @@ export function createPocDriver(page: Page): CanvasDriver {
           }
           return activeIndexes[0] ?? -1;
         },
-        [DROP_ZONES, ACTIVE_ZONE] as const
+        [DROP_ZONES, ACTIVE_ZONE, BLOCK_LEVEL_TARGET] as const
       );
     },
 
     async readIndicatorRect(): Promise<Rect | null> {
-      const inFrame = await canvasFrame().evaluate(active => {
-        // All of them, not the first: a collision-state regression that leaves
-        // several zones marked active would otherwise be invisible here, and
-        // every geometry assertion could pass while stale insertion indicators
-        // remained on screen elsewhere.
-        const all = document.querySelectorAll(active);
-        if (all.length === 0) return null;
-        if (all.length > 1) {
-          throw new Error(
-            `${all.length} drop zones are active at once; exactly one may be`
-          );
-        }
-        const el = all[0];
-        const style = getComputedStyle(el);
-        // `data-active` alone is not evidence the user can SEE an indicator: a
-        // CSS regression that hides it, makes it transparent, or collapses it
-        // to nothing still leaves the attribute set and still returns a rect.
-        if (
-          style.display === "none" ||
-          style.visibility === "hidden" ||
-          Number(style.opacity) === 0
-        ) {
-          throw new Error(
-            `the active drop zone is not visible (display=${style.display}, visibility=${style.visibility}, opacity=${style.opacity})`
-          );
-        }
-        const r = el.getBoundingClientRect();
-        if (r.width <= 0 || r.height <= 0) {
-          throw new Error(
-            `the active drop zone has no size (${r.width}x${r.height})`
-          );
-        }
-        return { x: r.x, y: r.y, width: r.width, height: r.height };
-      }, ACTIVE_ZONE);
+      const inFrame = await canvasFrame().evaluate(
+        ([active, blockLevel]) => {
+          const outOfModel = document.querySelectorAll(blockLevel);
+          if (outOfModel.length > 0) {
+            throw new Error(
+              `${outOfModel.length} block-level drop target(s) are active; this driver models gap zones only`
+            );
+          }
+          // All of them, not the first: a collision-state regression that leaves
+          // several zones marked active would otherwise be invisible here, and
+          // every geometry assertion could pass while stale insertion indicators
+          // remained on screen elsewhere.
+          const all = document.querySelectorAll(active);
+          if (all.length === 0) return null;
+          if (all.length > 1) {
+            throw new Error(
+              `${all.length} drop zones are active at once; exactly one may be`
+            );
+          }
+          const el = all[0];
+          const style = getComputedStyle(el);
+          // `data-active` alone is not evidence the user can SEE an indicator: a
+          // CSS regression that hides it, makes it transparent, or collapses it
+          // to nothing still leaves the attribute set and still returns a rect.
+          if (
+            style.display === "none" ||
+            style.visibility === "hidden" ||
+            Number(style.opacity) === 0
+          ) {
+            throw new Error(
+              `the active drop zone is not visible (display=${style.display}, visibility=${style.visibility}, opacity=${style.opacity})`
+            );
+          }
+          const r = el.getBoundingClientRect();
+          if (r.width <= 0 || r.height <= 0) {
+            throw new Error(
+              `the active drop zone has no size (${r.width}x${r.height})`
+            );
+          }
+          return { x: r.x, y: r.y, width: r.width, height: r.height };
+        },
+        [ACTIVE_ZONE, BLOCK_LEVEL_TARGET] as const
+      );
       if (!inFrame) return null;
 
       const frameOrigin = await page.locator("iframe").boundingBox();

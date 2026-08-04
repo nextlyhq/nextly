@@ -68,6 +68,15 @@ export interface CanvasDriver {
   /** The canvas frame's top-left in host coordinates. */
   frameOrigin(): Promise<Point>;
 
+  /**
+   * Whether the editor is still mounted.
+   *
+   * On the driver because what "the editor" is made of differs per canvas;
+   * asking for one canvas's chrome class directly would report a correctly
+   * behaving replacement as broken.
+   */
+  isEditorPresent(): Promise<boolean>;
+
   /** Press the pointer at a top-level viewport point and pass the drag threshold. */
   startDragAt(point: Point): Promise<void>;
   /** Move the pointer by a delta, in one step. */

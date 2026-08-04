@@ -40,13 +40,31 @@ test("[acceptance] point 1: the innermost container owns the drop target", async
   // Walk down through the nested container and record which container owns the
   // active zone at each step. Depth-priority means that while the pointer is
   // inside `nx-inner`, the outer root must never own the target.
-  const owners: string[] = [];
+  // Correlate each sample with WHERE the pointer was. Owner strings alone
+  // cannot distinguish "the inner container owned the target throughout the
+  // nested region" from "it owned one sample and the root owned the rest",
+  // and only the first satisfies depth priority.
+  const inner = (await driver.readBlockBoxes()).find(
+    box => box.id === "nx-inner"
+  );
+  expect(inner, "the nested container must render").toBeDefined();
+  const origin = await driver.frameOrigin();
+
+  const samples: Array<{ inside: boolean; owner: string | null }> = [];
   for (let step = 0; step < 60; step++) {
     await driver.moveBy(0, 8);
     const owner = await driver.readActiveZoneOwner();
-    if (owner) owners.push(owner);
+    const frameY = driver.pointer().y - origin.y;
+    samples.push({
+      inside: frameY >= inner!.top && frameY <= inner!.top + inner!.height,
+      owner,
+    });
   }
   await driver.cancel();
+
+  const owners = samples
+    .map(sample => sample.owner)
+    .filter((owner): owner is string => owner !== null);
 
   test
     .info()
@@ -66,6 +84,17 @@ test("[acceptance] point 1: the innermost container owns the drop target", async
     runs.filter(owner => owner === "nx-inner").length,
     `ownership must not interleave; runs were ${JSON.stringify(runs)}`
   ).toBe(1);
+
+  // The decisive check: while the pointer is inside the nested container, the
+  // OUTER container must never own the target. That is what depth priority
+  // means, and no assertion over owner strings alone can see it.
+  const rootOwnedInside = samples.filter(
+    sample => sample.inside && sample.owner === "nx-spike-root"
+  );
+  expect(
+    rootOwnedInside.length,
+    `the outer container owned the target ${rootOwnedInside.length} time(s) while the pointer was inside the nested one`
+  ).toBe(0);
 });
 
 /**
@@ -265,11 +294,13 @@ test("[acceptance] point 12: Escape cancels a drag without changing the tree", a
   for (let step = 0; step < 30; step++) await driver.moveBy(0, 8);
   await driver.cancel();
 
-  const afterCancel = await page.evaluate(() => ({
-    url: window.location.pathname,
-    iframes: document.querySelectorAll("iframe").length,
-    hasEditor: !!document.querySelector(".nx-pb-editor"),
-  }));
+  // Editor presence goes through the driver: a v2 canvas will not use this
+  // canvas's chrome class, and asking for it directly would report "editor
+  // gone" for a canvas that cancelled correctly.
+  const afterCancel = {
+    url: page.url(),
+    hasEditor: await driver.isEditorPresent(),
+  };
   test.info().annotations.push({
     type: "after-cancel",
     description: JSON.stringify(afterCancel),
