@@ -49,6 +49,15 @@ export interface AuditPruneDeps {
   adapter: AuditPruneAdapter;
   /** Injectable so tests can pin the cutoff instead of sleeping. */
   now?: () => Date;
+  /**
+   * Stop between batches once this passes.
+   *
+   * A budget bounds the WORK a pass does; this bounds the TIME it takes, and
+   * only the second is what a serverless invocation is killed for. Checked
+   * between batches so a pass started with little left does that little and
+   * stops, rather than either overrunning or being skipped entirely.
+   */
+  deadline?: Date;
   logger?: Logger;
 }
 
@@ -76,7 +85,10 @@ async function pruneTable(
 ): Promise<number> {
   let deleted = 0;
 
+  const clock = deps.now ?? (() => new Date());
   while (budget.batchesLeft > 0) {
+    if (deps.deadline && clock() >= deps.deadline) return deleted;
+
     const candidates = await deps.adapter.select<{ id: string }>(table, {
       where: { and: [{ column: "createdAt", op: "<", value: cutoff }] },
       orderBy: [{ column: "createdAt", direction: "asc" }],

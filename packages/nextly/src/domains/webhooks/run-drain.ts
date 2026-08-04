@@ -180,7 +180,10 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
         auditPolicy.intervalMs
       );
       if (auditDue) {
-        const trails = await pruneAuditDataSafely(retention.prune, auditPolicy);
+        const trails = await pruneAuditDataSafely(
+          { ...retention.prune, deadline },
+          auditPolicy
+        );
         result.pruned.activity = trails.activity;
         result.pruned.auth = trails.auth;
       }
