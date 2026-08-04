@@ -15,6 +15,7 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { generateCreateTableSql } from "./_fixture-schema/generator";
 import { getCoreSchema } from "../../schemas/index";
 import { nextlyTables } from "./_fixture-schema/unified";
 
@@ -87,5 +88,26 @@ describe("fixture schema parity", () => {
     }
 
     expect(stale).toEqual([]);
+  });
+});
+
+/**
+ * Column NAMES are dialect-independent, so the check above compares them. Types
+ * are not: the fixture describes them abstractly and the generator translates
+ * at emit time, so the only thing worth asserting is what it actually emits.
+ *
+ * The erasure stamp is the case that matters. MySQL can rewrite a nullable
+ * TIMESTAMP into NOT NULL DEFAULT CURRENT_TIMESTAMP, so a row whose identity
+ * was never erased would read as erased — on the dialect this fixture exists to
+ * exercise, and in the direction that quietly claims data was removed when it
+ * was not.
+ */
+describe("emitted erasure stamp", () => {
+  const auditLog = nextlyTables.find(table => table.name === "audit_log");
+
+  it("is a MySQL DATETIME, which cannot be rewritten", () => {
+    const sql = generateCreateTableSql(auditLog!, "mysql");
+    expect(sql).toMatch(/`identity_erased_at`\s+DATETIME/i);
+    expect(sql).not.toMatch(/`identity_erased_at`\s+TIMESTAMP/i);
   });
 });
