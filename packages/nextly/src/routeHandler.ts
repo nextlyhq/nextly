@@ -90,6 +90,7 @@ import { createSecurityHeadersMiddleware } from "./middleware/security-headers";
 import { buildPluginAdminMeta } from "./plugins/admin-meta";
 import { runPluginRoute } from "./plugins/routes/dispatch";
 import { getPluginRouteRegistry } from "./plugins/routes/route-registry";
+import { assertClientConfigs } from "./plugins/validate-client-config";
 import {
   parseRestRoute,
   getActionFromMethod,
@@ -160,6 +161,16 @@ async function applyGlobalDateFormatting(
   if (req) {
     const url = new URL(req.url);
     if (url.pathname.includes("/auth/")) {
+      return response;
+    }
+    // And for admin metadata, which is CONFIGURATION rather than content.
+    // This pass exists to render content timestamps in the viewer's timezone;
+    // admin-meta carries none, so every date-like string it holds is opaque
+    // text belonging to whoever wrote it. A plugin's `clientConfig` is the
+    // clearest case — it is promised to arrive exactly as declared, and
+    // rewriting `"2026-08-04T12:34Z"` into a normalised, timezone-shifted form
+    // breaks that promise for a value this pass cannot know the meaning of.
+    if (url.pathname.endsWith("/admin-meta")) {
       return response;
     }
   }
@@ -1411,6 +1422,14 @@ export function createDynamicHandlers(options?: {
 }) {
   // Store the config so ensureServicesInitialized() can use it
   if (options?.config) {
+    // Before the config is stored, so no request can be served against a
+    // plugin whose `clientConfig` cannot be delivered. `resolvePlugins` runs
+    // the same check, but service initialisation is lazy and `/api/admin-meta`
+    // is served WITHOUT it — so on an admin's first request that check has not
+    // happened yet, and the failure would land on the branding response
+    // instead of at startup. This module runs when the route file is imported,
+    // which is the earliest deterministic point the config exists.
+    assertClientConfigs(options.config.plugins ?? []);
     setHandlerConfig(options.config);
   }
 

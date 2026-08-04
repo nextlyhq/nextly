@@ -110,10 +110,12 @@ function sameShape(before: unknown, after: unknown): boolean {
   // invisible to `Object.keys` on BOTH sides, so comparing only enumerable
   // string keys would certify a decoded object that quietly lost them.
   //
-  // Objects only. An array's own keys include a non-enumerable `length`, so
-  // this comparison would reject every array in a config.
-  if (!Array.isArray(a) && Reflect.ownKeys(a).length !== keys.length)
-    return false;
+  // An array's own keys include a non-enumerable `length`, which JSON does
+  // carry — as the array's shape. That one is discounted rather than the whole
+  // array being exempted, so `[1, 2, 3]` passes while an array someone hung a
+  // symbol property on is still refused.
+  const carried = keys.length + (Array.isArray(a) ? 1 : 0);
+  if (Reflect.ownKeys(a).length !== carried) return false;
   if (keys.length !== Object.keys(b).length) return false;
   return keys.every(key => sameShape(a[key], b[key]));
 }

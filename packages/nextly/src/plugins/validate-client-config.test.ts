@@ -87,3 +87,33 @@ describe("shapes that survive JSON only by accident", () => {
     ).not.toThrow();
   });
 });
+
+describe("arrays are not a blanket exemption", () => {
+  it("refuses an array carrying an own key JSON cannot hold", () => {
+    // The `length` descriptor is discounted because JSON carries the array's
+    // shape; anything hung beside it is dropped exactly like a symbol key on a
+    // plain object, and was previously waved through by exempting arrays.
+    const withSymbol = [1, 2, 3] as unknown as Record<string, unknown>;
+    (withSymbol as unknown as Record<symbol, unknown>)[Symbol("s")] = 1;
+    expect(() => assertClientConfigs([plugin({ list: withSymbol })])).toThrow(
+      NextlyError
+    );
+
+    const withHidden = [1, 2, 3];
+    Object.defineProperty(withHidden, "hidden", {
+      value: 2,
+      enumerable: false,
+    });
+    expect(() => assertClientConfigs([plugin({ list: withHidden })])).toThrow(
+      NextlyError
+    );
+  });
+
+  it("still accepts an ordinary array", () => {
+    expect(() =>
+      assertClientConfigs([
+        plugin({ list: [1, "two", { three: 3 }], empty: [] }),
+      ])
+    ).not.toThrow();
+  });
+});
