@@ -22,9 +22,12 @@
  * that depends on these calls this too, where it is re-evaluated every run.
  */
 import { execFileSync } from "node:child_process";
-import { readdirSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import ts from "typescript";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const pkgRoot = join(here, "..", "..");
@@ -65,6 +68,61 @@ const BUILD_INPUTS = [
 ];
 
 /**
+ * Every tsconfig in the `extends` chain, the package's own included.
+ *
+ * The local file is four lines of overrides; the options that actually decide
+ * what the declaration bundler emits live in the shared configs it inherits
+ * (`@nextlyhq/tsconfig/react-library-bundler.json` and the two beneath it).
+ * Timestamping only the local file therefore watched the one member of the
+ * chain least likely to change.
+ *
+ * Resolved with the compiler's own parser rather than `JSON.parse`, because a
+ * tsconfig may carry comments and trailing commas, and `extends` may be a
+ * single specifier or an array of them.
+ */
+function tsconfigChain(entry: string): string[] | undefined {
+  const seen = new Set<string>();
+  const chain: string[] = [];
+
+  const visit = (file: string): boolean => {
+    if (seen.has(file)) return true;
+    seen.add(file);
+    let text: string;
+    try {
+      text = readFileSync(file, "utf8");
+    } catch {
+      return false;
+    }
+    chain.push(file);
+    const parsed = ts.parseConfigFileTextToJson(file, text).config as
+      | { extends?: string | string[] }
+      | undefined;
+    const extend = parsed?.extends;
+    if (extend === undefined) return true;
+    const req = createRequire(file);
+    for (const spec of Array.isArray(extend) ? extend : [extend]) {
+      let target: string;
+      try {
+        // A relative specifier resolves against the file that names it; a bare
+        // one is a package export, which is how the shared configs are reached.
+        target = spec.startsWith(".")
+          ? resolve(dirname(file), spec)
+          : req.resolve(spec);
+      } catch {
+        return false;
+      }
+      if (!visit(target)) return false;
+    }
+    return true;
+  };
+
+  // A chain that cannot be followed is reported as unknown rather than as the
+  // part of it that was readable, so the caller can refuse instead of trusting
+  // a partial answer.
+  return visit(entry) ? chain : undefined;
+}
+
+/**
  * The newest of the declaration build's inputs outside `src`.
  *
  * A MISSING input reads as infinitely new rather than as zero. Every entry
@@ -76,10 +134,20 @@ const BUILD_INPUTS = [
  * it cannot find, which says more than any check here could.
  */
 function newestBuildInputMtime(): number {
+  const chain = tsconfigChain(join(pkgRoot, "tsconfig.json"));
+  // An unfollowable chain is treated like a missing input, for the same reason:
+  // the declarations were produced by a configuration this cannot account for.
+  if (chain === undefined) return Number.POSITIVE_INFINITY;
+  const files = [
+    ...BUILD_INPUTS.map(name => join(pkgRoot, name)),
+    // The local tsconfig is in both lists; `seen` above and `Math.max` here
+    // both make that harmless.
+    ...chain,
+  ];
   let newest = 0;
-  for (const name of BUILD_INPUTS) {
+  for (const file of files) {
     try {
-      newest = Math.max(newest, statSync(join(pkgRoot, name)).mtimeMs);
+      newest = Math.max(newest, statSync(file).mtimeMs);
     } catch {
       return Number.POSITIVE_INFINITY;
     }
@@ -129,10 +197,33 @@ export function newestDeclarationInputMtime(): number {
 }
 
 export function ensureDeclarations(): void {
-  if (oldestDeclarationMtime() > newestDeclarationInputMtime()) return;
+  const inputs = newestDeclarationInputMtime();
+  if (oldestDeclarationMtime() > inputs) return;
   execFileSync("npx", ["tsup"], { cwd: pkgRoot, stdio: "inherit" });
   execFileSync("npx", ["tsup", "--config", "tsup.server-safe.config.ts"], {
     cwd: pkgRoot,
     stdio: "inherit",
   });
+
+  // Running the bundler is not the same as producing the files. Both configs
+  // set `clean: false`, so an entry point dropped from one of them leaves its
+  // previous declaration in `dist`, older than the config that no longer emits
+  // it and looking exactly like a file that was simply not touched this run.
+  // Asserting the OUTCOME rather than the action is what tells those apart.
+  const stale = DECLARATION_ENTRIES.filter(entry => {
+    try {
+      return statSync(join(pkgRoot, "dist", entry)).mtimeMs <= inputs;
+    } catch {
+      return true;
+    }
+  });
+  if (stale.length > 0) {
+    throw new Error(
+      `The declaration build did not produce: ${stale.join(", ")}. ` +
+        "Every entry in DECLARATION_ENTRIES is a published entry point, so " +
+        "one the current tsup config no longer emits would otherwise be " +
+        "checked in its previous form. Add the entry back, or remove it here " +
+        "and from the package's `exports` together."
+    );
+  }
 }
