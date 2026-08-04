@@ -983,10 +983,7 @@ export class PostgresAdapter extends DrizzleAdapter {
         data: Record<string, unknown>,
         options?: InsertOptions
       ): Promise<T> => {
-        const mapped = this.mapKeysToSqlColumns(
-          this.getTableObject(table),
-          data
-        );
+        const mapped = this.mapRowToRawSql(this.getTableObject(table), data);
         const columns = Object.keys(mapped);
         const values = Object.values(mapped);
         const placeholders = values.map((_, i) => `$${i + 1}`).join(", ");
@@ -1010,7 +1007,8 @@ export class PostgresAdapter extends DrizzleAdapter {
         // match the non-transactional insert.
         return this.mapRowFromRawSql(
           this.getTableObject(table),
-          result.rows[0] as T
+          result.rows[0] as T,
+          data
         );
       },
 
@@ -1022,9 +1020,7 @@ export class PostgresAdapter extends DrizzleAdapter {
         if (data.length === 0) return [];
 
         const tableObj = this.getTableObject(table);
-        const mappedRecords = data.map(r =>
-          this.mapKeysToSqlColumns(tableObj, r)
-        );
+        const mappedRecords = data.map(r => this.mapRowToRawSql(tableObj, r));
         const columns = Object.keys(mappedRecords[0]);
         const params: unknown[] = [];
         const valuesClauses: string[] = [];
@@ -1053,8 +1049,8 @@ export class PostgresAdapter extends DrizzleAdapter {
         }
 
         const result = await client.query(sql, params);
-        return (result.rows as T[]).map(r =>
-          this.mapRowFromRawSql(tableObj, r)
+        return (result.rows as T[]).map((r, index) =>
+          this.mapRowFromRawSql(tableObj, r, data[index])
         );
       },
 

@@ -829,10 +829,7 @@ export class MySqlAdapter extends DrizzleAdapter {
         data: Record<string, unknown>,
         options?: InsertOptions
       ): Promise<T> => {
-        const mapped = this.mapKeysToSqlColumns(
-          this.getTableObject(table),
-          data
-        );
+        const mapped = this.mapRowToRawSql(this.getTableObject(table), data);
         const columns = Object.keys(mapped);
         const values = Object.values(mapped);
         const placeholders = this.buildPlaceholders(values.length, 0);
@@ -868,7 +865,8 @@ export class MySqlAdapter extends DrizzleAdapter {
           );
           return this.mapRowFromRawSql(
             this.getTableObject(table),
-            rows[0] as T
+            rows[0] as T,
+            data
           );
         }
 
@@ -879,7 +877,11 @@ export class MySqlAdapter extends DrizzleAdapter {
           `SELECT ${selectList} FROM ${this.escapeIdentifier(table)} WHERE ${whereClauses.join(" AND ")} LIMIT 1`,
           values
         );
-        return this.mapRowFromRawSql(this.getTableObject(table), rows[0] as T);
+        return this.mapRowFromRawSql(
+          this.getTableObject(table),
+          rows[0] as T,
+          data
+        );
       },
 
       insertMany: async <T = unknown>(
@@ -892,9 +894,7 @@ export class MySqlAdapter extends DrizzleAdapter {
         const skipReread = Array.isArray(retMany) && retMany.length === 0;
 
         const tableObj = this.getTableObject(table);
-        const mappedRecords = data.map(r =>
-          this.mapKeysToSqlColumns(tableObj, r)
-        );
+        const mappedRecords = data.map(r => this.mapRowToRawSql(tableObj, r));
         const columns = Object.keys(mappedRecords[0]);
         const allValues: unknown[] = [];
         const valuesClauses: string[] = [];
@@ -927,7 +927,9 @@ export class MySqlAdapter extends DrizzleAdapter {
             `SELECT * FROM ${this.escapeIdentifier(table)} WHERE id IN (${placeholders})`,
             ids
           );
-          return (rows as T[]).map(r => this.mapRowFromRawSql(tableObj, r));
+          return (rows as T[]).map((r, index) =>
+            this.mapRowFromRawSql(tableObj, r, data[index])
+          );
         }
 
         // Fallback: return empty if we can't determine inserted rows
