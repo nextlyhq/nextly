@@ -52,16 +52,20 @@ function jsonOnly(
   // round-trip perfectly and would publish a `clientConfig` that every reader
   // — the type, the hook, the destructuring in a component — assumes is an
   // object.
-  if (
-    typeof value !== "object" ||
-    value === null ||
-    Array.isArray(value) ||
-    Object.getPrototypeOf(value) !== Object.prototype
-  ) {
-    return undefined;
-  }
   let decoded: Record<string, unknown>;
   try {
+    // Inside the guard with everything else that touches the value. Each of
+    // these is an observable operation on a Proxy — `Array.isArray` and
+    // `getPrototypeOf` both run traps — so a trap that throws would escape as
+    // a raw exception rather than as the configuration error this reports.
+    if (
+      typeof value !== "object" ||
+      value === null ||
+      Array.isArray(value) ||
+      Object.getPrototypeOf(value) !== Object.prototype
+    ) {
+      return undefined;
+    }
     const encoded = JSON.stringify(value);
     // `undefined` when the top-level value itself is not encodable.
     if (encoded === undefined) return undefined;

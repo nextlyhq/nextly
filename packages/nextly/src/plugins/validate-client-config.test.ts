@@ -117,3 +117,20 @@ describe("arrays are not a blanket exemption", () => {
     ).not.toThrow();
   });
 });
+
+describe("a hostile Proxy is still a configuration error", () => {
+  it("reports a throwing prototype trap rather than leaking it", () => {
+    // `Array.isArray` and `getPrototypeOf` are observable operations on a
+    // Proxy, so a trap that throws would escape the validator as a raw
+    // exception — from the function whose job is to report exactly this.
+    const hostile = new Proxy(
+      { a: 1 },
+      {
+        getPrototypeOf() {
+          throw new Error("trap");
+        },
+      }
+    );
+    expect(() => assertClientConfigs([plugin(hostile)])).toThrow(NextlyError);
+  });
+});
