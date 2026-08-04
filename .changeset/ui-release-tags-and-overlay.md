@@ -33,6 +33,14 @@ the declarations now, where the bundler keeps them, and 229 of them reach
 `toast` and `ToasterProps` are re-exported from `sonner`, so their declarations
 are not ours to annotate; they stay tagged in the barrel only.
 
+Twenty prop types were also promoted to `@public`, which is a widening rather
+than a change of intent: `STABILITY.md` already guaranteed that a prop type
+carries the same stability as its component, and every one of these belonged to
+a public component while advertising `@experimental` — so the published type
+withdrew what the component promised, and a plugin could not wrap `Tabs` or
+`Dialog` without depending on something labelled unstable. The rule is now
+enforced by a test rather than written down.
+
 Modal scrims are a theme token. Six components wrote the backdrop inline as
 `bg-black/80`, identical in light and dark and at four different strengths, so
 it could be neither themed nor white-labelled and was invisible to every token

@@ -6,8 +6,14 @@
       // The release-tag guard reads this package's OWN `dist/index.d.ts`: the
       // tags it checks are added by the declaration bundler, so there is
       // nothing to assert against until the package is built. The root task
-      // depends on `^build`, which builds dependencies and not this package,
-      // so the guard would silently have nothing to read on a clean checkout.
+      // depends on `^build`, which builds dependencies and not this package.
+      //
+      // The package's `test` script chains the build as well, because this
+      // only covers turbo-driven runs and `pnpm --filter @nextlyhq/ui test`
+      // executes the script directly without ever reading this file. A
+      // `pretest` hook would not do it either: pnpm leaves pre/post scripts
+      // disabled by default, so it would silently never run — the same shape
+      // of quiet no-op the guard exists to catch.
       "dependsOn": ["$TURBO_EXTENDS$", "build"],
       // The contrast alpha-utilities guard scans admin and plugin source, so
       // those trees are real inputs to this package's tests. $TURBO_EXTENDS$

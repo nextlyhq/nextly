@@ -24,7 +24,7 @@ export type DropdownMenuSubContentProps = React.ComponentPropsWithoutRef<
 
 /**
  * Props for the DropdownMenuContent component
- * @experimental
+ * @public
  */
 export type DropdownMenuContentProps = React.ComponentPropsWithoutRef<
   typeof DropdownMenuPrimitive.Content
@@ -32,7 +32,7 @@ export type DropdownMenuContentProps = React.ComponentPropsWithoutRef<
 
 /**
  * Props for the DropdownMenuItem component
- * @experimental
+ * @public
  */
 export type DropdownMenuItemProps = React.ComponentPropsWithoutRef<
   typeof DropdownMenuPrimitive.Item
@@ -45,7 +45,7 @@ export type DropdownMenuItemProps = React.ComponentPropsWithoutRef<
 
 /**
  * Props for the DropdownMenuCheckboxItem component
- * @experimental
+ * @public
  */
 export type DropdownMenuCheckboxItemProps = React.ComponentPropsWithoutRef<
   typeof DropdownMenuPrimitive.CheckboxItem
@@ -74,7 +74,7 @@ export type DropdownMenuLabelProps = React.ComponentPropsWithoutRef<
 
 /**
  * Props for the DropdownMenuSeparator component
- * @experimental
+ * @public
  */
 export type DropdownMenuSeparatorProps = React.ComponentPropsWithoutRef<
   typeof DropdownMenuPrimitive.Separator

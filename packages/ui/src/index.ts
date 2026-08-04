@@ -47,7 +47,7 @@ export { Badge } from "./components/badge";
 
 /** @experimental */
 export { badgeVariants } from "./components/badge";
-/** @experimental */
+/** @public */
 export type { BadgeProps } from "./components/badge";
 /** @experimental */
 export {
@@ -145,7 +145,7 @@ export type {
 
 /** @public */
 export { Tabs, TabsList, TabsTrigger, TabsContent } from "./components/tabs";
-/** @experimental */
+/** @public */
 export type {
   TabsProps,
   TabsListProps,
@@ -187,15 +187,17 @@ export {
   DialogTrigger,
   dialogContentVariants,
 } from "./components/dialog";
-/** @experimental */
+/** @public Prop types carry the same guarantee as their component. */
 export type {
-  DialogOverlayProps,
   DialogContentProps,
   DialogHeaderProps,
   DialogFooterProps,
   DialogTitleProps,
   DialogDescriptionProps,
 } from "./components/dialog";
+
+/** @experimental */
+export type { DialogOverlayProps } from "./components/dialog";
 
 /** @experimental No first-party plugin depends on it yet. */
 // Components — AlertDialog
@@ -248,16 +250,20 @@ export {
   DropdownMenuSubTrigger,
   DropdownMenuRadioGroup,
 } from "./components/dropdown-menu";
+/** @public Prop types carry the same guarantee as their component. */
+export type {
+  DropdownMenuContentProps,
+  DropdownMenuItemProps,
+  DropdownMenuCheckboxItemProps,
+  DropdownMenuSeparatorProps,
+} from "./types/dropdown-menu";
+
 /** @experimental */
 export type {
   DropdownMenuSubTriggerProps,
   DropdownMenuSubContentProps,
-  DropdownMenuContentProps,
-  DropdownMenuItemProps,
-  DropdownMenuCheckboxItemProps,
   DropdownMenuRadioItemProps,
   DropdownMenuLabelProps,
-  DropdownMenuSeparatorProps,
   DropdownMenuShortcutProps,
 } from "./types/dropdown-menu";
 
@@ -281,7 +287,7 @@ export {
   SelectSeparator,
   selectTriggerVariants,
 } from "./components/select";
-/** @experimental */
+/** @public */
 export type { SelectTriggerProps } from "./components/select";
 
 /** @public Sheet. Exercised by page-builder. */
@@ -304,18 +310,22 @@ export {
   SheetFooter,
   sheetVariants,
 } from "./components/sheet";
-/** @experimental */
+/** @public */
 export type { SheetContentProps } from "./components/sheet";
-/** @experimental */
+/** @public Prop types carry the same guarantee as their component. */
 export type {
   SheetProps,
+  SheetHeaderProps,
+  SheetTitleProps,
+  SheetDescriptionProps,
+} from "./types/sheet";
+
+/** @experimental */
+export type {
   SheetTriggerProps,
   SheetCloseProps,
   SheetOverlayProps,
-  SheetHeaderProps,
   SheetFooterProps,
-  SheetTitleProps,
-  SheetDescriptionProps,
   SheetOverlayRef,
   SheetContentRef,
   SheetTitleRef,

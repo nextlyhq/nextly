@@ -324,6 +324,42 @@ describe("ui release tags reach the published types", () => {
     ).toEqual([]);
   });
 
+  it("gives a prop type the same tag as its component", () => {
+    // STABILITY.md states this as a guarantee, and it is not a convention
+    // anyone has to remember: a stable component whose props type is
+    // experimental cannot be wrapped or forwarded to stably, so the weaker tag
+    // silently withdraws what the component promises. It had drifted on twenty
+    // of them, all in that direction.
+    const tagged = taggedPerSource();
+    const kindOf = (name: string): string | undefined =>
+      tagged.public.has(name)
+        ? "public"
+        : tagged.experimental.has(name)
+          ? "experimental"
+          : undefined;
+
+    const mismatched: string[] = [];
+    for (const name of [...tagged.public, ...tagged.experimental]) {
+      if (!name.endsWith("Props")) continue;
+      const component = name.slice(0, -"Props".length);
+      const componentKind = kindOf(component);
+      // Only checked where the component is exported too; a props type for
+      // something not on the surface has no component tag to agree with.
+      if (componentKind === undefined) continue;
+      const propKind = kindOf(name);
+      if (propKind !== componentKind) {
+        mismatched.push(
+          `${name} @${propKind} but ${component} @${componentKind}`
+        );
+      }
+    }
+    expect(
+      mismatched.sort(),
+      "STABILITY.md: prop types carry the same guarantee as the component they " +
+        `belong to.\n${mismatched.join("\n")}`
+    ).toEqual([]);
+  });
+
   it("is not passing vacuously", () => {
     const built = readFileSync(distTypes, "utf8");
     const declared = taggedPerDeclaration(built);

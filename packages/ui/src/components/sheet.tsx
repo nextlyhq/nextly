@@ -132,7 +132,7 @@ const sheetVariants = cva(
   }
 );
 
-/** @experimental */
+/** @public */
 export interface SheetContentProps
   extends React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>,
     VariantProps<typeof sheetVariants> {}

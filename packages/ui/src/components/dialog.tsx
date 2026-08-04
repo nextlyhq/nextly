@@ -127,7 +127,7 @@ const dialogContentVariants = cva("", {
   },
 });
 
-/** @experimental */
+/** @public */
 export type DialogContentProps = ComponentPropsWithoutRef<
   typeof DialogPrimitive.Content
 > &
@@ -179,7 +179,7 @@ const DialogContent = forwardRef<
 });
 DialogContent.displayName = DialogPrimitive.Content.displayName;
 
-/** @experimental */
+/** @public */
 export type DialogHeaderProps = HTMLAttributes<HTMLDivElement>;
 
 /**
@@ -201,7 +201,7 @@ const DialogHeader = forwardRef<HTMLDivElement, DialogHeaderProps>(
 );
 DialogHeader.displayName = "DialogHeader";
 
-/** @experimental */
+/** @public */
 export type DialogFooterProps = HTMLAttributes<HTMLDivElement>;
 
 /**
@@ -231,7 +231,7 @@ const DialogFooter = forwardRef<HTMLDivElement, DialogFooterProps>(
 );
 DialogFooter.displayName = "DialogFooter";
 
-/** @experimental */
+/** @public */
 export type DialogTitleProps = ComponentPropsWithoutRef<
   typeof DialogPrimitive.Title
 >;
@@ -258,7 +258,7 @@ const DialogTitle = forwardRef<
 ));
 DialogTitle.displayName = DialogPrimitive.Title.displayName;
 
-/** @experimental */
+/** @public */
 export type DialogDescriptionProps = ComponentPropsWithoutRef<
   typeof DialogPrimitive.Description
 >;

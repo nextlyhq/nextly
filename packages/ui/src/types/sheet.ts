@@ -9,7 +9,7 @@ import type * as DialogPrimitive from "@radix-ui/react-dialog";
 /**
  * Sheet root component props
  * Extends Radix UI Dialog.Root props
- * @experimental
+ * @public
  */
 export type SheetProps = React.ComponentPropsWithoutRef<
   typeof DialogPrimitive.Root
@@ -59,7 +59,7 @@ export type SheetContentProps = React.ComponentPropsWithoutRef<
 /**
  * Sheet header component props
  * Standard div props
- * @experimental
+ * @public
  */
 export type SheetHeaderProps = React.HTMLAttributes<HTMLDivElement>;
 
@@ -73,7 +73,7 @@ export type SheetFooterProps = React.HTMLAttributes<HTMLDivElement>;
 /**
  * Sheet title component props
  * Extends Radix UI Dialog.Title props
- * @experimental
+ * @public
  */
 export type SheetTitleProps = React.ComponentPropsWithoutRef<
   typeof DialogPrimitive.Title
@@ -82,7 +82,7 @@ export type SheetTitleProps = React.ComponentPropsWithoutRef<
 /**
  * Sheet description component props
  * Extends Radix UI Dialog.Description props
- * @experimental
+ * @public
  */
 export type SheetDescriptionProps = React.ComponentPropsWithoutRef<
   typeof DialogPrimitive.Description

@@ -57,7 +57,7 @@ const badgeVariants = cva(
   }
 );
 
-/** @experimental */
+/** @public */
 export interface BadgeProps
   extends HTMLAttributes<HTMLDivElement>,
     VariantProps<typeof badgeVariants> {}

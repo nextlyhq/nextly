@@ -65,7 +65,7 @@
     "check-types": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
-    "test": "vitest run --passWithNoTests",
+    "test": "pnpm build && vitest run --passWithNoTests",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
     "test:coverage": "vitest run --coverage",

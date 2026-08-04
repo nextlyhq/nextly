@@ -79,7 +79,7 @@ const selectTriggerVariants = cva(
   }
 );
 
-/** @experimental */
+/** @public */
 export interface SelectTriggerProps
   extends ComponentProps<typeof SelectPrimitive.Trigger>,
     VariantProps<typeof selectTriggerVariants> {}

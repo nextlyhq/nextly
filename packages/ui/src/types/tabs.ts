@@ -4,13 +4,13 @@ import type { ComponentPropsWithoutRef, ElementRef } from "react";
 /**
  * Props for the Tabs root component
  * @see https://www.radix-ui.com/primitives/docs/components/tabs
- * @experimental
+ * @public
  */
 export type TabsProps = ComponentPropsWithoutRef<typeof Root>;
 
 /**
  * Props for the TabsList component (container for tab triggers)
- * @experimental
+ * @public
  */
 export type TabsListProps = ComponentPropsWithoutRef<typeof List>;
 
@@ -21,7 +21,7 @@ export type TabsListRef = ElementRef<typeof List>;
 
 /**
  * Props for the TabsTrigger component (clickable tab button)
- * @experimental
+ * @public
  */
 export type TabsTriggerProps = ComponentPropsWithoutRef<typeof Trigger>;
 
@@ -32,7 +32,7 @@ export type TabsTriggerRef = ElementRef<typeof Trigger>;
 
 /**
  * Props for the TabsContent component (content panel for each tab)
- * @experimental
+ * @public
  */
 export type TabsContentProps = ComponentPropsWithoutRef<typeof Content>;
 
