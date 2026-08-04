@@ -134,8 +134,13 @@ export async function eraseActorPersonalData(
   // Rows the deleted account produced WITHOUT attribution — a failed login, a
   // rejected CSRF — are out of reach here by construction, because those are
   // recorded with no actor precisely so a failure cannot reveal which account
-  // was reached. Nothing links them to a person, which is also why they are not
-  // erasable on request; retention is what bounds them.
+  // was reached. Nothing links them to a person, which is also what makes them
+  // unerasable on request: there is no query that could find them.
+  //
+  // They are therefore bounded by how long the table is kept rather than by
+  // deletion, and this table has no retention pass yet, so today they are kept
+  // indefinitely. That is the case for keeping as little as possible on them in
+  // the first place, which is why the metadata projection is default-deny.
   if (auditLog) {
     // A database that predates the stamp column still has to be erased. The
     // stamp records WHEN an erasure happened; the erasure itself is the

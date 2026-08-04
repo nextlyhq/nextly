@@ -391,6 +391,31 @@ describe("auditFailureMetadata", () => {
     expect(logged[1]?.cause).toBe("connection reset");
   });
 
+  it("reports an operator message the row has nowhere to keep", () => {
+    // `logMessage` is operator-only by design, so an error carrying its whole
+    // diagnosis there and nothing else would leave a generic code and no
+    // explanation anywhere.
+    const logged: Record<string, unknown>[] = [];
+    const logger = getNextlyLogger();
+    const originalWarn = logger.warn.bind(logger);
+    logger.warn = (payload: unknown) => {
+      logged.push(payload as Record<string, unknown>);
+      return undefined as never;
+    };
+
+    try {
+      auditFailureMetadata(
+        NextlyError.serviceUnavailable({
+          logMessage: "SAML provider unavailable",
+        })
+      );
+    } finally {
+      logger.warn = originalWarn;
+    }
+
+    expect(logged[0]?.logMessage).toBe("SAML provider unavailable");
+  });
+
   it("keeps its own classification when a hook supplies those keys", () => {
     // `logContext` is written by application code. Spread, it could overwrite
     // the fields this adds — making a failure unsearchable as an auth failure,

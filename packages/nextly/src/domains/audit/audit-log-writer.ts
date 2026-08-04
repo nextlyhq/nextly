@@ -166,6 +166,9 @@ function reportWithheldDetail(err: NextlyError, requestId?: string): void {
       requestId,
       code: err.code,
       context: err.logContext,
+      // The operator-only message. The row never keeps it, so this is the only
+      // place it is readable, and an error may carry nothing else.
+      logMessage: err.logMessage,
       cause: err.cause instanceof Error ? err.cause.message : undefined,
     });
   } catch {
@@ -222,13 +225,17 @@ export function auditFailureMetadata(
   // context that is projected away, a code that is replaced, or a cause the row
   // has nowhere to put. A canonical code with no context still has a cause
   // worth reading, and this is the only place it would be read from.
-  const codeIsOurs = isCanonicalErrorCode(err.code);
-  if (err.logContext || !codeIsOurs || err.cause) {
+  // Read once. `code` can be accessor-backed on an application-supplied error,
+  // so validating one read and storing another would let a value that failed
+  // the check be the one that lands on the row.
+  const code: unknown = err.code;
+  const codeIsOurs = isCanonicalErrorCode(code);
+  if (err.logContext || !codeIsOurs || err.cause || err.logMessage) {
     reportWithheldDetail(err, requestId);
   }
 
   return {
-    code: codeIsOurs ? err.code : "INTERNAL_ERROR",
+    code: codeIsOurs ? code : "INTERNAL_ERROR",
     ...projectAuditMetadata(err.logContext),
   };
 }
