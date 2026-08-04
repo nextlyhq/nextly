@@ -402,6 +402,56 @@ describe("link colour, where two properties reach one element", () => {
   });
 });
 
+describe("one bad library entry cannot spend the whole tier", () => {
+  it("still writes a later class after an earlier one exhausts its own budget", () => {
+    // Sharing one budget across the tier meant an unreferenced entry with enough invalid
+    // properties refused every class after it unread — so a node referencing a perfectly good
+    // class received its token and no declarations, styled by an entry it never mentions.
+    const noisy: Record<string, unknown> = {};
+    for (let index = 0; index < 200; index += 1) {
+      noisy[`bogusProperty${index}`] = "nonsense";
+    }
+
+    const { css } = compile(doc({ classes: ["c2"] }), [
+      { id: "c1", slug: "noisy", orderIndex: 0, styles: styles(noisy) },
+      {
+        id: "c2",
+        slug: "good",
+        orderIndex: 1,
+        styles: styles({ color: "blue" }),
+      },
+    ]);
+
+    expect(css).toContain(".nx-c-good");
+    expect(css).toContain("color: blue");
+  });
+});
+
+describe("warnings point at something an editor can find", () => {
+  it("addresses a skipped class by its position in the stored library", () => {
+    // A pointer built from the id does not resolve: the id is exactly what is unreliable about a
+    // malformed entry, and may be missing or not a string at all.
+    const { warnings } = compile(doc({}), [
+      card,
+      { id: "c2", slug: "card", orderIndex: 1, styles: styles({}) },
+    ]);
+
+    const skipped = warnings.find(w => w.code === "duplicate-class-name");
+    expect(skipped?.path).toBe("/classes/1");
+  });
+});
+
+describe("a node whose class list is not a list", () => {
+  it("says so rather than normalizing it away", () => {
+    const { warnings, classes } = compile(doc({ classes: "c1" as never }), [
+      card,
+    ]);
+
+    expect(warnings.map(w => w.code)).toContain("invalid-classes");
+    expect(classes.get("n1")).not.toContain("nx-c-card");
+  });
+});
+
 describe("a class library that is not a library", () => {
   it("survives a stored library that is not a list at all", () => {
     // One site-settings record, read by every page compile. A spread over `{}` throws, which
@@ -464,10 +514,7 @@ describe("a class library the compiler cannot use whole", () => {
   it("does not resolve a class whose name another class already took", () => {
     const first = card;
     const second: NamedClass = { ...feature, slug: "card" };
-    const library = new Map([
-      [first.id, first],
-      [second.id, second],
-    ]);
+    const library = [first, second];
 
     // The compiler writes only the first. Resolving the second would report its value while the
     // block actually receives the first's declarations from the shared selector.
@@ -477,9 +524,7 @@ describe("a class library the compiler cannot use whole", () => {
 
   it("does not resolve a class with no styles record", () => {
     const broken = { id: "c9", slug: "broken", orderIndex: 0 } as never;
-    expect(resolveNodeClasses(["c9"], new Map([["c9", broken]]))).toHaveLength(
-      0
-    );
+    expect(resolveNodeClasses(["c9"], [broken])).toHaveLength(0);
     // And asking it directly answers rather than throwing.
     expect(
       resolveStyle("color", "base", BP, { classes: [broken] })

@@ -20,11 +20,13 @@
 // control on every render, tests call it without booting an engine, and an agent can ask it what
 // a page means without executing anything.
 
-import type { NodeStyles, StyleValue } from "../document";
+import type { NodeStyles, StyleState, StyleValue } from "../document";
+import { STYLE_STATES } from "../document";
 import { isPlainRecord } from "../plain-record";
 
 import { BREAKPOINT_AXES } from "./breakpoint-axes";
 import {
+  cssPropertiesForField,
   propertiesAlsoMatching,
   propertyInheritsToDescendants,
   propertyPseudoClassCount,
@@ -49,6 +51,14 @@ export type StyleSource =
    * not present itself as empty.
    */
   | { tier: "pageSettings" }
+  /**
+   * An ancestor node, whose value reaches this one because nothing closer states the property.
+   *
+   * `nodeId` names which ancestor, so a control can offer to jump to it — the value cannot be
+   * changed here, and saying only "inherited" leaves an author hunting for where. The wrapped
+   * source says how that ancestor got it, since an ancestor's colour can itself come from a class.
+   */
+  | { tier: "ancestor"; nodeId: string; source: StyleSource }
   /**
    * A breakpoint other than the one being edited, whose rule is also live.
    *
@@ -83,23 +93,50 @@ export interface ResolvedStyle {
   parts?: Record<string, ResolvedStyle>;
 }
 
-/** Everything resolution reads. Supplied by the caller; nothing is fetched. */
-export interface StyleResolutionInput {
+/**
+ * What one element contributes, in the three tiers a single node has.
+ *
+ * The same shape for the node being inspected and for every ancestor above it, because an
+ * ancestor's colour is decided exactly the way this node's is — its own value over its classes
+ * over its block's default. Modelling an ancestor as a bare style envelope would miss the case
+ * where the parent gets its colour from a class, which is the common one.
+ */
+export interface StyledNode {
   /** The node's own styles. */
   node?: NodeStyles;
   /** The classes the node applies, already in library order (see `resolveNodeClasses`). */
   classes?: readonly NamedClass[];
   /** The block type's base styles. */
   blockBase?: NodeStyles;
+}
+
+/** An ancestor of the node being inspected, and how it is styled. */
+export interface AncestorNode extends StyledNode {
+  /** Which ancestor, so a control can say where an inherited value actually lives. */
+  nodeId: string;
+}
+
+/** Everything resolution reads. Supplied by the caller; nothing is fetched. */
+export interface StyleResolutionInput extends StyledNode {
   /**
    * The page's styles, from `doc.settings.styles`.
    *
-   * Consulted only for properties that reach a descendant on their own — text colour and the
-   * typography properties, plus the link colours, which the catalog emits on a descendant
-   * selector. For anything else a page-root declaration never reaches this node, and offering it
-   * as a source would name an origin the browser does not use.
+   * The outermost thing a node can inherit from: written on the page root, and reaching this node
+   * only because nothing closer states the property.
    */
   pageSettings?: NodeStyles;
+  /**
+   * The ancestors between the page root and this node, **outermost first**, ending at the direct
+   * parent.
+   *
+   * Inheritance does not stop at the page. The compiler writes a parent's `color` on the parent's
+   * own selector and every descendant that states nothing shows it, so a resolver that knows only
+   * about this node and the page reports nothing for a value plainly on screen.
+   *
+   * Read only for properties that travel, and always beneath this node's own tiers: an inherited
+   * value loses to any declaration on the element itself, whatever the source order.
+   */
+  ancestors?: readonly AncestorNode[];
   /**
    * The viewport breakpoints whose rules are live, widest first, **including the active one**.
    *
@@ -130,21 +167,17 @@ export interface StyleResolutionInput {
  * not a competing declaration on this element but a value reaching it from an ancestor, and an
  * inherited value loses to any declaration on the element itself whatever the source order.
  */
-function tiers(
-  input: StyleResolutionInput,
-  property: string
+function nodeTiers(
+  styled: StyledNode
 ): { styles: NodeStyles; source: StyleSource }[] {
   const ordered: { styles: NodeStyles; source: StyleSource }[] = [];
-  if (input.pageSettings && propertyInheritsToDescendants(property)) {
+  if (styled.blockBase) {
     ordered.push({
-      styles: input.pageSettings,
-      source: { tier: "pageSettings" },
+      styles: styled.blockBase,
+      source: { tier: "blockDefault" },
     });
   }
-  if (input.blockBase) {
-    ordered.push({ styles: input.blockBase, source: { tier: "blockDefault" } });
-  }
-  for (const cls of input.classes ?? []) {
+  for (const cls of styled.classes ?? []) {
     // The compiler writes nothing for a class it cannot name, so applying one here would report
     // a value and a source the browser never receives.
     if (!isUsableNamedClass(cls)) continue;
@@ -153,8 +186,42 @@ function tiers(
       source: { tier: "class", id: cls.id, slug: cls.slug },
     });
   }
-  if (input.node)
-    ordered.push({ styles: input.node, source: { tier: "local" } });
+  if (styled.node)
+    ordered.push({ styles: styled.node, source: { tier: "local" } });
+  return ordered;
+}
+
+function tiers(
+  input: StyleResolutionInput,
+  property: string
+): { styles: NodeStyles; source: StyleSource }[] {
+  const ordered: { styles: NodeStyles; source: StyleSource }[] = [];
+  // Everything above this node is inheritance, which reaches it only for properties that travel
+  // and always loses to a declaration on the element itself. Outermost first, so the nearest
+  // ancestor is read last and wins — which is what "the closest one that says anything" means.
+  if (propertyInheritsToDescendants(property)) {
+    if (input.pageSettings) {
+      ordered.push({
+        styles: input.pageSettings,
+        source: { tier: "pageSettings" },
+      });
+    }
+    for (const ancestor of input.ancestors ?? []) {
+      for (const tier of nodeTiers(ancestor)) {
+        ordered.push({
+          styles: tier.styles,
+          // Wrapped rather than flattened: which ancestor it was, and how that ancestor came by
+          // it, are different questions and a control may want to ask either.
+          source: {
+            tier: "ancestor",
+            nodeId: ancestor.nodeId,
+            source: tier.source,
+          },
+        });
+      }
+    }
+  }
+  ordered.push(...nodeTiers(input));
   return ordered;
 }
 
@@ -224,8 +291,12 @@ function valueAt(
  * Asked per stated value, so the cost is one call per tier that mentions the property, not one
  * per property in the document.
  */
-function compilerWritesValue(property: string, value: StyleValue): boolean {
-  return compileStyleValues({ [property]: value }, "").declarations.length > 0;
+function compilerWrites(property: string, value: StyleValue): Set<string> {
+  return new Set(
+    compileStyleValues({ [property]: value }, "").declarations.map(
+      declaration => declaration.property
+    )
+  );
 }
 
 /**
@@ -273,24 +344,42 @@ type Accumulated =
 function fold(
   current: Accumulated | undefined,
   value: StyleValue,
-  source: StyleSource
+  source: StyleSource,
+  property: string,
+  path: readonly string[],
+  emitted: ReadonlySet<string>
 ): Accumulated | undefined {
-  if (isPlainRecord(value)) {
-    // A record with no fields states no declarations, so it neither wins nor clears what is
-    // already there — and where nothing is there it must not invent an empty one. Read out, that
-    // would show a control as carrying a value the browser has no declaration for.
-    const keys = Object.keys(value);
-    if (keys.length === 0) return current;
-    const fields =
-      current?.kind === "fields"
-        ? current.fields
-        : new Map<string, Accumulated>();
-    for (const key of keys) {
-      const folded = fold(fields.get(key), value[key], source);
-      if (folded !== undefined) fields.set(key, folded);
-    }
-    return fields.size === 0 ? current : { kind: "fields", fields };
+  if (!isPlainRecord(value)) {
+    // The compiler refuses a bad declaration one leaf at a time: `padding` with a valid
+    // `blockStart` and a nonsense `blockEnd` still writes the first. Folding the whole record
+    // would record the refused side too, and report it as the source over a lower tier the
+    // browser is still showing there.
+    const writes = cssPropertiesForField(property, path);
+    if (writes.length > 0 && !writes.some(css => emitted.has(css)))
+      return current;
+    return { kind: "whole", value, source };
   }
+  // A record with no fields states no declarations, so it neither wins nor clears what is
+  // already there — and where nothing is there it must not invent an empty one. Read out, that
+  // would show a control as carrying a value the browser has no declaration for.
+  const keys = Object.keys(value);
+  if (keys.length === 0) return current;
+  const fields =
+    current?.kind === "fields"
+      ? current.fields
+      : new Map<string, Accumulated>();
+  for (const key of keys) {
+    const folded = fold(
+      fields.get(key),
+      value[key],
+      source,
+      property,
+      [...path, key],
+      emitted
+    );
+    if (folded !== undefined) fields.set(key, folded);
+  }
+  return fields.size === 0 ? current : { kind: "fields", fields };
   return { kind: "whole", value, source };
 }
 
@@ -361,6 +450,9 @@ export function resolveStyle(
   //
   // Within one tier the compiler writes base first and the state after, so the state wins there;
   // across tiers the later tier wins whichever state it used.
+  // A state the compiler does not know is reported as `invalid-style-state` and emits nothing, so
+  // reading it here would return a value from a rule that was deliberately never written.
+  if (!STYLE_STATES.includes(state as StyleState)) return undefined;
   const states = state === "base" ? ["base"] : ["base", state];
   // Least specific first, so a rule that outranks another is read after it and the `>=` below
   // keeps the right one. For everything but the link colours this is a list of one.
@@ -374,7 +466,8 @@ export function resolveStyle(
         for (const candidate of properties) {
           const value = valueAt(tier.styles, candidateState, id, candidate);
           if (value === undefined) continue;
-          if (!compilerWritesValue(candidate, value)) continue;
+          const emitted = compilerWrites(candidate, value);
+          if (emitted.size === 0) continue;
           const source: StyleSource =
             id === breakpoint
               ? tier.source
@@ -393,7 +486,14 @@ export function resolveStyle(
             strongest = weight;
             accumulated = undefined;
           }
-          accumulated = fold(accumulated, value, source);
+          accumulated = fold(
+            accumulated,
+            value,
+            source,
+            candidate,
+            [],
+            emitted
+          );
         }
       }
     }

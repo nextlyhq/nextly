@@ -912,11 +912,12 @@ export function compilePageCss(
   // `usableNamedClasses` decides which of them are written, and the resolver reads the same
   // list, so a class dropped here cannot be reported as the source of a value.
   //
-  // Charged against an allowance of their own. A site's class library is one document's
-  // configuration and every document's problem: sharing the node budget let a single malformed
-  // library entry spend it before any node was reached, so one bad global class could strip the
-  // styling from a page that never referenced it.
-  const classBudget = newStyleIssueBudget();
+  // Charged against an allowance of their own, one per class. A site's class library is one
+  // document's configuration and every document's problem, and it took two goes to bound that
+  // properly: sharing the NODE budget let a malformed library entry spend it before any node was
+  // reached, and sharing one budget across the tier let a single unreferenced entry spend it
+  // before any later class was read. Either way one bad entry stripped styling from a page that
+  // never referenced it.
   // The library is one site-settings record read by every page compile, and it arrives whether or
   // not anything validated it. A non-array — `{}` from a corrupt row — reaches a spread inside
   // `orderedNamedClasses` and throws, which would take down rendering for every page on the site
@@ -942,6 +943,14 @@ export function compilePageCss(
   // The ids the written classes claimed, so an entry dropped for sharing one can be told that
   // rather than being told its name collided.
   const usedIds = new Set(usableClasses.map(cls => cls.id));
+  // Where each entry sits in the stored array, so a warning can point at the entry rather than at
+  // a name derived from it. A pointer built from the id does not resolve — the id may be missing,
+  // may not be a string, and is exactly what is unreliable about a malformed entry — so an editor
+  // could not highlight the class it is describing.
+  const libraryIndex = new Map<unknown, number>();
+  library.forEach((cls, index) => {
+    if (!libraryIndex.has(cls)) libraryIndex.set(cls, index);
+  });
   for (const cls of orderedNamedClasses(library)) {
     if (written.has(cls)) continue;
     // Reported once per entry the library could not use, naming which of the three reasons it
@@ -983,7 +992,7 @@ export function compilePageCss(
                 suggestion: "Give every class a distinct name.",
               };
     pushBoundedWarning(warningAllowance, warnings, {
-      path: pointer("/classes", describeValue(readClassId(cls))),
+      path: pointer("/classes", String(libraryIndex.get(cls) ?? 0)),
       severity: "warning",
       ...named,
     });
@@ -993,11 +1002,16 @@ export function compilePageCss(
       ...envelopeRules(
         cls.styles,
         `${pageRoot} .${escapeIdentifier(namedClassName(cls.slug))}`,
-        pointer("/classes", cls.id),
+        pointer("/classes", String(libraryIndex.get(cls) ?? 0)),
         contexts,
         tokenPrefix,
         warnings,
-        classBudget,
+        // One budget per class, not one for the tier. Shared, a single unreferenced entry with
+        // enough invalid properties spends it and every later class is refused unread — so a node
+        // referencing a perfectly good class receives its token and no declarations, styled by a
+        // library entry it never mentions. The tier's total output stays bounded by the warning
+        // allowance, which is shared and is what actually caps the reporting.
+        newStyleIssueBudget(),
         warningAllowance
       )
     );
@@ -1063,6 +1077,18 @@ export function compilePageCss(
     const own = classes.get(node.id);
     if (own === undefined) continue;
     const names = [own];
+    // A stored `classes` that is not a list — `"c1"` rather than `["c1"]` — references nothing
+    // this compiler can apply. Normalized away in silence it leaves an author with classes in the
+    // document, none on the element, and no account of either.
+    if (node.classes !== undefined && !Array.isArray(node.classes)) {
+      pushBoundedWarning(warningAllowance, warnings, {
+        path: pointer(path, "classes"),
+        code: "invalid-classes",
+        severity: "warning",
+        message: `The classes on this node are ${describeValue(node.classes)} rather than a list, so none were applied.`,
+        suggestion: "Store node classes as an array of class ids.",
+      });
+    }
     const applied = Array.isArray(node.classes) ? node.classes : [];
     for (const id of new Set(applied)) {
       if (typeof id === "string" && byId.has(id)) continue;

@@ -158,12 +158,18 @@ export function orderedNamedClasses(
  */
 export function resolveNodeClasses(
   ids: readonly string[],
-  library: ReadonlyMap<string, NamedClass>
+  library: readonly NamedClass[]
 ): NamedClass[] {
+  // The library arrives as the ordered list, not as a map keyed by id, and that is the whole
+  // point: a map is built by the caller, and building one collapses two entries sharing an id
+  // before anything here can see the collision. The compiler keeps the FIRST of those and warns;
+  // a map keeps the last, so the resolver would report a class the stylesheet never emitted.
+  //
   // Narrowed to what the compiler writes BEFORE anything is looked up, so a class dropped for
-  // colliding on its name cannot be reported as the source of a value it never contributed.
+  // colliding on its name or its id cannot be reported as the source of a value it never
+  // contributed.
   const emitted = new Map(
-    usableNamedClasses([...library.values()]).map(cls => [cls.id, cls])
+    usableNamedClasses(library).map(cls => [cls.id, cls])
   );
   const found: NamedClass[] = [];
   const seen = new Set<string>();

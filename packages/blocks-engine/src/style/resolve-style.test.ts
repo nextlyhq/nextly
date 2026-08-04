@@ -57,22 +57,10 @@ describe("which tier wins", () => {
     // The same two classes listed the other way round must resolve identically: order is the
     // library's, so two nodes carrying the same classes cannot look different.
     const listedForwards = resolveStyle("color", "base", "desktop", {
-      classes: resolveNodeClasses(
-        ["card", "feature"],
-        new Map([
-          ["card", card],
-          ["feature", feature],
-        ])
-      ),
+      classes: resolveNodeClasses(["card", "feature"], [card, feature]),
     });
     const listedBackwards = resolveStyle("color", "base", "desktop", {
-      classes: resolveNodeClasses(
-        ["feature", "card"],
-        new Map([
-          ["card", card],
-          ["feature", feature],
-        ])
-      ),
+      classes: resolveNodeClasses(["feature", "card"], [card, feature]),
     });
 
     expect(listedForwards?.value).toBe("green");
@@ -294,6 +282,27 @@ describe("values the compiler would refuse", () => {
     expect(found?.parts?.width).toBeUndefined();
   });
 
+  it("keeps a lower tier's side when a higher tier's side is refused", () => {
+    // The whole value compiles — `blockStart` is written — so a check on the whole property says
+    // yes while `blockEnd` was dropped. Folded in, the refused side reports itself as the source
+    // over a class value the browser is still showing there.
+    const found = resolveStyle("padding", "base", "desktop", {
+      classes: [
+        namedClass("card", 0, at("desktop", { padding: { blockEnd: "4px" } })),
+      ],
+      node: at("desktop", {
+        padding: { blockStart: "16px", blockEnd: "bogus" },
+      }),
+    });
+
+    expect(found?.value).toEqual({ blockStart: "16px", blockEnd: "4px" });
+    expect(found?.parts?.blockEnd.source).toEqual({
+      tier: "class",
+      id: "card",
+      slug: "card",
+    });
+  });
+
   it("reports nothing for a key the catalog does not define", () => {
     expect(
       resolveStyle("nonsense", "base", "desktop", {
@@ -362,6 +371,82 @@ describe("a composite property is not one declaration", () => {
   });
 });
 
+describe("what an ancestor passes down", () => {
+  it("names the ancestor a value is inherited from, and how that ancestor got it", () => {
+    // The compiler writes a parent's colour on the parent's own selector and every descendant
+    // that states nothing shows it. A resolver that knows only this node and the page reports
+    // nothing for a colour plainly on screen.
+    const found = resolveStyle("color", "base", "desktop", {
+      ancestors: [
+        {
+          nodeId: "section",
+          classes: [namedClass("card", 0, at("desktop", { color: "blue" }))],
+        },
+      ],
+    });
+
+    expect(found?.value).toBe("blue");
+    expect(found?.source).toEqual({
+      tier: "ancestor",
+      nodeId: "section",
+      source: { tier: "class", id: "card", slug: "card" },
+    });
+  });
+
+  it("prefers the nearest ancestor, which is the one the browser stops at", () => {
+    const found = resolveStyle("color", "base", "desktop", {
+      ancestors: [
+        { nodeId: "outer", node: at("desktop", { color: "red" }) },
+        { nodeId: "inner", node: at("desktop", { color: "green" }) },
+      ],
+    });
+
+    expect(found?.value).toBe("green");
+    expect(found?.source).toEqual({
+      tier: "ancestor",
+      nodeId: "inner",
+      source: { tier: "local" },
+    });
+  });
+
+  it("loses to any declaration on the node itself, including its block default", () => {
+    const found = resolveStyle("color", "base", "desktop", {
+      ancestors: [{ nodeId: "outer", node: at("desktop", { color: "red" }) }],
+      blockBase: at("desktop", { color: "black" }),
+    });
+
+    expect(found?.source).toEqual({ tier: "blockDefault" });
+  });
+
+  it("passes down nothing for a property that does not travel", () => {
+    expect(
+      resolveStyle("padding", "base", "desktop", {
+        ancestors: [
+          {
+            nodeId: "outer",
+            node: at("desktop", { padding: { blockStart: "8px" } }),
+          },
+        ],
+      })
+    ).toBeUndefined();
+  });
+});
+
+describe("a state the compiler does not know", () => {
+  it("reports nothing, because no rule was written for it", () => {
+    // `pressed` is reported as `invalid-style-state` and emits nothing. Read here, it would hand
+    // back a value from a rule the compiler deliberately omitted.
+    expect(
+      resolveStyle("color", "pressed", "desktop", {
+        node: {
+          base: { desktop: { color: "black" } },
+          pressed: { desktop: { color: "red" } },
+        } as unknown as NodeStyles,
+      })
+    ).toBeUndefined();
+  });
+});
+
 describe("page settings as an origin", () => {
   const pageSettings = at("desktop", {
     color: "rebeccapurple",
@@ -397,9 +482,7 @@ describe("page settings as an origin", () => {
 
 describe("a class library that is incomplete or unordered", () => {
   it("skips an id the library does not have rather than failing", () => {
-    const library = new Map([
-      ["card", namedClass("card", 0, at("desktop", { color: "blue" }))],
-    ]);
+    const library = [namedClass("card", 0, at("desktop", { color: "blue" }))];
 
     // Configuration that has not loaded cannot make a document invalid, for the same reason an
     // unresolved token name is a warning. The node keeps the classes that do resolve.
@@ -410,9 +493,7 @@ describe("a class library that is incomplete or unordered", () => {
 
   it("applies a class listed twice once", () => {
     const card = namedClass("card", 0, at("desktop", { color: "blue" }));
-    expect(
-      resolveNodeClasses(["card", "card"], new Map([["card", card]])).length
-    ).toBe(1);
+    expect(resolveNodeClasses(["card", "card"], [card]).length).toBe(1);
   });
 
   it("orders two classes sharing an index deterministically", () => {

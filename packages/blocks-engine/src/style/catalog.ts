@@ -23,6 +23,7 @@ import type {
   NumberLeaf,
   StyleGroup,
   StyleProperty,
+  StyleShape,
   TokenKind,
   UrlLeaf,
 } from "./catalog-types";
@@ -921,6 +922,48 @@ const CATALOG_BY_PROPERTY: ReadonlyMap<string, StyleProperty> = new Map(
 /** The catalog row for a storage key, or `undefined` if it is not a style property. */
 export function getStyleProperty(property: string): StyleProperty | undefined {
   return CATALOG_BY_PROPERTY.get(property);
+}
+
+/**
+ * The CSS properties one stored field of a value can turn into.
+ *
+ * A composite is stored as a record and emitted as separate declarations, so asking whether the
+ * compiler wrote a particular FIELD means asking which declarations that field is responsible
+ * for. `padding.blockEnd` answers `padding-block-end`; a field that is itself composite answers
+ * every leaf beneath it.
+ *
+ * An empty answer means the path names nothing this catalog defines, which a caller should read
+ * as "no claim", not as "emitted nothing" — persisted data reaches here unvalidated.
+ */
+export function cssPropertiesForField(
+  property: string,
+  path: readonly string[]
+): readonly string[] {
+  let shape = CATALOG_BY_PROPERTY.get(property)?.shape;
+  for (const key of path) {
+    if (shape === undefined) return [];
+    // A union stores one branch at a time, so the field belongs to whichever branch defines it.
+    const branches = shape.kind === "union" ? shape.of : [shape];
+    let next: StyleShape | undefined;
+    for (const branch of branches) {
+      const fields =
+        branch.kind === "logicalSides"
+          ? branch.sides
+          : branch.kind === "logicalCorners"
+            ? branch.corners
+            : branch.kind === "object"
+              ? branch.fields
+              : undefined;
+      if (fields === undefined) continue;
+      // Read through `entries` rather than by index: the side and corner records are declared
+      // with their exact keys, so a lookup by an arbitrary string is not something the types can
+      // answer, and persisted data is where these keys come from.
+      next ??= Object.entries(fields).find(([name]) => name === key)?.[1];
+    }
+    shape = next;
+  }
+  if (shape === undefined) return [];
+  return shapeLeaves(shape).map(leaf => leaf.cssProperty);
 }
 
 /** The descendant selector a property's declarations attach to, if any. */
