@@ -321,6 +321,45 @@ describe("auditFailureMetadata", () => {
     expect(projectAuditMetadata({ originalCode: "constructor" })).toEqual({});
   });
 
+  it("reports the withheld detail wherever it is called from", () => {
+    // Every handler that records a failure gets the operator report by calling
+    // this, rather than by remembering to log alongside it. That was the defect
+    // the first time: one of the three handlers logged and the other two
+    // discarded the only actionable detail their failures carried.
+    const logged: Record<string, unknown>[] = [];
+    const logger = getNextlyLogger();
+    const originalWarn = logger.warn.bind(logger);
+    logger.warn = (payload: unknown) => {
+      logged.push(payload as Record<string, unknown>);
+      return undefined as never;
+    };
+
+    try {
+      const metadata = auditFailureMetadata(
+        NextlyError.invalidCredentials({
+          logContext: {
+            reason: "strategy-fail",
+            strategyReason: "no SAML assertion for ada@example.com",
+            email: "ada@example.com",
+          },
+        }),
+        "req-42"
+      );
+      // Withheld from the row...
+      expect(metadata).toEqual({
+        code: "AUTH_INVALID_CREDENTIALS",
+        reason: "strategy-fail",
+      });
+    } finally {
+      logger.warn = originalWarn;
+    }
+
+    // ...and reported to the operator, which is the other half of the contract.
+    const entry = logged.find(e => e.kind === "auth-failed");
+    expect(entry?.requestId).toBe("req-42");
+    expect(entry?.strategyReason).toBe("no SAML assertion for ada@example.com");
+  });
+
   it("reports a non-NextlyError as an internal failure", () => {
     expect(auditFailureMetadata(new TypeError("boom"))).toEqual({
       code: "INTERNAL_ERROR",

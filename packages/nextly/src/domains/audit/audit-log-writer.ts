@@ -132,8 +132,27 @@ export function projectAuditMetadata(
  * A code the canonical table does not define is reported as an internal
  * failure, which is the status `NextlyError` already resolves such a code to.
  */
-export function auditFailureMetadata(err: unknown): Record<string, unknown> {
+export function auditFailureMetadata(
+  err: unknown,
+  requestId?: string
+): Record<string, unknown> {
   if (!NextlyError.is(err)) return { code: "INTERNAL_ERROR" };
+
+  // Reported here rather than by each caller, for the same reason the metadata
+  // is built here: the two halves are one contract — free text and identifiers
+  // go to the operator log, core-controlled values go to the retained trail —
+  // and a caller that projects without reporting silently discards the only
+  // actionable detail a failure carried. Keeping both in one place is what
+  // stops them diverging per handler.
+  if (err.logContext) {
+    getNextlyLogger().warn({
+      kind: "auth-failed",
+      requestId,
+      code: err.code,
+      ...err.logContext,
+    });
+  }
+
   return {
     code: isCanonicalErrorCode(err.code) ? err.code : "INTERNAL_ERROR",
     ...projectAuditMetadata(err.logContext),

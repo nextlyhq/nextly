@@ -186,7 +186,7 @@ export async function handleChallengeResolve(
         trustedProxyIps: deps.trustedProxyIps,
       }),
       userAgent: request.headers.get("user-agent"),
-      metadata: auditFailureMetadata(err),
+      metadata: auditFailureMetadata(err, requestId),
     });
     if (NextlyError.is(err)) {
       return buildAuthErrorResponse(err, requestId);

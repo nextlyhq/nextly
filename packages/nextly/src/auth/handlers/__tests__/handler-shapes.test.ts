@@ -386,7 +386,7 @@ describe("login handler: respondAction shape", () => {
       logger.warn = originalWarn;
     }
 
-    const entry = logged.find(e => e.kind === "login-failed");
+    const entry = logged.find(e => e.kind === "auth-failed");
     expect(entry).toBeDefined();
     expect(entry?.strategyReason).toBe("no SAML assertion for ada");
   });

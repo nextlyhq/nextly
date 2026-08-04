@@ -3,7 +3,6 @@ import { auditFailureMetadata } from "../../domains/audit/audit-log-writer";
 import type { AuditLogWriter } from "../../domains/audit/audit-log-writer";
 import { auditReason } from "../../domains/audit/audit-reasons";
 import { NextlyError } from "../../errors/nextly-error";
-import { getNextlyLogger } from "../../observability/logger";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
 import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
 import { validateCsrf } from "../csrf/validate";
@@ -200,19 +199,6 @@ export async function handleLogin(
     // toResponseJSON; everything else collapses to a single INTERNAL_ERROR
     // response so we never leak internals to the wire.
     await stallResponse(startTime, deps.loginStallTimeMs);
-    // The audit row keeps only core-controlled values, so the detail an error
-    // carried reaches the operator here or nowhere. That is the whole design —
-    // identifiers and free text go to the log, not to a retained trail that
-    // nothing can associate with a subject — and it only holds if the log is
-    // actually written.
-    if (NextlyError.is(err) && err.logContext) {
-      getNextlyLogger().warn({
-        kind: "login-failed",
-        requestId,
-        code: err.code,
-        ...err.logContext,
-      });
-    }
     // Every login failure (bad password, locked, unverified, inactive,
     // internal) records a single 'login-failed' event. We deliberately do
     // not split by reason here; that would re-introduce the account-state
@@ -226,7 +212,7 @@ export async function handleLogin(
         trustedProxyIps: deps.trustedProxyIps,
       }),
       userAgent: request.headers.get("user-agent"),
-      metadata: auditFailureMetadata(err),
+      metadata: auditFailureMetadata(err, requestId),
     });
     if (NextlyError.is(err)) {
       return buildAuthErrorResponse(err, requestId);
