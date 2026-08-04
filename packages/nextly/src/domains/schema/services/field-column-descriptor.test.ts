@@ -38,13 +38,21 @@ describe("getColumnDescriptor — plugin field types", () => {
       storage: "json",
       component: "@x/y#Z",
     });
-    const d = getColumnDescriptor(field("page-builder"), "postgres");
+    const d = getColumnDescriptor(
+      field("page-builder"),
+      "postgresql",
+      "codeFirst"
+    );
     expect(d?.kind).toBe("json");
   });
 
   it("falls back to a text column for an unregistered field type", () => {
     clearFieldTypes();
-    const d = getColumnDescriptor(field("page-builder"), "postgres");
+    const d = getColumnDescriptor(
+      field("page-builder"),
+      "postgresql",
+      "codeFirst"
+    );
     expect(d?.kind).toBe("text");
   });
 });
@@ -52,7 +60,7 @@ describe("getColumnDescriptor — plugin field types", () => {
 describe("getColumnDescriptor: number storage", () => {
   it("defaults a code-first number field to integer (unchanged behavior)", () => {
     for (const dialect of DIALECTS) {
-      const d = getColumnDescriptor(numberField({}), dialect);
+      const d = getColumnDescriptor(numberField({}), dialect, "codeFirst");
       expect(d?.kind).toBe("integer");
       expect(d?.precision).toBeUndefined();
     }
@@ -61,7 +69,8 @@ describe("getColumnDescriptor: number storage", () => {
   it("keeps the builder's options.format='float' mapping to double", () => {
     const d = getColumnDescriptor(
       numberField({ options: { format: "float" } }),
-      "postgresql"
+      "postgresql",
+      "codeFirst"
     );
     expect(d?.kind).toBe("double");
   });
@@ -75,7 +84,8 @@ describe("getColumnDescriptor: number storage", () => {
     for (const dialect of DIALECTS) {
       const d = getColumnDescriptor(
         numberField({ dbType: "decimal" }),
-        dialect
+        dialect,
+        "codeFirst"
       );
       expect(d?.kind).toBe("decimal");
       expect(d?.dialectType).toBe(expected[dialect]);
@@ -87,7 +97,8 @@ describe("getColumnDescriptor: number storage", () => {
   it("honors author-set precision and scale", () => {
     const d = getColumnDescriptor(
       numberField({ dbType: "decimal", precision: 12, scale: 4 }),
-      "mysql"
+      "mysql",
+      "codeFirst"
     );
     expect(d?.dialectType).toBe("decimal(12,4)");
     expect(d?.precision).toBe(12);
@@ -101,7 +112,8 @@ describe("getColumnDescriptor: number storage", () => {
     for (const dialect of DIALECTS) {
       const d = getColumnDescriptor(
         numberField({ dbType: "decimal" }),
-        dialect
+        dialect,
+        "codeFirst"
       );
       expect(normalizeType(d?.dialectType)).toBe("numeric");
     }
@@ -115,12 +127,17 @@ describe("getColumnDescriptor: number storage", () => {
     // integer/decimal column would reject it. hasMany wins over dbType.
     for (const dialect of DIALECTS) {
       expect(
-        getColumnDescriptor(numberField({ hasMany: true }), dialect)?.kind
+        getColumnDescriptor(
+          numberField({ hasMany: true }),
+          dialect,
+          "codeFirst"
+        )?.kind
       ).toBe("json");
       expect(
         getColumnDescriptor(
           numberField({ hasMany: true, dbType: "decimal" }),
-          dialect
+          dialect,
+          "codeFirst"
         )?.kind
       ).toBe("json");
     }

@@ -1,5 +1,6 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 import { isFieldLocalized } from "../classify-fields";
 
 import { ddlType, q } from "./ddl-types";
@@ -30,6 +31,13 @@ export interface ReconcileCompanionArgs {
   dialect: SupportedDialect;
   /** Whether the collection has Draft/Published → companion carries a per-locale `_status`. */
   status: boolean;
+  /**
+   * Which builder made the main table. A companion column mirrors the main table's, so it is
+   * described as whatever built that one; deciding it locally left a translatable field bounded on
+   * the companion while the same declaration was unbounded on the main table.
+   */
+  builtBy: ColumnOrigin;
+
   /**
    * Whether the companion `<tableName>_locales` table already exists in the live DB.
    * The caller performs the existence check (e.g. `adapter.tableExists`) so this helper
@@ -83,7 +91,15 @@ export function buildCompanionReconcileSql(
 export function buildCompanionReconcileStatements(
   args: ReconcileCompanionArgs
 ): string[] {
-  const { slug, tableName, oldLocalized, newLocalized, dialect, status } = args;
+  const {
+    slug,
+    tableName,
+    oldLocalized,
+    newLocalized,
+    dialect,
+    status,
+    builtBy,
+  } = args;
   const companionTable = `${tableName}_locales`;
 
   if (!args.companionExists) {
@@ -98,6 +114,7 @@ export function buildCompanionReconcileStatements(
       defaultLocale: "en", // unused for the create-only statement (no seed rows)
       collectionLocalized: true,
       status,
+      builtBy,
     });
     // The create-only helper terminates with `;`; strip it so this stays a bare statement.
     return spec ? [buildCompanionCreateOnlySql(spec).replace(/;\s*$/, "")] : [];
@@ -110,7 +127,7 @@ export function buildCompanionReconcileStatements(
 
   for (const f of newLocalized) {
     if (oldNames.has(f.name)) continue;
-    const col = fieldToLocalizedColumnSpec(f, dialect);
+    const col = fieldToLocalizedColumnSpec(f, dialect, builtBy);
     if (col) {
       stmts.push(
         `ALTER TABLE ${q(companionTable, dialect)} ADD COLUMN ${q(col.name, dialect)} ${ddlType(col, dialect)}`
@@ -119,7 +136,7 @@ export function buildCompanionReconcileStatements(
   }
   for (const f of oldLocalized) {
     if (newNames.has(f.name)) continue;
-    const col = fieldToLocalizedColumnSpec(f, dialect);
+    const col = fieldToLocalizedColumnSpec(f, dialect, builtBy);
     if (col) {
       stmts.push(
         `ALTER TABLE ${q(companionTable, dialect)} DROP COLUMN ${q(col.name, dialect)}`
@@ -166,6 +183,11 @@ export interface CompanionTransitionArgs {
   slug: string;
   tableName: string;
   dialect: SupportedDialect;
+  /**
+   * Which builder made the main table. A companion column mirrors the main table's, so it is
+   * described as whatever built that one.
+   */
+  builtBy: ColumnOrigin;
   /** Default locale — the language seeded onto/restored from the companion. */
   defaultLocale: string;
   /** Desired Draft/Published state (companion `_status`). */
@@ -247,6 +269,7 @@ export function buildCompanionTransitionStatements(
     slug,
     tableName,
     dialect,
+    builtBy,
     defaultLocale,
     status,
     wasLocalized,
@@ -273,6 +296,7 @@ export function buildCompanionTransitionStatements(
       defaultLocale,
       collectionLocalized: true,
       status,
+      builtBy,
     });
     // No translatable columns yet (or an already-present companion from a partial apply): fall
     // back to the plain reconcile, which CREATEs an empty companion or no-ops.
@@ -281,6 +305,7 @@ export function buildCompanionTransitionStatements(
         statements: buildCompanionReconcileStatements({
           slug,
           tableName,
+          builtBy,
           oldLocalized: [],
           newLocalized: localizedNew,
           dialect,
@@ -300,7 +325,7 @@ export function buildCompanionTransitionStatements(
     // old column and gets a companion column only.
     const oldColumnNames = new Set(
       oldFields
-        .map(f => fieldToLocalizedColumnSpec(f, dialect)?.name)
+        .map(f => fieldToLocalizedColumnSpec(f, dialect, builtBy)?.name)
         .filter((n): n is string => typeof n === "string")
     );
     spec.columnsOnMain = spec.columns
@@ -324,6 +349,7 @@ export function buildCompanionTransitionStatements(
       defaultLocale,
       collectionLocalized: true,
       status,
+      builtBy,
     });
     // Nothing to restore (no companion, or the entity had no translatable columns).
     if (!spec || !companionExists) return none;
@@ -363,6 +389,7 @@ export function buildCompanionTransitionStatements(
       statements: buildCompanionReconcileStatements({
         slug,
         tableName,
+        builtBy,
         oldLocalized,
         newLocalized,
         dialect,

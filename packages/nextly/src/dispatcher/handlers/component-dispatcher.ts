@@ -260,6 +260,8 @@ async function reconcileComponentCompanion(args: {
   const defaultLocale = getConfigFromDI()?.localization?.defaultLocale ?? "en";
 
   const plan = buildCompanionTransitionStatements({
+    // The companion mirrors the main table, and a field group's builder reads a width from a different key.
+    builtBy: "fieldGroup" as const,
     slug,
     tableName,
     dialect,

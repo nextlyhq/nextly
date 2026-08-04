@@ -84,7 +84,15 @@ export class DynamicCollectionSchemaService {
    */
   private canonicalSlugType(field: FieldDefinition): string | null {
     if (toSnakeCase(field.name) !== "slug") return null;
-    return getColumnDescriptor(field, this.dialect)?.dialectType ?? null;
+    // Asked as the builder this service IS. The descriptor bounds a slug column for every builder,
+    // because the index needs a column MySQL can index and that is a property of the column rather
+    // than of whoever created the table — so naming the real builder here is both honest and safe.
+    // The rule lives there and not here so the paths that ADD a slug column to an existing table
+    // reach it too; encoded only at this creator, a repaired table disagreed with a fresh one.
+    return (
+      getColumnDescriptor(field, this.dialect, "collection")?.dialectType ??
+      null
+    );
   }
 
   /**

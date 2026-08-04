@@ -98,7 +98,13 @@ async function resolveCopyShape(args: CopyArgs): Promise<{
   const pairs = args.fields
     .map(field => ({
       field: field.name,
-      column: fieldToLocalizedColumnSpec(field, args.dialect)?.name,
+      column: fieldToLocalizedColumnSpec(
+        field,
+        args.dialect,
+        // Only the column NAME is read here, to move values between two tables that already exist.
+        // The width plays no part in that, so this states the reading that renders no new column.
+        "codeFirst"
+      )?.name,
     }))
     .filter(
       (p): p is { field: string; column: string } =>

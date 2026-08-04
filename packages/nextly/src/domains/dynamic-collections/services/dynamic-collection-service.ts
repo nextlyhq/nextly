@@ -342,6 +342,8 @@ export class DynamicCollectionService extends BaseService {
       dbName: tableName,
       fields: opts.fields,
       dialect: this.adapter.dialect,
+      // This service creates Schema Builder collections, and the companion mirrors that table.
+      builtBy: "collection",
       // Unused for the create-only statement (no seed) — a placeholder is fine.
       defaultLocale: "en",
       collectionLocalized: true,
@@ -400,6 +402,8 @@ export class DynamicCollectionService extends BaseService {
       resolveLocalizedFieldNames(args.oldFields, args.wasLocalized)
     );
     const common = {
+      // This service owns Schema Builder collections, so the companion mirrors that builder.
+      builtBy: "collection" as const,
       slug: args.slug,
       tableName: args.tableName,
       dialect: this.adapter.dialect,

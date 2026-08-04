@@ -1005,6 +1005,8 @@ async function ensureLocalizedCompanionsForReload(
       const provisioned = await ensureCompanionTable(
         adapter,
         {
+          // The HMR path applies a config edit, so the table is the pipeline's.
+          builtBy: "codeFirst" as const,
           slug: entity.slug,
           tableName,
           fields: entity.fields ?? [],
@@ -1077,6 +1079,8 @@ async function ensureLocalizedCompanionsForReload(
       await reconcileCompanionColumns(
         adapter,
         {
+          // Same config-edit path as the companion creation above.
+          builtBy: "codeFirst" as const,
           slug: entity.slug,
           tableName: resolveTableName(entity),
           fields: entity.fields ?? [],
@@ -1692,6 +1696,8 @@ async function applyReload(opts?: {
         // i18n: omit translatable columns from the main table's desired snapshot
         // so the HMR diff doesn't re-add them (they live in the companion). H2.
         {
+          // These branches apply a CONFIG edit, so the table is the pipeline's.
+          builtBy: "codeFirst" as const,
           hasStatus: target.status === true,
           localized: target.localized === true,
         }
@@ -1747,6 +1753,8 @@ async function applyReload(opts?: {
         target.fields,
         dialect,
         {
+          // These branches apply a CONFIG edit, so the table is the pipeline's.
+          builtBy: "codeFirst" as const,
           hasStatus: target.status === true,
           localized: target.localized === true,
         }
@@ -1799,7 +1807,7 @@ async function applyReload(opts?: {
         target.tableName,
         target.fields,
         dialect,
-        { localized: target.localized === true }
+        { builtBy: "codeFirst" as const, localized: target.localized === true }
       );
       const operations = diffSnapshots(live, { tables: [desiredTable] });
 

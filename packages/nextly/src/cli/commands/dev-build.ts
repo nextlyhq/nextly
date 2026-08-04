@@ -978,6 +978,8 @@ export async function ensureLocalizedCompanions(
       await ensureCompanionTable(
         adapter as unknown as DrizzleAdapter,
         {
+          // The dev build syncs what nextly.config.ts declares.
+          builtBy: "codeFirst" as const,
           slug: entity.slug,
           tableName,
           fields: entity.fields ?? [],
@@ -1044,6 +1046,8 @@ export async function ensureLocalizedCompanions(
       await reconcileCompanionColumns(
         adapter as unknown as DrizzleAdapter,
         {
+          // Same config-derived sync as the creation above.
+          builtBy: "codeFirst" as const,
           slug: entity.slug,
           tableName,
           fields: entity.fields ?? [],

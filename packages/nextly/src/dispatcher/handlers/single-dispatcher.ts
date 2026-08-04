@@ -290,6 +290,8 @@ async function reconcileSingleCompanion(args: {
   const defaultLocale = getConfigFromDI()?.localization?.defaultLocale ?? "en";
 
   const plan = buildCompanionTransitionStatements({
+    // The companion mirrors the main table, and a single's table comes from the same builder as a collection's.
+    builtBy: "collection" as const,
     slug,
     tableName,
     dialect,

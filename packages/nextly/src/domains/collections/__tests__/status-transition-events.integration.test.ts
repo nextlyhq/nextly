@@ -142,6 +142,8 @@ describe("document status-transition events (integration)", () => {
       dialect: current.adapter.dialect,
       defaultLocale: "en",
       collectionLocalized: true,
+      // Defined in config, so the pipeline built this table.
+      builtBy: "codeFirst",
       status: true,
     });
     if (!spec) throw new Error("expected a companion spec");
@@ -208,6 +210,8 @@ describe("document status-transition events (integration)", () => {
       dialect: current.adapter.dialect,
       defaultLocale: "en",
       collectionLocalized: true,
+      // Defined in config, so the pipeline built this table.
+      builtBy: "codeFirst",
       status: true,
     });
     if (!spec)
@@ -231,7 +235,12 @@ describe("document status-transition events (integration)", () => {
     );
     const id = (created.data as { id: string }).id;
     await handler.updateEntry(
-      { collectionName: "pages", entryId: id, locale: "de", overrideAccess: true },
+      {
+        collectionName: "pages",
+        entryId: id,
+        locale: "de",
+        overrideAccess: true,
+      },
       { title: "de" }
     );
 
@@ -278,6 +287,8 @@ describe("document status-transition events (integration)", () => {
       dialect: current.adapter.dialect,
       defaultLocale: "en",
       collectionLocalized: true,
+      // Defined in config, so the pipeline built this table.
+      builtBy: "codeFirst",
       status: true,
     });
     if (!spec) throw new Error("expected a companion spec");
