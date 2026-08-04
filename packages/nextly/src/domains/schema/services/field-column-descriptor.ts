@@ -171,15 +171,37 @@ export function fieldProducesColumn(field: {
   if (field.type === "component") return false;
   // A many-to-many relationship stores its links in a dedicated junction table, not on the parent
   // row. Every other relationship shape does get a column.
-  if (field.type === "relationship" || field.type === "upload") {
-    const options: unknown = field.options;
-    const relationType =
-      typeof options === "object" && options !== null
-        ? (options as { relationType?: unknown }).relationType
-        : undefined;
-    return relationType !== "manyToMany";
-  }
+  if (usesJunctionTable(field)) return false;
   return true;
+}
+
+/**
+ * Whether a field's values live in a junction table instead of a column on its own row.
+ *
+ * The DDL generator asks this to decide whether to emit a junction table, and `fieldProducesColumn`
+ * asks it to decide there is no parent column — one rule, so the two cannot disagree about the same
+ * field. They did disagree, and the disagreement was resolved toward the row: an `upload` carrying
+ * `relationType: "manyToMany"` had no descriptor column while the generator emitted one.
+ *
+ * **Junction storage is a `relationship` feature only**, deliberately, because that is the only
+ * shape the persistence layer implements. Both halves select junction-backed fields by type:
+ * `collection-mutation-service` filters `f.type === "relationship" && relationType === "manyToMany"`
+ * on every write, and `collection-relationship-service` builds its relation set from
+ * `isRelationshipField`, which is `field.type === "relationship"`. Treating an upload as
+ * junction-backed would give it a table that nothing writes to and nothing reads from, so an upload
+ * keeps its column and the option is inert on it.
+ */
+export function usesJunctionTable(field: {
+  type?: unknown;
+  options?: unknown;
+}): boolean {
+  if (field.type !== "relationship") return false;
+  const options: unknown = field.options;
+  const relationType =
+    typeof options === "object" && options !== null
+      ? (options as { relationType?: unknown }).relationType
+      : undefined;
+  return relationType === "manyToMany";
 }
 
 /**
@@ -327,9 +349,10 @@ function classifyFieldKind(field: FieldDefinition): ColumnKind {
 
     case "relationship":
     case "upload": {
-      // Many-to-many is already excluded by fieldProducesColumn, which owns the junction-table
-      // rule. hasMany or array-target relationships are stored as JSON arrays of FK ids.
-      // Single-target -> plain FK column.
+      // A junction-backed relationship is already excluded by fieldProducesColumn, which owns
+      // that rule. An upload never is, so `relationType: "manyToMany"` on one falls through to the
+      // ordinary shapes below: hasMany or array-target is a JSON array of FK ids, single-target a
+      // plain FK column. That matches what the write path does with it.
       const hasMany = (field as { hasMany?: boolean }).hasMany;
       const relationTo = (field as { relationTo?: unknown }).relationTo;
       if (hasMany || Array.isArray(relationTo)) return "json";
