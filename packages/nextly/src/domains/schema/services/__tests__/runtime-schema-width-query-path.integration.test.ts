@@ -89,17 +89,17 @@ const CREATED_FIELDS: FieldDefinition[] = [
   { name: "body", type: "text" } as FieldDefinition,
 ];
 
-// What the runtime table is described from. The variant and width are read by the collection
-// creator and by neither other builder, so naming a builder here changes the declared column while
-// the physical one stays exactly as it was created. That mismatch is the situation under test: it
-// is what a query path gets when it does not know, and cannot know, which builder made the table.
+// What the runtime table is described from: a top-level `maxLength`, which the field-group creator
+// reads as the column's width and the collection creator does not read at all. Naming a builder
+// here therefore changes the declared column while the physical one stays exactly as it was
+// created. That mismatch is the situation under test — it is what a query path gets when it does
+// not know, and cannot know, which builder made the table.
+//
+// This pair on purpose: the two that disagree on BOTH bounded dialects. A collection and a
+// code-first table agree about every text field except one that states nothing at all, and then
+// only on MySQL, so that pair cannot carry the Postgres half of this suite.
 const DESCRIBED_FIELDS: FieldDefinition[] = [
-  {
-    name: "body",
-    type: "text",
-    options: { variant: "short" },
-    validation: { maxLength: 120 },
-  } as FieldDefinition,
+  { name: "body", type: "text", maxLength: 120 } as unknown as FieldDefinition,
 ];
 
 // Longer than either declared bound, so a bound that were enforced would be visible.
@@ -141,7 +141,7 @@ for (const entry of DIALECTS) {
     });
 
     // Both descriptions of the one physical table, differing only in which builder they name.
-    const describedAs = (builtBy: "collection" | "codeFirst") =>
+    const describedAs = (builtBy: "fieldGroup" | "collection") =>
       generateRuntimeSchema(tableName, DESCRIBED_FIELDS, entry.dialect, {
         builtBy,
         status: false,
@@ -150,17 +150,17 @@ for (const entry of DIALECTS) {
     it("describes the same column two different ways", () => {
       // Without this the round-trip below would prove nothing: it would be running the same
       // declaration twice.
-      const columnType = (builtBy: "collection" | "codeFirst") =>
+      const columnType = (builtBy: "fieldGroup" | "collection") =>
         columnsOf(describedAs(builtBy)).body.getSQLType();
 
-      expect(columnType("collection")).not.toBe(columnType("codeFirst"));
+      expect(columnType("fieldGroup")).not.toBe(columnType("collection"));
     });
 
     it("writes and reads a value past the bound through either description", async () => {
-      // The collection reading is the narrower of the two on both dialects: it takes the declared
-      // 120 where the code-first reading takes this module's own default.
-      const narrow = describedAs("collection");
-      const wide = describedAs("codeFirst");
+      // The field-group reading is the narrower of the two on both dialects: it takes the declared
+      // 120 where the collection reading ignores the key entirely and stays unbounded.
+      const narrow = describedAs("fieldGroup");
+      const wide = describedAs("collection");
 
       const idOf = (table: unknown) => columnsOf(table).id;
 

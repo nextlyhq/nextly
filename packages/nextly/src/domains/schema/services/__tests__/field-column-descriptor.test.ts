@@ -396,3 +396,59 @@ describe("getColumnDescriptor — a field named slug", () => {
     ).toBe("text");
   });
 });
+
+/**
+ * A code-first column keeps the shape the pipeline gave it.
+ *
+ * These readings are the rule this module applied before any builder was named, and that rule is
+ * what created every code-first column in every existing database. Describing one any other way
+ * proposes a change to a column nobody touched — and for the two unbounded readings on MySQL, the
+ * proposal is a narrowing that refuses or truncates whatever is already past 255 characters.
+ *
+ * Pinned on MySQL because it is the only dialect where the four readings render differently.
+ */
+describe("getColumnDescriptor — the code-first readings are preserved", () => {
+  // Each case builds its own field, because one of them is a shape the TYPED surface does not
+  // permit and the payload schema does: `options` is the choice list on a select, and the schema
+  // allows that on any field. That mismatch is precisely why the runtime guards it, so the case
+  // is stated structurally rather than dropped for not type-checking.
+  const cases: Array<[string, FieldDefinition, string]> = [
+    // Declared long: unbounded, and the case that loses data if narrowed.
+    [
+      "a long variant",
+      field({ name: "body", options: { variant: "long" } }),
+      "text",
+    ],
+    // A choice list states no width, so it is left unbounded too.
+    [
+      "a choice list",
+      contributedField({
+        name: "body",
+        type: "text",
+        options: [{ label: "A", value: "a" }],
+      }),
+      "text",
+    ],
+    // Declared short: bounded at the declared width.
+    [
+      "a short variant",
+      field({
+        name: "body",
+        options: { variant: "short" },
+        validation: { maxLength: 120 },
+      }),
+      "varchar(120)",
+    ],
+    // Nothing stated: the bounded default.
+    ["no width at all", field({ name: "body" }), "varchar(255)"],
+  ];
+
+  it.each(cases)(
+    "renders %s the way the pipeline built it",
+    (_label, declared, expected) => {
+      expect(
+        getColumnDescriptor(declared, "mysql", "codeFirst")?.dialectType
+      ).toBe(expected);
+    }
+  );
+});

@@ -299,7 +299,12 @@ export type ColumnOrigin =
   | "fieldGroup"
   /**
    * The pipeline's Drizzle builder, which is this module's own default and therefore what every
-   * code-first table was built with. It reads no width signal: a text field is the bounded default.
+   * code-first table was built with. It reads `options.variant` both ways and treats a choice list
+   * as unbounded; a field stating none of those gets the bounded default.
+   *
+   * Those readings are the rule this module applied before any builder was named, kept verbatim
+   * because they describe columns that already exist. Simplifying this to "the bounded default"
+   * proposed narrowing every code-first MySQL column that had been created unbounded.
    */
   | "codeFirst";
 
@@ -364,8 +369,19 @@ function textKindFor(
         : "longText";
 
     case "codeFirst":
-      // No width signal at all. `variant` is a Schema Builder concept — nothing in this package
-      // produces one — so honouring it here would bound a column the pipeline built unbounded.
+      // These four lines ARE the rule this module applied before any builder was named, and that
+      // rule is what the pipeline's builder used to create every code-first column that exists. So
+      // this branch keeps it exactly: describing an existing column any other way proposes a change
+      // to a column nobody touched, and two of these readings are unbounded — narrowing them on
+      // MySQL refuses or truncates whatever is already past 255 characters.
+      //
+      // What 122 changed is not this. The Schema Builder's creators read a width from other keys
+      // and read silence differently, and applying THESE rules to their tables was the defect.
+      if (variant === "long") return "longText";
+      if (variant === "short") return "shortText";
+      // `options` is the choice list on a select, and the payload schema permits that shape on any
+      // field, so a field carrying one states no width and is left unbounded.
+      if (Array.isArray(options)) return "longText";
       return "text";
 
     default:
