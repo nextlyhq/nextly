@@ -1,13 +1,16 @@
 import { buildMutationMessage } from "../direct-api/namespaces/helpers";
 import type {
   CollectionSlug,
-  DataFromCollectionSlug,
+  GeneratedTypes,
   MutationResult,
 } from "../direct-api/types/shared";
 import type { BatchOperationResult } from "../domains/collections/services/collection-types";
 import { NextlyError } from "../errors/nextly-error";
 import { collectingWarnings } from "../hooks/side-effect-warnings";
-import type { CollectionService } from "../services/collections/collection-service";
+import type {
+  CollectionEntry,
+  CollectionService,
+} from "../services/collections/collection-service";
 import type {
   PaginatedResult,
   QueryOptions,
@@ -96,14 +99,31 @@ const WRITE_VERB = {
 type WriteMethod = keyof typeof WRITE_VERB;
 
 /**
+ * A slug this surface accepts.
+ *
+ * The generated union when types exist, and any string besides. The canonical
+ * remap-safe way to name your own collection is `ctx.self.collections[...]`,
+ * which is `Record<string, string>` because the framework may rename an
+ * entity -- so a bare `CollectionSlug` would reject the very expression the
+ * docs tell plugin authors to use. `string & {}` keeps the union's
+ * autocompletion while still admitting a computed name.
+ */
+type AcceptedSlug = CollectionSlug | (string & {});
+
+/**
  * The row a slug resolves to.
  *
- * Reads the types `nextly generate:types` writes, and falls back to a loose
- * record when an app has not run it -- the same fallback the Direct API has
- * always had, so both paths degrade identically and a project that never
- * generates types is no worse off than it is today.
+ * The generated type when one exists, and `CollectionEntry` otherwise -- NOT a
+ * bare record. An app without generated types has always been promised `id`
+ * and the timestamps here, and dropping to `Record<string, unknown>` would take
+ * that away from exactly the projects that have the least type information to
+ * spare.
  */
-type RowFor<TSlug extends CollectionSlug> = DataFromCollectionSlug<TSlug>;
+type RowFor<TSlug> = GeneratedTypes extends { collections: infer C }
+  ? TSlug extends keyof C
+    ? C[TSlug]
+    : CollectionEntry
+  : CollectionEntry;
 
 /**
  * @public Plugin-facing collection service.
@@ -129,14 +149,14 @@ export type PluginCollectionService = Omit<
   AccessMethod | WriteMethod
 > & {
   /** Create one entry. Resolves to `{ message, item, warnings? }`. */
-  createEntry<TSlug extends CollectionSlug>(
+  createEntry<TSlug extends AcceptedSlug>(
     collectionName: TSlug,
     data: Record<string, unknown>,
     opts?: ServiceOpts
   ): Promise<MutationResult<RowFor<TSlug>>>;
 
   /** Update one entry. Resolves to `{ message, item, warnings? }`. */
-  updateEntry<TSlug extends CollectionSlug>(
+  updateEntry<TSlug extends AcceptedSlug>(
     collectionName: TSlug,
     entryId: string,
     data: Record<string, unknown>,
@@ -149,28 +169,28 @@ export type PluginCollectionService = Omit<
    * The deleted row is reported as its id alone: the facade's delete resolves
    * to `void`, and there is no row left to return.
    */
-  deleteEntry<TSlug extends CollectionSlug>(
+  deleteEntry<TSlug extends AcceptedSlug>(
     collectionName: TSlug,
     entryId: string,
     opts?: ServiceOpts
   ): Promise<MutationResult<{ id: string }>>;
 
   /** Fetch one entry by id. */
-  findEntryById<TSlug extends CollectionSlug>(
+  findEntryById<TSlug extends AcceptedSlug>(
     collectionName: TSlug,
     entryId: string,
     opts?: ServiceOpts
   ): Promise<RowFor<TSlug>>;
 
   /** List entries with filter, sort and pagination. */
-  listEntries<TSlug extends CollectionSlug>(
+  listEntries<TSlug extends AcceptedSlug>(
     collectionName: TSlug,
     options?: QueryOptions,
     opts?: ServiceOpts
   ): Promise<PaginatedResult<RowFor<TSlug>>>;
 
   /** Count entries matching a filter. */
-  count<TSlug extends CollectionSlug>(
+  count<TSlug extends AcceptedSlug>(
     collectionName: TSlug,
     options?: { where?: Record<string, unknown>; search?: string },
     opts?: ServiceOpts
@@ -182,7 +202,7 @@ export type PluginCollectionService = Omit<
    * Keeps `BatchOperationResult`, which already models per-row outcomes -- an
    * envelope around it would describe the batch and hide the rows.
    */
-  createMany<TSlug extends CollectionSlug>(
+  createMany<TSlug extends AcceptedSlug>(
     collectionName: TSlug,
     data: Record<string, unknown>[],
     opts?: ServiceOpts
