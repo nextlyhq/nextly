@@ -82,9 +82,16 @@ the published type advertised less than the component actually promised.
 ## Experimental surface (`@experimental`)
 
 Everything else the barrel exports, including: `Accordion`, `Alert`, `AlertDialog`,
-`Avatar`, `Card`, `Collapsible`, `Command`, `Popover`, `Progress`, `Separator`,
+`Avatar`, `Card`, `Collapsible`, `Command`, `ContextMenu` and its family, `Popover`,
+`Progress`, `ResizablePanelGroup`/`ResizablePanel`/`ResizableHandle`, `Separator`,
 `Skeleton`, `Spinner`, `Table` and its family, `TableSearch`, `TableSkeleton`, the table
 state components, the layout primitives (`Stack`, `Grid`, `Stat`) and `Toaster`.
+
+The context menu and the resizable split are the editor-shell primitives: an editor needs
+a right-click menu and draggable regions, and both belong in the kit rather than inside
+one plugin, because every plugin that builds an editing surface needs the same two. They
+enter experimental like everything else — the ladder does not make exceptions for the
+component that motivated it.
 
 These are shipped and used by the admin, but no first-party plugin depends on them yet,
 so they have not met the graduation bar. Use them — that is what promotes them — but

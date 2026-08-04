@@ -791,9 +791,10 @@
   --nx-overlay: oklch(0 0 0 / 0.55);
   /* A scrim you READ ON rather than look through. `--nx-overlay` sits under a
    * modal, which supplies its own surface for text; a full-screen state screen
-   * puts its message straight onto the scrim, and 55% over a white page tops
-   * out at 4.76:1 even for pure white — below AA with no headroom. 80% leaves
-   * room for a muted detail line to clear it comfortably. */
+   * puts its message straight onto the scrim, where the MUTED line decides the
+   * strength, not the heading: `text-white/60` over 55% on a white page is
+   * 2.81:1, and over 80% it is 5.66:1. Pure white clears AA on either (4.76:1
+   * and 12.63:1), so the heading alone would not have justified this token. */
   --nx-overlay-strong: oklch(0 0 0 / 0.8);
   /* For a scrim over CONTENT rather than the page: an image's hover actions,
    * where the content beneath still has to read through. */

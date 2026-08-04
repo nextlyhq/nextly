@@ -1,5 +1,5 @@
 /**
- * Webhook domain — retention pass scheduling.
+ * Retention pass scheduling, shared by every domain that prunes.
  *
  * Retention has no scheduler to hang off. Nextly is a library inside someone
  * else's Next.js app: there is no daemon, and an in-process timer would run on a
@@ -25,13 +25,38 @@
  * cost of a loss is only a second bounded, idempotent pass — the overlapping
  * deletes simply remove fewer rows.
  *
- * @module domains/webhooks/retention-gate
+ * @module domains/retention/gate
  */
 
 import type { WhereClause } from "@nextlyhq/adapter-drizzle/types";
 
-/** Where the last-pass timestamp lives, in the `nextly_meta` KV table. */
-export const RETENTION_GATE_KEY = "webhooks.retention.lastPassAt";
+/**
+ * Where a pass's last-run timestamp lives, in the `nextly_meta` KV table.
+ *
+ * One key PER PASS, never one shared key. A shared marker would let whichever
+ * pass ran first consume the interval for all of them, so a domain could be
+ * starved indefinitely by a busier neighbour and never prune at all.
+ */
+export const WEBHOOK_RETENTION_GATE_KEY = "webhooks.retention.lastPassAt";
+
+/**
+ * The audit trails are gated twice, because two triggers with different jobs
+ * offer them.
+ *
+ * A request path offers a capped pass so a save or a sign-in is not held up. The
+ * drain offers a full-budget one, and nothing waits on the drain. Sharing a
+ * marker let the capped trigger consume the interval first — a write landing
+ * just after the marker came due took the turn, and a scheduled drain arriving
+ * moments later found nothing to claim. Under continuous writes that repeats
+ * every interval, so the configured budget is never spent and the trails fall
+ * behind on a setting that reads as enforced.
+ *
+ * Separate markers mean the two can both run in an interval. That is harmless:
+ * a pass deletes rows older than a cutoff, so a second one finds less to do
+ * rather than doing it twice.
+ */
+export const AUDIT_RETENTION_GATE_KEY = "audit.retention.lastPassAt";
+export const AUDIT_RETENTION_DRAIN_GATE_KEY = "audit.retention.lastDrainPassAt";
 
 /**
  * The atomic claim primitive. Implemented against `nextly_meta` in
@@ -43,6 +68,12 @@ export interface RetentionGateStore {
    * `now`. Returns true only for the caller that took it.
    */
   claim(key: string, dueBefore: Date, now: Date): Promise<boolean>;
+  /**
+   * Drop a marker this caller wrote, returning the turn. Optional: a store
+   * that cannot release simply keeps the interval, which is the previous
+   * behaviour rather than a new failure.
+   */
+  release?(key: string): Promise<void>;
 }
 
 /** The subset of the adapter the gate needs. */
@@ -60,6 +91,12 @@ const META_TABLE = "nextly_meta";
  */
 export class MetaRetentionGate implements RetentionGateStore {
   constructor(private readonly adapter: RetentionGateAdapter) {}
+
+  async release(key: string): Promise<void> {
+    await this.adapter.delete(META_TABLE, {
+      and: [{ column: "key", op: "=", value: key }],
+    });
+  }
 
   async claim(key: string, dueBefore: Date, now: Date): Promise<boolean> {
     // Removing the stale marker IS the claim: only one caller can delete a
@@ -97,6 +134,30 @@ export class MetaRetentionGate implements RetentionGateStore {
 }
 
 /**
+ * Give back a turn that was claimed but not used.
+ *
+ * Claiming writes the marker before the caller can know whether it still has
+ * time to spend, so a pass that then finds none has taken a turn it did
+ * nothing with — and the marker would hold the next attempt off for a full
+ * interval. Removing it restores the state as if the claim had not happened.
+ *
+ * Safe because the work it guards is idempotent: a pass deletes rows older than
+ * a cutoff, so at worst another caller runs one now instead of later. A failure
+ * to release is not worth reporting — the only cost is the interval that would
+ * have been lost anyway.
+ */
+export async function releaseRetentionPass(
+  store: RetentionGateStore,
+  key: string
+): Promise<void> {
+  try {
+    await store.release?.(key);
+  } catch {
+    /* the turn stays taken; the next interval recovers it */
+  }
+}
+
+/**
  * Try to claim the next retention pass.
  *
  * Returns true when the caller should run one, having already recorded the
@@ -109,15 +170,12 @@ export class MetaRetentionGate implements RetentionGateStore {
  */
 export async function claimRetentionPass(
   store: RetentionGateStore,
+  key: string,
   intervalMs: number,
   now: Date = new Date()
 ): Promise<boolean> {
   try {
-    return await store.claim(
-      RETENTION_GATE_KEY,
-      new Date(now.getTime() - intervalMs),
-      now
-    );
+    return await store.claim(key, new Date(now.getTime() - intervalMs), now);
   } catch {
     return false;
   }

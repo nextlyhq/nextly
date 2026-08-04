@@ -10,11 +10,14 @@
  *     structured warning via `getNextlyLogger()` and the request
  *     continues.
  *   - **Append-only by application convention.** This writer never offers an
- *     update path. Operators hardening the table should revoke DELETE and
- *     revoke UPDATE except on the three columns an erasure touches — see the
- *     dialect schema definitions for the exact grants. A blanket UPDATE revoke
- *     stops `eraseActorPersonalData`, which runs inside the user-deletion
- *     transaction, and so stops account deletion outright.
+ *     update path, but the application holds two privileges an operator
+ *     hardening the table must allow for: a column-scoped UPDATE that erases a
+ *     deleted account's request identifiers, and DELETE, which retention needs
+ *     to prune rows past their window. A blanket UPDATE revoke stops
+ *     `eraseActorPersonalData`, which runs inside the user-deletion
+ *     transaction, and so stops account deletion outright; revoking DELETE
+ *     stops retention silently, since a pass must never fail the request that
+ *     offered it. See the dialect schema definitions for the exact grants.
  *   - **Metadata is opaque JSON.** The `metadata` field stays generic
  *     so we can extend coverage without a migration each time. Callers
  *     pass dialect-portable JSON-serialisable values only.
@@ -352,6 +355,52 @@ function encodeMetadata(
   return column?.dataType === "string" ? JSON.stringify(metadata) : metadata;
 }
 
+/**
+ * Offer a retention pass after an auth event is recorded.
+ *
+ * Isolated from the write's own error handling on purpose. Resolving a service
+ * that an installation never registered is not a failed write, and letting it
+ * reach the writer's catch would report a row that was stored perfectly well as
+ * having failed.
+ *
+ * A small budget, because a user is waiting on the login this hangs off. The
+ * drain spends the configured one, where nothing is.
+ */
+async function offerRetentionPass(
+  getService: (name: string) => unknown
+): Promise<void> {
+  try {
+    const runner = getService(RETENTION_RUNNER_SERVICE);
+    if (!offersRetention(runner)) return;
+    await runner.maybeRun(WRITE_PATH_BATCHES);
+  } catch {
+    /* no runner registered, or nothing configured to prune */
+  }
+}
+
+/** The service name the DI container registers a retention runner under. */
+const RETENTION_RUNNER_SERVICE = "retentionRunner";
+
+/** Batches a pass offered from a request path may take. */
+const WRITE_PATH_BATCHES = 1;
+
+/**
+ * Whether a resolved service can run a retention pass.
+ *
+ * A structural check rather than a cast: the container is keyed by string, so
+ * the compiler cannot know what a name resolves to, and asserting a shape that
+ * was never verified would turn a rename into a runtime failure inside a catch
+ * that hides it.
+ */
+function offersRetention(
+  value: unknown
+): value is { maybeRun(maxBatches?: number): Promise<void> } {
+  return (
+    typeof (value as { maybeRun?: unknown } | undefined)?.maybeRun ===
+    "function"
+  );
+}
+
 export function buildAuditLogWriter(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   getService: (name: string) => any
@@ -395,6 +444,16 @@ export function buildAuditLogWriter(
           metadata: encodeMetadata(table, event.metadata),
           createdAt: new Date(),
         });
+
+        // Offer a retention pass, for the same reason content writes do: there
+        // is no scheduler to hang one off. Every other trigger is a content
+        // mutation, so an installation taking authentication traffic and no
+        // content writes — an app whose editing happens elsewhere, or one
+        // simply between edits — would never offer one at all, and this is the
+        // table that grows with that traffic. The runner gates it, so the
+        // common case is one comparison. Failures are absorbed there; a login
+        // must not fail because housekeeping could not run.
+        await offerRetentionPass(getService);
       } catch (err) {
         getNextlyLogger().warn({
           kind: "audit-log-write-failed",
