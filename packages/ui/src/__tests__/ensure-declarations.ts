@@ -421,3 +421,27 @@ export function ensureDeclarations(): void {
     );
   }
 }
+
+/**
+ * Every source file the declarations are built from.
+ *
+ * Exported for the watcher: these are read from the filesystem to decide
+ * freshness, so a deleted one leaves `dist` describing a surface that no longer
+ * exists — and nothing in Vitest's module graph knows that, because the guard
+ * reads them rather than importing them.
+ */
+export function declarationSourceFiles(): string[] {
+  const out: string[] = [];
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+        continue;
+      }
+      if (/\.(ts|tsx)$/.test(entry.name)) out.push(full);
+    }
+  };
+  walk(join(pkgRoot, "src"));
+  return out;
+}

@@ -3,7 +3,10 @@ import { fileURLToPath } from "node:url";
 import type { Plugin } from "vite";
 import { defineConfig } from "vitest/config";
 
-import { declarationBuildInputs } from "./src/__tests__/ensure-declarations";
+import {
+  declarationBuildInputs,
+  declarationSourceFiles,
+} from "./src/__tests__/ensure-declarations";
 
 /**
  * Rerun the suite when a declaration-build input is DELETED.
@@ -20,24 +23,34 @@ import { declarationBuildInputs } from "./src/__tests__/ensure-declarations";
  * depend on APIs that are not part of its contract.
  */
 function rerunOnDeletedBuildInput(): Plugin {
-  // Not `import.meta.filename`, which arrives in Node 20.11 while this
-  // repository supports Node 20 — on 20.9 it is `undefined` and the emitted
-  // change names nothing.
-  const self = fileURLToPath(import.meta.url);
+  // The SUITE that reads the declarations, not this config file. Emitting a
+  // change for the config makes Vitest treat it as a configuration change and
+  // RESTART — which reruns the global setup, and a missing build input makes
+  // that setup throw, terminating the watch process instead of leaving a red
+  // run that can observe the file being restored. Naming an ordinary watched
+  // module keeps the failure inside the watch loop.
+  const suite = fileURLToPath(
+    new URL("./src/ui-surface.test.ts", import.meta.url)
+  );
   // The last inputs that resolved. Deleting a config BREAKS the chain, so
   // recomputing at that moment returns nothing — the very event that needs the
   // list is the one that destroys it. Remembering the last good answer is what
   // makes a deleted `base.json` recognisable, since nothing about its name
   // says "tsconfig".
-  let known = new Set(declarationBuildInputs() ?? []);
+  // Sources as well as configs. The guard reads `src` from the filesystem to
+  // decide freshness, so a deleted source leaves `dist` describing a surface
+  // that no longer exists — and Vitest does not rerun on unlink for those
+  // either, since it only knows the module graph.
+  const watched = (): Set<string> =>
+    new Set([...(declarationBuildInputs() ?? []), ...declarationSourceFiles()]);
+  let known = watched();
   return {
     name: "nextly:rerun-on-deleted-build-input",
     configureServer(server) {
       // Refreshed on every change so a config brought in mid-session joins the
       // set before it can be deleted.
       const refresh = (): void => {
-        const current = declarationBuildInputs();
-        if (current !== undefined) known = new Set(current);
+        if (declarationBuildInputs() !== undefined) known = watched();
       };
       server.watcher.on("change", refresh);
       server.watcher.on("add", refresh);
@@ -45,7 +58,7 @@ function rerunOnDeletedBuildInput(): Plugin {
         if (!known.has(file)) return;
         // Kept in the set: a file deleted now may be restored, and the chain
         // cannot be re-resolved to rediscover it while it is missing.
-        server.watcher.emit("change", self);
+        server.watcher.emit("change", suite);
       });
     },
   };
