@@ -23,14 +23,28 @@ export interface PageStyles {
   css: string;
   /** Node id to generated class name. */
   classes: Record<string, string>;
+  /**
+   * The scope class the selectors were anchored under, when there was one.
+   *
+   * Recorded here rather than asked of the caller separately, because a scope
+   * that lives in two places is a scope that can disagree with itself: the
+   * stylesheet's selectors already encode it, so a renderer told a different
+   * one puts a class on the root that no rule mentions and the whole sheet
+   * silently matches nothing. Travelling with the CSS makes that unstateable.
+   */
+  scope?: string;
 }
 
 /** The compiler's output in the storable shape. */
-export function toPageStyles(compiled: CompiledPageCss): PageStyles {
-  return {
+export function toPageStyles(
+  compiled: CompiledPageCss,
+  scope?: string
+): PageStyles {
+  const styles: PageStyles = {
     css: compiled.css,
     classes: Object.fromEntries(compiled.classes),
   };
+  return scope === undefined ? styles : { ...styles, scope };
 }
 
 /** Every node id in a document, in document order. */
@@ -66,7 +80,12 @@ export function resolvePageStyles(
   styleContext: StyleCompileContext | undefined
 ): PageStyles {
   if (styles) return styles;
-  if (styleContext) return toPageStyles(compilePageCss(document, styleContext));
+  if (styleContext) {
+    return toPageStyles(
+      compilePageCss(document, styleContext),
+      styleContext.scope
+    );
+  }
   return {
     css: "",
     classes: Object.fromEntries(nodeClassNames(documentNodeIds(document))),

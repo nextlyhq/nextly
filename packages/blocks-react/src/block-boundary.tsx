@@ -3,7 +3,7 @@ import { Suspense, type ReactNode } from "react";
 
 import type { PageContext } from "./context";
 import { BlockPlaceholder } from "./placeholder";
-import { describeValue, isRenderableNode, isThenable } from "./renderable";
+import { isThenable, normalizeRenderable } from "./renderable";
 import type { BlockResolver } from "./resolver";
 
 /** What a render needs to turn one node into output. */
@@ -42,13 +42,14 @@ function classNameFor(
 
 /** Validates a block's output and substitutes a placeholder when it is unusable. */
 function checkedOutput(value: unknown, node: BlockNode): ReactNode {
-  if (isRenderableNode(value)) return value;
+  const result = normalizeRenderable(value);
+  if (result.ok) return result.node;
   return (
     <BlockPlaceholder
       reason="invalid-output"
       type={node.type}
       id={node.id}
-      detail={`Expected a React node, received ${describeValue(value)}`}
+      detail={`Expected a React node, received ${result.reason}`}
     />
   );
 }

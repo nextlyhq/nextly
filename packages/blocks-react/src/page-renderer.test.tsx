@@ -224,6 +224,117 @@ describe("PageRenderer", () => {
       expect(html).toContain("survivor");
     });
 
+    it("renders a block that returns a non-array iterable", async () => {
+      // `ReactNode` includes `Iterable<ReactNode>`, so a Set or a generator of
+      // elements is valid output. Refusing it would replace a working block
+      // with a placeholder in production.
+      const setBlock = defineBlock({
+        name: "test/set",
+        version: 1,
+        description: "Returns a Set of elements.",
+        example: { props: {} },
+        render: () =>
+          new Set([<span key="a">one</span>, <span key="b">two</span>]),
+      });
+      const generatorBlock = defineBlock({
+        name: "test/generator",
+        version: 1,
+        description: "Returns a generator of elements.",
+        example: { props: {} },
+        render: function* () {
+          yield <span key="c">three</span>;
+        },
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(node("a", "test/set"), node("b", "test/generator"))}
+          blocks={createBlockResolver([
+            setBlock as AnyBlockDefinition,
+            generatorBlock as AnyBlockDefinition,
+          ])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual([]);
+      expect(html).toContain("one");
+      expect(html).toContain("two");
+      expect(html).toContain("three");
+    });
+
+    it("refuses a Map, which React does not render", async () => {
+      const mapBlock = defineBlock({
+        name: "test/map",
+        version: 1,
+        description: "Returns a Map.",
+        example: { props: {} },
+        render: () => new Map([["a", <span key="a">x</span>]]),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(node("a", "test/map"))}
+          blocks={createBlockResolver([mapBlock as AnyBlockDefinition])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual(["invalid-output"]);
+    });
+
+    it("contains an invalid value nested deep inside arrays", async () => {
+      // The check must not give up part way down and pass the rest through: a
+      // value it stopped inspecting reaches React and throws there, which is
+      // the exact escape this containment exists to prevent.
+      let nested: unknown = { not: "a node" };
+      for (let depth = 0; depth < 20; depth++) nested = [nested];
+      const deep = defineBlock({
+        name: "test/deep",
+        version: 1,
+        description: "Returns a deeply nested invalid value.",
+        example: { props: {} },
+        render: () => nested,
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/deep"),
+            node("b", "test/text", { props: { value: "survivor" } })
+          )}
+          blocks={createBlockResolver([
+            deep as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual(["invalid-output"]);
+      expect(html).toContain("survivor");
+    });
+
+    it("refuses output that never ends instead of hanging on it", async () => {
+      const endless = defineBlock({
+        name: "test/endless",
+        version: 1,
+        description: "Returns an iterable with no end.",
+        example: { props: {} },
+        render: function* () {
+          for (;;) yield "x";
+        },
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(node("a", "test/endless"))}
+          blocks={createBlockResolver([endless as AnyBlockDefinition])}
+        />
+      );
+
+      // Failing closed is the point: an unbounded iterable handed to React
+      // would never finish rendering the page.
+      expect(placeholderReasons(html)).toEqual(["invalid-output"]);
+    });
+
     it("shows nothing but a marker in production", async () => {
       vi.stubEnv("NODE_ENV", "production");
 
@@ -490,6 +601,33 @@ describe("PageRenderer", () => {
       expect(
         /<\/style[\s/>]/.test(html.slice(0, html.lastIndexOf("</style>")))
       ).toBe(false);
+    });
+
+    it("takes the root scope from the artifact that carries it", async () => {
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc()}
+          blocks={createBlockResolver([])}
+          styles={{ css: ".x{}", classes: {}, scope: "nx-doc-a" }}
+        />
+      );
+      expect(html).toContain('class="nx-pb-page nx-doc-a"');
+    });
+
+    it("takes the root scope from the compile context", async () => {
+      // The selectors compiled here are anchored under the scope, so a root
+      // without that class means every compiled rule matches nothing.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(node("a", "test/text", { props: { value: "x" } }))}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+          styleContext={{
+            breakpoints: { viewport: [], container: [] },
+            scope: "nx-doc-b",
+          }}
+        />
+      );
+      expect(html).toContain('class="nx-pb-page nx-doc-b"');
     });
 
     it("emits no style element when there is no css", async () => {

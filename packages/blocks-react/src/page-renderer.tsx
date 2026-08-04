@@ -41,12 +41,6 @@ export interface PageRendererProps {
   styleContext?: StyleCompileContext;
   /** Shown in place of an asynchronous block until its output arrives. */
   blockFallback?: ReactNode;
-  /**
-   * A class distinguishing this document's rules from another's, for a page
-   * showing two documents at once. Must match the `scope` the stylesheet was
-   * compiled with, since that is what its selectors were anchored to.
-   */
-  scope?: string;
 }
 
 /**
@@ -77,7 +71,6 @@ export function PageRenderer({
   styles,
   styleContext,
   blockFallback,
-  scope,
 }: PageRendererProps): ReactElement {
   const resolver = blocks ?? registeredBlocks();
   const pageContext = context ?? createStandaloneContext();
@@ -89,7 +82,11 @@ export function PageRenderer({
   // them.
   const { doc } = migrateDocument(document, migrationSourceFor(resolver));
 
-  const { css, classes } = resolvePageStyles(doc, styles, styleContext);
+  // The scope comes from whichever input supplied the stylesheet, never from a
+  // separate prop. Two inputs would have to agree, and when they did not the
+  // root would carry a class the selectors never mention, so every compiled
+  // rule would match nothing while both inputs looked correct on their own.
+  const { css, classes, scope } = resolvePageStyles(doc, styles, styleContext);
   const rootClassName = scope ? `${PAGE_ROOT_CLASS} ${scope}` : PAGE_ROOT_CLASS;
 
   return (
