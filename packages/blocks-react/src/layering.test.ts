@@ -90,7 +90,11 @@ function sourceFiles(dir: string = SRC_DIR): string[] {
  * documented workaround used elsewhere in this repo.
  */
 function runtimeImports(file: string): string[] {
-  const source = readFileSync(file, "utf8");
+  const raw = readFileSync(file, "utf8");
+  // Block comments become a single space so a comment sitting between tokens
+  // cannot hide a call from the matchers below, while token boundaries the
+  // patterns rely on are preserved.
+  const source = raw.replace(/\/\*[\s\S]*?\*\//g, " ");
   const specifiers: string[] = [];
 
   // `from "..."` in an import/export statement, and bare `import "..."`.
@@ -123,6 +127,10 @@ function runtimeImports(file: string): string[] {
   // argument does not start with a quote". `import("next/" + "headers")` starts
   // with a quote, so a first-character test waves it through while the literal
   // matcher above also skips it for the concatenation.
+  // `\s*` alone is not enough between the keyword and the parenthesis:
+  // `import /* webpackChunkName: "x" */ ("next/headers")` is valid and would
+  // be seen by neither matcher. Comments are stripped before matching so both
+  // forms are recognised.
   const anyDynamic = /(?<![.\w])(?:import|require)\s*\(([^)]*)\)/g;
   const singleLiteral = /^\s*["'][^"']*["']\s*$/;
   let dynamicMatch: RegExpExecArray | null;

@@ -11,9 +11,19 @@ into it.
 
 ## Two entries, and why
 
+| Entry                         | Contains                              | Exported today                           |
+| ----------------------------- | ------------------------------------- | ---------------------------------------- |
+| `@nextlyhq/blocks-react`      | the renderer and the context contract | context types, `createStandaloneContext` |
+| `@nextlyhq/blocks-react/next` | everything that needs `next/*`        | entry marker only                        |
+
+**Alpha:** the boundary and the context contract ship now. The renderer and the
+Next route helpers land on top of them, so these names describe the shape they
+will take rather than code that resolves today:
+
 ```ts
-import { PageRenderer } from "@nextlyhq/blocks-react"; // React only
-import { createBlocksPage } from "@nextlyhq/blocks-react/next"; // Next.js
+// Planned, not yet exported:
+// import { PageRenderer } from "@nextlyhq/blocks-react";
+// import { createBlocksPage } from "@nextlyhq/blocks-react/next";
 ```
 
 The root entry imports **no `next/*`, no admin code and no CMS runtime**. You
@@ -29,6 +39,8 @@ build failure rather than a convention.
 
 Blocks never reach for a database. Anything from the outside world arrives
 through `PageContext`:
+
+This part works today:
 
 ```ts
 import { createStandaloneContext } from "@nextlyhq/blocks-react";
