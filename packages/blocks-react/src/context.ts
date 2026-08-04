@@ -8,9 +8,10 @@
  * Everything the renderer needs from the outside world arrives through these
  * interfaces rather than through imports. That is what keeps the package usable
  * without the CMS, but the standalone case is the smaller half of the argument:
- * the canvas renders the same documents with different data access, tests want
- * fixtures instead of a database, and the binding system planned for a later
- * phase already assumes a provider. One seam serves all four.
+ * the canvas renders the same documents against different data access, and a
+ * test wants fixtures instead of a database. One seam serves every host, and a
+ * host that resolves data some other way is a different implementation of these
+ * interfaces rather than a change to the renderer.
  *
  * @module context
  */

@@ -3,6 +3,7 @@ import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Dirent } from "node:fs";
 
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 /**
@@ -17,8 +18,7 @@ import { describe, expect, it } from "vitest";
  * 2. **Nothing imports the admin or the CMS runtime.** The renderer runs in the
  *    user's application, where neither exists.
  * 3. **Nothing imports the editor.** The rendering path and the editing path
- *    share a document format, not a module graph — the separation Plasmic
- *    maintains and the one the proof-of-concept already enforces for itself.
+ *    share a document format, not a module graph.
  *
  * The guard is an ALLOWLIST. A blocklist only stops what someone thought to
  * name, and the next dependency added without thought is exactly the one that
@@ -62,6 +62,15 @@ const NEXT_ONLY_IMPORTS = [
 /** Files that are test harness rather than shipped code. */
 const TEST_FILE = /\.test\.tsx?$/;
 
+/**
+ * Stand-in for a dynamic import whose target cannot be read from the source.
+ *
+ * It is deliberately not a real specifier, so it matches no allowlist entry and
+ * therefore fails: an unreadable route into the module graph is treated as a
+ * violation rather than waved through.
+ */
+const UNRESOLVABLE_SPECIFIER = "<computed-dynamic-import>";
+
 /** Every source file, with its path relative to `src`. */
 function sourceFiles(dir: string = SRC_DIR): string[] {
   const entries: Dirent[] = readdirSync(dir, { withFileTypes: true });
@@ -75,85 +84,84 @@ function sourceFiles(dir: string = SRC_DIR): string[] {
 }
 
 /**
- * Module specifiers a file imports at RUNTIME.
+ * Module specifiers a source text imports at RUNTIME.
  *
- * `import type` and `export type` are excluded because they erase at build and
- * cost a consumer nothing. Inline `import { type X }` still counts: the
- * statement itself is a runtime import even when one binding is a type.
+ * Read from TypeScript's own parse of the file rather than by pattern. What
+ * counts as an import is a question about syntax, and syntax has exactly one
+ * authority; a text scan has to re-derive comments, string boundaries and
+ * statement positions, and each of those is a way for a real import to go
+ * unseen. Every form below is one the parser answers directly:
  *
- * DYNAMIC imports count too. `await import("next/headers")` puts Next in the
- * module graph exactly as a static import does, and a guard that reads only
- * static syntax is bypassed by the one line most likely to be written when
- * someone wants to "just reach for it here" — which is precisely the moment
- * the boundary needs enforcing. `require()` is scanned for the same reason,
- * even though this package is ESM-only, because a lazy CommonJS resolve is the
- * documented workaround used elsewhere in this repo.
+ * - `import "x"` anywhere a statement may appear, including after another
+ *   statement on the same line.
+ * - `import type` / `export type`, which erase at build and so do not count.
+ *   Inline `import { type X }` still counts: the statement itself is a runtime
+ *   import even when one binding is a type.
+ * - `import("x")` and `require("x")`. A dynamic import puts a module in the
+ *   graph exactly as a static one does, and `import x = require("y")` is the
+ *   documented CommonJS-interop spelling.
+ * - `import("x").Foo` in type position, which is a type query and erases, so
+ *   it is correctly absent — it parses as a type node, not a call.
+ *
+ * A dynamic call whose argument is not a single string literal is reported as
+ * {@link UNRESOLVABLE_SPECIFIER}: `import(base + name)` cannot be checked here,
+ * and the guard exists so that no route into the graph opens without a
+ * deliberate act.
  */
-function runtimeImports(file: string): string[] {
-  const raw = readFileSync(file, "utf8");
-  // Comments become a single space so one sitting between tokens cannot hide a
-  // call from the matchers below, while the token boundaries the patterns rely
-  // on are preserved. Both forms are legal between `import` and its
-  // parenthesis, so both must go:
-  //
-  //   import /* annotation */ ("next/headers")
-  //   import // annotation
-  //   ("next/headers")
-  //
-  // String literals are left intact deliberately. A `//` inside a specifier is
-  // part of a URL, not a comment, and stripping it would corrupt the very
-  // value being checked; the cost is that a `//` inside a string could mask a
-  // later call on the same line, which no import statement produces.
-  const source = raw
-    .replace(/\/\*[\s\S]*?\*\//g, " ")
-    .replace(/(^|[^:"'`\\])\/\/[^\n]*/g, "$1 ");
+export function collectRuntimeImports(source: string, fileName: string) {
+  const parsed = ts.createSourceFile(
+    fileName,
+    source,
+    ts.ScriptTarget.ESNext,
+    // Parent pointers are unused, but omitting them costs nothing to set and
+    // makes any later node-relative query work rather than crash.
+    true,
+    fileName.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS
+  );
+
   const specifiers: string[] = [];
+  const push = (node: ts.Expression): void => {
+    specifiers.push(
+      ts.isStringLiteralLike(node) ? node.text : UNRESOLVABLE_SPECIFIER
+    );
+  };
 
-  // `from "..."` in an import/export statement, and bare `import "..."`.
-  const staticPattern =
-    /(?:^|\n)\s*(?:import|export)\s+(type\s+)?([^;'"]*?)\s*from\s*["']([^"']+)["']|(?:^|\n)\s*import\s+["']([^"']+)["']/g;
-
-  let match: RegExpExecArray | null;
-  while ((match = staticPattern.exec(source)) !== null) {
-    const isTypeOnly = Boolean(match[1]);
-    const specifier = match[3] ?? match[4];
-    if (!specifier || isTypeOnly) continue;
-    specifiers.push(specifier);
-  }
-
-  // `import("...")` and `require("...")`, with any whitespace. A preceding
-  // `.` is excluded so a method named `import` on some object is not counted.
-  const dynamicPattern =
-    /(?<![.\w])(?:import|require)\s*\(\s*["']([^"']+)["']\s*\)/g;
-  while ((match = dynamicPattern.exec(source)) !== null) {
-    const specifier = match[1];
-    if (specifier) specifiers.push(specifier);
-  }
-
-  // A dynamic import whose specifier is not a single literal cannot be checked
-  // here. Fail loudly rather than pass silently: the point of this guard is
-  // that a route into the module graph cannot be opened without a deliberate
-  // act.
-  //
-  // The test is "the argument is not EXACTLY one string literal", not "the
-  // argument does not start with a quote". `import("next/" + "headers")` starts
-  // with a quote, so a first-character test waves it through while the literal
-  // matcher above also skips it for the concatenation.
-  // `\s*` alone is not enough between the keyword and the parenthesis:
-  // `import /* webpackChunkName: "x" */ ("next/headers")` is valid and would
-  // be seen by neither matcher. Comments are stripped before matching so both
-  // forms are recognised.
-  const anyDynamic = /(?<![.\w])(?:import|require)\s*\(([^)]*)\)/g;
-  const singleLiteral = /^\s*["'][^"']*["']\s*$/;
-  let dynamicMatch: RegExpExecArray | null;
-  while ((dynamicMatch = anyDynamic.exec(source)) !== null) {
-    const argument = dynamicMatch[1] ?? "";
-    if (!singleLiteral.test(argument)) {
-      specifiers.push("<computed-dynamic-import>");
+  const visit = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node)) {
+      // No import clause is a bare side-effect import, which is a runtime
+      // import by definition and the form most likely to be overlooked.
+      if (!node.importClause?.isTypeOnly) push(node.moduleSpecifier);
+    } else if (ts.isExportDeclaration(node)) {
+      // A re-export without a specifier (`export { x }`) reaches no module.
+      if (node.moduleSpecifier && !node.isTypeOnly) push(node.moduleSpecifier);
+    } else if (
+      ts.isImportEqualsDeclaration(node) &&
+      ts.isExternalModuleReference(node.moduleReference)
+    ) {
+      if (!node.isTypeOnly) push(node.moduleReference.expression);
+    } else if (ts.isCallExpression(node)) {
+      const callee = node.expression;
+      // A bare `require` identifier only. `foo.require("x")` is a method on
+      // some object, not a module resolve.
+      const isModuleCall =
+        callee.kind === ts.SyntaxKind.ImportKeyword ||
+        (ts.isIdentifier(callee) && callee.text === "require");
+      if (isModuleCall) {
+        const argument = node.arguments[0];
+        if (argument) push(argument);
+        else specifiers.push(UNRESOLVABLE_SPECIFIER);
+      }
     }
-  }
+    ts.forEachChild(node, visit);
+  };
 
+  visit(parsed);
   return specifiers;
+}
+
+/** {@link collectRuntimeImports} for a file on disk. */
+function runtimeImports(file: string): string[] {
+  return collectRuntimeImports(readFileSync(file, "utf8"), file);
 }
 
 /** Relative specifiers are internal: not gated, but they ARE followed (below). */
@@ -195,7 +203,7 @@ function resolveRelative(fromFile: string, specifier: string): string | null {
  * The root's promise is about its MODULE GRAPH, not about one file: if
  * `index.ts` re-exports `./next`, importing the package root loads the
  * Next-coupled entry transitively and the promise is broken even though no
- * file named `next/*` directly. Checking files in isolation cannot see that.
+ * file names `next/*` directly. Checking files in isolation cannot see that.
  */
 function reachableFrom(entry: string): Set<string> {
   const seen = new Set<string>();
@@ -216,6 +224,92 @@ function reachableFrom(entry: string): Set<string> {
 function isNodeBuiltin(specifier: string): boolean {
   return specifier.startsWith("node:");
 }
+
+/**
+ * The scanner's own coverage.
+ *
+ * Every case here is a way a real import can reach the module graph while
+ * looking like something else in the file's text. They are asserted against
+ * source strings rather than files on disk so that adding one costs nothing
+ * and leaves no fixture behind.
+ */
+describe("the runtime-import scanner", () => {
+  const scan = (source: string) => collectRuntimeImports(source, "sample.ts");
+
+  it("sees a static import that follows another statement on the same line", () => {
+    // An import declaration is legal wherever a statement is, so a scan that
+    // expects one at the start of a line misses this while the module still
+    // enters the graph.
+    expect(scan('export const marker = true; import "next/headers";')).toEqual([
+      "next/headers",
+    ]);
+  });
+
+  it("sees imports regardless of surrounding comments", () => {
+    expect(
+      scan(
+        [
+          "/* import 'not-real' */",
+          "// import 'also-not-real'",
+          'import "next/cache";',
+          'import /* between */ "next/headers";',
+        ].join("\n")
+      )
+    ).toEqual(["next/cache", "next/headers"]);
+  });
+
+  it("ignores imports and requires that appear inside string literals", () => {
+    expect(
+      scan('const sample = `import "next/headers"; require("next")`;')
+    ).toEqual([]);
+  });
+
+  it("counts every dynamic form that reaches a module", () => {
+    expect(
+      scan(
+        [
+          'await import("next/headers");',
+          'const cache = require("next/cache");',
+          'import navigation = require("next/navigation");',
+        ].join("\n")
+      )
+    ).toEqual(["next/headers", "next/cache", "next/navigation"]);
+  });
+
+  it("refuses a dynamic import whose target it cannot read", () => {
+    expect(scan('await import("next/" + "headers");')).toEqual([
+      UNRESOLVABLE_SPECIFIER,
+    ]);
+    expect(scan("await import(chosen);")).toEqual([UNRESOLVABLE_SPECIFIER]);
+  });
+
+  it("does not count a method that happens to be named require", () => {
+    expect(scan('loader.require("next/headers");')).toEqual([]);
+  });
+
+  it("excludes type-only imports and exports, which erase at build", () => {
+    expect(
+      scan(
+        [
+          'import type { A } from "next/headers";',
+          'export type { B } from "next/cache";',
+          'type Later = import("next/navigation").Thing;',
+        ].join("\n")
+      )
+    ).toEqual([]);
+  });
+
+  it("counts a statement carrying an inline type binding", () => {
+    // `import { type A, b }` still emits an import at runtime for `b`.
+    expect(scan('import { type A, b } from "next/headers";')).toEqual([
+      "next/headers",
+    ]);
+  });
+
+  it("counts a bare side-effect import", () => {
+    expect(scan('import "next/headers";')).toEqual(["next/headers"]);
+  });
+});
 
 describe("the package's layering contract", () => {
   const files = sourceFiles();
