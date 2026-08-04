@@ -44,6 +44,15 @@ export default defineConfig({
       // extends, none of which are called `tsconfig.json`. Deriving them
       // keeps the watcher and the rebuild looking at one set of files.
       ...(declarationBuildInputs() ?? []),
+      // The line above resolves the chain as it stands when Vitest loads this
+      // file, and Vitest registers these once at watcher startup — it never
+      // re-runs the function. So a session that repoints `extends` at a config
+      // it was not already watching would follow the new chain on the next
+      // rebuild but stop noticing edits to it. These patterns cover the shared
+      // configs by shape rather than by resolution, which is what survives the
+      // chain changing underneath a running watcher.
+      "**/tsconfig*.json",
+      "**/tsconfig/**/*.json",
     ],
   },
 });
