@@ -20,9 +20,21 @@ function generateNextlySecret(): string {
  * and the like -- does not read as this one and silently suppress the note. A
  * commented form counts: the note is what is being added, and adding a second
  * copy of it below the first would be noise rather than help.
+ *
+ * `export KEY=value` counts too. dotenv accepts it so the same file can be
+ * sourced by a shell, and a project written that way would otherwise be told
+ * the setting is absent and handed a duplicate block.
+ *
+ * The horizontal-space classes are `[ \t]`, not `\s`. Under the `m` flag `\s`
+ * matches newlines, so the two around an optional `#` can each consume the
+ * blank lines an `.env` is full of, and the engine retries that from every
+ * line -- quadratic work on a file that simply does not contain the key.
+ * Confining them to the current line is what keeps the scan linear.
  */
 function mentionsDiagnostics(env: string): boolean {
-  return /^\s*#?\s*NEXTLY_DEV_DIAGNOSTICS\s*=/m.test(env);
+  return /^[ \t]*(?:#[ \t]*)?(?:export[ \t]+)?NEXTLY_DEV_DIAGNOSTICS[ \t]*=/m.test(
+    env
+  );
 }
 
 /**

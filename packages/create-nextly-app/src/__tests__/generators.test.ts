@@ -447,6 +447,57 @@ describe("generateEnv", () => {
     expect(mockAppendFile).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    ["export form", "export NEXTLY_DEV_DIAGNOSTICS=1"],
+    ["commented export", "# export NEXTLY_DEV_DIAGNOSTICS=1"],
+    ["indented", "  NEXTLY_DEV_DIAGNOSTICS=1"],
+    ["spaced around =", "NEXTLY_DEV_DIAGNOSTICS = 1"],
+  ])("recognises the setting written as %s", async (_label, line) => {
+    // dotenv accepts `export KEY=value` so the same file can be sourced by a
+    // shell. A project written that way would otherwise be told the setting is
+    // absent and handed a duplicate block below the one it already has.
+    mockPathExists.mockImplementation((async (path: unknown) =>
+      String(path).endsWith(".env")) as never);
+    mockReadFile.mockResolvedValue(`DATABASE_URL=existing\n${line}\n` as never);
+
+    const result = await generateEnv("/test/project", {
+      type: "sqlite",
+      adapter: "@nextlyhq/adapter-sqlite",
+      databaseDriver: "better-sqlite3",
+      connectionUrl: "file:./nextly.db",
+      envExample: "file:./nextly.db",
+    });
+
+    expect(result).toEqual({ created: false, updated: false });
+    expect(mockAppendFile).not.toHaveBeenCalled();
+  });
+
+  it("scans a blank-line-heavy .env without backtracking", async () => {
+    // The whitespace classes are confined to the current line. With `\s` under
+    // the `m` flag they cross newlines, so each retry chews through the blank
+    // lines an .env is full of — quadratic on a file that does not contain the
+    // key at all, which is the common case.
+    mockPathExists.mockImplementation((async (path: unknown) =>
+      String(path).endsWith(".env")) as never);
+    mockReadFile.mockResolvedValue(
+      ("DATABASE_URL=existing\n" + "   \n".repeat(20000)) as never
+    );
+
+    const started = performance.now();
+    const result = await generateEnv("/test/project", {
+      type: "sqlite",
+      adapter: "@nextlyhq/adapter-sqlite",
+      databaseDriver: "better-sqlite3",
+      connectionUrl: "file:./nextly.db",
+      envExample: "file:./nextly.db",
+    });
+
+    // Generous by design: this fails on catastrophic backtracking, not on a
+    // slow machine. The pathological form takes orders of magnitude longer.
+    expect(performance.now() - started).toBeLessThan(2000);
+    expect(result).toEqual({ created: false, updated: true });
+  });
+
   it("leaves an already-commented setting alone", async () => {
     // The commented form IS the note, so appending a second copy below it would
     // be noise rather than help.
