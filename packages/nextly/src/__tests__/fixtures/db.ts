@@ -38,11 +38,13 @@ function createTables(sqlite: Database.Database) {
 
   // No core-table generator covers these: they are created by the schema
   // pipeline at runtime rather than at first-run, so there is nothing to
-  // reuse. Kept minimal, and to be repointed if a generator ever owns them.
+  // reuse. Carried across unchanged from the previous definition rather than
+  // retyped, and to be repointed if a generator ever owns them.
   sqlite.exec(`
     CREATE TABLE IF NOT EXISTS api_keys (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
+      description TEXT,
       key_hash TEXT NOT NULL,
       key_prefix TEXT NOT NULL,
       token_type TEXT NOT NULL,
@@ -61,13 +63,21 @@ function createTables(sqlite: Database.Database) {
 
     CREATE TABLE IF NOT EXISTS dynamic_collections (
       id TEXT PRIMARY KEY,
-      slug TEXT NOT NULL UNIQUE,
-      name TEXT NOT NULL,
+      name TEXT NOT NULL UNIQUE,
+      label TEXT NOT NULL,
+      table_name TEXT NOT NULL UNIQUE,
       description TEXT,
-      fields TEXT NOT NULL DEFAULT '[]',
+      icon TEXT,
+      schema_definition TEXT NOT NULL,
+      created_by TEXT REFERENCES users(id),
       created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000),
       updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000)
     );
+    CREATE UNIQUE INDEX IF NOT EXISTS dynamic_collections_name_unique ON dynamic_collections(name);
+    CREATE UNIQUE INDEX IF NOT EXISTS dynamic_collections_table_name_unique ON dynamic_collections(table_name);
+    CREATE INDEX IF NOT EXISTS dynamic_collections_created_by_idx ON dynamic_collections(created_by);
+    CREATE INDEX IF NOT EXISTS dynamic_collections_created_at_idx ON dynamic_collections(created_at);
+    CREATE INDEX IF NOT EXISTS dynamic_collections_updated_at_idx ON dynamic_collections(updated_at);
 
     CREATE TABLE IF NOT EXISTS nextly_meta (
       key TEXT PRIMARY KEY NOT NULL,

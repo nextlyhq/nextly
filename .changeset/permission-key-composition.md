@@ -38,3 +38,12 @@ of the services use.
 Composing a permission slug is now a single shared function rather than a
 string built by hand at each of eleven call sites, which is what let one of
 them drift.
+
+The SQLite bootstrap DDL was missing columns its own schemas define — `users`
+lacked `must_change_password`, `media` lacked `focal_x`, `focal_y` and `sizes`.
+A database created from it (the fallback used when drizzle-kit's push cannot
+run, for example without a TTY) therefore had tables the ORM could not write
+to: Drizzle names every column in an INSERT, so each write naming one of those
+failed outright. The columns are restored, and a test now compares every table
+in that DDL against the schema that defines it, so the two cannot drift apart
+again in silence.
