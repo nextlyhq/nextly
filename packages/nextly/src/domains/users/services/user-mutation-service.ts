@@ -408,25 +408,31 @@ export class UserMutationService extends BaseService {
   }
 
   /**
-   * Whether this database's activity trail can actually be erased.
+   * What this database can record about erasing a trail.
    *
-   * Two ways it cannot, and both must let the deletion proceed rather than
-   * fail. The table may be absent entirely, in which case there is no trail
-   * and so no identifying data to leave behind. Or it may still be on its
-   * pre-erasure shape, on a database whose upgrade did not reach it: the core
-   * reconcile pushes only the static tables, and drizzle-kit's SQLite
-   * entrypoint takes no table filter, so an ordinary `dc_*` content table
-   * reads as an orphan and trips its rename resolver — after which the
-   * recovery pass can create missing tables but never alters an existing one.
+   * Reports the SHAPE rather than a yes/no, because the two callers answer a
+   * pre-erasure shape differently and only they can decide that.
    *
-   * Refusing to delete an account on those installations would be a worse
-   * regression than the defect this erasure fixes, so it is skipped and said
-   * out loud. The trail there keeps its old cascading key and is still lost
-   * with the account, which only a real upgrade can fix.
+   * `false` — the table is absent, so there is no trail and no identifying data
+   * to leave behind. `"unstamped"` — the table is there on its pre-erasure
+   * shape, on a database whose upgrade did not reach it: the core reconcile
+   * pushes only the static tables, and drizzle-kit's SQLite entrypoint takes no
+   * table filter, so an ordinary `dc_*` content table reads as an orphan and
+   * trips its rename resolver — after which the recovery pass can create
+   * missing tables but never alters an existing one. The identifying columns
+   * exist there; only the column recording WHEN an erasure happened does not.
    *
-   * The table probe answering `false` is the only definite skip: a probe that
-   * cannot run answers `true`, so an unreadable catalogue leaves the erasure
-   * in place and the deletion fails loudly instead of quietly skipping.
+   * Neither answer fails the deletion. Refusing to delete an account on those
+   * installations would be a worse regression than the defect this erasure
+   * fixes, so it is reported and said out loud. What the caller does with
+   * `"unstamped"` depends on the table: an un-erased `activity_log` row is
+   * carried away by its cascading key, while an `audit_log` row has no key and
+   * would keep its identifiers indefinitely, so that one is scrubbed without
+   * the stamp rather than skipped.
+   *
+   * A probe that cannot run answers `"stamped"`, so an unreadable catalogue
+   * leaves the erasure in place and the deletion fails loudly rather than
+   * quietly skipping it.
    */
   private async supportsErasure(
     table: string,
