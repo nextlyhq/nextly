@@ -38,6 +38,7 @@ import {
   renderSystemColumnSql,
   toSnakeCase,
 } from "../../schema/services/field-column-descriptor";
+import { indexNameForColumn } from "../../schema/services/index-name";
 import { quoteJsonSqlDefault } from "../../schema/utils/sql-literal";
 
 import { DynamicCollectionValidationService } from "./dynamic-collection-validation-service";
@@ -151,34 +152,6 @@ export class DynamicCollectionSchemaService {
   }
 
   /**
-   * The index name for one column, short enough for every dialect to accept.
-   *
-   * MySQL refuses an identifier over 64 characters, and a collection and a field may each be up
-   * to 50, so the obvious `idx_<table>_<column>` can be half as long again as the limit. Names
-   * over the bound keep a readable prefix and end in a hash of the full name, so two long names
-   * sharing a prefix still differ and the same input always produces the same identifier —
-   * which matters because the name is built again, separately, to drop the index later.
-   */
-  private indexName(tableName: string, column: string): string {
-    const full = `idx_${tableName}_${column}`;
-    // 63, not 64. MySQL refuses anything longer than 64, but PostgreSQL silently TRUNCATES at
-    // 63 — so a 64-character name is not a name PostgreSQL keeps, and two that differ only in
-    // their last character arrive as one identifier. Bounding at the smaller of the two limits
-    // is what makes the hash below the thing that tells names apart, rather than a decoration
-    // on a name the database has already collapsed.
-    if (full.length <= 63) return full;
-    // FNV-1a over the full name. Not for secrecy — only to tell apart two names that a plain
-    // truncation would make identical.
-    let hash = 0x811c9dc5;
-    for (let i = 0; i < full.length; i++) {
-      hash ^= full.charCodeAt(i);
-      hash = Math.imul(hash, 0x01000193) >>> 0;
-    }
-    const suffix = hash.toString(36).padStart(7, "0");
-    return `${full.slice(0, 63 - suffix.length - 1)}_${suffix}`;
-  }
-
-  /**
    * Every name this generator may have given one column's index, current first.
    *
    * Bounding long names changed what they are called, and an index already in a database still
@@ -190,9 +163,21 @@ export class DynamicCollectionSchemaService {
    *
    * Which of these the table actually has is decided by the live index list, never guessed.
    */
+
+  /**
+   * Every name this generator may have given one column's index, current first.
+   *
+   * Bounding long names changed what they are called, and an index already in a database still
+   * answers to the name it was created under. Looking only for the current one leaves the old
+   * index in place while the field records that it was removed. The dialects even disagree on
+   * the legacy name: SQLite stored it whole, PostgreSQL truncated it to 63 characters, and
+   * MySQL could not create an over-long one at all, so none exists there to find.
+   *
+   * Which of these the table actually has is decided by the live index list, never guessed.
+   */
   private indexNameCandidates(tableName: string, column: string): string[] {
     const full = `idx_${tableName}_${column}`;
-    const candidates = [this.indexName(tableName, column), full];
+    const candidates = [indexNameForColumn(tableName, column), full];
     if (this.dialect === "postgresql") candidates.push(full.slice(0, 63));
     return [...new Set(candidates)];
   }
@@ -210,7 +195,7 @@ export class DynamicCollectionSchemaService {
     column: string,
     columnType: string
   ): string | null {
-    const name = this.quoteIdentifier(this.indexName(tableName, column));
+    const name = this.quoteIdentifier(indexNameForColumn(tableName, column));
     const table = this.quoteIdentifier(tableName);
     const quoted = this.quoteIdentifier(column);
     if (this.dialect === "mysql") {
@@ -520,11 +505,11 @@ ${allColumnDefs.join(",\n")}
     // Note: MySQL 5.7 doesn't support IF NOT EXISTS for CREATE INDEX
     let createdAtIndex = "";
     if (this.dialect === "sqlite") {
-      createdAtIndex = `CREATE INDEX IF NOT EXISTS ${this.quoteIdentifier(this.indexName(tableName, "created_at"))} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier("created_at")});`;
+      createdAtIndex = `CREATE INDEX IF NOT EXISTS ${this.quoteIdentifier(indexNameForColumn(tableName, "created_at"))} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier("created_at")});`;
     } else if (this.dialect === "mysql") {
-      createdAtIndex = `CREATE INDEX ${this.quoteIdentifier(this.indexName(tableName, "created_at"))} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier("created_at")} DESC);`;
+      createdAtIndex = `CREATE INDEX ${this.quoteIdentifier(indexNameForColumn(tableName, "created_at"))} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier("created_at")} DESC);`;
     } else {
-      createdAtIndex = `CREATE INDEX IF NOT EXISTS ${this.quoteIdentifier(this.indexName(tableName, "created_at"))} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier("created_at")} DESC);`;
+      createdAtIndex = `CREATE INDEX IF NOT EXISTS ${this.quoteIdentifier(indexNameForColumn(tableName, "created_at"))} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier("created_at")} DESC);`;
     }
     indexStatements.push(createdAtIndex);
 
@@ -535,7 +520,7 @@ ${allColumnDefs.join(",\n")}
     // mirroring the column gate above. Plain (non-unique) index; users cannot
     // request one on this reserved field, so it is injected here.
     if (!isSingleTable) {
-      const ownerIndexName = this.indexName(tableName, "created_by");
+      const ownerIndexName = indexNameForColumn(tableName, "created_by");
       const ownerIndex =
         this.dialect === "mysql"
           ? `CREATE INDEX ${this.quoteIdentifier(ownerIndexName)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier("created_by")});`
@@ -546,11 +531,11 @@ ${allColumnDefs.join(",\n")}
     // Add unique index for slug column (automatically available for all collections and singles)
     let slugIndex = "";
     if (this.dialect === "sqlite") {
-      slugIndex = `CREATE UNIQUE INDEX IF NOT EXISTS ${this.quoteIdentifier(this.indexName(tableName, "slug"))} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier("slug")});`;
+      slugIndex = `CREATE UNIQUE INDEX IF NOT EXISTS ${this.quoteIdentifier(indexNameForColumn(tableName, "slug"))} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier("slug")});`;
     } else if (this.dialect === "mysql") {
-      slugIndex = `CREATE UNIQUE INDEX ${this.quoteIdentifier(this.indexName(tableName, "slug"))} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier("slug")});`;
+      slugIndex = `CREATE UNIQUE INDEX ${this.quoteIdentifier(indexNameForColumn(tableName, "slug"))} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier("slug")});`;
     } else {
-      slugIndex = `CREATE UNIQUE INDEX IF NOT EXISTS ${this.quoteIdentifier(this.indexName(tableName, "slug"))} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier("slug")});`;
+      slugIndex = `CREATE UNIQUE INDEX IF NOT EXISTS ${this.quoteIdentifier(indexNameForColumn(tableName, "slug"))} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier("slug")});`;
     }
     indexStatements.push(slugIndex);
 
@@ -856,7 +841,10 @@ ${allColumnDefs.join(",\n")}
             }
           } else if (this.dialect !== "mysql") {
             statements.push(
-              this.dropIndexSql(tableName, this.indexName(tableName, idxCol))
+              this.dropIndexSql(
+                tableName,
+                indexNameForColumn(tableName, idxCol)
+              )
             );
           }
         }
@@ -932,7 +920,7 @@ ${allColumnDefs.join(",\n")}
           }
         } else if (this.dialect !== "mysql") {
           statements.push(
-            this.dropIndexSql(tableName, this.indexName(tableName, dropCol))
+            this.dropIndexSql(tableName, indexNameForColumn(tableName, dropCol))
           );
         }
 
@@ -1134,7 +1122,7 @@ ${allColumnDefs.join(",\n")}
     // The system indexes every generated table carries, named as `generateMigrationSQL` names
     // them, so a system column removed by an edit is not treated as unindexed.
     for (const column of ["slug", "created_at", "created_by"]) {
-      indexNames.add(this.indexName(tableName, column));
+      indexNames.add(indexNameForColumn(tableName, column));
     }
     for (const field of fields) {
       if (!fieldProducesColumn(field)) continue;
@@ -1156,7 +1144,7 @@ ${allColumnDefs.join(",\n")}
           )
         ) !== null
       ) {
-        indexNames.add(this.indexName(tableName, column));
+        indexNames.add(indexNameForColumn(tableName, column));
       }
       if (field.type === "relationship" && field.options?.target) {
         foreignKeysByColumn.set(column, [`fk_${tableName}_${column}`]);

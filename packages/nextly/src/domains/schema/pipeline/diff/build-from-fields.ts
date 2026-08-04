@@ -34,6 +34,7 @@ import {
   getSystemColumnDescriptors,
   toSnakeCase,
 } from "../../services/field-column-descriptor";
+import { indexNameForColumn } from "../../services/index-name";
 
 import { indexKey } from "./index-util";
 import type { ColumnSpec, IndexSpec, TableSpec } from "./types";
@@ -130,7 +131,7 @@ export function collectionIndexSpecs<F extends MinimalFieldDef>(
   const indexes: IndexSpec[] = [];
   if (context.hasSlugColumn) {
     indexes.push({
-      name: `idx_${tableName}_slug`,
+      name: indexNameForColumn(tableName, "slug"),
       columns: ["slug"],
       unique: true,
     });
@@ -142,14 +143,14 @@ export function collectionIndexSpecs<F extends MinimalFieldDef>(
     // every index the replacement table does not declare, and the restore
     // replays only what the snapshot carries.
     indexes.push({
-      name: `idx_${tableName}_created_by`,
+      name: indexNameForColumn(tableName, "created_by"),
       columns: ["created_by"],
       unique: false,
     });
   }
   if (context.hasCreatedAtColumn) {
     indexes.push({
-      name: `idx_${tableName}_created_at`,
+      name: indexNameForColumn(tableName, "created_at"),
       columns: ["created_at"],
       unique: false,
     });
@@ -169,13 +170,13 @@ export function collectionIndexSpecs<F extends MinimalFieldDef>(
       !Array.isArray(field.relationTo);
     if (field.unique === true) {
       indexes.push({
-        name: `uq_${tableName}_${col}`,
+        name: indexNameForColumn(tableName, col).replace(/^idx_/, "uq_"),
         columns: [col],
         unique: true,
       });
     } else if (field.index === true || isSingleRelation) {
       indexes.push({
-        name: `idx_${tableName}_${col}`,
+        name: indexNameForColumn(tableName, col),
         columns: [col],
         unique: false,
       });

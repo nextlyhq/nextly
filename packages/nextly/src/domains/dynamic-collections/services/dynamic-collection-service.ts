@@ -196,37 +196,23 @@ export class DynamicCollectionService extends BaseService {
       readIndexNames(db, this.adapter.dialect, tableName),
     ]);
 
-    // What the table carries, PLUS what the saved schema says it should — because artefacts
-    // replay in order and this one runs last. Two edits saved before a deployment are two
-    // artefacts: adding a relationship and then removing it leaves a live table with no index
-    // while the first artefact is still queued to create one, and reading only the live table
-    // emits a removal that meets the index the deployment just added. The saved fields are
-    // exactly what the queued artefacts build, so the union is the state this one will find.
+    // What the table carries, and only that.
     //
-    // In the ordinary case the two agree, because an applied edit is already in the table.
-    const planned = this.schemaService.plannedAttachments(
-      tableName,
-      pendingFields
-    );
-    // Indexes union freely: every path that adds a column also creates its index. Foreign keys
-    // do not, and only on SQLite — its ALTER cannot attach one, so a relationship a queued
-    // artefact ADDS there genuinely arrives without a constraint. Predicting one anyway makes a
-    // later removal refuse as unsupported when dropping the index and then the unconstrained
-    // column would have worked. The absent-table case above is different and keeps its
-    // prediction: a queued CREATE writes the constraint inline, on every dialect.
-    const foreignKeysByColumn = new Map<string, readonly string[]>(foreignKeys);
-    if (this.adapter.dialect !== "sqlite") {
-      for (const [column, names] of planned.foreignKeysByColumn) {
-        if (!foreignKeysByColumn.has(column)) {
-          foreignKeysByColumn.set(column, names);
-        }
-      }
-    }
-
+    // A deployment can hold several unapplied edits, and each one is generated against the
+    // table as it is now rather than as the edit before it will leave it. Correcting for that
+    // means replaying the queued artefacts in order — adding what they add AND removing what
+    // they remove — because a state that can only gain attachments answers the second edit
+    // wrongly in the other direction: disabling an index and then dropping its field would
+    // emit a second unguarded removal for an index the first artefact already took away.
+    //
+    // That is the deferred-artefact problem in general, not something about attachments, and
+    // it is tracked with the rest of it rather than approximated here. Reading the live table
+    // is exact whenever the edit is applied as it is saved, which is every development setup
+    // and every deployment holding one edit.
     return {
       tableHasRows: hasRows,
-      foreignKeysByColumn,
-      indexNames: new Set([...indexes, ...planned.indexNames]),
+      foreignKeysByColumn: foreignKeys,
+      indexNames: indexes,
     };
   }
 
