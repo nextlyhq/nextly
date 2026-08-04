@@ -799,6 +799,203 @@ describe("PageRenderer", () => {
       expect(html).toContain("survivor");
     });
 
+    it("refuses a node saved by a newer definition than this app has", async () => {
+      // Migration only ever upgrades, so a node from the future is left
+      // untouched and the older renderer would read props for a schema it has
+      // never seen. That is a wrong page, not a missing block.
+      const current = defineBlock({
+        name: "test/rolled-back",
+        version: 2,
+        description: "This app is behind the document.",
+        example: { props: {} },
+        render: () => <p>rendered anyway</p>,
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/rolled-back", { version: 5 }),
+            node("b", "test/text", { props: { value: "survivor" } })
+          )}
+          blocks={createBlockResolver([
+            current as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual(["version-ahead"]);
+      expect(html).not.toContain("rendered anyway");
+      expect(html).toContain("survivor");
+    });
+
+    it("renders an empty slot when the stored value is not a list", async () => {
+      // Stored documents are JSON from a database and can hold anything. A
+      // malformed slot would reach `nodes.map` inside React, past the boundary
+      // that called the block.
+      const box = defineBlock({
+        name: "test/bad-slot",
+        version: 1,
+        description: "Renders a slot whose stored value is malformed.",
+        example: { props: {} },
+        slots: { children: {} },
+        render: ({ className, renderSlot }) => (
+          <div className={className}>{renderSlot("children")}</div>
+        ),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/bad-slot", {
+              slots: { children: { nope: true } as unknown as [] },
+            }),
+            node("b", "test/text", { props: { value: "survivor" } })
+          )}
+          blocks={createBlockResolver([
+            box as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual([]);
+      expect(html).toContain("survivor");
+    });
+  });
+
+  describe("node fields the block cannot receive", () => {
+    it("puts cssId and attributes on the block's root element", async () => {
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", {
+              props: { value: "anchored" },
+              cssId: "section-one",
+              attributes: { "data-track": "hero", title: "A section" },
+            })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+        />
+      );
+
+      // Stored and silently dropped is what breaks anchors and author data
+      // attributes, since `BlockRenderArgs` carries only `className`.
+      expect(html).toContain('id="section-one"');
+      expect(html).toContain('data-track="hero"');
+      expect(html).toContain('title="A section"');
+      // The class the block was handed must survive the clone.
+      expect(html).toMatch(bothClasses("test/text"));
+    });
+
+    it("never lets a stored attribute reinterpret the element", async () => {
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", {
+              props: { value: "kept" },
+              attributes: {
+                children: "hijacked",
+                className: "nx-not-this",
+                style: "color: red",
+              },
+            })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+        />
+      );
+
+      // These keys change how React reads the element rather than what it
+      // renders, so author data must never reach them.
+      expect(html).toContain("kept");
+      expect(html).not.toContain("hijacked");
+      expect(html).not.toContain("nx-not-this");
+      expect(html).toMatch(bothClasses("test/text"));
+    });
+  });
+
+  describe("visibility", () => {
+    it("omits a node gated behind conditions nothing can evaluate", async () => {
+      // The format says conditionally hidden nodes are OMITTED from server
+      // output, and no evaluator exists yet. Showing everyone what was meant
+      // for some of them is the failure that cannot be taken back.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", {
+              props: { value: "vip only" },
+              visibility: {
+                conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+              },
+            }),
+            node("b", "test/text", { props: { value: "everyone" } })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+        />
+      );
+
+      expect(html).not.toContain("vip only");
+      expect(html).toContain("everyone");
+    });
+
+    it("keeps a node whose conditions list is empty", async () => {
+      // An empty envelope is not a gate, and treating it as one would hide
+      // content nobody restricted.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", {
+              props: { value: "ungated" },
+              visibility: { conditions: [] },
+            })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+        />
+      );
+
+      expect(html).toContain("ungated");
+    });
+
+    it("omits a gated node inside a slot too", async () => {
+      const box = defineBlock({
+        name: "test/gate-box",
+        version: 1,
+        description: "Renders a slot.",
+        example: { props: {} },
+        slots: { children: {} },
+        render: ({ className, renderSlot }) => (
+          <div className={className}>{renderSlot("children")}</div>
+        ),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/gate-box", {
+              slots: {
+                children: [
+                  node("b", "test/text", {
+                    props: { value: "nested vip" },
+                    visibility: {
+                      conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+                    },
+                  }),
+                ],
+              },
+            })
+          )}
+          blocks={createBlockResolver([
+            box as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+        />
+      );
+
+      expect(html).not.toContain("nested vip");
+    });
+  });
+
+  describe("containment (continued)", () => {
     it("shows nothing but a marker in production", async () => {
       vi.stubEnv("NODE_ENV", "production");
 
@@ -1092,6 +1289,62 @@ describe("PageRenderer", () => {
         />
       );
       expect(html).toContain('class="nx-pb-page nx-doc-b"');
+    });
+
+    it("compiles a block's base styles without being told them twice", async () => {
+      // The compiler emits one rule per block TYPE and takes those defaults
+      // from its context. The renderer already holds the resolver whose
+      // definitions it will render, so requiring the caller to mirror
+      // `baseStyles` into `styleContext` is a coupling that fails silently: the
+      // block-type class is still written and the sheet simply has no rule for
+      // it.
+      const styled = defineBlock({
+        name: "test/with-base",
+        version: 1,
+        description: "Declares shared defaults for its type.",
+        example: { props: {} },
+        baseStyles: { base: { base: { color: "rebeccapurple" } } },
+        render: ({ className }) => <p className={className}>styled</p>,
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(node("a", "test/with-base"))}
+          blocks={createBlockResolver([styled as AnyBlockDefinition])}
+          styleContext={{ breakpoints: { viewport: [], container: [] } }}
+        />
+      );
+
+      expect(html).toContain("rebeccapurple");
+      expect(html).toContain(blockTypeClassName("test/with-base"));
+    });
+
+    it("lets a caller's own blockBases win", async () => {
+      // An explicit choice outranks anything derived here.
+      const styled = defineBlock({
+        name: "test/with-base-2",
+        version: 1,
+        description: "Declares defaults the caller overrides.",
+        example: { props: {} },
+        baseStyles: { base: { base: { color: "rebeccapurple" } } },
+        render: ({ className }) => <p className={className}>styled</p>,
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(node("a", "test/with-base-2"))}
+          blocks={createBlockResolver([styled as AnyBlockDefinition])}
+          styleContext={{
+            breakpoints: { viewport: [], container: [] },
+            blockBases: {
+              "test/with-base-2": { base: { base: { color: "teal" } } },
+            },
+          }}
+        />
+      );
+
+      expect(html).toContain("teal");
+      expect(html).not.toContain("rebeccapurple");
     });
 
     it("emits no style element when there is no css", async () => {

@@ -4,8 +4,11 @@ import {
   walkNodes,
   type BlockDocument,
   type CompiledPageCss,
+  type NodeStyles,
   type StyleCompileContext,
 } from "@nextlyhq/blocks-engine";
+
+import type { BlockResolver } from "./resolver";
 
 /**
  * A page's compiled stylesheet and the class each node was assigned.
@@ -47,6 +50,33 @@ export function toPageStyles(
   return scope === undefined ? styles : { ...styles, scope };
 }
 
+/**
+ * The shared default styles for every block type the document uses.
+ *
+ * The compiler emits one rule per block TYPE rather than copying a type's
+ * defaults into every node, and it takes those defaults from the compile
+ * context. A caller compiling at render time already handed this renderer the
+ * resolver holding the definitions, so requiring them to mirror `baseStyles`
+ * into the context as well is a coupling that is easy to miss and silent when
+ * missed: the renderer still writes the block-type class and the sheet simply
+ * has no rule for it, so every block loses its defaults and nothing says why.
+ *
+ * A context that already carries `blockBases` is left alone — an explicit
+ * choice by the caller outranks what can be derived here.
+ */
+function blockBasesFor(
+  document: BlockDocument,
+  blocks: BlockResolver
+): Record<string, NodeStyles> {
+  const bases: Record<string, NodeStyles> = {};
+  walkNodes(document.nodes, node => {
+    if (bases[node.type] !== undefined) return;
+    const baseStyles = blocks.get(node.type)?.baseStyles;
+    if (baseStyles !== undefined) bases[node.type] = baseStyles;
+  });
+  return bases;
+}
+
 /** Every node id in a document, in document order. */
 function documentNodeIds(document: BlockDocument): string[] {
   const ids: string[] = [];
@@ -77,14 +107,16 @@ function documentNodeIds(document: BlockDocument): string[] {
 export function resolvePageStyles(
   document: BlockDocument,
   styles: PageStyles | undefined,
-  styleContext: StyleCompileContext | undefined
+  styleContext: StyleCompileContext | undefined,
+  blocks: BlockResolver
 ): PageStyles {
   if (styles) return styles;
   if (styleContext) {
-    return toPageStyles(
-      compilePageCss(document, styleContext),
-      styleContext.scope
-    );
+    const context: StyleCompileContext =
+      styleContext.blockBases === undefined
+        ? { ...styleContext, blockBases: blockBasesFor(document, blocks) }
+        : styleContext;
+    return toPageStyles(compilePageCss(document, context), context.scope);
   }
   return {
     css: "",

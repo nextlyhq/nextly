@@ -1,5 +1,5 @@
 import { blockTypeClassName, type BlockNode } from "@nextlyhq/blocks-engine";
-import { Suspense, type ReactNode } from "react";
+import { Suspense, cloneElement, isValidElement, type ReactNode } from "react";
 
 import type { PageContext } from "./context";
 import { BlockPlaceholder } from "./placeholder";
@@ -32,6 +32,72 @@ function classNameFor(
   const nodeClass = classes[node.id];
   const typeClass = blockTypeClassName(node.type);
   return nodeClass ? `${nodeClass} ${typeClass}` : typeClass;
+}
+
+/**
+ * A slot's children, or nothing when the stored value is not a list.
+ *
+ * Documents are JSON round-tripped through a database, so a slot can hold
+ * whatever was written there. Passing a malformed value on would put
+ * `nodes.map` inside React's render, past the boundary that called the block,
+ * and one bad field would cost the page rather than the slot.
+ */
+function slotNodes(node: BlockNode, name: string): BlockNode[] {
+  const stored = node.slots?.[name];
+  return Array.isArray(stored) ? stored : [];
+}
+
+/**
+ * React props that are never author data, whatever a stored attribute says.
+ *
+ * `attributes` is sanitized at write time and typed as strings, but these keys
+ * change how React interprets an element rather than what it renders: `key` and
+ * `ref` are consumed by React, `children` and `dangerouslySetInnerHTML` would
+ * replace the block's own content, and `className`/`style` are decided
+ * elsewhere in this file.
+ */
+const RESERVED_ATTRIBUTE_NAMES = new Set([
+  "key",
+  "ref",
+  "children",
+  "dangerouslySetInnerHTML",
+  "className",
+  "style",
+]);
+
+/**
+ * Applies the node's root-level HTML fields to what the block rendered.
+ *
+ * `cssId` and `attributes` belong to the NODE, not the block, and
+ * `BlockRenderArgs` carries only `className` — so a block has no way to receive
+ * them and they would be stored and silently dropped, breaking anchors, labels
+ * and author data attributes.
+ *
+ * Applied by cloning because the block owns its root element: the format says a
+ * block renders a single element and never wraps it, so its root IS the node's
+ * root. Output that is not a single element has no root to carry them and is
+ * returned untouched rather than guessed at.
+ */
+function withNodeAttributes(output: ReactNode, node: BlockNode): ReactNode {
+  const cssId = node.cssId;
+  const attributes = node.attributes;
+  const hasAttributes =
+    attributes !== undefined && Object.keys(attributes).length > 0;
+  if (cssId === undefined && !hasAttributes) return output;
+  if (!isValidElement(output)) return output;
+
+  const extra: Record<string, string> = {};
+  if (attributes) {
+    for (const [name, value] of Object.entries(attributes)) {
+      if (RESERVED_ATTRIBUTE_NAMES.has(name)) continue;
+      extra[name] = value;
+    }
+  }
+  // The modelled field wins over an attribute of the same name: `cssId` is what
+  // the editor writes, and the attribute bag is the escape hatch beside it.
+  if (cssId !== undefined) extra.id = cssId;
+
+  return Object.keys(extra).length > 0 ? cloneElement(output, extra) : output;
 }
 
 /**
@@ -74,8 +140,9 @@ function checkedOutput(
   // Only promises inside borrowed JSX children reach here unwrapped, since
   // nothing can be substituted into an element that already exists. React
   // suspends on them, so they still need a boundary above.
-  if (!result.hasUnwrappedThenable) return result.node;
-  return <Suspense fallback={fallback}>{result.node}</Suspense>;
+  const withAttributes = withNodeAttributes(result.node, node);
+  if (!result.hasUnwrappedThenable) return withAttributes;
+  return <Suspense fallback={fallback}>{withAttributes}</Suspense>;
 }
 
 /**
@@ -162,6 +229,22 @@ export function BlockBoundary({
     );
   }
 
+  // A node saved against a NEWER definition than this app has. The migration
+  // pass only ever upgrades, so it leaves such a node untouched and the older
+  // renderer would then read props shaped for a schema it has never seen. That
+  // is a wrong page rather than a missing block, and it is the same situation a
+  // failed upgrade produces from the other direction.
+  if (node.version > definition.version) {
+    return (
+      <BlockPlaceholder
+        reason="version-ahead"
+        type={node.type}
+        id={node.id}
+        detail={`Stored at version ${node.version}, but this app has version ${definition.version}`}
+      />
+    );
+  }
+
   const className = classNameFor(node, classes);
 
   let output: unknown;
@@ -178,7 +261,7 @@ export function BlockBoundary({
       // renders it if the block puts it somewhere.
       renderSlot: (name: string, slotContext?: PageContext) => (
         <BlockList
-          nodes={node.slots?.[name] ?? []}
+          nodes={slotNodes(node, name)}
           context={slotContext ?? context}
           blocks={blocks}
           classes={classes}
@@ -210,6 +293,26 @@ export function BlockBoundary({
   );
 }
 
+/**
+ * Whether a node is shown regardless of the entry it renders against.
+ *
+ * The document format is explicit that conditionally hidden nodes are OMITTED
+ * from server output rather than hidden with CSS, so a node carrying conditions
+ * must not reach the page unless something has decided they hold. Nothing here
+ * can decide that: a `Condition` is `{ field, op, value }` with `op` an open
+ * string, and the engine defines no evaluator for it.
+ *
+ * So this fails CLOSED. Conditions gate personalised and status-restricted
+ * content, and showing everyone what was meant for some of them is the failure
+ * that cannot be taken back; content missing from a page is visible and
+ * reportable. When the evaluator arrives this becomes a call into it.
+ */
+function isUnconditional(node: BlockNode): boolean {
+  const groups = node.visibility?.conditions;
+  if (!Array.isArray(groups)) return true;
+  return !groups.some(group => Array.isArray(group) && group.length > 0);
+}
+
 export interface BlockListProps {
   nodes: readonly BlockNode[];
   context: PageContext;
@@ -232,14 +335,16 @@ export function BlockList({
   classes,
   fallback,
 }: BlockListProps): ReactNode {
-  return nodes.map(node => (
-    <BlockBoundary
-      key={node.id}
-      node={node}
-      context={context}
-      blocks={blocks}
-      classes={classes}
-      fallback={fallback}
-    />
-  ));
+  return nodes
+    .filter(isUnconditional)
+    .map(node => (
+      <BlockBoundary
+        key={node.id}
+        node={node}
+        context={context}
+        blocks={blocks}
+        classes={classes}
+        fallback={fallback}
+      />
+    ));
 }

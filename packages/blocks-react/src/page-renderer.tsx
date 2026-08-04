@@ -13,6 +13,7 @@ import {
   migrationSourceFor,
   type BlockResolver,
 } from "./resolver";
+import { sanitizeDocument } from "./sanitize";
 import {
   resolvePageStyles,
   styleTextForInjection,
@@ -80,13 +81,26 @@ export function PageRenderer({
   // expect. Reading migrations from the global registry while rendering from a
   // fixture set would produce props no one asked for and no error to explain
   // them.
-  const { doc } = migrateDocument(document, migrationSourceFor(resolver));
+  // The shape is made sound before anything walks it. The engine's migrator,
+  // tree helpers and style compiler all assume a well-formed forest, and this
+  // renderer is handed whatever the database returned — a slot holding an
+  // object instead of a list would otherwise throw here, in the page component
+  // itself, where no per-block boundary can contain it.
+  const { doc } = migrateDocument(
+    sanitizeDocument(document),
+    migrationSourceFor(resolver)
+  );
 
   // The scope comes from whichever input supplied the stylesheet, never from a
   // separate prop. Two inputs would have to agree, and when they did not the
   // root would carry a class the selectors never mention, so every compiled
   // rule would match nothing while both inputs looked correct on their own.
-  const { css, classes, scope } = resolvePageStyles(doc, styles, styleContext);
+  const { css, classes, scope } = resolvePageStyles(
+    doc,
+    styles,
+    styleContext,
+    resolver
+  );
   const rootClassName = scope ? `${PAGE_ROOT_CLASS} ${scope}` : PAGE_ROOT_CLASS;
 
   return (

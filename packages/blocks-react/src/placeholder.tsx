@@ -6,6 +6,8 @@ export type PlaceholderReason =
   | "unknown-block"
   /** The node could not be upgraded to its block's current schema version. */
   | "migration-failed"
+  /** The node was saved against a newer definition than this app has. */
+  | "version-ahead"
   /** The block's own render threw or rejected. */
   | "render-error"
   /** The block returned something React cannot render. */
@@ -25,6 +27,7 @@ export interface BlockPlaceholderProps {
 const REASON_TEXT: Readonly<Record<PlaceholderReason, string>> = {
   "unknown-block": "No block is registered for this type",
   "migration-failed": "This block could not be upgraded to its current version",
+  "version-ahead": "This block was saved by a newer version of the app",
   "render-error": "This block failed to render",
   "invalid-output": "This block returned something that cannot be rendered",
 };
