@@ -24,6 +24,7 @@
 import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
+import type { NodeRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -123,6 +124,32 @@ function relativeExtends(fromDir: string, spec: string): string {
  * tsconfig may carry comments and trailing commas, and `extends` may be a
  * single specifier or an array of them.
  */
+/**
+ * A bare `extends` target, resolved the way TypeScript resolves one.
+ *
+ * TypeScript treats a bare PACKAGE NAME as naming that package's
+ * `tsconfig.json`, while Node resolves it to the package's entry point. For a
+ * config-only package there is no entry point and `require.resolve` throws; for
+ * one that has both, Node returns the JavaScript entry and TypeScript would
+ * have read the config. Either way, asking Node first answers a different
+ * question.
+ *
+ * A specifier carrying a subpath (`@scope/pkg/base.json`) names the file
+ * directly and needs no such treatment, which is the form this repository uses.
+ */
+function bareExtends(req: NodeRequire, spec: string): string {
+  const segments = spec.split("/");
+  const isPackageName = segments.length === (spec.startsWith("@") ? 2 : 1);
+  if (isPackageName) {
+    try {
+      return req.resolve(`${spec}/tsconfig.json`);
+    } catch {
+      // Fall through: a package may still name a config through `exports`.
+    }
+  }
+  return req.resolve(spec);
+}
+
 function tsconfigChain(entry: string): string[] | undefined {
   const seen = new Set<string>();
   const chain: string[] = [];
@@ -153,7 +180,7 @@ function tsconfigChain(entry: string): string[] | undefined {
         // a path that happens not to exist.
         target = spec.startsWith(".")
           ? relativeExtends(dirname(file), spec)
-          : req.resolve(spec);
+          : bareExtends(req, spec);
       } catch {
         return false;
       }

@@ -1,8 +1,42 @@
+import { basename } from "node:path";
+
+import type { Plugin } from "vite";
 import { defineConfig } from "vitest/config";
 
 import { declarationBuildInputs } from "./src/__tests__/ensure-declarations";
 
+/**
+ * Rerun the suite when a declaration-build input is DELETED.
+ *
+ * `forceRerunTriggers` covers a changed file, not a removed one: Vitest's
+ * unlink handling does not match deleted paths against those patterns, so
+ * moving a tsup config out of the tree left a watch session waiting on green
+ * while `ensureDeclarations()` never saw the input go missing. Deletion is the
+ * case that matters most here — a missing input is the one the freshness check
+ * treats as unknown.
+ *
+ * The rerun is provoked by re-emitting a `change` for a file the graph already
+ * watches, rather than by reaching into Vitest's internals, so it does not
+ * depend on APIs that are not part of its contract.
+ */
+function rerunOnDeletedBuildInput(): Plugin {
+  return {
+    name: "nextly:rerun-on-deleted-build-input",
+    configureServer(server) {
+      const watched = new Set(declarationBuildInputs() ?? []);
+      // Matched by basename as well as by path: a file moved out of the tree
+      // arrives as its old absolute path, while a rename within it may not.
+      const names = new Set([...watched].map(file => basename(file)));
+      server.watcher.on("unlink", (file: string) => {
+        if (!watched.has(file) && !names.has(basename(file))) return;
+        server.watcher.emit("change", import.meta.filename);
+      });
+    },
+  };
+}
+
 export default defineConfig({
+  plugins: [rerunOnDeletedBuildInput()],
   test: {
     // The release-tag guard reads this package's OWN `dist/index.d.ts`: the
     // tags it checks are written by the declaration bundler, so there is
