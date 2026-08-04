@@ -210,8 +210,13 @@ export interface BlockRenderArgs<P = Record<string, unknown>> {
    *
    * A block that renders a media URL into an `src` or an inline background is
    * making a request the style compiler never sees, so the same policy has to
-   * reach here: pass this to `mediaUrl` rather than reading the prop directly.
-   * Absent means same-origin only, which is what an unconfigured page gets.
+   * reach here. The renderer cannot inspect the element a block returns, so a
+   * block applies it: pass this to `mediaUrl` for an attribute, or
+   * `cssMediaUrl` for a value interpolated into a CSS `url("…")`. Both are
+   * exported from `@nextlyhq/plugin-page-builder`, so a block registered from
+   * outside this package can reach them.
+   *
+   * Absent means relative paths only, which is what an unconfigured page gets.
    */
   remotePatterns?: readonly RemotePatternInput[];
 }

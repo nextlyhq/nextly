@@ -60,10 +60,30 @@ leaves as raw text. A protocol-relative `//host/a.png` is refused rather than
 resolved against a guess, since the document's protocol is not knowable when the
 stylesheet is compiled.
 
-BREAKING for pages whose block background is an absolute URL: it stops rendering
-until its host is declared, and that includes absolute URLs pointing at your own
-site. If your media library stores absolute URLs — the cloud storage adapters
-do — add your own host to `remotePatterns` when you upgrade. The shape is Next.js's `images.remotePatterns`, so an entry can
+BREAKING, and wider than images: every resource a block loads on its own is now
+refused until its host is declared. On upgrade, add the hosts below to
+`remotePatterns` or the content stops rendering.
+
+| block                                         | what stops            | host to declare                         |
+| --------------------------------------------- | --------------------- | --------------------------------------- |
+| `core/image`                                  | the image             | wherever your media is served from      |
+| `core/cover`, `core/slides`, flip cards       | the background        | same                                    |
+| `core/gallery`, the carousels, `core/hotspot` | the images            | same                                    |
+| `core/video`                                  | the source and poster | your media host                         |
+| `core/lottie`                                 | the animation         | the animation's CDN                     |
+| `core/embed` (URL mode)                       | the iframe            | e.g. `www.youtube.com`                  |
+| `core/map`                                    | the iframe            | `www.google.com`, or your own tile host |
+
+This includes absolute URLs pointing at your own site: nothing in the compiler
+knows what your host is, so `https://your-site.com/a.png` needs an entry while
+`/a.png` needs none — the same line `next/image` draws. If your media library
+stores absolute URLs, which the cloud storage adapters do, declare your own host.
+
+A custom block registered from outside this package applies the policy itself:
+its `render` receives `remotePatterns`, and `mediaUrl` / `cssMediaUrl` are
+exported for it. The renderer cannot inspect the element a block returns, so a
+block that writes a URL into an `src` or an inline background without asking
+reaches whatever host it names. The shape is Next.js's `images.remotePatterns`, so an entry can
 be copied straight across from `next.config`, and the posture matches
 `next/image` — nothing off-origin unless you said so. Matching uses picomatch
 with the same options `next/image` uses, rather than an approximation of it, so

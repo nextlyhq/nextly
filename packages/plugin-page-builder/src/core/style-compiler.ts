@@ -107,7 +107,7 @@ function resolveScalar(v: StyleScalar): string {
  * properties is the same losing shape as a hand-kept list of dangerous
  * schemes. Asking the parser which values contain a `url()` cannot miss one.
  */
-function safeValue(
+export function safeValue(
   v: string,
   remotePatterns: readonly RemotePatternInput[] = []
 ): string | null {

@@ -1,4 +1,5 @@
 import { defineBlock } from "../../core/registry";
+import { safeValue } from "../../core/style-compiler";
 
 import { cssMediaUrl, str } from "./util";
 
@@ -35,7 +36,13 @@ export const cover = defineBlock({
     // `cssMediaUrl`: this is interpolated into a CSS `url("…")`, so the
     // delimiters that would end it are refused as well as the origin.
     const url = cssMediaUrl(props.image, remotePatterns);
-    const overlay = str(props.overlayColor, "#000000");
+    // The overlay is arbitrary author text assigned to `background`, which is
+    // fetch-capable: `url("https://…")` is a valid value there. It goes through
+    // the same value policy a structured style does, so an undeclared host is
+    // refused and anything that fails to parse falls back to the default.
+    const overlay =
+      safeValue(str(props.overlayColor, "#000000"), remotePatterns) ??
+      "#000000";
     const opacity = Number(props.overlayOpacity);
     return (
       <div
