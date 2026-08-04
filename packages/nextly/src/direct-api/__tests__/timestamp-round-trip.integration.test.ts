@@ -59,10 +59,6 @@ const ticks = () =>
  */
 const OCCURRED_AT = new Date("2026-08-04T15:04:01.000Z");
 
-/** The instant to one-second resolution, which every dialect stores exactly. */
-const toSecond = (value: unknown): number =>
-  Math.round((value as Date).getTime() / 1000);
-
 async function boot(dialect: TestDialect): Promise<TestNextly> {
   current = await createTestNextly({ dialect, collections: [ticks()] });
   return current;
@@ -95,7 +91,7 @@ describe.each(getConfiguredTestDialects())(
       expect(found?.occurredAt).toEqual(item.occurredAt);
     });
 
-    it("agrees with itself about the timestamps it generates", async () => {
+    it("reports the stored value, not the one it was handed", async () => {
       underNonUtcTimezone();
       const { nextly } = await boot(dialect);
 
@@ -114,14 +110,13 @@ describe.each(getConfiguredTestDialects())(
       // `createdAt` is stamped by the write path rather than supplied, so this
       // covers the system columns as well as a user-declared date field.
       //
-      // To the SECOND, because sub-second precision is not uniform: a MySQL
-      // `DATETIME` and a SQLite integer both hold whole seconds, so a stored
-      // timestamp comes back rounded there while the write reports what it
-      // generated. A whole second is still three orders of magnitude finer than
-      // the offset this guards against -- a skew of even the smallest real
-      // timezone would fail it many times over.
-      expect(toSecond(found?.createdAt)).toEqual(toSecond(item.createdAt));
-      expect(toSecond(found?.updatedAt)).toEqual(toSecond(item.updatedAt));
+      // Exactly, not to the nearest second. The write reports the value the
+      // database stored rather than the one it was handed, so a column that
+      // keeps only whole seconds reports whole seconds and a later read agrees
+      // to the millisecond. An assertion at second resolution would pass while
+      // a write invented sub-second precision the row never had.
+      expect(found?.createdAt).toEqual(item.createdAt);
+      expect(found?.updatedAt).toEqual(item.updatedAt);
     });
   }
 );

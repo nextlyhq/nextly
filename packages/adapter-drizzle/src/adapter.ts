@@ -61,6 +61,17 @@ interface DecodableColumn {
  */
 const DATE_DATA_TYPE = /(?:^|\s)date$/;
 
+/**
+ * How far an echoed timestamp may sit from the one that was bound and still
+ * count as the same value.
+ *
+ * A column with no fractional precision keeps whole seconds, so a stored value
+ * can differ from the bound one by up to a second without anything being wrong.
+ * Every real UTC offset is at least fifteen minutes, so a shift is never
+ * mistaken for rounding.
+ */
+const MAX_STORED_ROUNDING_MS = 1000;
+
 /** Whether a table property is a date column that can convert its own values. */
 function isDateColumn(colDef: unknown): colDef is DecodableColumn {
   if (!colDef || typeof colDef !== "object") return false;
@@ -649,44 +660,79 @@ export abstract class DrizzleAdapter {
     );
     return written === undefined
       ? mapped
-      : this.restoreWrittenDates(tableObj, mapped, written);
+      : this.correctEchoedDateZone(tableObj, mapped, written);
   }
 
   /**
-   * Put back the exact `Date` a write bound, in place of whatever the driver
-   * made of the value it echoed.
+   * Read an echoed date in the zone the statement wrote it in, keeping whatever
+   * the database actually stored.
    *
-   * A column declared without a time zone holds a wall clock, and the driver
-   * reads one back on its own terms -- as LOCAL -- where the statement wrote
-   * UTC. Correcting that by re-interpreting the driver's `Date` would mean
-   * encoding the driver's convention here and getting it wrong the moment a
-   * connection is configured differently.
+   * A column declared without a time zone holds a wall clock. The statement
+   * binds a UTC one; a driver reads it back in ITS zone, which is the local one,
+   * so the same row comes back shifted by the offset. Only the reading is
+   * wrong -- the wall clock in the database is right -- so the correction is to
+   * read it again as UTC rather than to substitute the value that was bound.
    *
-   * The write does not have to guess: it knows the value it bound. A column the
-   * caller did not supply is left exactly as it came back, so a database
-   * default is untouched.
+   * Substituting would report an instant the database never stored: a MySQL
+   * `DATETIME` without fractional precision keeps whole seconds, so the row it
+   * holds is not the one that was handed to it, and a later read would disagree
+   * with the write by up to a second.
+   *
+   * Whether the driver shifted anything is DECIDED, not assumed. The value that
+   * was bound is the reference: within a second of it, the driver already read
+   * the wall clock the way the statement wrote it and nothing is done. Every
+   * real offset is at least fifteen minutes, so the two cases cannot be
+   * confused, and a driver configured to read UTC is left alone rather than
+   * corrected twice.
+   *
+   * A column the statement did not return is not added, so a projection stays
+   * what the caller asked for. A column with no bound value -- a database
+   * default -- has no reference to judge against and is left as it came back.
    */
-  private restoreWrittenDates<T>(
+  private correctEchoedDateZone<T>(
     tableObj: unknown,
     row: T,
     written: Record<string, unknown>
   ): T {
     if (!tableObj || typeof tableObj !== "object" || !row) return row;
+    const record = row as Record<string, unknown>;
 
-    let restored: Record<string, unknown> | undefined;
+    let corrected: Record<string, unknown> | undefined;
     for (const [jsName, colDef] of Object.entries(
       tableObj as Record<string, unknown>
     )) {
       if (!isDateColumn(colDef)) continue;
+      if (!(jsName in record)) continue;
+
+      const echoed = record[jsName];
+      if (!(echoed instanceof Date)) continue;
+
       const sqlName = (colDef as { name?: unknown }).name;
-      const source =
+      const bound =
         written[jsName] ??
         (typeof sqlName === "string" ? written[sqlName] : undefined);
-      if (!(source instanceof Date)) continue;
-      restored ??= { ...(row as Record<string, unknown>) };
-      restored[jsName] = source;
+      if (!(bound instanceof Date)) continue;
+
+      if (
+        Math.abs(echoed.getTime() - bound.getTime()) <= MAX_STORED_ROUNDING_MS
+      ) {
+        continue;
+      }
+
+      corrected ??= { ...record };
+      corrected[jsName] = new Date(
+        Date.UTC(
+          echoed.getFullYear(),
+          echoed.getMonth(),
+          echoed.getDate(),
+          echoed.getHours(),
+          echoed.getMinutes(),
+          echoed.getSeconds(),
+          echoed.getMilliseconds()
+        )
+      );
     }
-    return (restored as T | undefined) ?? row;
+    return (corrected as T | undefined) ?? row;
   }
 
   /**
