@@ -140,14 +140,21 @@ function relativeExtends(fromDir: string, spec: string): string {
 function bareExtends(req: NodeRequire, spec: string): string {
   const segments = spec.split("/");
   const isPackageName = segments.length === (spec.startsWith("@") ? 2 : 1);
-  if (isPackageName) {
-    try {
-      return req.resolve(`${spec}/tsconfig.json`);
-    } catch {
-      // Fall through: a package may still name a config through `exports`.
-    }
+  // A specifier carrying a subpath names the file directly, which is the form
+  // this repository uses.
+  if (!isPackageName) return req.resolve(spec);
+
+  const manifest = req.resolve(`${spec}/package.json`);
+  const declared = (
+    JSON.parse(readFileSync(manifest, "utf8")) as { tsconfig?: unknown }
+  ).tsconfig;
+  // TypeScript reads the manifest's `tsconfig` field before falling back to the
+  // package root, so a package pointing at `./configs/custom.json` inherits
+  // from that file and not from a `tsconfig.json` that may not exist.
+  if (typeof declared === "string") {
+    return resolve(dirname(manifest), declared);
   }
-  return req.resolve(spec);
+  return req.resolve(`${spec}/tsconfig.json`);
 }
 
 function tsconfigChain(entry: string): string[] | undefined {

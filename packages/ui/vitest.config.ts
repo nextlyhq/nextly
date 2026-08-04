@@ -1,4 +1,5 @@
 import { basename } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import type { Plugin } from "vite";
 import { defineConfig } from "vitest/config";
@@ -20,16 +21,33 @@ import { declarationBuildInputs } from "./src/__tests__/ensure-declarations";
  * depend on APIs that are not part of its contract.
  */
 function rerunOnDeletedBuildInput(): Plugin {
+  // Not `import.meta.filename`, which arrives in Node 20.11 while this
+  // repository supports Node 20 — on 20.9 it is `undefined` and the emitted
+  // change names nothing.
+  const self = fileURLToPath(import.meta.url);
   return {
     name: "nextly:rerun-on-deleted-build-input",
     configureServer(server) {
-      const watched = new Set(declarationBuildInputs() ?? []);
-      // Matched by basename as well as by path: a file moved out of the tree
-      // arrives as its old absolute path, while a rename within it may not.
-      const names = new Set([...watched].map(file => basename(file)));
       server.watcher.on("unlink", (file: string) => {
-        if (!watched.has(file) && !names.has(basename(file))) return;
-        server.watcher.emit("change", import.meta.filename);
+        // Recomputed per event rather than snapshotted at startup. The chain
+        // is exactly the thing that can change during a session — repointing
+        // `extends` brings in a config this had never heard of — and a list
+        // captured once would be blind to the deletion of whatever arrived
+        // after it. The cost is a stat walk on an unlink, which is rare.
+        const watched = declarationBuildInputs() ?? [];
+        const matches =
+          watched.includes(file) ||
+          watched.some(input => basename(input) === basename(file));
+        // A DELETED input no longer appears in the recomputed list, so a
+        // deletion is also recognised by shape: any tsconfig, tsup config or
+        // lockfile is a build input of this package whether or not the chain
+        // still names it.
+        const looksLikeInput =
+          /(^|\/)(tsconfig[^/]*\.json|tsup[^/]*\.config\.[cm]?[jt]s|pnpm-lock\.yaml|package\.json)$/.test(
+            file
+          );
+        if (!matches && !looksLikeInput) return;
+        server.watcher.emit("change", self);
       });
     },
   };
