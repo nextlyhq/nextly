@@ -208,10 +208,18 @@ export class DynamicCollectionService extends BaseService {
       tableName,
       pendingFields
     );
+    // Indexes union freely: every path that adds a column also creates its index. Foreign keys
+    // do not, and only on SQLite — its ALTER cannot attach one, so a relationship a queued
+    // artefact ADDS there genuinely arrives without a constraint. Predicting one anyway makes a
+    // later removal refuse as unsupported when dropping the index and then the unconstrained
+    // column would have worked. The absent-table case above is different and keeps its
+    // prediction: a queued CREATE writes the constraint inline, on every dialect.
     const foreignKeysByColumn = new Map<string, readonly string[]>(foreignKeys);
-    for (const [column, names] of planned.foreignKeysByColumn) {
-      if (!foreignKeysByColumn.has(column)) {
-        foreignKeysByColumn.set(column, names);
+    if (this.adapter.dialect !== "sqlite") {
+      for (const [column, names] of planned.foreignKeysByColumn) {
+        if (!foreignKeysByColumn.has(column)) {
+          foreignKeysByColumn.set(column, names);
+        }
       }
     }
 
