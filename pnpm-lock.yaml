@@ -765,6 +765,46 @@ importers:
         specifier: ^4.1.0
         version: 4.1.10(@types/node@20.19.17)(@vitest/coverage-v8@4.1.10)(@vitest/ui@4.1.10)(happy-dom@20.9.0)(jsdom@27.1.0)(vite@7.3.6(@types/node@20.19.17)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
 
+  packages/blocks-react:
+    dependencies:
+      '@nextlyhq/blocks-engine':
+        specifier: workspace:*
+        version: link:../blocks-engine
+      next:
+        specifier: ^16.2.12
+        version: 16.2.12(@babel/core@7.29.7)(@playwright/test@1.61.1)(@types/node@20.19.17)(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
+    devDependencies:
+      '@nextlyhq/eslint-config':
+        specifier: workspace:*
+        version: link:../eslint-config
+      '@nextlyhq/tsconfig':
+        specifier: workspace:*
+        version: link:../tsconfig
+      '@types/node':
+        specifier: ^20.19.17
+        version: 20.19.17
+      '@types/react':
+        specifier: 19.2.0
+        version: 19.2.0
+      eslint:
+        specifier: ^9.39.1
+        version: 9.39.1(jiti@2.7.0)
+      react:
+        specifier: 19.2.0
+        version: 19.2.0
+      rimraf:
+        specifier: ^6.1.3
+        version: 6.1.3
+      tsup:
+        specifier: ^8.5.0
+        version: 8.5.0(jiti@2.7.0)(postcss@8.5.23)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.3)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.0
+        version: 4.1.10(@types/node@20.19.17)(@vitest/coverage-v8@4.1.10)(@vitest/ui@4.1.10)(happy-dom@20.9.0)(jsdom@27.1.0)(vite@7.3.6(@types/node@20.19.17)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
+
   packages/create-nextly-app:
     dependencies:
       '@clack/prompts':
@@ -5195,8 +5235,8 @@ packages:
     resolution: {integrity: sha512-Fm5NvhYathRnXNVndkUsCCuR63DCLVVwGOOwQw782coXFi5HhkXdu289l59HlXZBawsyNccXfWRYvLzcDCdDig==}
     engines: {node: '>=20'}
 
-  csstype@3.1.3:
-    resolution: {integrity: sha512-M1uQkMl8rQK/szD0LNhtqxIPLpimGm8sOBwU7lLnCpSbTyY3yeU1Vc7l4KT5zT4s/yOxHH5O7tIuuLOCnLADRw==}
+  csstype@3.2.3:
+    resolution: {integrity: sha512-z1HGKcYy2xA8AGQfwrn0PAy+PB7X/GSj3UVJW9qKyn43xWa+gl5nXmU4qqLMRzWVLFC8KusUX8T/0kCiOYpAIQ==}
 
   culori@4.0.2:
     resolution: {integrity: sha512-1+BhOB8ahCn4O0cep0Sh2l9KCOfOdY+BXJnKMHFFzDEouSr/el18QwXEMRlOj9UY5nCeA8UN3a/82rUWRBeyBw==}
@@ -11338,7 +11378,7 @@ snapshots:
 
   '@types/react@19.2.0':
     dependencies:
-      csstype: 3.1.3
+      csstype: 3.2.3
 
   '@types/semver@7.7.1': {}
 
@@ -11922,6 +11962,11 @@ snapshots:
       esbuild: 0.25.12
       load-tsconfig: 0.2.5
 
+  bundle-require@5.1.0(esbuild@0.28.1):
+    dependencies:
+      esbuild: 0.28.1
+      load-tsconfig: 0.2.5
+
   cac@6.7.14: {}
 
   call-bind-apply-helpers@1.0.2:
@@ -12151,7 +12196,7 @@ snapshots:
       css-tree: 3.1.0
       lru-cache: 11.3.5
 
-  csstype@3.1.3: {}
+  csstype@3.2.3: {}
 
   culori@4.0.2: {}
 
@@ -12704,7 +12749,7 @@ snapshots:
       '@humanfs/node': 0.16.6
       '@humanwhocodes/module-importer': 1.0.1
       '@humanwhocodes/retry': 0.4.3
-      '@types/estree': 1.0.8
+      '@types/estree': 1.0.9
       ajv: 6.15.0
       chalk: 4.1.2
       cross-spawn: 7.0.6
@@ -14962,22 +15007,22 @@ snapshots:
 
   tsup@8.5.0(jiti@2.6.1)(postcss@8.5.23)(tsx@4.20.5)(typescript@5.9.3)(yaml@2.8.3):
     dependencies:
-      bundle-require: 5.1.0(esbuild@0.25.12)
+      bundle-require: 5.1.0(esbuild@0.28.1)
       cac: 6.7.14
       chokidar: 4.0.3
       consola: 3.4.2
       debug: 4.4.3
-      esbuild: 0.25.12
+      esbuild: 0.28.1
       fix-dts-default-cjs-exports: 1.0.1
       joycon: 3.1.1
       picocolors: 1.1.1
       postcss-load-config: 6.0.1(jiti@2.6.1)(postcss@8.5.23)(tsx@4.20.5)(yaml@2.8.3)
       resolve-from: 5.0.0
-      rollup: 4.60.1
+      rollup: 4.62.3
       source-map: 0.8.0-beta.0
       sucrase: 3.35.0
       tinyexec: 0.3.2
-      tinyglobby: 0.2.15
+      tinyglobby: 0.2.17
       tree-kill: 1.2.2
     optionalDependencies:
       postcss: 8.5.23
@@ -15322,7 +15367,7 @@ snapshots:
       std-env: 4.2.0
       tinybench: 2.9.0
       tinyexec: 1.2.4
-      tinyglobby: 0.2.15
+      tinyglobby: 0.2.17
       tinyrainbow: 3.1.0
       vite: 7.3.6(@types/node@20.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.20.5)(yaml@2.8.3)
       why-is-node-running: 2.3.0
@@ -15384,7 +15429,7 @@ snapshots:
       std-env: 4.2.0
       tinybench: 2.9.0
       tinyexec: 1.2.4
-      tinyglobby: 0.2.15
+      tinyglobby: 0.2.17
       tinyrainbow: 3.1.0
       vite: 7.3.6(@types/node@24.10.0)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.20.5)(yaml@2.8.3)
       why-is-node-running: 2.3.0
@@ -15415,7 +15460,7 @@ snapshots:
       std-env: 4.2.0
       tinybench: 2.9.0
       tinyexec: 1.2.4
-      tinyglobby: 0.2.15
+      tinyglobby: 0.2.17
       tinyrainbow: 3.1.0
       vite: 7.3.6(@types/node@24.10.0)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3)
       why-is-node-running: 2.3.0
