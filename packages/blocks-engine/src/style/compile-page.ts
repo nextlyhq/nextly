@@ -37,9 +37,10 @@ import { compileStyleValues, DEFAULT_TOKEN_PREFIX } from "./declarations";
 import type { Declaration } from "./declarations";
 import type { NamedClass } from "./named-class";
 import {
-  isUsableNamedClass,
   namedClassName,
   orderedNamedClasses,
+  usableNamedClasses,
+  NAMED_CLASS_SLUG_RE,
 } from "./named-class";
 import {
   blockTypeClassName,
@@ -783,12 +784,14 @@ function documentNodes(
  * Compile a document's styles.
  *
  * The tiers, in the order they are emitted and therefore in the order they
- * override one another: page settings, block-type defaults, then each node's
- * own values. Two tiers named in the cascade are deliberately absent here.
- * Design tokens and named classes are defined by data this signature does not
- * take yet, and user custom CSS has to be sanitized before it can be written at
- * all, so writing it before that exists would be the one hole nothing else in
- * this design leaves open.
+ * override one another: page settings, block-type defaults, the site's named
+ * classes in library order, then each node's own values. A whole tier precedes
+ * the whole of the next, so a node's value beats a class's at any breakpoint.
+ *
+ * Two tiers named in the cascade are still absent. Design tokens are defined by
+ * data this signature does not take yet, and user custom CSS has to be sanitized
+ * before it can be written at all, so writing it before that exists would be the
+ * one hole nothing else in this design leaves open.
  */
 export function compilePageCss(
   doc: BlockDocument,
@@ -893,38 +896,40 @@ export function compilePageCss(
   // The named classes, in library order — the tier between a block's defaults and a node's own
   // values. At one specificity the cascade is source order, so being emitted here IS what makes
   // a class beat the block default and lose to a local value.
-  const emittedSlugs = new Set<string>();
+  //
+  // `usableNamedClasses` decides which of them are written, and the resolver reads the same
+  // list, so a class dropped here cannot be reported as the source of a value.
+  //
+  // Charged against an allowance of their own. A site's class library is one document's
+  // configuration and every document's problem: sharing the node budget let a single malformed
+  // library entry spend it before any node was reached, so one bad global class could strip the
+  // styling from a page that never referenced it.
+  const classBudget = newStyleIssueBudget();
+  const usableClasses = usableNamedClasses(ctx.namedClasses ?? []);
+  const usableIds = new Set(usableClasses.map(cls => cls.id));
   for (const cls of orderedNamedClasses(ctx.namedClasses ?? [])) {
-    // A slug reaches a selector, and this compiler reads persisted data whether or not a caller
-    // validated it. Held to the grammar rather than escaped into something safe: a name that is
-    // not a slug is not a class this engine can style, and rewriting it quietly would emit a
-    // class no renderer puts on an element. Entries that are not records at all are refused by
-    // the same check, so a `null` in the library costs a warning rather than the whole compile.
-    if (!isUsableNamedClass(cls)) {
-      pushBoundedWarning(warningAllowance, warnings, {
-        path: pointer("/classes", describeValue(readClassId(cls))),
-        code: "invalid-class-name",
-        severity: "warning",
-        message: `A named class could not be written: ${describeValue(readClassSlug(cls))} is not a class name.`,
-        suggestion: 'Use a lowercase slug such as "card-featured".',
-      });
-      continue;
-    }
-    // Two classes cannot share one name. Emitted anyway, both would land on the single
-    // `.nx-c-<slug>` selector, so a node applying either would silently receive the other's
-    // declarations too — and the later one in library order would win on a class the node never
-    // referenced. The first keeps the name, since library order is the author's own.
-    if (emittedSlugs.has(cls.slug)) {
-      pushBoundedWarning(warningAllowance, warnings, {
-        path: pointer("/classes", cls.id),
-        code: "duplicate-class-name",
-        severity: "warning",
-        message: `More than one class is named "${describeValue(cls.slug)}", so only the first was written.`,
-        suggestion: "Give every class a distinct name.",
-      });
-      continue;
-    }
-    emittedSlugs.add(cls.slug);
+    if (usableIds.has((cls as { id?: unknown } | null)?.id as string)) continue;
+    // Reported once per entry the library could not use, naming which of the two reasons it was.
+    const slug = readClassSlug(cls);
+    const named =
+      typeof slug === "string" && NAMED_CLASS_SLUG_RE.test(slug)
+        ? {
+            code: "duplicate-class-name" as const,
+            message: `More than one class is named "${describeValue(slug)}", so only the first was written.`,
+            suggestion: "Give every class a distinct name.",
+          }
+        : {
+            code: "invalid-class-name" as const,
+            message: `A named class could not be written: ${describeValue(slug)} is not a class name.`,
+            suggestion: 'Use a lowercase slug such as "card-featured".',
+          };
+    pushBoundedWarning(warningAllowance, warnings, {
+      path: pointer("/classes", describeValue(readClassId(cls))),
+      severity: "warning",
+      ...named,
+    });
+  }
+  for (const cls of usableClasses) {
     rules.push(
       ...envelopeRules(
         cls.styles,
@@ -933,7 +938,7 @@ export function compilePageCss(
         contexts,
         tokenPrefix,
         warnings,
-        budget,
+        classBudget,
         warningAllowance
       )
     );

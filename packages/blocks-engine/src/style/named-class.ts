@@ -69,8 +69,38 @@ export function isUsableNamedClass(value: unknown): value is NamedClass {
   return (
     typeof candidate.id === "string" &&
     typeof candidate.slug === "string" &&
-    NAMED_CLASS_SLUG_RE.test(candidate.slug)
+    NAMED_CLASS_SLUG_RE.test(candidate.slug) &&
+    // A class with no styles record has nothing to contribute and, read as one, indexes into
+    // `undefined` the moment anything asks it for a value.
+    candidate.styles !== null &&
+    typeof candidate.styles === "object"
   );
+}
+
+/**
+ * The classes the engine will actually use, in the order they override one another.
+ *
+ * Usability cannot be decided one class at a time, because two of them can collide: a name is
+ * only usable if no earlier class in library order already took it. Emitting both would put two
+ * different rule sets on one `.nx-c-<slug>` selector, so a block applying either would receive
+ * the other's declarations — and the later entry could override a class the block never
+ * referenced.
+ *
+ * The compiler writes exactly this list and the resolver reads exactly this list, which is what
+ * keeps a class the stylesheet dropped from being reported as the source of a value.
+ */
+export function usableNamedClasses(
+  classes: readonly NamedClass[]
+): NamedClass[] {
+  const taken = new Set<string>();
+  const usable: NamedClass[] = [];
+  for (const cls of orderedNamedClasses(classes)) {
+    if (!isUsableNamedClass(cls)) continue;
+    if (taken.has(cls.slug)) continue;
+    taken.add(cls.slug);
+    usable.push(cls);
+  }
+  return usable;
 }
 
 /** The emitted class name for a slug. */
@@ -120,6 +150,11 @@ export function resolveNodeClasses(
   ids: readonly string[],
   library: ReadonlyMap<string, NamedClass>
 ): NamedClass[] {
+  // Narrowed to what the compiler writes BEFORE anything is looked up, so a class dropped for
+  // colliding on its name cannot be reported as the source of a value it never contributed.
+  const emitted = new Map(
+    usableNamedClasses([...library.values()]).map(cls => [cls.id, cls])
+  );
   const found: NamedClass[] = [];
   const seen = new Set<string>();
   for (const id of ids) {
@@ -127,10 +162,10 @@ export function resolveNodeClasses(
     // different, since both copies carry identical values at identical specificity.
     if (seen.has(id)) continue;
     seen.add(id);
-    const cls = library.get(id);
     // Unusable is treated exactly as unknown: the compiler writes nothing for it, so reporting
     // it here would name a source the page does not have.
-    if (cls !== undefined && isUsableNamedClass(cls)) found.push(cls);
+    const cls = emitted.get(id);
+    if (cls !== undefined) found.push(cls);
   }
   return orderedNamedClasses(found);
 }

@@ -11,6 +11,7 @@ import { FIXTURE_BREAKPOINTS } from "../validation.fixtures";
 
 import { compilePageCss } from "./compile-page";
 import type { NamedClass } from "./named-class";
+import { resolveNodeClasses } from "./named-class";
 import { resolveStyle } from "./resolve-style";
 
 // The breakpoint id every fixture styles at. `base` is the widest in the shared set, which is
@@ -198,5 +199,93 @@ describe("tier order beats breakpoint order, in both halves", () => {
 
     expect(css).toContain(".nx-c-card");
     expect(warnings.map(w => w.code)).toContain("invalid-class-name");
+  });
+});
+
+describe("what an interactive state actually resolves to", () => {
+  it("lets a later tier's base value beat an earlier tier's hover value", () => {
+    // States are emitted as `:where(:hover)`, which carries NO specificity, so a base rule
+    // written later still wins. A hovered element matches both, and asking only about `hover`
+    // reports a value the browser overrides.
+    const cardHover: NamedClass = {
+      id: "c1",
+      slug: "card",
+      orderIndex: 0,
+      styles: { hover: { [BP]: { color: "blue" } } } as never,
+    };
+    const { css } = compile(
+      doc({ classes: ["c1"], styles: styles({ color: "red" }) }),
+      [cardHover]
+    );
+
+    expect(css.indexOf(":where(:hover)")).toBeLessThan(
+      css.lastIndexOf("color: red")
+    );
+
+    const resolved = resolveStyle("color", "hover", BP, {
+      classes: [cardHover],
+      node: styles({ color: "red" }),
+    });
+    expect(resolved?.value).toBe("red");
+    expect(resolved?.source).toEqual({ tier: "local" });
+  });
+
+  it("still prefers the state over the base WITHIN one tier", () => {
+    const resolved = resolveStyle("color", "hover", BP, {
+      node: {
+        base: { [BP]: { color: "red" } },
+        hover: { [BP]: { color: "blue" } },
+      } as never,
+    });
+    expect(resolved?.value).toBe("blue");
+  });
+});
+
+describe("a class library the compiler cannot use whole", () => {
+  it("does not resolve a class whose name another class already took", () => {
+    const first = card;
+    const second: NamedClass = { ...feature, slug: "card" };
+    const library = new Map([
+      [first.id, first],
+      [second.id, second],
+    ]);
+
+    // The compiler writes only the first. Resolving the second would report its value while the
+    // block actually receives the first's declarations from the shared selector.
+    const resolvedFor = resolveNodeClasses([second.id], library);
+    expect(resolvedFor).toHaveLength(0);
+  });
+
+  it("does not resolve a class with no styles record", () => {
+    const broken = { id: "c9", slug: "broken", orderIndex: 0 } as never;
+    expect(resolveNodeClasses(["c9"], new Map([["c9", broken]]))).toHaveLength(
+      0
+    );
+    // And asking it directly answers rather than throwing.
+    expect(
+      resolveStyle("color", "base", BP, { classes: [broken] })
+    ).toBeUndefined();
+  });
+
+  it("spends a bad class's diagnostics without silencing the nodes", () => {
+    // A site's class library is one document's configuration and every document's problem.
+    // Sharing the node budget let one malformed global entry strip the styling from a page that
+    // never referenced it.
+    const noisy: NamedClass = {
+      id: "noisy",
+      slug: "noisy",
+      orderIndex: 0,
+      styles: {
+        base: {
+          [BP]: Object.fromEntries(
+            Array.from({ length: 400 }, (_, i) => [`bogus${i}`, "nope"])
+          ),
+        },
+      } as never,
+    };
+
+    const { css } = compile(doc({ styles: styles({ color: "red" }) }), [noisy]);
+
+    expect(css).toContain("color: red");
   });
 });

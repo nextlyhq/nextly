@@ -51,10 +51,13 @@ export interface StyleResolutionInput {
   /** The block type's base styles. */
   blockBase?: NodeStyles;
   /**
-   * The breakpoints to fall back through, widest first.
+   * The breakpoints to fall back through, ordered OUTWARD from the one asked about: each entry
+   * wider than the one before it, ending at the base.
    *
-   * The caller passes the chain from the breakpoint asked about up to the base, because which
-   * breakpoints exist and how they nest is site configuration, not something this can assume.
+   * Resolving `mobile` in a base/tablet/mobile site passes `["tablet", "base"]`. The caller
+   * supplies it because which breakpoints exist and how they nest is site configuration, and
+   * the direction is fixed here because getting it backwards silently returns a wider value
+   * over a closer one — the browser would show the closer one.
    */
   breakpointChain?: readonly string[];
 }
@@ -93,6 +96,7 @@ function valueAt(
   breakpoint: string,
   property: string
 ): StyleValue | undefined {
+  if (styles === null || typeof styles !== "object") return undefined;
   const byBreakpoint = (styles as Record<string, unknown>)[state];
   if (byBreakpoint === null || typeof byBreakpoint !== "object")
     return undefined;
@@ -127,26 +131,36 @@ export function resolveStyle(
   input: StyleResolutionInput
 ): ResolvedStyle | undefined {
   const chain = [breakpoint, ...(input.breakpointChain ?? [])];
+  // An interactive state does not replace the unconditional rules — it joins them. `:hover` is
+  // emitted as `:where(:hover)`, which carries no specificity, so a `base` declaration written
+  // LATER still wins over a `hover` one written earlier. A hovered element therefore matches
+  // both, and asking only about `hover` reports a value the browser overrides.
+  //
+  // Within one tier the compiler writes base first and the state after, so the state wins there;
+  // across tiers the later tier wins whichever state it used.
+  const states = state === "base" ? ["base"] : ["base", state];
   let resolved: ResolvedStyle | undefined;
 
   for (const tier of tiers(input)) {
-    // Widest to narrowest, so the last value kept is the closest match this tier states.
-    for (let i = chain.length - 1; i >= 0; i--) {
-      const value = valueAt(tier.styles, state, chain[i], property);
-      if (value === undefined) continue;
-      resolved =
-        i === 0
-          ? { value, source: tier.source }
-          : {
-              value,
-              // Named so a control can say which breakpoint the value comes from, with the
-              // writer kept inside so it can also say who set it there.
-              source: {
-                tier: "inheritedBreakpoint",
-                from: chain[i],
-                source: tier.source,
-              },
-            };
+    for (const candidateState of states) {
+      // Widest to narrowest, so the last value kept is the closest match this tier states.
+      for (let i = chain.length - 1; i >= 0; i--) {
+        const value = valueAt(tier.styles, candidateState, chain[i], property);
+        if (value === undefined) continue;
+        resolved =
+          i === 0
+            ? { value, source: tier.source }
+            : {
+                value,
+                // Named so a control can say which breakpoint the value comes from, with the
+                // writer kept inside so it can also say who set it there.
+                source: {
+                  tier: "inheritedBreakpoint",
+                  from: chain[i],
+                  source: tier.source,
+                },
+              };
+      }
     }
   }
 
