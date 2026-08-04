@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import type { AddColumnOp, DropColumnOp, Operation } from "../diff/types";
+import type {
+  AddColumnOp,
+  DropColumnOp,
+  NextlySchemaSnapshot,
+  Operation,
+} from "../diff/types";
+import { buildDesiredTableFromFields } from "../diff/build-from-fields";
+import { diffSnapshots } from "../diff/diff";
 import { RegexRenameDetector } from "../rename-detector";
 
 const detector = new RegexRenameDetector();
@@ -221,16 +228,20 @@ describe("RegexRenameDetector - plan-v3 Appendix D worked example (10-field rena
   });
 });
 
-describe("RegexRenameDetector - the pre-#507 leading-underscore column", () => {
-  // Before #507 the Schema Builder's DDL generator named user columns with a copy of the
-  // field-name conversion that had lost its final step, so a field named `PublishedAt` was created
-  // as `_published_at` while the runtime schema and the diff both address `published_at`. Such a
-  // table was never readable, and #507 corrects only newly created ones.
+describe("RegexRenameDetector - a column left under a legacy spelling", () => {
+  // An earlier field-name conversion emitted a leading underscore for any name beginning with a
+  // capital, so a field named `PublishedAt` reached the database as `_published_at` while the
+  // runtime schema and the diff address `published_at`. Tables created under that conversion still
+  // carry the underscored column; the current conversion produces the canonical name.
   //
-  // Repairing the existing ones needs no new machinery: the drop/add pair this produces is already
-  // a rename candidate, and the suggestion is `rename`, which moves the data rather than discarding
-  // it. This test exists so that stays true — narrowing the detector would silently remove the only
-  // path by which an affected table can be recovered with its contents.
+  // Recovering such a table needs no dedicated migration. The live column is absent from the
+  // desired state and the desired column is absent from the table, which is a drop/add pair on one
+  // table — already a rename candidate, suggested as `rename`, the resolution that moves the data
+  // rather than dropping the column and recreating it empty.
+  //
+  // These cases exist so that stays true. The detector pairs any drop with any add on a table, so
+  // it covers this shape without having been written for it, and narrowing it would remove the only
+  // path by which such a table is recovered with its contents.
   it("offers to rename the legacy column onto its canonical name", () => {
     const candidates = detector.detect(
       [
@@ -282,5 +293,100 @@ describe("RegexRenameDetector - the pre-#507 leading-underscore column", () => {
         [canonical]: [[legacy(canonical), canonical, "rename"]],
       });
     }
+  });
+});
+
+describe("RegexRenameDetector - the legacy column reached through the diff", () => {
+  // The cases above hand-build the drop/add pair, which pins the detector and nothing before it.
+  // The recovery actually depends on the desired state and the diff producing that pair in the
+  // first place, so this drives both with the real implementations: only the live snapshot is
+  // written by hand, because that is what introspection returns for a table already in the
+  // database.
+  //
+  // What remains uncovered is the apply step — turning the chosen resolution into DDL — which
+  // needs a live database and is exercised by the pipeline integration suites.
+  const LEGACY_COLUMN = "_published_at";
+  const CANONICAL_COLUMN = "published_at";
+
+  function liveSnapshotWithLegacyColumn(
+    desired: NextlySchemaSnapshot
+  ): NextlySchemaSnapshot {
+    // The table as an older release created it: identical in every respect except that the one
+    // field's column carries the leading underscore the previous conversion produced.
+    return {
+      tables: desired.tables.map(table => ({
+        ...table,
+        columns: table.columns.map(column =>
+          column.name === CANONICAL_COLUMN
+            ? { ...column, name: LEGACY_COLUMN }
+            : column
+        ),
+      })),
+    };
+  }
+
+  it("produces a rename candidate from the real desired state and diff", () => {
+    const desired: NextlySchemaSnapshot = {
+      tables: [
+        buildDesiredTableFromFields(
+          "dc_posts",
+          [{ name: "PublishedAt", type: "date" }] as Parameters<
+            typeof buildDesiredTableFromFields
+          >[1],
+          "postgresql",
+          { hasStatus: false }
+        ),
+      ],
+    };
+
+    // The desired state has to carry the canonical column, or the rest of this proves nothing.
+    expect(desired.tables[0].columns.map(c => c.name)).toContain(
+      CANONICAL_COLUMN
+    );
+
+    const operations = diffSnapshots(
+      liveSnapshotWithLegacyColumn(desired),
+      desired
+    );
+    const candidates = new RegexRenameDetector().detect(
+      operations,
+      "postgresql"
+    );
+
+    expect(
+      candidates.map(c => [c.fromColumn, c.toColumn, c.defaultSuggestion])
+    ).toEqual([[LEGACY_COLUMN, CANONICAL_COLUMN, "rename"]]);
+  });
+
+  it("proposes exactly one drop and one add, so the pair is unambiguous", () => {
+    // A rename is only suggested when the pair is the sole drop/add on the table. If the diff ever
+    // emitted extra column operations for this shape, the detector would face a Cartesian product
+    // and the suggestion could land on the wrong column.
+    const desired: NextlySchemaSnapshot = {
+      tables: [
+        buildDesiredTableFromFields(
+          "dc_posts",
+          [
+            { name: "PublishedAt", type: "date" },
+            { name: "headline", type: "text" },
+          ] as Parameters<typeof buildDesiredTableFromFields>[1],
+          "postgresql",
+          { hasStatus: false }
+        ),
+      ],
+    };
+
+    const operations = diffSnapshots(
+      liveSnapshotWithLegacyColumn(desired),
+      desired
+    );
+
+    expect({
+      drops: operations.filter(op => op.type === "drop_column").length,
+      adds: operations.filter(op => op.type === "add_column").length,
+      others: operations.filter(
+        op => op.type !== "drop_column" && op.type !== "add_column"
+      ).length,
+    }).toEqual({ drops: 1, adds: 1, others: 0 });
   });
 });
