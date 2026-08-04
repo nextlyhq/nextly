@@ -77,8 +77,11 @@ export class UsersService extends BaseService {
     // drain; optional, so a bare facade still records and relies on the
     // scheduled drain.
     fastDrainScheduler?: WebhookFastDrainScheduler,
-    // Forwarded alongside the drain so user events also offer a bounded outbox
-    // prune; optional, absent when webhook retention is not configured.
+    // Forwarded alongside the drain so user writes offer a bounded retention
+    // pass. The shared runner carries both — the webhook outbox and the audit
+    // trails — each on its own window and gate. Absent only when NEITHER has
+    // anything to prune, so an install with webhook retention off and audit
+    // retention on still gets one.
     retentionRunner?: RetentionRunner
   ) {
     super(adapter, logger);

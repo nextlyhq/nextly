@@ -86,7 +86,12 @@ export class MediaService extends BaseService {
      * exactly once per write.
      */
     private readonly fastDrainScheduler?: WebhookFastDrainScheduler,
-    /** Prunes the outbox after a write, paired with the drain fast path. */
+    /**
+     * Prunes after a write, paired with the drain fast path. The shared runner
+     * carries both passes — the webhook outbox and the audit trails — each on
+     * its own window and gate, and is absent only when neither has anything to
+     * prune.
+     */
     private readonly retentionRunner?: RetentionRunner
   ) {
     super(adapter, logger);

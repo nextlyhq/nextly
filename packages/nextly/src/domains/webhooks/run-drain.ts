@@ -141,15 +141,18 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
   // because housekeeping could not run.
   const retention = deps.retention;
   if (retention) {
-    // Whether the wall-clock allowance is already gone. Claiming a gate with
+    // Read fresh at each claim rather than once for both. Claiming a gate with
     // nothing left to spend takes the turn and does no work, and the marker
     // then holds the next attempt off for a full interval — so a drain that
-    // repeatedly spends its budget on deliveries would consume every retention
-    // turn and prune nothing. Both passes check it before claiming.
-    const deadlineSpent = deadline !== undefined && now() >= deadline;
+    // repeatedly spends its budget would consume every retention turn and
+    // prune nothing. A single reading taken before the first pass is stale by
+    // the second, which is precisely the case worth catching: the first pass
+    // is what spends the remaining time.
+    const deadlineSpent = (): boolean =>
+      deadline !== undefined && now() >= deadline;
 
     const webhookPolicy = retention.policy;
-    if (webhookPolicy && !deadlineSpent) {
+    if (webhookPolicy && !deadlineSpent()) {
       const due = await claimRetentionPass(
         retention.gate,
         WEBHOOK_RETENTION_GATE_KEY,
@@ -183,7 +186,7 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
     // platform's limit and have it killed, losing the drain's own work with it.
     // The gate is not claimed in that case either, so the pass is deferred to
     // the next invocation rather than consumed by one that could not run it.
-    if (auditPolicy && !deadlineSpent) {
+    if (auditPolicy && !deadlineSpent()) {
       const auditDue = await claimRetentionPass(
         retention.gate,
         AUDIT_RETENTION_DRAIN_GATE_KEY,
