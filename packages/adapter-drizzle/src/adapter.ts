@@ -1491,14 +1491,20 @@ export abstract class DrizzleAdapter {
           sql = `
             SELECT EXISTS (
               SELECT FROM information_schema.tables
-              WHERE table_schema = COALESCE($1, current_schema())
+              WHERE table_schema = COALESCE($1, (
+                SELECT n.nspname FROM pg_class c
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE c.oid = to_regclass($2)
+              ))
               AND table_name = $2
             ) as exists
           `;
-          // Unqualified DDL and DML land in the first schema on the search path, which is not
-          // always `public`. Defaulting the catalog lookup to `public` reported a populated
-          // table as absent whenever a deployment used a schema of its own, and a caller that
-          // reads "absent" to mean "nothing to conflict with" then acts on the wrong table.
+          // Unqualified DDL and DML resolve across the whole search path, not against one
+          // schema. Naming `public` reported a populated table as absent whenever a deployment
+          // used a schema of its own, and naming only the FIRST entry misses a table that lives
+          // further along it. `to_regclass` resolves exactly as the statements do, so the
+          // lookup and the ALTER cannot disagree about which table is meant. A caller that
+          // reads "absent" as "nothing to conflict with" would otherwise act on the wrong one.
           params.push(schema ?? null, tableName);
           break;
 

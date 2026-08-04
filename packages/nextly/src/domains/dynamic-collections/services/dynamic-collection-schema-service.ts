@@ -151,6 +151,29 @@ export class DynamicCollectionSchemaService {
   }
 
   /**
+   * The index name for one column, short enough for every dialect to accept.
+   *
+   * MySQL refuses an identifier over 64 characters, and a collection and a field may each be up
+   * to 50, so the obvious `idx_<table>_<column>` can be half as long again as the limit. Names
+   * over the bound keep a readable prefix and end in a hash of the full name, so two long names
+   * sharing a prefix still differ and the same input always produces the same identifier —
+   * which matters because the name is built again, separately, to drop the index later.
+   */
+  private indexName(tableName: string, column: string): string {
+    const full = `idx_${tableName}_${column}`;
+    if (full.length <= 64) return full;
+    // FNV-1a over the full name. Not for secrecy — only to tell apart two names that a plain
+    // truncation would make identical.
+    let hash = 0x811c9dc5;
+    for (let i = 0; i < full.length; i++) {
+      hash ^= full.charCodeAt(i);
+      hash = Math.imul(hash, 0x01000193) >>> 0;
+    }
+    const suffix = hash.toString(36).padStart(7, "0");
+    return `${full.slice(0, 64 - suffix.length - 1)}_${suffix}`;
+  }
+
+  /**
    * `CREATE INDEX` for one column, in the spelling the dialect accepts.
    *
    * MySQL cannot index a `BLOB`/`TEXT` column without a key length and rejects the statement
@@ -163,7 +186,7 @@ export class DynamicCollectionSchemaService {
     column: string,
     columnType: string
   ): string | null {
-    const name = this.quoteIdentifier(`idx_${tableName}_${column}`);
+    const name = this.quoteIdentifier(this.indexName(tableName, column));
     const table = this.quoteIdentifier(tableName);
     const quoted = this.quoteIdentifier(column);
     if (this.dialect === "mysql") {
@@ -188,7 +211,7 @@ export class DynamicCollectionSchemaService {
    * removal it refused.
    */
   private dropIndexSql(tableName: string, column: string): string {
-    const name = this.quoteIdentifier(`idx_${tableName}_${column}`);
+    const name = this.quoteIdentifier(this.indexName(tableName, column));
     if (this.dialect === "mysql") {
       return `DROP INDEX ${name} ON ${this.quoteIdentifier(tableName)};`;
     }
@@ -473,11 +496,11 @@ ${allColumnDefs.join(",\n")}
     // Note: MySQL 5.7 doesn't support IF NOT EXISTS for CREATE INDEX
     let createdAtIndex = "";
     if (this.dialect === "sqlite") {
-      createdAtIndex = `CREATE INDEX IF NOT EXISTS ${this.quoteIdentifier(`idx_${tableName}_created_at`)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier("created_at")});`;
+      createdAtIndex = `CREATE INDEX IF NOT EXISTS ${this.quoteIdentifier(this.indexName(tableName, "created_at"))} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier("created_at")});`;
     } else if (this.dialect === "mysql") {
-      createdAtIndex = `CREATE INDEX ${this.quoteIdentifier(`idx_${tableName}_created_at`)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier("created_at")} DESC);`;
+      createdAtIndex = `CREATE INDEX ${this.quoteIdentifier(this.indexName(tableName, "created_at"))} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier("created_at")} DESC);`;
     } else {
-      createdAtIndex = `CREATE INDEX IF NOT EXISTS ${this.quoteIdentifier(`idx_${tableName}_created_at`)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier("created_at")} DESC);`;
+      createdAtIndex = `CREATE INDEX IF NOT EXISTS ${this.quoteIdentifier(this.indexName(tableName, "created_at"))} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier("created_at")} DESC);`;
     }
     indexStatements.push(createdAtIndex);
 
@@ -488,7 +511,7 @@ ${allColumnDefs.join(",\n")}
     // mirroring the column gate above. Plain (non-unique) index; users cannot
     // request one on this reserved field, so it is injected here.
     if (!isSingleTable) {
-      const ownerIndexName = `idx_${tableName}_created_by`;
+      const ownerIndexName = this.indexName(tableName, "created_by");
       const ownerIndex =
         this.dialect === "mysql"
           ? `CREATE INDEX ${this.quoteIdentifier(ownerIndexName)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier("created_by")});`
@@ -499,11 +522,11 @@ ${allColumnDefs.join(",\n")}
     // Add unique index for slug column (automatically available for all collections and singles)
     let slugIndex = "";
     if (this.dialect === "sqlite") {
-      slugIndex = `CREATE UNIQUE INDEX IF NOT EXISTS ${this.quoteIdentifier(`idx_${tableName}_slug`)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier("slug")});`;
+      slugIndex = `CREATE UNIQUE INDEX IF NOT EXISTS ${this.quoteIdentifier(this.indexName(tableName, "slug"))} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier("slug")});`;
     } else if (this.dialect === "mysql") {
-      slugIndex = `CREATE UNIQUE INDEX ${this.quoteIdentifier(`idx_${tableName}_slug`)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier("slug")});`;
+      slugIndex = `CREATE UNIQUE INDEX ${this.quoteIdentifier(this.indexName(tableName, "slug"))} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier("slug")});`;
     } else {
-      slugIndex = `CREATE UNIQUE INDEX IF NOT EXISTS ${this.quoteIdentifier(`idx_${tableName}_slug`)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier("slug")});`;
+      slugIndex = `CREATE UNIQUE INDEX IF NOT EXISTS ${this.quoteIdentifier(this.indexName(tableName, "slug"))} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier("slug")});`;
     }
     indexStatements.push(slugIndex);
 
@@ -798,7 +821,8 @@ ${allColumnDefs.join(",\n")}
           // aborts on MySQL, which cannot express `DROP INDEX IF EXISTS`.
           const known = options?.indexNames !== undefined;
           const exists =
-            options?.indexNames?.has(`idx_${tableName}_${idxCol}`) === true;
+            options?.indexNames?.has(this.indexName(tableName, idxCol)) ===
+            true;
           if (known ? exists : this.dialect !== "mysql") {
             statements.push(this.dropIndexSql(tableName, idxCol));
           }
@@ -865,7 +889,7 @@ ${allColumnDefs.join(",\n")}
         // Asked of the live table, not of the field: an index is created by whichever path
         // added the column, so a field that looks indexed may have none. MySQL cannot guard the
         // drop itself, so without the answer it is not attempted there.
-        const indexName = `idx_${tableName}_${dropCol}`;
+        const indexName = this.indexName(tableName, dropCol);
         const indexIsKnown = options?.indexNames !== undefined;
         const indexExists = options?.indexNames?.has(indexName) === true;
         if (indexIsKnown ? indexExists : this.dialect !== "mysql") {
@@ -1070,7 +1094,7 @@ ${allColumnDefs.join(",\n")}
     // The system indexes every generated table carries, named as `generateMigrationSQL` names
     // them, so a system column removed by an edit is not treated as unindexed.
     for (const column of ["slug", "created_at", "created_by"]) {
-      indexNames.add(`idx_${tableName}_${column}`);
+      indexNames.add(this.indexName(tableName, column));
     }
     for (const field of fields) {
       if (!fieldProducesColumn(field)) continue;
@@ -1092,7 +1116,7 @@ ${allColumnDefs.join(",\n")}
           )
         ) !== null
       ) {
-        indexNames.add(`idx_${tableName}_${column}`);
+        indexNames.add(this.indexName(tableName, column));
       }
       if (field.type === "relationship" && field.options?.target) {
         foreignKeysByColumn.set(column, [`fk_${tableName}_${column}`]);

@@ -507,6 +507,73 @@ describe("an index the dialect can actually accept", () => {
   });
 });
 
+describe("an index name every dialect accepts", () => {
+  // Collection and field names may each be 50 characters, so the obvious composition can be
+  // half as long again as MySQL's 64-character identifier limit, and the CREATE INDEX is then
+  // rejected after the ADD COLUMN before it may already have committed.
+  const longTable = `dc_${"a".repeat(50)}`;
+  const longColumn = "b".repeat(50);
+
+  it.each(DIALECTS)("stays within 64 characters (%s)", dialect => {
+    const sql = unquote(
+      service(dialect).generateAlterTableMigration(
+        TABLE,
+        [],
+        [field({ name: longColumn, type: "number", index: true })],
+        { tableHasRows: false }
+      )
+    );
+    const name = sql.match(/CREATE INDEX (?:IF NOT EXISTS )?(\S+) ON/)?.[1];
+    expect(name).toBeDefined();
+    expect(name!.length).toBeLessThanOrEqual(64);
+  });
+
+  it("keeps two long names apart rather than truncating them together", () => {
+    const svc = service("mysql");
+    const planned = (column: string) => [
+      ...svc.plannedAttachments(longTable, [
+        field({ name: column, type: "number", index: true }),
+      ]).indexNames,
+    ];
+    // A plain truncation would make these identical, and the second index would then silently
+    // fail to create or drop the first.
+    const first = planned(`${longColumn}_one`);
+    const second = planned(`${longColumn}_two`);
+    expect(first).not.toEqual(second);
+  });
+
+  it("names the same index the same way when creating and when dropping", () => {
+    const svc = service("mysql");
+    const indexed = field({ name: longColumn, type: "number", index: true });
+    const created = unquote(
+      svc.generateAlterTableMigration(longTable, [], [indexed], {
+        tableHasRows: false,
+      })
+    ).match(/CREATE INDEX (\S+) ON/)?.[1];
+    const known = [...svc.plannedAttachments(longTable, [indexed]).indexNames];
+    // The drop builds the name again, separately; if the two ever disagreed the drop would
+    // name an index that does not exist and abort the migration on MySQL.
+    expect(known).toContain(created);
+  });
+
+  it("bounds the system indexes too, which carry the same table name", () => {
+    const planned = service("mysql").plannedAttachments(longTable, []);
+    for (const name of planned.indexNames) {
+      expect(name.length).toBeLessThanOrEqual(64);
+    }
+  });
+
+  it("leaves a short name readable and unhashed", () => {
+    expect(
+      service("mysql")
+        .plannedAttachments(TABLE, [
+          field({ name: "rank", type: "number", index: true }),
+        ])
+        .indexNames.has(`idx_${TABLE}_rank`)
+    ).toBe(true);
+  });
+});
+
 describe("a required column that no value can backfill", () => {
   const requiredRelationship = field({
     name: "author",

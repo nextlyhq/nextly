@@ -104,9 +104,16 @@ export async function readIndexNames(
   const names = new Set<string>();
 
   if (dialect === "postgresql") {
+    // Resolved through the relation itself rather than by schema name. An unqualified statement
+    // resolves across the WHOLE search path, so a table in `public` reached from a search path of
+    // `tenant, public` is found by the ALTER and missed by any predicate naming one schema —
+    // including `current_schema()`, which is only the first entry. `to_regclass` answers the
+    // question the statements actually ask.
     const result = (await (db as PgMysqlExecute).execute(
-      sql`SELECT indexname FROM pg_indexes
-          WHERE schemaname = current_schema() AND tablename = ${tableName}`
+      sql`SELECT c.relname AS indexname
+          FROM pg_index i
+          JOIN pg_class c ON c.oid = i.indexrelid
+          WHERE i.indrelid = to_regclass(${tableName})`
     )) as { rows: { indexname: string }[] };
     for (const row of result.rows) names.add(row.indexname);
     return names;
@@ -151,15 +158,14 @@ export async function readForeignKeyColumns(
   };
 
   if (dialect === "postgresql") {
+    // Against the relation, for the same reason as `readIndexNames`: the schema a name resolves
+    // to is whatever the search path finds first, not whichever one is listed first.
     const result = (await (db as PgMysqlExecute).execute(
-      sql`SELECT kcu.column_name, tc.constraint_name
-          FROM information_schema.table_constraints tc
-          JOIN information_schema.key_column_usage kcu
-            ON tc.constraint_name = kcu.constraint_name
-           AND tc.constraint_schema = kcu.constraint_schema
-          WHERE tc.constraint_type = 'FOREIGN KEY'
-            AND tc.table_schema = current_schema()
-            AND tc.table_name = ${tableName}`
+      sql`SELECT a.attname AS column_name, c.conname AS constraint_name
+          FROM pg_constraint c
+          JOIN unnest(c.conkey) AS k(attnum) ON true
+          JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum
+          WHERE c.contype = 'f' AND c.conrelid = to_regclass(${tableName})`
     )) as { rows: PgForeignKeyRow[] };
     for (const row of result.rows) record(row.column_name, row.constraint_name);
     return out;
