@@ -12,6 +12,27 @@ function generateNextlySecret(): string {
   return crypto.randomBytes(32).toString("base64");
 }
 
+/** The variable name, so presence is tested against one spelling. */
+const DIAGNOSTICS_KEY = "NEXTLY_DEV_DIAGNOSTICS";
+
+/**
+ * The diagnostics note, shared by the full template and the append-only path.
+ *
+ * One definition because the two paths write it in different situations and a
+ * second copy would let them describe the same setting differently.
+ */
+const DIAGNOSTICS_BLOCK = `# Development diagnostics (opt-in)
+# Uncomment to add a _devDiagnostics field to error responses, carrying the
+# log context of an error and the underlying cause, so a failure names itself
+# while you build instead of only in the server log.
+#
+# Left commented on purpose. It is the SECOND of two independent signals — the
+# first is NODE_ENV — and the second exists precisely because NODE_ENV is a
+# runtime value a deployment can carry by mistake. A default that ships in this
+# file would be true in exactly that case, which is the one it guards against.
+# NEXTLY_DEV_DIAGNOSTICS=1
+`;
+
 /**
  * Generate the environment file template.
  */
@@ -29,17 +50,7 @@ NEXTLY_SECRET=${generateNextlySecret()}
 # Application URL
 NEXT_PUBLIC_APP_URL=http://localhost:3000
 
-# Development diagnostics (development only)
-# Adds a _devDiagnostics field to error responses carrying the error's log
-# context and the underlying cause, so a failure names itself while you build
-# instead of only in the server log.
-#
-# Ignored unless NODE_ENV is development. Two signals are required because
-# nextly ships pre-built and stays external to your build, so NODE_ENV is a
-# runtime value a production deployment can carry by mistake — this flag alone
-# can never turn the detail on there. Safe to leave set.
-NEXTLY_DEV_DIAGNOSTICS=1
-`;
+${DIAGNOSTICS_BLOCK}`;
 }
 
 /**
@@ -66,6 +77,15 @@ export async function generateEnv(
     const existingEnv = await fs.readFile(envPath, "utf-8");
     if (!existingEnv.includes("DATABASE_URL")) {
       await fs.appendFile(envPath, "\n" + envContent, "utf-8");
+      return { created: false, updated: true };
+    }
+    // An install into a project that already has a configured .env still gets
+    // the diagnostics note, keyed on its own absence rather than on
+    // DATABASE_URL. Sharing that condition meant the setting only ever reached
+    // brand-new apps, so the file the developer actually runs never mentioned
+    // it while .env.example did.
+    if (!existingEnv.includes(DIAGNOSTICS_KEY)) {
+      await fs.appendFile(envPath, "\n" + DIAGNOSTICS_BLOCK, "utf-8");
       return { created: false, updated: true };
     }
     return { created: false, updated: false };

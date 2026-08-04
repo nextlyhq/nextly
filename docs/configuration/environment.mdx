@@ -30,8 +30,8 @@ NEXTLY_SECRET=change-me-generate-a-secure-secret
 # Application URL
 NEXT_PUBLIC_APP_URL=http://localhost:3000
 
-# Development diagnostics (development only)
-NEXTLY_DEV_DIAGNOSTICS=1
+# Development diagnostics (opt-in — see below)
+# NEXTLY_DEV_DIAGNOSTICS=1
 
 # Storage (per-adapter — see "Storage" section below)
 ```
@@ -118,11 +118,20 @@ With this set, an error in development also carries:
 what makes an unexpected failure name itself instead of looking like every
 other one.
 
-**It cannot expose anything in production.** The gate requires two independent
-signals: `NODE_ENV` must be `development` **and** this flag must be `1`. One is
-not enough, because `nextly` ships pre-built and stays external to your build,
-so `NODE_ENV` is a runtime value a production deployment can carry by mistake.
-`create-nextly-app` sets the flag for you, and it is safe to leave set.
+**Why it is opt-in rather than on by default.** The gate requires two
+independent signals: `NODE_ENV` must be `development` **and** this flag must be
+`1`. The second exists precisely because the first can be wrong — `nextly` ships
+pre-built and stays external to your build, so `NODE_ENV` is a runtime value a
+deployment can carry by mistake.
+
+A default that shipped in `.env` would be true in exactly that case, which is
+the one the second signal guards against, collapsing two independent signals
+back into one. So `create-nextly-app` writes the setting **commented out** with
+this explanation: discoverable, and never enabled by a file that travels with
+your app.
+
+Uncomment it in your local `.env` — not in a file you deploy — and keep it out
+of any environment where `NODE_ENV` might not be what you expect.
 
 ---
 
