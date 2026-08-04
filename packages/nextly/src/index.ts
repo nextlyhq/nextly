@@ -135,6 +135,9 @@ export type {
   FieldGroupSlug,
   DataFromCollectionSlug,
   DataFromSingleSlug,
+  InProcessRow,
+  RowFromCollectionSlug,
+  RowFromSingleSlug,
   DataFromFieldGroupSlug,
 } from "./direct-api/types";
 

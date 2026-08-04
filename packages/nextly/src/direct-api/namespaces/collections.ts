@@ -19,7 +19,7 @@ import type {
   CountArgs,
   CountResult,
   CreateArgs,
-  DataFromCollectionSlug,
+  RowFromCollectionSlug,
   DeleteArgs,
   DeleteResult,
   DuplicateArgs,
@@ -52,7 +52,7 @@ import {
 export async function find<TSlug extends CollectionSlug>(
   ctx: NextlyContext,
   args: FindArgs<TSlug>
-): Promise<ListResult<DataFromCollectionSlug<TSlug>>> {
+): Promise<ListResult<RowFromCollectionSlug<TSlug>>> {
   const config = mergeConfig(ctx.defaultConfig, args);
 
   const result = await ctx.collectionsHandler.listEntries({
@@ -82,9 +82,7 @@ export async function find<TSlug extends CollectionSlug>(
   // the canonical ListResult envelope (`{ items, meta }`). Default missing
   // pagination fields so this still produces a valid meta block when the
   // service returns a slim payload (some test fixtures omit them).
-  const legacy = result.data as PaginatedResponse<
-    DataFromCollectionSlug<TSlug>
-  >;
+  const legacy = result.data as PaginatedResponse<RowFromCollectionSlug<TSlug>>;
   const total = legacy.totalDocs ?? legacy.docs.length;
   const limit = legacy.limit ?? args.limit ?? legacy.docs.length;
   const page = legacy.page ?? args.page ?? 1;
@@ -110,7 +108,7 @@ export async function find<TSlug extends CollectionSlug>(
 export async function findByID<TSlug extends CollectionSlug>(
   ctx: NextlyContext,
   args: FindByIDArgs<TSlug>
-): Promise<DataFromCollectionSlug<TSlug> | null> {
+): Promise<RowFromCollectionSlug<TSlug> | null> {
   const config = mergeConfig(ctx.defaultConfig, args);
 
   try {
@@ -138,7 +136,7 @@ export async function findByID<TSlug extends CollectionSlug>(
       throw createErrorFromResult(result);
     }
 
-    return result.data as DataFromCollectionSlug<TSlug>;
+    return result.data as RowFromCollectionSlug<TSlug>;
   } catch (error) {
     if (config.disableErrors && isNotFoundError(error)) {
       return null;
@@ -158,7 +156,7 @@ export async function findByID<TSlug extends CollectionSlug>(
 export async function create<TSlug extends CollectionSlug>(
   ctx: NextlyContext,
   args: CreateArgs<TSlug>
-): Promise<MutationResult<DataFromCollectionSlug<TSlug>>> {
+): Promise<MutationResult<RowFromCollectionSlug<TSlug>>> {
   const config = mergeConfig(ctx.defaultConfig, args);
 
   const { result, warnings } = await collectingWarnings(() =>
@@ -183,7 +181,7 @@ export async function create<TSlug extends CollectionSlug>(
 
   return {
     message: buildMutationMessage(args.collection, "created"),
-    item: result.data as DataFromCollectionSlug<TSlug>,
+    item: result.data as RowFromCollectionSlug<TSlug>,
     ...(warnings ? { warnings } : {}),
   };
 }
@@ -197,7 +195,7 @@ export async function create<TSlug extends CollectionSlug>(
 export async function update<TSlug extends CollectionSlug>(
   ctx: NextlyContext,
   args: UpdateArgs<TSlug>
-): Promise<MutationResult<DataFromCollectionSlug<TSlug>>> {
+): Promise<MutationResult<RowFromCollectionSlug<TSlug>>> {
   const config = mergeConfig(ctx.defaultConfig, args);
 
   if (!args.id && !args.where) {
@@ -235,7 +233,7 @@ export async function update<TSlug extends CollectionSlug>(
 
     return {
       message: buildMutationMessage(args.collection, "updated"),
-      item: result.data as DataFromCollectionSlug<TSlug>,
+      item: result.data as RowFromCollectionSlug<TSlug>,
       ...(warnings ? { warnings } : {}),
     };
   }
@@ -462,7 +460,7 @@ export async function bulkDelete(
 export async function duplicate<TSlug extends CollectionSlug>(
   ctx: NextlyContext,
   args: DuplicateArgs<TSlug>
-): Promise<MutationResult<DataFromCollectionSlug<TSlug>>> {
+): Promise<MutationResult<RowFromCollectionSlug<TSlug>>> {
   const config = mergeConfig(ctx.defaultConfig, args);
 
   const { result, warnings } = await collectingWarnings(() =>
@@ -483,7 +481,7 @@ export async function duplicate<TSlug extends CollectionSlug>(
 
   return {
     message: buildMutationMessage(args.collection, "duplicated"),
-    item: result.data as DataFromCollectionSlug<TSlug>,
+    item: result.data as RowFromCollectionSlug<TSlug>,
     ...(warnings ? { warnings } : {}),
   };
 }

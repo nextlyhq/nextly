@@ -2211,7 +2211,7 @@ describe("reloadNextlyConfig", () => {
     it("has exactly the landing points its paths need", () => {
       // A count rather than a proof. The scan this replaces looked for a
       // resolution in the lines before each early return, and passed while the
-      // no-DDL landing had none -- it was reading an `abandonReload()` that
+      // no-DDL landing had none -- it was reading an `undoOptimisticReloadWork()` that
       // belonged to the sibling branch. Line proximity cannot tell those apart,
       // so the paths are covered by the behaviour tests above instead and this
       // only stops a fourth landing appearing unnoticed.

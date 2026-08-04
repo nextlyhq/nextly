@@ -866,7 +866,10 @@ export class MySqlAdapter extends DrizzleAdapter {
             `SELECT ${selectList} FROM ${this.escapeIdentifier(table)} WHERE id = ?`,
             [idValue]
           );
-          return this.mapRowKeysToJs(this.getTableObject(table), rows[0] as T);
+          return this.mapRowFromRawSql(
+            this.getTableObject(table),
+            rows[0] as T
+          );
         }
 
         const whereClauses = columns.map(
@@ -876,7 +879,7 @@ export class MySqlAdapter extends DrizzleAdapter {
           `SELECT ${selectList} FROM ${this.escapeIdentifier(table)} WHERE ${whereClauses.join(" AND ")} LIMIT 1`,
           values
         );
-        return this.mapRowKeysToJs(this.getTableObject(table), rows[0] as T);
+        return this.mapRowFromRawSql(this.getTableObject(table), rows[0] as T);
       },
 
       insertMany: async <T = unknown>(
@@ -924,7 +927,7 @@ export class MySqlAdapter extends DrizzleAdapter {
             `SELECT * FROM ${this.escapeIdentifier(table)} WHERE id IN (${placeholders})`,
             ids
           );
-          return (rows as T[]).map(r => this.mapRowKeysToJs(tableObj, r));
+          return (rows as T[]).map(r => this.mapRowFromRawSql(tableObj, r));
         }
 
         // Fallback: return empty if we can't determine inserted rows
