@@ -8,6 +8,7 @@ import type {
 import type { ApiKeyService } from "@nextly/domains/auth/services/api-key-service";
 import type { RBACAccessControlService } from "@nextly/domains/auth/services/rbac-access-control-service";
 import { env } from "@nextly/lib/env";
+import { permissionSlug } from "@nextly/schemas/_zod/rbac";
 import {
   hasPermission,
   hasAnyPermission,
@@ -411,7 +412,7 @@ export async function requirePermission(
   // The permissions were already resolved by resolveApiKeyPermissions()
   // based on the key's token type (read-only → only read-* slugs, etc.).
   if (authResult.authMethod === "api-key") {
-    const slug = `${action}-${resource}`;
+    const slug = permissionSlug(action, resource);
     if (!authResult.permissions.includes(slug)) {
       return createErrorResponse(
         403,
@@ -460,7 +461,7 @@ export async function requireAnyPermission(
   // API key auth: check against pre-resolved permissions
   if (authResult.authMethod === "api-key") {
     const hasAny = permissions.some(({ action, resource }) =>
-      authResult.permissions.includes(`${action}-${resource}`)
+      authResult.permissions.includes(permissionSlug(action, resource))
     );
     if (!hasAny) {
       return createErrorResponse(
@@ -509,7 +510,7 @@ export async function requireCollectionAccess(
 
   // API key auth: use pre-resolved permissions, then evaluate code-defined access
   if (authResult.authMethod === "api-key") {
-    const slug = `${action}-${collectionSlug}`;
+    const slug = permissionSlug(action, collectionSlug);
     if (!authResult.permissions.includes(slug)) {
       return createErrorResponse(
         403,

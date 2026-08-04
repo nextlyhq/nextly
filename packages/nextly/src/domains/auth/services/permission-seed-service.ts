@@ -4,7 +4,7 @@ import { sql, eq } from "drizzle-orm";
 import type { RBACDatabaseInstance } from "@nextly/types/rbac-operations";
 
 import type { CollectedPermission } from "../../../plugins/permissions/collect-permissions";
-import { SYSTEM_RESOURCES } from "../../../schemas/_zod/rbac";
+import { SYSTEM_RESOURCES, permissionSlug } from "../../../schemas/_zod/rbac";
 import { BaseService } from "../../../services/base-service";
 import type { Logger } from "../../../services/shared";
 import { resolveRegistryTableName } from "../../field-groups/storage/resolve-storage-names";
@@ -374,7 +374,7 @@ export class PermissionSeedService extends BaseService {
     for (const action of actions) {
       const actionLabel = action.charAt(0).toUpperCase() + action.slice(1);
       const name = `${actionLabel} ${label}`;
-      const slug = `${action}-${collectionSlug}`;
+      const slug = permissionSlug(action, collectionSlug);
       const description = `Permission to ${action} ${label.toLowerCase()}`;
 
       result.total++;
@@ -419,7 +419,7 @@ export class PermissionSeedService extends BaseService {
     for (const action of actions) {
       const actionLabel = action.charAt(0).toUpperCase() + action.slice(1);
       const name = `${actionLabel} ${label}`;
-      const slug = `${action}-${singleSlug}`;
+      const slug = permissionSlug(action, singleSlug);
       const description = `Permission to ${action} ${label.toLowerCase()}`;
 
       result.total++;

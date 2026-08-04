@@ -8,9 +8,28 @@ import type {
   RolePermissionInsertData,
 } from "@nextly/types/rbac-operations";
 
+import { permissionName, permissionSlug } from "../../../schemas/_zod/rbac";
 import { BaseService } from "../../../services/base-service";
 import { invalidatePermissionCache } from "../../../services/lib/permissions";
 import type { Logger } from "../../../services/shared";
+
+/**
+ * The transaction methods this service calls.
+ *
+ * `withTransaction` hands back a dialect-specific instance typed `unknown`,
+ * because naming all three would bind this file to all three driver packages.
+ * Narrowing to what is actually used keeps the body typed without an `any`.
+ *
+ * `onConflictDoNothing` is optional because only some dialect builders expose
+ * it; the call site tests for it before using it.
+ */
+interface TransactionLike {
+  insert(table: unknown): {
+    values(data: unknown): Promise<unknown> & {
+      onConflictDoNothing?: () => Promise<unknown>;
+    };
+  };
+}
 
 /**
  * RolePermissionService handles role-permission relationship management.
@@ -49,8 +68,12 @@ export class RolePermissionService extends BaseService {
     roleId: string,
     perm: { action: string; resource: string; name?: string; slug?: string }
   ): Promise<void> {
-    const permName = perm.name || `${perm.resource}:${perm.action}`;
-    const permSlug = perm.slug || `${perm.resource}-${perm.action}`;
+    // Composed by the shared helpers rather than written out. This method
+    // creates the permission row when the pair has none, and it is reached from
+    // the REST surface with neither field supplied — so what these fallbacks
+    // produce IS the identity every later authorization check looks up.
+    const permName = perm.name || permissionName(perm.action, perm.resource);
+    const permSlug = perm.slug || permissionSlug(perm.action, perm.resource);
 
     let permissionId: string;
 
@@ -84,10 +107,15 @@ export class RolePermissionService extends BaseService {
       const newPermId = randomUUID();
       const rolePermId = randomUUID();
 
-      // Required by Drizzle ORM: transaction callback type varies by dialect and
-      // cannot be narrowed without importing internal Drizzle helper types.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await this.db.transaction(async (tx: any) => {
+      // `withTransaction`, not Drizzle's `db.transaction`. better-sqlite3 is
+      // synchronous and rejects any callback returning a promise, so calling
+      // the driver directly threw `Transaction function cannot return a
+      // promise` on SQLite — this whole branch, the one that CREATES the
+      // permission, was unreachable there. The base-service helper opens
+      // `BEGIN IMMEDIATE` on the shared connection for that dialect and uses
+      // the native transaction on Postgres and MySQL.
+      await this.withTransaction(async txRaw => {
+        const tx = txRaw as TransactionLike;
         const permissionData = {
           id: newPermId,
           name: permName,

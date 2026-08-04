@@ -18,6 +18,7 @@ import {
   respondList,
   respondMutation,
 } from "../../api/response-shapes";
+import { permissionSlug } from "../../schemas/_zod/rbac";
 import type { ServiceContainer } from "../../services";
 import {
   isSuperAdmin,
@@ -186,8 +187,8 @@ const USER_METHODS: Record<string, MethodHandler<UsersService>> = {
       // Convert "resource:action" → "action-resource" slug format
       // (e.g. "users:read" → "read-users").
       const permissions = permissionPairs.map(pair => {
-        const [resource, action] = pair.split(":");
-        return `${action}-${resource}`;
+        const [resource = "", action = ""] = pair.split(":");
+        return permissionSlug(action, resource);
       });
       return respondData({
         permissions,

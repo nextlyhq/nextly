@@ -43,6 +43,13 @@ function createTables(sqlite: Database.Database) {
       action TEXT NOT NULL,
       resource TEXT NOT NULL,
       description TEXT,
+      -- Nullable, matching schemas/rbac/sqlite.ts. Drizzle names every column
+      -- of the table in an INSERT, so one missing here is not a column the
+      -- fixture merely does without: every insert against this table fails.
+      owner TEXT,
+      orphaned_at INTEGER,
+      permission_group TEXT,
+      danger INTEGER,
       created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000),
       updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000)
     );

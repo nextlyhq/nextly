@@ -13,6 +13,7 @@
  * @module auth/authenticated-scope
  */
 
+import { permissionSlug } from "../schemas/_zod/rbac";
 import type {
   CollectionAccessControl,
   SingleAccessControl,
@@ -49,7 +50,7 @@ export function apiKeyScopeAllows(
   resource: string
 ): boolean | null {
   if (scope?.actorType !== "apiKey") return null;
-  return scope.permissions.includes(`${operation}-${resource}`);
+  return scope.permissions.includes(permissionSlug(operation, resource));
 }
 
 /** The RBAC surface `apiKeyWriteAllowed` needs — the registered code access. */
@@ -81,7 +82,8 @@ export async function apiKeyWriteAllowed(
   rbac: CodeAccessSource | undefined
 ): Promise<boolean | null> {
   if (scope?.actorType !== "apiKey") return null;
-  if (!scope.permissions.includes(`${operation}-${resource}`)) return false;
+  if (!scope.permissions.includes(permissionSlug(operation, resource)))
+    return false;
   const codeAccess = rbac?.getRegisteredAccess(resource);
   if (!codeAccess) return true;
   return codeAccessAllows(codeAccess, operation, resource, {
