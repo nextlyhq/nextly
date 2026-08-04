@@ -225,6 +225,59 @@ describe("tier order beats breakpoint order, in both halves", () => {
   });
 });
 
+describe("the classes a renderer is told to apply", () => {
+  it("includes the named classes, without which the whole tier is inert", () => {
+    // A `.nx-c-card` rule reaches an element only if the element carries the token. Returning the
+    // node class alone would emit the tier and leave every rule in it applying to nothing.
+    const { css, classes } = compile(doc({ classes: ["c1"] }), [card]);
+
+    expect(css).toContain(".nx-c-card");
+    expect(classes.get("n1")?.split(" ")).toContain("nx-c-card");
+  });
+
+  it("does not put on a class the stylesheet dropped", () => {
+    // The second `card` is never written, so its rules belong to the first. Applying it would
+    // hand this node declarations from a class it does not reference.
+    const { classes } = compile(doc({ classes: ["c2"] }), [
+      card,
+      { ...feature, slug: "card" },
+    ]);
+
+    expect(classes.get("n1")).toBe(classes.get("n1")?.split(" ")[0]);
+  });
+
+  it("orders the tokens by the library, not by the node's list", () => {
+    const { classes } = compile(doc({ classes: ["c2", "c1"] }), [
+      card,
+      feature,
+    ]);
+
+    expect(classes.get("n1")?.split(" ").slice(1)).toEqual([
+      "nx-c-card",
+      "nx-c-feature",
+    ]);
+  });
+});
+
+describe("a class library that is not a library", () => {
+  it("survives a stored library that is not a list at all", () => {
+    // One site-settings record, read by every page compile. A spread over `{}` throws, which
+    // would stop rendering every page on the site rather than costing the styling of classes
+    // nobody can read.
+    const compileBroken = () =>
+      compilePageCss(doc({}), {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        namedClasses: {},
+        blockBases: {},
+      } as never);
+
+    expect(compileBroken).not.toThrow();
+    expect(compileBroken().warnings.map(w => w.code)).toContain(
+      "invalid-class-library"
+    );
+  });
+});
+
 describe("what an interactive state actually resolves to", () => {
   it("lets a later tier's base value beat an earlier tier's hover value", () => {
     // States are emitted as `:where(:hover)`, which carries NO specificity, so a base rule

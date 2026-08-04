@@ -21,6 +21,7 @@
 // a page means without executing anything.
 
 import type { NodeStyles, StyleValue } from "../document";
+import { isPlainRecord } from "../plain-record";
 import type { TokenLookup } from "../validation";
 
 import { BREAKPOINT_AXES } from "./breakpoint-axes";
@@ -60,7 +61,23 @@ export type StyleSource =
 /** A resolved value and where it came from. */
 export interface ResolvedStyle {
   value: StyleValue;
-  source: StyleSource;
+  /**
+   * Where the whole value came from.
+   *
+   * Absent only when a composite property survived from more than one tier at once, which the
+   * stylesheet permits: the fields are separate declarations, so a later rule overrides the ones
+   * it names and leaves the rest standing. Read `parts` in that case — naming one winner would
+   * mean picking a tier that did not supply what the control is showing.
+   */
+  source?: StyleSource;
+  /**
+   * For a composite property, where each field came from, keyed as the value is.
+   *
+   * Present whenever the value is a record, even if one tier supplied all of it, so a caller can
+   * read per-field provenance without first testing which case it is in. A field that is itself
+   * composite carries its own `parts`.
+   */
+  parts?: Record<string, ResolvedStyle>;
 }
 
 /** Everything resolution reads. Supplied by the caller; nothing is fetched. */
@@ -223,6 +240,83 @@ function compilerWritesValue(
 }
 
 /**
+ * What has survived so far, at one property or one field of it.
+ *
+ * A composite property is not one declaration. `padding` is four, `border` is three, and the
+ * compiler writes each field as its own, so a tier that states `blockStart` overrides that side
+ * and leaves a lower tier's `blockEnd` on the page. Kept as a tree for exactly that reason:
+ * collapsing it to a single winner reports the last writer as the source of fields it never set,
+ * and hides the tier the author would have to edit to change them.
+ */
+type Accumulated =
+  | { kind: "whole"; value: StyleValue; source: StyleSource }
+  | { kind: "fields"; fields: Map<string, Accumulated> };
+
+/**
+ * Fold one tier's value into what earlier tiers left, field by field where both are records.
+ *
+ * Two cases stay coarser than the stylesheet, both requiring a shorthand and its longhands in
+ * DIFFERENT tiers. A record over a scalar — `borderRadius: {…}` over `borderRadius: "4px"` —
+ * replaces it here, where the browser keeps the shorthand for the corners the record does not
+ * name; expanding it needs the catalog's leaf mapping rather than the stored shape. And a
+ * composite carrying one invalid field is skipped whole, where the compiler drops only that
+ * field. Both report a real tier and a real value, never an invented one.
+ */
+function fold(
+  current: Accumulated | undefined,
+  value: StyleValue,
+  source: StyleSource
+): Accumulated {
+  if (isPlainRecord(value)) {
+    // A record with no fields states no declarations, so it neither wins nor clears what is
+    // already there.
+    const keys = Object.keys(value);
+    if (keys.length === 0)
+      return current ?? { kind: "fields", fields: new Map() };
+    const fields =
+      current?.kind === "fields"
+        ? current.fields
+        : new Map<string, Accumulated>();
+    for (const key of keys) {
+      fields.set(key, fold(fields.get(key), value[key], source));
+    }
+    return { kind: "fields", fields };
+  }
+  return { kind: "whole", value, source };
+}
+
+/** Two sources are the same origin when they name the same tier and the same member of it. */
+function sameSource(
+  a: StyleSource | undefined,
+  b: StyleSource | undefined
+): boolean {
+  if (a === undefined || b === undefined) return false;
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/** The accumulated tree, read out as the value a control shows and the origins behind it. */
+function readOut(acc: Accumulated): ResolvedStyle {
+  if (acc.kind === "whole") return { value: acc.value, source: acc.source };
+  const value: Record<string, StyleValue> = {};
+  const parts: Record<string, ResolvedStyle> = {};
+  let common: StyleSource | undefined;
+  let shared = true;
+  for (const [key, field] of acc.fields) {
+    const resolved = readOut(field);
+    value[key] = resolved.value;
+    parts[key] = resolved;
+    if (common === undefined) common = resolved.source;
+    else if (!sameSource(common, resolved.source)) shared = false;
+    if (resolved.source === undefined) shared = false;
+  }
+  return {
+    value,
+    parts,
+    ...(shared && common !== undefined ? { source: common } : {}),
+  };
+}
+
+/**
  * What a property resolves to, and where it came from.
  *
  * Walked tier-outermost, breakpoint-innermost, because that is the order the stylesheet is
@@ -259,7 +353,7 @@ export function resolveStyle(
   // Within one tier the compiler writes base first and the state after, so the state wins there;
   // across tiers the later tier wins whichever state it used.
   const states = state === "base" ? ["base"] : ["base", state];
-  let resolved: ResolvedStyle | undefined;
+  let accumulated: Accumulated | undefined;
 
   for (const tier of tiers(input, property)) {
     for (const candidateState of states) {
@@ -267,22 +361,20 @@ export function resolveStyle(
         const value = valueAt(tier.styles, candidateState, id, property);
         if (value === undefined) continue;
         if (!compilerWritesValue(property, value, input.tokens)) continue;
-        resolved =
+        const source: StyleSource =
           id === breakpoint
-            ? { value, source: tier.source }
+            ? tier.source
             : {
-                value,
                 // Named so a control can say which breakpoint the value comes from, with the
                 // writer kept inside so it can also say who set it there.
-                source: {
-                  tier: "inheritedBreakpoint",
-                  from: id,
-                  source: tier.source,
-                },
+                tier: "inheritedBreakpoint",
+                from: id,
+                source: tier.source,
               };
+        accumulated = fold(accumulated, value, source);
       }
     }
   }
 
-  return resolved;
+  return accumulated === undefined ? undefined : readOut(accumulated);
 }

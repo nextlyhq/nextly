@@ -134,11 +134,15 @@ export interface CompiledPageCss {
    */
   warnings: ValidationIssue[];
   /**
-   * The class assigned to each node id.
+   * The classes to put on each node id, space-separated: its own, then every
+   * named class it applies that the stylesheet actually wrote.
    *
    * Returned rather than recomputed by the renderer because two ids can hash
    * alike: only a pass over the whole document sees that, and a renderer that
    * derived the class per node in isolation would give both nodes the same one.
+   * The named classes are here for a second reason — a `.nx-c-*` rule reaches
+   * an element only if the element carries the token, so a renderer applying
+   * this value is what makes that tier do anything at all.
    */
   classes: Map<string, string>;
 }
@@ -913,9 +917,26 @@ export function compilePageCss(
   // library entry spend it before any node was reached, so one bad global class could strip the
   // styling from a page that never referenced it.
   const classBudget = newStyleIssueBudget();
-  const usableClasses = usableNamedClasses(ctx.namedClasses ?? []);
+  // The library is one site-settings record read by every page compile, and it arrives whether or
+  // not anything validated it. A non-array — `{}` from a corrupt row — reaches a spread inside
+  // `orderedNamedClasses` and throws, which would take down rendering for every page on the site
+  // rather than costing the styling of the classes nobody can read.
+  const storedLibrary: unknown = ctx.namedClasses;
+  const library: readonly NamedClass[] = Array.isArray(storedLibrary)
+    ? (storedLibrary as readonly NamedClass[])
+    : [];
+  if (storedLibrary !== undefined && !Array.isArray(storedLibrary)) {
+    pushBoundedWarning(warningAllowance, warnings, {
+      path: "/classes",
+      code: "invalid-class-library",
+      severity: "warning",
+      message: `The site's class library is ${describeValue(storedLibrary)} rather than a list, so no named class was written.`,
+      suggestion: "Store the class library as an array of classes.",
+    });
+  }
+  const usableClasses = usableNamedClasses(library);
   const usableIds = new Set(usableClasses.map(cls => cls.id));
-  for (const cls of orderedNamedClasses(ctx.namedClasses ?? [])) {
+  for (const cls of orderedNamedClasses(library)) {
     if (usableIds.has((cls as { id?: unknown } | null)?.id as string)) continue;
     // Reported once per entry the library could not use, naming which of the three reasons it
     // was. A usable record whose name is free is not reachable here, so the remaining case after
@@ -1012,5 +1033,35 @@ export function compilePageCss(
     );
   }
 
-  return { css: serializeRules(rules), warnings, classes };
+  // The classes a renderer puts on each node, which is not the same as the class this compiler
+  // styles it by. A `.nx-c-*` rule reaches an element only if the element carries that token, so
+  // returning the node class alone would emit the whole named-class tier and leave every rule in
+  // it inert — styles written, referenced, and applying to nothing.
+  //
+  // Narrowed through `usableClasses` for the same reason resolution is: a class the stylesheet
+  // dropped must not be put on an element, where it would match a rule some other class owns.
+  const byId = new Map(usableClasses.map(cls => [cls.id, cls]));
+  const attributeClasses = new Map<string, string>();
+  for (const { node } of nodes) {
+    const own = classes.get(node.id);
+    if (own === undefined) continue;
+    const names = [own];
+    const applied = Array.isArray(node.classes) ? node.classes : [];
+    // Library order, not the order the node lists them in, so the value is stable for a caching
+    // renderer and reads the way the stylesheet does.
+    for (const cls of orderedNamedClasses(
+      [...new Set(applied)]
+        .map(id => byId.get(id))
+        .filter((cls): cls is NamedClass => cls !== undefined)
+    )) {
+      names.push(namedClassName(cls.slug));
+    }
+    attributeClasses.set(node.id, names.join(" "));
+  }
+
+  return {
+    css: serializeRules(rules),
+    warnings,
+    classes: attributeClasses,
+  };
 }

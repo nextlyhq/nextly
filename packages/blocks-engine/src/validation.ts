@@ -195,6 +195,8 @@ export const ISSUE_CODES = {
     "A named class in the site library has a name that cannot be written to CSS.",
   "invalid-class":
     "A named class in the site library is missing the id or the styles record it needs to be written.",
+  "invalid-class-library":
+    "The site's named class library is not a list of classes.",
   "duplicate-class-name":
     "More than one named class in the site library carries the same name.",
   "invalid-style-value":

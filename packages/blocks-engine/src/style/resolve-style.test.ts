@@ -271,6 +271,65 @@ describe("values the compiler would refuse", () => {
   });
 });
 
+describe("a composite property is not one declaration", () => {
+  it("keeps a lower tier's untouched side, and names the tier that still supplies it", () => {
+    // `padding` is four declarations. A node stating only `blockStart` overrides that side; the
+    // class's `blockEnd` is never overridden and stays on the page. Reported atomically, the
+    // class would vanish from the answer while its value is still what the author can see.
+    const found = resolveStyle("padding", "base", "desktop", {
+      classes: [
+        namedClass("card", 0, at("desktop", { padding: { blockEnd: "4px" } })),
+      ],
+      node: at("desktop", { padding: { blockStart: "16px" } }),
+    });
+
+    expect(found?.value).toEqual({ blockStart: "16px", blockEnd: "4px" });
+    expect(found?.parts?.blockStart.source).toEqual({ tier: "local" });
+    expect(found?.parts?.blockEnd.source).toEqual({
+      tier: "class",
+      id: "card",
+      slug: "card",
+    });
+  });
+
+  it("names no single origin when the fields came from different tiers", () => {
+    // There is no honest answer to "where did this padding come from" here, and picking the last
+    // writer would attribute a side it never set.
+    const found = resolveStyle("padding", "base", "desktop", {
+      classes: [
+        namedClass("card", 0, at("desktop", { padding: { blockEnd: "4px" } })),
+      ],
+      node: at("desktop", { padding: { blockStart: "16px" } }),
+    });
+
+    expect(found?.source).toBeUndefined();
+  });
+
+  it("still names one origin when a single tier supplied every field", () => {
+    const found = resolveStyle("padding", "base", "desktop", {
+      node: at("desktop", { padding: { blockStart: "16px", blockEnd: "4px" } }),
+    });
+
+    expect(found?.source).toEqual({ tier: "local" });
+  });
+
+  it("lets a higher tier override the side it does state", () => {
+    const found = resolveStyle("padding", "base", "desktop", {
+      classes: [
+        namedClass(
+          "card",
+          0,
+          at("desktop", { padding: { blockStart: "4px" } })
+        ),
+      ],
+      node: at("desktop", { padding: { blockStart: "16px" } }),
+    });
+
+    expect(found?.value).toEqual({ blockStart: "16px" });
+    expect(found?.source).toEqual({ tier: "local" });
+  });
+});
+
 describe("page settings as an origin", () => {
   const pageSettings = at("desktop", {
     color: "rebeccapurple",
