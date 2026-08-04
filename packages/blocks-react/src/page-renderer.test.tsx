@@ -683,6 +683,122 @@ describe("PageRenderer", () => {
       expect(html).toContain("survivor");
     });
 
+    it("accepts children a custom component owns", async () => {
+      // React hands a component its children as an ordinary prop, so a render
+      // prop and an ignored opaque value are both legitimate. Judging them
+      // would replace working blocks with placeholders, which is a worse
+      // failure than the escape it would close.
+      const List = ({
+        children,
+      }: {
+        children: (item: string) => ReactElement;
+      }) => <ul>{children("item")}</ul>;
+      const renderProp = defineBlock({
+        name: "test/render-prop",
+        version: 1,
+        description: "Passes a function as children to a custom component.",
+        example: { props: {} },
+        render: () => <List>{(item: string) => <li>{item}</li>}</List>,
+      });
+
+      const Ignores = () => <p>ignored ok</p>;
+      const opaque = defineBlock({
+        name: "test/opaque-children",
+        version: 1,
+        description: "Passes an opaque object to a component that ignores it.",
+        example: { props: {} },
+        render: () => (
+          <Ignores>{{ opaque: true } as unknown as ReactElement}</Ignores>
+        ),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/render-prop"),
+            node("b", "test/opaque-children")
+          )}
+          blocks={createBlockResolver([
+            renderProp as AnyBlockDefinition,
+            opaque as AnyBlockDefinition,
+          ])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual([]);
+      expect(html).toContain("<li>item</li>");
+      expect(html).toContain("ignored ok");
+    });
+
+    it("contains a host element whose style prop React refuses", async () => {
+      // React's server renderer throws on a non-object style while writing the
+      // attribute, well after containment has returned. It is worth pre-empting
+      // because it arrives from stored content: a text field read into `style`.
+      const styled = defineBlock<{ style: string }>({
+        name: "test/string-style",
+        version: 1,
+        description: "Reads a stored text value into the style prop.",
+        example: { props: { style: "color: red" } },
+        defaultProps: { style: "" },
+        render: ({ props }) => (
+          <div style={props.style as unknown as React.CSSProperties} />
+        ),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/string-style", {
+              props: { style: "color: red" },
+            }),
+            node("b", "test/text", { props: { value: "survivor" } })
+          )}
+          blocks={createBlockResolver([
+            styled as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual(["invalid-output"]);
+      expect(html).toContain("survivor");
+    });
+
+    it("refuses a portal, which no server renderer can render", async () => {
+      // Constructed by shape rather than with `createPortal`, which cannot even
+      // be called without a DOM container.
+      const portalLike = {
+        $$typeof: Symbol.for("react.portal"),
+        key: null,
+        children: "inside",
+        containerInfo: {},
+        implementation: null,
+      };
+      const withPortal = defineBlock({
+        name: "test/portal",
+        version: 1,
+        description: "Returns a portal.",
+        example: { props: {} },
+        render: () => portalLike,
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/portal"),
+            node("b", "test/text", { props: { value: "survivor" } })
+          )}
+          blocks={createBlockResolver([
+            withPortal as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual(["invalid-output"]);
+      expect(html).toContain("survivor");
+    });
+
     it("shows nothing but a marker in production", async () => {
       vi.stubEnv("NODE_ENV", "production");
 

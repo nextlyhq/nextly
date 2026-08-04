@@ -8,8 +8,8 @@ import { isValidElement, type ReactNode } from "react";
  */
 const MAX_CHECKED_VALUES = 10_000;
 
-/** The only React-tagged object that is a NODE rather than a component type. */
-const PORTAL_TYPE = Symbol.for("react.portal");
+/** Elements whose children React renders itself, rather than handing them on. */
+const FRAGMENT_TYPE = Symbol.for("react.fragment");
 
 /** A block's output, checked and in a form React can render. */
 export type NormalizedOutput =
@@ -102,16 +102,48 @@ export function describeValue(value: unknown): string {
 }
 
 /**
- * A portal: the one React-tagged object that is a child rather than a type.
+ * Whether React renders this element's children itself.
  *
- * Checked by exact tag rather than by "any `react.*` symbol". The looser rule
- * looks equivalent and is not — `React.memo(C)` and `React.lazy(f)` carry
- * `react.*` tags too, and both are component TYPES whose `isValidElement` is
- * false. Rendering one as a child throws inside React, so the broad rule would
- * have opened the very hole this module exists to shut.
+ * True for a host element (`type` is a tag name) and for a fragment. False for
+ * a custom component, and that distinction decides whether its children may be
+ * judged at all: React hands a component its children as an ordinary prop, so
+ * `<List>{item => <Row item={item} />}</List>` is valid and so is a component
+ * that ignores `children` entirely. Both were verified to render. Inspecting
+ * those would replace working blocks with placeholders, which is a worse
+ * failure than the escape it would close — a component's children are its own
+ * contract.
  */
-function isPortal(value: object): boolean {
-  return (value as { $$typeof?: unknown }).$$typeof === PORTAL_TYPE;
+function rendersOwnChildren(element: unknown): boolean {
+  const type = (element as { type?: unknown }).type;
+  return typeof type === "string" || type === FRAGMENT_TYPE;
+}
+
+/**
+ * A host-element prop React's server renderer refuses outright.
+ *
+ * Deliberately ONE case rather than a general prop validator. React throws on
+ * a non-object `style`, and that is the one worth pre-empting here because it
+ * arrives from stored content — a block reading a text field into `style` is an
+ * ordinary mistake, and React raises it while writing the attribute, long after
+ * this package's containment has returned.
+ *
+ * The line stops there on purpose. Reproducing React's own prop validation
+ * would mean tracking its internals across versions, and every rule that drifts
+ * out of date becomes a valid block refused in production. What React accepts
+ * is React's to say; what is a renderable NODE is this module's.
+ */
+function hostPropReason(element: unknown): string | null {
+  const type = (element as { type?: unknown }).type;
+  if (typeof type !== "string") return null;
+
+  const props = (element as { props?: unknown }).props;
+  if (typeof props !== "object" || props === null) return null;
+
+  const style = (props as { style?: unknown }).style;
+  if (style != null && typeof style !== "object") {
+    return `a ${typeof style} \`style\` prop on <${type}>, where React requires an object`;
+  }
+  return null;
 }
 
 /** An element's children, without assuming `props` is shaped any particular way. */
@@ -162,11 +194,19 @@ function isSingleUse(value: Iterable<unknown>): boolean {
  *   Re-readable collections like `Set` ARE walked, since reading one costs
  *   nothing.
  *
- * **The limits of the guarantee**, both properties of borrowed children rather
- * than gaps that can be closed here: a promise inside existing JSX cannot be
- * substituted, so its rejection still reaches the route's error handling; and
- * children produced by a component exist only once React renders it, so
- * `<Thing />` returning a bad value is not visible from here.
+ * **The limits of the guarantee**, stated so nobody is surprised by them:
+ *
+ * - A promise inside existing JSX cannot be substituted without cloning
+ *   someone else's element, so its rejection reaches the route's error handling.
+ * - Children produced by a component exist only once React renders it, so
+ *   `<Thing />` returning a bad value is not visible from here.
+ * - A CUSTOM component's children are not judged at all. React passes them to
+ *   the component as an ordinary prop, so a render prop or an opaque value is
+ *   legitimate; only host elements and fragments have children React renders
+ *   directly.
+ * - Prop-level validity is React's to decide, with the single exception of a
+ *   non-object `style` on a host element. Everything else about props is left
+ *   alone rather than approximated.
  *
  * Total: it never throws. A hostile iterable, a throwing getter and an
  * undescribable value all become refusals, because the alternative is an
@@ -214,8 +254,11 @@ export function normalizeRenderable(
       return null;
     }
 
-    if (isValidElement(current)) return inspect(childrenOf(current));
-    if (type === "object" && isPortal(current)) return null;
+    if (isValidElement(current)) {
+      const propReason = hostPropReason(current);
+      if (propReason !== null) return propReason;
+      return rendersOwnChildren(current) ? inspect(childrenOf(current)) : null;
+    }
     if (type === "function") return describeValue(current);
 
     if (current instanceof Map) {
@@ -278,13 +321,14 @@ export function normalizeRenderable(
     }
 
     if (isValidElement(current)) {
-      const reason = inspect(childrenOf(current));
+      const propReason = hostPropReason(current);
+      if (propReason !== null) return { ok: false, reason: propReason };
+      const reason = rendersOwnChildren(current)
+        ? inspect(childrenOf(current))
+        : null;
       return reason === null
         ? { ok: true, node: current as ReactNode, hasUnwrappedThenable }
         : { ok: false, reason };
-    }
-    if (type === "object" && isPortal(current)) {
-      return { ok: true, node: current as ReactNode, hasUnwrappedThenable };
     }
 
     if (type === "function") {
