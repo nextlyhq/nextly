@@ -35,6 +35,12 @@ import type { ValidationIssue } from "../validation";
 import { escapeIdentifier } from "./css-value";
 import { compileStyleValues, DEFAULT_TOKEN_PREFIX } from "./declarations";
 import type { Declaration } from "./declarations";
+import type { NamedClass } from "./named-class";
+import {
+  namedClassName,
+  orderedNamedClasses,
+  NAMED_CLASS_SLUG_RE,
+} from "./named-class";
 import {
   blockTypeClassName,
   nodeClassNames,
@@ -61,6 +67,16 @@ export interface StyleCompileContext {
    * improving a block's default look reaches pages that already exist.
    */
   blockBases?: Readonly<Record<string, NodeStyles>>;
+  /**
+   * The site's named classes, in any order.
+   *
+   * Emitted between the block-type defaults and each node's own values, which is where a class
+   * sits in the cascade: it overrides what a block looks like by default and is overridden by
+   * anything the author set on one node. Precedence BETWEEN classes is their library order,
+   * carried on the class itself rather than taken from the order a node lists them in, so two
+   * nodes with the same classes cannot resolve differently.
+   */
+  namedClasses?: readonly NamedClass[];
   /**
    * The custom-property prefix site tokens are emitted under. Configurable
    * because a site's tokens live in the same namespace as everything else on
@@ -851,6 +867,38 @@ export function compilePageCss(
         // legal in a class already.
         `${pageRoot} .${escapeIdentifier(blockTypeClassName(type))}`,
         pointer("/blockBases", type),
+        contexts,
+        tokenPrefix,
+        warnings,
+        budget,
+        warningAllowance
+      )
+    );
+  }
+
+  // The named classes, in library order — the tier between a block's defaults and a node's own
+  // values. At one specificity the cascade is source order, so being emitted here IS what makes
+  // a class beat the block default and lose to a local value.
+  for (const cls of orderedNamedClasses(ctx.namedClasses ?? [])) {
+    // A slug reaches a selector, and this compiler reads persisted data whether or not a caller
+    // validated it. Held to the grammar rather than escaped into something safe: a name that is
+    // not a slug is not a class this engine can style, and rewriting it quietly would emit a
+    // class no renderer puts on an element.
+    if (typeof cls.slug !== "string" || !NAMED_CLASS_SLUG_RE.test(cls.slug)) {
+      pushBoundedWarning(warningAllowance, warnings, {
+        path: pointer("/classes", String(cls.id)),
+        code: "invalid-class-name",
+        severity: "warning",
+        message: `"${describeValue(cls.slug)}" is not a class name, so its styles were not written.`,
+        suggestion: 'Use a lowercase slug such as "card-featured".',
+      });
+      continue;
+    }
+    rules.push(
+      ...envelopeRules(
+        cls.styles,
+        `${pageRoot} .${escapeIdentifier(namedClassName(cls.slug))}`,
+        pointer("/classes", String(cls.id)),
         contexts,
         tokenPrefix,
         warnings,
