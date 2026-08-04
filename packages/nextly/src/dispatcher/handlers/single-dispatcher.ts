@@ -39,12 +39,7 @@ import { container } from "../../di/container";
 import { DynamicCollectionSchemaService } from "../../domains/dynamic-collections/services/dynamic-collection-schema-service";
 import { teardownEntityComponentData } from "../../domains/field-groups/services/teardown-entity-field-group-data";
 import { resolveLocalizedFieldNames } from "../../domains/i18n/classify-fields";
-import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
 import { teardownEntityI18n } from "../../domains/i18n/migration/teardown-entity-i18n";
-import {
-  companionHasStatusColumn,
-  localizedColumnsOnMain,
-} from "../../domains/i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
@@ -67,13 +62,13 @@ import {
 } from "../../domains/schema/pipeline/pushschema-pipeline-stubs";
 import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
-import { isIdempotencyError } from "../../domains/schema/pipeline/sql-statement-utils";
 import type { DesiredSingle } from "../../domains/schema/pipeline/types";
 import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
 import { columnsDeclaredBy } from "../../domains/schema/services/field-column-descriptor";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
+import { reconcileSingleCompanion } from "../../domains/singles/services/reconcile-single-companion";
 import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
 import type { SingleEntryService } from "../../domains/singles/services/single-entry-service";
 import type { SingleRegistryService } from "../../domains/singles/services/single-registry-service";
@@ -85,10 +80,6 @@ import { resolveBuilderRevalidate } from "../../revalidation/builder-revalidate"
 import { getProductionNotifier } from "../../runtime/notifications/index";
 import { isReservedResourceSlug } from "../../schemas/_zod/rbac";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
-import {
-  getI18nArchiveDdl,
-  getI18nArchiveIndexRepairDdl,
-} from "../../schemas/nextly-i18n-archive";
 import {
   isSuperAdmin,
   listEffectivePermissions,
@@ -103,7 +94,6 @@ import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
   getComponentRegistryFromDI,
-  getConfigFromDI,
   getMigrationJournalFromDI,
   getSchemaRegistryFromDI,
   getSingleEntryServiceFromDI,
@@ -229,167 +219,6 @@ async function executeMigrationStatements(
 interface SinglesServices {
   registry: SingleRegistryService;
   entry: SingleEntryService;
-}
-
-// ============================================================
-// i18n helpers
-// ============================================================
-
-/**
- * Provision (create / ADD-DROP columns / drop) the single's companion `single_<slug>_locales`
- * table out-of-band after a schema apply, then register its runtime table so per-language
- * reads/writes resolve without a restart. The push pipeline excludes companion tables, so every
- * single write/create/apply path that changes the localized field set goes through here.
- *
- * Shared by createSingle, updateSingleSchema and applySingleSchemaChanges so the three stay in
- * lockstep. No-op when the single isn't localized (a non-localized single has no companion).
- * The DDL reconcile throws on failure (data-integrity critical); the runtime registration is
- * best-effort (recovered on next restart).
- */
-async function reconcileSingleCompanion(args: {
-  slug: string;
-  tableName: string;
-  oldFields: FieldDefinition[];
-  newFields: FieldDefinition[];
-  /** Localization state AFTER this save (requested). */
-  localized: boolean;
-  /** Localization state BEFORE this save (persisted). Drives enable/disable detection. */
-  wasLocalized: boolean;
-  status: boolean;
-  /**
-   * Whether the single had Draft/Published BEFORE this apply.
-   *
-   * Separate from `status` because the disable restore asks a different question: not what the
-   * single is being saved as, but whether main carried `status` and the companion `_status`
-   * beforehand — a copy from columns that were not there fails the whole migration.
-   */
-  wasStatus: boolean;
-  adapter: DrizzleAdapter;
-}): Promise<void> {
-  const {
-    slug,
-    tableName,
-    oldFields,
-    newFields,
-    localized,
-    status,
-    wasStatus,
-    adapter,
-  } = args;
-  const wasLocalized = args.wasLocalized;
-  // Nothing to do when the single was and remains non-localized.
-  if (!wasLocalized && !localized) return;
-
-  const dialect = adapter.dialect;
-  const companionTable = `${tableName}_locales`;
-  const companionExists = await adapter.tableExists(companionTable);
-  // Only introspect `_status` when it can matter: an existing companion that stays localized
-  // (a later Draft/Published toggle must ADD/DROP `_status`).
-  const companionHasStatus =
-    companionExists && wasLocalized && localized
-      ? await companionHasStatusColumn(adapter, companionTable)
-      : undefined;
-
-  // The seed (enable) and restore (disable) copy the default-locale value to/from the companion;
-  // read the configured default locale (falls back to "en" when localization isn't configured).
-  const defaultLocale = getConfigFromDI()?.localization?.defaultLocale ?? "en";
-
-  const plan = buildCompanionTransitionStatements({
-    // The companion mirrors the main table, and a single's table comes from the same builder as a collection's.
-    builtBy: "collection" as const,
-    slug,
-    tableName,
-    dialect,
-    defaultLocale,
-    status,
-    wasLocalized,
-    isLocalized: localized,
-    oldFields,
-    newFields,
-    companionExists,
-    companionHasStatus,
-    wasStatus,
-    // Which translatable columns the main table still carries. A disable must not re-add one that
-    // is already there, and must still restore it: presence says the column exists, never that its
-    // value is current, because every localized write went to the companion alone.
-    existingMainColumns: await localizedColumnsOnMain(
-      adapter,
-      tableName,
-      oldFields
-    ).then(cols => cols.map(c => c.name)),
-  });
-
-  // A disable archives non-default translations, so ensure `nextly_i18n_archive` exists first
-  // (Builder entities have no `nextly migrate` step to provision it). Idempotent.
-  if (plan.needsArchive) {
-    for (const stmt of getI18nArchiveDdl(dialect)) {
-      await adapter.executeQuery(stmt);
-    }
-    // MySQL's table DDL cannot restore an index the table is missing, and
-    // index-only drift produces no reconcile operations, so the repair runs
-    // here. Tolerated rather than checked first: attempting it and accepting
-    // "duplicate key name" is one round trip instead of two, and the same
-    // tolerance the schema executor already applies.
-    const indexRepair = getI18nArchiveIndexRepairDdl(dialect);
-    if (indexRepair) {
-      try {
-        await adapter.executeQuery(indexRepair);
-      } catch (err) {
-        if (!isIdempotencyError(err)) throw err;
-      }
-    }
-  }
-  for (const stmt of plan.statements) {
-    await adapter.executeQuery(stmt);
-  }
-
-  // The transition record describes a companion that no longer exists, so it stops being true the
-  // moment the disable succeeds. Left behind, it would refuse the next enable's real source locale
-  // — the check that protects a live transition would block a legitimate one instead.
-  if (plan.companionDropped) {
-    // The other half of "this companion is gone": readiness remembers only that one exists.
-    const { forgetCompanionReadiness } = await import(
-      "../../domains/i18n/runtime/companion-readiness"
-    );
-    forgetCompanionReadiness(adapter, `${tableName}_locales`);
-    const { resolveTransitionStore } = await import(
-      "../../domains/i18n/migration/transition-recorder"
-    );
-    const { forgetI18nTransition } = await import(
-      "../../domains/i18n/migration/transition-state"
-    );
-    await forgetI18nTransition(
-      await resolveTransitionStore(adapter),
-      "single",
-      slug
-    );
-  }
-
-  // Register the companion runtime table (best-effort — next boot re-registers it). Skipped when
-  // the plan dropped the companion (disable) or the single is no longer localized.
-  if (!plan.companionDropped && localized) {
-    try {
-      const companion = buildCompanionRuntimeTable({
-        slug,
-        tableName,
-        fields: newFields,
-        dialect,
-        localized: true,
-        status,
-      });
-      if (companion) {
-        getSchemaRegistryFromDI()?.registerDynamicSchema(
-          companion.companionTableName,
-          companion.table
-        );
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.warn(
-        `[reconcileSingleCompanion] Companion runtime registration failed for '${slug}': ${msg}.`
-      );
-    }
-  }
 }
 
 // ============================================================
