@@ -8,11 +8,15 @@
       // nothing to assert against until the package is built, and the root task
       // depends on `^build`, which builds dependencies and not this package.
       //
-      // This makes turbo do that one build, in order, and cache it. The
-      // package's `vitest.globalSetup.ts` covers the runs turbo never sees —
-      // `pnpm --filter @nextlyhq/ui test`, and the watch, UI and coverage
-      // entry points, none of which read this file — and it skips when the
-      // declarations are already fresh, so the two do not build twice.
+      // This makes turbo do that one build, in order, and cache it. The runs
+      // turbo never sees — `pnpm --filter @nextlyhq/ui test`, and the watch,
+      // UI and coverage entry points, none of which read this file — are
+      // covered instead by `ensureDeclarations()` in the surface suite's
+      // `beforeAll`, which rebuilds the declarations itself. It rebuilds every
+      // time rather than testing for staleness, so the two do build twice on
+      // a cache miss; that is the deliberate trade, because deciding whether
+      // `dist` was current meant re-implementing turbo's input tracking and
+      // every error in it passed stale declarations.
       "dependsOn": ["$TURBO_EXTENDS$", "build"],
       // The contrast alpha-utilities guard scans admin and plugin source, so
       // those trees are real inputs to this package's tests. $TURBO_EXTENDS$
@@ -23,7 +27,6 @@
       "inputs": [
         "$TURBO_EXTENDS$",
         "vitest.config.ts",
-        "src/__tests__/global-setup.ts",
         "$TURBO_ROOT$/packages/admin/src/**",
         "$TURBO_ROOT$/packages/plugin-form-builder/src/**",
         "$TURBO_ROOT$/packages/plugin-page-builder/src/**"
@@ -32,16 +35,16 @@
     "test:coverage": {
       // The same ordering as `test`, for the same reason. Inheriting only
       // `^build` from the root left this task with no edge to this package's
-      // own `build`, so turbo was free to schedule them together: the global
-      // setup runs `tsup` while `build:js` is removing `dist` underneath it,
-      // and a coverage task starting mid-build reads half-written artifacts.
-      // Coverage asserts on the same declarations `test` does, so it needs the
-      // same guarantee that they exist and are not being rewritten.
+      // own `build`, so turbo was free to schedule them together: the surface
+      // suite's `beforeAll` runs `tsup` while `build:js` is removing `dist`
+      // underneath it, and a coverage task starting mid-build reads
+      // half-written artifacts. Coverage asserts on the same declarations
+      // `test` does, so it needs the same guarantee that they exist and are
+      // not being rewritten.
       "dependsOn": ["$TURBO_EXTENDS$", "build"],
       "inputs": [
         "$TURBO_EXTENDS$",
         "vitest.config.ts",
-        "src/__tests__/global-setup.ts",
         "$TURBO_ROOT$/packages/admin/src/**",
         "$TURBO_ROOT$/packages/plugin-form-builder/src/**",
         "$TURBO_ROOT$/packages/plugin-page-builder/src/**"
