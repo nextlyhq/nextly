@@ -77,9 +77,17 @@ export class CollectionsHandler {
     /**
      * Resolved webhook retention policy. Content writes offer to run a pass so
      * the event ledger stays bounded in installs that never configure a webhook
-     * and therefore never run the drain. Null or absent disables it.
+     * and therefore never run the drain. Null or absent leaves the event ledger
+     * unpruned; it no longer decides whether a runner exists at all, since the
+     * audit policy below can call for one on its own.
      */
     webhookRetention?: ResolvedWebhookRetentionConfig | null,
+    /**
+     * Resolved audit-trail retention windows, forwarded for the same reason and
+     * needed here in particular: this is the seam a dispatcher-driven install
+     * writes through, so a policy that does not reach it is a trail that
+     * install never prunes. Absent means the trails are kept in full.
+     */
     auditRetention?: ResolvedAuditRetentionConfig
   ) {
     this.logger = logger;

@@ -47,7 +47,12 @@ export interface RunDrainDeps {
    * invoked drain does not prune on every call.
    */
   retention?: {
-    policy: ResolvedWebhookRetentionConfig;
+    /**
+     * Absent when webhook retention is off. The trails are pruned on their own
+     * policy either way, so switching one off does not silently switch off the
+     * other's only full-budget trigger.
+     */
+    policy?: ResolvedWebhookRetentionConfig;
     /** Absent when the audit trails are configured to keep everything. */
     auditPolicy?: ResolvedAuditRetentionConfig;
     prune: PruneDeps;
@@ -130,18 +135,21 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
   // because housekeeping could not run.
   const retention = deps.retention;
   if (retention) {
-    const due = await claimRetentionPass(
-      retention.gate,
-      WEBHOOK_RETENTION_GATE_KEY,
-      retention.policy.intervalMs
-    );
-    if (due) {
-      const pruned = await pruneWebhookDataSafely(
-        retention.prune,
-        retention.policy
+    const webhookPolicy = retention.policy;
+    if (webhookPolicy) {
+      const due = await claimRetentionPass(
+        retention.gate,
+        WEBHOOK_RETENTION_GATE_KEY,
+        webhookPolicy.intervalMs
       );
-      result.pruned.events = pruned.events.webhook + pruned.events.audit;
-      result.pruned.deliveries = pruned.deliveries;
+      if (due) {
+        const pruned = await pruneWebhookDataSafely(
+          retention.prune,
+          webhookPolicy
+        );
+        result.pruned.events = pruned.events.webhook + pruned.events.audit;
+        result.pruned.deliveries = pruned.deliveries;
+      }
     }
 
     // The audit trails are offered here too, and at their FULL budget. Every

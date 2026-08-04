@@ -134,15 +134,38 @@ function encodeMetadata(
  * drain spends the configured one, where nothing is.
  */
 async function offerRetentionPass(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  getService: (name: string) => any
+  getService: (name: string) => unknown
 ): Promise<void> {
   try {
-    const runner = getService("retentionRunner");
-    await runner?.maybeRun?.(1);
+    const runner = getService(RETENTION_RUNNER_SERVICE);
+    if (!offersRetention(runner)) return;
+    await runner.maybeRun(WRITE_PATH_BATCHES);
   } catch {
     /* no runner registered, or nothing configured to prune */
   }
+}
+
+/** The service name the DI container registers a retention runner under. */
+const RETENTION_RUNNER_SERVICE = "retentionRunner";
+
+/** Batches a pass offered from a request path may take. */
+const WRITE_PATH_BATCHES = 1;
+
+/**
+ * Whether a resolved service can run a retention pass.
+ *
+ * A structural check rather than a cast: the container is keyed by string, so
+ * the compiler cannot know what a name resolves to, and asserting a shape that
+ * was never verified would turn a rename into a runtime failure inside a catch
+ * that hides it.
+ */
+function offersRetention(
+  value: unknown
+): value is { maybeRun(maxBatches?: number): Promise<void> } {
+  return (
+    typeof (value as { maybeRun?: unknown } | undefined)?.maybeRun ===
+    "function"
+  );
 }
 
 export function buildAuditLogWriter(
