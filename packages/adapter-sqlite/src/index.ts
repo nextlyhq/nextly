@@ -635,7 +635,11 @@ export class SqliteAdapter extends DrizzleAdapter {
     try {
       const stmt = db.prepare(sql);
       const rows = stmt.all(...(params as unknown[])) as T[];
-      return rows;
+      // SQLite stores a timestamp as an integer and hands it back as one. The
+      // Drizzle read paths decode it through the column definition, so without
+      // this a bulk insert answers with numbers where a read answers `Date`.
+      const tableObj = this.getTableObject(table);
+      return rows.map(r => this.mapRowFromRawSql(tableObj, r));
     } catch (error) {
       throw this.handleQueryError(error, "insertMany", table);
     }
@@ -802,8 +806,10 @@ export class SqliteAdapter extends DrizzleAdapter {
           return undefined as T;
         }
         const rows = stmt.all(...values) as T[];
-        // Return JS property-named keys to match the non-transactional insert.
-        return this.mapRowKeysToJs(this.getTableObject(table), rows[0]);
+        // Return JS property-named keys AND Drizzle-decoded date values, so a
+        // write inside a transaction answers with the same representation a
+        // read of the same row gives.
+        return this.mapRowFromRawSql(this.getTableObject(table), rows[0]);
       },
 
       // eslint-disable-next-line @typescript-eslint/require-await
@@ -851,7 +857,7 @@ export class SqliteAdapter extends DrizzleAdapter {
           return [];
         }
         return (stmt.all(...allValues) as T[]).map(r =>
-          this.mapRowKeysToJs(tableObj, r)
+          this.mapRowFromRawSql(tableObj, r)
         );
       },
 

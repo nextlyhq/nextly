@@ -43,6 +43,34 @@ import type {
 import { createDatabaseError, isDatabaseError } from "./types";
 
 /**
+ * A Drizzle column that decodes its own driver representation.
+ *
+ * `dataType` is the dialect-independent kind ("string", "boolean", "date");
+ * `mapFromDriverValue` turns what the driver handed back into the JS value a
+ * Drizzle query would have produced.
+ */
+interface DecodableColumn {
+  dataType: unknown;
+  mapFromDriverValue(value: unknown): unknown;
+}
+
+/**
+ * Matches the `dataType` a Drizzle timestamp/datetime column reports, in both
+ * the bare form and the object-qualified form some column classes carry.
+ */
+const DATE_DATA_TYPE = /(?:^|\s)date$/;
+
+/** Whether a table property is a date column that can decode a driver value. */
+function isDateColumn(colDef: unknown): colDef is DecodableColumn {
+  if (!colDef || typeof colDef !== "object") return false;
+  const candidate = colDef as Partial<DecodableColumn>;
+  return (
+    typeof candidate.mapFromDriverValue === "function" &&
+    DATE_DATA_TYPE.test(String(candidate.dataType))
+  );
+}
+
+/**
  * Abstract base class for database adapters.
  *
  * @remarks
@@ -495,6 +523,60 @@ export abstract class DrizzleAdapter {
       out[sqlToJs.get(key) ?? key] = value;
     }
     return out as T;
+  }
+
+  /**
+   * Decode a raw-SQL result row's DATE column values the way a Drizzle query
+   * would, so a write answers with the same representation a read of the same
+   * column gives.
+   *
+   * A Drizzle query path runs every value through its column definition; a
+   * raw-SQL path does not, so a dialect that stores a timestamp as a number
+   * answers a write with that number while every read answers a `Date`. Only
+   * date columns are touched, and a value that is already a `Date` is left
+   * alone, so a driver that decodes on its own is unaffected.
+   *
+   * Runs after {@link mapRowKeysToJs}: keys are Drizzle property names by then,
+   * which is what the table definition is keyed by.
+   */
+  protected mapDateValuesFromDriver<T = unknown>(tableObj: unknown, row: T): T {
+    if (
+      !tableObj ||
+      typeof tableObj !== "object" ||
+      !row ||
+      typeof row !== "object"
+    ) {
+      return row;
+    }
+
+    let decoded: Record<string, unknown> | undefined;
+    for (const [jsName, colDef] of Object.entries(
+      tableObj as Record<string, unknown>
+    )) {
+      if (!isDateColumn(colDef)) continue;
+      const value = (row as Record<string, unknown>)[jsName];
+      // `undefined` means the column was not projected; `null` is a stored
+      // absence. Neither is a driver representation to decode.
+      if (value == null || value instanceof Date) continue;
+      decoded ??= { ...(row as Record<string, unknown>) };
+      decoded[jsName] = colDef.mapFromDriverValue(value);
+    }
+    return (decoded as T | undefined) ?? row;
+  }
+
+  /**
+   * Bring a raw-SQL result row into the shape a Drizzle query would have
+   * produced: Drizzle property names for keys, decoded values for date columns.
+   *
+   * The raw-SQL write paths exist because a dialect needs SQL a Drizzle query
+   * cannot express, not because their callers want a different row shape, so
+   * every one of them ends here.
+   */
+  protected mapRowFromRawSql<T = unknown>(tableObj: unknown, row: T): T {
+    return this.mapDateValuesFromDriver(
+      tableObj,
+      this.mapRowKeysToJs(tableObj, row)
+    );
   }
 
   /**
