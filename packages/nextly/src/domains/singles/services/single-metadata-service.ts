@@ -52,7 +52,10 @@ import type {
 } from "../../../schemas/dynamic-singles/types";
 import type { Logger } from "../../../shared/types";
 import { DynamicCollectionSchemaService } from "../../dynamic-collections/services/dynamic-collection-schema-service";
-import { splitStatements } from "../../schema/pipeline/sql-statement-utils";
+import {
+  isIdempotencyError,
+  splitStatements,
+} from "../../schema/pipeline/sql-statement-utils";
 import { generateRuntimeSchema } from "../../schema/services/runtime-schema-generator";
 
 import { reconcileSingleCompanion } from "./reconcile-single-companion";
@@ -178,7 +181,17 @@ export class SingleMetadataService {
       // The shared splitter, not a private copy. The two the handlers carried had already drifted
       // from each other elsewhere in this codebase, which is why one canonical version exists.
       for (const statement of splitStatements([migrationSQL])) {
-        await adapter.executeQuery(statement);
+        try {
+          await adapter.executeQuery(statement);
+        } catch (error) {
+          // Re-running the create over schema it already produced is the repair case, and it has
+          // to behave the same on every dialect. PostgreSQL and SQLite emit `IF NOT EXISTS` for
+          // both the table and its indexes, so they already tolerate it; MySQL has no such form
+          // for `CREATE INDEX` and reports a duplicate key name, which would report a correct
+          // schema as a failed migration. The matcher is anchored to those DDL wordings and
+          // deliberately does not match a duplicate ROW, so a real data conflict still fails.
+          if (!isIdempotencyError(error)) throw error;
+        }
       }
     } catch (error) {
       this.logger.error(
