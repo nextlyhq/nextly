@@ -89,6 +89,21 @@ function ddlTypeForKind(
         ? `DECIMAL${dimensions}`
         : `NUMERIC${dimensions}`;
     }
+    case "text": {
+      // Only the slug column. It is indexed by every generator that creates one, and MySQL cannot
+      // index an unbounded string, so a slug ADDed to an existing table has to arrive bounded or it
+      // cannot carry the index a freshly created table gives it.
+      //
+      // Every other `text` field deliberately keeps the TEXT below. Aligning those with the
+      // descriptor's `varchar(255)` is a real reduction in what the column can hold and is a
+      // separate decision, tracked on its own rather than taken as a side effect here.
+      if (toSnakeCase(String(field.name)) !== "slug") return undefined;
+      // Matches what the descriptor renders: bounded only where the dialect has a bounded string
+      // AND needs one.
+      return dialect === "mysql"
+        ? `VARCHAR(${descriptor.length ?? 255})`
+        : "TEXT";
+    }
     case "shortText": {
       // The one string kind that is not TEXT everywhere. Stated here because a column this path
       // adds to an existing table is read back by the same descriptor the ORM binds: emitting TEXT

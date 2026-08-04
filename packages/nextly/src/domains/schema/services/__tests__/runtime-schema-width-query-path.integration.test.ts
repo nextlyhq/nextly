@@ -22,7 +22,7 @@
 import { createMySqlAdapter } from "@nextlyhq/adapter-mysql";
 import { createPostgresAdapter } from "@nextlyhq/adapter-postgres";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-import { eq, getTableColumns } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { randomBytes } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -38,6 +38,21 @@ interface TestAdapter {
   executeQuery<T = unknown>(sql: string, params?: unknown[]): Promise<T[]>;
   getDrizzle(): unknown;
 }
+
+/**
+ * The two columns this suite reads off a generated table.
+ *
+ * Read as properties, which is how Drizzle is written against everywhere else — `eq(users.id, x)`.
+ * The bulk column-map helper the ORM also offers would answer the same question and is refused by
+ * the v1 legacy gate: it is deprecated but still compiles, so that gate is the only thing that
+ * catches it.
+ */
+interface ProbeColumns {
+  id: unknown;
+  body: { getSQLType(): string };
+}
+
+const columnsOf = (table: unknown): ProbeColumns => table as ProbeColumns;
 
 /** The minimum of Drizzle's query builder this suite uses. */
 interface QueryDb {
@@ -136,12 +151,7 @@ for (const entry of DIALECTS) {
       // Without this the round-trip below would prove nothing: it would be running the same
       // declaration twice.
       const columnType = (builtBy: "collection" | "codeFirst") =>
-        (
-          getTableColumns(describedAs(builtBy) as never) as Record<
-            string,
-            { getSQLType(): string }
-          >
-        ).body.getSQLType();
+        columnsOf(describedAs(builtBy)).body.getSQLType();
 
       expect(columnType("collection")).not.toBe(columnType("codeFirst"));
     });
@@ -152,8 +162,7 @@ for (const entry of DIALECTS) {
       const narrow = describedAs("collection");
       const wide = describedAs("codeFirst");
 
-      const idOf = (table: unknown) =>
-        (getTableColumns(table as never) as Record<string, unknown>).id;
+      const idOf = (table: unknown) => columnsOf(table).id;
 
       // `title` and `slug` are NOT NULL system columns the creator injects into every collection
       // table, so a row has to carry them whichever description writes it.

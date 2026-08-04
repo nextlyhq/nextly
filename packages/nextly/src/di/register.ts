@@ -56,6 +56,7 @@ import {
   registerFieldType,
   withoutDisabledBehavior,
 } from "../domains/schema/field-types/field-type-registry";
+import { builtByFor } from "../domains/schema/pipeline/registered-collections";
 import type { DesiredCollection } from "../domains/schema/pipeline/types";
 import type { ColumnOrigin } from "../domains/schema/services/field-column-descriptor";
 import type { SingleEntryService } from "../domains/singles/services/single-entry-service";
@@ -1119,7 +1120,7 @@ async function initializeSchemaRegistry(
     await loadDynamicTables(
       adapter,
       "dynamic_collections",
-      async (tableName, fields, hasStatus, localized) => {
+      async (tableName, fields, hasStatus, localized, builderOwned) => {
         const { generateRuntimeSchema } = await import(
           "../domains/schema/services/runtime-schema-generator"
         );
@@ -1140,8 +1141,9 @@ async function initializeSchemaRegistry(
             "../domains/i18n/runtime/companion-io"
           );
           await ensureCompanionTable(adapter, {
-            // Loaded from the registry, so the Schema Builder made this table.
-            builtBy: "collection" as const,
+            // These registries hold code-first and plugin rows as well as Builder ones, and their
+            // creators size a text column differently, so the row's own ownership decides.
+            builtBy: builtByFor("collection", builderOwned),
             slug: tableName,
             tableName,
             fields: fields as { name: string; type: string }[],
@@ -1177,7 +1179,7 @@ async function initializeSchemaRegistry(
     await loadDynamicTables(
       adapter,
       "dynamic_singles",
-      async (tableName, fields, hasStatus, localized) => {
+      async (tableName, fields, hasStatus, localized, builderOwned) => {
         const { generateRuntimeSchema } = await import(
           "../domains/schema/services/runtime-schema-generator"
         );
@@ -1193,8 +1195,9 @@ async function initializeSchemaRegistry(
             "../domains/i18n/runtime/companion-io"
           );
           await ensureCompanionTable(adapter, {
-            // A single is built by the same service as a collection.
-            builtBy: "collection" as const,
+            // A single is built by the same service as a collection, but only when the Builder owns
+            // it — this registry carries code-first singles too, and those came from the pipeline.
+            builtBy: builtByFor("single", builderOwned),
             slug: tableName,
             tableName,
             fields: fields as { name: string; type: string }[],
@@ -1239,6 +1242,8 @@ async function initializeSchemaRegistry(
       tableName: string;
       fields: FieldConfig[];
       localized: boolean;
+      /** Ownership as the registry reported it; `undefined` where it is too old to say. */
+      builderOwned: boolean | undefined;
     }> = [];
     // Resolved inside the same best-effort boundary as the load it feeds. An
     // `await` in the argument position rejects BEFORE `loadDynamicTables`
@@ -1252,11 +1257,12 @@ async function initializeSchemaRegistry(
     await loadDynamicTables(
       adapter,
       fieldGroupRegistry ?? STORAGE_FORMAT.registryTable,
-      (tableName, fields, _hasStatus, localized) => {
+      (tableName, fields, _hasStatus, localized, builderOwned) => {
         loadedFieldGroups.push({
           tableName,
           fields: fields as FieldConfig[],
           localized,
+          builderOwned,
         });
         return Promise.resolve();
       }
@@ -1273,7 +1279,12 @@ async function initializeSchemaRegistry(
       adapter,
       loadedFieldGroups.map(entry => entry.tableName)
     );
-    for (const { tableName, fields, localized } of loadedFieldGroups) {
+    for (const {
+      tableName,
+      fields,
+      localized,
+      builderOwned,
+    } of loadedFieldGroups) {
       const typeColumn = fieldGroupTypeColumns.get(tableName);
       if (typeColumn === undefined) {
         // 🔴 Left unregistered rather than registered on a guess.
@@ -1308,8 +1319,9 @@ async function initializeSchemaRegistry(
           "../domains/i18n/runtime/companion-io"
         );
         await ensureCompanionTable(adapter, {
-          // A field group's builder sizes a text column from a different key.
-          builtBy: "fieldGroup" as const,
+          // As above: a field group's own creator sizes a text column from a different key again,
+          // and a code-first row in this registry was not built by it at all.
+          builtBy: builtByFor("fieldGroup", builderOwned),
           slug: tableName,
           tableName,
           fields: fields as { name: string; type: string }[],

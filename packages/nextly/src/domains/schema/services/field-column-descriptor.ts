@@ -36,6 +36,7 @@ import {
   type SystemColumnKind,
   type SystemColumnPresence,
 } from "../../../lib/system-columns";
+import { isBuiltInFieldType } from "../../../schemas/_zod/ui-schema";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { getFieldType } from "../field-types/field-type-registry";
 
@@ -319,6 +320,20 @@ function textKindFor(
   // schema permits that shape on any field, so a field carrying one states nothing about its column.
   const variant = Array.isArray(options) ? undefined : options?.variant;
 
+  // A `slug` column is indexed by every generator that creates one, and MySQL cannot index an
+  // unbounded string without a prefix length. So this one column is bounded whoever built the
+  // table: it is a constraint of the column, not a reading of a width the field never stated.
+  //
+  // Stated here rather than at the creators, because the paths that ADD a slug column to a table
+  // that already exists go through this function and never through them. Left to each creator, a
+  // freshly created table and a repaired one disagreed about the same column, and on MySQL the
+  // repaired one could not carry the index.
+  if (toSnakeCase(field.name) === "slug") {
+    return declaredMaxLength(field, builtBy) !== undefined
+      ? "shortText"
+      : "text";
+  }
+
   switch (builtBy) {
     case "collection":
       if (variant === "short") return "shortText";
@@ -331,7 +346,14 @@ function textKindFor(
       // A declared width wins outright, because this builder never looks at the variant: a field
       // saying `{ maxLength: 120, variant: "long" }` is created bounded, and reading the variant
       // described as unbounded a column that was built bounded.
-      return declaredMaxLength(field, builtBy) !== undefined
+      //
+      // Only for a type this schema names, though. This creator strips `maxLength` (with `dbType`,
+      // `precision`, `scale` and `options`) from a CONTRIBUTED type before mapping it — a plugin's
+      // keys are its own, and one that happens to be spelled `maxLength` must not reshape the
+      // column — so it builds such a field unbounded. Reading it here bounded a column the creator
+      // had just made unbounded, which reports a type change on an untouched column.
+      return isBuiltInFieldType(String(field.type)) &&
+        declaredMaxLength(field, builtBy) !== undefined
         ? "shortText"
         : "longText";
 

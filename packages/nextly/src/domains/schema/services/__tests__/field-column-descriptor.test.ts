@@ -300,3 +300,48 @@ describe("getColumnDescriptor — the same field, per builder", () => {
     }
   });
 });
+
+/**
+ * A contributed type's own keys do not reshape its column.
+ *
+ * The field-group creator strips `maxLength`, `dbType`, `precision`, `scale` and `options` from a
+ * contributed type before mapping it: a plugin's keys are its own, and one that happens to be
+ * spelled like a core key must not decide the physical column. Reading `maxLength` here bounded a
+ * column that creator had just made unbounded, so every later diff reported a type change on it.
+ */
+describe("getColumnDescriptor — a contributed type inside a field group", () => {
+  afterEach(() => {
+    clearFieldTypes();
+  });
+
+  it("ignores a plugin-owned maxLength", () => {
+    registerFieldType({
+      type: "acme-note",
+      storage: "text",
+      component: "@acme/note/admin#Note",
+    });
+
+    const field = contributedField({
+      name: "note",
+      type: "acme-note",
+      maxLength: 64,
+    });
+
+    expect(getColumnDescriptor(field, "mysql", "fieldGroup")?.dialectType).toBe(
+      "text"
+    );
+  });
+
+  // The mirror: a BUILT-IN field's `maxLength` is core's own key, and this creator does read it.
+  it("still reads a built-in field's own maxLength", () => {
+    const field = contributedField({
+      name: "note",
+      type: "text",
+      maxLength: 64,
+    });
+
+    expect(getColumnDescriptor(field, "mysql", "fieldGroup")?.dialectType).toBe(
+      "varchar(64)"
+    );
+  });
+});

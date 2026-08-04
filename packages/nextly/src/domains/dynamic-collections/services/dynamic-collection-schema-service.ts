@@ -84,14 +84,14 @@ export class DynamicCollectionSchemaService {
    */
   private canonicalSlugType(field: FieldDefinition): string | null {
     if (toSnakeCase(field.name) !== "slug") return null;
-    // Asked as the builder whose reading of an unstated width is BOUNDED, which is the whole
-    // reason this function exists: the index above needs a column MySQL can index, and the
-    // unbounded reading renders `text`, which it cannot index without a prefix length. This is a
-    // constraint of the column rather than a claim about who created the table, so it does not
-    // vary with the entity — asking as the creating service instead made every MySQL create fail
-    // on its own CREATE INDEX and leave the table absent.
+    // Asked as the builder this service IS. The descriptor bounds a slug column for every builder,
+    // because the index needs a column MySQL can index and that is a property of the column rather
+    // than of whoever created the table — so naming the real builder here is both honest and safe.
+    // The rule lives there and not here so the paths that ADD a slug column to an existing table
+    // reach it too; encoded only at this creator, a repaired table disagreed with a fresh one.
     return (
-      getColumnDescriptor(field, this.dialect, "codeFirst")?.dialectType ?? null
+      getColumnDescriptor(field, this.dialect, "collection")?.dialectType ??
+      null
     );
   }
 

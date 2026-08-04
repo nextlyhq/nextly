@@ -17,7 +17,9 @@
  */
 import { describe, expect, it } from "vitest";
 
+import type { FieldConfig } from "../../../../collections/fields/types";
 import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
+import { fieldToColumnDef } from "../../../schema/utils/missing-columns";
 import { DynamicCollectionSchemaService } from "../dynamic-collection-schema-service";
 
 const declaredSlug = [
@@ -52,6 +54,30 @@ describe("a declared slug field", () => {
       const sql = ddlFor(dialect);
       expect(sql).toMatch(/"slug"\s+text/i);
       expect(sql).toMatch(/CREATE UNIQUE INDEX .*"slug"/i);
+    }
+  });
+
+  /**
+   * The repair path has to agree with the create path about this column.
+   *
+   * A table that predates the synthetic identity columns gets its `slug` ADDed rather than created,
+   * and that path never reaches the generator above. Bounded there and unbounded here, the same
+   * entity ends up with a column MySQL will not index, and every later diff reports a type change
+   * on a column nothing touched.
+   *
+   * Asserted for every builder because the reason the column is bounded — the index — does not
+   * depend on who made the table.
+   */
+  it("adds the same bounded column to a table that already exists", () => {
+    const slugField = { name: "slug", type: "text" } as unknown as FieldConfig;
+
+    for (const builtBy of ["collection", "fieldGroup", "codeFirst"] as const) {
+      expect(fieldToColumnDef(slugField, "mysql", builtBy)).toMatch(
+        /VARCHAR\(\d+\)/i
+      );
+      expect(fieldToColumnDef(slugField, "mysql", builtBy)).not.toMatch(
+        /\bTEXT\b/i
+      );
     }
   });
 });
