@@ -170,3 +170,16 @@ export function genericPublicMessage(code: string): string {
     GENERIC_PUBLIC_MESSAGE.INTERNAL_ERROR!
   );
 }
+
+/**
+ * The canonical error code a service names when it knows which one it means.
+ *
+ * A status is coarser than a code -- 409 covers both a name clash and a stale
+ * write, and they need opposite advice -- so a failure that knows the
+ * difference says so, and the boundary believes it instead of inferring the
+ * safer reading from the number alone.
+ *
+ * Widened to `string` rather than `NextlyErrorCode`: a plugin declares codes
+ * outside the canonical set, and the converter already carries those through.
+ */
+export type ServiceErrorCode = string;

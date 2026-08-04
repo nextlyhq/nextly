@@ -161,6 +161,27 @@ export function toMediaDate(value: unknown): Date {
   return new Date(normalized || new Date());
 }
 
+/**
+ * Whether a failed folder result is the service refusing well-formed input.
+ *
+ * A folder that cannot be moved into itself, or deleted while it still holds
+ * something, is not a malformed request: the boundary answers it with a
+ * field-anchored validation error a caller can act on, rather than the generic
+ * sentence a bare code carries.
+ *
+ * Reads the code the service names, and still recognises a bare 400 for a
+ * producer that names none — those were the only failures reaching this branch
+ * before any of them named a code, and the branch has to keep answering them
+ * the same way.
+ */
+function isRefusedInput(result: {
+  code?: string;
+  statusCode: number;
+}): boolean {
+  if (result.code) return result.code === "INVALID_INPUT";
+  return result.statusCode === 400;
+}
+
 // ============================================================
 // MediaService
 // ============================================================
@@ -1051,7 +1072,7 @@ export class MediaService {
     );
 
     if (!result.success || !result.data) {
-      if (!result.code && result.statusCode === 400) {
+      if (isRefusedInput(result)) {
         // Per §13.8 the per-error message names the field but never the value;
         // driver text moves to logContext.
         throw NextlyError.validation({
@@ -1097,7 +1118,7 @@ export class MediaService {
     );
 
     if (!result.success) {
-      if (!result.code && result.statusCode === 400) {
+      if (isRefusedInput(result)) {
         // Folder-not-empty rejection. Per §13.8 the per-error message names
         // the field but never the value; the operator hint stays in logContext.
         throw NextlyError.validation({
