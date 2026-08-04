@@ -160,6 +160,12 @@ export function projectAuditMetadata(
  * aid taking down the request it exists to explain.
  */
 function reportWithheldDetail(err: NextlyError, requestId?: string): void {
+  // Read once and reused. Two reads of an accessor-backed property can answer
+  // differently, so one that passes `instanceof Error` and then returns
+  // undefined would throw on `.message` — inside this try, discarding the whole
+  // report including the context and message that were perfectly readable.
+  const cause = read(() => err.cause);
+  const causeMessage = cause instanceof Error ? cause.message : undefined;
   try {
     getNextlyLogger().warn({
       kind: "auth-failed",
@@ -169,10 +175,7 @@ function reportWithheldDetail(err: NextlyError, requestId?: string): void {
       // The operator-only message. The row never keeps it, so this is the only
       // place it is readable, and an error may carry nothing else.
       logMessage: read(() => err.logMessage),
-      cause:
-        read(() => err.cause) instanceof Error
-          ? (read(() => err.cause) as Error).message
-          : undefined,
+      cause: causeMessage,
     });
   } catch {
     /* an unserialisable context is not a reason to fail the request */

@@ -77,16 +77,32 @@ previously stored the whole error context, so existing unattributed
 Deletion is keyed on the actor and those rows have none, so nothing reaches them
 — the projection applies only to failures recorded from now on.
 
-Scrub them once, before or after upgrading:
+Accounts deleted BEFORE this change are not covered either, for the opposite
+reason: their attributed rows still hold the address and client they connected
+from, and the erasure added here runs during a deletion — it can never run for
+an account that is already gone. `actor_user_id` carries no foreign key, so
+those rows survive as orphans pointing at nothing.
+
+Scrub both once, before or after upgrading:
 
 ```sql
+-- Rows recorded without an actor: the context the handlers used to store
+-- wholesale, which may name an attempted address.
 UPDATE audit_log SET metadata = NULL
 WHERE actor_user_id IS NULL AND metadata IS NOT NULL;
+
+-- Rows attributed to accounts that no longer exist: their request identifiers,
+-- which the deletion that removed them never erased.
+UPDATE audit_log SET ip_address = NULL, user_agent = NULL
+WHERE actor_user_id IS NOT NULL
+  AND actor_user_id NOT IN (SELECT id FROM users);
 ```
 
-That discards the diagnostic codes on those rows along with the identifiers.
-The event, its outcome and its timestamp — the security fact the trail exists
-for — are columns, and are untouched.
+The first discards the diagnostic codes on those rows along with the
+identifiers. The second leaves `actor_user_id` in place — the trail should still
+say that the same someone did these things, only not who they were. The event,
+its outcome and its timestamp are columns, and neither statement touches them:
+that is the security fact the trail exists for.
 
 **Upgrading, PostgreSQL and MySQL: one required action.** If you hardened
 `audit_log` by revoking UPDATE — the posture this package previously documented —
