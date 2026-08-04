@@ -13,7 +13,10 @@
 
 import type { Logger } from "../../shared/types";
 import { pruneAuditDataSafely, type AuditPruneAdapter } from "../audit/prune";
-import type { ResolvedAuditRetentionConfig } from "../audit/retention-config";
+import {
+  activeAuditRetention,
+  type ResolvedAuditRetentionConfig,
+} from "../audit/retention-config";
 import { pruneWebhookDataSafely, type PruneDeps } from "../webhooks/prune";
 import type { ResolvedWebhookRetentionConfig } from "../webhooks/retention-config";
 
@@ -59,7 +62,9 @@ export function buildRetentionPasses(
   // so the pass is not registered at all rather than registered and made a
   // no-op: an unregistered pass never takes the gate, never reads, and never
   // appears in a log as having run.
-  const audit = input.auditPolicy;
+  // Read through the published value so a hot reload takes effect without a
+  // restart; the policy built in at construction is the fallback.
+  const audit = activeAuditRetention(input.auditPolicy);
   if (
     audit &&
     (audit.activityMaxAgeMs !== false || audit.authMaxAgeMs !== false)

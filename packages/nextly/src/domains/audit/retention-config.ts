@@ -156,3 +156,33 @@ export function resolveAuditRetentionConfig(
     ),
   };
 }
+
+/**
+ * The policy a hot reload published, if any.
+ *
+ * The runners capture their policy when they are built, so a config saved in
+ * dev would otherwise keep pruning on the previous windows until restart —
+ * including a change to `false`, where the stale windows go on deleting rows
+ * the operator has just asked to keep. Passes read through
+ * {@link activeAuditRetention} so the reloaded value takes effect on save,
+ * mirroring how the audit recording seam is republished.
+ *
+ * Process-global for the same reason that one is: it answers a question with a
+ * single answer per process, and threading it through every construction site
+ * would reintroduce the carry problem this exists to avoid.
+ */
+let publishedAuditRetention: ResolvedAuditRetentionConfig | undefined;
+
+/** Publish a reloaded policy. `undefined` restores whatever was built in. */
+export function setAuditRetention(
+  policy: ResolvedAuditRetentionConfig | undefined
+): void {
+  publishedAuditRetention = policy;
+}
+
+/** The policy a pass should run with: the reloaded one, else the built-in. */
+export function activeAuditRetention(
+  built: ResolvedAuditRetentionConfig | undefined
+): ResolvedAuditRetentionConfig | undefined {
+  return publishedAuditRetention ?? built;
+}

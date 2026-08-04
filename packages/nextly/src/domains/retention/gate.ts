@@ -68,6 +68,12 @@ export interface RetentionGateStore {
    * `now`. Returns true only for the caller that took it.
    */
   claim(key: string, dueBefore: Date, now: Date): Promise<boolean>;
+  /**
+   * Drop a marker this caller wrote, returning the turn. Optional: a store
+   * that cannot release simply keeps the interval, which is the previous
+   * behaviour rather than a new failure.
+   */
+  release?(key: string): Promise<void>;
 }
 
 /** The subset of the adapter the gate needs. */
@@ -85,6 +91,12 @@ const META_TABLE = "nextly_meta";
  */
 export class MetaRetentionGate implements RetentionGateStore {
   constructor(private readonly adapter: RetentionGateAdapter) {}
+
+  async release(key: string): Promise<void> {
+    await this.adapter.delete(META_TABLE, {
+      and: [{ column: "key", op: "=", value: key }],
+    });
+  }
 
   async claim(key: string, dueBefore: Date, now: Date): Promise<boolean> {
     // Removing the stale marker IS the claim: only one caller can delete a
@@ -118,6 +130,30 @@ export class MetaRetentionGate implements RetentionGateStore {
     } catch {
       return false;
     }
+  }
+}
+
+/**
+ * Give back a turn that was claimed but not used.
+ *
+ * Claiming writes the marker before the caller can know whether it still has
+ * time to spend, so a pass that then finds none has taken a turn it did
+ * nothing with — and the marker would hold the next attempt off for a full
+ * interval. Removing it restores the state as if the claim had not happened.
+ *
+ * Safe because the work it guards is idempotent: a pass deletes rows older than
+ * a cutoff, so at worst another caller runs one now instead of later. A failure
+ * to release is not worth reporting — the only cost is the interval that would
+ * have been lost anyway.
+ */
+export async function releaseRetentionPass(
+  store: RetentionGateStore,
+  key: string
+): Promise<void> {
+  try {
+    await store.release?.(key);
+  } catch {
+    /* the turn stays taken; the next interval recovers it */
   }
 }
 

@@ -5,9 +5,14 @@
  * as the collection/single/media services already wire: the fast-path drain (so
  * a recorded event is delivered immediately instead of at the next scheduled
  * trigger) and a bounded retention pass (so a frequently-written resource trims
- * old outbox rows without waiting for the scheduled drain). Both are optional — a
- * bare container (CLI, tests) or an install without webhook retention configured
- * gets `undefined` and relies on the scheduled drain.
+ * what it fills without waiting for the scheduled drain).
+ *
+ * The retention pass covers BOTH domains — the webhook outbox and the audit
+ * trails — each on its own window and its own gate. It is absent only when
+ * neither has anything to prune, so an install with webhook retention off and
+ * audit retention on still gets one; wiring that forwards a single policy
+ * leaves the other domain unpruned rather than failing. The drain hook is
+ * likewise optional, and a bare container (CLI, tests) has neither.
  *
  * Centralized because the user write paths reach the mutation service through
  * several construction sites (DI registration, the legacy facade, and the auth

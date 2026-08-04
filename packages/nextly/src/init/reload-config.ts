@@ -26,6 +26,10 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { type SQL } from "drizzle-orm";
 
 import type { CollectionHooks } from "../collections/config/define-collection";
+import {
+  setAuditRetention,
+  type ResolvedAuditRetentionConfig,
+} from "../domains/audit/retention-config";
 import { withMigrationExcluded } from "../domains/field-groups/migration/sync-guard";
 import { chooseTypeColumns } from "../domains/field-groups/storage/resolve-storage-names";
 import type { I18nTransitionKind } from "../domains/i18n/migration/transition-state";
@@ -1258,6 +1262,7 @@ async function applyReload(opts?: {
         singles?: SingleDef[];
         fieldGroups?: ComponentDef[];
         webhookAuditEnabled?: boolean;
+        auditRetention?: ResolvedAuditRetentionConfig;
         localization?: { defaultLocale?: string };
         /**
          * The resolved plugin list. Needed to tell a plugin's contribution
@@ -1390,6 +1395,12 @@ async function applyReload(opts?: {
   // process-global flag that reads no field tree, so — like a recording opt-out
   // — it is safe to apply immediately, before the schema diff is synced.
   setWebhookAuditEnabled(newConfig.webhookAuditEnabled ?? false);
+
+  // Republish the retention windows for the same reason. The runners captured
+  // theirs when they were built, so without this a saved change keeps pruning
+  // on the previous windows — including a change to `false`, where the stale
+  // ones go on deleting rows the operator has just asked to keep.
+  setAuditRetention(newConfig.auditRetention);
 
   // Worked out here and applied only where the reload lands, by `commitReload`.
   // A hook edit changes no table, so the reload it triggers often finds no diff
