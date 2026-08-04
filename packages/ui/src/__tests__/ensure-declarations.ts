@@ -144,17 +144,40 @@ function bareExtends(req: NodeRequire, spec: string): string {
   // this repository uses.
   if (!isPackageName) return req.resolve(spec);
 
-  const manifest = req.resolve(`${spec}/package.json`);
-  const declared = (
-    JSON.parse(readFileSync(manifest, "utf8")) as { tsconfig?: unknown }
-  ).tsconfig;
-  // TypeScript reads the manifest's `tsconfig` field before falling back to the
-  // package root, so a package pointing at `./configs/custom.json` inherits
-  // from that file and not from a `tsconfig.json` that may not exist.
-  if (typeof declared === "string") {
-    return resolve(dirname(manifest), declared);
+  // Three ways a package can name its config, tried in TypeScript's order. Each
+  // is attempted independently, because an `exports` map may expose one and
+  // encapsulate another: a package can export its config at the root while
+  // refusing `./package.json`, and reading the manifest first would then throw
+  // on a package that resolves perfectly well.
+  const fromManifest = (): string | undefined => {
+    const manifest = req.resolve(`${spec}/package.json`);
+    const declared = (
+      JSON.parse(readFileSync(manifest, "utf8")) as { tsconfig?: unknown }
+    ).tsconfig;
+    return typeof declared === "string"
+      ? resolve(dirname(manifest), declared)
+      : undefined;
+  };
+  for (const attempt of [
+    fromManifest,
+    () => req.resolve(`${spec}/tsconfig.json`),
+    // The root export, which is how an `exports`-mapped config package is
+    // reached. Only accepted when it actually names a config: resolving a
+    // package's JavaScript entry point and timestamping that would be a wrong
+    // answer wearing the shape of a right one.
+    () => {
+      const target = req.resolve(spec);
+      return target.endsWith(".json") ? target : undefined;
+    },
+  ]) {
+    try {
+      const target = attempt();
+      if (target !== undefined) return target;
+    } catch {
+      // Try the next form.
+    }
   }
-  return req.resolve(`${spec}/tsconfig.json`);
+  throw new Error(`Cannot resolve tsconfig for "${spec}"`);
 }
 
 function tsconfigChain(entry: string): string[] | undefined {
