@@ -800,6 +800,25 @@ describe("custom CSS may not reach off this origin", () => {
       expect(out.css).toContain(`16px/1.5"${ns("Brand")}",serif`);
     });
 
+    it("follows a name through a custom property", () => {
+      // `--anim: fade` only becomes a reference after `var()` substitution, so
+      // nothing here can see the use — but leaving it makes the definition
+      // rename break the animation with no trace in the output.
+      const out = sanitizeCustomCss(
+        `@keyframes fade { from { opacity: 0 } } .a { --anim: fade; animation: var(--anim) 1s }`,
+        SCOPE
+      );
+      expect(out.css).toContain(`--anim:${ns("fade")}`);
+    });
+
+    it("follows a family through a custom property too", () => {
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: Brand; src: url("/f.woff2") } .a { --f: Brand; font-family: var(--f) }`,
+        SCOPE
+      );
+      expect(out.css).toContain(`--f:${ns("Brand")}`);
+    });
+
     it("still refuses a remote url inside a keyframe step", () => {
       // The step blocks are ordinary declarations, so the origin policy has to
       // reach them — allowing the at-rule must not open a door beneath it.

@@ -283,6 +283,27 @@ export function rewriteNameReferences(
       const declaration = node as csstree.Declaration;
       const property = propertyName(declaration.property);
       const value = declaration.value;
+
+      // A custom property can hold a name that only becomes a reference after
+      // `var()` substitution — `--anim: fade` read by `animation: var(--anim)`.
+      // Nothing here can see that use, so the value is matched directly: a
+      // custom property whose WHOLE value is a name this stylesheet defines is
+      // rewritten with it. The trade is a custom property holding that same
+      // word as literal text, which would come back namespaced; against a
+      // definition renamed out from under every var() reference to it, which
+      // breaks silently and leaves nothing in the output to diagnose.
+      //
+      // Read from `Raw`, because that is what a custom property's value parses
+      // as: it may hold arbitrary tokens, so the parser does not interpret it.
+      if (property.startsWith("--")) {
+        if (value.type !== "Raw") return;
+        const whole = value.value.trim();
+        const namespaced =
+          map.keyframes.get(whole) ?? map.fontFamilies.get(whole.toLowerCase());
+        if (namespaced !== undefined) value.value = namespaced;
+        return;
+      }
+
       if (value.type !== "Value") return;
 
       if (map.keyframes.size > 0) {

@@ -234,3 +234,103 @@ describe("font faces", () => {
     expect(validateFontFace({ family: "B", src: [] }, "f")).toHaveLength(1);
   });
 });
+
+describe("stored data reaching the stylesheet", () => {
+  // Tokens and fonts are admin data, so every field here is attacker-shaped
+  // input to a text emitter. Each of these escaped the page's own rule before
+  // it was checked.
+
+  it("refuses a token name that would close the rule", () => {
+    const { css, issues } = emitTokenBlocks(
+      {
+        tokens: [
+          { name: "x:1}body{color", kind: "color", values: { light: "red" } },
+        ],
+      },
+      SCOPE
+    );
+    expect(css).toBe("");
+    expect(css).not.toContain("body{");
+    expect(issues[0]?.message).toContain("is not a token name");
+  });
+
+  it("refuses a token value that would end the custom property", () => {
+    // The semicolon ends `--site-color-primary` and what follows becomes a
+    // declaration on the page root — including a URL-bearing one.
+    const { css, issues } = emitTokenBlocks(
+      {
+        tokens: [
+          {
+            name: "color.primary",
+            kind: "color",
+            values: { light: "#fff;color:red" },
+          },
+        ],
+      },
+      SCOPE
+    );
+    expect(css).toBe("");
+    expect(issues[0]?.message).toContain("cannot be used");
+  });
+
+  it("refuses a dark value that would inject, not only the light one", () => {
+    const { css } = emitTokenBlocks(
+      {
+        tokens: [
+          {
+            name: "color.primary",
+            kind: "color",
+            values: { light: "#fff", dark: "#000}body{display:none" },
+          },
+        ],
+      },
+      SCOPE
+    );
+    expect(css).toBe("");
+  });
+
+  it("refuses a family name carrying structural characters", () => {
+    // `Brand";src:url(/ok)}body{display:none}/*` would end the quoted
+    // descriptor, then the rule, then write another. Escaping the quote alone
+    // would leave the braces and the comment opener inside a stylesheet that
+    // is written into a `<style>` element, where `</style>` ends the element
+    // whatever the CSS parser thinks of the quotes.
+    const { css, issues } = emitFontFaces([
+      {
+        family: 'Brand";src:url(/ok)}body{display:none}/*',
+        src: [{ url: "/f.woff2" }],
+      },
+    ]);
+    expect(css).toBe("");
+    expect(issues[0]?.message).toContain("not a usable font family name");
+  });
+
+  it("escapes a quote in a family name it does allow", () => {
+    // A quote alone is legal in a family name and is what the CSS escape
+    // exists for, so this one is carried through rather than refused.
+    const { css } = emitFontFaces([
+      { family: 'Say "Hi"', src: [{ url: "/f.woff2" }] },
+    ]);
+    expect(css).toContain('font-family:"Say \\"Hi\\""');
+    expect(css.match(/@font-face/g)?.length).toBe(1);
+  });
+
+  it("refuses an unquoted descriptor that would inject", () => {
+    for (const face of [
+      { family: "B", src: [{ url: "/f.woff2" }], weight: "400;color:red" },
+      { family: "B", src: [{ url: "/f.woff2" }], style: "normal}body{x:y" },
+      { family: "B", src: [{ url: "/f.woff2" }], display: "swap;a:b" },
+      { family: "B", src: [{ url: "/f.woff2" }], unicodeRange: "U+0-7F}a{b:c" },
+    ]) {
+      const { css } = emitFontFaces([face]);
+      expect(css, JSON.stringify(face)).toBe("");
+    }
+  });
+
+  it("refuses a format hint that is not a plain keyword", () => {
+    const { css } = emitFontFaces([
+      { family: "B", src: [{ url: "/f.woff2", format: 'woff2");}body{x:y' }] },
+    ]);
+    expect(css).toBe("");
+  });
+});
