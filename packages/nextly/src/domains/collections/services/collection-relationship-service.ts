@@ -6,6 +6,7 @@ import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { getDialectTables } from "../../../database";
 import { container } from "../../../di/container";
+import { NextlyError } from "../../../errors/nextly-error";
 import {
   convertTimestampsToCamelCase,
   keysToCamelCase,
@@ -2970,10 +2971,13 @@ export class CollectionRelationshipService extends BaseService {
       const mediaTable = (tables as Record<string, any>).media;
 
       if (!mediaTable) {
-        console.warn(
-          `[fetchMediaByIds] Media table schema not registered for dialect ${dialect}`
-        );
-        return [];
+        throw NextlyError.internal({
+          logContext: {
+            op: "fetchMediaByIds",
+            detail: "media table schema not registered for dialect",
+            dialect,
+          },
+        });
       }
 
       const rows = (await this.db
@@ -2994,8 +2998,18 @@ export class CollectionRelationshipService extends BaseService {
         return absolutizeMediaUrls(camel);
       });
     } catch (error) {
-      console.error("Failed to fetch media by IDs:", error);
-      return [];
+      // Raised, not swallowed — same contract as the Singles read path. An
+      // empty list here degrades a failed fetch into upload fields that read
+      // back as null, which the caller cannot tell apart from an entry that
+      // references no media, so a broken fetch looks like vanished images.
+      throw NextlyError.internal({
+        cause: error instanceof Error ? error : undefined,
+        logContext: {
+          op: "fetchMediaByIds",
+          dialect: this.adapter.getCapabilities().dialect,
+          mediaIds: ids.length,
+        },
+      });
     }
   }
 

@@ -2571,10 +2571,13 @@ export class SingleQueryService extends BaseService {
       ) as unknown as Record<string, { id: AnyColumn } | undefined>;
       const mediaTable = tables.media;
       if (!mediaTable) {
-        this.logger.warn("Media table schema not registered for dialect", {
-          dialect: this.adapter.dialect,
+        throw NextlyError.internal({
+          logContext: {
+            op: "fetchMediaByIds",
+            detail: "media table schema not registered for dialect",
+            dialect: this.adapter.dialect,
+          },
         });
-        return [];
       }
 
       // Structural cast: this.db is the cross-dialect Drizzle union, whose
@@ -2600,8 +2603,19 @@ export class SingleQueryService extends BaseService {
         return absolutizeMediaUrls(camel);
       });
     } catch (error) {
-      this.logger.error("Failed to fetch media by IDs", { error });
-      return [];
+      // Raised, not swallowed. Returning [] here degrades a failed fetch into
+      // an upload field that reads back as null, which is indistinguishable
+      // from "this document references no media" — the symptom that hid a
+      // broken media fetch on SQLite until a user reported vanishing images.
+      // Expansion failing is not a normal outcome, so the read fails loudly.
+      throw NextlyError.internal({
+        cause: error instanceof Error ? error : undefined,
+        logContext: {
+          op: "fetchMediaByIds",
+          dialect: this.adapter.dialect,
+          mediaIds: ids.length,
+        },
+      });
     }
   }
 }

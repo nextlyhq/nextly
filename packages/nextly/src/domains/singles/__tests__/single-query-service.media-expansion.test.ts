@@ -98,6 +98,28 @@ describe("SingleQueryService.expandUploadFields — dialect-portable media fetch
     );
   });
 
+  it("raises instead of degrading a failed fetch into a null field", async () => {
+    // Swallowing here is what made the original SQLite bug invisible: the
+    // fetch threw, the catch returned [], and the upload field rendered as
+    // null — indistinguishable from a document that references no media.
+    const boom = new Error("connection terminated");
+    const db = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn(() => Promise.reject(boom)),
+        })),
+      })),
+    };
+    const service = makeService(db);
+
+    await expect(
+      service.expandUploadFields(
+        { id: "s1", images: "m1" } as never,
+        uploadFields
+      )
+    ).rejects.toThrow();
+  });
+
   it("returns the document unchanged when it references no media", async () => {
     const { db } = makeBuilderOnlyDb([]);
     const service = makeService(db);
