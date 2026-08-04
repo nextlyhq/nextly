@@ -956,6 +956,10 @@ export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
     // user switched retention off; an absent `webhooks` key resolves to the
     // defaults, since the event ledger fills whether or not webhooks are used.
     webhookRetention: resolveWebhookRetentionConfig(config.webhooks?.retention),
+    // Resolved rather than passed through, and the resolution is the part that
+    // matters: omitting `audit` entirely produces the default windows, which
+    // DELETE rows past them. Keeping everything is `false` — at a single window
+    // or at the whole block — so it is stated rather than implied by absence.
     auditRetention: resolveAuditRetentionConfig(config.audit?.retention),
     // Off unless explicitly enabled; the org-wide audit log flips this to keep
     // recording events when an install has no delivery endpoints.

@@ -75,7 +75,13 @@ export interface RunDrainResult {
    */
   abandoned: number;
   /** Rows retention removed on this call; zero when the gate held it off. */
-  pruned: { events: number; deliveries: number };
+  pruned: {
+    events: number;
+    deliveries: number;
+    /** Rows removed from the activity and auth trails on this call. */
+    activity: number;
+    auth: number;
+  };
 }
 
 /**
@@ -104,7 +110,7 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
     retried: 0,
     failed: 0,
     abandoned: 0,
-    pruned: { events: 0, deliveries: 0 },
+    pruned: { events: 0, deliveries: 0, activity: 0, auth: 0 },
   };
 
   for (let round = 0; round < maxRounds; round += 1) {
@@ -160,14 +166,23 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
     // it the right place to spend it. Gated on its own key, so a webhook pass
     // taken this round does not consume the audit trails' turn.
     const auditPolicy = deps.retention?.auditPolicy;
-    if (auditPolicy) {
+    // Skipped once the delivery deadline is spent. The wall-clock bound is a
+    // promise this function makes to a serverless cron route, and a full-budget
+    // pass is up to forty statements — enough to carry the invocation past the
+    // platform's limit and have it killed, losing the drain's own work with it.
+    // The gate is not claimed in that case either, so the pass is deferred to
+    // the next invocation rather than consumed by one that could not run it.
+    const deadlineSpent = deadline !== undefined && now() >= deadline;
+    if (auditPolicy && !deadlineSpent) {
       const auditDue = await claimRetentionPass(
         retention.gate,
         AUDIT_RETENTION_GATE_KEY,
         auditPolicy.intervalMs
       );
       if (auditDue) {
-        await pruneAuditDataSafely(retention.prune, auditPolicy);
+        const trails = await pruneAuditDataSafely(retention.prune, auditPolicy);
+        result.pruned.activity = trails.activity;
+        result.pruned.auth = trails.auth;
       }
     }
   }

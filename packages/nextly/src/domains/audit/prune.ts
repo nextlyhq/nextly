@@ -152,17 +152,49 @@ export async function pruneAuditData(
  * error: `audit_log` is absent from some bootstrap paths, and a pass that
  * cannot find it should leave the other table's pruning alone.
  */
+/** One trail's pass, with its own failure absorbed and reported. */
+async function pruneTrailSafely(
+  deps: AuditPruneDeps,
+  trail: "activity" | "auth",
+  policy: ResolvedAuditRetentionConfig,
+  maxBatches: number | undefined,
+  now: () => Date
+): Promise<number> {
+  const maxAge =
+    trail === "activity" ? policy.activityMaxAgeMs : policy.authMaxAgeMs;
+  if (maxAge === false) return 0;
+
+  try {
+    return await pruneTable(
+      deps,
+      trail === "activity" ? ACTIVITY_TABLE : AUTH_TABLE,
+      new Date(now().getTime() - maxAge),
+      { batchesLeft: maxBatches ?? policy.maxBatchesPerRun }
+    );
+  } catch (error) {
+    deps.logger?.warn?.("audit retention pass failed", {
+      trail,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return 0;
+  }
+}
+
 export async function pruneAuditDataSafely(
   deps: AuditPruneDeps,
   policy: ResolvedAuditRetentionConfig,
   maxBatches?: number
 ): Promise<AuditPruneResult> {
-  try {
-    return await pruneAuditData(deps, policy, maxBatches);
-  } catch (error) {
-    deps.logger?.warn?.("audit retention pass failed", {
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return { activity: 0, auth: 0 };
-  }
+  // Per trail, not per pass. One try around both meant a failure on the trail
+  // pruned first stopped the other from being attempted at all — so a role
+  // holding DELETE on one table and not the other, or a database carrying one
+  // and not the other, lost retention on BOTH, every interval, silently. They
+  // have independent windows and independent budgets; they need independent
+  // failures too, or the independence is only nominal.
+  const now = deps.now ?? (() => new Date());
+  const [activity, auth] = await Promise.all([
+    pruneTrailSafely(deps, "activity", policy, maxBatches, now),
+    pruneTrailSafely(deps, "auth", policy, maxBatches, now),
+  ]);
+  return { activity, auth };
 }

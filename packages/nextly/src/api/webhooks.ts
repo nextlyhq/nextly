@@ -282,8 +282,12 @@ export const drainWebhooks = withErrorHandler(
       "webhookEndpointRegistry"
     );
     // Retention runs after delivery so a cron-only install still prunes its
-    // event/delivery ledger; `undefined` when the operator disabled retention,
-    // in which case the drain skips pruning entirely.
+    // event/delivery ledger and its audit trails. This is the only trigger with
+    // nobody waiting on it, so it is where the configured budget is spent —
+    // every other one hangs off a request and takes a single batch to keep a
+    // save or a sign-in short. An install with no webhooks at all reaches it by
+    // scheduling this route, which is what lets an auth-only deployment catch
+    // up. `undefined` when neither policy has anything to prune.
     const retention = container.get<RunWebhookDrainOptions["retention"]>(
       "webhookRetentionDeps"
     );

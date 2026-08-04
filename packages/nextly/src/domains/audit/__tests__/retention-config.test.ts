@@ -9,6 +9,7 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { pruneAuditDataSafely } from "../prune";
 import {
   DEFAULT_ACTIVITY_MAX_AGE_MS,
   DEFAULT_AUDIT_MAX_BATCHES_PER_RUN,
@@ -57,5 +58,34 @@ describe("resolveAuditRetentionConfig", () => {
     const resolved = resolveAuditRetentionConfig(false);
     expect(resolved.activityMaxAgeMs).toBe(false);
     expect(resolved.authMaxAgeMs).toBe(false);
+  });
+});
+
+/**
+ * The two trails have independent windows and independent budgets. Independent
+ * failures are what make that real: one try around both meant a role holding
+ * DELETE on one table and not the other lost retention on BOTH, every interval,
+ * silently.
+ */
+describe("pruneAuditDataSafely", () => {
+  it("prunes the auth trail when the activity trail fails", async () => {
+    const adapter = {
+      select: async <T>(table: string): Promise<T[]> => {
+        if (table === "activity_log") {
+          throw new Error("permission denied for table activity_log");
+        }
+        return [{ id: "a" }] as T[];
+      },
+      delete: async (): Promise<number> => 1,
+    };
+
+    const result = await pruneAuditDataSafely(
+      { adapter },
+      resolveAuditRetentionConfig(),
+      1
+    );
+
+    expect(result.activity).toBe(0);
+    expect(result.auth).toBe(1);
   });
 });
