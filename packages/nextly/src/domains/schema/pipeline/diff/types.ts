@@ -199,6 +199,15 @@ export interface DropIndexOp {
 //   - drop_column / drop_table: ensure F5's destructive-confirm runs first,
 //     and stay symmetric with the pre-rename phase (ops we own end-to-end)
 //
+// Pre-dropping the index only reaches uniques that exist as a separate object.
+// A `unique: true` field created AT THE SAME TIME as its SQLite table is
+// rendered as a column-level UNIQUE inside CREATE TABLE, which SQLite backs
+// with an internal `sqlite_autoindex_*`. That name is deliberately outside the
+// managed set, no drop_index op is ever planned for it, and DROP INDEX cannot
+// remove it in any case — so dropping such a column still fails with "cannot
+// drop UNIQUE column". Fields that gained their unique later go through
+// CREATE UNIQUE INDEX / ADD CONSTRAINT and are covered.
+//
 // Operations we let pushSchema handle (purely additive; no prompt in API):
 //   - add_table, add_column, add_index
 //   - change_column_type, change_column_nullable, change_column_default
