@@ -171,7 +171,7 @@ type CompanionReadDb = Parameters<
  */
 const writeIntegrityFailures = new WeakSet<object>();
 
-function markWriteIntegrityFailure<E>(error: E): E {
+export function markWriteIntegrityFailure<E>(error: E): E {
   if (typeof error === "object" && error !== null) {
     writeIntegrityFailures.add(error);
   }

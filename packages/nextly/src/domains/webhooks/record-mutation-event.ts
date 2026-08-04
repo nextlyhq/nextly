@@ -23,6 +23,7 @@ import type {
   ActivityWriteDb,
 } from "../../services/dashboard/activity-log-service";
 import { recordMutationActivity } from "../audit/record-activity";
+import { markWriteIntegrityFailure } from "../collections/services/collection-mutation-service";
 
 import { buildEnvelope } from "./envelope";
 import {
@@ -175,14 +176,23 @@ async function recordActivity(
 ): Promise<void> {
   const action = ACTIVITY_ACTIONS[args.type];
   if (!action || args.resource.kind !== "entry") return;
-  await recordMutationActivity(db, {
-    action,
-    collection: args.resource.collection,
-    ...(args.resource.id !== undefined ? { entryId: args.resource.id } : {}),
-    data: args.data,
-    previous: args.previous ?? null,
-    actor: args.actor ?? null,
-  });
+  // Marked as a write-integrity failure before it can reach the bulk workers.
+  // They turn an ordinary error raised after a row was written into a soft
+  // per-item failure and carry on inside the SAME transaction, which would
+  // commit the content change with no entry describing it — the exact outcome
+  // recording inside the transaction exists to prevent.
+  try {
+    await recordMutationActivity(db, {
+      action,
+      collection: args.resource.collection,
+      ...(args.resource.id !== undefined ? { entryId: args.resource.id } : {}),
+      data: args.data,
+      previous: args.previous ?? null,
+      actor: args.actor ?? null,
+    });
+  } catch (err) {
+    throw markWriteIntegrityFailure(err);
+  }
 }
 
 export async function recordMutationEvent(
