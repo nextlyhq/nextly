@@ -19,6 +19,7 @@ import { NextlyError } from "../../../errors";
 import { diffSnapshots } from "../pipeline/diff/diff";
 import type { NextlySchemaSnapshot, Operation } from "../pipeline/diff/types";
 
+import { isUnadoptedDatabase } from "./baseline";
 import { migrationDriftError, type DriftItem } from "./drift-error";
 
 export type ReconcileState = "in_sync" | "already_applied" | "drift";
@@ -149,5 +150,15 @@ export async function reconcileFile(
 
   // DRIFT — live matches neither baseline nor target.
   const driftItems = diffSnapshots(before, live).map(toDriftItem);
-  throw migrationDriftError({ migration, file: file.path, driftItems });
+  throw migrationDriftError({
+    migration,
+    file: file.path,
+    driftItems,
+    // A database standing before the history started is a different problem
+    // from a drifted one, and the recoveries for drift do not solve it.
+    unadoptedDatabase: isUnadoptedDatabase({
+      before,
+      driftKinds: driftItems.map(d => d.kind),
+    }),
+  });
 }
