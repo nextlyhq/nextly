@@ -149,8 +149,12 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
         webhookPolicy.intervalMs
       );
       if (due) {
+        // Bounded by the same deadline as everything else this call does.
+        // Unbounded, a backlogged sweep could spend the whole allowance and
+        // leave none for the pass after it — which is the only full-budget
+        // trigger the audit trails have, so it would starve every invocation.
         const pruned = await pruneWebhookDataSafely(
-          retention.prune,
+          { ...retention.prune, deadline },
           webhookPolicy
         );
         result.pruned.events = pruned.events.webhook + pruned.events.audit;
