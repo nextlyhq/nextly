@@ -1,10 +1,20 @@
 import { isFetchableUrl, type RemotePattern } from "../../core/url-policy";
 
 /**
- * Reject dangerous URL schemes for image/link/video srcs. Allows http(s)/relative/
- * mailto/tel. Browsers ignore ASCII control chars + whitespace when parsing a scheme
- * (so `java\tscript:` still executes), so we strip those before testing — matching the
- * raw string alone is an XSS bypass.
+ * A URL safe to NAVIGATE to: an `href`, a form `action`.
+ *
+ * Scheme safety only. Allows http(s)/relative/mailto/tel; browsers ignore ASCII
+ * control chars and whitespace when parsing a scheme (so `java\tscript:` still
+ * executes), so those are stripped before testing — matching the raw string
+ * alone is an XSS bypass.
+ *
+ * NOT for anything the browser fetches by itself. A link is followed when
+ * someone clicks it, so its host is the author's business; an `src` is
+ * requested without asking, and whether that request happens can be made
+ * conditional by CSS — which is the channel {@link mediaUrl} exists to close.
+ * Use `mediaUrl` for `src`, `poster`, `srcSet` and inline backgrounds. This
+ * function was used for the `core/image` source and that is exactly how the
+ * primary image block stayed reachable after backgrounds were gated.
  */
 export function safeUrl(url: unknown): string | undefined {
   if (typeof url !== "string") return undefined;
