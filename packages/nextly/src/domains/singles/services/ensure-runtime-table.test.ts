@@ -1,10 +1,12 @@
-// The lazy singles runtime-table registration: given the registry row, a
-// resolver miss OR a row whose shape moved past the recorded registration
-// re-derives the main table (localized-aware) and the `_locales` companion;
-// an unchanged shape registers nothing on repeat calls; a broken resolver
-// degrades to a no-op instead of throwing.
+// The lazy singles runtime-table registration. Three behaviours are pinned
+// here: a resolver miss registers from the row (the multi-worker gap this
+// exists for); a registration made by boot/create-time/the reconcile is
+// ADOPTED, never overridden on first touch (they build from config, this
+// builds from the row, and the row can lag); and a row that moves after
+// this helper accounted for the table re-registers main + companion. A
+// broken resolver degrades to a no-op instead of throwing.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
@@ -69,22 +71,65 @@ describe("ensureSingleRuntimeTable", () => {
     expect(registered.length).toBe(afterFirst);
   });
 
-  it("re-derives a registration made elsewhere once, then goes quiet", () => {
-    // A boot/create-time registration has no recorded signature, so the
-    // first pass replaces it with an identical row-derived table; the
-    // recorded signature then makes later calls free.
+  it("adopts a registration made elsewhere instead of overriding it", () => {
+    // Boot / create-time / the HMR reconcile build from the CONFIG; this
+    // helper builds from the ROW, and the row can lag. A registration this
+    // helper did not make is left in place on first touch.
+    const sentinel = { already: true };
+    const companionSentinel = { alsoAlready: true };
+    const { adapter, registered, tables } = makeAdapter({
+      single_test_page: sentinel,
+      single_test_page_locales: companionSentinel,
+    });
+    ensureSingleRuntimeTable(adapter, localizedMeta);
+    expect(registered).toEqual([]);
+    expect(tables.get("single_test_page")).toBe(sentinel);
+  });
+
+  it("still catches a row change that lands after adopting a foreign registration", () => {
+    // Adopting records the baseline, so the localization toggle another
+    // worker performs later is detected on the next read.
+    const sentinel = { already: true };
+    const { adapter, registered, tables } = makeAdapter({
+      single_test_page: sentinel,
+      single_test_page_locales: sentinel,
+    });
+    ensureSingleRuntimeTable(adapter, { ...localizedMeta, schemaVersion: 3 });
+    expect(registered).toEqual([]);
+
+    ensureSingleRuntimeTable(adapter, { ...localizedMeta, schemaVersion: 4 });
+    expect(registered).toContain("single_test_page");
+    expect(tables.get("single_test_page")).not.toBe(sentinel);
+  });
+
+  it("backfills only the missing companion when the main table is foreign", () => {
     const sentinel = { already: true };
     const { adapter, registered, tables } = makeAdapter({
       single_test_page: sentinel,
     });
     ensureSingleRuntimeTable(adapter, localizedMeta);
-    expect(registered).toEqual([
-      "single_test_page",
-      "single_test_page_locales",
-    ]);
-    expect(tables.get("single_test_page")).not.toBe(sentinel);
-    ensureSingleRuntimeTable(adapter, localizedMeta);
-    expect(registered.length).toBe(2);
+    expect(registered).toEqual(["single_test_page_locales"]);
+    // The foreign main-table registration survives the backfill.
+    expect(tables.get("single_test_page")).toBe(sentinel);
+  });
+
+  it("uses schemaVersion as the signature when the row carries one", () => {
+    // The cheap key: the same saves that change the field set bump it, so
+    // an unchanged version short-circuits without stringifying the fields.
+    const { adapter, registered } = makeAdapter();
+    ensureSingleRuntimeTable(adapter, { ...localizedMeta, schemaVersion: 7 });
+    const afterFirst = registered.length;
+    // Different field payload, same version → treated as unchanged.
+    ensureSingleRuntimeTable(adapter, {
+      ...localizedMeta,
+      schemaVersion: 7,
+      fields: [{ name: "totally", type: "text" }],
+    });
+    expect(registered.length).toBe(afterFirst);
+
+    // Bumped version → re-registered.
+    ensureSingleRuntimeTable(adapter, { ...localizedMeta, schemaVersion: 8 });
+    expect(registered.length).toBeGreaterThan(afterFirst);
   });
 
   it("re-registers when a storage-affecting field OPTION changes (same type)", () => {
@@ -144,7 +189,7 @@ describe("ensureSingleRuntimeTable", () => {
     ).not.toThrow();
   });
 
-  it("swallows registration failures (adapter falls back to its own error)", () => {
+  it("swallows registration failures but leaves a trace for the next reader", () => {
     const adapter = {
       dialect: "sqlite",
       tableResolver: {
@@ -154,8 +199,22 @@ describe("ensureSingleRuntimeTable", () => {
         },
       },
     } as unknown as DrizzleAdapter;
+    const debug = vi.fn();
+    const logger = {
+      debug,
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
     expect(() =>
-      ensureSingleRuntimeTable(adapter, localizedMeta)
+      ensureSingleRuntimeTable(adapter, localizedMeta, logger)
     ).not.toThrow();
+    // Degrading is intended; degrading silently is what hid the original
+    // registration gap.
+    expect(debug).toHaveBeenCalledOnce();
+    expect(debug.mock.calls[0]?.[1]).toMatchObject({
+      tableName: "single_test_page",
+      error: "registry exploded",
+    });
   });
 });

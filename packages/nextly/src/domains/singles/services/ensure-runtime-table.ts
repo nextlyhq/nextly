@@ -11,53 +11,45 @@
  * singles had no equivalent, so any read/write from an unaware process
  * failed with `Table "single_<slug>" not found in schema registry`.
  *
- * This helper is that equivalent: given the registry row the service just
- * loaded, it registers the main table (and the `_locales` companion for a
- * localized single) into the resolver when the registration is missing OR
- * its shape no longer matches the row. The shape check matters for the same
- * multi-worker reason as the miss: another worker can toggle localization or
- * Draft/Published, or change the field set — the row then says one shape
- * while this process's registration still has the old one, and reads would
- * select columns the physical table no longer carries. Registrations are
- * re-derived whenever the row-derived signature changes; a signature hit
- * makes the repeat call effectively free. Best effort: on any failure the
- * adapter keeps its current behavior (the raw missing-table error), which is
- * exactly the pre-existing outcome.
+ * This helper is that equivalent, and it is deliberately narrow about when
+ * it writes:
+ *
+ * - **Nothing registered** — register from the row. This is the multi-worker
+ *   gap above; there is no other candidate.
+ * - **Registered by someone else** (boot / create-time / the HMR reconcile,
+ *   none of which record a signature here) — leave it alone and record the
+ *   row's signature as a baseline. Those paths build from the CONFIG while
+ *   this one builds from the `dynamic_singles` ROW, and the two agree only
+ *   while the registry sync is current; overriding on first touch would let
+ *   a lagging row replace a fresher config-derived table with no signal.
+ * - **Registered by this helper, and the row has moved since** — re-register
+ *   main and companion together. This is what keeps a localization,
+ *   Draft/Published, or field-set change made by ANOTHER worker from being
+ *   served through a table whose columns no longer match the physical one.
+ *
+ * The baseline recorded in the second case is what makes the third work for
+ * foreign registrations too: the first touch adopts them, and any LATER row
+ * change is still caught.
+ *
+ * Best effort: on any failure the adapter keeps its current behavior (the
+ * raw missing-table error), which is exactly the pre-existing outcome.
  *
  * @module domains/singles/services/ensure-runtime-table
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import type { Logger } from "../../../shared/types";
 import { buildCompanionRuntimeTable } from "../../i18n/runtime/companion-registration";
 import { generateRuntimeSchema } from "../../schema/services/runtime-schema-generator";
 
 /**
- * Shape signatures of the tables this helper registered, per resolver. Keyed
- * WEAKLY on the resolver object so a torn-down adapter's registry does not
- * pin entries (tests boot many), and per table name inside.
+ * Shape signatures of the tables this helper has accounted for, per
+ * resolver. Keyed WEAKLY on the resolver object so a torn-down adapter's
+ * registry does not pin entries (tests boot many), and per table name
+ * inside.
  */
 const registeredShapes = new WeakMap<object, Map<string, string>>();
-
-/**
- * Everything about the row that can change the generated table's columns.
- * The FULL field objects are serialized rather than a name/type projection:
- * the column descriptor also branches on options a projection would miss
- * (`hasMany`/array `relationTo` turn a relationship into a JSON column,
- * `dbType`/`options.format` change number storage, ...), and listing them
- * here would drift as field types evolve. Over-sensitivity is safe — a
- * changed-but-equivalent row just re-derives an identical registration.
- */
-function shapeSignature(
-  meta: SingleRuntimeTableMeta,
-  fields: { name: string; type: string; localized?: boolean }[]
-): string {
-  return JSON.stringify([
-    meta.localized === true,
-    meta.status === true,
-    fields,
-  ]);
-}
 
 /** The registry-row slice this helper needs. */
 export interface SingleRuntimeTableMeta {
@@ -66,6 +58,11 @@ export interface SingleRuntimeTableMeta {
   fields: unknown;
   status?: boolean;
   localized?: boolean;
+  /**
+   * The row's `schema_version`. Bumped by every save that changes the field
+   * set, so it stands in for the field payload in the signature below.
+   */
+  schemaVersion?: number;
 }
 
 // The adapter's resolver is a protected member; the dispatcher and boot
@@ -76,9 +73,35 @@ interface ResolverLike {
   registerDynamicSchema?: (tableName: string, table: unknown) => void;
 }
 
+/**
+ * Everything about the row that can change the generated table's columns.
+ *
+ * `schemaVersion` is the cheap form: the same saves that change the field
+ * set bump it, so it covers the whole field payload at constant cost — this
+ * runs on every single read and write, and stringifying a large field array
+ * on each one is per-request work the comparison then throws away.
+ *
+ * Without it (a row predating the column, or a caller that does not carry
+ * it) the full field objects are serialized instead. Serialized whole rather
+ * than projected to name/type: the column descriptor also branches on field
+ * OPTIONS (`hasMany` or an array `relationTo` make a relationship a JSON
+ * column, `dbType`/`options.format` change number storage), and a projection
+ * listing today's storage-affecting keys would drift as field types evolve.
+ */
+function shapeSignature(
+  meta: SingleRuntimeTableMeta,
+  fields: { name: string; type: string; localized?: boolean }[]
+): string {
+  const shape = `${meta.localized === true}:${meta.status === true}`;
+  return meta.schemaVersion !== undefined
+    ? `v${meta.schemaVersion}:${shape}`
+    : `f${JSON.stringify(fields)}:${shape}`;
+}
+
 export function ensureSingleRuntimeTable(
   adapter: DrizzleAdapter,
-  singleMeta: SingleRuntimeTableMeta
+  singleMeta: SingleRuntimeTableMeta,
+  logger?: Logger
 ): void {
   try {
     const resolver = (adapter as unknown as { tableResolver?: ResolverLike })
@@ -99,39 +122,45 @@ export function ensureSingleRuntimeTable(
     const dialect = adapter.dialect;
     const localized = singleMeta.localized === true;
     const status = singleMeta.status === true;
+    const companionName = `${singleMeta.tableName}_locales`;
 
-    // Re-register when the table is missing OR the row's shape moved past
-    // what this process registered. A registration made elsewhere (boot,
-    // create-time) has no recorded signature, so the first pass through here
-    // re-derives it once from the same row + generators — an identical
-    // replacement — and records the signature that makes later calls free.
-    const signature = shapeSignature(singleMeta, fields);
     let shapes = registeredShapes.get(resolver);
     if (!shapes) {
       shapes = new Map();
       registeredShapes.set(resolver, shapes);
     }
-    const upToDate =
-      shapes.get(singleMeta.tableName) === signature &&
-      Boolean(resolver.getTable(singleMeta.tableName));
-    if (upToDate) return;
+    const recorded = shapes.get(singleMeta.tableName);
+    const signature = shapeSignature(singleMeta, fields);
 
-    // Same generator + flags as the boot registration, so the lazily
-    // registered table matches the physical one (a localized single's
-    // main table omits its translatable columns — they live in the
-    // companion).
-    const { table } = generateRuntimeSchema(
-      singleMeta.tableName,
-      fields as Parameters<typeof generateRuntimeSchema>[1],
-      dialect,
-      { status, localized }
-    );
-    resolver.registerDynamicSchema(singleMeta.tableName, table);
+    const mainMissing = !resolver.getTable(singleMeta.tableName);
+    const companionMissing = localized && !resolver.getTable(companionName);
+    // A recorded signature means THIS helper registered what is there, so a
+    // change since then is ours to act on. No record means the registration
+    // came from boot / create-time / the reconcile, which own it.
+    const rowMovedSinceOurs = recorded !== undefined && recorded !== signature;
 
-    // The companion rides the same signature: a localization or status
-    // toggle changes which columns live there (or whether it is used at
-    // all), so it is re-derived together with the main table.
-    if (localized) {
+    if (!mainMissing && !companionMissing && !rowMovedSinceOurs) {
+      // Either up to date, or a foreign registration on first touch: adopt
+      // it as the baseline so a later row change is still detected.
+      shapes.set(singleMeta.tableName, signature);
+      return;
+    }
+
+    if (mainMissing || rowMovedSinceOurs) {
+      // Same generator + flags as the boot registration, so the lazily
+      // registered table matches the physical one (a localized single's
+      // main table omits its translatable columns — they live in the
+      // companion).
+      const { table } = generateRuntimeSchema(
+        singleMeta.tableName,
+        fields as Parameters<typeof generateRuntimeSchema>[1],
+        dialect,
+        { status, localized }
+      );
+      resolver.registerDynamicSchema(singleMeta.tableName, table);
+    }
+
+    if (localized && (companionMissing || rowMovedSinceOurs)) {
       const companion = buildCompanionRuntimeTable({
         slug: singleMeta.slug,
         tableName: singleMeta.tableName,
@@ -148,7 +177,14 @@ export function ensureSingleRuntimeTable(
       }
     }
     shapes.set(singleMeta.tableName, signature);
-  } catch {
-    // Best-effort: fall through to the adapter's own missing-table error.
+  } catch (err) {
+    // Degrading to the adapter's own missing-table error is the intended
+    // behavior, but a silent degrade is what let the original registration
+    // gap go unnoticed — leave a trace so the next occurrence is greppable.
+    logger?.debug("Lazy single runtime-table registration skipped", {
+      slug: singleMeta.slug,
+      tableName: singleMeta.tableName,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 }

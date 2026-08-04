@@ -488,7 +488,7 @@ export class SingleMutationService extends BaseService {
       // companion) in this process — create/boot-time registration is
       // per-process, so a write from a worker that never saw the create
       // would otherwise fail with "not found in schema registry".
-      ensureSingleRuntimeTable(this.adapter, singleMeta);
+      ensureSingleRuntimeTable(this.adapter, singleMeta, this.logger);
 
       // 1.1. reject an unknown write locale rather than silently writing the
       // translatable values into the DEFAULT companion row (which would overwrite real
