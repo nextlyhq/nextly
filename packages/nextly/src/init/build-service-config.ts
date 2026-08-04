@@ -184,6 +184,17 @@ export function buildServiceConfig(
       serviceConfig.webhookRetention = nextlyConfig.webhookRetention;
     }
 
+    // Audit retention — carry the resolved windows through, for the same reason
+    // as the webhook policy above: the write paths read them to decide whether
+    // to register an audit pass, and an uncarried policy reads as "no retention
+    // configured" rather than as the defaults the sanitizer produced.
+    if (
+      serviceConfig.auditRetention === undefined &&
+      nextlyConfig?.auditRetention !== undefined
+    ) {
+      serviceConfig.auditRetention = nextlyConfig.auditRetention;
+    }
+
     // Audit seam — carry the resolved flag through so the webhook registration
     // can publish it to the recording gate. `undefined` means not carried; the
     // sanitizer always produces a boolean, so any value here is authoritative.

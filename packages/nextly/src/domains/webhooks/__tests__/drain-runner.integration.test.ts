@@ -25,7 +25,7 @@ import { WebhookEndpointRegistry } from "../endpoint-registry";
 import { buildEnvelope } from "../envelope";
 import { recordEvent } from "../record-event";
 import type { ResolvedWebhookRetentionConfig } from "../retention-config";
-import type { RetentionGateStore } from "../retention-gate";
+import type { RetentionGateStore } from "../../../domains/retention/gate";
 import { runWebhookDrain } from "../drain-runner";
 
 process.env.DB_DIALECT = "sqlite";
@@ -262,7 +262,12 @@ describe("runWebhookDrain (real SQLite)", () => {
     // The gate was consulted exactly once (after the queue quiesced); the
     // declined claim leaves nothing pruned this call.
     expect(claims).toBe(1);
-    expect(result.pruned).toEqual({ events: 0, deliveries: 0 });
+    expect(result.pruned).toEqual({
+      events: 0,
+      deliveries: 0,
+      activity: 0,
+      auth: 0,
+    });
   });
 
   it("skips retention when no policy is supplied", async () => {
@@ -277,7 +282,12 @@ describe("runWebhookDrain (real SQLite)", () => {
       decryptSecret: ct => ct,
     });
 
-    expect(result.pruned).toEqual({ events: 0, deliveries: 0 });
+    expect(result.pruned).toEqual({
+      events: 0,
+      deliveries: 0,
+      activity: 0,
+      auth: 0,
+    });
   });
 
   it("is a no-op when there are no endpoints", async () => {

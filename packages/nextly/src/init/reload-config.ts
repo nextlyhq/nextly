@@ -26,6 +26,10 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { type SQL } from "drizzle-orm";
 
 import type { CollectionHooks } from "../collections/config/define-collection";
+import {
+  setAuditRetention,
+  type ResolvedAuditRetentionConfig,
+} from "../domains/audit/retention-config";
 import { withMigrationExcluded } from "../domains/field-groups/migration/sync-guard";
 import { chooseTypeColumns } from "../domains/field-groups/storage/resolve-storage-names";
 import type { I18nTransitionKind } from "../domains/i18n/migration/transition-state";
@@ -1262,6 +1266,7 @@ async function applyReload(opts?: {
         singles?: SingleDef[];
         fieldGroups?: ComponentDef[];
         webhookAuditEnabled?: boolean;
+        auditRetention?: ResolvedAuditRetentionConfig;
         localization?: { defaultLocale?: string };
         /**
          * The resolved plugin list. Needed to tell a plugin's contribution
@@ -1410,6 +1415,12 @@ async function applyReload(opts?: {
     if (committed) return;
     committed = true;
     commitConfigHooks();
+    // Published here rather than when the file is read. A reload that is later
+    // refused still parsed a valid config, and publishing early would leave a
+    // policy the process explicitly rejected in force — deleting on windows
+    // nothing accepted. The runners read the published value at run time, so
+    // committing it here is what makes a saved change take effect.
+    setAuditRetention(newConfig?.auditRetention);
   };
 
   // databaseAdapter doubles as our DI-readiness probe. We don't need any

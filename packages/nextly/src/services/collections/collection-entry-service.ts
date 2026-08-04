@@ -40,8 +40,8 @@ import type {
 } from "../../domains/collections/services/collection-types";
 import type { DynamicCollectionService } from "../../domains/dynamic-collections";
 import type { SanitizedLocalizationConfig } from "../../domains/i18n/config/types";
+import type { RetentionRunner } from "../../domains/retention/runner";
 import type { WebhookFastDrainScheduler } from "../../domains/webhooks/after-drain";
-import type { WebhookRetentionRunner } from "../../domains/webhooks/retention-runner";
 import type {
   CacheRevalidator,
   RevalidationIntent,
@@ -94,12 +94,17 @@ export class CollectionEntryService extends BaseService {
     /** Normalized localization config (i18n M4) — forwarded to the query service. */
     localization?: SanitizedLocalizationConfig,
     /**
-     * Offers a webhook-retention pass after a write. Wired here rather than at
-     * a caller because every write path that appends an event runs through this
-     * service — the dispatcher-facing handler, `CollectionService`, and direct
-     * callers alike — so this is the one place that covers them all.
+     * Offers a retention pass after a write — both of them: the webhook event
+     * ledger and the audit trails, each on its own window and its own gate. The
+     * runner decides which are configured, so a construction site that forwards
+     * only one policy silently leaves that domain unpruned rather than failing.
+     *
+     * Wired here rather than at a caller because every write path that appends
+     * an event runs through this service — the dispatcher-facing handler,
+     * `CollectionService`, and direct callers alike — so this is the one place
+     * that covers them all.
      */
-    private readonly retentionRunner?: WebhookRetentionRunner,
+    private readonly retentionRunner?: RetentionRunner,
     /**
      * Kicks an immediate, bounded drain after a write (via Next `after()`), so
      * the first delivery attempt does not wait for the next scheduled trigger.

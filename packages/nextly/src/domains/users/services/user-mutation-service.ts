@@ -142,7 +142,7 @@ interface WebhookDrainOffer {
 /**
  * The single capability the user write paths need from the webhook retention
  * runner: a bounded, self-gating prune offered after a committed write. Narrow
- * (which `WebhookRetentionRunner` satisfies) for the same reason as
+ * (which `RetentionRunner` satisfies) for the same reason as
  * {@link WebhookDrainOffer}.
  */
 interface WebhookRetentionOffer {
@@ -359,8 +359,10 @@ export class UserMutationService extends BaseService {
     // Optional so a bare service (CLI, seed, unit test) still records events and
     // simply relies on the scheduled drain; wired from DI on the request paths.
     fastDrainScheduler?: WebhookDrainOffer,
-    // Optional bounded outbox prune offered after committed writes; absent when
-    // webhook retention is not configured, where the scheduled drain prunes.
+    // Optional bounded retention pass offered after committed writes. The
+    // shared runner carries both the webhook outbox and the audit trails, each
+    // on its own window and gate; absent only when neither has anything to
+    // prune, where the scheduled drain does the work instead.
     retentionRunner?: WebhookRetentionOffer
   ) {
     super(adapter, logger);
@@ -590,8 +592,9 @@ export class UserMutationService extends BaseService {
   // write paths. Absent on bare services, where the scheduled drain delivers.
   private readonly fastDrainScheduler?: WebhookDrainOffer;
 
-  // Post-commit bounded outbox prune, shared with the same write paths. Absent
-  // when webhook retention is not configured, where the scheduled drain prunes.
+  // Post-commit bounded retention pass, shared with the same write paths. It
+  // offers both the webhook outbox and the audit trails; absent only when
+  // neither has anything to prune, where the scheduled drain does the work.
   private readonly retentionRunner?: WebhookRetentionOffer;
 
   // Cap the write-path prune so a user write that happens to win the retention

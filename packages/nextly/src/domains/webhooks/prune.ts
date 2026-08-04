@@ -65,6 +65,15 @@ export interface PruneDeps {
   adapter: PruneAdapter;
   /** Injectable so tests can pin the cutoff instead of sleeping. */
   now?: () => Date;
+  /**
+   * Stop between batches once this passes.
+   *
+   * A budget bounds the WORK a pass does; this bounds the TIME it takes, and
+   * only the second is what a serverless invocation is killed for. It also
+   * keeps a sweep here from consuming the whole wall-clock allowance and
+   * leaving none for the passes that run after it.
+   */
+  deadline?: Date;
   logger?: Logger;
 }
 
@@ -200,7 +209,12 @@ async function pruneEventClass(
   // dry run would keep recounting its first batch.
   let skipped = 0;
 
+  const clock = deps.now ?? (() => new Date());
   while (budget.batchesLeft > 0) {
+    if (deps.deadline && clock() >= deps.deadline) {
+      return { deleted, exhausted: false };
+    }
+
     const candidates = await deps.adapter.select<{ id: string }>(EVENTS_TABLE, {
       where: {
         and: [
@@ -266,6 +280,10 @@ async function pruneDeliveries(
   let skipped = 0;
 
   while (budget.batchesLeft > 0) {
+    if (deps.deadline && (deps.now ?? (() => new Date()))() >= deps.deadline) {
+      return { deleted, exhausted: false };
+    }
+
     const candidates = await deps.adapter.select<{ id: string }>(
       DELIVERIES_TABLE,
       {

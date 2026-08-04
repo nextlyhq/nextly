@@ -138,9 +138,10 @@ export async function eraseActorPersonalData(
   // unerasable on request: there is no query that could find them.
   //
   // They are therefore bounded by how long the table is kept rather than by
-  // deletion, and this table has no retention pass yet, so today they are kept
-  // indefinitely. That is the case for keeping as little as possible on them in
-  // the first place, which is why the metadata projection is default-deny.
+  // deletion — `audit.retention.authMaxAgeMs`, 180 days by default. A window is
+  // a weaker guarantee than an erasure, which is the case for keeping as little
+  // as possible on them in the first place: the metadata projection is
+  // default-deny for exactly that reason.
   if (auditLog) {
     // A database that predates the stamp column still has to be erased. The
     // stamp records WHEN an erasure happened; the erasure itself is the
