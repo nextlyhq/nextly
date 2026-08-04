@@ -124,9 +124,11 @@ function safeValue(
   } catch {
     return null;
   }
-  const refused = fetchableValues(ast).some(
-    url => !isFetchableUrl(url, remotePatterns)
-  );
+  const { values, unreadable } = fetchableValues(ast);
+  // Unreadable is not safe. A fragment this could not resolve may hold a URL,
+  // so the value goes rather than being emitted unchecked.
+  if (unreadable !== undefined) return null;
+  const refused = values.some(url => !isFetchableUrl(url, remotePatterns));
   return refused ? null : v;
 }
 

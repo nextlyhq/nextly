@@ -16,6 +16,7 @@ import type { CssNode, List, ListItem, Rule } from "css-tree";
 
 import {
   isRemoteUrl,
+  MAX_VALUE_NESTING,
   SUBSTITUTION_FUNCTIONS,
   TEXT_ARGUMENT_FUNCTIONS,
 } from "./url-policy";
@@ -33,31 +34,26 @@ export interface SanitizedCss {
 }
 
 /**
- * Whether a `url()` target leaves this origin.
+ * Why custom CSS refuses an origin its block styles may be allowed.
  *
- * An allowlist by absence: a URL that carries no scheme and no host resolves
- * against the page's own origin, and everything else is refused. That covers
- * `javascript:` and `data:` without naming them, which is the point — a
- * denylist has to predict the next dangerous scheme and this does not.
- *
- * The reason for refusing plain `https:` here, where a block's own style value
- * still allows it, is that custom CSS is the one place where an author controls
- * the SELECTOR as well as the URL. `input[value^="a"] { background: url(...) }`
- * fires a request only when the selector matches, so a page full of them reads
- * a value out one character at a time.
+ * Custom CSS is the one place where an author controls the SELECTOR as well as
+ * the URL. `input[value^="a"] { background: url(...) }` fires a request only
+ * when the selector matches, so a page full of them reads a value out one
+ * character at a time.
  *
  * Refusing it here is only half of the boundary, because the other half of the
- * pair does not have to be written here. A block's `backgroundImage` is
- * compiled into the same stylesheet as this output, so a remote image there
- * plus a custom selector that suppresses it conditionally leaks by the
- * request's ABSENCE, with no URL in the custom CSS for this to refuse. That is
- * why `style-compiler.ts` applies the same origin rule to structured style
- * values, allowing only hosts the site has declared. Neither half is a channel
- * without the other, and each is checked where it is written.
+ * pair need not be written here. A block's `backgroundImage` is compiled into
+ * the same stylesheet as this output, so a remote image there plus a custom
+ * selector that suppresses it conditionally leaks by the request's ABSENCE,
+ * with no URL in the custom CSS for this to refuse. `style-compiler.ts`
+ * therefore applies the same origin rule to structured style values, allowing
+ * only hosts the site has declared. Neither half is a channel without the
+ * other, and each is checked where it is written.
+ *
+ * Both read `url-policy.ts`: which strings can fetch, and how a URL normalises,
+ * are answered once so the two surfaces cannot disagree about what
+ * `image-set("https://…")` is.
  */
-// The classification of which strings can fetch lives with the rest of the
-// origin policy, so custom CSS and structured style values cannot disagree
-// about what `image-set("https://…")` is.
 
 /**
  * What one scan concluded, which is not always "a URL" or "no URL".
@@ -107,15 +103,9 @@ function firstRemoteUrl(decl: csstree.Declaration): CssFinding | undefined {
  */
 export const MAX_RULE_NESTING = 16;
 
-/**
- * How deep a value may nest `Raw` fragments before the scan stops following it.
- *
- * Values are short, so the cost argument above barely bites here; this exists so
- * a hostile value cannot recurse without end. A real fallback chain bottoms out
- * in a literal after a handful of levels, and a design-token stack that walks
- * `var()` through five or six tiers still clears this comfortably.
- */
-export const MAX_VALUE_NESTING = 16;
+// The value-nesting bound belongs with the rest of the origin policy, which
+// walks the same fallbacks; re-exported so the published surface is unchanged.
+export { MAX_VALUE_NESTING } from "./url-policy";
 
 /**
  * The first remote URL reachable in one value, if any.

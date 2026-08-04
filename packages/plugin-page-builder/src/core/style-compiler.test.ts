@@ -429,22 +429,37 @@ describe("isAllowedRemoteUrl", () => {
     expect(isAllowedRemoteUrl("https://example.com/a.png", p)).toBe(true);
   });
 
-  it("treats * as one label and ** as any depth", () => {
-    expect(
-      isAllowedRemoteUrl("https://a.example.com/x", [
-        { hostname: "*.example.com" },
-      ])
-    ).toBe(true);
-    expect(
-      isAllowedRemoteUrl("https://a.b.example.com/x", [
-        { hostname: "*.example.com" },
-      ])
-    ).toBe(false);
-    expect(
-      isAllowedRemoteUrl("https://a.b.example.com/x", [
-        { hostname: "**.example.com" },
-      ])
-    ).toBe(true);
+  it("reads a hostname glob exactly as next/image does", () => {
+    // Verified against the picomatch build Next.js ships and calls from
+    // `matchRemotePattern`. `*` is NOT one label here — picomatch has no path
+    // separator to stop at in a hostname, so it spans dots. An earlier
+    // hand-rolled matcher made `*` single-label, which is a defensible reading
+    // and the wrong one: this type says a `next.config` entry can be copied
+    // across, so matching has to be what that entry already means.
+    const one = [{ hostname: "*.example.com" }];
+    expect(isAllowedRemoteUrl("https://a.example.com/x", one)).toBe(true);
+    expect(isAllowedRemoteUrl("https://a.b.example.com/x", one)).toBe(true);
+
+    const deep = [{ hostname: "**.example.com" }];
+    expect(isAllowedRemoteUrl("https://a.b.example.com/x", deep)).toBe(true);
+    // Neither form matches the bare apex, which is what the leading dot says.
+    expect(isAllowedRemoteUrl("https://example.com/x", deep)).toBe(false);
+  });
+
+  it("matches a terminal ** against the prefix path itself", () => {
+    // `/img/**` accepts `/img` in Next.js, and a matcher that required a
+    // remaining segment dropped a background the published config allowed.
+    const p = [{ hostname: "cdn.example", pathname: "/img/**" }];
+    for (const url of [
+      "https://cdn.example/img",
+      "https://cdn.example/img/",
+      "https://cdn.example/img/a.png",
+      "https://cdn.example/img/a/b.png",
+    ]) {
+      expect(isAllowedRemoteUrl(url, p), url).toBe(true);
+    }
+    // But not a sibling that merely starts with the same characters.
+    expect(isAllowedRemoteUrl("https://cdn.example/imgfoo", p)).toBe(false);
   });
 
   it("admits only http and https, even when the pattern names neither", () => {
@@ -478,6 +493,51 @@ describe("isAllowedRemoteUrl", () => {
     expect(isAllowedRemoteUrl("https://cdn.example/img/a/b.png", deep)).toBe(
       true
     );
+  });
+
+  it("refuses a value whose fallback it could not read", () => {
+    // `var(--missing, url("https://…"))` puts the fallback in a `Raw` node, and
+    // the browser substitutes it in. A walk that skipped `Raw` emitted the
+    // request while reporting the value clean.
+    const node = makeNode(
+      "core/container",
+      {},
+      {
+        base: {
+          filters: 'var(--missing, url("https://evil.example/f.svg#x"))',
+        },
+      }
+    );
+    expect(compileNodeCss(node)).not.toContain("evil.example");
+    expect(
+      compileNodeCss(node, {
+        remotePatterns: [{ protocol: "https", hostname: "evil.example" }],
+      })
+    ).toContain("evil.example");
+    // Nested one level further, since the re-parse recurses.
+    expect(
+      compileNodeCss(
+        makeNode(
+          "core/container",
+          {},
+          {
+            base: {
+              filters: 'var(--a, var(--b, url("https://evil.example/g.svg")))',
+            },
+          }
+        )
+      )
+    ).not.toContain("evil.example");
+    // A fallback with nothing remote in it survives.
+    expect(
+      compileNodeCss(
+        makeNode(
+          "core/container",
+          {},
+          { base: { filters: "var(--blur, blur(2px))" } }
+        )
+      )
+    ).toContain("var(--blur, blur(2px))");
   });
 
   it("allows nothing when nothing is declared", () => {

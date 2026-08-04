@@ -30,9 +30,8 @@ media library uses.
 This closes a way of reading data off the page. A selector that matches only on
 a prefix, paired with a URL that fires a request when it matches, spells a value
 out one character at a time — `input[value^="a"] { background: url(...) }`,
-repeated. Custom CSS is the only surface where an author writes both halves, so
-that is where the ban lands; a block's own style values still accept a remote
-image, because they cannot express a selector.
+repeated. Custom CSS is the only surface where an author writes both halves, so that is
+where the ban is absolute.
 
 Banning it in custom CSS alone would not have closed the channel, because the
 two halves need not be written in the same place. A block's background image is
@@ -53,18 +52,19 @@ hosts it loads from:
 ```
 
 The policy covers every value a block emits, not the properties someone
-remembered can fetch: `filter: url(…)` is a request too, and `next/image`'s
-`pathname` wildcards (`/img/*` as one segment, `/img/**` as any depth) are read
-the way Next.js reads them so a copied config keeps matching. A
-protocol-relative `//host/a.png` is refused rather than resolved against a
-guess, since the document's protocol is not knowable at compile time.
+remembered can fetch: `filter: url(…)` is a request too, and so is
+`filter: var(--missing, url(…))`, whose URL lives in a fallback the parser
+leaves as raw text. A protocol-relative `//host/a.png` is refused rather than
+resolved against a guess, since the document's protocol is not knowable when the
+stylesheet is compiled.
 
 BREAKING for pages using a remote block background: it stops rendering until its
 host is declared. The shape is Next.js's `images.remotePatterns`, so an entry can
 be copied straight across from `next.config`, and the posture matches
-`next/image` — nothing off-origin unless you said so. `**.example.com` matches
-any depth of subdomain, `*.example.com` exactly one, and a `pathname` ending
-`/**` any path beneath it.
+`next/image` — nothing off-origin unless you said so. Matching uses picomatch
+with the same options `next/image` uses, rather than an approximation of it, so
+`hostname` and `pathname` globs mean exactly what they already mean in your
+`next.config`. `search` is honoured too.
 
 Everything the sanitizer removes is now reported rather than dropped silently,
 including at-rules it does not support. A rule that disappears with nothing on
