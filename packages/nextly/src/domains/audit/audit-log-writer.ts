@@ -164,12 +164,15 @@ function reportWithheldDetail(err: NextlyError, requestId?: string): void {
     getNextlyLogger().warn({
       kind: "auth-failed",
       requestId,
-      code: err.code,
-      context: err.logContext,
+      code: read(() => err.code),
+      context: read(() => err.logContext),
       // The operator-only message. The row never keeps it, so this is the only
       // place it is readable, and an error may carry nothing else.
-      logMessage: err.logMessage,
-      cause: err.cause instanceof Error ? err.cause.message : undefined,
+      logMessage: read(() => err.logMessage),
+      cause:
+        read(() => err.cause) instanceof Error
+          ? (read(() => err.cause) as Error).message
+          : undefined,
     });
   } catch {
     /* an unserialisable context is not a reason to fail the request */
@@ -195,6 +198,23 @@ function reportUntypedFailure(err: unknown, requestId?: string): void {
     });
   } catch {
     /* an unserialisable failure is not a reason to fail the request */
+  }
+}
+
+/**
+ * Read a property of an application-supplied error without letting it throw.
+ *
+ * These errors are constructed by plugins, so any field may be accessor-backed
+ * or proxied. Every read of one happens through here, because a read that
+ * escapes takes down the request: this runs inside the auth handlers' catch
+ * blocks, where an exception costs the caller the typed response and the audit
+ * row alike. A property that cannot be read is simply absent.
+ */
+function read<T>(get: () => T): T | undefined {
+  try {
+    return get();
+  } catch {
+    return undefined;
   }
 }
 
@@ -228,15 +248,23 @@ export function auditFailureMetadata(
   // Read once. `code` can be accessor-backed on an application-supplied error,
   // so validating one read and storing another would let a value that failed
   // the check be the one that lands on the row.
-  const code: unknown = err.code;
+  const code: unknown = read(() => err.code);
   const codeIsOurs = isCanonicalErrorCode(code);
-  if (err.logContext || !codeIsOurs || err.cause || err.logMessage) {
-    reportWithheldDetail(err, requestId);
-  }
+  // Every read of an application-supplied error is guarded, the ones in this
+  // CONDITION included. An accessor that throws here would escape ahead of the
+  // report's own guard, and this runs inside the auth handlers' catch blocks —
+  // so the caller would lose both the typed response and the audit row to a
+  // check about whether to write a log line.
+  const carriesDetail =
+    read(() => err.logContext) !== undefined ||
+    !codeIsOurs ||
+    read(() => err.cause) !== undefined ||
+    read(() => err.logMessage) !== undefined;
+  if (carriesDetail) reportWithheldDetail(err, requestId);
 
   return {
     code: codeIsOurs ? code : "INTERNAL_ERROR",
-    ...projectAuditMetadata(err.logContext),
+    ...projectAuditMetadata(read(() => err.logContext)),
   };
 }
 

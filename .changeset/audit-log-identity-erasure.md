@@ -36,7 +36,10 @@ address of whoever acted on them, so erasing by target would scrub a different
 person's data and leave the subject's own in place. Events recorded without an
 actor — a failed login, a rejected CSRF — are out of reach by design, since they
 are written unattributed precisely so a failure cannot reveal which account was
-reached; nothing links them to a person, and retention is what bounds them.
+reached; nothing links them to a person, so no deletion can find them. This
+table has no retention pass yet, so those rows are kept indefinitely — which is
+why the metadata projection below is default-deny: what never enters is the only
+thing certain not to persist.
 
 Whether each table can be erased is now decided per table. A database can carry
 one and not the other, and answering for the pair would let a missing auth log
@@ -67,6 +70,23 @@ discarded without a diagnostic. Three that the initial-password exchange already
 emitted were being discarded that way, leaving `pending-token-wrong-challenge`, a
 stale must-change state, and a missing user indistinguishable from each other in
 the trail. All three are recorded again.
+
+**Upgrading: rows written before this change are not covered.** The handlers
+previously stored the whole error context, so existing unattributed
+`login-failed` rows can already hold an attempted email address or a user id.
+Deletion is keyed on the actor and those rows have none, so nothing reaches them
+— the projection applies only to failures recorded from now on.
+
+Scrub them once, before or after upgrading:
+
+```sql
+UPDATE audit_log SET metadata = NULL
+WHERE actor_user_id IS NULL AND metadata IS NOT NULL;
+```
+
+That discards the diagnostic codes on those rows along with the identifiers.
+The event, its outcome and its timestamp — the security fact the trail exists
+for — are columns, and are untouched.
 
 **Upgrading, PostgreSQL and MySQL: one required action.** If you hardened
 `audit_log` by revoking UPDATE — the posture this package previously documented —

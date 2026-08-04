@@ -416,6 +416,26 @@ describe("auditFailureMetadata", () => {
     expect(logged[0]?.logMessage).toBe("SAML provider unavailable");
   });
 
+  it("survives an error whose diagnostic accessors throw", () => {
+    // Every field of an application-supplied error may be accessor-backed. A
+    // read that escapes takes down the request, since this runs inside the auth
+    // handlers' catch blocks — the caller would lose the typed response and the
+    // audit row to a check about whether to write a log line.
+    const hostile = NextlyError.invalidCredentials({});
+    for (const field of ["logContext", "cause", "logMessage"]) {
+      Object.defineProperty(hostile, field, {
+        get() {
+          throw new Error(`hostile ${field}`);
+        },
+        configurable: true,
+      });
+    }
+
+    expect(auditFailureMetadata(hostile, "req-1")).toEqual({
+      code: "AUTH_INVALID_CREDENTIALS",
+    });
+  });
+
   it("keeps its own classification when a hook supplies those keys", () => {
     // `logContext` is written by application code. Spread, it could overwrite
     // the fields this adds — making a failure unsearchable as an auth failure,
