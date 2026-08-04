@@ -69,9 +69,11 @@ describe("SingleQueryService.expandUploadFields — dialect-portable media fetch
     const service = makeService(db);
 
     const doc = { id: "s1", images: "m1" } as never;
-    const expanded = (await service.expandUploadFields(doc, uploadFields)) as {
-      images: Row;
-    };
+    // Read the expanded field off the document's index signature rather than
+    // asserting a shape onto SingleDocument: `images` is a user field, so the
+    // document type says nothing about it.
+    const expanded: Row = await service.expandUploadFields(doc, uploadFields);
+    const images = expanded.images as Row;
 
     // Surface the swallowed fetch error, if any, before asserting the shape.
     const firstError = logger.error.mock.calls[0]?.[1] as
@@ -81,12 +83,12 @@ describe("SingleQueryService.expandUploadFields — dialect-portable media fetch
 
     // The raw id is replaced by the fetched record, with snake_case columns
     // camelCased for the API response.
-    expect(expanded.images).toMatchObject({
+    expect(images).toMatchObject({
       id: "m1",
       fileName: "hero.png",
       mimeType: "image/png",
     });
-    expect(String(expanded.images.url)).toContain("/uploads/hero.png");
+    expect(String(images.url)).toContain("/uploads/hero.png");
     // No fetch error was swallowed (the old raw-execute path logged one and
     // nulled the field).
     expect(logger.error).not.toHaveBeenCalled();
@@ -101,9 +103,7 @@ describe("SingleQueryService.expandUploadFields — dialect-portable media fetch
     const service = makeService(db);
 
     const doc = { id: "s1", images: null } as never;
-    const expanded = (await service.expandUploadFields(doc, uploadFields)) as {
-      images: unknown;
-    };
+    const expanded: Row = await service.expandUploadFields(doc, uploadFields);
 
     expect(expanded.images).toBeNull();
   });
