@@ -1,41 +1,49 @@
 /**
- * Build the declarations the surface guard reads.
+ * Build the declarations the surface guard reads, into a directory of its own.
  *
  * `ui-surface.test.ts` asserts that release tags survive the declaration
- * bundler, which it can only do against the files in `dist`. Skipping when
- * those are missing is the exact failure the guard exists to catch, so they are
+ * bundler, which it can only do against built files. Skipping when they are
+ * missing is the exact failure the guard exists to catch, so they are
  * generated instead.
  *
- * Every published entry point is built, not just the barrel: `index.d.ts` comes
- * from the default config, and `utils.d.ts` and `tailwind-preset.d.ts` only
- * from the server-safe one. Building one of the two leaves the guard asserting
- * against files that were never written.
+ * ## Not into `dist`, and that matters
+ *
+ * `dist` is what every other package imports this one through. Turbo runs
+ * `@nextlyhq/ui#test` and `@nextlyhq/admin#test` concurrently — both depend on
+ * `@nextlyhq/ui#build`, neither depends on the other, and admin has no path
+ * alias for this package, so its Vitest run resolves the workspace import
+ * through `dist`. Rebuilding there would rewrite the bundle while another
+ * package's tests are reading it, and the resulting failure would appear in a
+ * suite that did nothing wrong.
+ *
+ * Writing somewhere private removes the shared resource rather than trying to
+ * schedule around it, and it costs nothing: the guard needs to INSPECT a
+ * declaration build, never to replace the shipped one.
+ *
+ * ## The directory is emptied first, so presence proves emission
+ *
+ * Both tsup configs set `clean: false`. Against `dist` that made existence
+ * meaningless — an entry point dropped from a config leaves its previous
+ * declaration behind, present and stale, so the guard would check a file
+ * nothing had produced. Starting from an empty directory answers the same
+ * question exactly, and without comparing timestamps around the build.
  *
  * ## It builds every time, on purpose
  *
- * An earlier version computed whether `dist` was stale — walking the tsconfig
- * `extends` chain, resolving bare and relative specifiers, reading manifest
- * `tsconfig` fields and `exports` maps, timestamping the workspace lockfile.
- * That is re-implementing a build system's dependency tracking inside a test
- * helper, and it does not converge: TypeScript's config resolution is a deep
- * enough spec that each correction uncovered another case it answered wrongly,
- * and every one of those was a case where stale declarations passed.
+ * An earlier version computed whether the output was stale — walking the
+ * tsconfig `extends` chain, resolving bare and relative specifiers, reading
+ * manifest `tsconfig` fields and `exports` maps, timestamping the workspace
+ * lockfile. That is a build system's dependency tracking, re-implemented in a
+ * test helper, and it did not converge: each correction uncovered another case
+ * it answered wrongly, and every one of those was a case where stale
+ * declarations passed. Rebuilding unconditionally costs about two seconds and
+ * is correct by construction.
  *
- * Turbo already tracks this properly — `packages/ui/turbo.json` makes `test`
- * depend on this package's own `build`, with real input hashing — so the only
- * caller the hand-rolled version ever served was a direct
- * `pnpm --filter @nextlyhq/ui test`, which AGENTS.md already says not to rely
- * on. Rebuilding unconditionally costs about two seconds and is correct by
- * construction rather than by exhaustive case analysis. Turbo caches the whole
- * `test` task, so the repeated runs that would notice the cost never reach here.
- *
- * Deliberately NOT `build:js`: that begins with `rimraf dist`, and in the
- * parallel task graph other packages read this package's `dist` while their own
- * tests run. Removing it mid-run makes them fail for a reason of our making.
- * `tsup` alone rewrites the files in place.
+ * Deliberately NOT `build:js`: that begins by removing `dist`, which is the
+ * shared directory this exists to stay out of.
  */
 import { execFileSync } from "node:child_process";
-import { statSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -43,13 +51,21 @@ const here = dirname(fileURLToPath(import.meta.url));
 const pkgRoot = join(here, "..", "..");
 
 /**
+ * Where the guard's own declaration build lands.
+ *
+ * Under `node_modules` so it is already ignored by git and by every tool that
+ * walks the package, and outside `dist` so no consumer can resolve into it.
+ */
+const OUT_DIR = join(pkgRoot, "node_modules", ".cache", "surface-declarations");
+
+/**
  * Every declaration a published entry point resolves to.
  *
  * Both module systems, because `package.json` gives each entry point an
  * `import.types` AND a `require.types` condition. Listing only the ESM `.d.ts`
  * left the files served to CommonJS consumers unbuilt and unchecked for release
- * tags, so `dist/index.d.cts` could be missing or untagged while every
- * assertion here stayed green.
+ * tags, so `index.d.cts` could be missing or untagged while every assertion
+ * here stayed green.
  */
 export const DECLARATION_ENTRIES = [
   "index.d.ts",
@@ -60,37 +76,26 @@ export const DECLARATION_ENTRIES = [
   "tailwind-preset.d.cts",
 ];
 
-/** Each declaration's current mtime, or `undefined` where it does not exist. */
-function declarationMtimes(): Map<string, number | undefined> {
-  return new Map(
-    DECLARATION_ENTRIES.map(entry => {
-      try {
-        return [entry, statSync(join(pkgRoot, "dist", entry)).mtimeMs];
-      } catch {
-        return [entry, undefined];
-      }
-    })
+/**
+ * Build the declarations and return the directory holding them.
+ *
+ * Callers read from the returned path rather than assuming one, so the guard
+ * and the build cannot disagree about where the files are.
+ */
+export function ensureDeclarations(): string {
+  rmSync(OUT_DIR, { recursive: true, force: true });
+
+  const run = (args: string[]) =>
+    execFileSync("npx", ["tsup", ...args, "--out-dir", OUT_DIR], {
+      cwd: pkgRoot,
+      stdio: "inherit",
+    });
+  run([]);
+  run(["--config", "tsup.server-safe.config.ts"]);
+
+  const missing = DECLARATION_ENTRIES.filter(
+    entry => !existsSync(join(OUT_DIR, entry))
   );
-}
-
-export function ensureDeclarations(): void {
-  // Read before the build and compared after. Existence alone cannot tell an
-  // emitted file from a left-over one: both configs set `clean: false`, so an
-  // entry point dropped from one leaves its previous declaration in `dist`,
-  // present and stale. Asking whether each file CHANGED answers that directly,
-  // and needs none of the input resolution this file used to carry.
-  const before = declarationMtimes();
-  execFileSync("npx", ["tsup"], { cwd: pkgRoot, stdio: "inherit" });
-  execFileSync("npx", ["tsup", "--config", "tsup.server-safe.config.ts"], {
-    cwd: pkgRoot,
-    stdio: "inherit",
-  });
-
-  const after = declarationMtimes();
-  const missing = DECLARATION_ENTRIES.filter(entry => {
-    const now = after.get(entry);
-    return now === undefined || now === before.get(entry);
-  });
   if (missing.length > 0) {
     throw new Error(
       `The declaration build did not produce: ${missing.join(", ")}. ` +
@@ -100,4 +105,5 @@ export function ensureDeclarations(): void {
         "and from the package's `exports` together."
     );
   }
+  return OUT_DIR;
 }

@@ -17,12 +17,20 @@ export default defineConfig({
       // so a config that stops emitting an entry point would leave the last
       // green surface result on screen.
       //
-      // Deliberately NOT written `**/tsup*.config.*/**` to match the entries
-      // above: picomatch does not match `tsup.config.ts` against that, because
-      // a `*` before the trailing `/**` stops the pattern collapsing onto the
-      // file itself. Those entries are Vitest's own defaults and match only
-      // because a literal segment does collapse. Given the same suffix these
-      // would silently never fire.
+      // Deliberately NOT written `**/tsup*.config.*/**` to match the shape of
+      // the entries above, because that shape does not match a FILE. Measured
+      // against the picomatch Vitest matches with:
+      //
+      //   `**/package.json/**`     vs `packages/ui/package.json`     -> true
+      //   `**/vitest.config.*/**`  vs `packages/ui/vitest.config.ts` -> false
+      //   `**/tsup*.config.*`      vs `packages/ui/tsup.config.ts`   -> true
+      //
+      // Only a trailing literal segment collapses onto the file; a segment
+      // holding a `*` does not. So two of the three defaults above match
+      // nothing — harmless there, since editing a Vitest or Vite config
+      // restarts the server anyway, and they are kept to stay in step with the
+      // defaults they replace. A trigger for these configs has to be written
+      // without the suffix or it would silently never fire.
       "**/tsup*.config.*",
     ],
   },

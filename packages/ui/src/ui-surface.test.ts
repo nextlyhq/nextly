@@ -276,14 +276,16 @@ describe("ui release tags reach the published types", () => {
   // that computation was removed — and two tsup invocations do not fit in
   // Vitest's ten-second hook default. Allowing the time the operation takes is
   // the honest fix, not making the operation guess less carefully.
+  // The directory the guard built for itself. Read from what the build
+  // returned rather than assuming `dist`: the build stays out of `dist`
+  // because other packages import this one through it while these tests run.
+  let builtDir = "";
   beforeAll(() => {
-    ensureDeclarations();
+    builtDir = ensureDeclarations();
   }, 120_000);
 
   /** Symbols re-exported from a dependency, whose declarations are not ours. */
   const FOREIGN = new Set(["toast", "ToasterProps"]);
-
-  const distTypes = path.join(PKG_ROOT, "dist", "index.d.ts");
 
   /** Each declaration's name, mapped to the release tag written above it. */
   function taggedPerDeclaration(built: string): Map<string, string> {
@@ -303,19 +305,15 @@ describe("ui release tags reach the published types", () => {
   const DIST_ENTRIES = DECLARATION_ENTRIES;
 
   it("has built declarations to check", () => {
+    // `ensureDeclarations` throws on a missing entry, so this asserts the
+    // guard's own precondition rather than the state of a checkout: a guard
+    // that quietly checks nothing is indistinguishable from a passing one.
     for (const entry of DIST_ENTRIES) {
       expect(
-        existsSync(path.join(PKG_ROOT, "dist", entry)),
-        `dist/${entry} is missing; run \`pnpm --filter @nextlyhq/ui build\`.`
+        existsSync(path.join(builtDir, entry)),
+        `${entry} was not produced by the declaration build.`
       ).toBe(true);
     }
-    expect(
-      existsSync(distTypes),
-      `${distTypes} is missing. This guard reads the built declarations, so ` +
-        "run `pnpm --filter @nextlyhq/ui build` first. It fails rather than " +
-        "skipping, because a guard that does nothing on a clean checkout is " +
-        "indistinguishable from a passing one."
-    ).toBe(true);
   });
 
   // BOTH barrels, because `package.json` resolves `require` to the `.cts` one.
@@ -325,7 +323,7 @@ describe("ui release tags reach the published types", () => {
   it.each(["index.d.ts", "index.d.cts"])(
     "carries every barrel tag through to dist/%s, with the same tag",
     entry => {
-      const built = readFileSync(path.join(PKG_ROOT, "dist", entry), "utf8");
+      const built = readFileSync(path.join(builtDir, entry), "utf8");
       const declared = taggedPerDeclaration(built);
       const tagged = taggedPerSource();
 
@@ -408,7 +406,7 @@ describe("ui release tags reach the published types", () => {
     // the same stability metadata as one importing the root. A guard that reads
     // only `index.d.ts` reports success while those subpaths carry none.
     for (const entry of DIST_ENTRIES) {
-      const built = readFileSync(path.join(PKG_ROOT, "dist", entry), "utf8");
+      const built = readFileSync(path.join(builtDir, entry), "utf8");
       expect(
         /@(?:public|experimental)/.test(built),
         `dist/${entry} carries no release tag; its declarations need one on ` +
@@ -418,7 +416,7 @@ describe("ui release tags reach the published types", () => {
   });
 
   it("is not passing vacuously", () => {
-    const built = readFileSync(distTypes, "utf8");
+    const built = readFileSync(path.join(builtDir, "index.d.ts"), "utf8");
     const declared = taggedPerDeclaration(built);
     expect(
       [...declared.values()].filter(t => t === "public").length
