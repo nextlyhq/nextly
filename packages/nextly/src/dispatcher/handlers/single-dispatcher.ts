@@ -1387,6 +1387,13 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             );
           }
         } catch (migrationError) {
+          // A refusal is not a failed migration. The generator rejects an edit it can never
+          // apply — a required column with no value for the rows already there, a referenced
+          // column SQLite cannot detach — before any statement runs, and the field list is
+          // still exactly what the caller sent. Recording "failed" and saving that list anyway
+          // would persist a schema the table does not have and report success for it, so the
+          // refusal is raised to the caller with the field it names.
+          if (migrationError instanceof NextlyError) throw migrationError;
           migrationStatus = "failed";
           const message =
             migrationError instanceof Error

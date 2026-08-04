@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS \`dc_pinned\` (
   CONSTRAINT \`fk_dc_pinned_author\` FOREIGN KEY (\`author\`) REFERENCES \`dc_authors\`(\`id\`) ON DELETE CASCADE ON UPDATE CASCADE
 );
 --> statement-breakpoint
-CREATE INDEX \`idx_dc_pinned_lookup_code\` ON \`dc_pinned\`(\`lookup_code\`);
+CREATE INDEX \`idx_dc_pinned_lookup_code\` ON \`dc_pinned\`(\`lookup_code\`(191));
 --> statement-breakpoint
 CREATE INDEX \`idx_dc_pinned_author\` ON \`dc_pinned\`(\`author\`);
 --> statement-breakpoint
@@ -125,7 +125,7 @@ CREATE TABLE IF NOT EXISTS \`single_pinned\` (
   CONSTRAINT \`fk_single_pinned_author\` FOREIGN KEY (\`author\`) REFERENCES \`dc_authors\`(\`id\`) ON DELETE CASCADE ON UPDATE CASCADE
 );
 --> statement-breakpoint
-CREATE INDEX \`idx_single_pinned_lookup_code\` ON \`single_pinned\`(\`lookup_code\`);
+CREATE INDEX \`idx_single_pinned_lookup_code\` ON \`single_pinned\`(\`lookup_code\`(191));
 --> statement-breakpoint
 CREATE INDEX \`idx_single_pinned_author\` ON \`single_pinned\`(\`author\`);
 --> statement-breakpoint
@@ -179,7 +179,7 @@ CREATE TABLE IF NOT EXISTS \`single_pinned\` (
   CONSTRAINT \`fk_single_pinned_author\` FOREIGN KEY (\`author\`) REFERENCES \`dc_authors\`(\`id\`) ON DELETE CASCADE ON UPDATE CASCADE
 );
 --> statement-breakpoint
-CREATE INDEX \`idx_single_pinned_lookup_code\` ON \`single_pinned\`(\`lookup_code\`);
+CREATE INDEX \`idx_single_pinned_lookup_code\` ON \`single_pinned\`(\`lookup_code\`(191));
 --> statement-breakpoint
 CREATE INDEX \`idx_single_pinned_author\` ON \`single_pinned\`(\`author\`);
 --> statement-breakpoint

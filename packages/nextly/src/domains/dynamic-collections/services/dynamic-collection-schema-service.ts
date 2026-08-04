@@ -135,6 +135,46 @@ export class DynamicCollectionSchemaService {
   }
 
   /**
+   * `CREATE INDEX` for one column, in the spelling the dialect accepts.
+   *
+   * MySQL cannot index a `BLOB`/`TEXT` column without a key length and rejects the statement
+   * outright, so a text-backed column is indexed by prefix. 191 characters is the longest prefix
+   * that fits the 767-byte index limit under utf8mb4 on every InnoDB row format, including the
+   * compact ones where a longer prefix is refused. PostgreSQL and SQLite index the whole value.
+   */
+  private createIndexSql(
+    tableName: string,
+    column: string,
+    columnType: string
+  ): string {
+    const name = this.quoteIdentifier(`idx_${tableName}_${column}`);
+    const table = this.quoteIdentifier(tableName);
+    const quoted = this.quoteIdentifier(column);
+    if (this.dialect === "mysql") {
+      const target = /\b(text|blob)\b/i.test(columnType)
+        ? `${quoted}(191)`
+        : quoted;
+      return `CREATE INDEX ${name} ON ${table}(${target});`;
+    }
+    return `CREATE INDEX IF NOT EXISTS ${name} ON ${table}(${quoted});`;
+  }
+
+  /**
+   * `DROP INDEX` for one column's index, in the spelling the dialect accepts.
+   *
+   * Emitted before the column it names: SQLite refuses `DROP COLUMN` while any index still
+   * references the column, reporting it as a missing column inside the index rather than as the
+   * removal it refused.
+   */
+  private dropIndexSql(tableName: string, column: string): string {
+    const name = this.quoteIdentifier(`idx_${tableName}_${column}`);
+    if (this.dialect === "mysql") {
+      return `DROP INDEX ${name} ON ${this.quoteIdentifier(tableName)};`;
+    }
+    return `DROP INDEX IF EXISTS ${name};`;
+  }
+
+  /**
    * The literal that backfills existing rows when a required column is added, or null when the
    * field's type states none.
    *
@@ -399,16 +439,13 @@ ${allColumnDefs.join(",\n")}
         // indexed column so this matches the actual physical column (created
         // snake_cased) and the migrate:create desired-state index naming.
         const col = toSnakeCase(f.name);
-        const indexName = `idx_${tableName}_${col}`;
-        if (this.dialect === "mysql") {
-          indexStatements.push(
-            `CREATE INDEX ${this.quoteIdentifier(indexName)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier(col)});`
-          );
-        } else {
-          indexStatements.push(
-            `CREATE INDEX IF NOT EXISTS ${this.quoteIdentifier(indexName)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier(col)});`
-          );
-        }
+        indexStatements.push(
+          this.createIndexSql(
+            tableName,
+            col,
+            this.mapFieldTypeToSQL(f.type, f.length, f.options, f.validation)
+          )
+        );
       }
     });
 
@@ -674,15 +711,21 @@ ${allColumnDefs.join(",\n")}
             );
           }
 
-          // Add unique constraint if needed
-          if (this.columnIsUnique(field)) {
+          // The flag only, not `columnIsUnique`. A one-to-one's uniqueness is spelled three
+          // different ways today: the table CREATE writes it inline, where the dialect names the
+          // index itself; the desired schema the diff compares against declares a NON-unique
+          // index for the same field; and a named constraint here would be a third. Emitting one
+          // makes the next diff propose dropping it, so the cardinality is enforced by agreeing
+          // on one spelling, not by adding another.
+          if (field.unique) {
             statements.push(
               `ALTER TABLE ${this.quoteIdentifier(tableName)} ADD CONSTRAINT ${this.quoteIdentifier(`uq_${tableName}_${addColName}`)} UNIQUE (${this.quoteIdentifier(addColName)});`
             );
           }
         } else {
-          // For SQLite with unique constraint, create a unique index instead
-          if (this.columnIsUnique(field)) {
+          // For SQLite with unique constraint, create a unique index instead. The flag only,
+          // for the reason above.
+          if (field.unique) {
             statements.push(
               `CREATE UNIQUE INDEX IF NOT EXISTS ${this.quoteIdentifier(`uq_${tableName}_${addColName}`)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier(addColName)});`
             );
@@ -695,12 +738,7 @@ ${allColumnDefs.join(",\n")}
         // at the same moment as the column nor the one a relationship always carries was created
         // by either.
         if (this.columnIsIndexed(field)) {
-          const indexName = `idx_${tableName}_${addColName}`;
-          statements.push(
-            this.dialect === "mysql"
-              ? `CREATE INDEX ${this.quoteIdentifier(indexName)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier(addColName)});`
-              : `CREATE INDEX IF NOT EXISTS ${this.quoteIdentifier(indexName)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier(addColName)});`
-          );
+          statements.push(this.createIndexSql(tableName, addColName, type));
         }
       }
     }
@@ -718,30 +756,15 @@ ${allColumnDefs.join(",\n")}
       if (!oldField || this.storageClassChanged(oldField, field)) continue;
       if (oldField.index !== field.index) {
         const idxCol = toSnakeCase(field.name);
-        const indexName = `idx_${tableName}_${idxCol}`;
-        if (field.index) {
-          // Add index
-          if (this.dialect === "mysql") {
-            statements.push(
-              `CREATE INDEX ${this.quoteIdentifier(indexName)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier(idxCol)});`
-            );
-          } else {
-            statements.push(
-              `CREATE INDEX IF NOT EXISTS ${this.quoteIdentifier(indexName)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier(idxCol)});`
-            );
-          }
-        } else {
-          // Drop index
-          if (this.dialect === "mysql") {
-            statements.push(
-              `DROP INDEX ${this.quoteIdentifier(indexName)} ON ${this.quoteIdentifier(tableName)};`
-            );
-          } else {
-            statements.push(
-              `DROP INDEX IF EXISTS ${this.quoteIdentifier(indexName)} ON ${this.quoteIdentifier(tableName)};`
-            );
-          }
-        }
+        statements.push(
+          field.index
+            ? this.createIndexSql(
+                tableName,
+                idxCol,
+                this.mapFieldTypeToSQL(field.type, field.length)
+              )
+            : this.dropIndexSql(tableName, idxCol)
+        );
       }
     }
 
@@ -764,6 +787,14 @@ ${allColumnDefs.join(",\n")}
         // until the constraint is named and removed first. SQLite cannot remove a constraint at
         // all: the column stays until the whole table is rebuilt around it, so the edit is
         // refused rather than sent to fail as a driver error the author cannot act on.
+        // Everything attached to the column comes off before the column does. SQLite refuses
+        // `DROP COLUMN` while an index still names it, and reports that as a missing column
+        // inside the index rather than as the removal it refused. PostgreSQL and MySQL drop the
+        // index with the column, so removing it first is redundant there and never wrong.
+        if (this.columnIsIndexed(field)) {
+          statements.push(this.dropIndexSql(tableName, dropCol));
+        }
+
         const foreignKeys = options?.foreignKeysByColumn?.get(dropCol);
         if (foreignKeys !== undefined) {
           if (this.dialect === "sqlite") {

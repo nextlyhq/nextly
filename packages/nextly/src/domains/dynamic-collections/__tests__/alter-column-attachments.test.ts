@@ -183,8 +183,19 @@ describe.each(DIALECTS)(
       );
 
       expect(added.notNull).toBe(created.notNull);
-      expect(added.unique).toBe(created.unique);
       expect(added.indexed).toBe(created.indexed);
+
+      if (definition.unique !== true && created.unique) {
+        // A one-to-one's uniqueness is the one attachment the two paths cannot yet agree on,
+        // and the disagreement is older than either of them: CREATE writes it inline, where the
+        // dialect names the index; the desired schema the diff compares against declares a
+        // NON-unique index for the same field. A named constraint here would be a third
+        // spelling that the next diff proposes dropping. Asserted rather than skipped, so
+        // converging them makes this fail and say so.
+        expect(added.unique).toBe(false);
+      } else {
+        expect(added.unique).toBe(created.unique);
+      }
 
       if (dialect === "sqlite" && created.referencesTable !== null) {
         // SQLite attaches a foreign key only in a CREATE TABLE: there is no statement that adds
@@ -200,7 +211,7 @@ describe.each(DIALECTS)(
 
 describe("the attachments the ADD path used to lose", () => {
   it.each(DIALECTS)(
-    "marks a one-to-one column unique without an explicit flag (%s)",
+    "does not add a third spelling of a one-to-one's uniqueness (%s)",
     dialect => {
       const oneToOne = field({
         name: "profile",
@@ -213,7 +224,22 @@ describe("the attachments the ADD path used to lose", () => {
         [oneToOne],
         { tableHasRows: false }
       );
-      expect(alterAttachments(sql, "profile").unique).toBe(true);
+      // The desired schema declares a non-unique index for this field, so a named unique
+      // constraint here is drift the next diff proposes dropping.
+      expect(alterAttachments(sql, "profile").unique).toBe(false);
+    }
+  );
+
+  it.each(DIALECTS)(
+    "still applies an EXPLICIT unique flag, which the desired schema does model (%s)",
+    dialect => {
+      const sql = service(dialect).generateAlterTableMigration(
+        TABLE,
+        [],
+        [field({ name: "sku", type: "text", unique: true })],
+        { tableHasRows: false }
+      );
+      expect(alterAttachments(sql, "sku").unique).toBe(true);
     }
   );
 
@@ -293,6 +319,94 @@ describe("the attachments the ADD path used to lose", () => {
       expect(sql).not.toContain("ADD COLUMN rank");
     }
   );
+});
+
+describe("an index the dialect can actually accept", () => {
+  it("indexes a mysql text column by prefix, which is the only form mysql accepts", () => {
+    const sql = unquote(
+      service("mysql").generateAlterTableMigration(
+        TABLE,
+        [],
+        [field({ name: "note", type: "text", index: true })],
+        { tableHasRows: false }
+      )
+    );
+    // Without a key length MySQL rejects the statement outright: "BLOB/TEXT column used in key
+    // specification without a key length".
+    expect(sql).toContain("ON dc_probe(note(191))");
+  });
+
+  it("indexes a mysql varchar column whole, so the prefix is not applied to everything", () => {
+    const sql = unquote(
+      service("mysql").generateAlterTableMigration(
+        TABLE,
+        [],
+        [
+          field({
+            name: "author",
+            type: "relationship",
+            options: { target: "authors", relationType: "manyToOne" },
+          }),
+        ],
+        { tableHasRows: false }
+      )
+    );
+    expect(sql).toContain("ON dc_probe(author)");
+    expect(sql).not.toContain("author(191)");
+  });
+
+  it.each(["postgresql", "sqlite"] as const)(
+    "indexes the whole value where the dialect allows it (%s)",
+    dialect => {
+      const sql = unquote(
+        service(dialect).generateAlterTableMigration(
+          TABLE,
+          [],
+          [field({ name: "note", type: "text", index: true })],
+          { tableHasRows: false }
+        )
+      );
+      expect(sql).toContain("ON dc_probe(note)");
+    }
+  );
+
+  it.each(DIALECTS)(
+    "drops an index with the statement its dialect accepts, not one with a stray table clause (%s)",
+    dialect => {
+      const before = field({ name: "rank", type: "number", index: true });
+      const after = field({ name: "rank", type: "number" });
+      const sql = unquote(
+        service(dialect).generateAlterTableMigration(TABLE, [before], [after], {
+          tableHasRows: true,
+        })
+      );
+      expect(sql).toContain("DROP INDEX");
+      if (dialect === "mysql") {
+        expect(sql).toContain("DROP INDEX idx_dc_probe_rank ON dc_probe;");
+      } else {
+        // `DROP INDEX <name> ON <table>` is a syntax error on both PostgreSQL and SQLite.
+        expect(sql).toContain("DROP INDEX IF EXISTS idx_dc_probe_rank;");
+        expect(sql).not.toMatch(/DROP INDEX[^;]*ON dc_probe/);
+      }
+    }
+  );
+
+  it("removes the index before the column it names, which is what sqlite requires", () => {
+    const indexed = field({
+      name: "author",
+      type: "relationship",
+      options: { target: "authors", relationType: "manyToOne" },
+    });
+    const sql = unquote(
+      service("sqlite").generateAlterTableMigration(TABLE, [indexed], [], {
+        foreignKeysByColumn: new Map(),
+      })
+    );
+    // SQLite refuses DROP COLUMN while an index still references the column, and reports it as
+    // a missing column inside the index rather than as the removal it refused.
+    expect(sql.indexOf("DROP INDEX")).toBeGreaterThan(-1);
+    expect(sql.indexOf("DROP INDEX")).toBeLessThan(sql.indexOf("DROP COLUMN"));
+  });
 });
 
 describe("a required column that no value can backfill", () => {
