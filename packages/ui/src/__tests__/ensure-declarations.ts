@@ -68,6 +68,32 @@ const BUILD_INPUTS = [
 ];
 
 /**
+ * The workspace lockfile, which pins the compiler and bundler actually used.
+ *
+ * `typescript` and `tsup` are both caret ranges, so `pnpm update` can move the
+ * installed version — and therefore the emitted declarations — without editing
+ * this package's manifest at all. The lockfile is the only file that records
+ * which versions produced `dist`.
+ *
+ * Found by walking up rather than by a fixed depth, so it survives the package
+ * moving within the workspace.
+ */
+function workspaceLockfile(): string | undefined {
+  let dir = pkgRoot;
+  for (;;) {
+    const candidate = join(dir, "pnpm-lock.yaml");
+    try {
+      statSync(candidate);
+      return candidate;
+    } catch {
+      const parent = dirname(dir);
+      if (parent === dir) return undefined;
+      dir = parent;
+    }
+  }
+}
+
+/**
  * Every tsconfig in the `extends` chain, the package's own included.
  *
  * The local file is four lines of overrides; the options that actually decide
@@ -133,17 +159,31 @@ function tsconfigChain(entry: string): string[] | undefined {
  * Forcing the rebuild surfaces it as the bundler's own error about the config
  * it cannot find, which says more than any check here could.
  */
-function newestBuildInputMtime(): number {
+/**
+ * Every file the declarations are built FROM, outside `src`.
+ *
+ * Exported so the watch triggers are generated from this list rather than
+ * restated as globs beside it. A hand-written second list is how the freshness
+ * check came to know about the inherited tsconfigs while the watcher did not.
+ */
+export function declarationBuildInputs(): string[] | undefined {
   const chain = tsconfigChain(join(pkgRoot, "tsconfig.json"));
-  // An unfollowable chain is treated like a missing input, for the same reason:
-  // the declarations were produced by a configuration this cannot account for.
-  if (chain === undefined) return Number.POSITIVE_INFINITY;
-  const files = [
+  // An unfollowable chain is reported as unknown, for the same reason a missing
+  // file is: the declarations came from a configuration this cannot account for.
+  if (chain === undefined) return undefined;
+  const lockfile = workspaceLockfile();
+  return [
     ...BUILD_INPUTS.map(name => join(pkgRoot, name)),
-    // The local tsconfig is in both lists; `seen` above and `Math.max` here
-    // both make that harmless.
+    // The local tsconfig appears in both; `seen` in the walk and `Math.max`
+    // below make the duplicate harmless.
     ...chain,
+    ...(lockfile !== undefined ? [lockfile] : []),
   ];
+}
+
+function newestBuildInputMtime(): number {
+  const files = declarationBuildInputs();
+  if (files === undefined) return Number.POSITIVE_INFINITY;
   let newest = 0;
   for (const file of files) {
     try {

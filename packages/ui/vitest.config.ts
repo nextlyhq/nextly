@@ -1,5 +1,7 @@
 import { defineConfig } from "vitest/config";
 
+import { declarationBuildInputs } from "./src/__tests__/ensure-declarations";
+
 export default defineConfig({
   test: {
     // The release-tag guard reads this package's OWN `dist/index.d.ts`: the
@@ -35,10 +37,13 @@ export default defineConfig({
       // mode until a restart. CSS is not a module here, so nothing else puts it
       // in the graph.
       "**/src/**/*.css",
-      // The declarations are rebuilt from these, so a config change has to
-      // rerun the suites that assert on the output.
-      "**/tsup*.config.ts",
-      "**/tsconfig.json",
+      // The declaration build's own inputs, taken from the same list the
+      // freshness check uses rather than restated as globs. Naming them by
+      // hand meant `**/tsconfig.json` matched only the package's own file
+      // while the options that decide the output live in the configs it
+      // extends, none of which are called `tsconfig.json`. Deriving them
+      // keeps the watcher and the rebuild looking at one set of files.
+      ...(declarationBuildInputs() ?? []),
     ],
   },
 });
