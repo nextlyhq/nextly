@@ -23,9 +23,20 @@ import {
   varchar,
 } from "drizzle-orm/pg-core";
 
-// Append-only by application convention — operators should revoke
-// UPDATE / DELETE GRANTs on this table in production for stricter
-// integrity.
+// Append-only by application convention. Operators hardening this in production
+// should revoke DELETE outright, and revoke UPDATE except on the three columns
+// an erasure touches:
+//
+//   REVOKE UPDATE, DELETE ON audit_log FROM app_role;
+//   GRANT UPDATE (ip_address, user_agent, identity_erased_at)
+//     ON audit_log TO app_role;
+//
+// A blanket UPDATE revoke would make deleting a user fail, because erasing the
+// address and client a deleted account connected from is an UPDATE and it runs
+// inside the deletion's transaction. Column-scoped grants keep every other
+// column immutable while allowing exactly that erasure, so the append-only
+// posture and the erasure duty can both hold — they only look contradictory
+// while the grant is all-or-nothing.
 export const auditLog = pgTable(
   "audit_log",
   {
@@ -39,6 +50,14 @@ export const auditLog = pgTable(
     createdAt: timestamp("created_at", { withTimezone: false })
       .defaultNow()
       .notNull(),
+    // When this row's request identifiers were erased, and NULL while they
+    // were not. `ip_address` and `user_agent` are nullable for rows that
+    // never carried them, so a bare NULL cannot say whether a person was
+    // removed or was never recorded — which is the evidence an erasure
+    // request needs.
+    identityErasedAt: timestamp("identity_erased_at", {
+      withTimezone: false,
+    }),
   },
   t => [
     index("audit_log_kind_idx").on(t.kind),

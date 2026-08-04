@@ -24,9 +24,20 @@ import {
   timestamp,
 } from "drizzle-orm/mysql-core";
 
-// Append-only by application convention — operators should revoke
-// UPDATE / DELETE GRANTs on this table in production for stricter
-// integrity.
+// Append-only by application convention. Operators hardening this in production
+// should revoke DELETE outright, and revoke UPDATE except on the three columns
+// an erasure touches:
+//
+//   REVOKE UPDATE, DELETE ON audit_log FROM app_role;
+//   GRANT UPDATE (ip_address, user_agent, identity_erased_at)
+//     ON audit_log TO app_role;
+//
+// A blanket UPDATE revoke would make deleting a user fail, because erasing the
+// address and client a deleted account connected from is an UPDATE and it runs
+// inside the deletion's transaction. Column-scoped grants keep every other
+// column immutable while allowing exactly that erasure, so the append-only
+// posture and the erasure duty can both hold — they only look contradictory
+// while the grant is all-or-nothing.
 export const auditLog = mysqlTable(
   "audit_log",
   {
@@ -45,6 +56,16 @@ export const auditLog = mysqlTable(
     createdAt: datetime("created_at")
       .notNull()
       .default(sql`CURRENT_TIMESTAMP`),
+    // When this row's request identifiers were erased, and NULL while they
+    // were not. `ip_address` and `user_agent` are nullable for rows that
+    // never carried them, so a bare NULL cannot say whether a person was
+    // removed or was never recorded — which is the evidence an erasure
+    // request needs.
+    // `datetime`, not `timestamp`, for the same reason the activity log's stamp
+    // is: a nullable MySQL TIMESTAMP is subject to the server's
+    // explicit_defaults_for_timestamp mode, which can rewrite the column and
+    // leave the live schema disagreeing with the desired one forever.
+    identityErasedAt: datetime("identity_erased_at"),
   },
   t => [
     index("audit_log_kind_idx").on(t.kind),

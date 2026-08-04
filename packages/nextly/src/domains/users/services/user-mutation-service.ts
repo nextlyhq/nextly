@@ -66,6 +66,16 @@ import type { UserExtSchemaService } from "./user-ext-schema-service";
 // ============================================================
 
 /** The column whose presence means this database can erase an identity. */
+/**
+ * What a database can record about an erasure.
+ *
+ * `false` means the table is absent, so there is nothing to erase.
+ * `"unstamped"` means the table is there on its pre-erasure shape: the
+ * identifying columns exist and are scrubbed, but the column that records when
+ * does not, so that evidence is unavailable until the schema is upgraded.
+ */
+type ErasureShape = "stamped" | "unstamped" | false;
+
 const ERASURE_STAMP_COLUMN = "identity_erased_at";
 
 /**
@@ -316,15 +326,15 @@ export class UserMutationService extends BaseService {
   private userExtDisabled = false;
 
   /**
-   * Whether this database has an `activity_log` to erase from, probed once.
+   * Audit tables already confirmed to carry the erasure stamp, by table name.
    *
-   * Cached only for `true`. A missing table is the state an operator fixes by
-   * provisioning it, and re-probing until then costs one catalogue lookup per
-   * deletion — cheap on a rare operation, and far better than caching a "no"
-   * that would keep skipping the erasure for the life of the process after the
-   * table appeared.
+   * Only a confirmed stamp is cached. A table that is absent, or present on its
+   * pre-erasure shape, is the state an operator fixes by upgrading, so those
+   * are re-probed on each deletion: that costs one catalogue lookup on a rare
+   * operation, where caching them would keep answering with a shape the
+   * database has since left for the life of the process.
    */
-  private activityLogPresent = false;
+  private readonly erasableTables = new Set<string>();
 
   /** Cached merged Zod schemas (lazy, rebuilt when merged fields are available) */
   private createSchema: typeof CreateLocalUserSchema;
@@ -397,34 +407,44 @@ export class UserMutationService extends BaseService {
   }
 
   /**
-   * Whether this database's activity trail can actually be erased.
+   * What this database can record about erasing a trail.
    *
-   * Two ways it cannot, and both must let the deletion proceed rather than
-   * fail. The table may be absent entirely, in which case there is no trail
-   * and so no identifying data to leave behind. Or it may still be on its
-   * pre-erasure shape, on a database whose upgrade did not reach it: the core
-   * reconcile pushes only the static tables, and drizzle-kit's SQLite
-   * entrypoint takes no table filter, so an ordinary `dc_*` content table
-   * reads as an orphan and trips its rename resolver — after which the
-   * recovery pass can create missing tables but never alters an existing one.
+   * Reports the SHAPE rather than a yes/no, because the two callers answer a
+   * pre-erasure shape differently and only they can decide that.
    *
-   * Refusing to delete an account on those installations would be a worse
-   * regression than the defect this erasure fixes, so it is skipped and said
-   * out loud. The trail there keeps its old cascading key and is still lost
-   * with the account, which only a real upgrade can fix.
+   * `false` — the table is absent, so there is no trail and no identifying data
+   * to leave behind. `"unstamped"` — the table is there on its pre-erasure
+   * shape, on a database whose upgrade did not reach it: the core reconcile
+   * pushes only the static tables, and drizzle-kit's SQLite entrypoint takes no
+   * table filter, so an ordinary `dc_*` content table reads as an orphan and
+   * trips its rename resolver — after which the recovery pass can create
+   * missing tables but never alters an existing one. The identifying columns
+   * exist there; only the column recording WHEN an erasure happened does not.
    *
-   * The table probe answering `false` is the only definite skip: a probe that
-   * cannot run answers `true`, so an unreadable catalogue leaves the erasure
-   * in place and the deletion fails loudly instead of quietly skipping.
+   * Neither answer fails the deletion. An account holder's right to have their
+   * account removed does not depend on the state of a table they never saw, so
+   * a shape that cannot be fully erased is reported and said out loud rather
+   * than made a reason to refuse. What the caller does with
+   * `"unstamped"` depends on the table: an un-erased `activity_log` row is
+   * carried away by its cascading key, while an `audit_log` row has no key and
+   * would keep its identifiers indefinitely, so that one is scrubbed without
+   * the stamp rather than skipped.
+   *
+   * A probe that cannot run answers `"stamped"`, so an unreadable catalogue
+   * leaves the erasure in place and the deletion fails loudly rather than
+   * quietly skipping it.
    */
-  private async activityLogSupportsErasure(): Promise<boolean> {
-    if (this.activityLogPresent) return true;
+  private async supportsErasure(
+    table: string,
+    whatIsLost: string
+  ): Promise<ErasureShape> {
+    if (this.erasableTables.has(table)) return "stamped";
 
     let tableExists: boolean;
     try {
-      tableExists = await this.adapter.tableExists("activity_log");
+      tableExists = await this.adapter.tableExists(table);
     } catch {
-      return true;
+      return "stamped";
     }
     if (!tableExists) return false;
 
@@ -436,22 +456,21 @@ export class UserMutationService extends BaseService {
     // directly and propagates anything that goes wrong, so an unanswerable
     // question fails the deletion instead of silently skipping the erasure.
     const snapshot = await introspectLiveSnapshot(this.db, this.dialect, [
-      "activity_log",
+      table,
     ]);
-    const columns =
-      snapshot.tables.find(t => t.name === "activity_log")?.columns ?? [];
+    const columns = snapshot.tables.find(t => t.name === table)?.columns ?? [];
     if (!columns.some(c => c.name === ERASURE_STAMP_COLUMN)) {
       this.logger.warn(
-        `activity_log predates identity erasure (no ${ERASURE_STAMP_COLUMN} ` +
-          "column); deleting a user will not scrub their name and email from " +
-          "it, and the table's cascading key still removes their entries. Run " +
-          "`nextly migrate` to apply the core schema change."
+        `${table} predates identity erasure (no ${ERASURE_STAMP_COLUMN} ` +
+          `column); deleting a user cannot record WHEN ${whatIsLost} was ` +
+          "scrubbed from it. Run `nextly migrate` to apply the core schema " +
+          "change."
       );
-      return false;
+      return "unstamped";
     }
 
-    this.activityLogPresent = true;
-    return true;
+    this.erasableTables.add(table);
+    return "stamped";
   }
 
   /**
@@ -1339,7 +1358,48 @@ export class UserMutationService extends BaseService {
     // the SQLite fallback bootstrap in earlier releases created a subset of
     // the core tables, and neither first-run setup nor boot repairs an
     // existing database that is missing one — they only warn.
-    const activityLogExists = await this.activityLogSupportsErasure();
+    // Asked per table rather than once for all of them. A database can carry
+    // one and not the other — the SQLite fallback bootstrap created a subset of
+    // the core tables — and answering for the pair would let a missing auth log
+    // suppress the activity erasure, leaving behind exactly the names and
+    // emails the deletion exists to remove.
+    const auditTables = this.tables;
+    // Normalized here rather than left to the caller: the probes read the
+    // catalogue, and a transient metadata failure is a database error like any
+    // other. Outside this the raw driver exception would escape ahead of the
+    // block that converts one, and the caller would get an untyped throw from
+    // an operation whose whole surface is typed.
+    let activityShape: ErasureShape;
+    let authShape: ErasureShape;
+    try {
+      activityShape = await this.supportsErasure(
+        "activity_log",
+        "their name and email"
+      );
+      authShape = await this.supportsErasure(
+        "audit_log",
+        "the address and client they connected from"
+      );
+    } catch (err) {
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
+    }
+    // The two answer a legacy shape differently, because what happens to an
+    // un-erased row differs. A legacy `activity_log` still cascades from the
+    // account, so its rows go with the deletion and there is nothing left to
+    // scrub. `audit_log.actor_user_id` carries no key at all — deliberately, so
+    // the trail outlives the account — so an un-erased row keeps the address
+    // and client indefinitely, and no later migration can revisit a deletion
+    // that has already happened. It is erased either way; only the record of
+    // when is lost on a schema with nowhere to put it.
+    const erasableAuditTables = {
+      ...(activityShape === "stamped" && {
+        activityLog: auditTables.activityLog,
+      }),
+      ...(authShape !== false && { auditLog: auditTables.auditLog }),
+    };
+    const unstampedAuditTables = new Set<"activityLog" | "auditLog">(
+      authShape === "unstamped" ? ["auditLog"] : []
+    );
 
     // Delete user and related data in a single Drizzle transaction so that
     // partial deletes can't leave orphaned rows. The tx alias is a structural
@@ -1411,12 +1471,13 @@ export class UserMutationService extends BaseService {
         // still carrying the name and email of someone who asked to be erased.
         // Inside the transaction, so a failed erasure takes the deletion with
         // it rather than leaving the two out of step.
-        if (activityLogExists) {
+        if (Object.keys(erasableAuditTables).length > 0) {
           await eraseActorPersonalData(
             txDb,
-            this.tables,
+            erasableAuditTables,
             String(userId),
-            new Date()
+            new Date(),
+            unstampedAuditTables
           );
         }
 
@@ -1462,12 +1523,13 @@ export class UserMutationService extends BaseService {
     // exists. Erasing is idempotent, so a second pass over rows already erased
     // costs one indexed update and changes nothing.
     try {
-      if (activityLogExists) {
+      if (Object.keys(erasableAuditTables).length > 0) {
         await eraseActorPersonalData(
           this.db as Parameters<typeof eraseActorPersonalData>[0],
-          this.tables,
+          erasableAuditTables,
           String(userId),
-          new Date()
+          new Date(),
+          unstampedAuditTables
         );
       }
     } catch (err) {
@@ -1476,9 +1538,9 @@ export class UserMutationService extends BaseService {
       // that finds nothing to delete. Loud enough to act on, quiet enough not
       // to undo a committed write.
       this.logger.error(
-        `activity-log erasure sweep after deleteUser failed: ${
-          err instanceof Error ? err.message : String(err)
-        }`
+        `audit erasure sweep after deleteUser failed for ${Object.keys(
+          erasableAuditTables
+        ).join(", ")}: ${err instanceof Error ? err.message : String(err)}`
       );
     }
 
