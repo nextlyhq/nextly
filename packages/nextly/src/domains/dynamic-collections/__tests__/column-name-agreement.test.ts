@@ -704,7 +704,8 @@ describe("junction storage is a relationship feature only", () => {
         expect({
           [`${at}.parentColumn`]: declaredColumns(sql).includes("gallery"),
           [`${at}.descriptorColumn`]:
-            getColumnDescriptor(m2m(type) as never, dialect) !== null,
+            getColumnDescriptor(m2m(type) as never, dialect, "collection") !==
+            null,
           [`${at}.createTables`]: (sql.match(/CREATE TABLE/g) ?? []).length,
         }).toEqual({
           [`${at}.parentColumn`]: want.parentColumn,
@@ -721,7 +722,11 @@ describe("junction storage is a relationship feature only", () => {
     const single = { name: "cover", type: "upload", relationTo: "media" };
 
     expect({
-      descriptor: getColumnDescriptor(single as never, "postgresql")?.name,
+      descriptor: getColumnDescriptor(
+        single as never,
+        "postgresql",
+        "collection"
+      )?.name,
       producesColumn: fieldProducesColumn(single),
     }).toEqual({ descriptor: "cover", producesColumn: true });
   });

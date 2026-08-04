@@ -256,4 +256,47 @@ describe("getColumnDescriptor — the same field, per builder", () => {
       getColumnDescriptor(declared, "mysql", "collection")?.dialectType
     ).toBe("text");
   });
+
+  // The mirror of the case above. A collection field states its width through the variant plus its
+  // stored validation, and the field-group creator reads neither, so the disagreement runs both
+  // ways rather than one creator simply bounding more often than the other.
+  it("reads a collection field's variant, and only for that builder", () => {
+    const declared = field({
+      options: { variant: "short" },
+      validation: { maxLength: 120 },
+    });
+
+    expect(
+      getColumnDescriptor(declared, "mysql", "collection")?.dialectType
+    ).toBe("varchar(120)");
+    expect(
+      getColumnDescriptor(declared, "mysql", "fieldGroup")?.dialectType
+    ).toBe("text");
+  });
+
+  // SQLite stores every string in one type, so the builders that disagree on a bounded dialect
+  // agree here. Pinned so a width rule cannot leak into a dialect that has no widths to express.
+  it("gives every builder the same column on SQLite", () => {
+    const variantWidth = field({
+      options: { variant: "short" },
+      validation: { maxLength: 120 },
+    });
+    const topLevelWidth = contributedField({
+      name: "value",
+      type: "text",
+      maxLength: 120,
+    });
+
+    for (const declared of [variantWidth, topLevelWidth]) {
+      for (const builtBy of [
+        "collection",
+        "fieldGroup",
+        "codeFirst",
+      ] as ColumnOrigin[]) {
+        expect(
+          getColumnDescriptor(declared, "sqlite", builtBy)?.dialectType
+        ).toBe("text");
+      }
+    }
+  });
 });
