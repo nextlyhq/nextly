@@ -65,13 +65,15 @@ describe("a declared slug field", () => {
    * entity ends up with a column MySQL will not index, and every later diff reports a type change
    * on a column nothing touched.
    *
-   * Asserted for every builder because the reason the column is bounded — the index — does not
-   * depend on who made the table.
+   * Asserted for the builders that carry a slug identity column, because the reason it is bounded
+   * — the unique index on it — does not depend on which of those made the table. A field group has
+   * no such column and indexes its parent pointer instead, so it is excluded here and covered by
+   * the descriptor's own suite.
    */
   it("adds the same bounded column to a table that already exists", () => {
     const slugField = { name: "slug", type: "text" } as unknown as FieldConfig;
 
-    for (const builtBy of ["collection", "fieldGroup", "codeFirst"] as const) {
+    for (const builtBy of ["collection", "codeFirst"] as const) {
       expect(fieldToColumnDef(slugField, "mysql", builtBy)).toMatch(
         /VARCHAR\(\d+\)/i
       );
@@ -79,5 +81,15 @@ describe("a declared slug field", () => {
         /\bTEXT\b/i
       );
     }
+  });
+
+  // The mirror, so the exclusion is asserted rather than merely omitted: a field group's own slug
+  // field keeps the unbounded column its creator makes.
+  it("leaves a field group's slug field alone", () => {
+    const slugField = { name: "slug", type: "text" } as unknown as FieldConfig;
+
+    expect(fieldToColumnDef(slugField, "mysql", "fieldGroup")).toMatch(
+      /\bTEXT\b/i
+    );
   });
 });
