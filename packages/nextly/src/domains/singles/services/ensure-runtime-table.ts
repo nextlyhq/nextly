@@ -138,6 +138,16 @@ export function ensureSingleRuntimeTable(
     // change since then is ours to act on. No record means the registration
     // came from boot / create-time / the reconcile, which own it.
     const rowMovedSinceOurs = recorded !== undefined && recorded !== signature;
+    // The one case where a foreign registration is provably behind the row
+    // rather than possibly ahead of it: the row says localized, yet nothing
+    // registered a companion. Those two are always registered together, so
+    // whoever registered the main table did it before localization was
+    // enabled — and that main table still declares the translatable columns
+    // the enable moved to the companion, which every read would then select.
+    // Refreshing it here is not the authority flip the adopt-rule prevents:
+    // the row is the only side with newer information.
+    const foreignPredatesLocalization =
+      recorded === undefined && companionMissing;
 
     if (!mainMissing && !companionMissing && !rowMovedSinceOurs) {
       // Either up to date, or a foreign registration on first touch: adopt
@@ -146,7 +156,7 @@ export function ensureSingleRuntimeTable(
       return;
     }
 
-    if (mainMissing || rowMovedSinceOurs) {
+    if (mainMissing || rowMovedSinceOurs || foreignPredatesLocalization) {
       // Same generator + flags as the boot registration, so the lazily
       // registered table matches the physical one (a localized single's
       // main table omits its translatable columns — they live in the

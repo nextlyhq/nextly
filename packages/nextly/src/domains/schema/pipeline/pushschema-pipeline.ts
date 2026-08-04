@@ -1000,6 +1000,14 @@ export class PushSchemaPipeline {
         if (useFastPath) {
           emittedStatements = emitDdl(resolvedOps, dialect);
         } else {
+          // Resolved BEFORE the pre-creation below writes anything. The
+          // import carries MySQL's `databaseName` precondition, and running
+          // it after the CREATEs would leave those tables behind on a
+          // dialect whose DDL auto-commits when the precondition then
+          // fails. The fast path never reaches this branch, so a kit-free
+          // apply still never evaluates the precondition at all.
+          const kit = await getKit();
+
           // v1 kit crash guard (SQLite/MySQL only — PG scopes the kit's
           // introspection with a tables filter): drizzle-kit v1's differ
           // sees the WHOLE live DB on these dialects, so any live table
@@ -1054,7 +1062,6 @@ export class PushSchemaPipeline {
             // `Internal error: resolver(...) without a HintsHandler` — the
             // catch below converts that into a journaled PushSchemaError
             // instead of the pre-v1 unanswerable TTY prompt.
-            const kit = await getKit();
             pushResult = await withCapturedStdout(
               () =>
                 kit.pushSchema(

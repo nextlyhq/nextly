@@ -254,9 +254,10 @@ describe("emitAdditiveDdl — indexes and contracts", () => {
       rename_column: {
         type: "rename_column",
         tableName: "dc_a",
-        fromName: "a",
-        toName: "b",
-        columnType: "text",
+        fromColumn: "a",
+        toColumn: "b",
+        fromType: "text",
+        toType: "text",
       },
       drop_column: {
         type: "drop_column",
