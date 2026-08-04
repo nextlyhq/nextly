@@ -63,6 +63,7 @@ type Registry = {
   listSingles: ReturnType<typeof vi.fn>;
   registerSingle: ReturnType<typeof vi.fn>;
   getSingleBySlug: ReturnType<typeof vi.fn>;
+  getAllSingles: ReturnType<typeof vi.fn>;
   updateSingle: ReturnType<typeof vi.fn>;
   deleteSingle: ReturnType<typeof vi.fn>;
 };
@@ -76,6 +77,9 @@ function makeRegistry(overrides: Partial<Registry> = {}): Registry {
     listSingles: vi.fn(),
     registerSingle: vi.fn(),
     getSingleBySlug: vi.fn(),
+    // Answers "no single owns that table" so a create reaches the path under test. The handler
+    // asks before it emits any DDL, so a double that cannot answer fails the request instead.
+    getAllSingles: vi.fn().mockResolvedValue([]),
     updateSingle: vi.fn(),
     deleteSingle: vi.fn(),
     ...overrides,

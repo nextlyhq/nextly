@@ -384,6 +384,64 @@ describe("PushSchemaPipeline (Option E flow) - introspection wired", () => {
     expect(opsArg.some(op => op.type === "drop_column")).toBe(true);
     expect(opsArg.some(op => op.type === "add_column")).toBe(true);
   });
+
+  // A UI save must not be refused over drift on a table it does not own. An unresolved rename
+  // candidate fails closed, so a locked table's operations reaching the detector is enough to
+  // refuse the whole save even though the apply would discard every one of them.
+  it("hides locked-table operations from rename detection on a UI save", async () => {
+    const lockedDesired: DesiredSchema = {
+      collections: {
+        posts: {
+          slug: "posts",
+          tableName: "dc_posts",
+          fields: [{ name: "summary", type: "text" }] as never,
+          locked: true,
+        },
+      },
+      singles: {},
+      components: {},
+    };
+
+    const introspectImpl = vi
+      .fn<
+        (
+          db: unknown,
+          dialect: SupportedDialect,
+          tableNames: string[]
+        ) => Promise<NextlySchemaSnapshot>
+      >()
+      .mockResolvedValue({
+        tables: [
+          {
+            name: "dc_posts",
+            columns: [
+              { name: "id", type: "text", nullable: false },
+              { name: "title", type: "text", nullable: false },
+              { name: "slug", type: "text", nullable: false },
+              { name: "created_at", type: "timestamp", nullable: true },
+              { name: "updated_at", type: "timestamp", nullable: true },
+              { name: "body", type: "text", nullable: true },
+            ],
+          },
+        ],
+      });
+
+    const { pipeline, mocks } = makePipeline({ introspectImpl });
+
+    await pipeline.apply({
+      desired: lockedDesired,
+      db: {},
+      dialect: "postgresql",
+      source: "ui",
+      promptChannel: "browser",
+    });
+
+    const [opsArg] = mocks.renameDetector.detect.mock.calls[0] as [
+      Operation[],
+      SupportedDialect,
+    ];
+    expect(opsArg).toEqual([]);
+  });
 });
 
 describe("PushSchemaPipeline (Option E flow) - prompt + resolution flow", () => {

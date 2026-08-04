@@ -96,17 +96,16 @@ export function createErrorFromResult(result: ServiceResultLike): NextlyError {
   // original back on as `cause` by reading it off the envelope, and the spread
   // below is what carries it there — it is an enumerable own property, so it
   // survives into the object handed over.
-  return errorFromServiceEnvelope(
-    {
-      ...result,
-      // A code-less envelope still needs the status-derived guess this boundary
-      // has always made, rather than falling through to a generic internal.
-      code: result.code ?? statusCodeToErrorCode(result.statusCode),
-    },
-    result.data !== undefined && result.data !== null
+  return errorFromServiceEnvelope(result, {
+    // The service's own text, kept for the operator. A code-less failure now
+    // answers with a generic sentence, because its message may be a raw
+    // exception's; withholding it from the caller is the point, and discarding
+    // it as well would make exactly those failures undiagnosable.
+    legacyMessage: result.message,
+    ...(result.data !== undefined && result.data !== null
       ? { resultData: result.data }
-      : {}
-  );
+      : {}),
+  });
 }
 
 /**
@@ -143,9 +142,6 @@ export function createErrorFromSingleResult(
     {
       ...result,
       message,
-      // A code-less envelope keeps the status-derived guess this boundary has
-      // always made rather than falling through to a generic internal.
-      code: result.code ?? statusCodeToErrorCode(result.statusCode),
       // Normalised to the canonical shape; SingleResult still emits `{field}`.
       errors: result.errors?.map(e => ({
         path: e.field,
@@ -155,47 +151,14 @@ export function createErrorFromSingleResult(
         message: e.message,
       })),
     },
-    {}
+    // The NORMALISED message, not `result.message`. A Single failure may omit
+    // the top-level one and carry per-field `errors` instead, in which case the
+    // text above is synthesised from them -- and that synthesised text is what
+    // the converter replaces with a generic sentence for a non-validation
+    // status. Logging the raw field would record `undefined` in exactly the
+    // case where the caller's text was withheld.
+    { legacyMessage: message }
   );
-}
-
-/**
- * Map an HTTP status code to the primary canonical `NextlyErrorCode` string
- * for that status. Mirrors the inverse of `NEXTLY_ERROR_STATUS` from
- * `error-codes.ts`, picking the most specific representative code per status.
- *
- * Statuses outside this table fall back to `INTERNAL_ERROR` — service-layer
- * results that need a more specific code (e.g. `BUSINESS_RULE_VIOLATION` at
- * 422) should throw `NextlyError` directly rather than returning a result
- * shape that funnels through this helper.
- */
-export function statusCodeToErrorCode(statusCode: number): string {
-  switch (statusCode) {
-    case 400:
-      return "VALIDATION_ERROR";
-    case 401:
-      return "AUTH_REQUIRED";
-    case 403:
-      return "FORBIDDEN";
-    case 404:
-      return "NOT_FOUND";
-    case 409:
-      return "CONFLICT";
-    case 413:
-      return "PAYLOAD_TOO_LARGE";
-    case 415:
-      return "UNSUPPORTED_MEDIA_TYPE";
-    case 422:
-      return "INVALID_INPUT";
-    case 429:
-      return "RATE_LIMITED";
-    case 502:
-      return "EXTERNAL_SERVICE_ERROR";
-    case 503:
-      return "SERVICE_UNAVAILABLE";
-    default:
-      return "INTERNAL_ERROR";
-  }
 }
 
 /**

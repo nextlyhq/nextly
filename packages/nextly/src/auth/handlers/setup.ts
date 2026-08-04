@@ -3,6 +3,7 @@
 // the legitimate first-admin form. See docs/auth/csrf.md.
 import { readOrGenerateRequestId } from "../../api/request-id";
 import { respondAction, respondData } from "../../api/response-shapes";
+import type { AuditLogWriter } from "../../domains/audit/audit-log-writer";
 import { NextlyError } from "../../errors";
 import { getNextlyLogger } from "../../observability/logger";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
@@ -12,7 +13,7 @@ import { validatePasswordStrength } from "../credentials/password-strength";
 import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
 import { validateCsrf } from "../csrf/validate";
 import { buildClaims } from "../jwt/claims";
-import { signAccessToken } from "../jwt/sign";
+import { signAccessTokenWithExpiry } from "../jwt/sign";
 // hashPassword not needed here -- seedSuperAdmin handles hashing internally
 import {
   generateRefreshToken,
@@ -27,6 +28,12 @@ import {
 } from "./handler-utils";
 
 export interface SetupHandlerDeps {
+  /**
+   * Records the session this hands out. Setup is account creation, but it
+   * returns a working session, so the trail must show it like any other
+   * completed login.
+   */
+  auditLog: AuditLogWriter;
   secret: string;
   isProduction: boolean;
   accessTokenTTL: number;
@@ -167,11 +174,8 @@ export async function handleSetup(
     image: null,
     roleIds,
   });
-  const accessToken = await signAccessToken(
-    claims,
-    deps.secret,
-    deps.accessTokenTTL
-  );
+  const { token: accessToken, expiresAt: accessTokenExpiresAt } =
+    await signAccessTokenWithExpiry(claims, deps.secret, deps.accessTokenTTL);
 
   const rawRefreshToken = generateRefreshToken();
   await deps.storeRefreshToken({
@@ -184,6 +188,20 @@ export async function handleSetup(
       trustedProxyIps: deps.trustedProxyIps,
     }),
     expiresAt: new Date(Date.now() + deps.refreshTokenTTL * 1000),
+  });
+
+  // Setup issues a real session, so it is a completed login and belongs in the
+  // trail like any other. It does not route through `issueSession` because it
+  // is account creation rather than authentication — different status, message,
+  // and no login hooks — but the session it hands out is the same thing.
+  await deps.auditLog.write({
+    kind: "login-succeeded",
+    actorUserId: user.id,
+    ipAddress: getTrustedClientIp(request, {
+      trustProxy: deps.trustProxy,
+      trustedProxyIps: deps.trustedProxyIps,
+    }),
+    userAgent: request.headers.get("user-agent"),
   });
 
   const cookies = [
@@ -205,10 +223,10 @@ export async function handleSetup(
       user: { id: user.id, email: user.email, name: user.name, roleIds },
       accessToken,
       refreshToken: rawRefreshToken,
-      // Authoritative server-side exp = accessToken JWT exp claim, not cookie max-age.
-      expiresAt: new Date(
-        Date.now() + deps.accessTokenTTL * 1000
-      ).toISOString(),
+      // Authoritative server-side exp = the accessToken JWT's own exp claim,
+      // not cookie max-age and not a fresh clock reading taken after the
+      // awaited work above.
+      expiresAt: accessTokenExpiresAt.toISOString(),
     },
     { status: 201, headers: buildCookieHeaders(cookies) }
   );

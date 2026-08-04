@@ -7,7 +7,11 @@
 
 import { recordFlattenedError } from "../hooks/side-effect-warnings";
 
-import { NEXTLY_ERROR_STATUS } from "./error-codes";
+import {
+  genericPublicMessage,
+  NEXTLY_ERROR_STATUS,
+  statusToErrorCode,
+} from "./error-codes";
 import { NextlyError } from "./nextly-error";
 import { originalErrorOf, withOriginalError } from "./original-error";
 import type { PublicData } from "./public-data";
@@ -159,29 +163,40 @@ export function errorFromServiceEnvelope(
     });
   }
 
-  // The status-derived branches chain the original too. A code-less envelope is
-  // exactly the one a raw driver rejection produces, so the branch with the
-  // least to say about the failure is the branch whose cause is worth the most.
-  //
-  // Named explicitly rather than spread in from a conditional object: an option
-  // a factory does not declare is a type error when written out and is accepted
-  // in silence when spread, so the spelling that catches the omission is the
-  // one that reads as if it does.
-  if (status === NEXTLY_ERROR_STATUS.NOT_FOUND) {
-    return NextlyError.notFound({ logContext, cause: original });
-  }
-  if (status === NEXTLY_ERROR_STATUS.FORBIDDEN) {
-    return NextlyError.forbidden({ logContext, cause: original });
-  }
-  if (status === NEXTLY_ERROR_STATUS.CONFLICT) {
-    // Without a code, staleness is the safer default: it tells the user to
-    // refresh rather than implying the write itself was invalid.
-    return NextlyError.conflict({ logContext, cause: original });
-  }
-  if (status === NEXTLY_ERROR_STATUS.VALIDATION_ERROR) {
+  // Nothing named a code, so the ONE table decides. Every boundary used to
+  // decide separately, which is how the same 401 reached a Direct API caller as
+  // `AUTH_REQUIRED` and a REST caller as a 500.
+  const derived = statusToErrorCode(status);
+
+  // Validation keeps its own path either way: it is the only code whose public
+  // data is per-field issues the admin maps onto form inputs.
+  if (derived === "VALIDATION_ERROR") {
     return validationFromEnvelope(envelope, logContext, original);
   }
-  return NextlyError.internal({ logContext, cause: original });
+
+  return new NextlyError({
+    code: derived,
+    // The GENERIC sentence for the derived code, never the envelope's own
+    // message. A code-less envelope comes from a legacy converter that may have
+    // stored a raw exception's text, and promoting that would put driver
+    // output and internal paths on the wire (spec 13.8). It stays in
+    // `logContext` for the operator.
+    publicMessage: genericPublicMessage(derived),
+    // The envelope's status rather than the code's canonical one, so an
+    // unrecognised legacy status still answers with what the producer chose
+    // instead of being rounded to 500.
+    statusCode: status,
+    // Forwarded even though the message is not. They are not the same kind of
+    // field: `message` is prose a legacy converter may have filled with a raw
+    // exception's text, while `publicData` is the structured payload whose
+    // whole purpose is to reach the caller. Dropping it silently disarmed the
+    // derived code -- a 429 answered RATE_LIMITED while `Retry-After` is read
+    // from `publicData.retryAfterSeconds`, so the caller was told to back off
+    // and not told for how long.
+    publicData: envelope.publicData as PublicData | undefined,
+    logContext,
+    ...(original !== undefined ? { cause: original } : {}),
+  });
 }
 
 /**

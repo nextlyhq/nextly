@@ -22,10 +22,7 @@ vi.mock("../../../di/container", () => ({
   },
 }));
 
-import {
-  getAdapterFromDI,
-  getComponentRegistryFromDI,
-} from "../../helpers/di";
+import { getAdapterFromDI, getComponentRegistryFromDI } from "../../helpers/di";
 import { dispatchComponents } from "../component-dispatcher";
 
 type Registry = {
@@ -34,6 +31,8 @@ type Registry = {
   getComponent: ReturnType<typeof vi.fn>;
   updateComponent: ReturnType<typeof vi.fn>;
   deleteComponent: ReturnType<typeof vi.fn>;
+  getComponentBySlug: ReturnType<typeof vi.fn>;
+  getAllComponents: ReturnType<typeof vi.fn>;
   isLocked: ReturnType<typeof vi.fn>;
 };
 
@@ -44,6 +43,12 @@ function makeRegistry(overrides: Partial<Registry> = {}): Registry {
     getComponent: vi.fn(),
     updateComponent: vi.fn(),
     deleteComponent: vi.fn(),
+    // Answers "no such slug" so a create reaches the path under test. The handler asks before it
+    // converges any schema, so a double that cannot answer fails the request instead.
+    getComponentBySlug: vi.fn().mockResolvedValue(null),
+    // Answers "no field group owns that table" so a create reaches the path under test. The
+    // handler asks before it emits any DDL, so a double that cannot answer fails the request.
+    getAllComponents: vi.fn().mockResolvedValue([]),
     isLocked: vi.fn().mockResolvedValue(false),
     ...overrides,
   };

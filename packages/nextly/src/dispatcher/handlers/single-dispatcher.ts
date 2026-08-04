@@ -640,6 +640,25 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // and DDL so every call site writes and reads the same physical table.
       const tableName = resolveSingleTableName({ slug: b.slug });
 
+      // Refused before any DDL runs, and keyed on the TABLE NAME rather than the slug. A slug is
+      // normalised on its way to a table name, so `foo-bar` and `foo_bar` name one physical table
+      // while looking like two free slugs. The registry's own check runs after the DDL, by which
+      // point `CREATE TABLE IF NOT EXISTS` has reported success against the table that already
+      // exists and the runtime registration has rebound it to this request's fields.
+      const owner = (await svc.registry.getAllSingles()).find(
+        s => s.tableName === tableName
+      );
+      if (owner) {
+        throw NextlyError.duplicate({
+          logContext: {
+            reason: "single-table-conflict",
+            slug: b.slug,
+            tableName,
+            ownedBy: owner.slug,
+          },
+        });
+      }
+
       // Generate migration SQL for the Single's data table. Passing
       // isSingle: true skips the slug column and auto-adds updated_at.
       // Pass hasStatus so the data table also gets a `status` column
@@ -1482,6 +1501,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // i18n: carry localized so the preview omits translatable columns from the
         // single's main table (mirrors the apply path).
         localized: (single as { localized?: boolean }).localized === true,
+        // Authored in the Schema Builder: this is the Builder's own save path.
+        builderOwned: true,
       };
 
       const pipelinePreview = await previewDesiredSchema({
@@ -1597,6 +1618,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // from the single's main table (they live in single_<slug>_locales, reconciled
         // out-of-band below) — mirrors the collection apply path.
         localized: isLocalized,
+        // Authored in the Schema Builder: this is the Builder's own save path.
+        builderOwned: true,
       };
 
       const promptDispatcher = new BrowserPromptDispatcher(
@@ -1626,6 +1649,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         promptChannel: "browser",
         databaseName,
         uiTargetSlug: slug,
+        // Named, not defaulted: the scope defaults to a collection, and a single recorded under that
+        // kind is invisible to every history query filtered by its own.
+        uiTargetKind: "single" as const,
       });
 
       if (!result.success) {

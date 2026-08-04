@@ -31,6 +31,7 @@ import {
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import {
   fieldProducesColumn,
+  usesJunctionTable,
   getColumnDescriptor,
   getSystemColumnDescriptors,
   renderSystemColumnSql,
@@ -87,6 +88,21 @@ export class DynamicCollectionSchemaService {
   }
 
   /**
+   * Whether a field kept its name but moved between storage classes.
+   *
+   * A junction-backed field has no column on this row and a row-backed one has no junction table,
+   * so changing between them is not a modification of anything: it is a removal from one storage
+   * and an addition to the other. Read as a modification instead, it produced an ALTER COLUMN
+   * against a name the table never had.
+   */
+  private storageClassChanged(
+    previous: FieldDefinition,
+    next: FieldDefinition
+  ): boolean {
+    return usesJunctionTable(previous) !== usesJunctionTable(next);
+  }
+
+  /**
    * Generate SQL migration for creating a new collection table
    *
    * @param tableName - The name of the table to create
@@ -135,11 +151,10 @@ export class DynamicCollectionSchemaService {
 
     const columns = mainFields
       .map(f => {
-        // Skip many-to-many fields as they don't create columns in the main table
-        if (
-          f.type === "relationship" &&
-          f.options?.relationType === "manyToMany"
-        ) {
+        // Skip junction-backed fields: their links live in a junction table, not on this row.
+        // Asked through the shared predicate so this and the descriptor cannot disagree about
+        // which fields those are — an `upload` is not one of them, whatever option it carries.
+        if (usesJunctionTable(f)) {
           return null;
         }
 
@@ -319,11 +334,7 @@ ${allColumnDefs.join(",\n")}
 
     // Generate many-to-many junction tables
     fields.forEach(f => {
-      if (
-        f.type === "relationship" &&
-        f.options?.relationType === "manyToMany" &&
-        f.options?.target
-      ) {
+      if (usesJunctionTable(f) && f.options?.target) {
         const junctionTableSQL = this.generateJunctionTable(tableName, f);
         junctionTables.push(junctionTableSQL);
       }
@@ -555,12 +566,10 @@ ${allColumnDefs.join(",\n")}
       // Phase D: skip the renamed target — it's already been handled
       // above as ALTER TABLE RENAME COLUMN.
       if (field.name === renamedToName) continue;
-      if (!oldFieldMap.has(field.name)) {
+      const previous = oldFieldMap.get(field.name);
+      if (!previous || this.storageClassChanged(previous, field)) {
         // Skip manyToMany fields - they don't get columns, they get junction tables
-        if (
-          field.type === "relationship" &&
-          field.options?.relationType === "manyToMany"
-        ) {
+        if (usesJunctionTable(field)) {
           // Generate junction table instead
           const junctionSQL = this.generateJunctionTable(tableName, field);
           statements.push(junctionSQL);
@@ -668,7 +677,8 @@ ${allColumnDefs.join(",\n")}
       // IF EXISTS to tolerate the absence. A many-to-many relationship is in that set too: its
       // links live in a junction table, so dropping one must not touch the parent.
       if (!fieldProducesColumn(field)) continue;
-      if (!newFieldMap.has(field.name)) {
+      const next = newFieldMap.get(field.name);
+      if (!next || this.storageClassChanged(field, next)) {
         const dropCol = toSnakeCase(field.name);
         // SQLite doesn't support IF EXISTS on DROP COLUMN
         if (this.dialect === "sqlite") {
@@ -692,6 +702,9 @@ ${allColumnDefs.join(",\n")}
         // many-to-many emitted ALTER COLUMN against a name the table does not have.
         if (!fieldProducesColumn(field)) continue;
         const oldField = oldFieldMap.get(field.name);
+        // A storage move is handled by the add and remove loops above; altering the column here
+        // would target one the table does not have yet, or no longer has.
+        if (oldField && this.storageClassChanged(oldField, field)) continue;
         if (oldField && this.isFieldModified(oldField, field)) {
           const alterCol = toSnakeCase(field.name);
           const type = this.mapFieldTypeToSQL(field.type, field.length);
@@ -826,7 +839,7 @@ ${allColumnDefs.join(",\n")}
     // handling. The caller's add/drop loop will do drop-junction +
     // add-junction (data loss for the join) — admin UI ideally warns
     // before this kind of edit.
-    if (a.type === "relationship" && a.options?.relationType === "manyToMany") {
+    if (usesJunctionTable(a)) {
       return false;
     }
     if (a.type === "relationship") {

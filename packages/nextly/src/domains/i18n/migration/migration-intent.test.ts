@@ -12,7 +12,7 @@ import {
   LOCALIZATION_INTENT_VERSION,
   parseLocalizationIntent,
 } from "./migration-intent";
-import type { CompanionMigrationSpec } from "./types";
+import { LOCALIZED_COLUMN_KINDS, type CompanionMigrationSpec } from "./types";
 
 const spec = (
   overrides: Partial<CompanionMigrationSpec> = {}
@@ -51,6 +51,22 @@ describe("localization migration intent", () => {
     expect(parsed?.spec.columnsOnMain).toEqual(["body"]);
     expect(parsed?.spec.status).toBe(true);
     expect(parsed?.spec.columns).toEqual([{ name: "body", kind: "text" }]);
+  });
+
+  // Every kind the spec type permits, rather than a chosen one. The generator may write any member
+  // of this set into a header, so a parser that accepts a subset aborts a run on a file the same
+  // build just produced. Enumerating the set is what makes the next kind added fail here instead of
+  // at a user's migrate.
+  it.each(LOCALIZED_COLUMN_KINDS)("round-trips the %s column kind", kind => {
+    const line = formatLocalizationIntent({
+      kind: "enable",
+      entity: "collection",
+      spec: spec({ columns: [{ name: "body", kind }] }),
+    });
+
+    const parsed = parseLocalizationIntent(fileWith(line), "m.sql");
+
+    expect(parsed?.spec.columns).toEqual([{ name: "body", kind }]);
   });
 
   // The file's checksum covers this line, so an unstable rendering would make two runs that

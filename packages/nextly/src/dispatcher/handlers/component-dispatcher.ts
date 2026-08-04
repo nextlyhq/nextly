@@ -384,6 +384,27 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
       // migrate:create paths, so the created table and the registry row agree.
       const tableName = resolveComponentTableName(b.slug);
 
+      // Refused before any DDL runs, and keyed on the TABLE NAME rather than the slug. The two are
+      // not the same key: a slug is normalised on its way to a table name, so `foo-bar` and
+      // `foo_bar` name one physical table while looking like two free slugs. Left to the registry's
+      // own check, which runs after the DDL, `CREATE TABLE IF NOT EXISTS` reports success against
+      // the table that already exists and the runtime registration then rebinds it to this
+      // request's fields — so a rejected create leaves the existing field group reading through a
+      // schema that does not describe it.
+      const owner = (await svc.registry.getAllComponents()).find(
+        c => c.tableName === tableName
+      );
+      if (owner) {
+        throw NextlyError.duplicate({
+          logContext: {
+            reason: "component-table-conflict",
+            slug: b.slug,
+            tableName,
+            ownedBy: owner.slug,
+          },
+        });
+      }
+
       // Use FieldGroupSchemaService to generate tables with parent
       // reference columns (_parent_id, _parent_table, _parent_field,
       // _order, _component_type).
@@ -659,6 +680,8 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         // from the component's main table (they live in comp_<slug>_locales, reconciled
         // out-of-band below) — mirrors the collection/single apply path.
         localized: (component as { localized?: boolean }).localized === true,
+        // Authored in the Schema Builder: this is the Builder's own save path.
+        builderOwned: true,
       };
 
       const pipelinePreview = await previewDesiredSchema({
@@ -783,6 +806,8 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         // from the component's main table (they live in comp_<slug>_locales, reconciled
         // out-of-band below) — mirrors the collection/single apply path.
         localized: isLocalized,
+        // Authored in the Schema Builder: this is the Builder's own save path.
+        builderOwned: true,
       };
 
       const promptDispatcher = new BrowserPromptDispatcher(
@@ -812,6 +837,9 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         promptChannel: "browser",
         databaseName,
         uiTargetSlug: slug,
+        // Named, not defaulted: the scope defaults to a collection, and a field group recorded under
+        // that kind is invisible to every history query filtered by its own.
+        uiTargetKind: "component" as const,
       });
 
       if (!result.success) {

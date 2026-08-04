@@ -76,7 +76,11 @@ describe("computeJournalSummaryFromOperations", () => {
 
   it("counts add_column and add_table as added", () => {
     expect(
-      computeJournalSummaryFromOperations([addColumn(), addColumn(), addTable()])
+      computeJournalSummaryFromOperations([
+        addColumn(),
+        addColumn(),
+        addTable(),
+      ])
     ).toEqual({ added: 3, removed: 0, renamed: 0, changed: 0 });
   });
 
@@ -122,6 +126,20 @@ describe("computeJournalScope", () => {
       slug: "posts",
     });
   });
+
+  // Every entity kind, not just the defaulted one. A scope naming a kind carries the entity it
+  // names — the type now requires it — because a kind arriving without one had to be retargeted to
+  // the whole schema by the notification conversion, losing the target a scope-filtered history is
+  // searched by.
+  it.each(["collection", "single", "component"] as const)(
+    "ui + slug -> %s scope carrying its slug",
+    kind => {
+      expect(computeJournalScope("ui", "hero", kind)).toEqual({
+        kind,
+        slug: "hero",
+      });
+    }
+  );
 
   it("code source -> global scope", () => {
     expect(computeJournalScope("code", undefined)).toEqual({ kind: "global" });

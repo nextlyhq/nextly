@@ -1,7 +1,7 @@
 import { NextlyError } from "../../../errors/nextly-error";
 
 import type { I18nTransitionKind } from "./transition-state";
-import type { CompanionMigrationSpec } from "./types";
+import { LOCALIZED_COLUMN_KINDS, type CompanionMigrationSpec } from "./types";
 
 /**
  * Header field carrying a companion migration's declared intent.
@@ -160,18 +160,17 @@ export function isLocalizationIntentRefusal(error: unknown): boolean {
 /** Dialects a spec may name. Drives DDL, so an unknown one cannot be carried forward. */
 const DIALECTS = new Set(["postgresql", "mysql", "sqlite"]);
 
-/** Storage kinds a localized column may declare, mirroring `LocalizedColumnSpec["kind"]`. */
-const COLUMN_KINDS = new Set([
-  "text",
-  "longText",
-  "boolean",
-  "integer",
-  "double",
-  "decimal",
-  "timestamp",
-  "json",
-  "fkSingle",
-]);
+/**
+ * Storage kinds a localized column may declare.
+ *
+ * Built from the declaration the spec's own type is derived from, so the set this parser accepts
+ * and the set the generator can write are the same set. A hand-kept copy drifted the moment a kind
+ * was added: the generator wrote it, this refused it, and the run aborted on a file it had just
+ * produced itself.
+ */
+const COLUMN_KINDS: ReadonlySet<string> = new Set<string>(
+  LOCALIZED_COLUMN_KINDS
+);
 
 /**
  * A column dimension: absent, or a whole number in range.

@@ -47,7 +47,9 @@ const DIALECTS: SupportedDialect[] = ["postgresql", "mysql", "sqlite"];
  * Read off `Symbol("drizzle:Columns")` rather than through drizzle-orm's column-listing helper,
  * which is deprecated on v1 yet still compiles — `scripts/check-drizzle-v1-legacy.cjs` refuses it
  * for exactly that reason. `filter-unsafe-statements.ts` reads `Symbol("drizzle:Name")` the same
- * way. If the symbol ever moves, the set comes back empty and the assertions below fail loudly.
+ * way. An empty result is asserted against at each call site: a "no duplicates" check passes
+ * trivially on an empty list, so emptiness has to be refused explicitly rather than assumed to
+ * surface.
  */
 function runtimeColumnNames(table: unknown): string[] {
   const symbol = Object.getOwnPropertySymbols(table as object).find(
@@ -60,7 +62,12 @@ function runtimeColumnNames(table: unknown): string[] {
   );
 }
 
-/** The identifiers declared in the CREATE TABLE body, before any index statement. */
+/**
+ * The identifiers declared in the CREATE TABLE body, before any index statement.
+ *
+ * Returns an empty list if the statement does not match — which every "declares no column twice"
+ * assertion would then satisfy without comparing anything, so callers assert it is non-empty.
+ */
 function declaredColumns(sql: string): string[] {
   const body = sql.split("--> statement-breakpoint")[0];
   return [...body.matchAll(/^\s*[`"]([A-Za-z_][A-Za-z0-9_]*)[`"]/gm)].map(
@@ -121,8 +128,12 @@ describe("collection column names agree across the generators", () => {
           (column, index) => columns.indexOf(column) !== index
         );
 
-        expect({ [`${dialect}.${name}`]: duplicated }).toEqual({
-          [`${dialect}.${name}`]: [],
+        expect({
+          [`${dialect}.${name}.duplicated`]: duplicated,
+          [`${dialect}.${name}.extracted`]: columns.length > 0,
+        }).toEqual({
+          [`${dialect}.${name}.duplicated`]: [],
+          [`${dialect}.${name}.extracted`]: true,
         });
       }
     }
@@ -154,8 +165,12 @@ describe("collection column names agree across the generators", () => {
             (column, index) => columns.indexOf(column) !== index
           );
 
-          expect({ [`${dialect}.${table}.${name}`]: duplicated }).toEqual({
-            [`${dialect}.${table}.${name}`]: [],
+          expect({
+            [`${dialect}.${table}.${name}.duplicated`]: duplicated,
+            [`${dialect}.${table}.${name}.extracted`]: columns.length > 0,
+          }).toEqual({
+            [`${dialect}.${table}.${name}.duplicated`]: [],
+            [`${dialect}.${table}.${name}.extracted`]: true,
           });
         }
       }
@@ -200,6 +215,15 @@ describe("all three descriptions of the main table agree", () => {
         localized: options.localized,
       }).table
     );
+
+    // Every comparison below asserts three lists are equal. An empty extraction cannot satisfy
+    // that on its own — the three come from independent generators, so one going empty makes the
+    // lists differ — but asserting it here names the cause instead of leaving an opaque diff.
+    expect({
+      created: created.length > 0,
+      desired: desired.length > 0,
+      runtime: runtime.length > 0,
+    }).toEqual({ created: true, desired: true, runtime: true });
 
     return {
       created: [...created].sort(),
@@ -632,6 +656,130 @@ describe("duplicate columns are judged globally, not per table", () => {
         } as never)
       )
     ).toEqual([]);
+  });
+});
+
+describe("junction storage is a relationship feature only", () => {
+  // `relationship` and `upload` can both carry `relationType: "manyToMany"`, and the descriptor
+  // once said neither had a column while the generator emitted one for the upload. The two are
+  // reconciled toward the ROW, not the junction, because only a relationship is junction-backed in
+  // the persistence layer: `collection-mutation-service` filters junction writes by
+  // `f.type === "relationship"`, and the read path builds its relation set from
+  // `isRelationshipField`, which is `field.type === "relationship"`. Giving an upload a junction
+  // table would give it storage nothing writes to and nothing reads from.
+  const m2m = (type: string) => ({
+    name: "gallery",
+    type,
+    options: { relationType: "manyToMany", target: "media" },
+  });
+
+  it("routes a relationship to a junction and an upload to its own column", () => {
+    const expected: Record<string, unknown> = {
+      relationship: { parentColumn: false, descriptorColumn: false, tables: 2 },
+      upload: { parentColumn: true, descriptorColumn: true, tables: 1 },
+    };
+    for (const dialect of DIALECTS) {
+      for (const type of ["relationship", "upload"]) {
+        const service = new DynamicCollectionSchemaService(undefined, dialect);
+        const generate = service as unknown as {
+          generateMigrationSQL: (
+            name: string,
+            fields: unknown[],
+            options?: unknown
+          ) => string;
+        };
+        const sql = generate.generateMigrationSQL("dc_p", [m2m(type)], {
+          hasStatus: false,
+        });
+        const at = `${dialect}.${type}`;
+
+        const want = expected[type] as {
+          parentColumn: boolean;
+          descriptorColumn: boolean;
+          tables: number;
+        };
+
+        expect({
+          [`${at}.parentColumn`]: declaredColumns(sql).includes("gallery"),
+          [`${at}.descriptorColumn`]:
+            getColumnDescriptor(m2m(type) as never, dialect) !== null,
+          [`${at}.createTables`]: (sql.match(/CREATE TABLE/g) ?? []).length,
+        }).toEqual({
+          [`${at}.parentColumn`]: want.parentColumn,
+          [`${at}.descriptorColumn`]: want.descriptorColumn,
+          [`${at}.createTables`]: want.tables,
+        });
+      }
+    }
+  });
+
+  it("still gives a single-target upload its own column", () => {
+    // The mirror: only the many-to-many option moves storage off the row. An ordinary upload is
+    // still a foreign key on the parent, and must not be swept up by the type check.
+    const single = { name: "cover", type: "upload", relationTo: "media" };
+
+    expect({
+      descriptor: getColumnDescriptor(single as never, "postgresql")?.name,
+      producesColumn: fieldProducesColumn(single),
+    }).toEqual({ descriptor: "cover", producesColumn: true });
+  });
+});
+
+describe("a field that moves between storage classes", () => {
+  // A junction-backed field has no column on its row and a row-backed one has no junction table.
+  // Changing a field between those two while keeping its name is therefore not a modification of
+  // anything — read as one, it emitted ALTER COLUMN against a name the table never had, which
+  // fails the whole save. It has to leave one storage and arrive in the other.
+  const named = (type: string) => ({
+    name: "gallery",
+    type,
+    relationTo: "media",
+    options: { relationType: "manyToMany", target: "media" },
+  });
+
+  function alterSql(oldFields: unknown[], newFields: unknown[]): string {
+    const service = new DynamicCollectionSchemaService(undefined, "postgresql");
+    const alter = service as unknown as {
+      generateAlterTableMigration: (
+        table: string,
+        oldFields: unknown[],
+        newFields: unknown[]
+      ) => string;
+    };
+    return alter.generateAlterTableMigration("dc_p", oldFields, newFields);
+  }
+
+  it("adds the column when a junction-backed field becomes row-backed", () => {
+    const sql = alterSql([named("relationship")], [named("upload")]);
+
+    expect({
+      addsColumn: sql.includes("ADD COLUMN"),
+      altersColumn: sql.includes("ALTER COLUMN"),
+    }).toEqual({ addsColumn: true, altersColumn: false });
+  });
+
+  it("drops the column and builds the junction when it goes the other way", () => {
+    const sql = alterSql([named("upload")], [named("relationship")]);
+
+    expect({
+      dropsColumn: sql.includes("DROP COLUMN"),
+      createsJunction: sql.includes("CREATE TABLE"),
+      altersColumn: sql.includes("ALTER COLUMN"),
+    }).toEqual({
+      dropsColumn: true,
+      createsJunction: true,
+      altersColumn: false,
+    });
+  });
+
+  it("still alters a field that stays in the same storage class", () => {
+    // The mirror: an ordinary change to a row-backed field must still reach the modify path.
+    const sql = alterSql(
+      [{ name: "headline", type: "text" }],
+      [{ name: "headline", type: "text", required: true }]
+    );
+
+    expect(sql).toContain("ALTER COLUMN");
   });
 });
 
