@@ -319,6 +319,15 @@ export interface BreakpointSet {
 /** Maximum breakpoints per axis (the base breakpoint included). */
 export const MAX_BREAKPOINTS_PER_AXIS = 7;
 
+/**
+ * Maximum named classes read from the site library on one compile.
+ *
+ * The library is site settings, not part of a document, so the document's own byte cap does not
+ * bound it — and it is read on every page render. Set far above any hand-authored library so the
+ * cap is only ever reached by data that is already wrong.
+ */
+export const MAX_NAMED_CLASSES = 2000;
+
 // ---------------------------------------------------------------------------
 // Component instances — a distinguished node type
 // ---------------------------------------------------------------------------

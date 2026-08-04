@@ -935,6 +935,31 @@ export function getStyleProperty(property: string): StyleProperty | undefined {
  * An empty answer means the path names nothing this catalog defines, which a caller should read
  * as "no claim", not as "emitted nothing" — persisted data reaches here unvalidated.
  */
+/**
+ * The shape stored under one field of a composite, across whichever branch defines it.
+ *
+ * A union stores one branch at a time, so a field belongs to whichever of them has it.
+ */
+function fieldShape(shape: StyleShape, key: string): StyleShape | undefined {
+  for (const branch of shape.kind === "union" ? shape.of : [shape]) {
+    const fields =
+      branch.kind === "logicalSides"
+        ? branch.sides
+        : branch.kind === "logicalCorners"
+          ? branch.corners
+          : branch.kind === "object"
+            ? branch.fields
+            : undefined;
+    if (fields === undefined) continue;
+    // Read through `entries` rather than by index: the side and corner records are declared with
+    // their exact keys, so a lookup by an arbitrary string is not something the types can answer,
+    // and persisted data is where these keys come from.
+    const found = Object.entries(fields).find(([name]) => name === key)?.[1];
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+
 export function cssPropertiesForField(
   property: string,
   path: readonly string[]
@@ -942,25 +967,7 @@ export function cssPropertiesForField(
   let shape = CATALOG_BY_PROPERTY.get(property)?.shape;
   for (const key of path) {
     if (shape === undefined) return [];
-    // A union stores one branch at a time, so the field belongs to whichever branch defines it.
-    const branches = shape.kind === "union" ? shape.of : [shape];
-    let next: StyleShape | undefined;
-    for (const branch of branches) {
-      const fields =
-        branch.kind === "logicalSides"
-          ? branch.sides
-          : branch.kind === "logicalCorners"
-            ? branch.corners
-            : branch.kind === "object"
-              ? branch.fields
-              : undefined;
-      if (fields === undefined) continue;
-      // Read through `entries` rather than by index: the side and corner records are declared
-      // with their exact keys, so a lookup by an arbitrary string is not something the types can
-      // answer, and persisted data is where these keys come from.
-      next ??= Object.entries(fields).find(([name]) => name === key)?.[1];
-    }
-    shape = next;
+    shape = fieldShape(shape, key);
   }
   if (shape === undefined) return [];
   return shapeLeaves(shape).map(leaf => leaf.cssProperty);
@@ -984,6 +991,18 @@ function descendantOf(entry: StyleProperty | undefined): string | undefined {
  * by one class-worth wherever both are written on the same element. Counted rather than assumed,
  * because it is the difference that decides which of two matching rules the browser uses.
  */
+/**
+ * Whether a property writes to something INSIDE the block rather than to the block itself.
+ *
+ * The distinction decides which cascade applies. A descendant rule from an ancestor lands on this
+ * node's own links, competing with this node's rules at equal specificity; an inherited value
+ * merely arrives when nothing here declares one, and loses to anything that does. Treating the
+ * first as the second reports the wrong colour for a link inside a styled parent.
+ */
+export function propertyUsesDescendantSelector(property: string): boolean {
+  return descendantOf(CATALOG_BY_PROPERTY.get(property)) !== undefined;
+}
+
 export function propertyPseudoClassCount(property: string): number {
   const descendant = descendantOf(CATALOG_BY_PROPERTY.get(property));
   if (descendant === undefined) return 0;
@@ -1004,23 +1023,71 @@ export function propertyPseudoClassCount(property: string): number {
  */
 export function propertiesAlsoMatching(property: string): readonly string[] {
   const entry = CATALOG_BY_PROPERTY.get(property);
+  if (entry === undefined) return [];
   const descendant = descendantOf(entry);
-  if (entry === undefined || descendant === undefined) return [];
-  const cssProperty = shapeLeaves(entry.shape)[0]?.cssProperty;
+  const emits = new Set(shapeLeaves(entry.shape).map(leaf => leaf.cssProperty));
   const related: string[] = [];
   for (const other of STYLE_CATALOG) {
     if (other.property === property) continue;
+    // Sharing a CSS property is the whole test. Two keys that write `background-image` compete
+    // whether or not either uses a descendant selector, and the earlier version asked only about
+    // descendants — so `background` and `backgroundGradient`, which are exactly this case, were
+    // resolved as though they could not overwrite each other.
+    if (!shapeLeaves(other.shape).some(leaf => emits.has(leaf.cssProperty))) {
+      continue;
+    }
     const otherDescendant = descendantOf(other);
-    if (otherDescendant === undefined) continue;
-    if (shapeLeaves(other.shape)[0]?.cssProperty !== cssProperty) continue;
-    // Less specific and matching the same elements: the same selector, with this property's
-    // pseudo-classes stripped off.
-    if (descendant.startsWith(`${otherDescendant}:`))
+    // A rule can only be read alongside this one if it lands on the same elements. Same selector,
+    // or this property's selector with its pseudo-classes stripped off — `a` against `a:hover`.
+    // A descendant rule and a plain one style different elements and never compete.
+    if (otherDescendant === descendant) related.push(other.property);
+    else if (
+      descendant !== undefined &&
+      otherDescendant !== undefined &&
+      descendant.startsWith(`${otherDescendant}:`)
+    ) {
       related.push(other.property);
+    }
   }
   return related.sort(
     (a, b) => propertyPseudoClassCount(a) - propertyPseudoClassCount(b)
   );
+}
+
+/**
+ * The field names a composite value carries at a path, across every branch that defines them.
+ *
+ * Used to expand a shorthand: a lower tier storing `borderRadius: "4px"` sets all four corners,
+ * and a higher tier storing one corner overrides only that one — so the shorthand has to become
+ * the four fields it stood for before the record folds over it, or the corners it is still
+ * painting are reported as coming from nowhere.
+ */
+export function compositeFieldNames(
+  property: string,
+  path: readonly string[] = []
+): readonly string[] {
+  let shape = CATALOG_BY_PROPERTY.get(property)?.shape;
+  for (const key of path) {
+    if (shape === undefined) return [];
+    shape = fieldShape(shape, key);
+  }
+  if (shape === undefined) return [];
+  const names: string[] = [];
+  for (const branch of shape.kind === "union" ? shape.of : [shape]) {
+    const fields =
+      branch.kind === "logicalSides"
+        ? branch.sides
+        : branch.kind === "logicalCorners"
+          ? branch.corners
+          : branch.kind === "object"
+            ? branch.fields
+            : undefined;
+    if (fields === undefined) continue;
+    for (const name of Object.keys(fields)) {
+      if (!names.includes(name)) names.push(name);
+    }
+  }
+  return names;
 }
 
 /**

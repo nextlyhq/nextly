@@ -25,7 +25,11 @@ import type {
   NodeStyles,
   StyleState,
 } from "../document";
-import { MAX_BREAKPOINTS_PER_AXIS, STYLE_STATES } from "../document";
+import {
+  MAX_BREAKPOINTS_PER_AXIS,
+  MAX_NAMED_CLASSES,
+  STYLE_STATES,
+} from "../document";
 import { describeValue, pointer } from "../issue-text";
 import { DEFAULT_LIMITS } from "../limits";
 import type { DocumentLimits } from "../limits";
@@ -923,9 +927,26 @@ export function compilePageCss(
   // `orderedNamedClasses` and throws, which would take down rendering for every page on the site
   // rather than costing the styling of the classes nobody can read.
   const storedLibrary: unknown = ctx.namedClasses;
-  const library: readonly NamedClass[] = Array.isArray(storedLibrary)
+  // Bounded BEFORE anything copies, sorts or scans it. The library is site-level persisted data
+  // read on every page render, and a corrupt settings row holding a very large array would be
+  // allocated and sorted in full each time — the document walk is capped and the warnings are
+  // capped, so this was the one unbounded read left on the path.
+  const wholeLibrary: readonly NamedClass[] = Array.isArray(storedLibrary)
     ? (storedLibrary as readonly NamedClass[])
     : [];
+  const library =
+    wholeLibrary.length > MAX_NAMED_CLASSES
+      ? wholeLibrary.slice(0, MAX_NAMED_CLASSES)
+      : wholeLibrary;
+  if (library.length < wholeLibrary.length) {
+    pushBoundedWarning(warningAllowance, warnings, {
+      path: "/classes",
+      code: "invalid-class-library",
+      severity: "warning",
+      message: `The site's class library holds ${wholeLibrary.length} classes; only the first ${MAX_NAMED_CLASSES} were read.`,
+      suggestion: "Remove the classes the site no longer uses.",
+    });
+  }
   if (storedLibrary !== undefined && !Array.isArray(storedLibrary)) {
     pushBoundedWarning(warningAllowance, warnings, {
       path: "/classes",

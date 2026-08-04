@@ -432,6 +432,84 @@ describe("what an ancestor passes down", () => {
   });
 });
 
+describe("a shorthand under a partial record", () => {
+  it("keeps the corners the shorthand is still painting, and names their tier", () => {
+    // `border-radius: 4px` sets four corners; one logical longhand after it overrides one. The
+    // browser keeps 4px on the other three, so replacing the shorthand outright would leave three
+    // visible corners attributed to nothing.
+    const found = resolveStyle("borderRadius", "base", "desktop", {
+      classes: [namedClass("card", 0, at("desktop", { borderRadius: "4px" }))],
+      node: at("desktop", { borderRadius: { startStart: "8px" } }),
+    });
+
+    expect(found?.parts?.startStart.source).toEqual({ tier: "local" });
+    expect(found?.parts?.startEnd.source).toEqual({
+      tier: "class",
+      id: "card",
+      slug: "card",
+    });
+    expect(found?.parts?.startEnd.value).toBe("4px");
+  });
+});
+
+describe("two catalog keys writing one CSS property", () => {
+  it("prefers the one the compiler writes last, even under a different name", () => {
+    // `background.url` and `backgroundGradient` both emit `background-image`. Reading only the
+    // asked-for key reports the image while the browser paints the gradient over it.
+    const found = resolveStyle("background", "base", "desktop", {
+      classes: [
+        namedClass("card", 0, at("desktop", { background: { url: "/a.png" } })),
+      ],
+      node: at("desktop", {
+        backgroundGradient: "linear-gradient(red, blue)",
+      }),
+    });
+
+    expect(found?.value).toBe("linear-gradient(red, blue)");
+    expect(found?.source).toEqual({ tier: "local" });
+  });
+
+  it("keeps the stored order within one tier, which is the order the compiler writes", () => {
+    // Both keys in one map: whichever the compiler writes second wins, and that is the order the
+    // record holds them in, not a preference of ours.
+    const gradientLast = resolveStyle("background", "base", "desktop", {
+      node: at("desktop", {
+        background: { url: "/a.png" },
+        backgroundGradient: "linear-gradient(red, blue)",
+      }),
+    });
+    const imageLast = resolveStyle("background", "base", "desktop", {
+      node: at("desktop", {
+        backgroundGradient: "linear-gradient(red, blue)",
+        background: { url: "/a.png" },
+      }),
+    });
+
+    expect(gradientLast?.value).toBe("linear-gradient(red, blue)");
+    expect(imageLast?.value).toEqual({ url: "/a.png" });
+  });
+});
+
+describe("a style map the compiler refuses whole", () => {
+  it("reports the tier below, not the value stored beside the wreckage", () => {
+    // The compiler compiles a MAP, and a map with enough malformed siblings is refused together.
+    // Compiling the one asked-for property in isolation says it is fine and reports a local value
+    // the browser never received.
+    const wreckage: Record<string, unknown> = { color: "red" };
+    for (let index = 0; index < 400; index += 1) {
+      wreckage[`bogusProperty${index}`] = "nonsense";
+    }
+
+    const found = resolveStyle("color", "base", "desktop", {
+      classes: [namedClass("card", 0, at("desktop", { color: "blue" }))],
+      node: at("desktop", wreckage),
+    });
+
+    expect(found?.value).toBe("blue");
+    expect(found?.source).toEqual({ tier: "class", id: "card", slug: "card" });
+  });
+});
+
 describe("a state the compiler does not know", () => {
   it("reports nothing, because no rule was written for it", () => {
     // `pressed` is reported as `invalid-style-state` and emits nothing. Read here, it would hand

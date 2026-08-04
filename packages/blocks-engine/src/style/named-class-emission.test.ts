@@ -7,6 +7,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { BlockDocument, NodeStyles } from "../document";
+import { MAX_NAMED_CLASSES } from "../document";
 import { FIXTURE_BREAKPOINTS } from "../validation.fixtures";
 
 import { compilePageCss } from "./compile-page";
@@ -449,6 +450,102 @@ describe("a node whose class list is not a list", () => {
 
     expect(warnings.map(w => w.code)).toContain("invalid-classes");
     expect(classes.get("n1")).not.toContain("nx-c-card");
+  });
+});
+
+describe("a link colour set on an ancestor", () => {
+  it("beats the child's own class, because the compiler groups by tier", () => {
+    // Measured, because it reads the other way round. `linkColor` writes a DESCENDANT rule, so a
+    // parent's `.parent a` lands on this child's links directly rather than being inherited — and
+    // the compiler emits every block default, then every class, then every node's own rules, so
+    // the parent's LOCAL rule is written after the child's CLASS rule and wins.
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "parent",
+          type: "core/box",
+          version: 1,
+          props: {},
+          styles: styles({ linkColor: "red" }),
+          slots: {
+            default: [
+              {
+                id: "child",
+                type: "core/box",
+                version: 1,
+                props: {},
+                classes: ["c1"],
+              },
+            ],
+          },
+        },
+      ],
+    };
+    const linkCard: NamedClass = {
+      id: "c1",
+      slug: "card",
+      orderIndex: 0,
+      styles: styles({ linkColor: "blue" }),
+    };
+    const { css } = compilePageCss(
+      document as never,
+      {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        namedClasses: [linkCard],
+        blockBases: { "core/box": styles({ linkColor: "green" }) },
+      } as never
+    );
+
+    const classRule = css.indexOf(".nx-c-card a");
+    const parentRule = css.lastIndexOf(" a { color: red }");
+    expect(classRule).toBeGreaterThan(-1);
+    expect(parentRule).toBeGreaterThan(classRule);
+
+    const resolved = resolveStyle("linkColor", "base", BP, {
+      ancestors: [{ nodeId: "parent", node: styles({ linkColor: "red" }) }],
+      classes: [linkCard],
+      blockBase: styles({ linkColor: "green" }),
+    });
+
+    expect(resolved?.value).toBe("red");
+    expect(resolved?.source).toEqual({
+      tier: "ancestor",
+      nodeId: "parent",
+      source: { tier: "local" },
+    });
+  });
+
+  it("still loses to the child's own local rule, written later still", () => {
+    const resolved = resolveStyle("linkColor", "base", BP, {
+      ancestors: [{ nodeId: "parent", node: styles({ linkColor: "red" }) }],
+      node: styles({ linkColor: "blue" }),
+    });
+
+    expect(resolved?.source).toEqual({ tier: "local" });
+  });
+});
+
+describe("a class library too large to be real", () => {
+  it("reads a bounded prefix and says it stopped", () => {
+    // Site-level data read on EVERY page render, and the only unbounded read left on the path:
+    // the document walk is capped and the warnings are capped, but a corrupt settings row was
+    // still copied, sorted and scanned in full each time.
+    const huge = Array.from(
+      { length: MAX_NAMED_CLASSES + 5 },
+      (_unused, index): NamedClass => ({
+        id: `c${index}`,
+        slug: `cls-${index}`,
+        orderIndex: index,
+        styles: styles({ color: "blue" }),
+      })
+    );
+
+    const { css, warnings } = compile(doc({}), huge);
+
+    expect(warnings.map(w => w.code)).toContain("invalid-class-library");
+    expect(css).not.toContain(`.nx-c-cls-${MAX_NAMED_CLASSES + 1}`);
   });
 });
 

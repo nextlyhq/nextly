@@ -26,14 +26,16 @@ import { isPlainRecord } from "../plain-record";
 
 import { BREAKPOINT_AXES } from "./breakpoint-axes";
 import {
+  compositeFieldNames,
   cssPropertiesForField,
   propertiesAlsoMatching,
   propertyInheritsToDescendants,
   propertyPseudoClassCount,
+  propertyUsesDescendantSelector,
 } from "./catalog";
 import { compileStyleValues } from "./declarations";
 import type { NamedClass } from "./named-class";
-import { isUsableNamedClass } from "./named-class";
+import { isUsableNamedClass, orderedNamedClasses } from "./named-class";
 
 /** Which tier a resolved value came from, and which member of that tier. */
 export type StyleSource =
@@ -191,33 +193,100 @@ function nodeTiers(
   return ordered;
 }
 
+/** An ancestor's tier, labelled so a control can say which ancestor and how that one got it. */
+function ancestorTier(
+  ancestor: AncestorNode,
+  tier: { styles: NodeStyles; source: StyleSource }
+): { styles: NodeStyles; source: StyleSource } {
+  return {
+    styles: tier.styles,
+    // Wrapped rather than flattened: which ancestor it was, and how that ancestor came by it, are
+    // different questions and a control may want to ask either.
+    source: { tier: "ancestor", nodeId: ancestor.nodeId, source: tier.source },
+  };
+}
+
 function tiers(
   input: StyleResolutionInput,
   property: string
 ): { styles: NodeStyles; source: StyleSource }[] {
   const ordered: { styles: NodeStyles; source: StyleSource }[] = [];
+  const ancestors = input.ancestors ?? [];
+  const inheritable = propertyInheritsToDescendants(property);
+  if (inheritable && input.pageSettings) {
+    ordered.push({
+      styles: input.pageSettings,
+      source: { tier: "pageSettings" },
+    });
+  }
+
+  // A property that writes to a DESCENDANT selector is not inherited at all: an ancestor's
+  // `.parent a` rule lands on this node's links directly, at the same specificity as this node's
+  // own `.nx-c-card a`, so the two compete on source order rather than one being a fallback for
+  // the other.
+  //
+  // And the compiler groups its output by TIER across the whole page — every block default, then
+  // every class, then every node's own rules — so an ancestor's LOCAL rule is written after this
+  // node's class rule and beats it. Ordering ancestors as a block before this node, which is what
+  // inheritance means, gets that backwards.
+  //
+  // Measured, because it reads the other way round: a parent with a local `linkColor` beats a
+  // child whose class sets one.
+  if (propertyUsesDescendantSelector(property)) {
+    const chain: readonly (StyledNode | AncestorNode)[] = [...ancestors, input];
+    const label = (
+      styled: StyledNode | AncestorNode,
+      tier: { styles: NodeStyles; source: StyleSource }
+    ): { styles: NodeStyles; source: StyleSource } =>
+      "nodeId" in styled ? ancestorTier(styled, tier) : tier;
+
+    for (const styled of chain) {
+      if (styled.blockBase === undefined) continue;
+      ordered.push(
+        label(styled, {
+          styles: styled.blockBase,
+          source: { tier: "blockDefault" },
+        })
+      );
+    }
+    // Classes are emitted once each in library order, not once per node that applies them, so an
+    // ancestor's class and this node's interleave by their own order rather than by whose it is.
+    const applied: { cls: NamedClass; styled: StyledNode | AncestorNode }[] =
+      [];
+    for (const styled of chain) {
+      for (const cls of styled.classes ?? []) {
+        if (!isUsableNamedClass(cls)) continue;
+        if (applied.some(seen => seen.cls.id === cls.id)) continue;
+        applied.push({ cls, styled });
+      }
+    }
+    const inLibraryOrder = orderedNamedClasses(applied.map(entry => entry.cls));
+    for (const cls of inLibraryOrder) {
+      const entry = applied.find(seen => seen.cls.id === cls.id);
+      if (entry === undefined) continue;
+      ordered.push(
+        label(entry.styled, {
+          styles: cls.styles,
+          source: { tier: "class", id: cls.id, slug: cls.slug },
+        })
+      );
+    }
+    for (const styled of chain) {
+      if (styled.node === undefined) continue;
+      ordered.push(
+        label(styled, { styles: styled.node, source: { tier: "local" } })
+      );
+    }
+    return ordered;
+  }
+
   // Everything above this node is inheritance, which reaches it only for properties that travel
   // and always loses to a declaration on the element itself. Outermost first, so the nearest
   // ancestor is read last and wins — which is what "the closest one that says anything" means.
-  if (propertyInheritsToDescendants(property)) {
-    if (input.pageSettings) {
-      ordered.push({
-        styles: input.pageSettings,
-        source: { tier: "pageSettings" },
-      });
-    }
-    for (const ancestor of input.ancestors ?? []) {
+  if (inheritable) {
+    for (const ancestor of ancestors) {
       for (const tier of nodeTiers(ancestor)) {
-        ordered.push({
-          styles: tier.styles,
-          // Wrapped rather than flattened: which ancestor it was, and how that ancestor came by
-          // it, are different questions and a control may want to ask either.
-          source: {
-            tier: "ancestor",
-            nodeId: ancestor.nodeId,
-            source: tier.source,
-          },
-        });
+        ordered.push(ancestorTier(ancestor, tier));
       }
     }
   }
@@ -259,20 +328,19 @@ function liveBreakpoints(
 }
 
 /** The value one tier states for a property at exactly this state and breakpoint, if any. */
-function valueAt(
+function valuesAt(
   styles: NodeStyles,
   state: string,
-  breakpoint: string,
-  property: string
-): StyleValue | undefined {
-  if (styles === null || typeof styles !== "object") return undefined;
+  breakpoint: string
+): Record<string, unknown> | undefined {
+  // Read as a record rather than through the declared key types: persisted data reaches here
+  // whether or not it matches them, and a state or breakpoint that is not one this site defines
+  // is a normal thing to be handed and to find nothing under.
+  if (!isPlainRecord(styles)) return undefined;
   const byBreakpoint = (styles as Record<string, unknown>)[state];
-  if (byBreakpoint === null || typeof byBreakpoint !== "object")
-    return undefined;
-  const values = (byBreakpoint as Record<string, unknown>)[breakpoint];
-  if (values === null || typeof values !== "object") return undefined;
-  const value = (values as Record<string, unknown>)[property];
-  return value === undefined ? undefined : (value as StyleValue);
+  if (!isPlainRecord(byBreakpoint)) return undefined;
+  const values = byBreakpoint[breakpoint];
+  return isPlainRecord(values) ? values : undefined;
 }
 
 /**
@@ -291,9 +359,9 @@ function valueAt(
  * Asked per stated value, so the cost is one call per tier that mentions the property, not one
  * per property in the document.
  */
-function compilerWrites(property: string, value: StyleValue): Set<string> {
+function compilerWrites(values: Record<string, unknown>): Set<string> {
   return new Set(
-    compileStyleValues({ [property]: value }, "").declarations.map(
+    compileStyleValues(values, "").declarations.map(
       declaration => declaration.property
     )
   );
@@ -364,10 +432,23 @@ function fold(
   // would show a control as carrying a value the browser has no declaration for.
   const keys = Object.keys(value);
   if (keys.length === 0) return current;
-  const fields =
-    current?.kind === "fields"
-      ? current.fields
-      : new Map<string, Accumulated>();
+  const fields = new Map<string, Accumulated>();
+  if (current?.kind === "fields") {
+    for (const [name, held] of current.fields) fields.set(name, held);
+  } else if (current?.kind === "whole") {
+    // A shorthand underneath a partial record. `borderRadius: "4px"` sets all four corners, and a
+    // later `{ startStart: "8px" }` overrides exactly one, so the browser keeps 4px on the other
+    // three. Replacing the shorthand outright would report only the corner that changed and leave
+    // the three the lower tier is still painting with no source at all — so it is expanded into
+    // the fields it stood for, and the record folds over that.
+    for (const name of compositeFieldNames(property, path)) {
+      fields.set(name, {
+        kind: "whole",
+        value: current.value,
+        source: current.source,
+      });
+    }
+  }
   for (const key of keys) {
     const folded = fold(
       fields.get(key),
@@ -456,18 +537,34 @@ export function resolveStyle(
   const states = state === "base" ? ["base"] : ["base", state];
   // Least specific first, so a rule that outranks another is read after it and the `>=` below
   // keeps the right one. For everything but the link colours this is a list of one.
-  const properties = [...propertiesAlsoMatching(property), property];
+  const properties = new Set([...propertiesAlsoMatching(property), property]);
   let accumulated: Accumulated | undefined;
   let strongest = 0;
+  // Which catalog key produced what is accumulated, so a key overriding a DIFFERENT key that
+  // happens to write the same CSS property replaces it rather than merging into its shape.
+  let producer: string | undefined;
 
   for (const tier of tiers(input, property)) {
     for (const candidateState of states) {
       for (const id of live) {
-        for (const candidate of properties) {
-          const value = valueAt(tier.styles, candidateState, id, candidate);
+        const values = valuesAt(tier.styles, candidateState, id);
+        if (values === undefined) continue;
+        // Compiled as the WHOLE map, the way the page compiler compiles it. A map is refused
+        // together — enough malformed siblings exhaust the structural budget and nothing in it is
+        // written — so asking about one property in isolation can report a value the browser
+        // never received because of the company it was stored with.
+        const emitted = compilerWrites(values);
+        // Stored key order, because that is the order the compiler writes a map in, and two keys
+        // that emit the same CSS property are decided by which of them it writes last.
+        for (const candidate of Object.keys(values)) {
+          if (!properties.has(candidate)) continue;
+          const value = values[candidate] as StyleValue;
           if (value === undefined) continue;
-          const emitted = compilerWrites(candidate, value);
-          if (emitted.size === 0) continue;
+          if (
+            !cssPropertiesForField(candidate, []).some(css => emitted.has(css))
+          ) {
+            continue;
+          }
           const source: StyleSource =
             id === breakpoint
               ? tier.source
@@ -486,6 +583,15 @@ export function resolveStyle(
             strongest = weight;
             accumulated = undefined;
           }
+          // Folding merges a value into what a LOWER tier of the same property left, field by
+          // field. Two different catalog keys are not that: `backgroundGradient` and `background`
+          // both write `background-image`, but they are stored in different shapes and neither is
+          // a partial version of the other, so the later one replaces rather than merges. Only a
+          // key overriding itself can leave the other's fields standing.
+          if (producer !== undefined && producer !== candidate) {
+            accumulated = undefined;
+          }
+          producer = candidate;
           accumulated = fold(
             accumulated,
             value,
