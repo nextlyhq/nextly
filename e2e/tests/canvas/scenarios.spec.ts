@@ -122,6 +122,19 @@ test("scenario 1: a library block drags across the iframe boundary", async ({
   await expect
     .poll(async () => (await driver.readTreeShape()).length)
     .toBe(before.length + 1);
+
+  // A net increase of one is not evidence of an insertion: a drop that removed
+  // an existing block while adding two produces the same count. Every original
+  // id must survive, and exactly one id must be new.
+  const after = await driver.readTreeShape();
+  expect(
+    before.filter(id => !after.includes(id)),
+    "a drop must not remove existing blocks"
+  ).toEqual([]);
+  expect(
+    after.filter(id => !before.includes(id)),
+    "a drop must add exactly one block"
+  ).toHaveLength(1);
 });
 
 test("scenario 2: droppable geometry survives a host scroll mid-drag", async ({
@@ -262,20 +275,17 @@ test("scenario 4: a steady drag over variable-height blocks never reverses", asy
 });
 
 /**
- * Expected failure: **this canvas has no target-switch hysteresis.**
+ * Expected failure: this canvas has no target-switch hysteresis.
  *
- * Master plan §2.8 point 3 requires a sticky target with an 8-12px dead-zone
- * margin or a >100ms dwell, so that "oscillating the pointer 2px around any
- * boundary must never flip the indicator". Bracketed to 1px and sampled on
- * genuinely opposite sides of the edge, the observed run is
- * `[1,2,1,2,1,2,...]` — the indicator flips on every 2px move.
+ * The requirement is a sticky target with an 8-12px dead-zone margin or a
+ * >100ms dwell, so that oscillating the pointer 2px around any boundary never
+ * flips the indicator. Observed here, with the edge bracketed to 1px and the
+ * samples taken on opposite sides of it: `[1,2,1,2,...]`, a flip on every move.
  *
- * Two earlier revisions of this test reported it stable, and both were
- * measurement artifacts: the first jittered inside one zone's catchment rather
- * than at its edge, the second sampled P and P+2 (one side) rather than P-2 and
- * P+2. The requirement is real, the gap is real, and it is unrelated to
- * dnd-kit #2088 — nothing upstream is at fault, the hysteresis was simply never
- * built.
+ * Both halves of the method are load-bearing. Jittering anywhere other than a
+ * bracketed edge measures the middle of one zone's catchment, and sampling P
+ * and P+2 rather than P-2 and P+2 keeps both samples on the same side; either
+ * reports a stable indicator on a canvas that has none.
  */
 test("scenario 4b: a 2px jitter at a zone edge keeps the indicator stable", async ({
   page,

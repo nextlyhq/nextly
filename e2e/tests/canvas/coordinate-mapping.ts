@@ -22,6 +22,25 @@ export function mapFramePointToHost(
   };
 }
 
+/**
+ * The inverse: a host point expressed in the canvas's own coordinates.
+ *
+ * Both directions are needed and neither is optional. Drawing an overlay in
+ * parent chrome maps canvas -> host; deciding which block sits under the
+ * pointer maps host -> canvas. A canvas that implements only one ends up
+ * open-coding the other at the call site, which is how the two drift apart.
+ */
+export function mapHostPointToFrame(
+  hostPoint: Point,
+  frameOrigin: Point,
+  scale = 1
+): Point {
+  return {
+    x: (hostPoint.x - frameOrigin.x) / scale,
+    y: (hostPoint.y - frameOrigin.y) / scale,
+  };
+}
+
 /** The same mapping for a rect, so an indicator can be drawn in parent chrome. */
 export function mapFrameRectToHost(
   frameRect: Rect,

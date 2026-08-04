@@ -112,20 +112,24 @@ test("[acceptance] point 4: siblings do not move during a drag", async ({
   // library item or a drag-activation failure would all be classified as the
   // known layout-shift gap, and the test would "pass" without ever reaching the
   // zero-shift assertion.
-  test.fail(
-    true,
-    "zones expand from 0px to 6px and push every block below them down"
-  );
-
-  // Zones expand from 0px to 6px when a drag starts, so the blocks below them
-  // DO move. The requirement is zero shift; this records the real number so the
-  // v2 canvas has a figure to beat rather than a slogan.
   test.info().annotations.push({
     type: "shifted-count",
     description: `${shifted.length} of ${before.length} nodes changed geometry`,
   });
 
-  expect(before.length).toBe(during.length);
+  // Outside the expected failure: a drag that INSERTS or DELETES nodes is a
+  // different defect from the known geometry shift, and marking it expected
+  // would let real content loss ride in under the layout gap.
+  expect(during.length, "a drag must not change the node count").toBe(
+    before.length
+  );
+
+  // Only the geometry assertion is the known gap: zones expand from 0px to 6px
+  // when a drag starts and push every block below them down.
+  test.fail(
+    true,
+    "zones expand from 0px to 6px and push every block below them down"
+  );
   expect(shifted, "point 4 requires zero layout shift during a drag").toEqual(
     []
   );

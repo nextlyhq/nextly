@@ -16,7 +16,11 @@
 import { expect, test } from "@playwright/test";
 
 import { FLAT_LIST_FIXTURE, seedPage } from "./fixtures";
-import { mapFrameRectToHost } from "./coordinate-mapping";
+import {
+  mapFramePointToHost,
+  mapFrameRectToHost,
+  mapHostPointToFrame,
+} from "./coordinate-mapping";
 import { createPocDriver } from "./poc-driver";
 
 test.describe.configure({ timeout: 180_000 });
@@ -168,4 +172,31 @@ test("point 5: the mapping survives scroll and scale together", async ({
     description: `delta=${delta} originMoved=${Math.round(moved)}`,
   });
   expect(delta).toBeLessThanOrEqual(1);
+});
+
+test("point 5: the two directions are exact inverses", async ({
+  page,
+  request,
+}) => {
+  const fixture = await seedPage(request, FLAT_LIST_FIXTURE);
+  const driver = createPocDriver(page);
+  await driver.mountTree(fixture);
+  await driver.setZoom(0.75);
+
+  const origin = await driver.frameOrigin();
+  const scale = 0.75;
+
+  // Hit-testing a pointer and drawing an overlay use opposite directions of the
+  // same mapping. Asserting they round-trip is what stops one being corrected
+  // in isolation and silently disagreeing with the other.
+  for (const framePoint of [
+    { x: 0, y: 0 },
+    { x: 137, y: 421 },
+    { x: 1024, y: 2048 },
+  ]) {
+    const host = mapFramePointToHost(framePoint, origin, scale);
+    const back = mapHostPointToFrame(host, origin, scale);
+    expect(Math.abs(back.x - framePoint.x)).toBeLessThanOrEqual(0.001);
+    expect(Math.abs(back.y - framePoint.y)).toBeLessThanOrEqual(0.001);
+  }
 });
