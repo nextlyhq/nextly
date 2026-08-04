@@ -64,14 +64,24 @@ const BUILD_INPUTS = [
   "package.json",
 ];
 
-/** The newest of the declaration build's inputs outside `src`. */
+/**
+ * The newest of the declaration build's inputs outside `src`.
+ *
+ * A MISSING input reads as infinitely new rather than as zero. Every entry
+ * here is required to produce the declarations, so one that is absent means
+ * `dist` was built by a configuration that no longer exists — the strongest
+ * possible reason to distrust it, and treating it as "nothing changed" left
+ * the guard asserting happily against artifacts nothing could reproduce.
+ * Forcing the rebuild surfaces it as the bundler's own error about the config
+ * it cannot find, which says more than any check here could.
+ */
 function newestBuildInputMtime(): number {
   let newest = 0;
   for (const name of BUILD_INPUTS) {
     try {
       newest = Math.max(newest, statSync(join(pkgRoot, name)).mtimeMs);
     } catch {
-      // A config that is absent cannot have changed the output.
+      return Number.POSITIVE_INFINITY;
     }
   }
   return newest;
