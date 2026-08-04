@@ -167,12 +167,27 @@ describe("projectAuditMetadata", () => {
     const projected = projectAuditMetadata({
       email: "victim@example.com",
       userId: "u-123",
-      reason: "wrong-password",
+      reason: "password-mismatch",
     });
 
-    expect(projected).toEqual({ reason: "wrong-password" });
+    expect(projected).toEqual({ reason: "password-mismatch" });
     expect(JSON.stringify(projected)).not.toContain("victim@example.com");
     expect(JSON.stringify(projected)).not.toContain("u-123");
+  });
+
+  it("drops a reason a plugin chose rather than one we produce", () => {
+    // An AuthStrategy is application code and its failure result carries a
+    // free-text reason, which the login handler copies into the error context.
+    // Allowlisting the KEY would let that text through under an approved name —
+    // onto a row with no actor, which no later deletion can find.
+    expect(
+      projectAuditMetadata({ reason: "no account for ada@example.com" })
+    ).toEqual({});
+    // What this package produces is still kept, so the diagnostic value the
+    // allowlist exists for survives.
+    expect(projectAuditMetadata({ reason: "password-mismatch" })).toEqual({
+      reason: "password-mismatch",
+    });
   });
 
   it("keeps nothing when the context is only identifiers", () => {

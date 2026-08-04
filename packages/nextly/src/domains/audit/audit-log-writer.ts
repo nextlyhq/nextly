@@ -9,9 +9,12 @@
  *     because the audit table is unreachable. A DB failure logs a
  *     structured warning via `getNextlyLogger()` and the request
  *     continues.
- *   - **Append-only by application convention.** Operators are expected
- *     to revoke UPDATE / DELETE GRANTs on the table in production for
- *     stricter integrity. The writer never offers an update path.
+ *   - **Append-only by application convention.** This writer never offers an
+ *     update path. Operators hardening the table should revoke DELETE and
+ *     revoke UPDATE except on the three columns an erasure touches — see the
+ *     dialect schema definitions for the exact grants. A blanket UPDATE revoke
+ *     stops `eraseActorPersonalData`, which runs inside the user-deletion
+ *     transaction, and so stops account deletion outright.
  *   - **Metadata is opaque JSON.** The `metadata` field stays generic
  *     so we can extend coverage without a migration each time. Callers
  *     pass dialect-portable JSON-serialisable values only.
@@ -58,6 +61,33 @@ export type AuditEventKind =
 const AUDIT_METADATA_KEYS = ["reason", "originalCode", "legacyCode"] as const;
 
 /**
+ * The `reason` values this package itself produces.
+ *
+ * Allowlisting the KEY is not enough for this one. An `AuthStrategy` is supplied
+ * by the application, its failure result carries a free-text `reason`, and the
+ * login handler copies that into the error context — so a strategy that put an
+ * email or an external account name there would have it stored on a row that
+ * has no actor and therefore can never be erased for that person.
+ *
+ * A value outside this set is dropped rather than stored. The reason still
+ * reaches the logger through `logContext`; what it does not do is enter a
+ * retained trail nothing can later associate with a subject.
+ */
+const CORE_AUDIT_REASONS = new Set([
+  "user-not-found",
+  "password-mismatch",
+  "unverified",
+  "inactive",
+  "locked",
+  "strategy-fail",
+  "no-strategy-matched",
+  "pending-token-invalid",
+  "challenge-failed-final",
+  "challenge-attempts-exhausted",
+  "challenge-user-missing",
+]);
+
+/**
  * Copy the allowlisted diagnostic keys out of an error's context.
  *
  * Callers pass the whole `logContext`; anything not listed is dropped rather
@@ -70,9 +100,13 @@ export function projectAuditMetadata(
   const projected: Record<string, unknown> = {};
   if (!context) return projected;
   for (const key of AUDIT_METADATA_KEYS) {
-    if (Object.prototype.hasOwnProperty.call(context, key)) {
-      projected[key] = context[key];
-    }
+    if (!Object.prototype.hasOwnProperty.call(context, key)) continue;
+    const value = context[key];
+    // `reason` is the one allowlisted key whose VALUE is not ours: an
+    // application-supplied strategy chooses it. Keep only what this package
+    // produces, so free text cannot ride in under an approved name.
+    if (key === "reason" && !CORE_AUDIT_REASONS.has(String(value))) continue;
+    projected[key] = value;
   }
   return projected;
 }
