@@ -130,6 +130,105 @@ describe.each(getConfiguredTestDialects())(
       expect(rows[0].identityErasedAt).toBeFalsy();
     });
 
+    it("records a working-draft save, which changes no live document", async () => {
+      // A status-less edit to a PUBLISHED entry on a drafts collection is stored
+      // as a working draft: the live row is untouched, so no public event is
+      // recorded and nothing a subscriber sees has changed. A person still
+      // edited content, and the trail records people — this is the one place
+      // the outbox and the trail legitimately disagree, and the edit was
+      // missing from the trail when activity was recorded only where an event
+      // was.
+      current = await withActor(dialect, [
+        defineCollection({
+          slug: "posts",
+          status: true,
+          versions: true,
+          fields: [text({ name: "title" })],
+        }),
+      ]);
+      const handler = current.getService("collectionsHandler");
+
+      const created = await handler.createEntry(asActor("posts"), {
+        title: "live",
+        status: "published",
+      });
+      const id = (created.data as { id: string }).id;
+
+      // No `status` key: that is what makes it accumulate onto the published
+      // row as a draft rather than edit it in place.
+      await handler.updateEntry(
+        { ...asActor("posts"), entryId: id },
+        { title: "draft edit" }
+      );
+
+      const updated = (await activity(current)).find(
+        row => row.action === "update"
+      );
+      expect(updated).toBeDefined();
+      expect(updated!.entryId).toBe(id);
+      expect(metadataOf(updated!).changedFields).toContain("title");
+    });
+
+    it("records a bulk write, and attributes it to whoever performed it", async () => {
+      // The in-transaction methods the bulk workers call resolved their actor
+      // as `actorForWrite(undefined, params.user)` — discarding the transport
+      // actor the bulk caller had already spread in, and reaching for a `user`
+      // those methods are not given either. Every bulk and transaction write
+      // therefore resolved to the SYSTEM actor, which the trail does not
+      // record: the whole of bulk editing was missing from it.
+      current = await withActor(dialect);
+      const handler = current.getService("collectionsHandler");
+
+      const created = await handler.createEntry(asActor("posts"), {
+        title: "before",
+      });
+      const id = (created.data as { id: string }).id;
+
+      await handler.bulkUpdateEntries({
+        collectionName: "posts",
+        ids: [id],
+        data: { title: "edited in bulk" },
+        overrideAccess: true,
+        user: { id: ACTOR.id, email: ACTOR.email },
+        actor: { type: "user", id: ACTOR.id },
+      });
+
+      // Sorted: the read places no ORDER BY, and the dialects genuinely differ
+      // on what order they hand back. Only the SET of actions is the claim.
+      const rows = await activity(current);
+      expect(rows.map(row => row.action).sort()).toEqual(["create", "update"]);
+      const updated = rows.find(row => row.action === "update");
+      expect(updated!.userId).toBe(ACTOR.id);
+      expect(updated!.entryId).toBe(id);
+    });
+
+    it("does not attribute an API-key bulk write to the key's owner", async () => {
+      // The same seam, with the transport actor now honoured: a key is not a
+      // person, and the trail's actor column is an account reference. Recording
+      // API-key writes properly needs an actor-kind column; inventing the key's
+      // OWNER as the author is the one thing it must not do meanwhile.
+      current = await withActor(dialect);
+      const handler = current.getService("collectionsHandler");
+
+      const created = await handler.createEntry(asActor("posts"), {
+        title: "before",
+      });
+      const id = (created.data as { id: string }).id;
+
+      await handler.bulkUpdateEntries({
+        collectionName: "posts",
+        ids: [id],
+        data: { title: "by the key" },
+        overrideAccess: true,
+        user: { id: ACTOR.id, email: ACTOR.email },
+        actor: { type: "apiKey", id: "key_bulk_probe" },
+      });
+
+      expect((await activity(current)).map(row => row.action)).toEqual([
+        "create",
+      ]);
+    });
+
     it("stores which fields an update changed, as names and never values", async () => {
       current = await withActor(dialect);
       const handler = current.getService("collectionsHandler");

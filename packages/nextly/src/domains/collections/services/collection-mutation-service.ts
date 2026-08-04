@@ -128,7 +128,10 @@ import { withVersionConflictRetry } from "../../versions/version-conflict";
 import { VersionsRepository } from "../../versions/versions-repository";
 import { expandComponentFields } from "../../webhooks/expand-component-fields";
 import { projectFields } from "../../webhooks/project-fields";
-import { recordMutationEvent } from "../../webhooks/record-mutation-event";
+import {
+  recordEntryActivity,
+  recordMutationEvent,
+} from "../../webhooks/record-mutation-event";
 import {
   getWebhookEmitSpec,
   isRecordingDisabledByConfig,
@@ -6083,6 +6086,21 @@ export class CollectionMutationService extends BaseService {
                   fields: webhookFields,
                   actor: actorForWrite(params.actor, params.user),
                 });
+              } else {
+                // A working-draft save changes no live document, so there is no
+                // public event for a subscriber to receive — but a person did
+                // edit content, and the trail records people rather than
+                // documents. Recorded on its own seam because the two answer
+                // different questions; routing it through the event above would
+                // have to invent a public event for a private edit.
+                await recordEntryActivity(tx, {
+                  action: "update",
+                  collection: params.collectionName,
+                  entryId: params.entryId,
+                  data: updatedDocument,
+                  previous: previousDocument,
+                  actor: actorForWrite(params.actor, params.user),
+                });
               }
 
               // D69 status lifecycle events, recorded in the SAME transaction as
@@ -6910,6 +6928,13 @@ export class CollectionMutationService extends BaseService {
       overrideAccess?: boolean;
       // See createEntry: route-authorized REST responses stay redacted.
       routeAuthorized?: boolean;
+      /**
+       * Who performed the write. The bulk callers already spread this in; until
+       * it was declared here it was received and dropped, so every event and
+       * activity entry these paths recorded attributed an API-key write to the
+       * key's OWNER as though a person had made it.
+       */
+      actor?: RequestActor;
       // Publish/unpublish authorization resolved by the batch caller before this
       // transaction opened, so the transition is enforced under the row lock with
       // no permission read inside the transaction. Self-resolved (pooled) when a
@@ -7325,7 +7350,7 @@ export class CollectionMutationService extends BaseService {
         fields,
         tx.getDrizzle()
       );
-      const eventActor = actorForWrite(undefined, params.user);
+      const eventActor = actorForWrite(params.actor, params.user);
       let eventRecorded = await recordMutationEvent(tx, {
         type: "entry.created",
         resource: {
@@ -7483,6 +7508,13 @@ export class CollectionMutationService extends BaseService {
       overrideAccess?: boolean;
       // See createEntry: route-authorized REST responses stay redacted.
       routeAuthorized?: boolean;
+      /**
+       * Who performed the write. The bulk callers already spread this in; until
+       * it was declared here it was received and dropped, so every event and
+       * activity entry these paths recorded attributed an API-key write to the
+       * key's OWNER as though a person had made it.
+       */
+      actor?: RequestActor;
       // Publish/unpublish authorization resolved by the batch caller before this
       // transaction opened, so the transition is enforced under the row lock with
       // no permission read inside the transaction. Self-resolved (pooled) when a
@@ -7954,7 +7986,7 @@ export class CollectionMutationService extends BaseService {
         fields,
         tx.getDrizzle()
       );
-      const eventActor = actorForWrite(undefined, params.user);
+      const eventActor = actorForWrite(params.actor, params.user);
       let eventRecorded = await recordMutationEvent(tx, {
         type: "entry.updated",
         resource: {
@@ -8414,6 +8446,13 @@ export class CollectionMutationService extends BaseService {
       overrideAccess?: boolean;
       // See createEntry: route-authorized REST responses stay redacted.
       routeAuthorized?: boolean;
+      /**
+       * Who performed the write. The bulk callers already spread this in; until
+       * it was declared here it was received and dropped, so every event and
+       * activity entry these paths recorded attributed an API-key write to the
+       * key's OWNER as though a person had made it.
+       */
+      actor?: RequestActor;
       // Publish authorization resolved once by the batch caller before this
       // shared transaction opened, so the create-as-published is enforced with no
       // permission read inside the transaction. Self-resolved (pooled) when a
@@ -8815,7 +8854,7 @@ export class CollectionMutationService extends BaseService {
         fields,
         tx.getDrizzle()
       );
-      const eventActor = actorForWrite(undefined, params.user);
+      const eventActor = actorForWrite(params.actor, params.user);
       let eventRecorded = await recordMutationEvent(tx, {
         type: "entry.created",
         resource: {
@@ -8987,6 +9026,13 @@ export class CollectionMutationService extends BaseService {
       overrideAccess?: boolean;
       // See createEntry: route-authorized REST responses stay redacted.
       routeAuthorized?: boolean;
+      /**
+       * Who performed the write. The bulk callers already spread this in; until
+       * it was declared here it was received and dropped, so every event and
+       * activity entry these paths recorded attributed an API-key write to the
+       * key's OWNER as though a person had made it.
+       */
+      actor?: RequestActor;
       // Publish/unpublish authorization resolved once by the batch caller before
       // this shared transaction opened, so the transition is enforced under the
       // row lock with no permission read inside the transaction. Self-resolved
@@ -9509,7 +9555,7 @@ export class CollectionMutationService extends BaseService {
         fields,
         tx.getDrizzle()
       );
-      const eventActor = actorForWrite(undefined, params.user);
+      const eventActor = actorForWrite(params.actor, params.user);
       let eventRecorded = await recordMutationEvent(tx, {
         type: "entry.updated",
         resource: {

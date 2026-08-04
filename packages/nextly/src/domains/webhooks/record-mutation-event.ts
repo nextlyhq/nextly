@@ -22,7 +22,10 @@ import type {
   ActivityLogAction,
   ActivityWriteDb,
 } from "../../services/dashboard/activity-log-service";
-import { recordMutationActivity } from "../audit/record-activity";
+import {
+  recordMutationActivity,
+  type RecordMutationActivityInput,
+} from "../audit/record-activity";
 import { markWriteIntegrityFailure } from "../collections/services/collection-mutation-service";
 
 import { buildEnvelope } from "./envelope";
@@ -176,23 +179,50 @@ async function recordActivity(
 ): Promise<void> {
   const action = ACTIVITY_ACTIONS[args.type];
   if (!action || args.resource.kind !== "entry") return;
-  // Marked as a write-integrity failure before it can reach the bulk workers.
-  // They turn an ordinary error raised after a row was written into a soft
-  // per-item failure and carry on inside the SAME transaction, which would
-  // commit the content change with no entry describing it — the exact outcome
-  // recording inside the transaction exists to prevent.
+  await writeActivity(db, {
+    action,
+    collection: args.resource.collection,
+    ...(args.resource.id !== undefined ? { entryId: args.resource.id } : {}),
+    data: args.data,
+    previous: args.previous ?? null,
+    actor: args.actor ?? null,
+  });
+}
+
+/**
+ * Write the entry, failing the surrounding transaction if it cannot be written.
+ *
+ * The failure is marked before it can reach the bulk workers: they turn an
+ * ordinary error raised after a row was written into a soft per-item failure
+ * and carry on inside the SAME transaction, which would commit the content
+ * change with no entry describing it — the exact outcome recording inside the
+ * transaction exists to prevent.
+ */
+async function writeActivity(
+  db: () => ActivityWriteDb,
+  input: RecordMutationActivityInput
+): Promise<void> {
   try {
-    await recordMutationActivity(db, {
-      action,
-      collection: args.resource.collection,
-      ...(args.resource.id !== undefined ? { entryId: args.resource.id } : {}),
-      data: args.data,
-      previous: args.previous ?? null,
-      actor: args.actor ?? null,
-    });
+    await recordMutationActivity(db, input);
   } catch (err) {
     throw markWriteIntegrityFailure(err);
   }
+}
+
+/**
+ * Record an entry's activity for a write that appends NO outbox event.
+ *
+ * The outbox and the trail answer different questions, and a working-draft save
+ * is where they diverge: no published document changed, so no subscriber has
+ * anything to receive — but a person did edit content, and the trail records
+ * people. Recording it through the event seam would either invent a public
+ * event for a private edit or, as it did, drop the edit from the trail entirely.
+ */
+export async function recordEntryActivity(
+  tx: TransactionContext,
+  input: RecordMutationActivityInput
+): Promise<void> {
+  await writeActivity(() => tx.getDrizzle(), input);
 }
 
 export async function recordMutationEvent(
