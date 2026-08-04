@@ -28,6 +28,24 @@
         "$TURBO_ROOT$/packages/plugin-form-builder/src/**",
         "$TURBO_ROOT$/packages/plugin-page-builder/src/**"
       ]
+    },
+    "test:coverage": {
+      // The same ordering as `test`, for the same reason. Inheriting only
+      // `^build` from the root left this task with no edge to this package's
+      // own `build`, so turbo was free to schedule them together: the global
+      // setup runs `tsup` while `build:js` is removing `dist` underneath it,
+      // and a coverage task starting mid-build reads half-written artifacts.
+      // Coverage asserts on the same declarations `test` does, so it needs the
+      // same guarantee that they exist and are not being rewritten.
+      "dependsOn": ["$TURBO_EXTENDS$", "build"],
+      "inputs": [
+        "$TURBO_EXTENDS$",
+        "vitest.config.ts",
+        "src/__tests__/global-setup.ts",
+        "$TURBO_ROOT$/packages/admin/src/**",
+        "$TURBO_ROOT$/packages/plugin-form-builder/src/**",
+        "$TURBO_ROOT$/packages/plugin-page-builder/src/**"
+      ]
     }
   }
 }

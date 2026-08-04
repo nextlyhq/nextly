@@ -17,6 +17,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import {
   DECLARATION_ENTRIES,
   ensureDeclarations,
+  newestDeclarationInputMtime,
 } from "./__tests__/ensure-declarations";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -308,45 +309,53 @@ describe("ui release tags reach the published types", () => {
     ).toBe(true);
   });
 
-  it("carries every barrel tag through to dist/index.d.ts, with the same tag", () => {
-    const built = readFileSync(distTypes, "utf8");
-    const declared = taggedPerDeclaration(built);
-    const tagged = taggedPerSource();
+  // BOTH barrels, because `package.json` resolves `require` to the `.cts` one.
+  // Requiring only that the CommonJS barrel contain SOME tag let every symbol
+  // but one lose or change its tag while this stayed green, so `require`
+  // consumers could be served stability metadata nothing had compared.
+  it.each(["index.d.ts", "index.d.cts"])(
+    "carries every barrel tag through to dist/%s, with the same tag",
+    entry => {
+      const built = readFileSync(path.join(PKG_ROOT, "dist", entry), "utf8");
+      const declared = taggedPerDeclaration(built);
+      const tagged = taggedPerSource();
 
-    const missing: string[] = [];
-    const mismatched: string[] = [];
-    for (const [kind, names] of [
-      ["public", tagged.public],
-      ["experimental", tagged.experimental],
-    ] as const) {
-      for (const name of names) {
-        if (FOREIGN.has(name)) continue;
-        const actual = declared.get(name);
-        if (actual === undefined) {
-          missing.push(name);
-          // The tag kind is compared as well as its presence. Checking only
-          // that SOME tag reached the declaration let a symbol ship
-          // `@experimental` while the ledger promised `@public`, which is a
-          // worse failure than no tag at all: it advertises a guarantee
-          // nobody agreed to.
-        } else if (actual !== kind) {
-          mismatched.push(`${name}: barrel @${kind}, declaration @${actual}`);
+      const missing: string[] = [];
+      const mismatched: string[] = [];
+      for (const [kind, names] of [
+        ["public", tagged.public],
+        ["experimental", tagged.experimental],
+      ] as const) {
+        for (const name of names) {
+          if (FOREIGN.has(name)) continue;
+          const actual = declared.get(name);
+          if (actual === undefined) {
+            missing.push(name);
+            // The tag kind is compared as well as its presence. Checking only
+            // that SOME tag reached the declaration let a symbol ship
+            // `@experimental` while the ledger promised `@public`, which is a
+            // worse failure than no tag at all: it advertises a guarantee
+            // nobody agreed to.
+          } else if (actual !== kind) {
+            mismatched.push(`${name}: barrel @${kind}, declaration @${actual}`);
+          }
         }
       }
-    }
 
-    expect(
-      missing.sort(),
-      "Tagged in index.ts but the tag does not reach dist/index.d.ts. The " +
-        "bundler keeps a doc comment attached to a DECLARATION and drops one " +
-        "attached to an export statement, so the tag has to live on the " +
-        `declaration: ${missing.join(", ")}`
-    ).toEqual([]);
-    expect(
-      mismatched.sort(),
-      `The published tag contradicts the ledger: ${mismatched.join("; ")}`
-    ).toEqual([]);
-  });
+      expect(
+        missing.sort(),
+        `Tagged in index.ts but the tag does not reach dist/${entry}. The ` +
+          "bundler keeps a doc comment attached to a DECLARATION and drops " +
+          "one attached to an export statement, so the tag has to live on " +
+          `the declaration: ${missing.join(", ")}`
+      ).toEqual([]);
+      expect(
+        mismatched.sort(),
+        `dist/${entry}: the published tag contradicts the ledger: ` +
+          mismatched.join("; ")
+      ).toEqual([]);
+    }
+  );
 
   it("gives a prop type the same tag as its component", () => {
     // STABILITY.md states this as a guarantee, and it is not a convention
@@ -399,30 +408,24 @@ describe("ui release tags reach the published types", () => {
     }
   });
 
-  it("checks declarations that are newer than the source", () => {
+  it("checks declarations that are newer than everything they are built from", () => {
     // A global setup runs once per Vitest project, not once per rerun, so in
     // watch mode an edited tag would otherwise be compared against the
     // declarations built before the edit. Staleness is asserted here, where it
     // is re-evaluated on every run, rather than assumed by the setup.
-    const newestSource = (dir: string): number => {
-      let newest = 0;
-      for (const entry of readdirSync(dir, { withFileTypes: true })) {
-        const full = path.join(dir, entry.name);
-        if (entry.isDirectory()) {
-          newest = Math.max(newest, newestSource(full));
-          continue;
-        }
-        if (!/\.(ts|tsx)$/.test(entry.name)) continue;
-        newest = Math.max(newest, statSync(full).mtimeMs);
-      }
-      return newest;
-    };
+    //
+    // The same freshness definition the rebuild uses, imported rather than
+    // repeated: a second copy here would drift from it, and this is the copy
+    // that would keep quietly passing. It counts the tsup and tsconfig inputs
+    // too, since those decide what the bundler emits without any file under
+    // `src` changing.
     expect(
       statSync(distTypes).mtimeMs,
-      "dist/index.d.ts predates the newest source file, so these assertions " +
+      "dist/index.d.ts predates one of its build inputs (a source file, a " +
+        "tsup config, tsconfig.json or package.json), so these assertions " +
         "would be checking declarations that no longer describe the code. " +
         "Rebuild: `pnpm --filter @nextlyhq/ui build`."
-    ).toBeGreaterThanOrEqual(newestSource(path.join(SRC)));
+    ).toBeGreaterThanOrEqual(newestDeclarationInputMtime());
   });
 
   it("is not passing vacuously", () => {

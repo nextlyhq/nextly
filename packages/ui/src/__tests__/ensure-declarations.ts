@@ -47,6 +47,36 @@ export const DECLARATION_ENTRIES = [
   "tailwind-preset.d.cts",
 ];
 
+/**
+ * The non-source files the declaration output also depends on.
+ *
+ * A tsup or tsconfig change alters what the bundler emits — which entry points
+ * exist, and whether doc comments survive at all — without touching anything
+ * under `src`. Judging freshness on `src` alone meant such a change left the
+ * old artifacts in place and the guard asserting against declarations the
+ * current configuration would not produce. `package.json` is included because
+ * the bundler version lives there.
+ */
+const BUILD_INPUTS = [
+  "tsup.config.ts",
+  "tsup.server-safe.config.ts",
+  "tsconfig.json",
+  "package.json",
+];
+
+/** The newest of the declaration build's inputs outside `src`. */
+function newestBuildInputMtime(): number {
+  let newest = 0;
+  for (const name of BUILD_INPUTS) {
+    try {
+      newest = Math.max(newest, statSync(join(pkgRoot, name)).mtimeMs);
+    } catch {
+      // A config that is absent cannot have changed the output.
+    }
+  }
+  return newest;
+}
+
 function newestSourceMtime(dir: string): number {
   let newest = 0;
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -74,9 +104,22 @@ function oldestDeclarationMtime(): number {
   return oldest === Number.POSITIVE_INFINITY ? 0 : oldest;
 }
 
+/**
+ * The newest thing the declarations are built FROM.
+ *
+ * Exported so the staleness assertion and this rebuild decide freshness from
+ * the same set of inputs. Two definitions would drift, and the one in the test
+ * is the one that would silently keep passing.
+ */
+export function newestDeclarationInputMtime(): number {
+  return Math.max(
+    newestSourceMtime(join(pkgRoot, "src")),
+    newestBuildInputMtime()
+  );
+}
+
 export function ensureDeclarations(): void {
-  if (oldestDeclarationMtime() > newestSourceMtime(join(pkgRoot, "src")))
-    return;
+  if (oldestDeclarationMtime() > newestDeclarationInputMtime()) return;
   execFileSync("npx", ["tsup"], { cwd: pkgRoot, stdio: "inherit" });
   execFileSync("npx", ["tsup", "--config", "tsup.server-safe.config.ts"], {
     cwd: pkgRoot,

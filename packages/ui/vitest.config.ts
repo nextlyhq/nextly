@@ -30,6 +30,15 @@ export default defineConfig({
       "**/vitest.config.*/**",
       "**/vite.config.*/**",
       "**/src/**/*.{ts,tsx}",
+      // The overlay and contrast suites read `theme.css` the same way, so a
+      // deleted dark-mode token or a contrast regression stayed green in watch
+      // mode until a restart. CSS is not a module here, so nothing else puts it
+      // in the graph.
+      "**/src/**/*.css",
+      // The declarations are rebuilt from these, so a config change has to
+      // rerun the suites that assert on the output.
+      "**/tsup*.config.ts",
+      "**/tsconfig.json",
     ],
   },
 });
