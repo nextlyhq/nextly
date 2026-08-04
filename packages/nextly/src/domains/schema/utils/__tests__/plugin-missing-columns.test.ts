@@ -1,0 +1,161 @@
+/**
+ * A plugin field added to an existing table gets its storage primitive.
+ *
+ * A fresh component table maps a plugin type through the canonical descriptor,
+ * but `db:sync` adds columns to an existing table through this helper, whose
+ * own switch falls back to TEXT for anything it does not recognise — so the
+ * same declaration produced a numeric column on one path and a text column on
+ * the other.
+ */
+import { afterEach, describe, expect, it } from "vitest";
+
+import type { FieldConfig } from "../../../../collections/fields/types";
+import {
+  clearFieldTypes,
+  registerFieldType,
+} from "../../field-types/field-type-registry";
+import { fieldToColumnDef } from "../missing-columns";
+
+afterEach(() => {
+  clearFieldTypes();
+});
+
+describe("adding a plugin field to an existing table", () => {
+  it("uses the type's storage primitive rather than the text fallback", () => {
+    registerFieldType({
+      type: "star-rating",
+      storage: "number",
+      component: "@acme/ratings/admin#StarRating",
+      surfaces: ["entries", "singles", "components"],
+    });
+
+    const column = fieldToColumnDef(
+      { name: "score", type: "star-rating" } as unknown as FieldConfig,
+      "postgresql"
+    );
+
+    expect(column).not.toMatch(/TEXT/i);
+    expect(column).toMatch(/INTEGER|REAL|DOUBLE PRECISION|NUMERIC/i);
+  });
+});
+
+/**
+ * A built-in field added to an existing table must get the same storage class
+ * a freshly created table gives it. This helper stated its own types, so a
+ * `number` became NUMERIC/DECIMAL/REAL here while the ORM bound an integer,
+ * and a SQLite `date` became TEXT while the binder wrote an integer.
+ */
+describe("built-in columns agree with the descriptor the ORM binds", () => {
+  const number = { name: "score", type: "number" } as unknown as FieldConfig;
+
+  it("adds an integer number column on every dialect", () => {
+    for (const dialect of ["postgresql", "mysql", "sqlite"]) {
+      expect(fieldToColumnDef(number, dialect)).toMatch(/INTEGER/i);
+    }
+  });
+
+  it("does not emit a fractional type for a plain number", () => {
+    // NUMERIC/DECIMAL/REAL here truncated or widened relative to the binder,
+    // so the value read back was not the value written.
+    for (const dialect of ["postgresql", "mysql", "sqlite"]) {
+      expect(fieldToColumnDef(number, dialect)).not.toMatch(
+        /NUMERIC|DECIMAL|REAL|DOUBLE/i
+      );
+    }
+  });
+
+  it("honours the two ways a field asks for fractions", () => {
+    const money = {
+      name: "price",
+      type: "number",
+      dbType: "decimal",
+    } as unknown as FieldConfig;
+    expect(fieldToColumnDef(money, "postgresql")).toMatch(/NUMERIC/i);
+    expect(fieldToColumnDef(money, "mysql")).toMatch(/DECIMAL/i);
+
+    const float = {
+      name: "ratio",
+      type: "number",
+      options: { format: "float" },
+    } as unknown as FieldConfig;
+    expect(fieldToColumnDef(float, "postgresql")).toMatch(/DOUBLE PRECISION/i);
+    expect(fieldToColumnDef(float, "sqlite")).toMatch(/REAL/i);
+  });
+
+  it("adds a SQLite date column the timestamp binder can read", () => {
+    const date = {
+      name: "publishedAt",
+      type: "date",
+    } as unknown as FieldConfig;
+
+    expect(fieldToColumnDef(date, "sqlite")).toMatch(/INTEGER/i);
+    // The other two dialects keep the types they already had.
+    expect(fieldToColumnDef(date, "postgresql")).toMatch(/TIMESTAMP/i);
+    expect(fieldToColumnDef(date, "mysql")).toMatch(/DATETIME/i);
+  });
+});
+
+/**
+ * A text field that declared its own width gets the bounded column the descriptor binds.
+ *
+ * This helper stated TEXT for every string field, so a short field added to an existing table got a
+ * column the ORM then described as a varchar — and the next preview reported a type change on a
+ * column this path had just created.
+ */
+describe("adding a declared-short text field to an existing table", () => {
+  const shortField = {
+    name: "short_code",
+    type: "text",
+    options: { variant: "short" },
+    validation: { maxLength: 120 },
+  } as unknown as FieldConfig;
+
+  it.each([
+    ["postgresql", /VARCHAR\(120\)/i],
+    ["mysql", /VARCHAR\(120\)/i],
+  ] as const)("bounds the column on %s", (dialect, expected) => {
+    expect(fieldToColumnDef(shortField, dialect)).toMatch(expected);
+  });
+
+  // SQLite has one string type, so TEXT is what the descriptor says for it there too.
+  it("stays TEXT on sqlite", () => {
+    expect(fieldToColumnDef(shortField, "sqlite")).toMatch(/TEXT/i);
+  });
+
+  // A field that declares no width keeps the type this path has always emitted; only the declared
+  // case changes, so existing columns are not re-described.
+  it("leaves an undeclared text field as TEXT", () => {
+    const plain = { name: "body", type: "text" } as unknown as FieldConfig;
+    expect(fieldToColumnDef(plain, "postgresql")).toMatch(/TEXT/i);
+    expect(fieldToColumnDef(plain, "mysql")).toMatch(/TEXT/i);
+  });
+});
+
+/**
+ * A contributed type keeps the unbounded column its creator builds.
+ *
+ * The field-group creator deletes `options` from a contributed type before mapping it — a plugin's
+ * options are its own, and one that happens to be named `variant` must not reshape the column — so
+ * it builds such a field as TEXT. Reading the option here bounded a column the creator had just made
+ * unbounded, reporting a type change on it.
+ */
+describe("adding a contributed text field that carries a width option", () => {
+  it("keeps TEXT rather than reading the plugin's own option", () => {
+    registerFieldType({
+      type: "acme-swatch",
+      storage: "text",
+      component: "@acme/swatch/admin#Swatch",
+      surfaces: ["entries", "singles", "components"],
+    });
+
+    const field = {
+      name: "swatch",
+      type: "acme-swatch",
+      options: { variant: "short" },
+      validation: { maxLength: 64 },
+    } as unknown as FieldConfig;
+
+    expect(fieldToColumnDef(field, "postgresql")).toMatch(/TEXT/i);
+    expect(fieldToColumnDef(field, "mysql")).toMatch(/TEXT/i);
+  });
+});

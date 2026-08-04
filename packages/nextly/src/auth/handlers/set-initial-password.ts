@@ -167,7 +167,6 @@ export async function handleSetInitialPassword(
     });
 
     const response = await issueSession(user, deps, request, requestId);
-    await deps.authHooks.runAfterLogin(user, deps.pluginCtx);
     await stallResponse(startTime, deps.loginStallTimeMs);
     return response;
   } catch (err) {

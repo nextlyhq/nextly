@@ -60,10 +60,10 @@ import { RoleService } from "../domains/auth/services/role-service";
 import { NextlyError } from "../errors/nextly-error";
 import { buildPluginServicesNamespace } from "../plugins/services/plugin-services-registry";
 import type { CollectionsHandler } from "../services/collections-handler";
-import type { ComponentRegistryService } from "../services/components/component-registry-service";
 import type { EmailProviderService } from "../services/email/email-provider-service";
 import type { EmailService } from "../services/email/email-service";
 import type { EmailTemplateService } from "../services/email/email-template-service";
+import type { FieldGroupRegistryService } from "../services/field-groups/field-group-registry-service";
 import type { MediaService } from "../services/media/media-service";
 import type { Logger } from "../services/shared";
 import type { SingleEntryService } from "../services/singles/single-entry-service";
@@ -367,8 +367,10 @@ export class Nextly implements NextlyContext {
   }
 
   /** @internal */
-  public get componentRegistryService(): ComponentRegistryService {
-    return container.get<ComponentRegistryService>("componentRegistryService");
+  public get fieldGroupRegistryService(): FieldGroupRegistryService {
+    return container.get<FieldGroupRegistryService>(
+      "fieldGroupRegistryService"
+    );
   }
 
   /** @internal */
@@ -541,10 +543,16 @@ export class Nextly implements NextlyContext {
     return singlesNs.findSingle(this, args);
   }
 
-  /** Update a Single (global) document by slug. */
+  /**
+   * Update a Single (global) document by slug.
+   *
+   * Returns the same `{ message, item }` envelope the collection mutations do,
+   * so every mutation reports its outcome the same way and a post-commit hook
+   * failure has somewhere to be reported.
+   */
   updateSingle<TSlug extends SingleSlug>(
     args: UpdateSingleArgs<TSlug>
-  ): Promise<DataFromSingleSlug<TSlug>> {
+  ): Promise<MutationResult<DataFromSingleSlug<TSlug>>> {
     return singlesNs.updateSingle(this, args);
   }
 
@@ -679,6 +687,21 @@ export function getNextly(config?: DirectAPIConfig): Nextly {
  */
 export function resetNextlyInstance(): void {
   globalForDirectApi.__nextly_directApiInstance = null;
+}
+
+/**
+ * Whether the Direct API singleton has been built in this process.
+ *
+ * Answers the question without building it, which `getNextly()` cannot: asking
+ * it constructs the instance and registers the container binding. That makes
+ * "was the Direct API resolved?" unobservable through the ordinary surface, so
+ * a test cannot tell a caller that resolved it lazily from one that never
+ * touched it at all.
+ *
+ * @internal
+ */
+export function isNextlyInstantiated(): boolean {
+  return Boolean(globalForDirectApi.__nextly_directApiInstance);
 }
 
 /**

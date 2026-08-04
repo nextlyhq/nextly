@@ -328,19 +328,34 @@ console.log(settings.siteName);
 
 ### updateSingle
 
-Update a single's content by slug. Returns the bare updated document.
+Update a single's content by slug. Returns the same `{ message, item }` envelope
+the collection mutations return, so every mutation reports its outcome the same
+way.
 
 ```typescript
-const updated = await nextly.updateSingle({
+const { item, warnings } = await nextly.updateSingle({
   slug: "site-settings",
   data: {
     siteName: "My Awesome Site",
     maintenanceMode: false,
   },
 });
+
+item.siteName; // "My Awesome Site"
+
+if (warnings) {
+  // The document was saved. A hook that runs after the write committed threw,
+  // so a side effect did not happen — each warning names the phase, the single
+  // and the error code.
+}
 ```
 
-**Returns:** `T` (the updated single document).
+**Returns:** `MutationResult<T>` — `{ message, item, warnings? }`.
+
+`warnings` is present only when a post-commit hook failed. The write itself
+succeeded: an `afterChange` hook cannot un-save the document, so the operation
+reports success and the failed side effect is reported beside it rather than
+being turned into an error that would invite a retry.
 
 ### findSingles
 

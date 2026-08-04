@@ -132,6 +132,9 @@
    * ============================================ */
 
   /* shadcn/ui semantic colors - reference CSS variables defined below */
+  --color-overlay: var(--nx-overlay);
+  --color-overlay-soft: var(--nx-overlay-soft);
+  --color-overlay-strong: var(--nx-overlay-strong);
   --color-border: var(--nx-border);
   --color-border-subtle: var(--nx-border-subtle);
   --color-border-strong: var(--nx-border-strong);
@@ -779,6 +782,22 @@
    * (composites to a light grey on white, a hairline rather than a rule). The third
    * is not decorative — strong marks the edge of a control that has no other
    * boundary, so it is held to a contrast minimum instead. */
+  /* The scrim behind a modal. A token rather than a literal because it is the
+   * one surface colour that must differ between the two modes for the same
+   * reason a border does: it composites over what is beneath it, and what is
+   * beneath it is white here and near-black in dark. It was written inline as
+   * `bg-black/80`, identical in both modes, at four different strengths across
+   * six components — drift rather than intent. */
+  --nx-overlay: oklch(0 0 0 / 0.55);
+  /* A scrim you READ ON rather than look through. `--nx-overlay` sits under a
+   * modal, which supplies its own surface for text; a full-screen state screen
+   * puts its message straight onto the scrim, and 55% over a white page tops
+   * out at 4.76:1 even for pure white — below AA with no headroom. 80% leaves
+   * room for a muted detail line to clear it comfortably. */
+  --nx-overlay-strong: oklch(0 0 0 / 0.8);
+  /* For a scrim over CONTENT rather than the page: an image's hover actions,
+   * where the content beneath still has to read through. */
+  --nx-overlay-soft: oklch(0 0 0 / 0.4);
   --nx-border-subtle: oklch(0 0 0 / 0.08);
   --nx-border: oklch(0 0 0 / 0.14);
   /* Alpha raised so the composited strong border clears WCAG 3:1 / ~4:1 (was 2.11:1). */
@@ -942,6 +961,12 @@
    * on the deep background without glowing. The decorative tiers carry the same
    * alphas as light mode, which lands the container edge at a matched 1.41:1 on
    * the page (1.38:1 light), so a hairline weighs the same in both modes. */
+  /* Stronger than light: the surfaces beneath are mid-tone rather than white,
+   * so the same alpha suppresses less of them. Still black rather than a tinted
+   * scrim, because the modal above it supplies the contrast. */
+  --nx-overlay: oklch(0 0 0 / 0.7);
+  --nx-overlay-strong: oklch(0 0 0 / 0.85);
+  --nx-overlay-soft: oklch(0 0 0 / 0.5);
   --nx-border-subtle: oklch(1 0 0 / 0.08);
   --nx-border: oklch(1 0 0 / 0.14);
   /* Alpha raised so the composited strong border clears WCAG 3:1 / ~4:1 (was 3.00:1). */

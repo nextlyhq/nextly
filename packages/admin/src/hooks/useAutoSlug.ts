@@ -63,6 +63,23 @@ export interface UseAutoSlugOptions<TValues extends FieldValues = FieldValues> {
    * @default true
    */
   enabled?: boolean;
+  /**
+   * Stop following the title, without unmounting the hook.
+   *
+   * A published entry's slug is a public contract: it is in inbound links, feeds, sitemaps, shares
+   * and search results. Re-deriving it from an edited title silently retires a URL the author never
+   * chose to change, and the old one 404s. No established CMS does this — WordPress, Ghost and
+   * Contentful all stop tracking at first publish, Strapi stops as soon as the field is non-empty,
+   * and Sanity never tracks at all.
+   *
+   * Distinct from `enabled`, deliberately. `enabled: false` means this form has no auto-slug
+   * concept (a single, whose slug is fixed by config); `frozen` means the entry HAS one and has
+   * outgrown it. Keeping them apart lets a caller that freezes still describe why, and lets the
+   * manual-edit detection below stay meaningful for the unfrozen case.
+   *
+   * @default false
+   */
+  frozen?: boolean;
 }
 
 /**
@@ -88,6 +105,7 @@ export function useAutoSlug<TValues extends FieldValues = FieldValues>({
   titleFieldName,
   slugFieldName,
   enabled = true,
+  frozen = false,
 }: UseAutoSlugOptions<TValues>): void {
   const titleValue = useWatch({
     control: form.control,
@@ -140,6 +158,11 @@ export function useAutoSlug<TValues extends FieldValues = FieldValues>({
     const isStillAuto =
       currentSlug === "" || currentSlug === lastGeneratedRef.current;
 
+    // Frozen entries seed the ref above and stop here. Checked after the mount pass rather than at
+    // the top of the effect so the baseline is still established: the write is what must not
+    // happen, not the bookkeeping that decides whether a later value was hand-edited.
+    if (frozen) return;
+
     if (isStillAuto && generatedSlug !== currentSlug) {
       // shouldDirty stays false on the very first auto-write so we
       // don't trip the unsaved-changes warning before the user has
@@ -152,5 +175,13 @@ export function useAutoSlug<TValues extends FieldValues = FieldValues>({
       });
       lastGeneratedRef.current = generatedSlug;
     }
-  }, [enabled, form, titleFieldName, slugFieldName, titleValue, slugValue]);
+  }, [
+    enabled,
+    frozen,
+    form,
+    titleFieldName,
+    slugFieldName,
+    titleValue,
+    slugValue,
+  ]);
 }

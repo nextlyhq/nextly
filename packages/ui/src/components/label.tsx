@@ -3,6 +3,7 @@ import type { ComponentProps } from "react";
 
 import { cn } from "../lib/utils";
 
+/** @public */
 function Label({ className, ...props }: ComponentProps<typeof LabelRoot>) {
   return (
     <LabelRoot

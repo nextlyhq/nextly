@@ -170,15 +170,19 @@ export function useEntry<T = Entry>({
   return useQuery<T, Error>({
     // i18n M7: locale is part of the cache identity — switching languages must refetch the
     // entry (the localized field values differ per locale), not serve the previous language.
+    // The cache identity is built through the shared `detailScoped` helper so the
+    // mutation hook's optimistic-update key stays in lockstep with this read key.
+    // `draft` is part of it: the editor learns `draftsEnabled` only after the
+    // schema loads, flipping `draft` false -> true on a cold load, and without it
+    // in the key the stale-time would keep serving the live row and hide an
+    // existing working draft (and the Changed / Publish / Discard affordances).
     queryKey: entryId
-      ? [
-          ...entryKeys.detail(collectionSlug, entryId),
-          {
-            locale: locale ?? null,
-            fallbackLocale: fallbackLocale ?? null,
-            translationStatus: translationStatus ?? false,
-          },
-        ]
+      ? entryKeys.detailScoped(collectionSlug, entryId, {
+          locale,
+          fallbackLocale,
+          translationStatus,
+          draft,
+        })
       : entryKeys.detailsByCollection(collectionSlug),
     queryFn: async () => {
       // Safety check: This shouldn't execute due to `enabled` flag,

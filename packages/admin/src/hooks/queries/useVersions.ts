@@ -12,6 +12,7 @@
  */
 
 import {
+  keepPreviousData,
   useInfiniteQuery,
   useMutation,
   useQuery,
@@ -24,6 +25,7 @@ import {
   type RestoreVersionResponse,
   type SetVersionLabelResponse,
   type VersionDetail,
+  type VersionDiff,
   type VersionListResponse,
   type VersionScope,
 } from "@admin/services/versionApi";
@@ -66,11 +68,36 @@ function isAddressable(scope: VersionScope): boolean {
 export const versionKeys = {
   all: () => ["versions"] as const,
   lists: () => [...versionKeys.all(), "list"] as const,
-  list: (scope: VersionScope) =>
-    [...versionKeys.lists(), ...scopeKey(scope)] as const,
+  // The optional locale is appended, so a locale-filtered list is its own cache
+  // entry while `list(scope)` (no locale) stays the prefix every mutation
+  // invalidates — that prefix match still clears every locale variant.
+  list: (scope: VersionScope, locale?: string) =>
+    [
+      ...versionKeys.lists(),
+      ...scopeKey(scope),
+      ...(locale !== undefined ? [locale] : []),
+    ] as const,
   details: () => [...versionKeys.all(), "detail"] as const,
   detail: (scope: VersionScope, versionNo: number) =>
     [...versionKeys.details(), ...scopeKey(scope), versionNo] as const,
+  diffs: () => [...versionKeys.all(), "diff"] as const,
+  // A diff is identified by the document (scope), the ordered version pair
+  // (from, to), and whether unchanged fields are filtered out (modifiedOnly).
+  // The result also depends on the live schema, which the query treats as
+  // always stale rather than fold into the key (see useVersionDiff).
+  diff: (
+    scope: VersionScope,
+    from: number,
+    to: number,
+    modifiedOnly: boolean
+  ) =>
+    [
+      ...versionKeys.diffs(),
+      ...scopeKey(scope),
+      from,
+      to,
+      modifiedOnly,
+    ] as const,
 };
 
 // ============================================================
@@ -80,6 +107,8 @@ export const versionKeys = {
 export interface UseVersionsOptions {
   scope: VersionScope;
   enabled?: boolean;
+  /** Scope the listing to one locale's versions. Absent lists every locale. */
+  locale?: string;
 }
 
 /**
@@ -87,14 +116,25 @@ export interface UseVersionsOptions {
  *
  * The response carries no cursor of its own, so the next one is the oldest
  * `versionNo` on the page just received.
+ *
+ * Focus refetch is enabled explicitly (the provider turns it off app-wide, so
+ * `staleTime: 0` alone would not revalidate on focus): a save in another tab
+ * adds a version, and "Compare with current" reads the newest row from this
+ * list, so returning to the panel must revalidate the head or it would label a
+ * stale version as current.
  */
-export function useVersions({ scope, enabled = true }: UseVersionsOptions) {
+export function useVersions({
+  scope,
+  enabled = true,
+  locale,
+}: UseVersionsOptions) {
   return useInfiniteQuery<VersionListResponse, Error>({
-    queryKey: versionKeys.list(scope),
+    queryKey: versionKeys.list(scope, locale),
     queryFn: ({ pageParam }) =>
       versionApi.list(scope, {
         limit: PAGE_SIZE,
         ...(typeof pageParam === "number" ? { cursor: pageParam } : {}),
+        ...(locale !== undefined ? { locale } : {}),
       }),
     initialPageParam: undefined,
     getNextPageParam: lastPage => {
@@ -111,6 +151,9 @@ export function useVersions({ scope, enabled = true }: UseVersionsOptions) {
     // Saving the document adds a version, and the panel is opened on demand, so
     // each open re-reads rather than serving a list captured before the save.
     staleTime: 0,
+    // The provider disables focus refetch app-wide; re-enable it here so a save
+    // made in another tab is reflected when this panel regains focus (see above).
+    refetchOnWindowFocus: true,
   });
 }
 
@@ -147,6 +190,59 @@ export function useVersion({
     },
     enabled: enabled && versionNo !== null && isAddressable(scope),
     staleTime: 60_000,
+  });
+}
+
+export interface UseVersionDiffOptions {
+  scope: VersionScope;
+  /** Older version number; null disables the query. */
+  from: number | null;
+  /** Newer version number; null disables the query. */
+  to: number | null;
+  /** Return only changed fields. */
+  modifiedOnly?: boolean;
+  enabled?: boolean;
+}
+
+/**
+ * A diff of two versions. The snapshots are immutable, but the server classifies
+ * and renders them against the live schema, so the result is not immutable
+ * across schema edits. Rather than fingerprint every schema attribute that feeds
+ * the diff, the query is treated as always stale: each time the compare view
+ * mounts it revalidates, so an edited schema yields a fresh diff. Focus refetch
+ * is enabled explicitly for the same reason: a schema edited in another tab is
+ * picked up on returning here rather than showing an obsolete classification.
+ * The provider disables focus refetch app-wide, so `staleTime: 0` alone would
+ * not revalidate on focus; opting back in has to be explicit.
+ */
+export function useVersionDiff({
+  scope,
+  from,
+  to,
+  modifiedOnly = false,
+  enabled = true,
+}: UseVersionDiffOptions) {
+  return useQuery<VersionDiff, Error>({
+    queryKey:
+      from === null || to === null
+        ? ([...versionKeys.diffs(), "none"] as const)
+        : versionKeys.diff(scope, from, to, modifiedOnly),
+    queryFn: () => {
+      // Guarded by `enabled`; this is defence against a direct queryFn call.
+      if (from === null || to === null) {
+        throw new Error("Two version numbers are required");
+      }
+      return versionApi.diff(scope, from, to, { modifiedOnly });
+    },
+    enabled: enabled && from !== null && to !== null && isAddressable(scope),
+    staleTime: 0,
+    // The provider disables focus refetch app-wide; re-enable it here so a
+    // schema edited in another tab reclassifies the diff on return (see above).
+    refetchOnWindowFocus: true,
+    // Toggling "Changed only" switches to a different cache entry; keep the
+    // prior diff on screen while the new one loads rather than flashing a
+    // skeleton over a comparison the user is already reading.
+    placeholderData: keepPreviousData,
   });
 }
 

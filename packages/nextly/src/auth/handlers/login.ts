@@ -181,7 +181,6 @@ export async function handleLogin(
     }
 
     const response = await issueSession(afterAuth, deps, request, requestId);
-    await deps.authHooks.runAfterLogin(afterAuth, deps.pluginCtx);
     await stallResponse(startTime, deps.loginStallTimeMs);
     return response;
   } catch (err) {

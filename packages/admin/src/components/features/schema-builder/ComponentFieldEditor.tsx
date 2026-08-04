@@ -32,7 +32,7 @@ import { useCallback, useMemo, useRef } from "react";
 import * as Icons from "@admin/components/icons";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
-import { useComponents } from "@admin/hooks/queries";
+import { useFieldGroups } from "@admin/hooks/queries";
 
 import { EditorAlert } from "./EditorAlert";
 import type { ComponentFieldEditorProps, ComponentFieldMode } from "./types";
@@ -41,6 +41,9 @@ import type { ComponentFieldEditorProps, ComponentFieldMode } from "./types";
 // ComponentFieldEditor Component
 // ============================================================
 
+// Field groups are called field groups in the UI. The `component` spelling that remains here is
+// the STORED one and stays: it is the field type written into `fields` JSON and the registry key
+// the API is addressed by, so renaming it would make existing content unreadable.
 export function ComponentFieldEditor({
   component,
   onComponentChange,
@@ -60,7 +63,7 @@ export function ComponentFieldEditor({
   const multiSelectionCacheRef = useRef<string[] | undefined>(undefined);
 
   // Fetch available components
-  const { data: componentsData, isLoading } = useComponents({
+  const { data: componentsData, isLoading } = useFieldGroups({
     pagination: { page: 0, pageSize: 100 },
     sorting: [{ field: "label", direction: "asc" }],
     filters: {},
@@ -172,12 +175,14 @@ export function ComponentFieldEditor({
       <div className="space-y-4">
         <div className="flex items-center gap-2">
           <Icons.Puzzle className="h-4 w-4 text-muted-foreground" />
-          <Label className="text-xs font-medium">Component Configuration</Label>
+          <Label className="text-xs font-medium">
+            Field Group Configuration
+          </Label>
         </div>
         <div className="flex items-center justify-center p-6">
           <Icons.Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
           <span className="ml-2 text-sm text-muted-foreground">
-            Loading components...
+            Loading field groups...
           </span>
         </div>
       </div>
@@ -190,22 +195,24 @@ export function ComponentFieldEditor({
       <div className="space-y-4">
         <div className="flex items-center gap-2">
           <Icons.Puzzle className="h-4 w-4 text-muted-foreground" />
-          <Label className="text-xs font-medium">Component Configuration</Label>
+          <Label className="text-xs font-medium">
+            Field Group Configuration
+          </Label>
         </div>
         {/* PR H feedback 2.2: subtle EditorAlert replaces the loud
             amber empty state. */}
         <EditorAlert>
           <div className="space-y-2">
             <p>
-              No components available. Create a component first to use this
+              No field groups available. Create a field group first to use this
               field type.
             </p>
             <Link
-              href={ROUTES.BUILDER_COMPONENTS_NEW}
+              href={ROUTES.BUILDER_FIELD_GROUPS_NEW}
               className="inline-flex items-center gap-1 text-foreground hover:underline"
             >
               <Icons.Plus className="h-3 w-3" />
-              Create component
+              Create field group
             </Link>
           </div>
         </EditorAlert>
@@ -218,7 +225,7 @@ export function ComponentFieldEditor({
       {/* Section Header */}
       <div className="flex items-center gap-2">
         <Icons.Puzzle className="h-4 w-4 text-muted-foreground" />
-        <Label className="text-xs font-medium">Component Configuration</Label>
+        <Label className="text-xs font-medium">Field Group Configuration</Label>
       </div>
 
       {/* Mode Toggle */}
@@ -278,15 +285,15 @@ export function ComponentFieldEditor({
         </div>
         <p className="text-xs text-muted-foreground mt-2">
           {currentMode === "single"
-            ? "Embed one specific component type"
-            : "Allow editors to choose from multiple component types"}
+            ? "Embed one specific field group"
+            : "Allow editors to choose from multiple field groups"}
         </p>
       </div>
 
       {/* Component Selection */}
       <div className="space-y-2 pt-2  border-t border-border">
         <Label className="text-xs font-medium">
-          {currentMode === "single" ? "Component" : "Available Components"}
+          {currentMode === "single" ? "Field Group" : "Available Field Groups"}
         </Label>
 
         {currentMode === "single" ? (
@@ -296,12 +303,12 @@ export function ComponentFieldEditor({
             onValueChange={handleSingleComponentChange}
           >
             <SelectTrigger className="h-8 text-sm">
-              <SelectValue placeholder="Select a component" />
+              <SelectValue placeholder="Select a field group" />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="__none__">
                 <span className="text-muted-foreground">
-                  No component selected
+                  No field group selected
                 </span>
               </SelectItem>
               {availableComponents.map(comp => (
@@ -360,7 +367,7 @@ export function ComponentFieldEditor({
             </Badge>
             {(!components || components.length === 0) && (
               <span className="text-xs text-muted-foreground">
-                Select at least one component
+                Select at least one field group
               </span>
             )}
           </div>
@@ -461,8 +468,8 @@ export function ComponentFieldEditor({
       {/* PR H feedback 2.2: subtle EditorAlert replaces the
           bg-primary/5 Tip box. */}
       <EditorAlert>
-        Components are reusable field groups. Each instance stores its own data
-        in a separate table.
+        Field groups are reusable sets of fields. Each instance stores its own
+        data in a separate table.
       </EditorAlert>
     </div>
   );

@@ -89,9 +89,10 @@ import type {
 import {
   createDatabaseError,
   isDatabaseError,
+  isApplicationError,
 } from "@nextlyhq/adapter-drizzle/types";
 import { checkDialectVersion } from "@nextlyhq/adapter-drizzle/version-check";
-import type { AnyRelations } from "drizzle-orm";
+import type { AnyRelations, SQL } from "drizzle-orm";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { PoolClient, PoolConfig } from "pg";
 import { Pool } from "pg";
@@ -562,11 +563,20 @@ export class PostgresAdapter extends DrizzleAdapter {
    * Supports automatic retry for serialization failures (40001) and
    * deadlocks (40P01) when `retryCount` is specified in options.
    *
+   * An error carrying the Nextly application brand is neither retried nor
+   * classified: it is the application refusing the write, so it arrives at the
+   * caller as it was thrown. Retrying it would repeat work whose verdict has
+   * already been given. Every other error, including an unbranded one raised by
+   * the callback, is retried when it is a serialization failure or deadlock and
+   * classified on the way out.
+   *
    * @param callback - Function to execute within the transaction
    * @param options - Transaction options (isolation level, timeout, retry)
    * @returns The result of the callback
    *
-   * @throws {DatabaseError} If transaction fails after all retries
+   * @throws {DatabaseError} If the transaction itself fails after all retries,
+   * or if the callback threw an error that does not carry the application brand
+   * @throws The callback's own error, unchanged, when it carries that brand
    */
   async transaction<T>(
     callback: (ctx: TransactionContext) => Promise<T>,
@@ -610,6 +620,14 @@ export class PostgresAdapter extends DrizzleAdapter {
         await client.query("ROLLBACK").catch(() => {});
 
         lastError = error;
+
+        // Work inside a transaction may throw to roll the write back — a
+        // refused value, a denied permission — and that is the application's
+        // verdict, not the driver's failure. Rethrown before the retry check as
+        // well as before classification: a refusal re-run is the same refusal,
+        // and the caller must receive the code and payload it raised rather
+        // than a generic database error with the detail stripped out.
+        if (isApplicationError(error)) throw error;
 
         // Check if error is retryable
         const pgError = error as { code?: string };
@@ -933,6 +951,21 @@ export class PostgresAdapter extends DrizzleAdapter {
         params: SqlParam[] = []
       ): Promise<T[]> => {
         const result = await client.query(sql, params as unknown[]);
+        return result.rows as T[];
+      },
+
+      // Run on the transaction-bound Drizzle instance rather than the pool, so
+      // the statement is part of this transaction and sees its uncommitted rows.
+      runStatement: async (statement: SQL): Promise<void> => {
+        await txDb().execute(statement);
+      },
+
+      // node-postgres answers `{ rows }`; the transaction-bound instance keeps
+      // the read inside this transaction so it sees its uncommitted writes.
+      queryStatement: async <T = Record<string, unknown>>(
+        statement: SQL
+      ): Promise<T[]> => {
+        const result = await txDb().execute(statement);
         return result.rows as T[];
       },
 

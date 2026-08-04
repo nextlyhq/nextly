@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { STORAGE_FORMAT } from "../../schemas/storage-format";
+
 import {
   BINDABLE_KINDS,
   BLOCK_FIELD_TYPES,
@@ -131,12 +133,12 @@ describe("FORM_FIELD_TYPE_CATALOG", () => {
 });
 
 describe("BLOCK_FIELD_TYPE_CATALOG", () => {
-  it("is the canonical catalog minus password, component, and blocks", () => {
+  it("is the canonical catalog minus password and component", () => {
     const types = BLOCK_FIELD_TYPE_CATALOG.map(entry => entry.type);
     expect(new Set(types).size).toBe(types.length);
     expect([...types].sort()).toEqual(
       ALL_FIELD_TYPES.filter(
-        type => type !== "password" && type !== "component" && type !== "blocks"
+        type => type !== "password" && type !== "component"
       ).sort()
     );
   });
@@ -154,16 +156,6 @@ describe("BLOCK_FIELD_TYPE_CATALOG", () => {
         (BLOCK_FIELD_TYPES as readonly string[]).includes(type)
       )
     );
-  });
-
-  it("keeps the blocks field out of the block-prop surface", () => {
-    // A prop holding a whole nested document is what slots already express.
-    expect(isBlockFieldType("blocks")).toBe(false);
-    expect(
-      BLOCK_FIELD_TYPE_CATALOG.some(entry => entry.type === "blocks")
-    ).toBe(false);
-    // It is still a real field type, describable by the canonical catalog.
-    expect(getFieldTypeCatalogEntry("blocks")?.category).toBe("Structured");
   });
 
   it("recognizes block prop types and rejects everything else", () => {
@@ -361,5 +353,33 @@ describe("binding kinds", () => {
     expect(canBindFieldToProp({ type: "toString" }, { type: "text" })).toBe(
       false
     );
+  });
+});
+
+// The field group's field type has two spellings that must not be confused: what the picker SHOWS
+// and what gets written to disk. The label was renamed with the rest of the vocabulary; the stored
+// value deliberately was not, because changing it rewrites `fields` JSON in three registry tables.
+//
+// This pins them apart. A sweep that renames the label and takes the value with it would pass every
+// other test in the suite while silently making existing content unreadable.
+describe("field group entry: display name vs stored value", () => {
+  const entry = FIELD_TYPE_CATALOG.find(f => f.label === "Field Group");
+
+  it("presents itself as a field group", () => {
+    expect(entry).toBeDefined();
+    expect(entry?.hint).toBe("Embed a reusable field group");
+  });
+
+  it("still stores the value the on-disk format defines, not the label", () => {
+    expect(entry?.type).toBe(STORAGE_FORMAT.fieldType);
+    expect(STORAGE_FORMAT.fieldType).toBe("component");
+  });
+
+  // No catalog entry may present itself with the pre-rename vocabulary.
+  it("leaves no catalog entry labelled or hinted 'component'", () => {
+    const stale = FIELD_TYPE_CATALOG.filter(
+      f => /component/i.test(f.label) || /component/i.test(f.hint ?? "")
+    );
+    expect(stale.map(f => f.label)).toEqual([]);
   });
 });

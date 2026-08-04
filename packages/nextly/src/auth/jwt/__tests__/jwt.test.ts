@@ -2,7 +2,11 @@ import { jwtVerify } from "jose";
 import { describe, it, expect } from "vitest";
 
 import { buildClaims } from "../claims";
-import { signAccessToken, secretToKey } from "../sign";
+import {
+  signAccessToken,
+  signAccessTokenWithExpiry,
+  secretToKey,
+} from "../sign";
 import { verifyAccessToken } from "../verify";
 
 const TEST_SECRET = "test-secret-must-be-at-least-32-characters-long!!";
@@ -186,5 +190,62 @@ describe("verifyAccessToken", () => {
   it("should reject empty string", async () => {
     const result = await verifyAccessToken("", TEST_SECRET);
     expect(result.valid).toBe(false);
+  });
+});
+
+/**
+ * A caller that reports when the access token expires must report the token's
+ * OWN expiry. Deriving it from a second clock reading — after the awaits that
+ * follow signing — reports a later moment than the token actually holds, and a
+ * client trusting it keeps using a token the server has already rejected.
+ */
+describe("signAccessTokenWithExpiry", () => {
+  it("returns the expiry the token itself carries", async () => {
+    const claims = buildClaims({
+      userId: "user_123",
+      email: "test@example.com",
+      name: "Test User",
+      image: null,
+      roleIds: [],
+    });
+
+    const { token, expiresAt } = await signAccessTokenWithExpiry(
+      claims,
+      TEST_SECRET,
+      900
+    );
+
+    const key = secretToKey(TEST_SECRET);
+    const { payload } = await jwtVerify(token, key);
+    expect(expiresAt.getTime()).toBe((payload.exp as number) * 1000);
+  });
+
+  it("does not drift when the caller waits before reading the expiry", async () => {
+    const claims = buildClaims({
+      userId: "user_123",
+      email: "test@example.com",
+      name: "Test User",
+      image: null,
+      roleIds: [],
+    });
+
+    const { token, expiresAt } = await signAccessTokenWithExpiry(
+      claims,
+      TEST_SECRET,
+      1
+    );
+    // Stand in for the awaited work every session-issuing path does between
+    // signing and responding: storing the refresh token, running plugin
+    // afterLogin hooks, writing the audit record.
+    await new Promise(resolve => setTimeout(resolve, 1100));
+
+    const key = secretToKey(TEST_SECRET);
+    const { payload } = await jwtVerify(token, key).catch(() => ({
+      payload: null,
+    }));
+    // The token is expired by now, and the reported expiry says so rather than
+    // claiming validity the token no longer has.
+    expect(payload).toBeNull();
+    expect(expiresAt.getTime()).toBeLessThanOrEqual(Date.now());
   });
 });

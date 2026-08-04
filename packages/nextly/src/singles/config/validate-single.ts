@@ -23,6 +23,15 @@
 
 import { RESERVED_SLUGS } from "../../collections/config/validate-config";
 import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
+import {
+  fieldProducesColumn,
+  toSnakeCase,
+} from "../../domains/schema/services/field-column-descriptor";
+import {
+  isLifecycleSystemColumn,
+  isOwnableSystemColumn,
+  isReservedSystemColumn,
+} from "../../lib/system-columns";
 import { SYSTEM_RESOURCES } from "../../schemas/_zod/rbac";
 import {
   type BaseValidationError,
@@ -32,8 +41,7 @@ import {
   validateFieldTypeShared,
   validateNumberDecimalDimensionsShared,
   validateRelationshipTargetShared,
-  validateBlocksDefaultShared,
-  validateBlocksPolicyShared,
+  validatePluginFieldOptionsShared,
   validateSelectOptionsShared,
   validateSlugShared,
 } from "../../shared/base-validator";
@@ -71,6 +79,13 @@ export type SingleValidationErrorCode =
   | "FIELD_NAME_INVALID_FORMAT"
   | "FIELD_NAME_SQL_KEYWORD"
   | "FIELD_NAME_DUPLICATE"
+  // A field named after a column the system injects onto the Single's table.
+  | "FIELD_NAME_RESERVED"
+  // A name that reaches a system column under a different spelling. Allowed only as the
+  // column's own name, because the declared name stays the identity in every payload.
+  | "FIELD_NAME_SYSTEM_ALIAS"
+  // A name that reaches a column the Draft/Published lifecycle owns, while it is enabled.
+  | "FIELD_NAME_LIFECYCLE_RESERVED"
   | "FIELD_TYPE_REQUIRED"
   | "FIELD_TYPE_INVALID"
   // A declared default the field's own rules reject.
@@ -177,6 +192,20 @@ function validateField(
 
   // Plugin types are accepted only when they opted into the entries surface —
   // registration alone is not authorization for a single field.
+  // Whether a name is usable as a column does not depend on the field's type,
+  // and a contributed type has no answer here at all — it defers to boot. Left
+  // behind the type check, a plugin field's name was never checked by anything:
+  // the deferral returns before this, and the boot gate asks only whether the
+  // token was claimed. A duplicate or SQL-reserved name reached schema
+  // generation as a colliding column.
+  validateFieldNameShared(
+    f.name,
+    path,
+    errsBase,
+    seenNames,
+    DEFAULT_SQL_KEYWORDS_SET
+  );
+
   if (
     !validateFieldTypeShared(f.type, path, errsBase, type =>
       isPluginFieldTypeOnSurface(type, "entries")
@@ -186,13 +215,10 @@ function validateField(
   }
   const fieldType = f.type as string;
 
-  validateFieldNameShared(
-    f.name,
-    path,
-    errsBase,
-    seenNames,
-    DEFAULT_SQL_KEYWORDS_SET
-  );
+  // A plugin type reaches none of the cases below, so its own declaration
+  // checks run here rather than as a case that could never be written for a
+  // type core does not know.
+  validatePluginFieldOptionsShared(f, path, errsBase);
 
   switch (fieldType) {
     case "select":
@@ -205,8 +231,6 @@ function validateField(
 
     case "blocks":
       // A blocks default must satisfy the same field policy the write applies.
-      validateBlocksPolicyShared(f, path, errsBase);
-      validateBlocksDefaultShared(f, path, errsBase);
       break;
 
     case "relationship":
@@ -251,6 +275,12 @@ function validateField(
   }
 }
 
+// System columns injected onto a Single's table, under both the snake_case name
+// and the camelCase alias that snake-cases to the same column. A Single gets no
+// owner column, so unlike a collection only the first-publication marker is
+// reserved here — which is why this check had to be added rather than extended:
+// until the marker reached a Single's table there was nothing to collide with.
+
 /**
  * Validate an array of field configurations.
  */
@@ -272,7 +302,8 @@ function validateFieldsArray(
  */
 function validateFields(
   fields: unknown,
-  errors: SingleValidationError[]
+  errors: SingleValidationError[],
+  lifecycleEnabled = false
 ): void {
   const path = "fields";
 
@@ -293,6 +324,79 @@ function validateFields(
     });
     return;
   }
+
+  // Block the injected system columns at the top level, before per-field
+  // validation. Reserved even when the draft/publish lifecycle is off, so
+  // enabling it later fails here rather than at migration time. Nested
+  // repeater/group fields live inside JSON and are exempt, as for collections.
+  //
+  // Ownership is GLOBAL, not per table. Two names that reach one column are refused even when the
+  // generators would put them in different tables — a shared `foo_bar` beside a localized
+  // `FooBar`. Physical separation does not keep the two values apart, because the write path
+  // normalizes payload keys through the same conversion BEFORE it splits localized fields off, so
+  // both keys land on `foo_bar` and the second silently overwrites the first. One of the two
+  // authored values is already gone by the time anything decides which table it belongs to.
+  const columnOwners = new Map<string, string>();
+  fields.forEach((field, index) => {
+    if (!field || typeof field !== "object") return;
+    const candidate = field as Record<string, unknown>;
+    const name = candidate.name;
+    if (typeof name !== "string") return;
+    const column = toSnakeCase(name);
+    if (isReservedSystemColumn(column, "singleConfig")) {
+      errors.push({
+        path: `${path}[${index}].name`,
+        message: `Field name '${name}' is reserved: it becomes the system column '${column}'`,
+        code: "FIELD_NAME_RESERVED",
+      });
+      return;
+    }
+    // Everything below is about columns, so a field that occupies none is exempt. A component or
+    // a many-to-many named `Title` takes over nothing: its values live in its own table and its
+    // payload key stays `Title`, distinct from the system field's `title`.
+    if (!fieldProducesColumn(candidate)) return;
+    // A field may take over `title` or `slug` — the documented "user wins" behaviour — but only
+    // under the column's own name. `Title` reaches the same column while staying a different
+    // identity everywhere the declared name is the key, so the two would write one column under
+    // two names and the generated value would overwrite the author's.
+    if (column !== name && isOwnableSystemColumn(column, "single")) {
+      errors.push({
+        path: `${path}[${index}].name`,
+        message: `Field name '${name}' becomes the system column '${column}'. Name the field '${column}' to replace that column, or choose a different name`,
+        code: "FIELD_NAME_SYSTEM_ALIAS",
+      });
+      return;
+    }
+    // The Draft/Published lifecycle owns its columns outright, so any name reaching them is a
+    // collision rather than a takeover. Only when the lifecycle is on — with it off these are
+    // ordinary names.
+    if (lifecycleEnabled && isLifecycleSystemColumn(column, "single")) {
+      errors.push({
+        path: `${path}[${index}].name`,
+        message: `Field name '${name}' becomes the column '${column}', which the Draft/Published lifecycle owns. Rename the field, or turn the lifecycle off`,
+        code: "FIELD_NAME_LIFECYCLE_RESERVED",
+      });
+      return;
+    }
+    // Two names that reach one column cannot both be emitted, so the table could never be
+    // created. Checked here rather than in the shared field-name rule because only this level has
+    // columns at all: a repeater or group keeps its children inside a single JSON column, where
+    // two names that convert alike are simply two keys.
+    //
+    // Column-less field types are exempt for the same reason. A component and a many-to-many
+    // relationship store their values in their own tables, keyed by the field's declared name, so
+    // two of them whose names converge stay distinct and nothing is emitted twice.
+    const owner = columnOwners.get(column);
+    if (owner !== undefined) {
+      errors.push({
+        path: `${path}[${index}].name`,
+        message: `Field name '${name}' collides with '${owner}': both become the column '${column}'`,
+        code: "FIELD_NAME_DUPLICATE",
+      });
+      return;
+    }
+    columnOwners.set(column, name);
+  });
 
   // Why: empty fields list is now valid for both code-first defines and the
   // new modal-driven create flow (Builder redesign PR 2/3). System columns
@@ -375,7 +479,11 @@ export function validateSingleConfig(
     sqlKeywordsSet: DEFAULT_SQL_KEYWORDS_SET,
   });
 
-  validateFields(config.fields, errors);
+  validateFields(
+    config.fields,
+    errors,
+    (config as { status?: boolean }).status === true
+  );
 
   validateAccess(config.access, errors);
 

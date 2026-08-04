@@ -24,7 +24,7 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { dequal } from "dequal";
 
-import { getDialectTables } from "../../../database/index";
+import { getDialectTablesForPush } from "../../../database/index";
 import {
   getCachedSnapshot,
   getLiveSnapshot,
@@ -32,8 +32,15 @@ import {
 } from "../../../init/schema-snapshot-cache";
 import { buildNotificationEvent } from "../../../runtime/notifications/build-event";
 import type { MigrationScope } from "../../../runtime/notifications/types";
-import { ComponentSchemaService } from "../../components/services/component-schema-service";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import { FieldGroupSchemaService } from "../../field-groups/services/field-group-schema-service";
+import {
+  chooseTypeColumns,
+  resolveRegistryNameFromCatalog,
+} from "../../field-groups/storage/resolve-storage-names";
+import { withResolvedBuilderTextWidths } from "../services/builder-text-width";
 import { generateRuntimeSchema } from "../services/runtime-schema-generator";
+import { identifierCaseRules } from "../utils/resolve-catalog-name";
 
 import {
   countNulls as countNullsHelper,
@@ -366,10 +373,14 @@ export function computeJournalSummaryFromOperations(
 // Pure helper. Test seam: exported.
 export function computeJournalScope(
   source: "ui" | "code",
-  uiTargetSlug: string | undefined
+  uiTargetSlug: string | undefined,
+  // Defaulted to `collection` so the many existing UI callers that target one keep their scope
+  // without restating it. A single or field group must say so: recording either as a collection
+  // hid its migrations from every scope-filtered audit query.
+  uiTargetKind: "collection" | "single" | "component" = "collection"
 ): MigrationJournalScope {
   if (source === "ui" && uiTargetSlug) {
-    return { kind: "collection", slug: uiTargetSlug };
+    return { kind: uiTargetKind, slug: uiTargetSlug };
   }
   return { kind: "global" };
 }
@@ -445,7 +456,7 @@ export function excludeLockedTableOps(
   return { kept, skipped };
 }
 
-function logSkippedLockedOps(skipped: Operation[]): void {
+export function logSkippedLockedOps(skipped: Operation[]): void {
   if (skipped.length === 0 || process.env.DEBUG_SCHEMA !== "1") return;
   const tables = [
     ...new Set(skipped.map(op => operationTargetTable(op) ?? "<unknown>")),
@@ -478,12 +489,10 @@ function toNotificationScope(scope: MigrationJournalScope): MigrationScope {
       ? { kind: "global", slug: scope.slug }
       : { kind: "global" };
   }
-  // collection | single — both require a slug per
-  // MigrationJournalScope's contract (asserted at the type-system
-  // level because slug is optional only for fresh-push/global).
-  return scope.slug
-    ? { kind: scope.kind, slug: scope.slug }
-    : { kind: "global" };
+  // collection | single | component — the scope type requires a slug on each of them, so there is
+  // no slugless case left to fall back for. The fallback this replaces silently retargeted such a
+  // scope to the whole schema, which is the one outcome an entity-scoped apply must not produce.
+  return { kind: scope.kind, slug: scope.slug };
 }
 
 export class PushSchemaPipeline {
@@ -506,9 +515,20 @@ export class PushSchemaPipeline {
     // slug: <user's collection> }`. HMR/code-first applies omit it
     // and get tagged as global.
     uiTargetSlug?: string;
+    /** Which entity kind `uiTargetSlug` names, so the journal row records it accurately. */
+    uiTargetKind?: "collection" | "single" | "component";
   }): Promise<PipelineResult> {
-    const { desired, db, dialect, source, promptChannel, databaseName } = args;
-    const scope = computeJournalScope(source, args.uiTargetSlug);
+    const { db, dialect, source, promptChannel, databaseName } = args;
+    // Resolved once, before anything reads it. A desired schema is consumed by TWO builders — the
+    // snapshot the diff compares and the Drizzle tables drizzle-kit turns into DDL — and resolving
+    // inside either leaves the other on the raw fields, so a table would converge and then report a
+    // type change against itself on every following diff.
+    const desired = withResolvedBuilderTextWidths(args.desired);
+    const scope = computeJournalScope(
+      source,
+      args.uiTargetSlug,
+      args.uiTargetKind
+    );
     // F10 PR 3: track wall-clock for the notification event. The
     // journal already computes its own duration; we duplicate here so
     // the notification event surfaces duration even when the journal
@@ -599,6 +619,45 @@ export class PushSchemaPipeline {
             : await introspectLiveSnapshot(db, dialect, managedTableNames);
       }
 
+      // 🔴 Derived from the snapshot just taken, not from a fresh catalog read.
+      //
+      // That snapshot was introspected over exactly these table names, so it
+      // already carries the columns this needs — and deriving from it guarantees
+      // the desired shape and the live shape are read from ONE observation of
+      // the database. A second read could disagree with the first, and a diff
+      // computed across two disagreeing observations is the one thing this
+      // function must never produce.
+      // 🔴 Contained, and its failure means "declare NEITHER registry".
+      //
+      // The desired schema is what drizzle-kit creates from, so naming the
+      // wrong registry creates an empty one — and on MySQL and SQLite the full
+      // schema is always handed over, because scope reduction below is
+      // PostgreSQL-only. Guessing is therefore the one thing this must not do.
+      // Omitting it instead leaves drizzle-kit free to propose a DROP, which
+      // `filterUnsafeStatements` blocks and reports; a wrong CREATE is additive
+      // and nothing stops it.
+      const fieldGroupRegistryTable = await resolveRegistryNameFromCatalog({
+        dialect,
+        getDrizzle: <T>() => db as T,
+      }).catch(() => undefined);
+
+      const fieldGroupTypeColumns = chooseTypeColumns(
+        liveSnapshot.tables.map(table => ({
+          table: table.name,
+          columns: table.columns.map(column => column.name),
+        })),
+        Object.values(desired.components).map(c => c.tableName),
+        // MySQL is given the folding setting rather than queried for it. The
+        // names being matched are ones this apply itself asked the server to
+        // describe, so a case-insensitive table match cannot select a different
+        // object than the one requested — while an exact match would miss a
+        // server that reported it folded. Column names fold on MySQL
+        // regardless, which is what the discriminator lookup actually needs.
+        dialect === "mysql"
+          ? identifierCaseRules({ dialect, lowerCaseTableNames: 1 })
+          : identifierCaseRules({ dialect })
+      );
+
       const desiredSnapshot: NextlySchemaSnapshot = {
         tables: [
           ...Object.values(desired.collections).map(c =>
@@ -615,7 +674,10 @@ export class PushSchemaPipeline {
               // localized collection's translatable columns are omitted from the
               // main table's desired snapshot (they live in the companion
               // `_locales` table) rather than being re-added by the diff.
-              { hasStatus: c.status === true, localized: c.localized === true }
+              {
+                hasStatus: c.status === true,
+                localized: c.localized === true,
+              }
             )
           ),
           ...Object.values(desired.singles).map(s =>
@@ -638,13 +700,31 @@ export class PushSchemaPipeline {
                 typeof buildDesiredTableFromComponentFields
               >[1],
               dialect,
-              { localized: (c as { localized?: boolean }).localized === true }
+              {
+                localized: (c as { localized?: boolean }).localized === true,
+                typeColumn: fieldGroupTypeColumns.get(c.tableName),
+              }
             )
           ),
         ],
       };
 
-      const operations = diffSnapshots(liveSnapshot, desiredSnapshot);
+      const allOperations = diffSnapshots(liveSnapshot, desiredSnapshot);
+
+      // A UI save owns only the entity being edited. An operation targeting a code-first or
+      // plugin-owned table is dropped here, BEFORE anything reads the operation set, because those
+      // tables belong to `nextly.config.ts` and reconciling their drift is db:sync's job.
+      //
+      // 🔴 Dropped before rename detection rather than after prompting, which is where this used to
+      // happen. An operation on a locked table still reached the rename detector and the prompt gate
+      // on the way, and an unresolved candidate fails closed — so unapplied drift on a table the
+      // save was never going to touch could refuse the entire save, over an operation the very next
+      // step discards. Code-first applies keep the full set: they ARE the authority for those tables.
+      const { kept: operations, skipped: skippedLockedOps } =
+        source === "ui"
+          ? excludeLockedTableOps(allOperations, desired)
+          : { kept: allOperations, skipped: [] as Operation[] };
+      logSkippedLockedOps(skippedLockedOps);
 
       // Phase B: rename detection + prompt + resolution application.
       const candidates = this.deps.renameDetector.detect(operations, dialect);
@@ -715,20 +795,19 @@ export class PushSchemaPipeline {
           toRenameResolutions(dispatchResult.confirmedRenames, candidates)
         );
 
-      // A UI save owns only the entity being edited. Drop any operation that
-      // targets a code-first/plugin-owned table so the Schema Builder can never
-      // alter schema the user did not edit. Code-first applies (db:sync) are
-      // the authority for those tables and keep the full operation set.
-      const { kept: resolvedOps, skipped: skippedLockedOps } =
-        source === "ui"
-          ? excludeLockedTableOps(allResolvedOps, desired)
-          : { kept: allResolvedOps, skipped: [] as Operation[] };
-      logSkippedLockedOps(skippedLockedOps);
+      // Already excluded above, before the operation set was read. Resolutions are keyed to the
+      // candidates and events that set produced, so none of them can reintroduce a locked table.
+      const resolvedOps = allResolvedOps;
 
       // Phase C+D: execute pre-resolution ops, then pushSchema for the rest.
       const drizzleSchema = this.testHooks._buildDrizzleSchemaOverride
         ? this.testHooks._buildDrizzleSchemaOverride(patchedDesired, dialect)
-        : this.buildDrizzleSchema(patchedDesired, dialect);
+        : this.buildDrizzleSchema(
+            patchedDesired,
+            dialect,
+            fieldGroupTypeColumns,
+            fieldGroupRegistryTable
+          );
 
       // Scope drizzleSchema down to the table(s) actually touched by
       // resolvedOps. Without this, a Builder save that touches one
@@ -1165,7 +1244,9 @@ export class PushSchemaPipeline {
 
   private buildDrizzleSchema(
     desired: DesiredSchema,
-    dialect: SupportedDialect
+    dialect: SupportedDialect,
+    typeColumns: Map<string, string>,
+    fieldGroupRegistryTable: string | undefined
   ): Record<string, unknown> {
     const out: Record<string, unknown> = {};
 
@@ -1187,7 +1268,11 @@ export class PushSchemaPipeline {
     // when disk matches the schema definition. Phase C's strict
     // filterUnsafeStatements is the safety net.
     for (const [exportKey, value] of Object.entries(
-      getDialectTables(dialect)
+      // `null` where the catalog could not say which registry exists, which the
+      // bundle reads as "declare neither".
+      getDialectTablesForPush(dialect, {
+        fieldGroupRegistryTable: fieldGroupRegistryTable ?? null,
+      })
     )) {
       if (isDrizzleTable(value)) {
         const sqlName = getDrizzleTableName(value, exportKey);
@@ -1242,18 +1327,32 @@ export class PushSchemaPipeline {
     }
     // Components (comp_* tables) use component system columns
     // (_parent_id, _parent_table, _parent_field, _order, _component_type)
-    // instead of collection columns (title, slug). ComponentSchemaService
+    // instead of collection columns (title, slug). FieldGroupSchemaService
     // owns that column layout; generateRuntimeSchema would inject wrong
     // system columns.
-    const componentSchemaService = new ComponentSchemaService(dialect);
+    const fieldGroupSchemaService = new FieldGroupSchemaService(dialect);
     for (const c of Object.values(desired.components)) {
       // i18n: omit a localized component's translatable columns from the main
       // comp_ table handed to drizzle-kit (they live in comp_<slug>_locales,
       // provisioned out-of-band) — same rule as collections/singles above.
-      const componentTable = componentSchemaService.generateRuntimeSchema(
+      const componentTable = fieldGroupSchemaService.generateRuntimeSchema(
         c.tableName,
         c.fields,
-        { localized: (c as { localized?: boolean }).localized === true }
+        {
+          localized: (c as { localized?: boolean }).localized === true,
+          // 🔴 The discriminator is a SYSTEM column whose name no user ever
+          // chooses: the only two spellings are the two storage generations,
+          // and which one a table carries is a fact of that table rather than a
+          // preference the desired shape could hold an opinion about. Naming
+          // the other one turns a diff into "add this column, drop that one" —
+          // a destructive pair the classifier refuses and fresh-push strips, so
+          // every later apply carries an operation that can never succeed.
+          //
+          // A table the catalog does not describe, including one about to be
+          // created, resolves to the spelling this release's DDL writes.
+          typeColumn:
+            typeColumns.get(c.tableName) ?? STORAGE_FORMAT.columns.type,
+        }
       );
       out[c.tableName] = componentTable;
     }

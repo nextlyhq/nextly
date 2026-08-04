@@ -12,6 +12,8 @@ import { twMerge } from "tailwind-merge";
  * cn('px-2 py-1', 'px-4') // => 'py-1 px-4'
  * cn('text-muted-foreground', condition && 'text-foreground')
  * ```
+ *
+ * @experimental
  */
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));

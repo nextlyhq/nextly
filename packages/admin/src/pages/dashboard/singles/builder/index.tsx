@@ -65,6 +65,11 @@ export default function SingleBuilderPage(): React.ReactElement | null {
         ...(values.i18n === true ? { localized: true } : {}),
         // Version history opt-in at create; the server resolves the boolean.
         ...(values.versions === true ? { versions: true } : {}),
+        // Retention: only forwarded when set (else the server default 50
+        // applies); false = unlimited, a number = keep that many.
+        ...(values.versionsMaxPerDoc !== undefined
+          ? { versionsMaxPerDoc: values.versionsMaxPerDoc }
+          : {}),
         // Cache revalidation is on by default, so only forward an explicit
         // opt-out; omitting the key leaves the server default (on).
         ...(values.revalidate === false ? { revalidate: false } : {}),
@@ -92,6 +97,8 @@ export default function SingleBuilderPage(): React.ReactElement | null {
                     localized: values.i18n === true,
                     // and version history.
                     versions: values.versions === true,
+                    // and its retention setting.
+                    versionsMaxPerDoc: values.versionsMaxPerDoc,
                     // and cache revalidation (on unless explicitly off).
                     revalidate: values.revalidate !== false,
                     // and webhook recording (on unless explicitly off).

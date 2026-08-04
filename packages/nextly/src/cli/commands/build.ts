@@ -42,8 +42,17 @@ import {
 } from "../../domains/schema/services/type-generator";
 import { ZodGenerator } from "../../domains/schema/services/zod-generator";
 import { describeError } from "../../errors/index";
+import type { FieldGroupConfig } from "../../field-groups/config/types";
+import { assertValidFieldGroupConfig } from "../../field-groups/config/validate-field-group";
+import { collectCodegenNames } from "../../plugins/codegen/collect-codegen-names";
 import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/types";
+import {
+  assertPluginFieldDeclarations,
+  describeDeclarationFailure,
+} from "../../shared/lib/assert-plugin-field-declarations";
 import { toSingularLabel, toPluralLabel } from "../../shared/lib/pluralization";
+import type { SingleConfig } from "../../singles/config/types";
+import { assertValidSingleConfig } from "../../singles/config/validate-single";
 import { createContext, type CommandContext } from "../program";
 import {
   createAdapter,
@@ -53,12 +62,19 @@ import {
   type SupportedDialect,
 } from "../utils/adapter";
 import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
+import { hasSchemaToSync } from "../utils/has-schema";
 import { formatDuration, formatCount } from "../utils/logger";
 import {
   discoverMigrationGroups,
   selectVariant,
   getSortedBaseNames,
 } from "../utils/migration-discovery";
+
+import {
+  convertToComponentRecords,
+  convertToSingleRecords,
+  convertToUserFieldRecords,
+} from "./generate-types";
 
 // ============================================================================
 // Types
@@ -227,6 +243,26 @@ export async function runBuild(
     process.exit(1);
   }
 
+  // `loadConfig` has registered `contributes.fieldTypes` by now, which is the
+  // first moment an unknown field type can be told apart from one a plugin had
+  // not contributed yet: the `define*` validators defer that question because
+  // the config bundle is evaluated before any plugin registers. Asked here, a
+  // misspelled or wrong-surface token fails the command instead of silently
+  // generating primitive fallback types and a snapshot that production boot
+  // then refuses.
+  try {
+    assertPluginFieldDeclarations({
+      collections: configResult.config.collections,
+      singles: configResult.config.singles,
+      fieldGroups: configResult.config.fieldGroups,
+    });
+  } catch (error) {
+    // Reported and exited rather than thrown, so an invalid declaration reads
+    // like every other build failure instead of an unhandled crash.
+    logger.error(describeDeclarationFailure(error));
+    process.exit(1);
+  }
+
   if (configResult.configPath) {
     logger.success(`Loaded config from ${configResult.configPath}`);
   } else {
@@ -237,10 +273,41 @@ export async function runBuild(
   result.collectionCount = collectionCount;
   logger.keyValue("Collections", collectionCount);
 
-  if (collectionCount === 0) {
-    logger.warn("No collections defined in config");
+  // Singles and field groups answer to the same declaration rules as collections,
+  // and a project can be made entirely of them. Validated before the
+  // no-collections return below, which would otherwise let an invalid
+  // declaration past the only check that would have caught it.
+  const entityValidation = validateSinglesAndFieldGroups(
+    configResult.config.singles ?? [],
+    configResult.config.fieldGroups ?? [],
+    context
+  );
+  result.errors.push(...entityValidation.errors);
+
+  // Any supported entity is enough to build for. Gating on collections alone
+  // meant an app of singles, field groups, or plugin-backed user fields wrote
+  // no types at all, or kept a stale file from a previous run.
+  const hasSchema = hasSchemaToSync(configResult.config);
+
+  if (!hasSchema) {
+    if (entityValidation.errors.length > 0) {
+      reportDeclarationErrors(entityValidation.errors, context);
+      result.success = false;
+      result.durationMs = Date.now() - startTime;
+      logger.error(`Build failed in ${formatDuration(result.durationMs)}`);
+      logger.info("Fix the errors above and run `nextly build` again.");
+      process.exit(1);
+    }
+    logger.warn("No schema defined in config");
     logger.info("Add collections to your nextly.config.ts to build.");
     return;
+  }
+
+  // Worth saying even though the build continues: the other entity kinds still
+  // generate types, so stopping here would leave an app of singles or user
+  // fields with no output.
+  if (collectionCount === 0) {
+    logger.warn("No collections defined in config");
   }
 
   // Step 2: Validate all collections
@@ -255,17 +322,17 @@ export async function runBuild(
   result.errors.push(...validationResult.errors);
   result.warnings.push(...validationResult.warnings);
 
-  if (validationResult.errors.length > 0) {
+  // Reported together: a build is valid only if every entity is, and a single
+  // or component error that did not fail the build would be a report the
+  // command prints and then ignores.
+  const declarationErrors = [
+    ...validationResult.errors,
+    ...entityValidation.errors,
+  ];
+
+  if (declarationErrors.length > 0) {
     result.success = false;
-    logger.error(
-      `Validation failed with ${formatCount(validationResult.errors.length, "error")}`
-    );
-    for (const error of validationResult.errors) {
-      const location = error.field
-        ? `${error.collection}.${error.field}`
-        : error.collection;
-      logger.item(`${location}: ${error.message}`, 1);
-    }
+    reportDeclarationErrors(declarationErrors, context);
   } else {
     logger.success(
       `Validated ${formatCount(collectionCount, "collection")} successfully`
@@ -469,6 +536,63 @@ function validateAllCollections(
   return { errors, warnings };
 }
 
+/** Print declaration errors, naming the entity and field each belongs to. */
+function reportDeclarationErrors(
+  errors: BuildError[],
+  context: CommandContext
+): void {
+  const { logger } = context;
+  logger.error(`Validation failed with ${formatCount(errors.length, "error")}`);
+  for (const error of errors) {
+    const location = error.field
+      ? `${error.collection}.${error.field}`
+      : error.collection;
+    logger.item(`${location}: ${error.message}`, 1);
+  }
+}
+
+/**
+ * Run the comprehensive config validators over singles and field groups.
+ *
+ * Collections were already covered here; singles and field groups were not, so a
+ * declaration they alone carry — including one a plugin field type's own rules
+ * reject — reported success from `nextly build` and surfaced later at runtime.
+ * This is the one place the check is reliable, because the CLI registers plugin
+ * field types while loading the config, so the registry is populated by the
+ * time these run.
+ */
+function validateSinglesAndFieldGroups(
+  singles: SingleConfig[],
+  fieldGroups: FieldGroupConfig[],
+  context: CommandContext
+): { errors: BuildError[] } {
+  const { logger } = context;
+  const errors: BuildError[] = [];
+
+  for (const single of singles) {
+    logger.debug(`Validating single: ${single.slug}`);
+    try {
+      assertValidSingleConfig(single);
+    } catch (error) {
+      errors.push({ collection: single.slug, message: describeError(error) });
+    }
+  }
+
+  for (const fieldGroup of fieldGroups) {
+    logger.debug(`Validating field group: ${fieldGroup.slug}`);
+    try {
+      assertValidFieldGroupConfig(fieldGroup);
+    } catch (error) {
+      errors.push({
+        collection: fieldGroup.slug,
+        message: describeError(error),
+      });
+    }
+  }
+
+  return { errors };
+}
+
 /**
  * Validate that all relationship fields reference existing collections
  */
@@ -577,6 +701,16 @@ async function generateAllFiles(
   // Convert CollectionConfig[] to DynamicCollectionRecord[] for generators
   const records = convertToRecords(config.collections);
 
+  // The other entity kinds, converted with the same functions `generate:types`
+  // uses. Passing collections alone produced a different types file from the
+  // two commands, so a field declared on a single, a field group, or the user
+  // schema was absent from the build-generated types.
+  const singleRecords = convertToSingleRecords(config.singles ?? []);
+  const componentRecords = convertToComponentRecords(config.fieldGroups ?? []);
+  const userFieldRecords = convertToUserFieldRecords(
+    config.users?.fields ?? []
+  );
+
   // Generate Zod schemas
   if (options.zod !== false) {
     logger.debug("Generating Zod schemas...");
@@ -616,8 +750,23 @@ async function generateAllFiles(
       generateModuleAugmentation: true,
     };
 
+    // The same names `generate:types` narrows `PermissionSlug` and `EventName`
+    // to. Without them the build writes those types as bare `string`, so a
+    // deployment build would widen what a development run had narrowed.
+    const { permissionSlugs, eventNames } = collectCodegenNames(
+      config,
+      config.plugins ?? []
+    );
+
     const typeGenerator = new TypeGenerator(typeGeneratorOptions);
-    const typesFile = typeGenerator.generateTypesFile(records);
+    const typesFile = typeGenerator.generateTypesFile(
+      records,
+      singleRecords,
+      componentRecords,
+      userFieldRecords,
+      permissionSlugs,
+      eventNames
+    );
 
     const typesFilePath = resolve(cwd, config.typescript.outputFile);
     await ensureDir(dirname(typesFilePath));

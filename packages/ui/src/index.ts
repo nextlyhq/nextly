@@ -40,14 +40,13 @@ export { FormLabelWithTooltip } from "./components/form-label-with-tooltip";
 /** @public */
 export type { FormLabelWithTooltipProps } from "./components/form-label-with-tooltip";
 
-/** Release tags are per clause below. */
-// Components — Display
+// Components — Display. Release tags are per clause below.
 /** @public */
 export { Badge } from "./components/badge";
 
 /** @experimental */
 export { badgeVariants } from "./components/badge";
-/** @experimental */
+/** @public */
 export type { BadgeProps } from "./components/badge";
 /** @experimental */
 export {
@@ -112,9 +111,8 @@ export {
   CollapsibleContent,
 } from "./components/collapsible";
 
-/** Release tags are per clause below. */
+// Components — Radix Primitives. Release tags are per clause below.
 /** @experimental */
-// Components — Radix Primitives
 export {
   Accordion,
   AccordionItem,
@@ -145,7 +143,7 @@ export type {
 
 /** @public */
 export { Tabs, TabsList, TabsTrigger, TabsContent } from "./components/tabs";
-/** @experimental */
+/** @public */
 export type {
   TabsProps,
   TabsListProps,
@@ -167,8 +165,7 @@ export {
   PopoverAnchor,
 } from "./components/popover";
 
-/** @public Dialog. Exercised by page-builder. */
-// Components — Dialog
+// Components — Dialog. Exercised by page-builder.
 /** @public */
 export {
   Dialog,
@@ -187,15 +184,17 @@ export {
   DialogTrigger,
   dialogContentVariants,
 } from "./components/dialog";
-/** @experimental */
+/** @public Prop types carry the same guarantee as their component. */
 export type {
-  DialogOverlayProps,
   DialogContentProps,
   DialogHeaderProps,
   DialogFooterProps,
   DialogTitleProps,
   DialogDescriptionProps,
 } from "./components/dialog";
+
+/** @experimental */
+export type { DialogOverlayProps } from "./components/dialog";
 
 /** @experimental No first-party plugin depends on it yet. */
 // Components — AlertDialog
@@ -224,8 +223,7 @@ export type {
   AlertDialogCancelProps,
 } from "./components/alert-dialog";
 
-/** @public Dropdown menu. Exercised by page-builder. */
-// Components — DropdownMenu
+// Components — DropdownMenu. Exercised by page-builder.
 /** @public */
 export {
   DropdownMenu,
@@ -248,21 +246,24 @@ export {
   DropdownMenuSubTrigger,
   DropdownMenuRadioGroup,
 } from "./components/dropdown-menu";
+/** @public Prop types carry the same guarantee as their component. */
+export type {
+  DropdownMenuContentProps,
+  DropdownMenuItemProps,
+  DropdownMenuCheckboxItemProps,
+  DropdownMenuSeparatorProps,
+} from "./types/dropdown-menu";
+
 /** @experimental */
 export type {
   DropdownMenuSubTriggerProps,
   DropdownMenuSubContentProps,
-  DropdownMenuContentProps,
-  DropdownMenuItemProps,
-  DropdownMenuCheckboxItemProps,
   DropdownMenuRadioItemProps,
   DropdownMenuLabelProps,
-  DropdownMenuSeparatorProps,
   DropdownMenuShortcutProps,
 } from "./types/dropdown-menu";
 
-/** @public Select. Exercised by both first-party plugins. */
-// Components — Select
+// Components — Select. Exercised by both first-party plugins.
 /** @public */
 export {
   Select,
@@ -281,11 +282,10 @@ export {
   SelectSeparator,
   selectTriggerVariants,
 } from "./components/select";
-/** @experimental */
+/** @public */
 export type { SelectTriggerProps } from "./components/select";
 
-/** @public Sheet. Exercised by page-builder. */
-// Components — Sheet
+// Components — Sheet. Exercised by page-builder.
 /** @public */
 export {
   Sheet,
@@ -304,18 +304,22 @@ export {
   SheetFooter,
   sheetVariants,
 } from "./components/sheet";
-/** @experimental */
+/** @public */
 export type { SheetContentProps } from "./components/sheet";
-/** @experimental */
+/** @public Prop types carry the same guarantee as their component. */
 export type {
   SheetProps,
+  SheetHeaderProps,
+  SheetTitleProps,
+  SheetDescriptionProps,
+} from "./types/sheet";
+
+/** @experimental */
+export type {
   SheetTriggerProps,
   SheetCloseProps,
   SheetOverlayProps,
-  SheetHeaderProps,
   SheetFooterProps,
-  SheetTitleProps,
-  SheetDescriptionProps,
   SheetOverlayRef,
   SheetContentRef,
   SheetTitleRef,

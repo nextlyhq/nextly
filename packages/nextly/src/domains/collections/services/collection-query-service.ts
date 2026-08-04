@@ -11,33 +11,19 @@
  * - Apply field selection to filter response data
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import {
-  eq,
-  ne,
-  gt,
-  gte,
-  lt,
-  lte,
-  and,
-  or,
-  like,
-  ilike,
-  inArray,
-  notInArray,
-  isNull,
-  isNotNull,
-  sql,
-  asc,
-  desc,
-} from "drizzle-orm";
+import { eq, and, or, like, ilike, sql, asc, desc } from "drizzle-orm";
 
 import { transformRichTextFields } from "@nextly/lib/field-transform";
 import type { RichTextOutputFormat } from "@nextly/lib/rich-text-html";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
+import { isFieldGroupField } from "../../../collections/fields/guards";
 import type { FieldConfig } from "../../../collections/fields/types";
+import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
 import { getFilterRegistry, FilterSeams } from "../../../filters";
 import { toSnakeCase } from "../../../lib/case-conversion";
@@ -56,6 +42,11 @@ import type {
 } from "../../../services/collection-file-manager";
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
 import {
+  buildDrizzleCondition,
+  buildLocalizedWhereExists,
+  type LocalizedQueryContext,
+} from "../../../services/collections/drizzle-condition";
+import {
   applyGeoFilters,
   sortByDistance,
 } from "../../../services/collections/geo-utils";
@@ -68,12 +59,17 @@ import type {
   WhereFilter,
   ComponentFieldFilter,
 } from "../../../services/collections/query-operators";
-import type { ComponentDataService } from "../../../services/components/component-data-service";
+import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
-import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
+import {
+  convertTimestampsToCamelCase,
+  rehydrateSystemTimestamps,
+  SYSTEM_TIMESTAMP_KEYS,
+} from "../../../shared/lib/case-conversion";
 import {
   applyFieldReadAccess,
+  type ReadAccessRedactions,
   runFieldHooks,
 } from "../../../shared/lib/field-level-registry";
 import {
@@ -89,6 +85,7 @@ import {
 } from "../../../types/pagination";
 import type { PaginatedResponse } from "../../../types/pagination";
 import type { DynamicCollectionService } from "../../dynamic-collections";
+import { resolveTypeColumns } from "../../field-groups/storage/resolve-storage-names";
 import {
   buildCompanionExists,
   buildLocalizedOrderExpr,
@@ -96,7 +93,6 @@ import {
   populateCompanionFields,
   populateCompanionFieldsAllLocales,
   populateTranslationStatus,
-  type LocalizedFieldRef,
   type TranslationStatusFilter,
   type TranslationFilterState,
 } from "../../i18n/companion-join";
@@ -106,7 +102,15 @@ import {
   resolveFallbackChain,
   resolveRequestedLocale,
 } from "../../i18n/resolve-locale";
+import { resolveCompanionSchemaReadiness } from "../../i18n/runtime/companion-readiness";
 import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
+import {
+  buildRestorePayload,
+  type ComponentSchemas,
+} from "../../versions/restore-snapshot";
+import { resolveComponentSchemas } from "../../versions/restore-version";
+import { rehydrateSnapshotDates } from "../../versions/tag-component-types";
+import { VersionsRepository } from "../../versions/versions-repository";
 
 import type { CollectionAccessService } from "./collection-access-service";
 import type { CollectionHookService } from "./collection-hook-service";
@@ -115,28 +119,92 @@ import {
   getTableName,
   getSearchableFields,
   getMinSearchLength,
-  isJsonFieldType,
+  decodeJsonFieldValues,
 } from "./collection-utils";
 
 /**
- * Localized-query context (i18n M4c) threaded into the search/where builders so a localized
- * field filters via a companion EXISTS on the requested locale instead of being silently
- * dropped. `null`/absent → non-localized behavior (unchanged).
+ * One component-field predicate, as raw SQL against a named column.
+ *
+ * Extracted from the filter loop so it can be built once per component TABLE
+ * rather than once per filter: a `_componentType` filter over a dynamic zone
+ * spans several tables, and the storage migration can have moved the
+ * discriminator on some of them and not others.
  */
-interface LocalizedQueryContext {
-  companionTableName: string;
-  /** Localized fields with both the camelCase name (matching) and snake_case column (SQL). */
-  localizedFields: LocalizedFieldRef[];
-  /** The main table's `id` column (Drizzle) — the companion `_parent` correlation target. */
-  mainIdColumn: unknown;
-  /** The locale to filter on (the requested locale — chain head). */
-  locale: string;
-  /**
-   * Per-locale status filter (i18n M6). Set (e.g. `"published"`) when the read resolves to a
-   * single status and the collection has per-locale status, so localized where/search EXISTS
-   * checks only match companion rows in that state. Undefined = no status constraint.
-   */
-  statusValue?: string;
+function buildComponentValueCondition(
+  filter: ComponentFieldFilter,
+  dbColumnName: string,
+  dialect: string
+): ReturnType<typeof sql> | undefined {
+  let valueCondition: ReturnType<typeof sql>;
+
+  switch (filter.operator) {
+    case "equals":
+      valueCondition = sql`${sql.identifier(dbColumnName)} = ${filter.value}`;
+      break;
+    case "not_equals":
+      valueCondition = sql`${sql.identifier(dbColumnName)} != ${filter.value}`;
+      break;
+    case "greater_than":
+      valueCondition = sql`${sql.identifier(dbColumnName)} > ${filter.value}`;
+      break;
+    case "greater_than_equal":
+      valueCondition = sql`${sql.identifier(dbColumnName)} >= ${filter.value}`;
+      break;
+    case "less_than":
+      valueCondition = sql`${sql.identifier(dbColumnName)} < ${filter.value}`;
+      break;
+    case "less_than_equal":
+      valueCondition = sql`${sql.identifier(dbColumnName)} <= ${filter.value}`;
+      break;
+    case "like":
+      valueCondition = sql`${sql.identifier(dbColumnName)} LIKE ${`%${String(filter.value)}%`}`;
+      break;
+    case "contains":
+    case "search":
+      // Use ILIKE for PostgreSQL, LIKE for others
+      if (dialect === "postgresql") {
+        valueCondition = sql`${sql.identifier(dbColumnName)} ILIKE ${`%${String(filter.value)}%`}`;
+      } else {
+        valueCondition = sql`LOWER(${sql.identifier(dbColumnName)}) LIKE LOWER(${`%${String(filter.value)}%`})`;
+      }
+      break;
+    case "in": {
+      const inValues = Array.isArray(filter.value)
+        ? filter.value
+        : [filter.value];
+      if (inValues.length === 0) return undefined;
+      const inPlaceholders = sql.join(
+        inValues.map(v => sql`${v}`),
+        sql`, `
+      );
+      valueCondition = sql`${sql.identifier(dbColumnName)} IN (${inPlaceholders})`;
+      break;
+    }
+    case "not_in": {
+      const notInValues = Array.isArray(filter.value)
+        ? filter.value
+        : [filter.value];
+      if (notInValues.length === 0) return undefined;
+      const notInPlaceholders = sql.join(
+        notInValues.map(v => sql`${v}`),
+        sql`, `
+      );
+      valueCondition = sql`${sql.identifier(dbColumnName)} NOT IN (${notInPlaceholders})`;
+      break;
+    }
+    case "exists":
+      if (filter.value === true || filter.value === "true") {
+        valueCondition = sql`${sql.identifier(dbColumnName)} IS NOT NULL`;
+      } else {
+        valueCondition = sql`${sql.identifier(dbColumnName)} IS NULL`;
+      }
+      break;
+    default:
+      // An operator this builder does not implement contributes no condition.
+      return undefined;
+  }
+
+  return valueCondition;
 }
 
 export class CollectionQueryService extends BaseService {
@@ -148,7 +216,7 @@ export class CollectionQueryService extends BaseService {
     private readonly relationshipService: CollectionRelationshipService,
     private readonly accessService: CollectionAccessService,
     private readonly hookService: CollectionHookService,
-    private readonly componentDataService?: ComponentDataService,
+    private readonly fieldGroupDataService?: FieldGroupDataService,
     /**
      * Normalized localization config (i18n M4). When set and a collection is localized,
      * reads resolve translatable fields from the companion `_locales` table for the
@@ -204,6 +272,35 @@ export class CollectionQueryService extends BaseService {
    * covering every configured locale. No-op when localization is off, the request isn't
    * `locale=all`, or the collection isn't localized.
    */
+  /**
+   * Run a companion overlay, turning a driver failure into the canonical envelope.
+   *
+   * The companion reads used to swallow a failure — deciding existence by catching one is what
+   * aborted PostgreSQL transactions — so these overlays could not throw and nothing here needed to
+   * shape their errors. Now every failure propagates, and the result builders below put a bare
+   * `Error`'s own message into the response: the failed query, with companion table and column
+   * names in it.
+   *
+   * Only non-`NextlyError` failures are wrapped. One that is already typed carries a deliberate
+   * status — a refused access constraint is a 403 — and flattening it would report an
+   * authorization decision as a server fault.
+   */
+  private async overlayLocalized(
+    collectionName: string,
+    reason: string,
+    run: () => Promise<void>
+  ): Promise<void> {
+    try {
+      await run();
+    } catch (error) {
+      if (NextlyError.is(error)) throw error;
+      throw NextlyError.internal({
+        cause: error instanceof Error ? error : undefined,
+        logContext: { collection: collectionName, reason },
+      });
+    }
+  }
+
   private async populateLocalizedAll(
     collectionName: string,
     rows: Record<string, unknown>[],
@@ -218,6 +315,8 @@ export class CollectionQueryService extends BaseService {
     await populateCompanionFieldsAllLocales({
       db: this.db as never,
       companionTable: companion.table,
+      // Outside any transaction, so this may resolve rather than only read what is remembered.
+      readiness: await resolveCompanionSchemaReadiness(this.adapter, companion),
       localizedFields: companion.localizedFields,
       rows,
       locales: this.localization.locales.map(l => l.code),
@@ -249,6 +348,7 @@ export class CollectionQueryService extends BaseService {
     await populateTranslationStatus({
       db: this.db as never,
       companionTable: companion.table,
+      readiness: await resolveCompanionSchemaReadiness(this.adapter, companion),
       localizedFields: companion.localizedFields,
       rows,
       locales: this.localization.locales.map(l => l.code),
@@ -349,6 +449,7 @@ export class CollectionQueryService extends BaseService {
     await populateCompanionFields({
       db: this.db as never,
       companionTable: companion.table,
+      readiness: await resolveCompanionSchemaReadiness(this.adapter, companion),
       localizedFields: companion.localizedFields,
       rows,
       localeChain,
@@ -360,104 +461,193 @@ export class CollectionQueryService extends BaseService {
   }
 
   /**
-   * Build a companion EXISTS condition for a where-filter on a localized field (i18n M4c).
-   * Maps the where operator to a SQL predicate on the companion column for the requested locale.
-   * Returns `undefined` for operators not supported over the companion (caller falls through).
-   */
-  private buildLocalizedWhereExists(
-    ctx: LocalizedQueryContext,
-    column: string,
-    op: string,
-    value: unknown,
-    dialect: string
-  ): ReturnType<typeof sql> | undefined {
-    const t = sql.identifier(ctx.companionTableName);
-    const col = sql.identifier(column);
-    let valueCondition: ReturnType<typeof sql> | undefined;
-    switch (op) {
-      case "=":
-        valueCondition = sql`${t}.${col} = ${value}`;
-        break;
-      case "!=":
-        valueCondition = sql`${t}.${col} <> ${value}`;
-        break;
-      case ">":
-        valueCondition = sql`${t}.${col} > ${value}`;
-        break;
-      case ">=":
-        valueCondition = sql`${t}.${col} >= ${value}`;
-        break;
-      case "<":
-        valueCondition = sql`${t}.${col} < ${value}`;
-        break;
-      case "<=":
-        valueCondition = sql`${t}.${col} <= ${value}`;
-        break;
-      case "LIKE":
-        valueCondition = sql`${t}.${col} LIKE ${value}`;
-        break;
-      case "ILIKE":
-        valueCondition =
-          dialect === "postgresql"
-            ? sql`${t}.${col} ILIKE ${value}`
-            : sql`${t}.${col} LIKE ${value}`;
-        break;
-      case "IS NULL": {
-        // A localized field is absent for the locale when no companion row holds
-        // a value — an untranslated entry usually has no companion row at all.
-        // Match those with NOT EXISTS(row with a value) rather than
-        // EXISTS(col IS NULL), which would require a companion row to exist.
-        const present = buildCompanionExists({
-          companionTableName: ctx.companionTableName,
-          mainIdColumn: ctx.mainIdColumn,
-          locale: ctx.locale,
-          valueCondition: sql`${t}.${col} IS NOT NULL`,
-          statusValue: ctx.statusValue,
-        });
-        return sql`NOT ${present}`;
-      }
-      case "IS NOT NULL":
-        valueCondition = sql`${t}.${col} IS NOT NULL`;
-        break;
-      case "IN":
-        if (Array.isArray(value) && value.length > 0) {
-          // Expand the array into an SQL list; a bare array bind would emit
-          // `col IN $1` and compare against the whole array as one value.
-          const inList = sql.join(
-            value.map(v => sql`${v}`),
-            sql`, `
-          );
-          valueCondition = sql`${t}.${col} IN (${inList})`;
-        }
-        break;
-      case "NOT IN":
-        if (Array.isArray(value) && value.length > 0) {
-          // Expand into an SQL list, mirroring the IN case; without this the
-          // localized not_in filter is silently dropped and excludes nothing.
-          const notInList = sql.join(
-            value.map(v => sql`${v}`),
-            sql`, `
-          );
-          valueCondition = sql`${t}.${col} NOT IN (${notInList})`;
-        }
-        break;
-      default:
-        return undefined;
-    }
-    if (!valueCondition) return undefined;
-    return buildCompanionExists({
-      companionTableName: ctx.companionTableName,
-      mainIdColumn: ctx.mainIdColumn,
-      locale: ctx.locale,
-      valueCondition,
-      statusValue: ctx.statusValue,
-    });
-  }
-
-  /**
    * Build the localized-query context for the search/where builders, or `null` when the
    * collection isn't localized. Uses the requested locale (chain head) for EXISTS filtering.
    */
+  /**
+   * Run the hooks that precede a where-filtered read and return the filter they
+   * settled on.
+   *
+   * The chain is the caller's own filter, then `beforeOperation`'s `args.where`,
+   * then `beforeRead`'s return, and each stage is shown the previous stage's
+   * result. Stating it in one place matters twice over: a hook cannot narrow a
+   * filter it was never shown, and a list and its count have to narrow
+   * identically or the total describes rows the list correctly withheld.
+   *
+   * The `CollectionsListQuery` filter seam runs after this, on what this
+   * returns.
+   *
+   * With no hooks registered both calls hand back what they were given, so the
+   * caller's filter reaches the query untouched.
+   */
+  /**
+   * The collections whose read hooks are running on this async call stack.
+   *
+   * A read handler may read again -- a `count()` for a quota, a `findByID()`
+   * for related state -- and that was safe while a count ran no hooks. Now
+   * that every read path runs them, a nested read of the collection the
+   * handler is already running for would call that handler a second time, and
+   * so on without end.
+   *
+   * Scoped per collection, not per call stack: a nested read of a DIFFERENT
+   * collection is an ordinary read and must run that collection's own hooks.
+   * Those hooks may be what scopes it to a tenant or hides soft-deleted rows,
+   * so suppressing them would hand the handler rows the other collection
+   * withholds -- a silent widening, which is worse than the recursion this
+   * guards against.
+   *
+   * Keyed by collection rather than by individual handler because handlers can
+   * cycle in pairs (a handler on A reads B, a handler on B reads A) and only a
+   * per-collection key breaks that. The cost is that a handler re-reading its
+   * own collection runs unhooked, which is what such handlers were written
+   * against.
+   */
+  private static readonly activeReadHookCollections = new AsyncLocalStorage<
+    ReadonlySet<string>
+  >();
+
+  /** True when this collection's read hooks are already running up-stack. */
+  private static readHooksActiveFor(collectionName: string): boolean {
+    return (
+      CollectionQueryService.activeReadHookCollections
+        .getStore()
+        ?.has(collectionName) ?? false
+    );
+  }
+
+  /**
+   * Runs `run` with this collection marked active, preserving any collection
+   * already marked so an A-reads-B-reads-A cycle still terminates.
+   */
+  private static withReadHookScope<T>(
+    collectionName: string,
+    run: () => Promise<T>
+  ): Promise<T> {
+    const active = CollectionQueryService.activeReadHookCollections.getStore();
+    const nested = new Set(active ?? []);
+    nested.add(collectionName);
+    return CollectionQueryService.activeReadHookCollections.run(nested, run);
+  }
+
+  private async resolveReadWhere(params: {
+    collectionName: string;
+    where: WhereFilter | undefined;
+    user?: UserContext;
+    sharedContext: Record<string, unknown>;
+  }): Promise<WhereFilter | undefined> {
+    // Already inside this collection's read hooks: the call came from one of
+    // its own handlers, so it uses the filter it was given and runs nothing.
+    if (CollectionQueryService.readHooksActiveFor(params.collectionName)) {
+      return params.where;
+    }
+    const seededWhere = params.where ?? {};
+    return CollectionQueryService.withReadHookScope(
+      params.collectionName,
+      async () => {
+        const beforeOpArgs =
+          await this.hookService.hookRegistry.executeBeforeOperation({
+            collection: params.collectionName,
+            operation: "read",
+            // An object, for the same reason `beforeRead` gets one below: a
+            // handler scoping in place (`ctx.args.where.tenant = ...`) would
+            // otherwise throw on every unfiltered read instead of adding its
+            // predicate. The settled filter keeps `undefined` as its own value.
+            args: { where: seededWhere },
+            user: params.user
+              ? { id: params.user.id, email: params.user.email }
+              : undefined,
+            context: params.sharedContext,
+          });
+
+        // Returning an args object replaces the arguments wholesale, so a handler
+        // that omits `where` -- or sets it to `undefined` -- is clearing the filter,
+        // not declining to change it. Only the absence of a returned object leaves
+        // the caller's filter in place.
+        // The seeded object is an input convenience, not a filter. If it comes
+        // back untouched and still empty, the read has no filter -- turning that
+        // into `{}` would make every downstream `if (where)` believe one exists.
+        const returnedWhere = beforeOpArgs ? beforeOpArgs.where : params.where;
+        const afterBeforeOperation = (
+          returnedWhere === seededWhere && Object.keys(seededWhere).length === 0
+            ? params.where
+            : returnedWhere
+        ) as WhereFilter | undefined;
+
+        const beforeReadResult = await this.hookService.hookRegistry.execute(
+          "beforeRead",
+          this.hookService.buildHookContext({
+            collection: params.collectionName,
+            operation: "read" as const,
+            // Always an object: handlers documented as "modify query parameters"
+            // assign onto it in place, and handing them `undefined` would throw on
+            // every unfiltered read rather than adding their predicate.
+            data: afterBeforeOperation ?? {},
+            user: params.user,
+            context: params.sharedContext,
+          })
+        );
+
+        // `undefined` means the hook returned nothing, so the filter is unchanged;
+        // `null` is a deliberate return the registry preserves, and it means the
+        // hook cleared the filter. Collapsing the two would leave a hook unable to
+        // widen a read it had decided should not be narrowed.
+        if (beforeReadResult === undefined) return afterBeforeOperation;
+        return beforeReadResult ?? undefined;
+      }
+    );
+  }
+
+  /**
+   * The detail read's half of {@link resolveReadWhere}: runs `beforeOperation`
+   * and `beforeRead` for a read by id and returns the id they settled on.
+   *
+   * Deliberately the same check-then-enter shape as the list half. A detail
+   * read reached from another read's handler must skip its hooks for the same
+   * reason a nested list does, and holding both to one shape is what keeps the
+   * guard from being applied to one path and not the other.
+   */
+  private async resolveReadEntryId(params: {
+    collectionName: string;
+    entryId: string;
+    user?: UserContext;
+    sharedContext: Record<string, unknown>;
+  }): Promise<string> {
+    if (CollectionQueryService.readHooksActiveFor(params.collectionName)) {
+      return params.entryId;
+    }
+    return CollectionQueryService.withReadHookScope(
+      params.collectionName,
+      async () => {
+        const beforeOpArgs =
+          await this.hookService.hookRegistry.executeBeforeOperation({
+            collection: params.collectionName,
+            operation: "read",
+            args: { id: params.entryId },
+            user: params.user
+              ? { id: params.user.id, email: params.user.email }
+              : undefined,
+            context: params.sharedContext,
+          });
+
+        // Use the modified id when beforeOperation returned one.
+        const resolvedId = beforeOpArgs?.id ?? params.entryId;
+
+        await this.hookService.hookRegistry.execute(
+          "beforeRead",
+          this.hookService.buildHookContext({
+            collection: params.collectionName,
+            operation: "read" as const,
+            data: { entryId: resolvedId },
+            user: params.user,
+            context: params.sharedContext,
+          })
+        );
+
+        return resolvedId;
+      }
+    );
+  }
+
   private buildLocalizedQueryContext(
     companion: CompanionSchema | null,
     localeChain: string[] | null,
@@ -703,44 +893,27 @@ export class CollectionQueryService extends BaseService {
       // Seed with caller's context if provided (e.g., from Direct API)
       const sharedContext: Record<string, unknown> = { ...params.context };
 
-      // Execute beforeOperation hooks FIRST (before operation-specific hooks)
-      // Can modify operation arguments or throw to abort
-      const beforeOpArgs =
-        await this.hookService.hookRegistry.executeBeforeOperation({
-          collection: params.collectionName,
-          operation: "read",
-          args: { where: {} }, // List operations can have where clause modified
-          user: params.user
-            ? { id: params.user.id, email: params.user.email }
-            : undefined,
-          context: sharedContext,
-        });
-
-      // Extract modified where clause if returned (for future query filtering)
-      const whereFromHook = beforeOpArgs?.where;
-
-      // Execute beforeRead hooks
-      // Hooks can be used to modify query parameters or add filters
-      const beforeContext = this.hookService.buildHookContext({
-        collection: params.collectionName,
-        operation: "read" as const,
-        data: whereFromHook ?? {}, // Pass where clause as data for beforeRead
+      // The read hooks settle the filter before any seam or constraint touches
+      // it, so `beforeOperation` and `beforeRead` both narrow the rows actually
+      // returned rather than being computed and dropped.
+      const hookedWhere = await this.resolveReadWhere({
+        collectionName: params.collectionName,
+        where: params.where,
         user: params.user,
-        context: sharedContext,
+        sharedContext,
       });
 
-      await this.hookService.hookRegistry.execute("beforeRead", beforeContext);
-
       // D63 seam: let plugins transform the structured list-query `where`.
-      // Guarded by hasFilters so default behavior (no plugins) is unchanged —
-      // we do NOT activate the dormant beforeOperation `whereFromHook` path here.
+      // Guarded by hasFilters so default behavior (no plugins) is unchanged. It
+      // runs last, on what the hooks settled, because it is the only one of the
+      // three that was already live.
       const filterRegistry = getFilterRegistry();
       const listQueryWhere = filterRegistry.hasFilters(
         FilterSeams.CollectionsListQuery
       )
         ? await filterRegistry.applyFilters(
             FilterSeams.CollectionsListQuery,
-            params.where ?? {},
+            hookedWhere ?? {},
             {
               collection: params.collectionName,
               userId: params.user?.id,
@@ -748,7 +921,7 @@ export class CollectionQueryService extends BaseService {
               limit: params.limit,
             }
           )
-        : params.where;
+        : hookedWhere;
 
       // Build base query using Drizzle (via BaseService db compatibility layer)
       let query = this.db.select().from(schema);
@@ -897,12 +1070,21 @@ export class CollectionQueryService extends BaseService {
       const tableName = getTableName(params.collectionName);
 
       // Build component field EXISTS conditions
+      const componentTables =
+        await this.resolveComponentTableNames(componentFilters);
+      // Kept so the count over these same filters can reuse them instead of
+      // repeating the registry lookup and the catalog introspection.
+      const componentTypeColumns = await this.resolveComponentTypeColumns(
+        componentFilters,
+        componentTables.values()
+      );
       const componentCondition = this.buildComponentFieldConditions(
         componentFilters,
         tableName,
         schema.id,
         dialect,
-        await this.resolveComponentTableNames(componentFilters)
+        componentTables,
+        componentTypeColumns
       );
 
       // Apply component field conditions to query
@@ -1095,7 +1277,21 @@ export class CollectionQueryService extends BaseService {
             collectionName: params.collectionName,
             user: params.user,
             search: params.search,
-            where: cleanedWhere, // Use cleaned where (without geo operators)
+            // Resolved once for this request; see the parameter's own note.
+            resolvedComponentTables: componentTables,
+            resolvedComponentTypeColumns: componentTypeColumns,
+            // Geo operators removed (the count cannot apply them), but component
+            // predicates kept: `cleanedWhere` has BOTH stripped, and the count
+            // builds its own EXISTS conditions from the ones it is given. Sending
+            // the component-stripped filter counts rows the page excluded, so a
+            // read filtered on `seo.metaTitle` reported a total describing rows
+            // it had correctly withheld.
+            where: whereAfterGeo,
+            // The read hooks already ran for this request and `cleanedWhere`
+            // is what they settled on. Running them again here would fire every
+            // side effect twice -- an audit entry, a rate-limit tick -- for one
+            // list call.
+            readHooksAlreadyRan: true,
             // The `_translated` language filter was stripped from `cleanedWhere` for
             // the list query; pass it explicitly so the count applies the same filter.
             // Without it the count ignores the filter and over-counts
@@ -1137,28 +1333,43 @@ export class CollectionQueryService extends BaseService {
       // i18n M4: resolve localized fields for the whole page from the companion table
       // (batch — one query for all rows), with fallback, BEFORE relationship/component
       // expansion and hooks. Reuses the companion loaded above. No-op when non-localized.
-      await this.populateLocalized(
+      await this.overlayLocalized(
         params.collectionName,
-        entries,
-        localeChain,
-        companion,
-        statusFilter?.value ?? null // i18n M6: per-locale published filter
+        "translation-load-failed",
+        () =>
+          this.populateLocalized(
+            params.collectionName,
+            entries,
+            localeChain,
+            companion,
+            statusFilter?.value ?? null // i18n M6: per-locale published filter
+          )
       );
       // `locale=all` → language-keyed values per localized field (admin/export).
-      await this.populateLocalizedAll(
+      await this.overlayLocalized(
         params.collectionName,
-        entries,
-        params.locale,
-        companion,
-        statusFilter?.value ?? null // i18n M6: per-locale published filter
+        "translation-projection-failed",
+        () =>
+          this.populateLocalizedAll(
+            params.collectionName,
+            entries,
+            params.locale,
+            companion,
+            statusFilter?.value ?? null // i18n M6: per-locale published filter
+          )
       );
       // i18n M7: per-locale translation-status map for the admin overview (opt-in).
       if (params.translationStatus) {
-        await this.populateTranslationMeta(
+        await this.overlayLocalized(
           params.collectionName,
-          entries,
-          companion,
-          statusFilter?.value ?? null // i18n M6: per-locale published filter
+          "translation-overview-failed",
+          () =>
+            this.populateTranslationMeta(
+              params.collectionName,
+              entries,
+              companion,
+              statusFilter?.value ?? null // i18n M6: per-locale published filter
+            )
         );
       }
 
@@ -1190,8 +1401,25 @@ export class CollectionQueryService extends BaseService {
             // collection's field rules say nothing about another collection's
             // fields — so the caller has to reach the related row's own rules.
             enforceFieldAccess: true,
+            // This path finishes with the post-assembly pass, so the target's
+            // field rules run there, after its masking hooks have seen a whole
+            // row.
+            fieldAccessStage: "assembled" as const,
             user: params.user,
             overrideAccess: params.overrideAccess,
+            authenticatedScope: params.authenticatedScope,
+            // The language this read resolved to, so a target collection whose
+            // read rule filters on a localized field can have that filter
+            // applied against the right companion rows instead of withholding.
+            locale: localeChain?.[0],
+            // Only "read everything" propagates, and only when the caller
+            // actually asked for it. Deriving this from the parent having
+            // resolved to no filter would unfilter every target behind a
+            // status-less collection.
+            status:
+              params.status === "all" || params.overrideAccess === true
+                ? "all"
+                : undefined,
           }
         );
 
@@ -1199,9 +1427,9 @@ export class CollectionQueryService extends BaseService {
       // Uses WHERE _parent_id IN (...) for N+1 prevention
       // Pass depth for relationship expansion within component data
       // Pass select to skip component fields excluded from selection (performance optimization)
-      if (this.componentDataService) {
+      if (this.fieldGroupDataService) {
         expandedEntries =
-          await this.componentDataService.populateComponentDataMany({
+          await this.fieldGroupDataService.populateComponentDataMany({
             entries: expandedEntries,
             parentTable: getTableName(params.collectionName),
             fields: fields as FieldConfig[],
@@ -1221,6 +1449,22 @@ export class CollectionQueryService extends BaseService {
               enforceFieldAccess: true,
               user: params.user,
               overrideAccess: params.overrideAccess,
+              authenticatedScope: params.authenticatedScope,
+              // Shared across every component row this listing expands, so
+              // rows pointing at the same target resolve its policy once.
+              targetPolicies: new Map(),
+              targetCompanions: new Map(),
+              // A relationship inside a component points at a collection whose
+              // read rule may filter on one of its own localized fields.
+              locale: localeChain?.[0],
+              // Only "read everything" propagates, and only when the caller
+              // actually asked for it. Deriving this from the parent having
+              // resolved to no filter would unfilter every target behind a
+              // status-less collection.
+              status:
+                params.status === "all" || params.overrideAccess === true
+                  ? "all"
+                  : undefined,
             },
           });
       }
@@ -1283,6 +1527,61 @@ export class CollectionQueryService extends BaseService {
         stripSystemOwnerField(entry);
       }
 
+      // Decode before any afterRead hook runs. A hook is documented against the
+      // configured value, and on SQLite these columns are strings, so decoding
+      // after the hooks handed every one of them the storage encoding instead.
+      decodeJsonFieldValues(expandedEntries, fields, params.locale);
+
+      // A related row's own field hooks run BEFORE this collection's afterRead
+      // hooks can observe it, and before field selection narrows it.
+      //
+      // Before the collection's hooks, because one of them can copy a related
+      // row's value onto a root property of its own; the traversal masks the
+      // nested field it walked, never the copy, so a hook handed an unmasked
+      // target could publish it under a key nothing sanitizes. That is the same
+      // reason password hashes are stripped above rather than after.
+      //
+      // Before selection, because selection rebuilds each related row as a fresh
+      // object holding only the projected paths, so a hook masking on a sibling
+      // -- `select: { "author.secret": true }` while the rule reads
+      // `organization.classification` -- would be handed a row with its evidence
+      // missing and fall open.
+      //
+      // Every populated related row is walked, including one under a
+      // relationship the projection drops. Skipping those would leave them on
+      // the document unmasked for the hooks below to read and copy elsewhere,
+      // and the skip could not be honoured coherently in any case: batch
+      // expansion shares one row object between parents, so a row reachable
+      // through both a kept and a dropped relationship would end up masked or
+      // not depending on which reference the traversal happened to meet first.
+      //
+      // One state for the whole listing, for that same sharing: a per-entry pass
+      // would run a shared row's hooks once per reference.
+      const nestedHookState = this.relationshipService.createNestedHookState();
+      const nestedAccess = {
+        enforceFieldAccess: true,
+        user: params.user,
+        overrideAccess: params.overrideAccess,
+        authenticatedScope: params.authenticatedScope,
+      };
+      for (const entry of expandedEntries) {
+        await this.relationshipService.applyNestedFieldHooks(
+          entry,
+          params.collectionName,
+          nestedAccess,
+          nestedHookState
+        );
+      }
+      // Once, after the whole listing: the walk already applied field access to
+      // each related row before its parent's hooks; this re-applies it (restoring
+      // the removed evidence and re-judging the current content) to strip a denied
+      // field a parent hook reintroduced, mutated, or added, then rebuilds labels
+      // from the survivors.
+      await this.relationshipService.finalizeRelatedRows(
+        nestedHookState,
+        nestedAccess
+      );
+
       // Execute afterRead hooks (code-registered)
       // Hooks can transform the fetched data
       const afterContext = this.hookService.buildHookContext({
@@ -1299,6 +1598,18 @@ export class CollectionQueryService extends BaseService {
       );
       const dataAfterCodeHooks = (transformedData ??
         expandedEntries) as unknown[];
+
+      // A code hook may have RETURNED a reshaped related row carrying a denied
+      // field; sanitize now, before the stored and field-level hooks run, so one
+      // of them cannot read that field and copy it onto an allowed source key the
+      // final pass no longer looks at. The authoritative pass is idempotent over
+      // the shared walk state, so running it after each source phase is safe.
+      await this.relationshipService.reprojectRelatedRows(
+        dataAfterCodeHooks as Record<string, unknown>[],
+        params.collectionName,
+        nestedAccess,
+        nestedHookState
+      );
 
       // Execute stored afterRead hooks (UI-configured)
       const storedAfterResult =
@@ -1318,15 +1629,6 @@ export class CollectionQueryService extends BaseService {
       let finalData = (storedAfterResult.data ??
         dataAfterCodeHooks) as unknown[];
 
-      // Apply field selection if select parameter is provided
-      // This filters the response to only include requested fields
-      if (params.select && Object.keys(params.select).length > 0) {
-        finalData = this.applyFieldSelectionToArray(
-          finalData as Record<string, unknown>[],
-          params.select
-        );
-      }
-
       // Convert snake_case timestamp columns to their camelCase API form.
       finalData = (finalData as Record<string, unknown>[]).map(entry =>
         convertTimestampsToCamelCase(entry)
@@ -1340,45 +1642,37 @@ export class CollectionQueryService extends BaseService {
         }
       }
 
-      // Deserialize JSON fields (richtext, blocks, array, group, json) for all entries
-      finalData = (finalData as Record<string, unknown>[]).map(entry => {
-        fields.forEach(field => {
-          if (!isJsonFieldType(field.type, field)) return;
-          const value = entry[field.name];
-          if (typeof value === "string") {
-            try {
-              entry[field.name] = JSON.parse(value);
-            } catch {
-              // If parsing fails, keep as string
-            }
-          } else if (
-            params.locale === "all" &&
-            value !== null &&
-            typeof value === "object"
-          ) {
-            // locale=all yields a language-keyed map of raw companion values;
-            // parse each locale's JSON string so nested shapes match the
-            // parsed objects a single-locale read returns.
-            const keyed = value as Record<string, unknown>;
-            for (const code of Object.keys(keyed)) {
-              if (typeof keyed[code] === "string") {
-                try {
-                  keyed[code] = JSON.parse(keyed[code]);
-                } catch {
-                  // If parsing fails, keep as string
-                }
-              }
-            }
-          }
-        });
-
-        return entry;
-      });
+      // A stored hook may likewise have reintroduced a denied related field;
+      // sanitize before the field-level hooks read the assembled document.
+      await this.relationshipService.reprojectRelatedRows(
+        finalData as Record<string, unknown>[],
+        params.collectionName,
+        nestedAccess,
+        nestedHookState
+      );
 
       // Field-level afterRead hooks + read access (code-first functions
       // resolved via the field-level registry): hooks may transform values;
-      // fields whose access.read denies are stripped from the response.
+      // fields whose access.read denies are stripped from the response. Access is
+      // applied BEFORE the hooks and AGAIN after, sharing a redactions store: the
+      // first pass hides a denied source field from the hooks — so a hook on a
+      // selected, allowed field cannot read a denied sibling and copy it onto its
+      // own value (selection now runs last and no longer projects such a sibling out
+      // first) — while restoring each removed value as evidence in the second pass
+      // keeps a conditional rule judging against the whole row and catches a denied
+      // field a hook reintroduced. Runs on the whole rows, before selection.
       for (const entry of finalData as Record<string, unknown>[]) {
+        const sourceRedactions: ReadAccessRedactions = new WeakMap();
+        await applyFieldReadAccess(
+          {
+            kind: "collection",
+            slug: params.collectionName,
+            entry,
+            user: params.user,
+            overrideAccess: params.overrideAccess,
+          },
+          sourceRedactions
+        );
         await runFieldHooks({
           kind: "collection",
           slug: params.collectionName,
@@ -1387,13 +1681,41 @@ export class CollectionQueryService extends BaseService {
           operation: "read",
           user: params.user,
         });
-        await applyFieldReadAccess({
-          kind: "collection",
-          slug: params.collectionName,
-          entry,
-          user: params.user,
-          overrideAccess: params.overrideAccess,
-        });
+        await applyFieldReadAccess(
+          {
+            kind: "collection",
+            slug: params.collectionName,
+            entry,
+            user: params.user,
+            overrideAccess: params.overrideAccess,
+          },
+          sourceRedactions
+        );
+      }
+
+      // Authoritative related-row sanitization: re-apply each related row's OWN
+      // collection field access over the ASSEMBLED response, after EVERY source
+      // afterRead hook phase above (code, stored, and field-level). Those hooks
+      // can write a denied target field back onto a related row, or return a
+      // reshaped document whose related rows are new objects the earlier walk
+      // never held; the root access pass above knows only this collection's
+      // schema and never descends into a related row. Before selection, so it
+      // judges whole rows with their sibling evidence intact.
+      await this.relationshipService.reprojectRelatedRows(
+        finalData as Record<string, unknown>[],
+        params.collectionName,
+        nestedAccess,
+        nestedHookState
+      );
+
+      // Apply field selection if select parameter is provided. Last of the
+      // sanitizing steps, so every hook and access pass above judged the whole
+      // row rather than the projected slice.
+      if (params.select && Object.keys(params.select).length > 0) {
+        finalData = this.applyFieldSelectionToArray(
+          finalData as Record<string, unknown>[],
+          params.select
+        );
       }
 
       // Transform rich text fields to requested format (html, both)
@@ -1449,6 +1771,11 @@ export class CollectionQueryService extends BaseService {
         statusCode,
         message,
         data: null,
+        // A boundary can only rebuild what the envelope carried. Recording the
+        // status alone left a read hook's `rateLimited()` or `authRequired()`
+        // arriving at the caller as a generic 500, because the code-keyed
+        // rebuild had no code to key on.
+        ...errorEnvelopeFields(error),
       };
     }
   }
@@ -1463,8 +1790,12 @@ export class CollectionQueryService extends BaseService {
    * Security checks are applied in order:
    * 1. Collection-level access (AccessControlService)
    *
-   * Note: Hooks are NOT executed for count operations as there is no
-   * document data to transform. This provides optimal performance.
+   * Runs the read hooks that precede a query -- `beforeOperation` and
+   * `beforeRead` -- so the total describes the rows a list would return. There
+   * is no after phase: those reshape a document, and a count has none.
+   *
+   * Skipped when the caller sets `readHooksAlreadyRan`, which `listEntries`
+   * does for the count it takes for its own total.
    *
    * @param params - Collection name, optional user context, and optional search query
    * @returns Count result with totalDocs or error
@@ -1529,12 +1860,30 @@ export class CollectionQueryService extends BaseService {
     /** Fallback control (`false`/`"none"` disables fallback). */
     fallbackLocale?: string | false;
     /**
+     * Set by `listEntries`, which has already run the read hooks for this
+     * request and forwards the filter they settled on. A standalone count runs
+     * them itself, so the total answers the same question as a list would.
+     */
+    readHooksAlreadyRan?: boolean;
+    /**
      * Language filter, already extracted by the caller (listEntries). When present it is
      * applied directly instead of re-extracting `_translated` from `where` — listEntries strips
      * `_translated` from the where it forwards, so re-extraction would find nothing and the count
      * would over-count.
      */
     translationFilter?: TranslationStatusFilter;
+    /**
+     * Component table names and discriminator columns, already resolved by the
+     * caller (listEntries) for this same request.
+     *
+     * The list path resolves both to build its page, then asks for a total over
+     * the same filters, so without this the count repeats a registry lookup per
+     * component slug and a catalog introspection per table: column and index
+     * reads on Postgres and MySQL, a PRAGMA each on SQLite. A standalone count
+     * omits them and resolves its own.
+     */
+    resolvedComponentTables?: Map<string, string>;
+    resolvedComponentTypeColumns?: Map<string, string>;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
   }): Promise<CollectionServiceResult<{ totalDocs: number }>> {
@@ -1563,6 +1912,36 @@ export class CollectionQueryService extends BaseService {
       const schema = await this.fileManager.loadDynamicSchema(
         params.collectionName
       );
+
+      // A standalone count runs the read hooks for the same reason it mirrors
+      // every other listEntries filter: the total has to describe the rows a
+      // list would return. Skipped when listEntries already ran them and
+      // forwarded what they settled on.
+      const countWhere = params.readHooksAlreadyRan
+        ? params.where
+        : await this.resolveReadWhere({
+            collectionName: params.collectionName,
+            where: params.where,
+            user: params.user,
+            sharedContext: { ...params.context },
+          });
+
+      // A count cannot apply geo predicates: `listEntries` evaluates them in
+      // memory over the rows it fetched, and there are no rows here.
+      // `buildWhereClause` emits no SQL for them, so leaving one in place would
+      // return a total describing every candidate the geo filter was meant to
+      // exclude. Refusing says so instead of answering wrongly.
+      const { geoFilters: countGeoFilters } = extractGeoFilters(countWhere);
+      if (countGeoFilters.length > 0) {
+        throw NextlyError.invalidInput({
+          message:
+            "A geo filter cannot be counted. Geo predicates are evaluated over fetched rows, so they apply to a list but not to a count; remove the geo operator or take the total from the list instead.",
+          logContext: {
+            collection: params.collectionName,
+            operators: countGeoFilters.map(f => f.operator),
+          },
+        });
+      }
 
       // i18n M4c: mirror listEntries' localized-query context so a locale-scoped search/where
       // counts the SAME rows the page returns (count==list parity).
@@ -1658,13 +2037,13 @@ export class CollectionQueryService extends BaseService {
         }
       }
 
-      // apply the `_translated` language filter regardless of `params.where` — when it
+      // apply the `_translated` language filter regardless of `countWhere` — when it
       // is the ONLY filter, listEntries forwards `where: undefined` (the key having been stripped)
       // and passes the filter via `translationFilter`. Applying it here (not inside the
-      // `if (params.where)` block below) keeps count == list so pagination totals stay correct.
+      // `if (countWhere)` block below) keeps count == list so pagination totals stay correct.
       const countTranslationFilter =
         params.translationFilter ??
-        this.extractTranslationStatusFilter(params.where).filter;
+        this.extractTranslationStatusFilter(countWhere).filter;
       if (countTranslationFilter) {
         const translationCondition =
           await this.buildTranslationStatusFilterCondition(
@@ -1676,7 +2055,7 @@ export class CollectionQueryService extends BaseService {
       }
 
       // Apply where clause if provided
-      if (params.where) {
+      if (countWhere) {
         // Determine database dialect for ILIKE vs LIKE
         const dialect = this.adapter?.dialect || "postgresql";
 
@@ -1700,7 +2079,7 @@ export class CollectionQueryService extends BaseService {
         // Strip the `_translated` key before the component extractor (which drops unrecognized
         // object keys). The filter itself was already applied above.
         const { cleanedWhere: whereWithoutTranslation } =
-          this.extractTranslationStatusFilter(params.where);
+          this.extractTranslationStatusFilter(countWhere);
 
         // Extract component field conditions (e.g., 'seo.metaTitle')
         const { componentFilters, cleanedWhere } =
@@ -1713,12 +2092,20 @@ export class CollectionQueryService extends BaseService {
         const tableName = getTableName(params.collectionName);
 
         // Build component field EXISTS conditions
+        const componentTables =
+          params.resolvedComponentTables ??
+          (await this.resolveComponentTableNames(componentFilters));
         const componentCondition = this.buildComponentFieldConditions(
           componentFilters,
           tableName,
           schema.id,
           dialect,
-          await this.resolveComponentTableNames(componentFilters)
+          componentTables,
+          params.resolvedComponentTypeColumns ??
+            (await this.resolveComponentTypeColumns(
+              componentFilters,
+              componentTables.values()
+            ))
         );
 
         if (componentCondition) {
@@ -1839,6 +2226,9 @@ export class CollectionQueryService extends BaseService {
         statusCode: NextlyError.is(error) ? error.statusCode : 500,
         message,
         data: null,
+        // Same reason as listEntries: without the code the boundary rebuilds a
+        // typed refusal as a generic internal error.
+        ...errorEnvelopeFields(error),
       };
     }
   }
@@ -1932,6 +2322,17 @@ export class CollectionQueryService extends BaseService {
      * copy). Undefined for session/system callers.
      */
     authenticatedScope?: AuthenticatedScope;
+    /**
+     * Whether the caller is an editor asking to SEE the working draft (pending
+     * unpublished edits) in place of the live row. Opt-in on purpose: a
+     * status-less read is the default for many internal callers (duplicate,
+     * reference labels), and they must keep seeing the published row, so draft
+     * visibility follows an explicit editor-view intent rather than every
+     * status-less read. Still gated by trust below (overrideAccess, or an actual
+     * update-capability decision against the loaded row), so setting it does not
+     * expose a draft to a caller who cannot edit the document.
+     */
+    includeWorkingDraft?: boolean;
   }): Promise<CollectionServiceResult> {
     try {
       const accessUser = params.overrideAccess ? undefined : params.user;
@@ -1960,33 +2361,14 @@ export class CollectionQueryService extends BaseService {
       // Shared context between all hooks in this request
       const sharedContext: Record<string, unknown> = { ...params.context };
 
-      // Execute beforeOperation hooks FIRST (before operation-specific hooks)
-      // Can modify operation arguments (id) or throw to abort
-      const beforeOpArgs =
-        await this.hookService.hookRegistry.executeBeforeOperation({
-          collection: params.collectionName,
-          operation: "read",
-          args: { id: params.entryId },
-          user: params.user
-            ? { id: params.user.id, email: params.user.email }
-            : undefined,
-          context: sharedContext,
-        });
-
-      // Use modified id if returned by beforeOperation
-      const entryId = beforeOpArgs?.id ?? params.entryId;
-
-      // Execute beforeRead hooks
-      // Hooks can be used to modify query parameters or add filters
-      const beforeContext = this.hookService.buildHookContext({
-        collection: params.collectionName,
-        operation: "read" as const,
-        data: { entryId },
+      // `beforeOperation` runs first and may rewrite the id, then `beforeRead`
+      // sees the id it settled on.
+      const entryId = await this.resolveReadEntryId({
+        collectionName: params.collectionName,
+        entryId: params.entryId,
         user: params.user,
-        context: sharedContext,
+        sharedContext,
       });
-
-      await this.hookService.hookRegistry.execute("beforeRead", beforeContext);
 
       // When read access is `owner-only`, fold the ownership
       // predicate into the SQL WHERE clause. A non-owner gets a 404
@@ -2019,8 +2401,28 @@ export class CollectionQueryService extends BaseService {
       const ownerCondition = ownerConstraint
         ? eq(schema[ownerConstraint.field], ownerConstraint.value)
         : null;
+      // An explicit `status: "draft"` view that opts into the working draft must
+      // not filter the live row to draft-only: the split keeps the main row
+      // published, so that predicate would 404 before the overlay below can
+      // surface the pending draft. Drop it for a drafts-enabled collection when
+      // `includeWorkingDraft` is set; the overlay returns the draft (or the live
+      // row when none exists). Every other status filter is applied as usual.
+      const suppressDraftStatusFilter =
+        params.includeWorkingDraft === true &&
+        statusFilter?.value === "draft" &&
+        // Only in the split's own domain: a non-localized status collection with
+        // drafts on. Outside it (a localized collection, or one with no status
+        // column) the normal draft predicate must stand, so a draft-status read
+        // still filters correctly and the no-draft 404 below does not apply.
+        (collectionForStatus as { status?: boolean }).status === true &&
+        (collectionForStatus as { localized?: boolean }).localized !== true &&
+        (
+          collectionForStatus as {
+            versions?: { drafts?: { enabled?: boolean } };
+          }
+        ).versions?.drafts?.enabled === true;
       const statusCondition =
-        statusFilter && schema.status
+        statusFilter && schema.status && !suppressDraftStatusFilter
           ? eq(schema.status, statusFilter.value)
           : null;
       const whereParts = [idCondition, ownerCondition, statusCondition].filter(
@@ -2044,31 +2446,52 @@ export class CollectionQueryService extends BaseService {
         };
       }
 
+      // Resolved once and reused: relationship expansion below needs the same
+      // language, so deriving it twice would let the two drift.
+      const localeChain = this.resolveLocaleChain(
+        params.locale,
+        params.fallbackLocale
+      );
       // i18n M4: resolve localized fields from the companion `_locales` table for the
       // requested language (with fallback) BEFORE relationship expansion / hooks, so every
       // downstream consumer sees the translated values. No-op for non-localized collections.
-      await this.populateLocalized(
+      await this.overlayLocalized(
         params.collectionName,
-        [entry as Record<string, unknown>],
-        this.resolveLocaleChain(params.locale, params.fallbackLocale),
-        undefined,
-        statusFilter?.value ?? null // i18n M6: per-locale published filter
+        "translation-load-failed",
+        () =>
+          this.populateLocalized(
+            params.collectionName,
+            [entry as Record<string, unknown>],
+            localeChain,
+            undefined,
+            statusFilter?.value ?? null // i18n M6: per-locale published filter
+          )
       );
       // `locale=all` → language-keyed values per localized field (admin/export).
-      await this.populateLocalizedAll(
+      await this.overlayLocalized(
         params.collectionName,
-        [entry as Record<string, unknown>],
-        params.locale,
-        undefined,
-        statusFilter?.value ?? null // i18n M6: per-locale published filter
+        "translation-projection-failed",
+        () =>
+          this.populateLocalizedAll(
+            params.collectionName,
+            [entry as Record<string, unknown>],
+            params.locale,
+            undefined,
+            statusFilter?.value ?? null // i18n M6: per-locale published filter
+          )
       );
       // i18n M7: per-locale translation-status map for the admin per-language pills (opt-in).
       if (params.translationStatus) {
-        await this.populateTranslationMeta(
+        await this.overlayLocalized(
           params.collectionName,
-          [entry as Record<string, unknown>],
-          undefined,
-          statusFilter?.value ?? null // i18n M6: per-locale published filter
+          "translation-overview-failed",
+          () =>
+            this.populateTranslationMeta(
+              params.collectionName,
+              [entry as Record<string, unknown>],
+              undefined,
+              statusFilter?.value ?? null // i18n M6: per-locale published filter
+            )
         );
       }
 
@@ -2097,16 +2520,30 @@ export class CollectionQueryService extends BaseService {
           // Same reasoning as the list path: a related row is redacted by its
           // own collection's field rules, for this caller.
           enforceFieldAccess: true,
+          // Same deferral as the list path; this path runs the same pass.
+          fieldAccessStage: "assembled" as const,
           user: params.user,
           overrideAccess: params.overrideAccess,
+          authenticatedScope: params.authenticatedScope,
+          // As on the list path: the language a target collection's read rule is
+          // evaluated in when its predicate names a localized field.
+          locale: localeChain?.[0],
+          // Only "read everything" propagates, and only when the caller
+          // actually asked for it. Deriving this from the parent having
+          // resolved to no filter would unfilter every target behind a
+          // status-less collection.
+          status:
+            params.status === "all" || params.overrideAccess === true
+              ? "all"
+              : undefined,
         }
       );
 
       // Populate component field data from comp_{slug} tables
       // Pass depth for relationship expansion within component data
       // Pass select to skip component fields excluded from selection (performance optimization)
-      if (this.componentDataService) {
-        expandedEntry = await this.componentDataService.populateComponentData({
+      if (this.fieldGroupDataService) {
+        expandedEntry = await this.fieldGroupDataService.populateComponentData({
           entry: expandedEntry,
           parentTable: getTableName(params.collectionName),
           fields: fields as FieldConfig[],
@@ -2124,8 +2561,249 @@ export class CollectionQueryService extends BaseService {
             enforceFieldAccess: true,
             user: params.user,
             overrideAccess: params.overrideAccess,
+            authenticatedScope: params.authenticatedScope,
+            // As on the list path: a component's relationship reaches a
+            // collection that may scope reads by a localized field.
+            locale: localeChain?.[0],
+            // Only "read everything" propagates, and only when the caller
+            // actually asked for it. Deriving this from the parent having
+            // resolved to no filter would unfilter every target behind a
+            // status-less collection.
+            status:
+              params.status === "all" || params.overrideAccess === true
+                ? "all"
+                : undefined,
           },
         });
+      }
+
+      // On a trusted draft-view read, surface the working draft
+      // (pending edits to a published document) in place of the live row, when
+      // one exists. Placed AFTER the live assembly above so re-reading LIVE
+      // relations/components/localized values by the shared entry id cannot
+      // clobber the draft's values, and BEFORE the redaction/shaping below so
+      // the snapshot's owner column, password values, and field-level read
+      // access are stripped and enforced like any other read. Never surfaced for
+      // a published-only or untrusted read: `statusFilter === null` excludes the
+      // published default and `?status=published`, and `overrideAccess ||
+      // routeAuthorized` excludes an anonymous caller passing `?status=all`.
+      const draftEligible =
+        (collectionForStatus as { status?: boolean }).status === true &&
+        // The working-draft split is non-localized-only (the write path stores
+        // no draft for a localized collection), so skip the lookup there rather
+        // than issue a read that can only miss.
+        (collectionForStatus as { localized?: boolean }).localized !== true &&
+        // Only when drafts are still enabled. If the collection turned drafts
+        // off after a working draft was written, the write path no longer
+        // promotes or deletes it, so surfacing it here would shadow the live
+        // document with a sidecar nothing can ever consume.
+        (
+          collectionForStatus as {
+            versions?: { drafts?: { enabled?: boolean } };
+          }
+        ).versions?.drafts?.enabled === true &&
+        // The caller explicitly asked to see the working draft (an editor
+        // opening the document to edit). This is opt-in on purpose: many
+        // internal callers issue a status-less read (duplicate, reference
+        // labels) and must keep seeing the published row, so draft visibility
+        // follows an explicit editor intent, not every status-less read.
+        params.includeWorkingDraft === true &&
+        // An explicit published view still suppresses the draft.
+        params.status !== "published";
+      // Even with the opt-in, a pending draft is surfaced only to a caller
+      // trusted to EDIT the document. `overrideAccess` attests that directly.
+      // `routeAuthorized` is NOT trusted: on this read path the REST dispatcher
+      // sets it from `!!user` after authorizing the READ, so it attests read, not
+      // update — trusting it would leak drafts to a read-only authenticated
+      // caller. Every non-override authenticated caller is instead judged by an
+      // actual update-capability probe against the LOADED row, so an owner-only
+      // update rule (which the coarse check passes pending a row-level predicate)
+      // does not treat a non-owner reader as an editor.
+      let draftView = false;
+      // Set once a working draft is actually surfaced. When the draft predicate
+      // was suppressed but nothing is overlaid, the loaded row is the published
+      // one, which an explicit draft filter must not return (see the 404 below).
+      let draftOverlaid = false;
+      if (draftEligible) {
+        if (params.overrideAccess === true) {
+          draftView = true;
+        } else if (params.user !== undefined) {
+          const updateDenied = await this.accessService.checkCollectionAccess(
+            params.collectionName,
+            "update",
+            params.user,
+            entryId,
+            entry as Record<string, unknown>,
+            params.overrideAccess,
+            // The route attested a read, never an update, so the update grant is
+            // checked rather than assumed from `routeAuthorized`.
+            false,
+            params.authenticatedScope
+          );
+          draftView = !updateDenied;
+        }
+      }
+      if (draftView) {
+        const workingDraft = await new VersionsRepository(
+          this.adapter
+        ).findWorkingDraft(
+          {
+            scopeKind: "collection",
+            scopeSlug: params.collectionName,
+            entryId,
+          },
+          // Non-localized split: the draft is keyed under the unlocalized
+          // `locale IS NULL` slot, matching the store and promote, so it is
+          // found regardless of the request locale.
+          null
+        );
+        // Mirror the write gate's eligibility check before overlaying: a
+        // component that turned localized or unresolvable after this draft was
+        // written — or a password field that appeared on the collection or a
+        // reachable component — makes the sidecar unpromotable by any write, so
+        // the live row must not be shadowed by a draft nothing can complete.
+        // Resolved only once a draft actually exists, to keep the registry reads
+        // off the common read path; the schemas double as the prune filter below.
+        const draftComponentSchemas = workingDraft
+          ? await resolveComponentSchemas(fields as FieldConfig[])
+          : null;
+        const draftIneligible = draftComponentSchemas
+          ? hasPasswordField(fields) ||
+            [...draftComponentSchemas.values()].some(
+              schema =>
+                schema.localized ||
+                !schema.resolved ||
+                hasPasswordField(schema.fields)
+            )
+          : false;
+        if (workingDraft && !draftIneligible) {
+          const rawSnapshot = workingDraft.snapshot as Record<string, unknown>;
+          // Shape the snapshot to the current schema before exposing it. A field
+          // removed or renamed while the draft was pending leaves a key the
+          // snapshot still carries; the password strip and field read-access
+          // below inspect only currently declared fields, so an obsolete value
+          // would otherwise reach the afterRead hooks and the response even
+          // though a live read of the same document no longer returns it. The
+          // same schema-aware prune the promote path applies is reused, then the
+          // identity and timestamp columns it holds back (a restore must not
+          // resubmit them, a read carries them) are copied back from the snapshot.
+          // Which system columns the row actually has, mirroring the promote and
+          // restore paths: a plugin collection gets no synthesized slug/title, so
+          // telling the prune those columns exist would keep an obsolete snapshot
+          // key the current schema no longer declares. `status` is present because
+          // the draft eligibility above required it.
+          const declaredFields = fields as FieldConfig[];
+          const isPluginCollection =
+            (collection as { admin?: { isPlugin?: boolean } }).admin
+              ?.isPlugin === true;
+          const { payload: shapedDraft } = buildRestorePayload(
+            rawSnapshot,
+            declaredFields,
+            {
+              hasStatus: true,
+              hasSlug:
+                !isPluginCollection ||
+                declaredFields.some(f => f.name === "slug"),
+              hasTitle:
+                !isPluginCollection ||
+                declaredFields.some(f => f.name === "title"),
+              componentSchemas: draftComponentSchemas ?? undefined,
+              documentLocalized: false,
+              localeUnknown: false,
+            }
+          );
+          // Every system timestamp spelling, taken from the shared list rather than named here.
+          // Naming them is why the first-publication marker was pruned from this view while an
+          // ordinary read of the same document returned it.
+          for (const key of ["id", ...SYSTEM_TIMESTAMP_KEYS]) {
+            if (key in rawSnapshot) shapedDraft[key] = rawSnapshot[key];
+          }
+          let draftEntry = shapedDraft;
+          // The snapshot stores top-level relations as ids (captured at depth 0),
+          // so expand them at the requested depth to match a live read. The live
+          // assembly forwards `params.depth` unconditionally and
+          // `expandRelationships` applies its own default when it is undefined,
+          // so guard only the explicit `depth === 0` (ids-only) case — otherwise
+          // a draft read that omits depth would return bare ids while the live
+          // read for the same request expands. Only relationship expansion runs
+          // here, never component population: the snapshot already carries the
+          // draft's own component values, and re-reading components from their
+          // tables would replace the pending edits with live content.
+          if (params.depth !== 0) {
+            const expandOptions: Parameters<
+              CollectionRelationshipService["expandRelationships"]
+            >[3] = {
+              depth: params.depth,
+              enforceFieldAccess: true,
+              // The overlaid draft is the document the post-assembly pass runs
+              // over, so its related rows defer field rules for the same reason
+              // the live read does. Without this a draft read hides a denied
+              // sibling before the rule that masks on it has run.
+              fieldAccessStage: "assembled" as const,
+              user: params.user,
+              overrideAccess: params.overrideAccess,
+              authenticatedScope: params.authenticatedScope,
+              locale: localeChain?.[0],
+              status:
+                params.status === "all" || params.overrideAccess === true
+                  ? "all"
+                  : undefined,
+            };
+            draftEntry = await this.relationshipService.expandRelationships(
+              draftEntry,
+              params.collectionName,
+              fields,
+              expandOptions
+            );
+            // The parent-schema expansion above does not traverse component
+            // fields, so a relationship inside a draft component would stay an id
+            // while a live read populates it through the component data service.
+            // Expand those relations on the snapshot's own component values, so a
+            // draft read matches a live read at depth > 0 without re-reading the
+            // live component rows (which would replace the pending edits).
+            draftEntry = await this.expandDraftComponentRelations(
+              draftEntry,
+              fields as FieldConfig[],
+              draftComponentSchemas,
+              expandOptions
+            );
+          }
+          // Snapshot serialization turned Date values into ISO strings, but an
+          // ordinary live read hands the afterRead hooks Drizzle-decoded Date
+          // objects, so a hook that calls date methods would fail only for a
+          // drafted entry. Rehydrate the system timestamps and every declared
+          // date field — including those nested inside components — to Date
+          // before the read pipeline runs below.
+          rehydrateSystemTimestamps(draftEntry);
+          rehydrateSnapshotDates(
+            draftEntry,
+            declaredFields,
+            draftComponentSchemas
+          );
+          expandedEntry = draftEntry;
+          draftOverlaid = true;
+        }
+      }
+
+      // An explicit `status: "draft"` read that opted into the working draft
+      // dropped the draft predicate above so the published main row could be
+      // loaded for the overlay. When no draft was surfaced (none exists, it turned
+      // ineligible, or the caller is not trusted to edit) AND the loaded row is not
+      // itself a draft, the row is the published one the draft filter would never
+      // have matched, so 404 rather than hand back content the caller did not ask
+      // for. A never-published entry whose main row IS `draft` matches the filter
+      // directly and is returned as loaded.
+      if (
+        suppressDraftStatusFilter &&
+        !draftOverlaid &&
+        (expandedEntry as { status?: unknown }).status !== statusFilter?.value
+      ) {
+        return {
+          success: false,
+          statusCode: 404,
+          message: "Entry not found",
+          data: null,
+        };
       }
 
       // Redact password hashes BEFORE any afterRead hook runs (a hook could
@@ -2137,6 +2815,41 @@ export class CollectionQueryService extends BaseService {
       }
       // Always strip the system owner column (see listEntries).
       stripSystemOwnerField(expandedEntry);
+
+      // Decode before any afterRead hook runs, for the same reason as the list
+      // path: a hook is documented against the configured value, not the
+      // storage encoding SQLite hands back.
+      decodeJsonFieldValues([expandedEntry], fields, params.locale);
+
+      // Same placement as the list path: a related row's own field hooks run
+      // before this collection's afterRead hooks can copy an unmasked value onto
+      // a root property, and before selection rebuilds the row without the
+      // siblings a masking rule judges on. Every populated related row is
+      // walked, including one the projection drops.
+      //
+      // The state is held here rather than left to the inline finalize so the
+      // related rows can be sanitized twice: once now (so the source collection's
+      // hooks below are handed already sanitized rows), and again after those
+      // hooks (so a denied field one of them writes back onto a related row is
+      // stripped before the response).
+      const detailNestedState =
+        this.relationshipService.createNestedHookState();
+      const detailNestedAccess = {
+        enforceFieldAccess: true,
+        user: params.user,
+        overrideAccess: params.overrideAccess,
+        authenticatedScope: params.authenticatedScope,
+      };
+      await this.relationshipService.applyNestedFieldHooks(
+        expandedEntry,
+        params.collectionName,
+        detailNestedAccess,
+        detailNestedState
+      );
+      await this.relationshipService.finalizeRelatedRows(
+        detailNestedState,
+        detailNestedAccess
+      );
 
       // Execute afterRead hooks (code-registered)
       // Hooks can transform the fetched data
@@ -2153,6 +2866,17 @@ export class CollectionQueryService extends BaseService {
         afterContext
       );
       const dataAfterCodeHooks = transformedData ?? expandedEntry;
+
+      // A code hook may have RETURNED a reshaped related row carrying a denied
+      // field; sanitize now, before the stored and field-level hooks run, so one
+      // of them cannot read that field and copy it onto an allowed source key the
+      // final pass no longer looks at. Idempotent over the shared walk state.
+      await this.relationshipService.reprojectRelatedRows(
+        [dataAfterCodeHooks],
+        params.collectionName,
+        detailNestedAccess,
+        detailNestedState
+      );
 
       // Execute stored afterRead hooks (UI-configured)
       const storedAfterResult =
@@ -2174,12 +2898,6 @@ export class CollectionQueryService extends BaseService {
         unknown
       >;
 
-      // Apply field selection if select parameter is provided
-      // This filters the response to only include requested fields
-      if (params.select && Object.keys(params.select).length > 0) {
-        finalData = this.applyFieldSelection(finalData, params.select);
-      }
-
       // Convert snake_case timestamp columns to their camelCase API form.
       finalData = convertTimestampsToCamelCase(finalData);
 
@@ -2191,39 +2909,32 @@ export class CollectionQueryService extends BaseService {
       // Same defense in depth for the owner column.
       stripSystemOwnerField(finalData);
 
-      // Deserialize JSON fields (richtext, blocks, array, group, json) for response
-      fields.forEach(field => {
-        if (!isJsonFieldType(field.type, field)) return;
-        const value = finalData[field.name];
-        if (typeof value === "string") {
-          try {
-            finalData[field.name] = JSON.parse(value);
-          } catch {
-            // If parsing fails, keep as string
-          }
-        } else if (
-          params.locale === "all" &&
-          value !== null &&
-          typeof value === "object"
-        ) {
-          // locale=all yields a language-keyed map of raw companion values;
-          // parse each locale's JSON string so nested shapes match the parsed
-          // objects a single-locale read returns.
-          const keyed = value as Record<string, unknown>;
-          for (const code of Object.keys(keyed)) {
-            if (typeof keyed[code] === "string") {
-              try {
-                keyed[code] = JSON.parse(keyed[code]);
-              } catch {
-                // If parsing fails, keep as string
-              }
-            }
-          }
-        }
-      });
+      // A stored hook may likewise have reintroduced a denied related field;
+      // sanitize before the field-level hooks read the assembled document.
+      await this.relationshipService.reprojectRelatedRows(
+        [finalData],
+        params.collectionName,
+        detailNestedAccess,
+        detailNestedState
+      );
 
-      // Field-level afterRead hooks + read access — same semantics as the
-      // list path above.
+      // Field-level afterRead hooks + read access — same semantics as the list
+      // path above: access is applied BEFORE the hooks and AGAIN after, sharing a
+      // redactions store, so a denied source field is hidden from the hooks (a hook
+      // cannot copy a denied sibling onto an allowed key selection now projects
+      // last) while a conditional rule still judges against the whole row and a
+      // hook-reintroduced denied field is caught.
+      const detailSourceRedactions: ReadAccessRedactions = new WeakMap();
+      await applyFieldReadAccess(
+        {
+          kind: "collection",
+          slug: params.collectionName,
+          entry: finalData,
+          user: params.user,
+          overrideAccess: params.overrideAccess,
+        },
+        detailSourceRedactions
+      );
       await runFieldHooks({
         kind: "collection",
         slug: params.collectionName,
@@ -2232,13 +2943,37 @@ export class CollectionQueryService extends BaseService {
         operation: "read",
         user: params.user,
       });
-      await applyFieldReadAccess({
-        kind: "collection",
-        slug: params.collectionName,
-        entry: finalData,
-        user: params.user,
-        overrideAccess: params.overrideAccess,
-      });
+      await applyFieldReadAccess(
+        {
+          kind: "collection",
+          slug: params.collectionName,
+          entry: finalData,
+          user: params.user,
+          overrideAccess: params.overrideAccess,
+        },
+        detailSourceRedactions
+      );
+
+      // Authoritative related-row sanitization over the assembled response,
+      // after EVERY source afterRead hook phase above (code, stored, and
+      // field-level), for the reason given at the same point on the list path:
+      // those hooks can write a denied target field back onto a related row or
+      // return a reshaped document whose related rows are new objects, and the
+      // root access pass sees only this collection's schema. Before selection, so
+      // it judges whole rows with their sibling evidence intact.
+      await this.relationshipService.reprojectRelatedRows(
+        [finalData],
+        params.collectionName,
+        detailNestedAccess,
+        detailNestedState
+      );
+
+      // Apply field selection if select parameter is provided. Last of the
+      // sanitizing steps, so every hook and access pass above judged the whole
+      // row rather than the projected slice.
+      if (params.select && Object.keys(params.select).length > 0) {
+        finalData = this.applyFieldSelection(finalData, params.select);
+      }
 
       // Transform rich text fields to requested format (html, both)
       // Default is "json" which returns the Lexical JSON structure as-is
@@ -2257,6 +2992,15 @@ export class CollectionQueryService extends BaseService {
       // nothing downstream can re-expose the creator's user id.
       stripSystemOwnerField(finalData);
 
+      // Signal that the returned document is the pending working draft, not the
+      // live row (draft/published split). The overlay keeps the draft's `status`
+      // at the live parent's value, so an editor UI needs an explicit flag to show
+      // an "unpublished changes" state. Set only when a draft was actually
+      // surfaced; mirrors the synthetic `_translations` read-response convention.
+      if (draftOverlaid) {
+        finalData._isWorkingDraft = true;
+      }
+
       return {
         success: true,
         statusCode: 200,
@@ -2270,6 +3014,10 @@ export class CollectionQueryService extends BaseService {
         message:
           error instanceof Error ? error.message : "Failed to fetch entry",
         data: null,
+        // A typed error keeps its own status and code. Hardcoding 500 reported
+        // a read hook's refusal as a server fault, and told a caller nothing it
+        // could act on.
+        ...errorEnvelopeFields(error),
       };
     }
   }
@@ -2277,6 +3025,95 @@ export class CollectionQueryService extends BaseService {
   // ============================================================
   // PRIVATE HELPER METHODS
   // ============================================================
+
+  /**
+   * Expand relationship fields nested inside a working draft's component values,
+   * using each component's own schema and WITHOUT re-reading the component rows.
+   *
+   * The parent-schema `expandRelationships` does not traverse component fields,
+   * so a relationship inside a draft component would otherwise stay an id on a
+   * draft read while a live read populates it. The draft snapshot already carries
+   * the component values (re-reading them would replace the pending edits with
+   * live content), so this walks and expands them in place.
+   */
+  private async expandDraftComponentRelations(
+    entry: Record<string, unknown>,
+    parentFields: FieldConfig[],
+    componentSchemas: ComponentSchemas | null,
+    options: Parameters<CollectionRelationshipService["expandRelationships"]>[3]
+  ): Promise<Record<string, unknown>> {
+    if (!componentSchemas) return entry;
+    const out = { ...entry };
+    for (const field of parentFields) {
+      if (!isFieldGroupField(field)) continue;
+      const name = (field as { name?: unknown }).name;
+      if (typeof name !== "string" || !(name in out)) continue;
+      out[name] = await this.expandComponentInstanceRelations(
+        out[name],
+        field,
+        componentSchemas,
+        options
+      );
+    }
+    return out;
+  }
+
+  /**
+   * Expand one component value, or each element when the field is repeatable or a
+   * dynamic zone, resolving each instance against its own component schema.
+   */
+  private async expandComponentInstanceRelations(
+    value: unknown,
+    field: FieldConfig,
+    componentSchemas: ComponentSchemas,
+    options: Parameters<CollectionRelationshipService["expandRelationships"]>[3]
+  ): Promise<unknown> {
+    if (Array.isArray(value)) {
+      return Promise.all(
+        value.map(item =>
+          this.expandComponentInstanceRelations(
+            item,
+            field,
+            componentSchemas,
+            options
+          )
+        )
+      );
+    }
+    if (value === null || typeof value !== "object") return value;
+
+    const instance = value as Record<string, unknown>;
+    // A dynamic-zone row records the component it holds; a single-component field
+    // takes it from the field's declared slug.
+    const tagged = instance._componentType;
+    const declared = (field as { component?: unknown }).component;
+    const slug =
+      typeof tagged === "string"
+        ? tagged
+        : typeof declared === "string"
+          ? declared
+          : undefined;
+    if (slug === undefined) return instance;
+
+    const schema = componentSchemas.get(slug);
+    if (!schema || !schema.resolved) return instance;
+
+    // Expand this component's own relationship fields, then recurse into any
+    // component nested inside it.
+    let expanded = await this.relationshipService.expandRelationships(
+      instance,
+      slug,
+      schema.fields as unknown as FieldDefinition[],
+      options
+    );
+    expanded = await this.expandDraftComponentRelations(
+      expanded,
+      schema.fields,
+      componentSchemas,
+      options
+    );
+    return expanded;
+  }
 
   /**
    * Build WHERE condition for full-text search across multiple fields.
@@ -2356,6 +3193,13 @@ export class CollectionQueryService extends BaseService {
    * @param dialect - Database dialect for case sensitivity handling
    * @returns Drizzle SQL condition or undefined if no conditions
    */
+  /**
+   * Compile a filter, keeping this service's localized-field support.
+   *
+   * The translation itself is shared, so a stored constraint binds the same way
+   * whether it reaches SQL through a list read or through a relationship
+   * populating a row from the same collection.
+   */
   private buildDrizzleCondition(
     whereClause: ReturnType<typeof buildWhereClause>,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle dynamic schema
@@ -2363,157 +3207,20 @@ export class CollectionQueryService extends BaseService {
     dialect: string = "postgresql",
     localizedCtx?: LocalizedQueryContext | null
   ): ReturnType<typeof and> | undefined {
-    if (!whereClause) {
-      return undefined;
-    }
-
-    // Helper to build condition from a single WhereCondition
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- dynamic where clause structure
-    const buildSingleCondition = (condition: any): any => {
-      // Check if it's a nested WhereClause (has and/or)
-      if (condition.and || condition.or) {
-        return this.buildDrizzleCondition(
-          condition,
-          schema,
-          dialect,
-          localizedCtx
-        );
-      }
-
-      // It's a WhereCondition
-      const { column, op, value } = condition;
-
-      // Get the column from schema (handle dot notation for nested fields)
-      const columnParts = column.split(".");
-
-      // i18n M4c: a filter on a localized field targets the companion table (absent from the
-      // main schema). Resolve it to a companion EXISTS on the requested locale so the filter
-      // takes effect instead of being silently skipped.
-      const localizedWhereField = localizedCtx?.localizedFields.find(
-        f => f.name === columnParts[0]
-      );
-      if (localizedCtx && localizedWhereField) {
-        const localizedCond = this.buildLocalizedWhereExists(
-          localizedCtx,
-          localizedWhereField.column,
-          op,
-          value,
-          dialect
-        );
-        if (localizedCond) return localizedCond;
-      }
-
-      const schemaColumn = schema[columnParts[0]];
-
-      if (!schemaColumn) {
-        // Column doesn't exist in schema, skip this condition
-        return undefined;
-      }
-
-      switch (op) {
-        case "=":
-          return eq(schemaColumn, value);
-        case "!=":
-          return ne(schemaColumn, value);
-        case ">":
-          return gt(schemaColumn, value);
-        case ">=":
-          return gte(schemaColumn, value);
-        case "<":
-          return lt(schemaColumn, value);
-        case "<=":
-          return lte(schemaColumn, value);
-        case "LIKE":
-          return like(schemaColumn, value);
-        case "ILIKE":
-          // Use ILIKE for PostgreSQL, LIKE for others
-          if (dialect === "postgresql") {
-            return ilike(schemaColumn, value);
-          }
-          return like(schemaColumn, value);
-        case "IN":
-          if (Array.isArray(value) && value.length > 0) {
-            return inArray(schemaColumn, value);
-          }
-          return undefined;
-        case "NOT IN":
-          if (Array.isArray(value) && value.length > 0) {
-            return notInArray(schemaColumn, value);
-          }
-          return undefined;
-        case "IS NULL":
-          return isNull(schemaColumn);
-        case "IS NOT NULL":
-          return isNotNull(schemaColumn);
-        default:
-          return undefined;
-      }
-    };
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle SQL condition accumulator
-    const conditions: any[] = [];
-
-    // Handle AND conditions
-    if (whereClause.and && Array.isArray(whereClause.and)) {
-      const andConditions = whereClause.and
-        .map(buildSingleCondition)
-        .filter(Boolean);
-      if (andConditions.length > 0) {
-        conditions.push(and(...andConditions));
-      }
-    }
-
-    // Handle OR conditions
-    if (whereClause.or && Array.isArray(whereClause.or)) {
-      const orConditions = whereClause.or
-        .map(buildSingleCondition)
-        .filter(Boolean);
-      if (orConditions.length > 0) {
-        conditions.push(or(...orConditions));
-      }
-    }
-
-    // Return combined conditions
-    if (conditions.length === 0) {
-      return undefined;
-    }
-    if (conditions.length === 1) {
-      return conditions[0];
-    }
-    return and(...conditions);
+    return buildDrizzleCondition(
+      whereClause,
+      schema,
+      dialect,
+      localizedCtx,
+      buildLocalizedWhereExists
+    );
   }
 
-  /**
-   * Build EXISTS subquery conditions for component field filters.
-   *
-   * Generates SQL EXISTS subqueries to filter entries based on component field values.
-   * Each component filter results in an EXISTS clause against the component data table.
-   *
-   * @param componentFilters - Component field filters extracted from where clause
-   * @param parentTableName - Name of the parent table (e.g., 'dc_pages')
-   * @param parentIdColumn - Reference to the parent table's id column
-   * @param dialect - Database dialect for operator handling
-   * @returns Combined Drizzle SQL condition or undefined if no filters
-   *
-   * @example
-   * ```typescript
-   * // For filter: { 'seo.metaTitle': { contains: 'About' } }
-   * // Generates: EXISTS (SELECT 1 FROM comp_seo WHERE _parent_id = dc_pages.id AND _parent_table = 'dc_pages' AND meta_title ILIKE '%About%')
-   * ```
-   */
-  /**
-   * Physical table name for every component slug referenced by these filters.
-   *
-   * Resolved through the registry because a component with a custom `dbName`
-   * has a table name that cannot be derived from its slug. Skipped entirely
-   * when no component filter is present, so ordinary queries take no extra
-   * round trip.
-   */
   private async resolveComponentTableNames(
     componentFilters: ComponentFieldFilter[]
   ): Promise<Map<string, string>> {
     const resolved = new Map<string, string>();
-    if (componentFilters.length === 0 || !this.componentDataService) {
+    if (componentFilters.length === 0 || !this.fieldGroupDataService) {
       return resolved;
     }
 
@@ -2533,7 +3240,8 @@ export class CollectionQueryService extends BaseService {
     const lookups = await Promise.all(
       [...slugs].map(async slug => ({
         slug,
-        tableName: await this.componentDataService?.getComponentTableName(slug),
+        tableName:
+          await this.fieldGroupDataService?.getComponentTableName(slug),
       }))
     );
     for (const { slug, tableName } of lookups) {
@@ -2542,13 +3250,38 @@ export class CollectionQueryService extends BaseService {
     return resolved;
   }
 
+  /**
+   * The physical discriminator column each named component table carries.
+   *
+   * 🔴 This predicate is built as raw SQL rather than through the table object,
+   * so it does not get the runtime schema's stable property key: it emits the
+   * column name it is handed. A `_componentType` filter must therefore be given
+   * the name the table actually has, or it addresses a column the storage
+   * migration has moved and the query fails instead of matching documents.
+   */
+  private async resolveComponentTypeColumns(
+    filters: readonly ComponentFieldFilter[],
+    tableNames: Iterable<string>
+  ): Promise<Map<string, string>> {
+    // Only a `_componentType` filter addresses the discriminator. Every other
+    // component filter names a user column, so introspecting here would spend
+    // per-table catalog queries — column and index reads, or a PRAGMA each on
+    // SQLite — on a value nothing goes on to read.
+    if (!filters.some(filter => filter.isComponentTypeFilter)) return new Map();
+
+    const tables = [...new Set(tableNames)];
+    if (tables.length === 0) return new Map();
+    return resolveTypeColumns(this.adapter, tables);
+  }
+
   private buildComponentFieldConditions(
     componentFilters: ComponentFieldFilter[],
     parentTableName: string,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle column reference
     parentIdColumn: any,
     dialect: string = "postgresql",
-    componentTableNames: Map<string, string> = new Map()
+    componentTableNames: Map<string, string> = new Map(),
+    componentTypeColumns: Map<string, string> = new Map()
   ): ReturnType<typeof and> | undefined {
     if (componentFilters.length === 0) {
       return undefined;
@@ -2561,80 +3294,12 @@ export class CollectionQueryService extends BaseService {
       // Convert component field path to snake_case for database column
       const columnName = toSnakeCase(filter.componentFieldPath);
 
-      // Handle _componentType filter specially (already snake_case)
-      const dbColumnName = filter.isComponentTypeFilter
-        ? STORAGE_FORMAT.columns.type
-        : columnName;
-
-      // Build the value condition based on operator
-      let valueCondition: ReturnType<typeof sql>;
-
-      switch (filter.operator) {
-        case "equals":
-          valueCondition = sql`${sql.identifier(dbColumnName)} = ${filter.value}`;
-          break;
-        case "not_equals":
-          valueCondition = sql`${sql.identifier(dbColumnName)} != ${filter.value}`;
-          break;
-        case "greater_than":
-          valueCondition = sql`${sql.identifier(dbColumnName)} > ${filter.value}`;
-          break;
-        case "greater_than_equal":
-          valueCondition = sql`${sql.identifier(dbColumnName)} >= ${filter.value}`;
-          break;
-        case "less_than":
-          valueCondition = sql`${sql.identifier(dbColumnName)} < ${filter.value}`;
-          break;
-        case "less_than_equal":
-          valueCondition = sql`${sql.identifier(dbColumnName)} <= ${filter.value}`;
-          break;
-        case "like":
-          valueCondition = sql`${sql.identifier(dbColumnName)} LIKE ${`%${String(filter.value)}%`}`;
-          break;
-        case "contains":
-        case "search":
-          // Use ILIKE for PostgreSQL, LIKE for others
-          if (dialect === "postgresql") {
-            valueCondition = sql`${sql.identifier(dbColumnName)} ILIKE ${`%${String(filter.value)}%`}`;
-          } else {
-            valueCondition = sql`LOWER(${sql.identifier(dbColumnName)}) LIKE LOWER(${`%${String(filter.value)}%`})`;
-          }
-          break;
-        case "in": {
-          const inValues = Array.isArray(filter.value)
-            ? filter.value
-            : [filter.value];
-          if (inValues.length === 0) continue;
-          const inPlaceholders = sql.join(
-            inValues.map(v => sql`${v}`),
-            sql`, `
-          );
-          valueCondition = sql`${sql.identifier(dbColumnName)} IN (${inPlaceholders})`;
-          break;
-        }
-        case "not_in": {
-          const notInValues = Array.isArray(filter.value)
-            ? filter.value
-            : [filter.value];
-          if (notInValues.length === 0) continue;
-          const notInPlaceholders = sql.join(
-            notInValues.map(v => sql`${v}`),
-            sql`, `
-          );
-          valueCondition = sql`${sql.identifier(dbColumnName)} NOT IN (${notInPlaceholders})`;
-          break;
-        }
-        case "exists":
-          if (filter.value === true || filter.value === "true") {
-            valueCondition = sql`${sql.identifier(dbColumnName)} IS NOT NULL`;
-          } else {
-            valueCondition = sql`${sql.identifier(dbColumnName)} IS NULL`;
-          }
-          break;
-        default:
-          // Unknown operator, skip
-          continue;
-      }
+      // 🔴 The discriminator's physical name is resolved PER TABLE, so the
+      // condition is built inside the per-table loop below rather than once for
+      // the filter. This predicate is raw SQL and does not go through the
+      // runtime table object, so it emits whatever column name it is handed —
+      // and a dynamic-zone filter can span several tables whose storage the
+      // migration has moved independently.
 
       // For _componentType filter on dynamic zone, we may need to query multiple tables
       // But the filter value tells us which specific component type to look for
@@ -2655,6 +3320,19 @@ export class CollectionQueryService extends BaseService {
         // fallback when the lookup was unavailable.
         const componentTableName =
           componentTableNames.get(slug) ?? resolveComponentTableName(slug);
+
+        const dbColumnName = filter.isComponentTypeFilter
+          ? (componentTypeColumns.get(componentTableName) ??
+            STORAGE_FORMAT.columns.type)
+          : columnName;
+        const valueCondition = buildComponentValueCondition(
+          filter,
+          dbColumnName,
+          dialect
+        );
+        // An operator with nothing to match — an empty `in` list, or one this
+        // builder does not implement — contributes no condition for this table.
+        if (valueCondition === undefined) continue;
 
         // Build EXISTS subquery:
         // EXISTS (SELECT 1 FROM comp_{slug}
@@ -2734,18 +3412,14 @@ export class CollectionQueryService extends BaseService {
       result.id = entry.id;
     }
 
-    // Always include timestamps for consistency across responses
-    if (entry.created_at !== undefined) {
-      result.created_at = entry.created_at;
-    }
-    if (entry.updated_at !== undefined) {
-      result.updated_at = entry.updated_at;
-    }
-    if (entry.createdAt !== undefined) {
-      result.createdAt = entry.createdAt;
-    }
-    if (entry.updatedAt !== undefined) {
-      result.updatedAt = entry.updatedAt;
+    // Always include the system timestamps, for consistency across responses. Taken from the
+    // shared list rather than named one by one: this ran BEFORE camelCase conversion and knew
+    // only the original two, so a selected read dropped the first-publication marker even when
+    // the caller asked for it by name.
+    for (const key of SYSTEM_TIMESTAMP_KEYS) {
+      if (entry[key] !== undefined) {
+        result[key] = entry[key];
+      }
     }
 
     for (const fieldPath of selectedFields) {

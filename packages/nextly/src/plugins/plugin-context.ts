@@ -16,7 +16,12 @@ import type { EventBus, EventHandler, EventName } from "../events/event-bus";
 import { getEventBus } from "../events/event-bus";
 import type { Action, Filter } from "../filters";
 import { getFilterRegistry } from "../filters";
-import type { HookHandler, HookType } from "../hooks/types";
+import type {
+  BeforeOperationHandler,
+  HookContextPhase,
+  HookHandler,
+  HookOwner,
+} from "../hooks/types";
 import type { CollectionService } from "../services/collections/collection-service";
 import type { EmailService } from "../services/email/email-service";
 import type { MediaService } from "../services/media/media-service";
@@ -100,7 +105,7 @@ export interface PluginHookRegistry {
    * ```
    */
   on<T = unknown>(
-    hookType: HookType,
+    hookType: HookContextPhase,
     collection: string,
     handler: HookHandler<T>
   ): void;
@@ -124,9 +129,45 @@ export interface PluginHookRegistry {
    * ```
    */
   off<T = unknown>(
-    hookType: HookType,
+    hookType: HookContextPhase,
     collection: string,
     handler: HookHandler<T>
+  ): void;
+
+  /**
+   * Register a `beforeOperation` hook.
+   *
+   * Separate from {@link on} because the handler is shaped differently: it
+   * receives the operation's `args` -- the data, id or where clause about to be
+   * used -- rather than a document, and returning a modified set replaces them.
+   *
+   * @param collection - Collection name or '*' for all collections
+   * @param handler - Hook function to execute
+   *
+   * @example
+   * ```typescript
+   * nextly.hooks.onBeforeOperation('posts', (context) => {
+   *   if (context.operation === 'read') {
+   *     return { ...context.args, where: { ...context.args.where, archived: false } };
+   *   }
+   * });
+   * ```
+   */
+  onBeforeOperation<T = unknown>(
+    collection: string,
+    handler: BeforeOperationHandler<T>
+  ): void;
+
+  /**
+   * Unregister a `beforeOperation` hook, the counterpart to
+   * {@link onBeforeOperation}.
+   *
+   * @param collection - Collection name or '*'
+   * @param handler - The exact handler function to remove
+   */
+  offBeforeOperation<T = unknown>(
+    collection: string,
+    handler: BeforeOperationHandler<T>
   ): void;
 }
 
@@ -178,7 +219,7 @@ export interface PluginActionRegistry {
  *
  * @example
  * ```typescript
- * import { definePlugin } from 'nextly';
+ * import { definePlugin, NextlyError } from '@nextlyhq/plugin-sdk';
  *
  * export const myPlugin = definePlugin({
  *   name: 'my-plugin',
@@ -193,7 +234,13 @@ export interface PluginActionRegistry {
  *       // Validate that author exists
  *       const author = await users.findById(context.data.authorId, {});
  *       if (!author) {
- *         throw new Error('Author not found');
+ *         // A NextlyError, not a plain one: a plain Error reads as a crash and
+ *         // its message is replaced before the caller sees it.
+ *         throw NextlyError.validation({
+ *           errors: [
+ *             { path: 'authorId', code: 'NOT_FOUND', message: 'Author not found.' },
+ *           ],
+ *         });
  *       }
  *       return context.data;
  *     });
@@ -712,14 +759,26 @@ export function createPluginContext(
                   : never,
   hookRegistry: {
     register: (
-      hookType: HookType,
+      hookType: HookContextPhase,
       collection: string,
-      handler: HookHandler
+      handler: HookHandler,
+      owner?: HookOwner
     ) => void;
     unregister: (
-      hookType: HookType,
+      hookType: HookContextPhase,
       collection: string,
-      handler: HookHandler
+      handler: HookHandler,
+      owner?: HookOwner
+    ) => void;
+    registerBeforeOperation: (
+      collection: string,
+      handler: BeforeOperationHandler,
+      owner?: HookOwner
+    ) => void;
+    unregisterBeforeOperation: (
+      collection: string,
+      handler: BeforeOperationHandler,
+      owner?: HookOwner
     ) => void;
   },
   /**
@@ -732,18 +791,53 @@ export function createPluginContext(
   // so the runtime can clear them before the plugin re-initializes on HMR (B2).
   const pluginName = plugin?.name;
 
+  // Everything registered through this context is attributed to the plugin, so
+  // a config reload can rebuild the config's own handlers without deleting a
+  // plugin's -- the form builder registers its `afterRead` straight into the
+  // `forms` namespace, and nothing would put that back. A context built without
+  // a plugin has no identity to attribute to and keeps the registry's default.
+  const hookOwner: HookOwner | undefined = pluginName
+    ? `plugin:${pluginName}`
+    : undefined;
+
   // Create simplified hook registry for plugins
   const pluginHooks: PluginHookRegistry = {
     on: (hookType, collection, handler) => {
-      hookRegistry.register(hookType, collection, handler as HookHandler);
+      hookRegistry.register(
+        hookType,
+        collection,
+        handler as HookHandler,
+        hookOwner
+      );
       if (pluginName) {
         recordPluginSubscription(pluginName, () =>
-          hookRegistry.unregister(hookType, collection, handler as HookHandler)
+          hookRegistry.unregister(
+            hookType,
+            collection,
+            handler as HookHandler,
+            hookOwner
+          )
         );
       }
     },
     off: (hookType, collection, handler) => {
-      hookRegistry.unregister(hookType, collection, handler as HookHandler);
+      hookRegistry.unregister(
+        hookType,
+        collection,
+        handler as HookHandler,
+        hookOwner
+      );
+    },
+    onBeforeOperation: (collection, handler) => {
+      hookRegistry.registerBeforeOperation(collection, handler, hookOwner);
+      if (pluginName) {
+        recordPluginSubscription(pluginName, () =>
+          hookRegistry.unregisterBeforeOperation(collection, handler, hookOwner)
+        );
+      }
+    },
+    offBeforeOperation: (collection, handler) => {
+      hookRegistry.unregisterBeforeOperation(collection, handler, hookOwner);
     },
   };
 

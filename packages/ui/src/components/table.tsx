@@ -2,6 +2,7 @@ import * as React from "react";
 
 import { cn } from "../lib/utils";
 
+/** @experimental */
 const Table = React.forwardRef<
   HTMLTableElement,
   React.HTMLAttributes<HTMLTableElement>
@@ -16,6 +17,7 @@ const Table = React.forwardRef<
 ));
 Table.displayName = "Table";
 
+/** @experimental */
 const TableHeader = React.forwardRef<
   HTMLTableSectionElement,
   React.HTMLAttributes<HTMLTableSectionElement>
@@ -28,6 +30,7 @@ const TableHeader = React.forwardRef<
 ));
 TableHeader.displayName = "TableHeader";
 
+/** @experimental */
 const TableBody = React.forwardRef<
   HTMLTableSectionElement,
   React.HTMLAttributes<HTMLTableSectionElement>
@@ -40,6 +43,7 @@ const TableBody = React.forwardRef<
 ));
 TableBody.displayName = "TableBody";
 
+/** @experimental */
 const TableFooter = React.forwardRef<
   HTMLTableSectionElement,
   React.HTMLAttributes<HTMLTableSectionElement>
@@ -55,6 +59,7 @@ const TableFooter = React.forwardRef<
 ));
 TableFooter.displayName = "TableFooter";
 
+/** @experimental */
 const TableRow = React.forwardRef<
   HTMLTableRowElement,
   React.HTMLAttributes<HTMLTableRowElement>
@@ -70,6 +75,7 @@ const TableRow = React.forwardRef<
 ));
 TableRow.displayName = "TableRow";
 
+/** @experimental */
 const TableHead = React.forwardRef<
   HTMLTableCellElement,
   React.ThHTMLAttributes<HTMLTableCellElement>
@@ -85,6 +91,7 @@ const TableHead = React.forwardRef<
 ));
 TableHead.displayName = "TableHead";
 
+/** @experimental */
 const TableCell = React.forwardRef<
   HTMLTableCellElement,
   React.TdHTMLAttributes<HTMLTableCellElement>
@@ -100,6 +107,7 @@ const TableCell = React.forwardRef<
 ));
 TableCell.displayName = "TableCell";
 
+/** @experimental */
 const TableCaption = React.forwardRef<
   HTMLTableCaptionElement,
   React.HTMLAttributes<HTMLTableCaptionElement>

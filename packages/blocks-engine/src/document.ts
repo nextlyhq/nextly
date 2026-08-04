@@ -8,6 +8,7 @@
  * runtime (Node scripts, edge, browser, external agents) without pulling in
  * a framework.
  */
+import { isPlainRecord } from "./plain-record";
 
 /**
  * Engine document-format version. Bumped only when the envelope shape itself
@@ -284,11 +285,11 @@ export type NodeStyles = Partial<
 
 /** True if a style value is a design-token reference. */
 export function isTokenRef(value: unknown): value is TokenRef {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    typeof (value as TokenRef).$token === "string"
-  );
+  // A reference must be a plain record, not merely an object carrying the key.
+  // An array or a Date decorated with `$token` reads as a reference here and
+  // then serializes to `[]` or a string, so the token is lost on the way to
+  // storage and the document fails validation the next time it is read.
+  return isPlainRecord(value) && typeof value.$token === "string";
 }
 
 // ---------------------------------------------------------------------------

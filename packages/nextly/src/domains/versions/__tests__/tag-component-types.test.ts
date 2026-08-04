@@ -4,11 +4,16 @@
  * event, whose payload is documented as read shape. Tagging is what separates
  * them, so not mutating the shared object is the whole point.
  */
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect } from "vitest";
 
 import type { FieldConfig } from "../../../collections/fields/types";
+import {
+  clearFieldTypes,
+  registerFieldType,
+} from "../../schema/field-types/field-type-registry";
 import { NextlyError } from "../../../errors";
 import {
+  rehydrateSnapshotDates,
   resolveComponentFieldMap,
   tagComponentTypes,
   tagNestedComponentTypes,
@@ -463,5 +468,44 @@ describe("resolveComponentFieldMap", () => {
         }
       )
     ).rejects.toThrow(NextlyError);
+  });
+});
+
+describe("rehydrateSnapshotDates", () => {
+  afterEach(() => {
+    clearFieldTypes();
+  });
+
+  it("rehydrates a built-in date field's ISO string to a Date", () => {
+    const value: Record<string, unknown> = {
+      when: "2026-01-01T00:00:00.000Z",
+    };
+    rehydrateSnapshotDates(
+      value,
+      [{ name: "when", type: "date" }] as FieldConfig[],
+      null
+    );
+    expect(value.when instanceof Date).toBe(true);
+  });
+
+  it("rehydrates a timestamp-backed plugin field, matching a live read", () => {
+    // A plugin type binds to the date column, so its working-draft snapshot value
+    // is an ISO string like a built-in date; a literal `type === "date"` check
+    // would miss it and hand a hook a string where a live read supplies a Date.
+    registerFieldType({
+      type: "occurred",
+      storage: "timestamp",
+      component: "@acme/when/admin#When",
+      surfaces: ["entries", "singles", "components"],
+    });
+    const value: Record<string, unknown> = {
+      when: "2026-02-02T00:00:00.000Z",
+    };
+    rehydrateSnapshotDates(
+      value,
+      [{ name: "when", type: "occurred" }] as FieldConfig[],
+      null
+    );
+    expect(value.when instanceof Date).toBe(true);
   });
 });

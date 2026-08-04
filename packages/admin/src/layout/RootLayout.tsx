@@ -17,6 +17,7 @@ import { BrandingProvider } from "../context/providers/BrandingProvider";
 import { GeneralSettingsSyncProvider } from "../context/providers/GeneralSettingsSyncProvider";
 import { ThemeProvider, useTheme } from "../context/providers/ThemeProvider";
 import { RestartProvider } from "../context/RestartContext";
+import { fieldGroupKeys } from "../hooks/queries";
 import { useRouter } from "../hooks/useRouter";
 import { cn } from "../lib/utils";
 
@@ -51,7 +52,7 @@ function AdminAppContent() {
       void queryClient.invalidateQueries({ queryKey: ["entries"] });
       void queryClient.invalidateQueries({ queryKey: ["singles"] });
       void queryClient.invalidateQueries({ queryKey: ["single-documents"] });
-      void queryClient.invalidateQueries({ queryKey: ["components"] });
+      void queryClient.invalidateQueries({ queryKey: fieldGroupKeys.all() });
     };
     window.addEventListener("nextly:schema-updated", handler);
     return () => window.removeEventListener("nextly:schema-updated", handler);

@@ -38,15 +38,23 @@ export interface DocumentPanelProps {
 }
 
 /**
- * Derive the displayed pill state from the persisted status + form dirty.
- * "Modified" only applies to published entries with local changes; drafts
- * stay drafts regardless of dirty (drafts are inherently work-in-progress).
+ * Derive the displayed pill state from the persisted status, the form dirty
+ * flag, and whether a working draft is pending.
+ *
+ * - "Changed" — a published entry with a persisted working draft waiting to be
+ *   promoted (Payload's model). This is the authoritative divergence from live,
+ *   so it wins over "Modified": the enabled Save button already signals any
+ *   extra unsaved local edits.
+ * - "Modified" — a published entry with local edits not yet saved. Drafts never
+ *   show Modified (they are inherently work-in-progress).
  */
-export type PillState = "draft" | "modified" | "published";
+export type PillState = "draft" | "modified" | "changed" | "published";
 export function pillStateFromForm(
   status: string | undefined,
-  isDirty: boolean
+  isDirty: boolean,
+  hasWorkingDraft = false
 ): PillState {
+  if (status === "published" && hasWorkingDraft) return "changed";
   if (status === "published" && isDirty) return "modified";
   return status === "published" ? "published" : "draft";
 }
@@ -80,7 +88,16 @@ export function DocumentPanel({
   // Hide entirely on create — nothing to show until the entry exists.
   if (isCreate) return null;
 
-  const pill = pillStateFromForm(entry?.status as string | undefined, isDirty);
+  // A published entry whose overlay read carried `_isWorkingDraft` has a pending
+  // working draft (draft/published split) — surfaced as the "Changed" state.
+  const hasWorkingDraft =
+    (entry as { _isWorkingDraft?: boolean } | null | undefined)
+      ?._isWorkingDraft === true;
+  const pill = pillStateFromForm(
+    entry?.status as string | undefined,
+    isDirty,
+    hasWorkingDraft
+  );
 
   // i18n M7: per-language translation-status pills (spec §10). Present only when the entry was
   // fetched with `?translation-status=1` on a localized collection; inert otherwise.
@@ -151,18 +168,24 @@ function RowIcon({ icon: Icon }: { icon: typeof Hash }) {
 function StatusRow({ state }: { state: PillState }) {
   // Why: heavier pill than the meta-strip variant — matched padding and
   // font weight so the lifecycle state reads as the most important row.
-  // The Modified state uses amber-50/foreground (light) and amber-200
-  // text on a transparent bg (dark) — distinct from Draft (neutral) and
-  // Published (foreground/background). Avoids saturated AI-style hues.
+  // Both pending states use the muted amber `warning` token (light + dark) —
+  // distinct from Draft (neutral) and Published (foreground/background), and
+  // avoiding saturated AI-style hues. "Modified" flags unsaved local edits;
+  // "Changed" flags a persisted working draft pending publish. They share the
+  // colour because both mean "diverges from what's live"; the label says which,
+  // and pillStateFromForm guarantees they never render at once.
   const PILL_CLASS: Record<PillState, string> = {
     draft: "bg-muted text-muted-foreground border border-border",
     modified:
+      "bg-warning-100 text-warning-800 border border-warning-200 dark:bg-warning-950/40 dark:text-warning-200 dark:border-warning-900",
+    changed:
       "bg-warning-100 text-warning-800 border border-warning-200 dark:bg-warning-950/40 dark:text-warning-200 dark:border-warning-900",
     published: "bg-foreground text-background",
   };
   const PILL_LABEL: Record<PillState, string> = {
     draft: "Draft",
     modified: "Modified",
+    changed: "Changed",
     published: "Published",
   };
   return (

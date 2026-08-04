@@ -11,6 +11,7 @@
  */
 
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
+import { defineOwnProperty } from "../../shared/lib/own-property";
 
 import { componentTypeSegment } from "./expand-component-fields";
 import type {
@@ -101,7 +102,9 @@ function stripValue(
     for (const [k, v] of Object.entries(value)) {
       const childPaths = prefixes.map(p => (p ? `${p}.${k}` : k));
       if (childPaths.some(candidate => denied.has(candidate))) continue;
-      out[k] = stripValue(v, denied, childPaths);
+      // Defined, not assigned: a JSON column can hold a `__proto__` key, and
+      // assigning it would drop it from the envelope rather than carry it.
+      defineOwnProperty(out, k, stripValue(v, denied, childPaths));
     }
     return out;
   }

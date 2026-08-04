@@ -21,6 +21,7 @@ import { generateSqliteCoreTableStatements } from "../../database/sqlite-core-ta
 // MySQL because it has no caller-supplied URL. Once F8 PR 2/3 collapses
 // the two paths, this can collapse back to a single import.
 import { CollectionRegistryService } from "../../domains/collections/services/collection-registry-service";
+import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
 import { createApplyDesiredSchema } from "../../domains/schema/pipeline/apply";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
@@ -42,6 +43,7 @@ import type {
   DesiredSingle,
 } from "../../domains/schema/pipeline/types";
 import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
+import { columnsDeclaredBy } from "../../domains/schema/services/field-column-descriptor";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 // F8 PR 1: SchemaPushService dropped from this module. The env check
 // (was getEnvironment().isProduction) is now an inline NODE_ENV read.
@@ -56,9 +58,9 @@ import { getProductionNotifier } from "../../runtime/notifications/index";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import type { CollectionSyncResultWithValidation } from "../../services/collections/collection-sync-service";
 import {
-  ComponentRegistryService,
+  FieldGroupRegistryService,
   type SyncComponentResult,
-} from "../../services/components/component-registry-service";
+} from "../../services/field-groups/field-group-registry-service";
 import type { Logger as ServiceLogger } from "../../services/shared/types";
 import {
   SingleRegistryService,
@@ -245,8 +247,13 @@ export async function performAutoSync(
   // here to wire `setTableResolver` so adapter CRUD on dynamic tables
   // works for the rest of this CLI invocation (seed scripts, etc.).
   const schemaRegistry = new SchemaRegistry(dialect);
-  const staticSchemas = getDialectTables(dialect);
-  schemaRegistry.registerStaticSchemas(staticSchemas);
+  // Both spellings of the field-group registry: the schema registry keys a
+  // table by the physical name its Drizzle object carries, so a database whose
+  // storage migration has run has no handle for its registry otherwise.
+  schemaRegistry.registerStaticSchemas({
+    ...getDialectTables(dialect),
+    ...getFieldGroupRegistryAliases(dialect),
+  });
 
   // F8 PR 1: collections flow through the F2 applyDesiredSchema pipeline
   // (rename detection + classifier + pre-cleanup + pushSchema, all inside
@@ -345,7 +352,7 @@ export async function performAutoSync(
     drizzleAdapter,
     registryLogger
   );
-  const componentRegistry = new ComponentRegistryService(
+  const componentRegistry = new FieldGroupRegistryService(
     drizzleAdapter,
     registryLogger
   );
@@ -627,17 +634,17 @@ export async function performSinglesAutoSync(
         // Ensure system columns (title, slug) exist — they may be missing
         // on tables created before the fix that added them to the schema.
         // Singles always need title/slug for createDefaultDocument().
+        // Matched on the COLUMN each field becomes, as `defineSingle` and the generators do. An
+        // author writing `Title` already owns the `title` column, so adding the system field
+        // beside it asks for that column twice.
         const systemFields = [];
-        const hasTitleField = (
-          singleConfig.fields as Array<{ name?: string }>
-        ).some(f => f.name === "title");
-        if (!hasTitleField) {
+        const declaredColumns = columnsDeclaredBy(
+          singleConfig.fields as Array<{ name?: string; type?: string }>
+        );
+        if (!declaredColumns.has("title")) {
           systemFields.push({ name: "title", type: "text" });
         }
-        const hasSlugField = (
-          singleConfig.fields as Array<{ name?: string }>
-        ).some(f => f.name === "slug");
-        if (!hasSlugField) {
+        if (!declaredColumns.has("slug")) {
           systemFields.push({ name: "slug", type: "text" });
         }
 
@@ -863,7 +870,7 @@ export async function performSinglesReconcile(
 export async function performComponentsAutoSync(
   config: LoadConfigResult["config"],
   adapter: CLIDatabaseAdapter,
-  componentRegistry: ComponentRegistryService,
+  componentRegistry: FieldGroupRegistryService,
   syncResult: SyncComponentResult,
   _options: ResolvedDevOptions,
   context: CommandContext
@@ -881,12 +888,12 @@ export async function performComponentsAutoSync(
   logger.info(`Auto-syncing ${componentsToSync.length} component table(s)...`);
 
   // Import the component schema service for generating migration SQL
-  const { ComponentSchemaService } = await import(
-    "../../services/components/component-schema-service"
+  const { FieldGroupSchemaService } = await import(
+    "../../services/field-groups/field-group-schema-service"
   );
   const dialect = (adapter as unknown as DrizzleAdapter).getCapabilities()
     .dialect;
-  const schemaService = new ComponentSchemaService(dialect);
+  const schemaService = new FieldGroupSchemaService(dialect);
 
   const synced: string[] = [];
   const errors: Array<{ slug: string; error: string }> = [];

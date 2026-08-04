@@ -16,13 +16,16 @@ import type { CollectionConfig } from "nextly";
 
 import { formsCollection } from "./collections/forms";
 import { submissionsCollection } from "./collections/submissions";
+import {
+  asFormDocument,
+  asSubmissionDocument,
+  asSubmissionDocuments,
+} from "./document-shapes";
 import type {
   BeforeEmailFilterContext,
   FormNotification,
   FormBuilderPluginOptions,
   FormEmailNotification,
-  FormDocument,
-  SubmissionDocument,
   ResolvedFormBuilderConfig,
 } from "./types";
 import { evaluateSingleCondition } from "./utils/evaluate-conditions";
@@ -305,8 +308,8 @@ export function formBuilder(
             // The service returns parsed entries; the export helpers declare
             // the document shapes — the boundary cast is through unknown.
             const csv = exportToCSV(
-              items as unknown as SubmissionDocument[],
-              form as unknown as FormDocument
+              asSubmissionDocuments(items),
+              asFormDocument(form)
             );
             const filename = generateExportFilename(
               typeof form.slug === "string" ? form.slug : "form",
@@ -418,8 +421,8 @@ export function formBuilder(
             resolvedConfig.beforeEmail!({
               emails,
               // Boundary: loose runtime documents → the user's typed contract.
-              form: ctx.form as unknown as FormDocument,
-              submission: ctx.submission as unknown as SubmissionDocument,
+              form: asFormDocument(ctx.form),
+              submission: asSubmissionDocument(ctx.submission),
             })
         );
       }

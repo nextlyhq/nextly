@@ -34,11 +34,19 @@ describe("form-builder contributes.admin (P5 dogfood)", () => {
     expect(collection.admin?.disableCreate).toBe(true);
   });
 
-  it("opts submissions out of webhook recording (they carry ipAddress/userAgent)", () => {
-    // Submission records hold submitted content plus visitor metadata
-    // (ipAddress, userAgent), so they are excluded from the webhook outbox to
-    // keep that PII off the delivery path — hence `webhooks: false`.
+  it("emits a curated form.submission.created instead of the PII-bearing entry.* events", () => {
+    // Submission records hold submitted answers plus visitor metadata
+    // (ipAddress, userAgent). The default entry.* events stay suppressed
+    // (record: false) so none of that reaches the outbox; a curated
+    // form.submission.created carries only safe metadata (form, submittedAt,
+    // status) so subscribers still learn a submission arrived.
     const collection = submissionsCollection(formBuilder().config);
-    expect(collection.webhooks).toBe(false);
+    expect(collection.webhooks).toEqual({
+      record: false,
+      emit: {
+        event: "form.submission.created",
+        fields: ["form", "submittedAt", "status"],
+      },
+    });
   });
 });

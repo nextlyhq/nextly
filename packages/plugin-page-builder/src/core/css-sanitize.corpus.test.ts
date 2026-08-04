@@ -50,12 +50,21 @@ describe("custom CSS adversarial corpus", () => {
     }
   });
 
-  it("strips <script> and </style> injection attempts", () => {
-    const out = clean(
-      "a{color:red}</style><script>alert(1)</script><style>b{}"
-    ).toLowerCase();
-    expect(out).not.toContain("<script");
-    expect(out).not.toContain("</style");
+  it("cannot end the style element, however the markup is spelled", () => {
+    // Both spellings, because only one of them used to get through. The escaped
+    // form contains no markup in the source: `csstree.generate` decodes it into
+    // markup on the way out, which is why this is checked on the output.
+    for (const attempt of [
+      "a{color:red}</style><script>alert(1)</script><style>b{}",
+      `a{content:"\\3c /style>\\3c img src=x onerror=alert(1)>"}`,
+      `a{background:url("\\3c /style>")}`,
+      `a{content:"\\3c !--"}`,
+    ]) {
+      const out = clean(attempt).toLowerCase();
+      expect(out).not.toContain("</style");
+      expect(out).not.toContain("</script");
+      expect(out).not.toContain("<!");
+    }
   });
 
   it("returns a string (never throws) on deeply malformed input", () => {

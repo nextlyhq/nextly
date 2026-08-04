@@ -32,6 +32,7 @@ import { resolveLocalizedFieldNames } from "../../../i18n/classify-fields";
 import {
   getColumnDescriptor,
   getSystemColumnDescriptors,
+  toSnakeCase,
 } from "../../services/field-column-descriptor";
 
 import { indexKey } from "./index-util";
@@ -211,10 +212,13 @@ export function buildDesiredTableFromFields(
   // Inject reserved system columns first - mirrors runtime-schema-generator's
   // behavior. title/slug only when a column-producing user field replaces them
   // (user wins). status only when Draft/Published is enabled.
-  const hasTitleField = fields.some(
-    f => f.name === "title" && producesColumn(f)
-  );
-  const hasSlugField = fields.some(f => f.name === "slug" && producesColumn(f));
+  // Matched on the COLUMN the field becomes, so this agrees with the runtime schema and the DDL
+  // generator. Comparing declared names makes `Title` suppress the column in one place and not
+  // the others, and the diff then reconciles a column the table does not have.
+  const declaresColumn = (column: string): boolean =>
+    fields.some(f => toSnakeCase(f.name) === column && producesColumn(f));
+  const hasTitleField = declaresColumn("title");
+  const hasSlugField = declaresColumn("slug");
   for (const reserved of getSystemColumnDescriptors(dialect, {
     hasTitleField,
     hasSlugField,
@@ -284,8 +288,24 @@ export function buildDesiredTableFromComponentFields(
   tableName: string,
   fields: MinimalFieldDef[],
   dialect: SupportedDialect,
-  options: { localized?: boolean } = {}
+  options: {
+    localized?: boolean;
+    /**
+     * The discriminator this table actually carries.
+     *
+     * 🔴 A system column, so its name is never a preference: the only two
+     * spellings are the two storage generations, and which one a table has is a
+     * fact about that table. Naming the other turns the diff into an add paired
+     * with a destructive drop, which the classifier refuses — so the operation
+     * never applies and never goes away.
+     *
+     * Defaults to the spelling this release's DDL writes, which is right for a
+     * table about to be created and for every database that has not migrated.
+     */
+    typeColumn?: string;
+  } = {}
 ): TableSpec {
+  const typeColumn = options.typeColumn ?? STORAGE_FORMAT.columns.type;
   const columns: ColumnSpec[] = [];
 
   // i18n: when the component is localized, its translatable fields live in the
@@ -295,7 +315,7 @@ export function buildDesiredTableFromComponentFields(
     ? new Set(resolveLocalizedFieldNames(fields, true))
     : new Set<string>();
 
-  // Component system columns — mirrors component-schema-service.ts DDL.
+  // Component system columns — mirrors field-group-schema-service.ts DDL.
   if (dialect === "postgresql") {
     columns.push({
       name: "id",
@@ -331,7 +351,7 @@ export function buildDesiredTableFromComponentFields(
       default: undefined,
     });
     columns.push({
-      name: STORAGE_FORMAT.columns.type,
+      name: typeColumn,
       type: "varchar",
       nullable: true,
       default: undefined,
@@ -371,7 +391,7 @@ export function buildDesiredTableFromComponentFields(
       default: undefined,
     });
     columns.push({
-      name: STORAGE_FORMAT.columns.type,
+      name: typeColumn,
       type: "varchar(255)",
       nullable: true,
       default: undefined,
@@ -412,7 +432,7 @@ export function buildDesiredTableFromComponentFields(
       default: undefined,
     });
     columns.push({
-      name: STORAGE_FORMAT.columns.type,
+      name: typeColumn,
       type: "text",
       nullable: true,
       default: undefined,
@@ -480,7 +500,7 @@ export function buildDesiredTableFromComponentFields(
   }
 
   // Component tables have no slug. They get a composite index on the parent-link
-  // columns plus the system created_at index — mirroring component-schema-service.ts
+  // columns plus the system created_at index — mirroring field-group-schema-service.ts
   // (idx_<table>_parent). The parent index is required so the migrate:create snapshot
   // matches the table the apply pipeline builds; otherwise the live index reads as an
   // unmanaged extra and `migrate:resolve --applied` verify emits a spurious drop_index.
@@ -498,7 +518,7 @@ export function buildDesiredTableFromComponentFields(
     // taken from the shared helper rather than restated: a component table
     // materialises `idx_<table>_<column>` for an indexed or single-relationship
     // field and `uq_<table>_<column>` for a unique one, exactly as
-    // ComponentSchemaService creates them. Listing only the parent and
+    // FieldGroupSchemaService creates them. Listing only the parent and
     // created_at indexes here left the rest out of the snapshot, so a SQLite
     // rebuild dropped them and nothing put them back — including the unique
     // ones, which is a constraint silently disappearing, not just an index.

@@ -23,8 +23,6 @@ import {
   varchar,
 } from "drizzle-orm/pg-core";
 
-import { users } from "../users/postgres";
-
 // Append-only by application convention — operators should revoke
 // UPDATE / DELETE GRANTs on this table in production for stricter
 // integrity.
@@ -57,17 +55,33 @@ export const auditLog = pgTable(
  * operations. User name and email are denormalized to avoid JOINs on every
  * dashboard load. Entry title is a snapshot at action time.
  *
+ * `user_id` carries NO foreign key, deliberately. It is an opaque historical
+ * reference to whoever acted, and it has to outlive them: a cascade would let
+ * the subject of an audit trail erase it by being deleted, and a restricting
+ * constraint would make deleting an account that ever did anything fail
+ * outright. The actor's identity is instead erased in place —
+ * `eraseActorPersonalData` NULLs `user_name` / `user_email` and stamps
+ * `identity_erased_at` — so the audit FACT survives while the personal data
+ * does not.
+ *
+ * `user_name` / `user_email` are therefore nullable: NULL means erased, and
+ * `identity_erased_at` records when, which is the evidence an erasure request
+ * needs and which a bare NULL cannot supply. It times THIS ROW's erasure
+ * rather than the account's deletion: for an entry erased by a deletion the
+ * two coincide, because the erasure runs inside that transaction, and for one
+ * written after the account was already gone nothing retains when that
+ * deletion happened — so naming it for the deletion would put a number in an
+ * audit field that no record supports.
+ *
  * Retention: 90-day default cleanup via ActivityLogService.cleanupOldActivities()
  */
 export const activityLog = pgTable(
   "activity_log",
   {
     id: text("id").primaryKey(),
-    userId: text("user_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
-    userName: text("user_name").notNull(),
-    userEmail: text("user_email").notNull(),
+    userId: text("user_id").notNull(),
+    userName: text("user_name"),
+    userEmail: text("user_email"),
     action: varchar("action", { length: 10 }).notNull(), // 'create' | 'update' | 'delete'
     collection: varchar("collection", { length: 255 }).notNull(),
     entryId: text("entry_id"),
@@ -76,6 +90,7 @@ export const activityLog = pgTable(
     createdAt: timestamp("created_at", { withTimezone: false })
       .defaultNow()
       .notNull(),
+    identityErasedAt: timestamp("identity_erased_at", { withTimezone: false }),
   },
   t => [
     index("idx_activity_log_created_at").on(t.createdAt),

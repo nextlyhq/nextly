@@ -3,6 +3,7 @@ import type * as React from "react";
 
 import { cn } from "../lib/utils";
 
+/** @experimental */
 function Separator({
   className,
   orientation = "horizontal",

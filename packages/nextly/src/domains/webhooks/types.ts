@@ -75,12 +75,16 @@ export type WebhookEventSubscription =
   | typeof WEBHOOK_EVENT_WILDCARD;
 
 /** Resource families an event can be about. */
-export type WebhookResourceKind =
-  | "entry"
-  | "single"
-  | "media"
-  | "user"
-  | "form";
+export const WEBHOOK_RESOURCE_KINDS = [
+  "entry",
+  "single",
+  "media",
+  "user",
+  "form",
+] as const;
+
+/** Resource families an event can be about. */
+export type WebhookResourceKind = (typeof WEBHOOK_RESOURCE_KINDS)[number];
 
 /** What triggered an event; feeds the audit trail. */
 export type WebhookActorType = "user" | "apiKey" | "system";
@@ -151,7 +155,28 @@ export interface WebhookEvent {
    * published. Additive + optional: existing subscribers are unaffected.
    */
   statusChange?: { from: string | null; to: string };
+  /**
+   * Whether the action this event describes succeeded.
+   *
+   * Absent means `success`, which is what every event recorded today is: the
+   * outbox row is written inside the transaction of a change that commits, so
+   * a recorded event is by construction a completed one. The field exists so
+   * that a refusal — a denied publish, a rejected write — can be recorded as
+   * the distinct thing it is rather than being indistinguishable from a change
+   * that happened. Additive + optional: existing subscribers are unaffected.
+   *
+   * `success | failure | unknown` is the one outcome vocabulary the audit and
+   * observability schemas agree on, and the only field NIST SP 800-53 AU-3(e)
+   * requires that this envelope did not already carry.
+   */
+  outcome?: WebhookEventOutcome;
 }
+
+/** The outcome vocabulary shared by every audit record. */
+export type WebhookEventOutcome = "success" | "failure" | "unknown";
+
+/** What a recorded event means when it states no outcome. */
+export const DEFAULT_EVENT_OUTCOME: WebhookEventOutcome = "success";
 
 /** Lifecycle of one delivery row in the outbox ledger. */
 export type DeliveryStatus =

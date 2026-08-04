@@ -23,7 +23,7 @@ import { getService } from "../di";
 import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
-import type { ComponentRegistryService } from "../services/components/component-registry-service";
+import type { FieldGroupRegistryService } from "../services/field-groups/field-group-registry-service";
 import { requireBuilderEnabled } from "../shared/builder-access";
 
 import { assertValidFieldsPayload } from "./fields-payload";
@@ -39,9 +39,9 @@ interface RouteContext {
   params: Promise<{ slug: string }>;
 }
 
-async function getComponentRegistry(): Promise<ComponentRegistryService> {
+async function getComponentRegistry(): Promise<FieldGroupRegistryService> {
   await getCachedNextly();
-  return getService("componentRegistryService");
+  return getService("fieldGroupRegistryService");
 }
 
 /**

@@ -2,6 +2,7 @@ import { Search, Loader2, X } from "lucide-react";
 
 /**
  * Props for TableSearch component
+ * @experimental
  */
 export interface TableSearchProps {
   /** Current search value */
@@ -37,6 +38,7 @@ export interface TableSearchProps {
  *   isLoading={loading}
  * />
  * ```
+ * @experimental
  */
 export function TableSearch({
   value,

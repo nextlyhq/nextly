@@ -20,6 +20,7 @@
 import { actorFromAuthContext } from "../auth/request-actor";
 import { getService } from "../di";
 import type { SingleResult } from "../domains/singles/types";
+import { errorFromServiceEnvelope } from "../errors/from-service-envelope";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import { withTimezoneFormatting } from "../lib/date-formatting";
@@ -81,29 +82,26 @@ function throwFromSingleResult<T>(
   };
   if (result.errors) logContext.legacyErrors = result.errors;
 
-  if (result.statusCode === 404) {
-    throw NextlyError.notFound({ logContext });
-  }
-
-  // A stored Single access rule (or RBAC) denial surfaces as 403 now that
-  // route writes run with overrideAccess:false; map it to a forbidden error
-  // instead of letting it fall through to a 500.
-  if (result.statusCode === 403) {
-    throw NextlyError.forbidden({ logContext });
-  }
-
-  if (result.statusCode === 400) {
-    throw NextlyError.validation({
-      errors: (result.errors ?? []).map(e => ({
-        path: e.field ?? "",
-        code: "INVALID",
+  // Rebuilt through the shared converter, so a Single hook's typed error --
+  // `authRequired()`, `rateLimited()`, a plugin's own code -- reaches the
+  // caller as itself. Every status outside 400/403/404 used to become a 500,
+  // and a rate limit lost the interval the route needs for `Retry-After`.
+  //
+  // The legacy `{field}` issues are normalised to the canonical `{path}` shape
+  // the converter reads.
+  throw errorFromServiceEnvelope(
+    {
+      ...result,
+      errors: result.errors?.map(e => ({
+        path: e.field,
+        // The per-field reason travels with the issue; dropping it here would
+        // have the converter substitute a generic one.
+        code: e.code,
         message: e.message,
       })),
-      logContext,
-    });
-  }
-
-  throw NextlyError.internal({ logContext });
+    },
+    logContext
+  );
 }
 
 const VALID_RICH_TEXT_FORMATS = ["json", "html", "both"] as const;

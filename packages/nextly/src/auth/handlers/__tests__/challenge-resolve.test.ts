@@ -71,6 +71,13 @@ describe("handleChallengeResolve (D71)", () => {
     expect(body.message).toBe("Logged in.");
     expect(body.user).toMatchObject({ id: "u1", email: "a@b.c" });
     expect(typeof body.accessToken).toBe("string");
+    // A user who always completes a second factor logs in through THIS handler,
+    // never through the one that first asked for the password. Recording the
+    // success only there would leave that population absent from the trail —
+    // which is the population an operator most wants to see in it.
+    expect(deps.auditLog.write).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "login-succeeded", actorUserId: "u1" })
+    );
   });
 
   it("re-challenges with a fresh pending token on a wrong code", async () => {

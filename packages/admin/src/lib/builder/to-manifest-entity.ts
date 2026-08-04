@@ -10,6 +10,7 @@
  * @module lib/builder/to-manifest-entity
  * @since v0.0.3-alpha (Plan D4)
  */
+import { applyCarriedOptions } from "./field-transformers";
 import { type UiSchemaFieldType } from "./ui-schema-mode";
 
 /** Validation shape carried by builder fields (superset of FieldDefinition's). */
@@ -74,6 +75,12 @@ export interface BuilderFieldInput {
   repeatable?: boolean;
   /** Nested fields for container types (repeater/group/component). */
   fields?: BuilderFieldInput[];
+  /**
+   * Options declared by the field's own type. Open-ended because a
+   * plugin-contributed type names them, so they are carried rather than
+   * modelled.
+   */
+  pluginOptions?: Record<string, unknown>;
 }
 
 export interface BuilderSettingsInput {
@@ -84,6 +91,9 @@ export interface BuilderSettingsInput {
   localized?: boolean;
   /** Whether every save is recorded as a restorable version. */
   versions?: boolean;
+  /** Durable versions kept per document. `false` = unlimited, a number = keep
+   *  that many, undefined = the default (50). Ignored when `versions` is off. */
+  versionsMaxPerDoc?: number | false;
   /** Whether writes bust cache tags. Defaults on; false opts out. */
   revalidate?: boolean;
   /** Whether writes are recorded to the webhook outbox. Defaults on; false opts out. */
@@ -147,6 +157,9 @@ export interface ManifestEntity {
   localized?: boolean;
   /** Whether every save is recorded as a restorable version. */
   versions?: boolean;
+  /** Durable versions kept per document. `false` = unlimited, a number = keep
+   *  that many, undefined = the default (50). Ignored when `versions` is off. */
+  versionsMaxPerDoc?: number | false;
   /** Whether writes bust cache tags. Defaults on; false opts out. */
   revalidate?: boolean;
   /** Whether writes are recorded to the webhook outbox. Defaults on; false opts out. */
@@ -209,6 +222,9 @@ export function mapBuilderFieldToManifest(f: BuilderFieldInput): ManifestField {
   if (f.fields !== undefined) {
     out.fields = f.fields.map(mapBuilderFieldToManifest);
   }
+  // A plugin field type names its own options, so no fixed allowlist can carry
+  // them. Applied last, leaving every modelled key above authoritative.
+  applyCarriedOptions(out, f.pluginOptions);
   return out;
 }
 
@@ -224,6 +240,7 @@ export function applyCommonSettings(
     status,
     localized,
     versions,
+    versionsMaxPerDoc,
     revalidate,
     webhooks,
   } = settings;
@@ -237,6 +254,9 @@ export function applyCommonSettings(
   if (status !== undefined) entity.status = status;
   if (localized !== undefined) entity.localized = localized;
   if (versions !== undefined) entity.versions = versions;
+  if (versionsMaxPerDoc !== undefined) {
+    entity.versionsMaxPerDoc = versionsMaxPerDoc;
+  }
   if (revalidate !== undefined) entity.revalidate = revalidate;
   if (webhooks !== undefined) entity.webhooks = webhooks;
 }

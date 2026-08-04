@@ -53,6 +53,7 @@ import { cn } from "../lib/utils";
  * - Interactive cards MUST have role, tabIndex, and keyboard handlers (see above)
  * - Ensure sufficient color contrast for all text (WCAG 2.2 AA minimum)
  * - Use aria-label or aria-labelledby for cards without visible text labels
+ * @experimental
  */
 const cardVariants = cva(
   "bg-card text-foreground rounded-lg  border border-border   transition-all duration-200",
@@ -70,9 +71,11 @@ const cardVariants = cva(
   }
 );
 
+/** @experimental */
 export type CardProps = HTMLAttributes<HTMLDivElement> &
   VariantProps<typeof cardVariants>;
 
+/** @experimental */
 const Card = forwardRef<HTMLDivElement, CardProps>(
   ({ className, variant, ...props }, ref) => {
     return (
@@ -87,6 +90,7 @@ const Card = forwardRef<HTMLDivElement, CardProps>(
 );
 Card.displayName = "Card";
 
+/** @experimental */
 export interface CardHeaderProps extends HTMLAttributes<HTMLDivElement> {
   /**
    * Whether to hide the bottom  border border-border separator between header and content.
@@ -95,6 +99,7 @@ export interface CardHeaderProps extends HTMLAttributes<HTMLDivElement> {
   noBorder?: boolean;
 }
 
+/** @experimental */
 const CardHeader = forwardRef<HTMLDivElement, CardHeaderProps>(
   ({ className, noBorder = false, ...props }, ref) => {
     return (
@@ -120,8 +125,10 @@ const CardHeader = forwardRef<HTMLDivElement, CardHeaderProps>(
 );
 CardHeader.displayName = "CardHeader";
 
+/** @experimental */
 export type CardTitleProps = HTMLAttributes<HTMLHeadingElement>;
 
+/** @experimental */
 const CardTitle = forwardRef<HTMLHeadingElement, CardTitleProps>(
   ({ className, ...props }, ref) => {
     return (
@@ -136,8 +143,10 @@ const CardTitle = forwardRef<HTMLHeadingElement, CardTitleProps>(
 );
 CardTitle.displayName = "CardTitle";
 
+/** @experimental */
 export type CardDescriptionProps = HTMLAttributes<HTMLParagraphElement>;
 
+/** @experimental */
 const CardDescription = forwardRef<HTMLParagraphElement, CardDescriptionProps>(
   ({ className, ...props }, ref) => {
     return (
@@ -152,8 +161,10 @@ const CardDescription = forwardRef<HTMLParagraphElement, CardDescriptionProps>(
 );
 CardDescription.displayName = "CardDescription";
 
+/** @experimental */
 export type CardActionProps = HTMLAttributes<HTMLDivElement>;
 
+/** @experimental */
 const CardAction = forwardRef<HTMLDivElement, CardActionProps>(
   ({ className, ...props }, ref) => {
     return (
@@ -168,8 +179,10 @@ const CardAction = forwardRef<HTMLDivElement, CardActionProps>(
 );
 CardAction.displayName = "CardAction";
 
+/** @experimental */
 export type CardContentProps = HTMLAttributes<HTMLDivElement>;
 
+/** @experimental */
 const CardContent = forwardRef<HTMLDivElement, CardContentProps>(
   ({ className, ...props }, ref) => {
     return (
@@ -184,8 +197,10 @@ const CardContent = forwardRef<HTMLDivElement, CardContentProps>(
 );
 CardContent.displayName = "CardContent";
 
+/** @experimental */
 export type CardFooterProps = HTMLAttributes<HTMLDivElement>;
 
+/** @experimental */
 const CardFooter = forwardRef<HTMLDivElement, CardFooterProps>(
   ({ className, ...props }, ref) => {
     return (

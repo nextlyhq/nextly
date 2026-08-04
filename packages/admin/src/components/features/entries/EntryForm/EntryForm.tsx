@@ -32,6 +32,11 @@ import { cn } from "@admin/lib/utils";
 
 import { EntryLocaleProvider } from "../EntryLocaleContext";
 
+import {
+  effectiveEntryStatus,
+  isSlugPerLocale,
+  useHasPublicAddress,
+} from "./entry-address";
 import { EntryFormActions } from "./EntryFormActions";
 import { EntryFormContent } from "./EntryFormContent";
 import { EntryFormContextProvider } from "./EntryFormContext";
@@ -41,9 +46,11 @@ import { EntryFormToolbarSlots } from "./EntryFormToolbarSlots";
 import { EntryMetaStrip } from "./EntryMetaStrip";
 import { EntrySystemHeader } from "./EntrySystemHeader";
 import { FormErrorSummary } from "./FormErrorSummary";
+import { PublicUrlChangeNotice } from "./PublicUrlChangeNotice";
 import {
   useEntryForm,
   getCollectionFields,
+  resolveDefaultSaveIntent,
   type EntryFormCollection,
   type EntryData,
   type EntryFormMode,
@@ -71,6 +78,13 @@ export interface EntryFormProps {
   onCancel?: () => void;
   /** Active content locale (i18n M7) — saves target this language. */
   locale?: string;
+  /**
+   * Whether the parent read this entry with the working-draft overlay (`draft`).
+   * Forwarded to the update so its optimistic cache key matches the query on
+   * screen. Omit for the full-page editor (it reads the overlay for a drafts
+   * collection); an embedded editor reading the live row passes `false`.
+   */
+  readDraft?: boolean;
   /** Called when the user switches the active content language (i18n M7). */
   onLocaleChange?: (locale: string) => void;
   /**
@@ -176,6 +190,7 @@ export function EntryForm({
   onDelete,
   onCancel,
   locale,
+  readDraft,
   onLocaleChange,
   sourceValues,
   embedded = false,
@@ -185,6 +200,7 @@ export function EntryForm({
     form,
     handleSubmit,
     handleDelete,
+    handleDiscardWorkingDraft,
     handleCancel,
     isSubmitting,
     isDirty,
@@ -193,6 +209,7 @@ export function EntryForm({
     entry,
     mode,
     locale,
+    readDraft,
     onSuccess: data => {
       onSuccess?.(data);
     },
@@ -290,21 +307,55 @@ export function EntryForm({
   // slug-gen logic that used to live in TextInput never fired for the
   // configured title. Mounting the hook here closes that gap and follows the
   // configured title field name (not a hardcoded "title"/"name").
+  // Once an entry has a public address its slug stops following its title. That address is in
+  // links, feeds, sitemaps and search results, so re-deriving it from an edited title retires a URL
+  // the author never chose to change and the old one 404s. Editing the slug directly still works;
+  // this only stops the automatic rewrite.
+  // The auto-injected slug is shared across languages, so one address serves them all and any
+  // published language keeps it frozen. Only a slug the author opted into localizing belongs to
+  // the language in view.
+  const hasPublicAddress = useHasPublicAddress({
+    mode,
+    hasStatus,
+    entry,
+    locale,
+    slugLocalized: isSlugPerLocale(slugField, collection.localized === true),
+    collectionLocalized: collection.localized === true,
+    defaultLocale,
+    mutationPending: isSubmitting,
+  });
+
   useAutoSlug({
     form,
     titleFieldName: titleField?.name ?? "title",
     slugFieldName: slugField?.name ?? "slug",
     enabled: !!titleField && !!slugField,
+    frozen: hasPublicAddress,
   });
 
   // ---------------------------------------------------------------------------
   // Keyboard Shortcuts (standalone mode only)
   // ---------------------------------------------------------------------------
 
+  // Route Cmd/Ctrl+S to the same intent the primary Save button uses for this
+  // document's state, so a keyboard save and a button save behave identically:
+  // on a drafts collection a published entry stores a working draft
+  // (status-less), on a non-drafts collection it re-asserts published, and any
+  // other editing state saves a draft. Create mode and non-status collections
+  // keep the intent-less single-Save behavior.
+  const keyboardSaveIntent = resolveDefaultSaveIntent({
+    mode,
+    hasStatus,
+    // The ACTIVE locale's status, not the main row's — the same effective status
+    // the header's submit buttons use, so a keyboard save and a button save agree.
+    effectiveStatus: effectiveEntryStatus(entry, locale, defaultLocale),
+    draftsEnabled: collection.draftsEnabled === true,
+  });
+
   // Only enable shortcuts in standalone mode (not embedded modals)
   useEntryFormShortcuts({
     onSave: () => {
-      void handleSubmit();
+      void handleSubmit(undefined, keyboardSaveIntent);
     },
     onCancel: handleCancel,
     isDirty,
@@ -329,6 +380,17 @@ export function EntryForm({
           <div className="space-y-6">
             {/* Error summary at top of form */}
             <FormErrorSummary errors={errors} submitCount={submitCount} />
+            {/* This branch renders every collection field, the editable slug among them, but not
+                the meta strip that carries the notice in the standalone layout. Quick-edit from a
+                relationship picker lands here on existing entries, so without this the one place
+                the warning is skipped is also a place a live URL can be rewritten and saved. */}
+            {slugField && (
+              <PublicUrlChangeNotice
+                slugName={slugField.name ?? "slug"}
+                active={hasPublicAddress}
+                className="block"
+              />
+            )}
             {/* Forward the form mode so write-only password fields render
                 their edit-mode affordance: on edit a blank password input
                 means "keep the current password" (the stored hash never
@@ -382,6 +444,7 @@ export function EntryForm({
                   mode={mode}
                   titleField={titleField}
                   hasStatus={hasStatus}
+                  draftsEnabled={collection.draftsEnabled === true}
                   isSubmitting={isSubmitting}
                   isDirty={isDirty}
                   entry={entry}
@@ -390,6 +453,7 @@ export function EntryForm({
                   historyEnabled={historyEnabledFrom(collection)}
                   locale={locale}
                   onLocaleChange={onLocaleChange}
+                  localized={collection.localized === true}
                   toolbarSlot={
                     <EntryFormToolbarSlots
                       context="collection"
@@ -405,19 +469,34 @@ export function EntryForm({
                   onSaveChanges={() => {
                     void handleSubmit(undefined, "save-changes");
                   }}
+                  onSaveWorkingDraft={() => {
+                    void handleSubmit(undefined, "save-working-draft");
+                  }}
                   onUnpublish={() => {
                     void handleSubmit(undefined, "unpublish");
                   }}
                   onCancel={handleCancel}
                   onDelete={handleDelete}
+                  onDiscardWorkingDraft={handleDiscardWorkingDraft}
                   isRailCollapsed={railCollapsed}
                   onToggleRail={mode === "edit" ? toggleRail : undefined}
                 />
                 <EntryMetaStrip
                   slugField={slugField}
                   hasStatus={hasStatus}
-                  status={(entry?.status as string | undefined) ?? "draft"}
+                  // The pill reports the language being edited, matching the header's submit
+                  // affordances. Reading the main row instead would show "Published" beside a
+                  // Publish button whenever a translation lags its default language.
+                  status={
+                    effectiveEntryStatus(entry, locale, defaultLocale) ??
+                    "draft"
+                  }
+                  hasWorkingDraft={
+                    (entry as { _isWorkingDraft?: boolean } | null | undefined)
+                      ?._isWorkingDraft === true
+                  }
                   isRailCollapsed={railCollapsed}
+                  hasPublicAddress={hasPublicAddress}
                 />
 
                 {mainFields.length > 0 && (

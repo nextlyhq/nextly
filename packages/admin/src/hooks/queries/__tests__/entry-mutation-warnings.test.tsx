@@ -1,0 +1,168 @@
+/**
+ * The warnings the server sends reach the toast, on all three write hooks.
+ *
+ * `warnings` rides on every mutation envelope, and each API client returned
+ * `result.item` — so the array was dropped one layer below the code that could
+ * have shown it. A side effect that silently did not run looked exactly like a
+ * clean save.
+ *
+ * Asserted per hook rather than once, because the drop was per client: covering
+ * update alone would leave create and delete free to differ again.
+ */
+
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { renderHook, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+const { createSpy, updateSpy, deleteSpy, successSpy, warningSpy } = vi.hoisted(
+  () => ({
+    createSpy: vi.fn(),
+    updateSpy: vi.fn(),
+    deleteSpy: vi.fn(),
+    successSpy: vi.fn(),
+    warningSpy: vi.fn(),
+  })
+);
+
+vi.mock("@admin/services/entryApi", async importOriginal => {
+  const actual =
+    await importOriginal<typeof import("@admin/services/entryApi")>();
+  return {
+    ...actual,
+    entryApi: {
+      ...actual.entryApi,
+      create: createSpy,
+      update: updateSpy,
+      delete: deleteSpy,
+    },
+  };
+});
+
+vi.mock("@admin/hooks/useLocalization", () => ({
+  useLocalization: () => ({ enabled: false }),
+}));
+
+vi.mock("@admin/components/ui", () => ({
+  toast: { success: successSpy, warning: warningSpy, error: vi.fn() },
+}));
+
+import { useCreateEntry } from "../useCreateEntry";
+import { useDeleteEntry } from "../useDeleteEntry";
+import { useUpdateEntry } from "../useUpdateEntry";
+
+function makeWrapper(client: QueryClient) {
+  return function Wrapper({ children }: { children: ReactNode }) {
+    return (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+  };
+}
+
+const entry = { id: "e1", title: "Hello" };
+
+const warnings = [
+  {
+    phase: "afterUpdate",
+    collection: "posts",
+    code: "INTERNAL_ERROR",
+    message: "The search index could not be updated.",
+  },
+];
+
+/** Only the part of the mutation result these cases drive. */
+interface MutationLike {
+  mutateAsync: (variables: unknown) => Promise<unknown>;
+}
+
+/** Each hook, with the client it drops through and how it is invoked. */
+const HOOKS = [
+  {
+    name: "useCreateEntry",
+    spy: createSpy,
+    use: (onSuccess?: (entry: unknown) => void) =>
+      useCreateEntry({ collectionSlug: "posts", onSuccess }) as MutationLike,
+    invoke: (m: MutationLike) => m.mutateAsync({ title: "Hello" }),
+    successMessage: "Entry created successfully",
+  },
+  {
+    name: "useUpdateEntry",
+    spy: updateSpy,
+    use: (onSuccess?: (entry: unknown) => void) =>
+      useUpdateEntry({
+        collectionSlug: "posts",
+        entryId: "e1",
+        onSuccess,
+      }) as MutationLike,
+    invoke: (m: MutationLike) => m.mutateAsync({ title: "Hello" }),
+    successMessage: "Entry updated successfully",
+  },
+  {
+    name: "useDeleteEntry",
+    spy: deleteSpy,
+    use: (onSuccess?: (entry: unknown) => void) =>
+      useDeleteEntry({ collectionSlug: "posts", onSuccess }) as MutationLike,
+    invoke: (m: MutationLike) => m.mutateAsync("e1"),
+    successMessage: "Entry deleted successfully",
+  },
+];
+
+beforeEach(() => vi.clearAllMocks());
+
+describe.each(HOOKS)(
+  "$name reports post-commit failures",
+  ({ spy, use, invoke, successMessage }) => {
+    it("shows a plain success when the server sent no warnings", async () => {
+      spy.mockResolvedValue({ item: entry });
+      const client = new QueryClient({
+        defaultOptions: { mutations: { retry: false } },
+      });
+
+      const { result } = renderHook(() => use(), {
+        wrapper: makeWrapper(client),
+      });
+      await invoke(result.current);
+
+      await waitFor(() =>
+        expect(successSpy).toHaveBeenCalledWith(successMessage)
+      );
+      expect(warningSpy).not.toHaveBeenCalled();
+    });
+
+    it("names the follow-up failure the server reported", async () => {
+      spy.mockResolvedValue({ item: entry, warnings });
+      const client = new QueryClient({
+        defaultOptions: { mutations: { retry: false } },
+      });
+
+      const { result } = renderHook(() => use(), {
+        wrapper: makeWrapper(client),
+      });
+      await invoke(result.current);
+
+      await waitFor(() => expect(warningSpy).toHaveBeenCalledOnce());
+      expect(warningSpy.mock.calls[0]?.[0]).toBe(
+        `${successMessage}, but 1 follow-up action failed`
+      );
+      // Still not an error: the row committed before the hook ran.
+      expect(successSpy).not.toHaveBeenCalled();
+    });
+
+    it("hands the entry, not the envelope, to onSuccess", async () => {
+      // The envelope is an internal detail of the hook. A consumer asked for
+      // the saved row, and widening that silently would break every caller.
+      spy.mockResolvedValue({ item: entry, warnings });
+      const onSuccess = vi.fn();
+      const client = new QueryClient({
+        defaultOptions: { mutations: { retry: false } },
+      });
+
+      const { result } = renderHook(() => use(onSuccess), {
+        wrapper: makeWrapper(client),
+      });
+      await invoke(result.current);
+
+      await waitFor(() => expect(onSuccess).toHaveBeenCalledWith(entry));
+    });
+  }
+);

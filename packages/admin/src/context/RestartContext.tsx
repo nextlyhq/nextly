@@ -19,6 +19,8 @@ import {
   type ReactNode,
 } from "react";
 
+import { fieldGroupKeys } from "../hooks/queries";
+
 interface RestartContextValue {
   isRestarting: boolean;
   statusMessage: string;
@@ -92,7 +94,7 @@ export function RestartProvider({ children }: { children: ReactNode }) {
         void queryClient.invalidateQueries({ queryKey: ["entries"] });
         void queryClient.invalidateQueries({ queryKey: ["singles"] });
         void queryClient.invalidateQueries({ queryKey: ["single-documents"] });
-        void queryClient.invalidateQueries({ queryKey: ["components"] });
+        void queryClient.invalidateQueries({ queryKey: fieldGroupKeys.all() });
       } else {
         toast.error(message ?? "Failed to apply schema changes");
       }

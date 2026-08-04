@@ -15,8 +15,6 @@
 
 import { sqliteTable, integer, text, index } from "drizzle-orm/sqlite-core";
 
-import { users } from "../users/sqlite";
-
 // Append-only by application convention — operators should revoke
 // UPDATE/DELETE GRANTs on this table in production for stricter
 // integrity. metadata is JSON-encoded text since SQLite has no native
@@ -57,11 +55,9 @@ export const activityLog = sqliteTable(
   "activity_log",
   {
     id: text("id").primaryKey(),
-    userId: text("user_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
-    userName: text("user_name").notNull(),
-    userEmail: text("user_email").notNull(),
+    userId: text("user_id").notNull(),
+    userName: text("user_name"),
+    userEmail: text("user_email"),
     action: text("action").notNull(), // 'create' | 'update' | 'delete'
     collection: text("collection").notNull(),
     entryId: text("entry_id"),
@@ -70,6 +66,7 @@ export const activityLog = sqliteTable(
     createdAt: integer("created_at", { mode: "timestamp" })
       .notNull()
       .$defaultFn(() => new Date()),
+    identityErasedAt: integer("identity_erased_at", { mode: "timestamp" }),
   },
   t => [
     index("idx_activity_log_created_at").on(t.createdAt),

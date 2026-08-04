@@ -24,7 +24,7 @@ type Props = {
 };
 
 const NESTED_UNIQUE_TOOLTIP =
-  "Unique can't be enforced inside a repeater or repeatable component. The constraint would apply across the whole table, not per row. For per-row uniqueness, use code-first config.";
+  "Unique can't be enforced inside a repeater or repeatable field group. The constraint would apply across the whole table, not per row. For per-row uniqueness, use code-first config.";
 
 export function AdvancedTab({
   field,

@@ -122,7 +122,7 @@ async function runCoreSchemaDriftCheck(
   adapter: AdapterLike,
   logger: LoggerLike
 ): Promise<void> {
-  const [{ introspectLiveSnapshot }, { getCoreSchema, CORE_TABLE_NAMES }] =
+  const [{ introspectLiveSnapshot }, { getCoreSchema, getCoreTableNames }] =
     await Promise.all([
       import("../domains/schema/pipeline/diff/introspect-live"),
       import("../schemas/index"),
@@ -131,11 +131,24 @@ async function runCoreSchemaDriftCheck(
     "./core-schema-drift"
   );
 
-  const desired = getCoreSchema(adapter.dialect);
+  // 🔴 Both sides take the registry this database actually holds. Checking for
+  // the legacy name on a migrated database misses the table that is really
+  // there and reports the core schema as behind on every start — a warning an
+  // operator cannot act on, about a database that is correct.
+  const { resolveRegistryNameFromCatalog } = await import(
+    "../domains/field-groups/storage/resolve-storage-names"
+  );
+  const coreOptions = {
+    fieldGroupRegistryTable: await resolveRegistryNameFromCatalog({
+      dialect: adapter.dialect,
+      getDrizzle: <T>() => adapter.getDrizzle() as T,
+    }),
+  };
+  const desired = getCoreSchema(adapter.dialect, coreOptions);
   const live = await introspectLiveSnapshot(
     adapter.getDrizzle(),
     adapter.dialect,
-    [...CORE_TABLE_NAMES]
+    getCoreTableNames(coreOptions)
   );
 
   const drift = findCoreSchemaDrift(live, desired);

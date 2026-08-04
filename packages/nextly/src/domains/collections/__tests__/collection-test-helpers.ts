@@ -237,6 +237,25 @@ export function createMockRelationshipService(): MockRecord {
     expandRelationships: vi
       .fn()
       .mockImplementation((entry: unknown) => Promise.resolve(entry)),
+    // The read paths call this once the document is assembled. A double that
+    // omits it certifies a path that throws for real.
+    applyNestedFieldHooks: vi.fn().mockResolvedValue(undefined),
+    // Paired with it: the list path finishes the rows it collected once the
+    // whole listing has been walked, so a double carrying only the first half
+    // certifies a path that throws for real.
+    finalizeRelatedRows: vi.fn().mockResolvedValue(undefined),
+    // The authoritative re-sanitization the read paths run over the assembled
+    // response after every source hook. Both list and detail paths now call it on
+    // every successful read, so a double without it certifies a path that throws.
+    reprojectRelatedRows: vi.fn().mockResolvedValue(undefined),
+    createNestedHookState: vi.fn().mockImplementation(() => ({
+      visited: new Set(),
+      fields: new Map(),
+      labelFields: new Map(),
+      redactions: new WeakMap(),
+      pending: [],
+      sanitized: new Map(),
+    })),
     insertManyToManyRelations: vi.fn().mockResolvedValue(undefined),
     deleteManyToManyRelations: vi.fn().mockResolvedValue(undefined),
   };
@@ -269,6 +288,17 @@ export function createMockComponentDataService(): MockRecord {
         Promise.resolve(params.entry)
       ),
     saveComponentData: vi.fn().mockResolvedValue(undefined),
+    // The collection write saves component rows inside its own transaction,
+    // handing this the presence map resolved beforehand. Absent from the double,
+    // the write threw partway and the failure read as a denied or errored save.
+    saveComponentDataInTransaction: vi.fn().mockResolvedValue(undefined),
+    // Asked before the caller opens its transaction, and its result is handed
+    // to `saveComponentDataInTransaction`. An empty map is what production
+    // returns when no localization is configured, which is the shape these
+    // suites exercise. Built per call so one test cannot mutate another's.
+    assertLocalizedFieldGroupsWritable: vi
+      .fn()
+      .mockImplementation(async () => new Map<string, boolean>()),
     deleteComponentData: vi.fn().mockResolvedValue(undefined),
   };
 }

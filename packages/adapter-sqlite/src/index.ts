@@ -59,10 +59,11 @@ import {
   type DatabaseErrorKind,
   type BaseAdapterConfig,
   type AdapterLogger,
+  isApplicationError,
 } from "@nextlyhq/adapter-drizzle/types";
 import { checkDialectVersion } from "@nextlyhq/adapter-drizzle/version-check";
 import type Database from "better-sqlite3";
-import type { AnyRelations } from "drizzle-orm";
+import type { AnyRelations, SQL } from "drizzle-orm";
 import {
   drizzle,
   type BetterSQLite3Database,
@@ -539,6 +540,12 @@ export class SqliteAdapter extends DrizzleAdapter {
         throw error;
       }
     } catch (error) {
+      // Work inside a transaction may throw to roll the write back — a refused
+      // value, a denied permission — and that is the application's verdict, not
+      // the driver's failure. Classifying it would replace its code and payload
+      // with a generic database error, so a caller that asked for a refusal is
+      // handed an unexplained failure and the per-field detail never arrives.
+      if (isApplicationError(error)) throw error;
       throw this.classifyError(error);
     }
   }
@@ -713,6 +720,25 @@ export class SqliteAdapter extends DrizzleAdapter {
       // opens SQLite transactions with BEGIN IMMEDIATE, which takes the write
       // lock up front and serializes writers for the whole transaction.
       lockRow: (): Promise<void> => Promise.resolve(),
+
+      // `run`, not `all`: better-sqlite3 throws on a statement that returns no
+      // rows, which is every statement this method exists to carry. The Drizzle
+      // instance is the transaction-bound one, so the statement runs inside this
+      // transaction.
+      //
+      // better-sqlite3 is synchronous, so this resolves an already-settled
+      // promise rather than being declared `async` over a body that never
+      // awaits.
+      runStatement: (statement: SQL): Promise<void> => {
+        txDb().run(statement);
+        return Promise.resolve();
+      },
+
+      // `all`, not `run`: this is the reading half, and better-sqlite3 returns
+      // rows only from `all`. Synchronous, so the promise is already settled.
+      queryStatement: <T = Record<string, unknown>>(
+        statement: SQL
+      ): Promise<T[]> => Promise.resolve(txDb().all(statement)),
 
       // eslint-disable-next-line @typescript-eslint/require-await
       execute: async <T = unknown>(

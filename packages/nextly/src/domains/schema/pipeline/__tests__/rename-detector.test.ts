@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import type { AddColumnOp, DropColumnOp, Operation } from "../diff/types";
+import type {
+  AddColumnOp,
+  DropColumnOp,
+  NextlySchemaSnapshot,
+  Operation,
+} from "../diff/types";
+import { DynamicCollectionSchemaService } from "../../../dynamic-collections/services/dynamic-collection-schema-service";
+import { buildDesiredTableFromFields } from "../diff/build-from-fields";
+import { diffSnapshots } from "../diff/diff";
+import type { SupportedDialect } from "../../services/field-column-descriptor";
 import { RegexRenameDetector } from "../rename-detector";
 
 const detector = new RegexRenameDetector();
@@ -218,5 +227,202 @@ describe("RegexRenameDetector - plan-v3 Appendix D worked example (10-field rena
       c => c.fromColumn === "age" && c.toColumn === "dob"
     );
     expect(ageToDob?.typesCompatible).toBe(false);
+  });
+});
+
+describe("RegexRenameDetector - a column left under a legacy spelling", () => {
+  // An earlier field-name conversion emitted a leading underscore for any name beginning with a
+  // capital, so a field named `PublishedAt` reached the database as `_published_at` while the
+  // runtime schema and the diff address `published_at`. Tables created under that conversion still
+  // carry the underscored column; the current conversion produces the canonical name.
+  //
+  // Recovering such a table needs no dedicated migration. The live column is absent from the
+  // desired state and the desired column is absent from the table, which is a drop/add pair on one
+  // table — already a rename candidate, suggested as `rename`, the resolution that moves the data
+  // rather than dropping the column and recreating it empty.
+  //
+  // These cases exist so that stays true. The detector pairs any drop with any add on a table, so
+  // it covers this shape without having been written for it, and narrowing it would remove the only
+  // path by which such a table is recovered with its contents.
+  it("offers to rename the legacy column onto its canonical name", () => {
+    const candidates = detector.detect(
+      [
+        drop("single_settings", "_published_at", "timestamp"),
+        add("single_settings", "published_at", "timestamp"),
+      ] as Operation[],
+      "postgresql"
+    );
+
+    expect(candidates).toEqual([
+      {
+        tableName: "single_settings",
+        fromColumn: "_published_at",
+        toColumn: "published_at",
+        fromType: "timestamp",
+        toType: "timestamp",
+        typesCompatible: true,
+        defaultSuggestion: "rename",
+      },
+    ]);
+  });
+
+  it("offers the rename only while the legacy column type still matches", () => {
+    // The underscore is not the only thing that can differ. The builder's own type map and the
+    // canonical descriptor disagree for some field types, so a table created under the old
+    // conversion can carry both a legacy NAME and a legacy TYPE. Where the types are compatible the
+    // pair resolves as a rename and the values move; where they are not, the detector suggests
+    // dropping and re-adding, and the column comes back empty.
+    //
+    // The pairs below are not hand-chosen: the legacy type is read from the builder's own map and
+    // the desired type from the descriptor, so a fixture cannot quietly assume they agree.
+    const legacyType = (fieldType: string, dialect: SupportedDialect): string =>
+      new DynamicCollectionSchemaService(undefined, dialect).mapFieldTypeToSQL(
+        fieldType
+      );
+
+    const desiredType = (
+      fieldType: string,
+      dialect: SupportedDialect
+    ): string | undefined =>
+      buildDesiredTableFromFields(
+        "dc_posts",
+        [{ name: "PublishedItems", type: fieldType }] as Parameters<
+          typeof buildDesiredTableFromFields
+        >[1],
+        dialect,
+        { hasStatus: false }
+      ).columns.find(c => c.name === "published_items")?.type;
+
+    const outcomes: Record<string, string> = {};
+    for (const dialect of ["postgresql", "mysql"] as SupportedDialect[]) {
+      for (const fieldType of ["text", "date", "number", "repeater", "group"]) {
+        const from = legacyType(fieldType, dialect);
+        const to = desiredType(fieldType, dialect);
+        if (!to) continue;
+        const candidates = detector.detect(
+          [
+            drop("dc_posts", "_published_items", from),
+            add("dc_posts", "published_items", to),
+          ] as Operation[],
+          dialect
+        );
+        outcomes[`${dialect}.${fieldType}`] =
+          candidates[0]?.defaultSuggestion ?? "(none)";
+      }
+    }
+
+    // Recorded rather than asserted loosely: `repeater` and `group` were never in the builder's
+    // type map, so their legacy column is `text` where the descriptor asks for JSON, and the
+    // resolution offered is not the data-preserving one.
+    expect(outcomes).toEqual({
+      "postgresql.text": "rename",
+      "postgresql.date": "rename",
+      "postgresql.number": "rename",
+      "postgresql.repeater": "drop_and_add",
+      "postgresql.group": "drop_and_add",
+      "mysql.text": "rename",
+      "mysql.date": "rename",
+      "mysql.number": "rename",
+      "mysql.repeater": "drop_and_add",
+      "mysql.group": "drop_and_add",
+    });
+  });
+});
+
+describe("RegexRenameDetector - the legacy column reached through the diff", () => {
+  // The cases above hand-build the drop/add pair, which pins the detector and nothing before it.
+  // The recovery actually depends on the desired state and the diff producing that pair in the
+  // first place, so this drives both with the real implementations: only the live snapshot is
+  // written by hand, because that is what introspection returns for a table already in the
+  // database.
+  //
+  // What remains uncovered is the apply step — turning the chosen resolution into DDL — which
+  // needs a live database and is exercised by the pipeline integration suites.
+  const LEGACY_COLUMN = "_published_at";
+  const CANONICAL_COLUMN = "published_at";
+
+  function liveSnapshotWithLegacyColumn(
+    desired: NextlySchemaSnapshot
+  ): NextlySchemaSnapshot {
+    // The table as an older release created it: identical in every respect except that the one
+    // field's column carries the leading underscore the previous conversion produced.
+    return {
+      tables: desired.tables.map(table => ({
+        ...table,
+        columns: table.columns.map(column =>
+          column.name === CANONICAL_COLUMN
+            ? { ...column, name: LEGACY_COLUMN }
+            : column
+        ),
+      })),
+    };
+  }
+
+  it("produces a rename candidate from the real desired state and diff", () => {
+    const desired: NextlySchemaSnapshot = {
+      tables: [
+        buildDesiredTableFromFields(
+          "dc_posts",
+          [{ name: "PublishedAt", type: "date" }] as Parameters<
+            typeof buildDesiredTableFromFields
+          >[1],
+          "postgresql",
+          { hasStatus: false }
+        ),
+      ],
+    };
+
+    // The desired state has to carry the canonical column, or the rest of this proves nothing.
+    expect(desired.tables[0].columns.map(c => c.name)).toContain(
+      CANONICAL_COLUMN
+    );
+
+    const operations = diffSnapshots(
+      liveSnapshotWithLegacyColumn(desired),
+      desired
+    );
+    const candidates = new RegexRenameDetector().detect(
+      operations,
+      "postgresql"
+    );
+
+    expect(
+      candidates.map(c => [c.fromColumn, c.toColumn, c.defaultSuggestion])
+    ).toEqual([[LEGACY_COLUMN, CANONICAL_COLUMN, "rename"]]);
+  });
+
+  it("proposes exactly one drop and one add for this shape", () => {
+    // The detector pairs every drop with every add on a table and marks each type-compatible pair
+    // as a rename, so it offers no protection against ambiguity — the suite above covers a table
+    // that yields 49 candidates. What keeps THIS recovery unambiguous is the diff: a column that
+    // only changed spelling produces one drop and one add and nothing else, so there is a single
+    // pair to resolve. That is a property of this shape, asserted here, not a guard in the
+    // detector.
+    const desired: NextlySchemaSnapshot = {
+      tables: [
+        buildDesiredTableFromFields(
+          "dc_posts",
+          [
+            { name: "PublishedAt", type: "date" },
+            { name: "headline", type: "text" },
+          ] as Parameters<typeof buildDesiredTableFromFields>[1],
+          "postgresql",
+          { hasStatus: false }
+        ),
+      ],
+    };
+
+    const operations = diffSnapshots(
+      liveSnapshotWithLegacyColumn(desired),
+      desired
+    );
+
+    expect({
+      drops: operations.filter(op => op.type === "drop_column").length,
+      adds: operations.filter(op => op.type === "add_column").length,
+      others: operations.filter(
+        op => op.type !== "drop_column" && op.type !== "add_column"
+      ).length,
+    }).toEqual({ drops: 1, adds: 1, others: 0 });
   });
 });

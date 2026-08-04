@@ -12,7 +12,14 @@ import { afterEach, describe, it, expect } from "vitest";
 
 import { parseSqlSections } from "../../../cli/commands/migrate";
 
-import { writeLocalizationMigrationFile } from "./write-migration-file";
+import {
+  LOCALIZATION_INTENT_HEADER,
+  parseLocalizationIntent,
+} from "./migration-intent";
+import {
+  writeCompanionMigrationFile,
+  writeLocalizationMigrationFile,
+} from "./write-migration-file";
 import type { CompanionMigrationSpec } from "./types";
 
 const spec: CompanionMigrationSpec = {
@@ -46,7 +53,7 @@ describe("writeLocalizationMigrationFile", () => {
 
     // parses into non-empty UP and DOWN
     const { upSql, downSql } = parseSqlSections(readFileSync(path, "utf-8"));
-    expect(upSql).toContain(`CREATE TABLE "dc_pages_locales"`);
+    expect(upSql).toContain(`CREATE TABLE IF NOT EXISTS "dc_pages_locales"`);
     expect(downSql).toContain(`DROP TABLE "dc_pages_locales"`);
   });
 
@@ -59,6 +66,78 @@ describe("writeLocalizationMigrationFile", () => {
     expect(path).toMatch(/_disable_localization_pages\.sql$/);
     const { upSql, downSql } = parseSqlSections(readFileSync(path, "utf-8"));
     expect(upSql).toContain(`DROP TABLE "dc_pages_locales"`);
-    expect(downSql).toContain(`CREATE TABLE "dc_pages_locales"`);
+    expect(downSql).toContain(`CREATE TABLE IF NOT EXISTS "dc_pages_locales"`);
+  });
+});
+
+describe("declared intent in the written header", () => {
+  const intentSpec: CompanionMigrationSpec = {
+    dialect: "postgresql",
+    collection: "posts",
+    mainTable: "dc_posts",
+    companionTable: "dc_posts_locales",
+    defaultLocale: "en",
+    parentIdType: "TEXT",
+    columns: [{ name: "body", kind: "text" }],
+    columnsOnMain: ["body"],
+  };
+
+  // The two sides are only useful together: a header the writer emits and the parser cannot read
+  // would leave the apply path silently falling back to verbatim SQL.
+  it("writes an intent the parser can read back", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nextly-intent-"));
+    const path = writeCompanionMigrationFile(dir, intentSpec, {
+      kind: "enable",
+      entity: "collection",
+      upSql: "SELECT 1;",
+      downSql: "SELECT 1;",
+      now: new Date("2026-08-02T00:00:00.000Z"),
+    });
+
+    const intent = parseLocalizationIntent(readFileSync(path, "utf-8"), path);
+
+    expect(intent?.kind).toBe("enable");
+    expect(intent?.entity).toBe("collection");
+    expect(intent?.spec.mainTable).toBe("dc_posts");
+    expect(intent?.spec.columnsOnMain).toEqual(["body"]);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  // The kind is half the transition record's key, so a single and a collection sharing a slug
+  // must not produce files that name the same record.
+  it("records the entity kind it was given", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nextly-intent-"));
+    const path = writeCompanionMigrationFile(dir, intentSpec, {
+      kind: "create-only",
+      entity: "fieldGroup",
+      upSql: "SELECT 1;",
+      downSql: "SELECT 1;",
+      now: new Date("2026-08-02T00:00:00.000Z"),
+    });
+
+    expect(
+      parseLocalizationIntent(readFileSync(path, "utf-8"), path)?.entity
+    ).toBe("fieldGroup");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  // Header lines live before `-- UP`, which is what keeps the JSON out of the statement splitter.
+  it("keeps the intent out of the UP section", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nextly-intent-"));
+    const path = writeCompanionMigrationFile(dir, intentSpec, {
+      kind: "enable",
+      entity: "collection",
+      upSql: "SELECT 1;",
+      downSql: "SELECT 1;",
+      now: new Date("2026-08-02T00:00:00.000Z"),
+    });
+
+    const content = readFileSync(path, "utf-8");
+    const up = content.slice(
+      content.indexOf("-- UP"),
+      content.indexOf("-- DOWN")
+    );
+    expect(up).not.toContain(LOCALIZATION_INTENT_HEADER);
+    rmSync(dir, { recursive: true, force: true });
   });
 });

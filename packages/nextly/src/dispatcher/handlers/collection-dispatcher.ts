@@ -18,7 +18,10 @@
  * `{ id, code, message }` keyed by canonical NextlyErrorCode.
  */
 
-import { assertValidFieldsPayload } from "../../api/fields-payload";
+import {
+  assertValidFieldsPayload,
+  assertValidPluginFieldOptions,
+} from "../../api/fields-payload";
 import {
   respondAction,
   respondBulk,
@@ -29,7 +32,10 @@ import {
   respondMutation,
 } from "../../api/response-shapes";
 import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
-import { companionHasStatusColumn } from "../../domains/i18n/runtime/companion-io";
+import {
+  companionHasStatusColumn,
+  localizedColumnsOnMain,
+} from "../../domains/i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { createApplyDesiredSchema } from "../../domains/schema/pipeline/apply";
@@ -109,6 +115,8 @@ import type { MethodHandler, Params } from "../types";
 // all three entity kinds, so a stale UI save is rejected before any DDL runs.
 import { assertSchemaVersionMatch } from "./schema-version-guard";
 import {
+  discardWorkingDraftForDocument,
+  getVersionDiffForDocument,
   getVersionForDocument,
   restoreVersionForDocument,
   listVersionsForDocument,
@@ -174,6 +182,7 @@ export const COLLECTION_VERSION_METHODS: Record<
         authenticatedScope: readAuthenticatedScope(p),
         limit: p.limit !== undefined ? Number(p.limit) : undefined,
         cursor: p.cursor !== undefined ? Number(p.cursor) : undefined,
+        locale: p.locale !== undefined ? String(p.locale) : undefined,
       });
       return respondList(result.items, result.meta);
     },
@@ -208,6 +217,18 @@ export const COLLECTION_VERSION_METHODS: Record<
       return respondAction("Version restored.", result);
     },
   },
+  discardWorkingDraft: {
+    execute: async (_svc, p) => {
+      const item = await discardWorkingDraftForDocument({
+        scopeKind: "collection",
+        slug: String(p.collectionName ?? ""),
+        entryId: String(p.entryId ?? ""),
+        user: userFromParams(p),
+        params: p,
+      });
+      return respondMutation("Working draft discarded.", item);
+    },
+  },
   getEntryVersion: {
     execute: async (_svc, p) => {
       const row = await getVersionForDocument({
@@ -219,6 +240,21 @@ export const COLLECTION_VERSION_METHODS: Record<
         versionNo: Number(p.versionNo),
       });
       return respondDoc(row);
+    },
+  },
+  getEntryVersionDiff: {
+    execute: async (_svc, p) => {
+      const diff = await getVersionDiffForDocument({
+        scopeKind: "collection",
+        slug: String(p.collectionName ?? ""),
+        entryId: String(p.entryId ?? ""),
+        user: userFromParams(p),
+        authenticatedScope: readAuthenticatedScope(p),
+        from: Number(p.from),
+        to: Number(p.to),
+        modifiedOnly: p.modifiedOnly === "1" || p.modifiedOnly === "true",
+      });
+      return respondDoc(diff);
     },
   },
 };
@@ -234,9 +270,18 @@ const COLLECTIONS_METHODS: Record<
     // as the toast string so admin UIs see the same copy ("Collection
     // created! Restart the app...").
     execute: async (svc, _, body) => {
-      const result = await svc.createCollection(
-        requireBody(body, "Collection data is required")
+      const created = requireBody<Parameters<typeof svc.createCollection>[0]>(
+        body,
+        "Collection data is required"
       );
+      // Metadata generation validates field names and shapes downstream, but
+      // it has no way to judge a plugin type's own options, so a declaration no
+      // value could satisfy would reach the registry and fail per write.
+      const createdFields = (created as { fields?: unknown }).fields;
+      if (createdFields !== undefined) {
+        assertValidPluginFieldOptions(createdFields);
+      }
+      const result = await svc.createCollection(created);
       const collection = unwrapServiceResult(result);
       return respondMutation(
         result.message ?? "Collection created.",
@@ -359,6 +404,10 @@ const COLLECTIONS_METHODS: Record<
     execute: async (svc, p, body) => {
       if (!p.collectionName || !body)
         throw new Error("collectionName and update data are required");
+      const updatedFields = (body as { fields?: unknown }).fields;
+      if (updatedFields !== undefined) {
+        assertValidPluginFieldOptions(updatedFields);
+      }
       const result = await svc.updateCollection(
         { collectionName: p.collectionName },
         body
@@ -446,6 +495,8 @@ const COLLECTIONS_METHODS: Record<
         // must re-supply it or the preview would show translatable columns being
         // added to the main table.
         localized: (collection as { localized?: boolean }).localized === true,
+        // Authored in the Schema Builder: this is the Builder's own save path.
+        builderOwned: true,
       };
 
       const pipelinePreview = await previewDesiredSchema({
@@ -630,6 +681,8 @@ const COLLECTIONS_METHODS: Record<
         // toggle applies immediately; without this the apply re-adds translatable
         // columns to the main table.
         localized: isLocalized,
+        // Authored in the Schema Builder: this is the Builder's own save path.
+        builderOwned: true,
       };
 
       // Resolve adapter for the pipeline construction.
@@ -694,6 +747,8 @@ const COLLECTIONS_METHODS: Record<
             // editing so the admin NotificationCenter can render "Posts
             // schema updated" instead of generic "global".
             uiTargetSlug: p.collectionName,
+            // Stated rather than relying on the default, so the default stops being load-bearing.
+            uiTargetKind: "collection" as const,
           });
         },
         // The optimistic-lock check now runs up front via
@@ -754,10 +809,24 @@ const COLLECTIONS_METHODS: Record<
             status: collection.status === true,
             wasLocalized,
             isLocalized,
+            // The PERSISTED status, which is what the disable restore needs: it decides whether
+            // main carried `status` and the companion `_status` before this apply. `collection`
+            // here is the registry record, so this is the prior state for the same reason
+            // `wasLocalized` above is.
+            wasStatus: collection.status === true,
             oldFields,
             newFields,
             companionExists,
             companionHasStatus,
+            // Which translatable columns the main table still carries. A disable must not re-add
+            // one that is already there, and must still restore it: presence says the column
+            // exists, never that its value is current, because every localized write went to the
+            // companion alone.
+            existingMainColumns: await localizedColumnsOnMain(
+              adapter,
+              tableName,
+              oldFields
+            ).then(cols => cols.map(c => c.name)),
           });
           // A disable archives non-default translations, so ensure the archive
           // table exists first. Run each statement individually (executeQuery is
@@ -782,6 +851,29 @@ const COLLECTIONS_METHODS: Record<
           }
           for (const stmt of plan.statements) {
             await adapter.executeQuery(stmt);
+          }
+
+          // The transition record describes a companion that no longer exists, so it stops being true
+          // the moment the disable succeeds. Left behind, it would refuse the next enable's real
+          // source locale — the check that protects a live transition would block a legitimate one.
+          if (plan.companionDropped) {
+            // The other half of "this companion is gone": readiness remembers only that one
+            // exists.
+            const { forgetCompanionReadiness } = await import(
+              "../../domains/i18n/runtime/companion-readiness"
+            );
+            forgetCompanionReadiness(adapter, `${tableName}_locales`);
+            const { resolveTransitionStore } = await import(
+              "../../domains/i18n/migration/transition-recorder"
+            );
+            const { forgetI18nTransition } = await import(
+              "../../domains/i18n/migration/transition-state"
+            );
+            await forgetI18nTransition(
+              await resolveTransitionStore(adapter),
+              "collection",
+              String(p.collectionName)
+            );
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
@@ -1112,6 +1204,11 @@ const COLLECTIONS_METHODS: Record<
         select: parseSelectParam(p.select),
         richTextFormat: parseRichTextFormat(p.richTextFormat),
         status,
+        // `?draft=true` overlays the pending working draft in place of the live
+        // row (draft/published split), matching Payload's read-side `draft`
+        // parameter. The service gates it on an update-capability probe, so a
+        // read-only caller passing it still receives the published row.
+        includeWorkingDraft: isTruthyParam(p.draft),
         // i18n M4: `?locale=` selects the content language; `?fallback-locale=none`
         // disables fallback. Non-localized collections ignore both.
         locale: p.locale,

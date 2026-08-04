@@ -17,6 +17,7 @@ import {
   registerFieldType,
   withoutDisabledBehavior,
 } from "../../../domains/schema/field-types/field-type-registry";
+import { NextlyError } from "../../../errors/nextly-error";
 import type {
   PluginFieldType,
   PluginFieldValidateArgs,
@@ -161,10 +162,8 @@ describe("plugin field-type validation", () => {
   });
 
   it("treats a throwing validator as a refusal, not a crash", async () => {
-    // Deliberately a bare Error: this stands in for third-party plugin code,
-    // which throws whatever it likes and is not bound by core's conventions.
     registerRating(() => {
-      throw new Error("registry unreachable");
+      throw NextlyError.internal("registry unreachable");
     });
 
     const issues = await validateEntryData({ stars: 3 }, FIELDS, {
@@ -413,6 +412,9 @@ describe("plugin field-type validation", () => {
     const notBefore = new Date("2020-01-01T00:00:00.000Z");
     const allowed = new Set(["hero"]);
     const labels = new Map([["hero", "Hero"]]);
+    // An object used as a Map KEY is as reachable through the copy as a value.
+    const keyObject = { name: "hero" };
+    const byBlock = new Map([[keyObject, "Hero"]]);
 
     registerDocument((_value, args) => {
       const {
@@ -427,11 +429,14 @@ describe("plugin field-type validation", () => {
       seenDate.setFullYear(1999);
       seenSet.add("injected");
       seenMap.set("hero", "Overwritten");
+      const keyed = (args.field as { byBlock: Map<{ name: string }, string> })
+        .byBlock;
+      for (const seenKey of keyed.keys()) seenKey.name = "injected";
       return true;
     });
 
     const fields: ValidatableField[] = [
-      { name: "body", type: "document", notBefore, allowed, labels },
+      { name: "body", type: "document", notBefore, allowed, labels, byBlock },
     ];
     await validateEntryData({ body: {} }, fields, { mode: "create" });
 
@@ -440,6 +445,7 @@ describe("plugin field-type validation", () => {
     expect(notBefore.toISOString()).toBe("2020-01-01T00:00:00.000Z");
     expect([...allowed]).toEqual(["hero"]);
     expect(labels.get("hero")).toBe("Hero");
+    expect(keyObject.name).toBe("hero");
   });
 
   it("leaves built-in types alone", async () => {
@@ -473,10 +479,31 @@ describe("a disabled plugin's field type", () => {
     expect(registrable.component).toBe("@acme/ratings/admin#RatingInput");
   });
 
+  it("loses its emptyValue, which runs on backfill and on single seeding", () => {
+    const seeding: PluginFieldType = {
+      ...rating,
+      emptyValue: () => {
+        throw new Error("this must never run");
+      },
+    };
+
+    const registrable = withoutDisabledBehavior(seeding, { enabled: false });
+
+    // Left registered, adding a required column or first-reading a single
+    // would call into a plugin that is off, failing a migration or a read.
+    expect(registrable.emptyValue).toBeUndefined();
+    expect(registrable.storage).toBe("number");
+  });
+
   it("is untouched while the plugin is enabled", () => {
     expect(withoutDisabledBehavior(rating, {}).validate).toBe(rating.validate);
     expect(withoutDisabledBehavior(rating, { enabled: true }).validate).toBe(
       rating.validate
+    );
+
+    const seeding: PluginFieldType = { ...rating, emptyValue: () => 0 };
+    expect(withoutDisabledBehavior(seeding, { enabled: true }).emptyValue).toBe(
+      seeding.emptyValue
     );
   });
 

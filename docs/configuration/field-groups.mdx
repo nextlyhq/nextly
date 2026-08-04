@@ -1,0 +1,214 @@
+---
+title: Field Groups
+description: Define reusable field groups that can be shared across collections and singles.
+---
+
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+
+Field groups are reusable field structures. Define a set of fields once as a field group, then embed it in any number of collections or singles. Each usage creates a separate data instance — field groups are schemas, not shared documents.
+
+> **Source of truth:** the `FieldGroupConfig` interface lives in `packages/nextly/src/field-groups/config/types.ts`. The `defineFieldGroup()` helper is in `packages/nextly/src/field-groups/config/define-field-group.ts`.
+
+Key characteristics:
+
+- **Templates, not documents** — field groups define a field structure; each embed creates its own data row.
+- **Own database table** — each field group gets a table derived from its slug and prefixed with `comp_` (e.g. `comp_seo`). The name is always derived; it cannot be overridden.
+- **Nesting** — a field group's fields can include `component` fields referencing other field groups (max depth: 3 levels).
+- **Slug uniqueness** — field group slugs must be unique across field groups, collections, **and** singles.
+- **Dual creation** — define in code with `defineFieldGroup()` or visually in the Visual Schema Builder.
+
+<Tabs items={["Code-first", "Visual Schema Builder"]}>
+<Tab value="Code-first">
+
+Use `defineFieldGroup()` from `nextly` to create field groups in TypeScript:
+
+```typescript title="src/field-groups/seo.ts"
+import {
+  defineFieldGroup,
+  text,
+  textarea,
+  upload,
+} from "nextly";
+
+export default defineFieldGroup({
+  slug: "seo",
+  label: { singular: "SEO Metadata" },
+  admin: {
+    category: "Shared",
+    icon: "Search",
+    description: "Search engine optimization metadata",
+  },
+  fields: [
+    text({ name: "metaTitle", required: true, label: "Meta Title" }),
+    textarea({
+      name: "metaDescription",
+      label: "Meta Description",
+      maxLength: 160,
+    }),
+    upload({ name: "ogImage", relationTo: "media", label: "OG Image" }),
+    text({ name: "canonicalUrl", label: "Canonical URL" }),
+  ],
+});
+```
+
+</Tab>
+<Tab value="Visual Schema Builder">
+
+Field groups can also be created visually in the admin UI:
+
+1. Navigate to **Field Groups** in the sidebar.
+2. Click **Create Field Group**.
+3. Name it and add fields using the drag-and-drop Schema Builder.
+4. Save — the field group is immediately available for use.
+
+Builder-created field groups work identically to code-defined ones; both produce the same database schema and API behavior.
+
+</Tab>
+</Tabs>
+
+## Field group options
+
+Only `slug` and `fields` are required.
+
+| Option | Type | Required | Description |
+|---|---|---|---|
+| `slug` | `string` | Yes | Unique identifier across field groups, collections, and singles. Used as the DB table prefix (`comp_{slug}`). Must be URL-friendly. |
+| `fields` | `FieldConfig[]` | Yes | Array of [field definitions](/docs/configuration/fields). |
+| `label` | `{ singular: string }` | No | Display name in the admin UI. Auto-generated from slug if omitted (e.g. `social-link` → `Social Link`). |
+| `admin.category` | `string` | No | Category that groups field groups in the sidebar and selector modal (e.g. `"Shared"`, `"Blocks"`). |
+| `admin.icon` | `string` | No | Lucide icon name shown in sidebar and field group selector. |
+| `admin.description` | `string` | No | Help text in the field group selector modal. |
+| `admin.hidden` | `boolean` | No | Hide from admin navigation. Still usable in code and via API. |
+| `admin.imageURL` | `string` | No | Preview image URL shown in the field group selector. |
+| `description` | `string` | No | General description; falls back to `admin.description`. |
+| `custom` | `Record<string, unknown>` | No | Arbitrary metadata for plugins or custom code. Not persisted. |
+
+> **Field groups do not have hooks or access control of their own.** They inherit hook execution and access checks from the collection or single they're embedded in.
+
+## Using field groups in collections and singles
+
+Once defined, embed a field group in any collection or single using the `fieldGroup()` field helper. There are three usage modes.
+
+### Single field group (fixed type)
+
+Embed exactly one instance of a specific field group:
+
+```typescript title="src/collections/pages.ts"
+import { defineCollection, fieldGroup, text, richText } from "nextly";
+
+export default defineCollection({
+  slug: "pages",
+  fields: [
+    text({ name: "title", required: true }),
+    richText({ name: "content" }),
+    fieldGroup({ name: "seo", component: "seo" }),
+  ],
+});
+```
+
+### Dynamic zone (multiple field group types)
+
+Let editors choose from several field group types, which suits flexible page builders:
+
+```typescript title="src/collections/pages.ts"
+import { defineCollection, fieldGroup, text } from "nextly";
+
+export default defineCollection({
+  slug: "pages",
+  fields: [
+    text({ name: "title", required: true }),
+    fieldGroup({
+      name: "layout",
+      components: ["hero", "cta", "content-block", "image-gallery"],
+      repeatable: true,
+    }),
+  ],
+});
+```
+
+### Repeatable single field group
+
+An array of the same field group, for example a list of feature cards:
+
+```typescript title="src/collections/landing-pages.ts"
+import { defineCollection, fieldGroup, text } from "nextly";
+
+export default defineCollection({
+  slug: "landing-pages",
+  fields: [
+    text({ name: "title", required: true }),
+    fieldGroup({
+      name: "features",
+      component: "feature-card",
+      repeatable: true,
+      minRows: 1,
+      maxRows: 12,
+    }),
+  ],
+});
+```
+
+The `component` field's full option reference lives in [Fields → Component](/docs/configuration/fields#component).
+
+## Example: hero section field group
+
+```typescript title="src/field-groups/hero.ts"
+import {
+  defineFieldGroup,
+  text,
+  upload,
+  select,
+  option,
+} from "nextly";
+
+export default defineFieldGroup({
+  slug: "hero",
+  label: { singular: "Hero Section" },
+  admin: {
+    category: "Blocks",
+    icon: "Image",
+    description: "Full-width hero banner with heading and CTA",
+  },
+  fields: [
+    text({ name: "heading", required: true, label: "Heading" }),
+    text({ name: "subheading", label: "Subheading" }),
+    upload({
+      name: "backgroundImage",
+      relationTo: "media",
+      label: "Background Image",
+    }),
+    text({ name: "ctaText", label: "CTA Button Text" }),
+    text({ name: "ctaLink", label: "CTA Button Link" }),
+    select({
+      name: "alignment",
+      label: "Content Alignment",
+      options: [option("Left"), option("Center"), option("Right")],
+      defaultValue: "center",
+    }),
+  ],
+});
+```
+
+## Field group nesting
+
+Field groups can embed other field groups using the `component` field type, up to **3 levels deep**. `defineConfig()` rejects circular references and configurations that exceed the depth limit at startup.
+
+```typescript title="src/field-groups/faq-item.ts"
+import { defineFieldGroup, text, fieldGroup } from "nextly";
+
+export default defineFieldGroup({
+  slug: "faq-item",
+  label: { singular: "FAQ Item" },
+  fields: [
+    text({ name: "question", required: true }),
+    text({ name: "answer", required: true }),
+    fieldGroup({ name: "cta", component: "cta" }),
+  ],
+});
+```
+
+## Next steps
+
+- [Fields](/docs/configuration/fields) — all field types available inside field groups
+- [Collections](/docs/configuration/collections) — where field groups are most commonly used
+- [Singles](/docs/configuration/singles) — embed field groups in single-document content

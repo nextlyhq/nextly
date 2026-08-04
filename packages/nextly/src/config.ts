@@ -24,6 +24,10 @@ export {
   type HookHandler,
 } from "./collections/config/define-collection";
 
+// The context a FIELD-level hook is handed. `FieldHooks` is already public
+// through the field types below, so the handler it is declared with is too.
+export type { FieldHookContext, FieldHookHandler } from "./hooks/types";
+
 // Single configuration (defineSingle, SingleConfig, etc.)
 export {
   defineSingle,
@@ -88,7 +92,7 @@ export {
   type FieldGroupConfig,
   type FieldGroupLabel,
   type FieldGroupAdminOptions,
-} from "./components/config";
+} from "./field-groups/config";
 
 // Field builders and related runtime guards used in collection definitions.
 export {
@@ -111,12 +115,19 @@ export {
   json,
   fieldGroup,
   chips,
-  blocks,
   option,
 } from "./collections/fields/helpers";
 
+// The factory a contributed field type is declared through. A value, not a
+// type: the block above this one re-exports the field types with `export type`,
+// which carries no runtime binding, so a caller would resolve the symbol at
+// compile time and find nothing at run time.
 export {
-  isBlocksField,
+  pluginField,
+  pluginFieldBrand,
+} from "./collections/fields/types/plugin-field";
+
+export {
   isTextField,
   isTextareaField,
   isRichTextField,
@@ -141,17 +152,3 @@ export {
 } from "./collections/fields/guards";
 
 export type * from "./collections/fields/types";
-
-// The stored page-builder document, re-exported so app and admin code can name
-// what a blocks field holds without depending on the engine package directly.
-export type {
-  BlockDocument,
-  BlockNode,
-  DocumentKind,
-} from "@nextlyhq/blocks-engine";
-
-// A starting document for a blocks field with no declared default.
-export {
-  emptyBlockDocument,
-  emptyBlockDocumentJson,
-} from "./collections/fields/blocks-document";
