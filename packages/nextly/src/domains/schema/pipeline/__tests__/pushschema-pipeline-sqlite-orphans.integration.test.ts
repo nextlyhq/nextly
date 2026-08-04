@@ -191,9 +191,9 @@ describe("PushSchemaPipeline — SQLite applies with orphan live tables", () => 
     // Pre-fix this failed with PUSHSCHEMA_FAILED: `Internal error:
     // resolver(table) was called without a HintsHandler` — the kit paired
     // the orphan companion against the to-be-created dc_*_reviews table.
-    if (!result.success) {
-      console.error("APPLY ERROR:", JSON.stringify(result.error, null, 2));
-    }
+    // Asserting the error first puts that message in the reporter output:
+    // `success: false` on its own says nothing about which apply broke.
+    expect(result.error).toBeUndefined();
     expect(result.success).toBe(true);
     expect(tableExists(`dc_${P}_reviews`)).toBe(true);
     // The rebuild landed: views is now text.
