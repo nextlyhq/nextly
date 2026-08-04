@@ -68,6 +68,42 @@ export const myPlugin = (opts: MyPluginOptions = {}) =>
   });
 ```
 
+### Choosing the `nextly` range
+
+The floor names **the release that introduced the newest core API your plugin
+actually calls** — not the version you happened to develop against, and not the
+latest release.
+
+Get it too low and the failure is confusing: your plugin boots against a core
+that lacks the API, the import resolves to nothing, and the crash names a
+symbol rather than a version. Too high, and installs that would have worked are
+refused.
+
+There is one case that catches people out. If the API you need is landing in
+the *same release as your plugin* — you added it to core yourself, or you are
+building inside the Nextly monorepo — then the version to name **does not exist
+yet**. Writing the next one is a guess about a release that has not happened,
+and it makes your plugin unusable in the source tree, where core carries the
+current version: every boot fails compatibility before a single test runs.
+
+Where your package and core version together, say so directly instead:
+
+```ts
+import { version } from "../package.json";
+
+definePlugin({
+  // Released in lockstep with core, so a core at least as new as this build is
+  // exactly the compatibility that is meant — and it stays true after every
+  // release without being edited.
+  nextly: `>=${version}`,
+  // …
+});
+```
+
+That only applies where the two genuinely ship together. A plugin released on
+its own schedule should name the real floor, and leave it alone until it calls
+something newer.
+
 ### `contributes` (declarative)
 
 `contributes` is data the host can read **without running your plugin** (so the admin and codegen can reason about it):
