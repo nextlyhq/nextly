@@ -133,14 +133,27 @@ function isInternal(specifier: string): boolean {
 /** Resolve a relative specifier to a file on disk, or null if it is not one. */
 function resolveRelative(fromFile: string, specifier: string): string | null {
   if (!specifier.startsWith(".")) return null;
-  const base = join(dirname(fromFile), specifier);
-  for (const candidate of [
-    `${base}.ts`,
-    `${base}.tsx`,
-    join(base, "index.ts"),
-    join(base, "index.tsx"),
-  ]) {
-    if (existsSync(candidate)) return candidate;
+
+  // `./next.js` is the standard ESM-TypeScript spelling and resolves to
+  // `next.ts` under both TypeScript's bundler resolution and esbuild. Probing
+  // only `next.js.ts` would treat that edge as unresolvable, and an
+  // unresolvable edge is silently dropped from the graph — which is exactly
+  // the re-export this walk exists to catch.
+  const withoutJsSuffix = specifier.replace(/\.(js|jsx|mjs|cjs)$/, "");
+  const bases = [
+    join(dirname(fromFile), specifier),
+    join(dirname(fromFile), withoutJsSuffix),
+  ];
+
+  for (const base of bases) {
+    for (const candidate of [
+      `${base}.ts`,
+      `${base}.tsx`,
+      join(base, "index.ts"),
+      join(base, "index.tsx"),
+    ]) {
+      if (existsSync(candidate)) return candidate;
+    }
   }
   return null;
 }
