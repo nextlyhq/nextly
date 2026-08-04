@@ -166,9 +166,32 @@ function reportWithheldDetail(err: NextlyError, requestId?: string): void {
       requestId,
       code: err.code,
       context: err.logContext,
+      cause: err.cause instanceof Error ? err.cause.message : undefined,
     });
   } catch {
     /* an unserialisable context is not a reason to fail the request */
+  }
+}
+
+/**
+ * Report a failure that is not a `NextlyError`.
+ *
+ * Nothing about it survives into the row beyond `INTERNAL_ERROR`, and the auth
+ * handlers do no other logging, so this is the only record that the failure had
+ * a shape at all. Non-throwing for the same reason as the typed report: it runs
+ * inside a catch block whose contract is that it never fails the request.
+ */
+function reportUntypedFailure(err: unknown, requestId?: string): void {
+  try {
+    getNextlyLogger().warn({
+      kind: "auth-failed",
+      requestId,
+      code: "INTERNAL_ERROR",
+      error: err instanceof Error ? err.message : String(err),
+      stack: err instanceof Error ? err.stack : undefined,
+    });
+  } catch {
+    /* an unserialisable failure is not a reason to fail the request */
   }
 }
 
@@ -176,7 +199,14 @@ export function auditFailureMetadata(
   err: unknown,
   requestId?: string
 ): Record<string, unknown> {
-  if (!NextlyError.is(err)) return { code: "INTERNAL_ERROR" };
+  // An untyped failure is the case with the LEAST in the row and the most in
+  // the error: a plugin hook throwing an ordinary Error records nothing but
+  // INTERNAL_ERROR, so the message and stack reach the operator here or are
+  // lost entirely.
+  if (!NextlyError.is(err)) {
+    reportUntypedFailure(err, requestId);
+    return { code: "INTERNAL_ERROR" };
+  }
 
   // Reported here rather than by each caller, for the same reason the metadata
   // is built here: the two halves are one contract — free text and identifiers
@@ -188,8 +218,14 @@ export function auditFailureMetadata(
   // will not keep: a plugin naming its own code and carrying no context would
   // otherwise leave INTERNAL_ERROR as the only trace of a failure it alone can
   // explain.
+  // Reported whenever anything the error carried does not reach the row: a
+  // context that is projected away, a code that is replaced, or a cause the row
+  // has nowhere to put. A canonical code with no context still has a cause
+  // worth reading, and this is the only place it would be read from.
   const codeIsOurs = isCanonicalErrorCode(err.code);
-  if (err.logContext || !codeIsOurs) reportWithheldDetail(err, requestId);
+  if (err.logContext || !codeIsOurs || err.cause) {
+    reportWithheldDetail(err, requestId);
+  }
 
   return {
     code: codeIsOurs ? err.code : "INTERNAL_ERROR",

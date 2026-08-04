@@ -363,6 +363,34 @@ describe("auditFailureMetadata", () => {
     });
   });
 
+  it("reports a failure that is not ours at all", () => {
+    // An untyped failure has the LEAST in the row and the most in the error:
+    // nothing but INTERNAL_ERROR is recorded, so its message reaches the
+    // operator here or is lost entirely.
+    const logged: Record<string, unknown>[] = [];
+    const logger = getNextlyLogger();
+    const originalWarn = logger.warn.bind(logger);
+    logger.warn = (payload: unknown) => {
+      logged.push(payload as Record<string, unknown>);
+      return undefined as never;
+    };
+
+    try {
+      expect(
+        auditFailureMetadata(new TypeError("afterLogin exploded"))
+      ).toEqual({ code: "INTERNAL_ERROR" });
+      // A canonical code with no context still has a cause worth reading.
+      auditFailureMetadata(
+        NextlyError.internal({ cause: new Error("connection reset") })
+      );
+    } finally {
+      logger.warn = originalWarn;
+    }
+
+    expect(logged[0]?.error).toBe("afterLogin exploded");
+    expect(logged[1]?.cause).toBe("connection reset");
+  });
+
   it("keeps its own classification when a hook supplies those keys", () => {
     // `logContext` is written by application code. Spread, it could overwrite
     // the fields this adds — making a failure unsearchable as an auth failure,
