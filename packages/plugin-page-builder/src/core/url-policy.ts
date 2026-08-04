@@ -43,6 +43,38 @@ export const TEXT_ARGUMENT_FUNCTIONS = new Set([
 export const SUBSTITUTION_FUNCTIONS = new Set(["var", "env", "attr"]);
 
 /**
+ * An `attr()` standing where the value would be FETCHED rather than read.
+ *
+ * Unlike every other shape these scans look at, `attr()` has no literal in the
+ * stylesheet to inspect: the value arrives from an author-controlled DOM
+ * attribute at use time, so `image-set(attr(data-probe) 1x)` names a request
+ * whose destination this parser cannot see. In a text position the same
+ * function is ordinary — `content: attr(data-label)` — which is why the answer
+ * depends on where it sits and not on the function alone.
+ *
+ * CSS Values 5 forbids the fetching case independently: the working group
+ * resolved to make `type(<url>)` invalid inside `attr()`, and an
+ * `attr()`-tainted value may not be used in a URL context at all. So refusing
+ * costs no legitimate stylesheet anything, and it means the guarantee does not
+ * rest on every engine having implemented that taint correctly — support for
+ * `attr()` outside `content` is still marked experimental.
+ *
+ * Shared by both scans deliberately. They reach different verdicts (one
+ * compares against an allowlist, the other refuses every remote origin) but
+ * they read POSITION the same way, and a second copy of this rule is how one
+ * of them would come to disagree with the other.
+ */
+export function attrFetchesFromDom(
+  node: csstree.CssNode,
+  position: readonly string[]
+): boolean {
+  if (node.type !== "Function" || node.name.toLowerCase() !== "attr")
+    return false;
+  const enclosing = position[position.length - 1];
+  return enclosing !== undefined && !TEXT_ARGUMENT_FUNCTIONS.has(enclosing);
+}
+
+/**
  * How deep a value may nest `Raw` fragments before the scan gives up.
  *
  * Values are short, so this exists to stop a hostile value recursing without
@@ -60,7 +92,7 @@ export interface FetchableValues {
    * same as safe: a caller refuses rather than emitting what it could not
    * check.
    */
-  unreadable?: "depth" | "syntax";
+  unreadable?: "depth" | "syntax" | "attr";
 }
 
 /**
@@ -89,6 +121,9 @@ export function fetchableValues(
   const values: string[] = [];
   const raws: { text: string; position: string[] }[] = [];
   const functions: string[] = [];
+  // An `attr()` standing where a URL would be fetched. Recorded rather than
+  // returned mid-walk so the values found so far still reach the caller.
+  let attrInFetchPosition = false;
   csstree.walk(value, {
     enter(node: csstree.CssNode) {
       if (node.type === "Function") functions.push(node.name.toLowerCase());
@@ -99,6 +134,9 @@ export function fetchableValues(
         ...outerPosition,
         ...functions.filter(name => !SUBSTITUTION_FUNCTIONS.has(name)),
       ];
+      // No literal to read: the URL would arrive from a DOM attribute at use
+      // time, so this is a request whose destination the scan cannot see.
+      if (attrFetchesFromDom(node, position)) attrInFetchPosition = true;
       if (node.type === "Url") {
         values.push(node.value);
         return;
@@ -118,6 +156,11 @@ export function fetchableValues(
       if (node.type === "Function") functions.pop();
     },
   });
+
+  // Ahead of the `Raw` re-parse: an unreadable value is refused either way, and
+  // this reason names the actual cause rather than whatever the nested walk
+  // happens to report first.
+  if (attrInFetchPosition) return { values, unreadable: "attr" };
 
   for (const raw of raws) {
     if (raw.text.trim() === "") continue;

@@ -384,6 +384,65 @@ describe("custom CSS may not reach off this origin", () => {
     expect(fine.css).toContain("color: blue");
   });
 
+  it("refuses attr() where the value would be fetched", () => {
+    // The URL never appears in the stylesheet: it arrives from a DOM attribute
+    // at use time, so the scan has no literal to judge and a selector can make
+    // the request conditional on a secret. Refused as unreadable rather than
+    // as a remote URL, because no host was named.
+    for (const value of [
+      "background-image: image-set(attr(data-probe) 1x)",
+      "background: -webkit-image-set(attr(data-probe) 1x)",
+      "list-style-image: image(attr(data-probe))",
+      "border-image-source: image-set(attr(data-probe) 1x)",
+    ]) {
+      const out = sanitizeCustomCss(`.a{${value}}`, SCOPE);
+      expect(
+        out.warnings.map(w => w.code),
+        value
+      ).toEqual(["unchecked"]);
+      expect(out.warnings[0]?.message, value).toContain("attr()");
+      expect(out.css, value).not.toContain("attr(");
+    }
+  });
+
+  it("refuses url(attr(...)), which no parser can read as a URL", () => {
+    // `url()` takes a URL token or a string, never a function, so this is a
+    // parse error rather than an attr() the walk can see — and it is reported
+    // as one. It is covered here because the outcome is what matters: the
+    // declaration is removed either way, so the shape cannot reach the page
+    // while being described by a different reason than the cases above.
+    const out = sanitizeCustomCss(
+      ".a{background-image: url(attr(data-probe))}",
+      SCOPE
+    );
+    expect(out.warnings.map(w => w.code)).toEqual(["unchecked"]);
+    expect(out.css).not.toContain("attr(");
+  });
+
+  it("leaves attr() alone where it is read as text", () => {
+    // `content: attr(data-label)` is the ordinary, specified use and fetches
+    // nothing. A refusal that fired on it would break the one thing attr() is
+    // universally supported for.
+    for (const value of [
+      "content: attr(data-label)",
+      'content: "x" attr(data-label) "y"',
+      "font-family: local(attr(data-face))",
+    ]) {
+      const out = sanitizeCustomCss(`.a::before{${value}}`, SCOPE);
+      expect(out.warnings, value).toEqual([]);
+      expect(out.css, value).toContain("attr(");
+    }
+  });
+
+  it("refuses attr() in a custom property, which can land anywhere", () => {
+    // A custom property is checked as though its value could be used in any
+    // position, because the declaration that uses it carries no literal of its
+    // own to inspect.
+    const out = sanitizeCustomCss(".a{--probe: attr(data-probe)}", SCOPE);
+    expect(out.warnings.map(w => w.code)).toEqual(["unchecked"]);
+    expect(out.css).not.toContain("attr(");
+  });
+
   it("refuses nesting past the bound as unchecked, not as a URL", () => {
     // Rules deeper than the scan follows are still removed — unreadable is not
     // safe — but the reason given has to be the real one. Reporting them as

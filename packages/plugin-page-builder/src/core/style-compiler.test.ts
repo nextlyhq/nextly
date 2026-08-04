@@ -6,6 +6,7 @@ import {
   compileDocumentCss,
   compileTokensCss,
   isAllowedRemoteUrl,
+  safeValue,
   DEFAULT_BREAKPOINTS,
 } from "./style-compiler";
 import { makeNode } from "./tree";
@@ -269,6 +270,36 @@ describe("compileNodeCss — extended scalars", () => {
       { base: { fontWeight: "700; color:red" } }
     );
     expect(compileNodeCss(n)).not.toContain("color:red");
+  });
+});
+
+describe("safeValue — attr() in a fetch position", () => {
+  // Against `safeValue` directly rather than through a style property. Every
+  // image-bearing key on the structured surface today is `backgroundImage`,
+  // which takes the URL-shaped path and never reaches here, so no property
+  // reproduces this yet. The rule still belongs in the value checker: it is
+  // what a NEW structured value taking an image would inherit, and a test
+  // routed through a property that cannot express the shape would assert the
+  // property's own rejection instead of this one.
+  it("refuses a value whose URL comes from a DOM attribute", () => {
+    for (const value of [
+      "image-set(attr(data-probe) 1x)",
+      "-webkit-image-set(attr(data-probe) 1x)",
+      "image(attr(data-probe))",
+    ]) {
+      expect(safeValue(value), value).toBeNull();
+      // An allowlist cannot rescue it: there is no host here to match against,
+      // which is precisely why it is refused rather than compared.
+      expect(
+        safeValue(value, [{ protocol: "https", hostname: "**" }]),
+        value
+      ).toBeNull();
+    }
+  });
+
+  it("keeps attr() where it is read as text", () => {
+    expect(safeValue("attr(data-label)")).toBe("attr(data-label)");
+    expect(safeValue("local(attr(data-face))")).toBe("local(attr(data-face))");
   });
 });
 

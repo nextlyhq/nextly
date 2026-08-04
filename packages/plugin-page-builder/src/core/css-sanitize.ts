@@ -15,6 +15,7 @@ import * as csstree from "css-tree";
 import type { CssNode, List, ListItem, Rule } from "css-tree";
 
 import {
+  attrFetchesFromDom,
   isRemoteUrl,
   MAX_VALUE_NESTING,
   SUBSTITUTION_FUNCTIONS,
@@ -67,7 +68,7 @@ export interface SanitizedCss {
  */
 type CssFinding =
   | { kind: "remote"; url: string }
-  | { kind: "unreadable"; reason: "depth" | "syntax" };
+  | { kind: "unreadable"; reason: "depth" | "syntax" | "attr" };
 
 /** The first `url()` in a declaration that leaves this origin, if any. */
 function firstRemoteUrl(decl: csstree.Declaration): CssFinding | undefined {
@@ -132,6 +133,11 @@ function remoteUrlInValue(
   anyPositionIsUrl = false
 ): CssFinding | undefined {
   let found: string | undefined;
+  // An `attr()` reading a URL out of the DOM, where there is no literal for
+  // this walk to judge. Recorded rather than returned in place so a remote URL
+  // found elsewhere in the same value still wins: it names a host, which is a
+  // more useful thing to tell the author than "something was unreadable".
+  let attrFetch = false;
   // One walk, maintaining the enclosing-function stack, because all three
   // shapes below depend on where in the value they sit.
   const functions: string[] = [];
@@ -140,6 +146,16 @@ function remoteUrlInValue(
     enter(node: csstree.CssNode) {
       if (node.type === "Function") functions.push(node.name.toLowerCase());
       if (found !== undefined) return;
+      // A custom property can land anywhere, so there every `attr()` is a
+      // potential fetch; elsewhere the enclosing function decides.
+      if (
+        node.type === "Function" &&
+        node.name.toLowerCase() === "attr" &&
+        (anyPositionIsUrl ||
+          attrFetchesFromDom(node, positionOf(functions, outerPosition)))
+      ) {
+        attrFetch = true;
+      }
       // `.value` is decoded on Url and String alike, so a scheme spelled with
       // CSS escapes is read the way a browser resolves it, not as written.
       if (node.type === "Url") {
@@ -176,6 +192,7 @@ function remoteUrlInValue(
     },
   });
   if (found !== undefined) return { kind: "remote", url: found };
+  if (attrFetch) return { kind: "unreadable", reason: "attr" };
 
   for (const raw of raws) {
     if (raw.text.trim() === "") continue;
@@ -422,6 +439,11 @@ export function sanitizeCustomCss(
           warn(
             "unchecked",
             `"${decl.property}" nests values more than ${MAX_VALUE_NESTING} levels deep, so it could not be checked and was removed. Shorten the fallback chain.`
+          );
+        } else if (finding.reason === "attr") {
+          warn(
+            "unchecked",
+            `"${decl.property}" builds a URL from an attr() value, whose destination is only known once the page renders, so it could not be checked and was removed. CSS cannot load a URL from an attribute in any case; set the image through the block's background control, which can load from the hosts your site allows.`
           );
         } else {
           warn(
