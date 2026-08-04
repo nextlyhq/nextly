@@ -154,6 +154,27 @@ describe("a code-less failure never puts its own message on the wire", () => {
     expect(single.logContext).toMatchObject({ legacyMessage: raw });
   });
 
+  it("logs a Single's synthesised message, not the absent raw one", () => {
+    // A SingleResult may omit the top-level message and carry per-field errors
+    // instead. The synthesised text is what the caller would have seen and what
+    // the converter replaces for a non-validation status, so it is what has to
+    // survive: logging the raw field records `undefined` in exactly the case
+    // where the caller's text was withheld.
+    const error = createErrorFromSingleResult({
+      success: false,
+      statusCode: 500,
+      errors: [
+        { field: "slug", message: "slug already taken" },
+        { field: "title", message: "title too long" },
+      ],
+    });
+
+    expect(error.publicMessage).toBe("An unexpected error occurred.");
+    expect(error.logContext).toMatchObject({
+      legacyMessage: "slug already taken, title too long",
+    });
+  });
+
   it("keeps the detail for the operator", () => {
     const error = errorFromServiceEnvelope(codeless(500, "driver exploded"), {
       legacyMessage: "driver exploded",

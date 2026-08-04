@@ -151,9 +151,13 @@ export function createErrorFromSingleResult(
         message: e.message,
       })),
     },
-    // Same reason as the collection converter: the generic public sentence is
-    // what the caller gets, so the original has to survive somewhere.
-    { legacyMessage: result.message }
+    // The NORMALISED message, not `result.message`. A Single failure may omit
+    // the top-level one and carry per-field `errors` instead, in which case the
+    // text above is synthesised from them -- and that synthesised text is what
+    // the converter replaces with a generic sentence for a non-validation
+    // status. Logging the raw field would record `undefined` in exactly the
+    // case where the caller's text was withheld.
+    { legacyMessage: message }
   );
 }
 
