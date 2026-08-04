@@ -27,8 +27,16 @@ the hosts it is configured to allow, as a backstop to the origin policy already
 enforced when compiling styles and markup.
 
 `cspDirectives(remotePatterns)` builds `img-src`, `media-src`, `frame-src`,
-`font-src` and `object-src 'none'`. Your app sends the header from its own
-middleware or `next.config`.
+`font-src`, `style-src`, `object-src 'none'` and `base-uri 'self'`. Your app
+sends the header from its own middleware or `next.config`.
+
+`style-src` carries `'unsafe-inline'`, because the renderer emits its scoped CSS
+as inline `<style>` elements and the alternative is a per-request nonce that
+would force dynamic rendering. What it still buys you is the part that matters
+here: the HOST a stylesheet may be loaded from is bounded, so a block rendering
+`<link rel="stylesheet">` cannot pull one from anywhere. `base-uri` is the one
+non-fetch directive, because a cross-origin `<base href>` re-points every
+relative URL on the page and no fetch directive can express that.
 
 If the response already carries a policy — Nextly's own security headers send
 one — union these into it with `mergeCspDirectives` rather than sending a second

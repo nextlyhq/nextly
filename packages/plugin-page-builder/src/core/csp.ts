@@ -33,26 +33,38 @@
  * or its CDN, merged with whatever it already sends. It owns the response, so
  * it owns the header.
  *
- * ## Fetch directives only
+ * ## No `script-src`
  *
- * No `script-src`, and deliberately. The canonical Next.js recipe uses a
- * per-request nonce, which forces dynamic rendering on every page and would
- * defeat tag-based ISR. A nonce governs scripts; the channel this closes is
- * where a RESOURCE comes from, and a host allowlist is a static string that
- * works unchanged under static generation, ISR and dynamic rendering alike.
- * Scripts remain the host application's business.
+ * Deliberately. The canonical Next.js recipe uses a per-request nonce, which
+ * forces dynamic rendering on every page and would defeat tag-based ISR. A
+ * nonce governs scripts; the channel this closes is where a RESOURCE comes
+ * from, and a host allowlist is a static string that works unchanged under
+ * static generation, ISR and dynamic rendering alike. Scripts remain the host
+ * application's business.
+ *
+ * What IS emitted is the fetch directives plus `base-uri`. The one non-fetch
+ * directive earns its place because a cross-origin `<base href>` re-points
+ * every relative url on the page, and no fetch directive can express that.
  *
  * @module core/csp
  */
 
 import type { RemotePattern, RemotePatternInput } from "./url-policy";
 
-/** The directives this generates, in the order they are emitted. */
+/** The fetch directives this generates, in the order they are emitted. */
 export const CSP_FETCH_DIRECTIVES = [
   "img-src",
   "media-src",
   "frame-src",
   "font-src",
+  // A stylesheet is a fetch like any other, and the one most worth bounding
+  // here: a block registered outside this package renders its own markup, so
+  // `<link rel="stylesheet" href={props.href}>` from author-controlled props
+  // loads a stylesheet from anywhere — and a stylesheet is precisely where a
+  // selector-gated `url()` turns a page's contents into a series of requests.
+  // The parser policy never sees that file, so this directive is the only
+  // thing standing in front of it.
+  "style-src",
   // `'none'`, and present even though nothing here contributes sources to it.
   // A block registered outside this package renders its own markup, and an
   // `<object data="…">` fetches without a user action like any other resource.
@@ -62,7 +74,26 @@ export const CSP_FETCH_DIRECTIVES = [
   "object-src",
 ] as const;
 
+/**
+ * Directives that bound the DOCUMENT rather than a fetch.
+ *
+ * `base-uri` is not a fetch directive and is here anyway, because a
+ * cross-origin `<base href>` is one of the surfaces this policy exists to
+ * cover and no fetch directive constrains it: a block that injects one
+ * re-points every RELATIVE url on the page, which the parser policy allows
+ * precisely because relative urls name no host. It also has no `default-src`
+ * fallback, so it must be written to exist at all.
+ */
+export const CSP_DOCUMENT_DIRECTIVES = ["base-uri"] as const;
+
+/** Every directive this generates, in the order they are emitted. */
+export const CSP_DIRECTIVES = [
+  ...CSP_FETCH_DIRECTIVES,
+  ...CSP_DOCUMENT_DIRECTIVES,
+] as const;
+
 export type CspFetchDirective = (typeof CSP_FETCH_DIRECTIVES)[number];
+export type CspDirective = (typeof CSP_DIRECTIVES)[number];
 
 export interface CspOptions {
   /**
@@ -186,8 +217,12 @@ function cspPort(port: string | undefined): string | undefined {
  * disagree.
  */
 function cspPaths(pathname: string | undefined): readonly string[] | undefined {
-  if (pathname === undefined || pathname === "" || pathname === "**")
-    return [""];
+  // Only an ABSENT pathname means any path. The matcher reaches its `** `
+  // default through `pattern.pathname ?? "**"`, which an empty string does not
+  // trigger — it arrives at picomatch as an empty glob, where `makeRe` throws
+  // rather than matching anything. Reading it as "omitted" would emit a
+  // host-wide source for a pattern that admits no request at all.
+  if (pathname === undefined || pathname === "**") return [""];
   if (!pathname.startsWith("/")) return undefined;
 
   if (pathname.endsWith("/**")) {
@@ -203,6 +238,13 @@ function cspPaths(pathname: string | undefined): readonly string[] | undefined {
   }
 
   if (pathname.includes("*")) return undefined;
+  // A literal ending in `/` is where the two grammars invert. picomatch reads
+  // `/tenant/` as that exact path; CSP reads a trailing slash as a PREFIX, so
+  // the same text would allow `/tenant/private.png`. `/` is the extreme case,
+  // an exact path to the matcher and the whole origin to CSP. The prefix form
+  // is emitted only from the terminal `/**` branch above, where it is what the
+  // pattern means.
+  if (pathname.endsWith("/")) return undefined;
   if (!isExpressiblePath(pathname)) return undefined;
   return [pathname];
 }
@@ -260,15 +302,26 @@ export function unexpressibleHosts(
 }
 
 /**
- * The fetch directives a page built with this plugin needs, as a record.
+ * The directives a page built with this plugin needs, as a record.
  *
  * `'self'` is always present: the media library is same-origin, and it is the
  * path the refusal messages point authors at.
+ *
+ * `style-src` carries `'unsafe-inline'` because the renderer emits its scoped
+ * CSS as inline `<style>` elements — the node styles, the sanitized custom CSS
+ * and several first-party blocks each write one. The alternative is a
+ * per-request nonce, which is the same trade refused for `script-src`: it
+ * forces dynamic rendering and defeats ISR. This matches the Next.js
+ * nonce-free CSP recipe, which is also `style-src 'self' 'unsafe-inline'`, and
+ * it does not give up what this policy is for — the HOST a stylesheet loads
+ * from stays bounded, which is the part `remotePatterns` backstops. Inline CSS
+ * is already read by the sanitizer, which the stylesheet on a remote host
+ * never is.
  */
 export function cspDirectives(
   remotePatterns: readonly RemotePatternInput[] = [],
   options: CspOptions = {}
-): Record<CspFetchDirective, string[]> {
+): Record<CspDirective, string[]> {
   const { allowDataImages = true, allowBlobMedia = false } = options;
 
   const hosts = [
@@ -290,7 +343,11 @@ export function cspDirectives(
     "media-src": [...base(), ...(allowBlobMedia ? ["blob:"] : [])],
     "frame-src": base(),
     "font-src": base(),
+    "style-src": [...base(), "'unsafe-inline'"],
     "object-src": ["'none'"],
+    // `'self'` rather than `'none'`: a host legitimately sets a `<base>` for
+    // its own routing, and this only has to stop one pointing off-origin.
+    "base-uri": ["'self'"],
   };
 }
 
@@ -305,7 +362,7 @@ export function cspHeaderValue(
   options: CspOptions = {}
 ): string {
   const directives = cspDirectives(remotePatterns, options);
-  return CSP_FETCH_DIRECTIVES.map(
+  return CSP_DIRECTIVES.map(
     name => `${name} ${directives[name].join(" ")}`
   ).join("; ");
 }
@@ -364,8 +421,7 @@ export function mergeCspDirectives(
     // was relying on `default-src` to provide.
     const inherited = before.has(name)
       ? before.get(name)
-      : ((name === "frame-src" ? before.get("child-src") : undefined) ??
-        before.get("default-src"));
+      : inheritedSources(name, before);
 
     // `'none'` is only meaningful as a directive's ONLY source. CSP 3 special-
     // cases it when the list holds exactly one item, so in any longer list it
@@ -396,6 +452,32 @@ export function mergeCspDirectives(
     merged[name] = [...new Set([...(inherited ?? []), ...sources])];
   }
   return merged;
+}
+
+/**
+ * What an UNSTATED directive was already being enforced with.
+ *
+ * `undefined` where nothing was, which is not the same as an empty list — that
+ * would read as "permits nothing" and stop sources being added at all.
+ *
+ * Not every directive falls back. The fetch directives inherit `default-src`,
+ * and `frame-src` prefers `child-src` ahead of it, but a document directive
+ * like `base-uri` has no fallback at all: unstated, it restricts nothing.
+ * Seeding it from `default-src` would hand it sources the host never granted
+ * it — a policy with `default-src https://cdn.example` would come back
+ * permitting a `<base>` pointing at that CDN.
+ */
+function inheritedSources(
+  name: string,
+  before: Map<string, readonly string[]>
+): readonly string[] | undefined {
+  if ((CSP_DOCUMENT_DIRECTIVES as readonly string[]).includes(name))
+    return undefined;
+  if (name === "frame-src") {
+    const child = before.get("child-src");
+    if (child !== undefined) return child;
+  }
+  return before.get("default-src");
 }
 
 /**
