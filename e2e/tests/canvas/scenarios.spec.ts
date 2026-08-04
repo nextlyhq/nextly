@@ -273,9 +273,13 @@ test("scenario 4b: a 2px oscillation at a boundary never flips the indicator", a
     "a boundary must actually be crossed, or this measures the middle of one zone"
   ).toBeGreaterThanOrEqual(0);
 
+  // Straddle the boundary: step back 2px BEFORE sampling, so the run covers
+  // P-2 and P+2 rather than only P and P+2. Sampling one side lets an algorithm
+  // that flips the instant the pointer crosses still report a single target.
+  await driver.moveBy(0, -2);
   const observed: number[] = [];
   for (let step = 0; step < 20; step++) {
-    await driver.moveBy(0, step % 2 === 0 ? 2 : -2);
+    await driver.moveBy(0, step % 2 === 0 ? 4 : -4);
     observed.push(await driver.readActiveTarget());
   }
   await driver.cancel();
@@ -285,12 +289,14 @@ test("scenario 4b: a 2px oscillation at a boundary never flips the indicator", a
     description: JSON.stringify(observed),
   });
 
-  // Exactly one. Allowing two admits [1,2,1,2,...], which IS the flip this
-  // scenario exists to reject.
-  const distinct = new Set(observed.filter(value => value >= 0));
-  expect(distinct.size, "the indicator must not flip under a 2px jitter").toBe(
-    1
-  );
+  // -1 is NOT filtered out. A run of [2,-1,2,-1,...] has one active value but
+  // the indicator vanishes on every other move, which is the same defect seen
+  // from the other side. Counting the inactive state makes that fail.
+  const distinct = new Set(observed);
+  expect(
+    distinct.size,
+    `the indicator must neither flip nor disappear: ${JSON.stringify(observed)}`
+  ).toBe(1);
 });
 
 /**
@@ -308,13 +314,12 @@ test("scenario 5: a keyboard move actually moves a block", async ({
   page,
   request,
 }) => {
-  test.fail(true, "this canvas has no keyboard move path at all");
-
   const fixture = await seedPage(request, FLAT_LIST_FIXTURE);
   const driver = createPocDriver(page);
   await driver.mountTree(fixture);
 
   const before = await driver.readTreeShape();
+  test.fail(true, "this canvas has no keyboard move path at all");
   await driver.keyboardInsert("down");
   const moved = await driver.readTreeShape();
 

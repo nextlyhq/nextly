@@ -82,21 +82,20 @@ test("[acceptance] point 4: siblings do not move during a drag", async ({
   page,
   request,
 }) => {
-  test.fail(
-    true,
-    "zones expand from 0px to 6px and push every block below them down"
-  );
   const fixture = await seedPage(request, FLAT_LIST_FIXTURE);
   const driver = createPocDriver(page);
   await driver.mountTree(fixture);
 
-  const frame = page.frames().find(f => f.url() === "about:blank")!;
-  const read = () =>
-    frame.evaluate(() =>
-      Array.from(document.querySelectorAll("[data-nx-id]")).map(el =>
-        Math.round(el.getBoundingClientRect().top)
-      )
-    );
+  // Declared here, not at the top: annotating before setup would classify an
+  // API failure, a missing frame or a selector regression as the known point-4
+  // gap, letting the body stop before producing any evidence while the suite
+  // still exits green.
+  test.fail(
+    true,
+    "zones expand from 0px to 6px and push every block below them down"
+  );
+
+  const read = async () => (await driver.readBlockBoxes()).map(box => box.top);
 
   const before = await read();
   await startLibraryDrag(driver);
@@ -138,11 +137,17 @@ test("[acceptance] point 8: a 500-block tree stays responsive during a drag", as
 
   // Wall-clock per move+read, not a frame rate: Playwright cannot observe
   // frames, and a fabricated fps number would be worse than an honest latency.
+  expect(
+    await driver.isDragging(),
+    "the benchmark must measure an ACTIVE drag, not a failed one"
+  ).toBe(true);
+
   const samples: number[] = [];
+  const targets: number[] = [];
   for (let step = 0; step < 40; step++) {
     const started = await page.evaluate(() => performance.now());
     await driver.moveBy(0, 6);
-    await driver.readActiveTarget();
+    targets.push(await driver.readActiveTarget());
     const ended = await page.evaluate(() => performance.now());
     samples.push(ended - started);
   }
@@ -160,6 +165,13 @@ test("[acceptance] point 8: a 500-block tree stays responsive during a drag", as
   });
 
   expect(fixture.blockIds.length).toBe(501);
+  // Without this, droppable registration failing on a large tree makes every
+  // sample a fast -1 and all three ceilings pass — the benchmark would be
+  // cheapest exactly when the tree is broken.
+  expect(
+    targets.filter(value => value >= 0).length,
+    "targets must be resolved during the benchmark"
+  ).toBeGreaterThan(0);
   // A loose ceiling on purpose. It is a smoke alarm for an order-of-magnitude
   // regression, not the 60fps budget, which needs frame instrumentation the v2
   // canvas will have to provide.
@@ -231,7 +243,7 @@ test("[informational] point 9: the library's Insert button adds a block", async 
  * cancelled drag and an unchanged tree; what happens is an abandoned editing
  * session. The v2 canvas must claim Escape while a drag is in flight.
  */
-test("[informational] point 12: Escape cancels a drag without changing the tree", async ({
+test("[acceptance] point 12: Escape cancels a drag without changing the tree", async ({
   page,
   request,
 }) => {
@@ -258,8 +270,16 @@ test("[informational] point 12: Escape cancels a drag without changing the tree"
     description: JSON.stringify(afterCancel),
   });
 
-  // Cancelling remounts the canvas iframe, so a single read can land while no
-  // about:blank frame exists at all. Poll until it is back.
+  // Asserted, not annotated. When Escape unmounts the editor the poll below
+  // spends its full 30s timing out on a canvas that is never coming back, which
+  // reports as a slow flake rather than the defect it is.
+  expect(
+    afterCancel.hasEditor,
+    `Escape left the editor: ${JSON.stringify(afterCancel)}`
+  ).toBe(true);
+
+  // The canvas iframe may legitimately remount, so a single read can land while
+  // it is absent. Poll for the valid remount path only.
   let after: string[] = [];
   await expect
     .poll(

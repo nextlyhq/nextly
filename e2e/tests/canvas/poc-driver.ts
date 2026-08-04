@@ -5,9 +5,10 @@
  */
 import { expect, type Frame, type Page } from "@playwright/test";
 
-import type { CanvasDriver, CanvasFixture, Point, Rect } from "./driver";
-import { mapFrameRectToHost } from "./coordinate-mapping";
 import { gotoAdmin } from "../support/admin";
+
+import { mapFrameRectToHost } from "./coordinate-mapping";
+import type { CanvasDriver, CanvasFixture, Point, Rect } from "./driver";
 
 /**
  * Both drop-zone shapes. `nx-pb-dropzone-empty` does NOT carry
@@ -163,7 +164,7 @@ export function createPocDriver(page: Page): CanvasDriver {
           const zones = Array.from(
             document.querySelectorAll(selector as string)
           );
-          const el = zones[index as number];
+          const el = zones[index];
           if (!el) return null;
           const r = el.getBoundingClientRect();
           return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
@@ -184,7 +185,18 @@ export function createPocDriver(page: Page): CanvasDriver {
     },
 
     async keyboardInsert(direction: "up" | "down") {
+      // A full keyboard drag, not a bare arrow key: focus a block, lift it,
+      // move, drop. Sending only the arrow would keep scenario 5 failing for
+      // want of an active drag even after keyboard dragging is implemented, so
+      // it could never become the unexpected pass it exists to produce.
+      const blocks = await driver.readTreeShape();
+      const target = blocks[1];
+      if (!target) throw new Error("no block available to move");
+
+      await canvasFrame().locator(`[data-nx-id="${target}"]`).focus();
+      await page.keyboard.press("Space");
       await page.keyboard.press(direction === "up" ? "ArrowUp" : "ArrowDown");
+      await page.keyboard.press("Space");
     },
 
     async readActiveTarget() {

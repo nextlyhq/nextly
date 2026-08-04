@@ -25,8 +25,8 @@ export function findReversal(sequence: number[]): Reversal | null {
 
   let direction = 0;
   for (let i = 1; i < active.length; i++) {
-    const previous = active[i - 1]!;
-    const current = active[i]!;
+    const previous = active[i - 1];
+    const current = active[i];
     const step = current.value - previous.value;
     if (step === 0) continue;
 

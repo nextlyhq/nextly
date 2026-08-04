@@ -139,8 +139,11 @@ export async function seedPage(
   opts: SeedOptions
 ): Promise<CanvasFixture> {
   // Slugs are unique on this collection, so a re-run would collide with the row
-  // the previous run left behind.
-  const slug = `${opts.slug}-${Date.now()}`;
+  // the previous run left behind. Millisecond resolution alone is not enough:
+  // two workers seeding the same fixture in the same millisecond collide, and
+  // the POST then fails on the constraint, reporting a seed error rather than a
+  // canvas result.
+  const slug = `${opts.slug}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
   const response = await request.post("/admin/api/collections/pages/entries", {
     data: {
