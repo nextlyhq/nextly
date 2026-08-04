@@ -16,6 +16,7 @@ import { resolveBindings } from "../core/bindings";
 import type { BlockRegistry } from "../core/registry";
 import { nodeClass } from "../core/style-compiler";
 import type { BlockNode } from "../core/types";
+import type { RemotePattern } from "../core/url-policy";
 
 import type { DataProvider } from "./dataProvider";
 import { BlockErrorBoundary } from "./ErrorBoundary";
@@ -45,6 +46,8 @@ export interface RenderNodeProps {
   node: BlockNode;
   registry: BlockRegistry;
   dataProvider?: DataProvider;
+  /** Hosts this page may load media from; passed to every block's render args. */
+  remotePatterns?: readonly RemotePattern[];
   /** Current Query Loop item — threaded to resolve bindings at any depth. */
   item?: Record<string, unknown>;
   /** Remaining query budget shared across nested loops on this page render. */
@@ -61,6 +64,7 @@ export function RenderNode({
   node,
   registry,
   dataProvider,
+  remotePatterns,
   item,
   budget,
   refs,
@@ -82,6 +86,7 @@ export function RenderNode({
         node={target}
         registry={registry}
         dataProvider={dataProvider}
+        remotePatterns={remotePatterns}
         item={item}
         budget={budget}
         refs={refs}
@@ -105,6 +110,7 @@ export function RenderNode({
           node={node}
           registry={registry}
           dataProvider={dataProvider}
+          remotePatterns={remotePatterns}
           className={className}
           budget={budget ?? { n: 0 }}
         />
@@ -121,6 +127,7 @@ export function RenderNode({
           node={child}
           registry={registry}
           dataProvider={dataProvider}
+          remotePatterns={remotePatterns}
           item={item}
           budget={budget}
           refs={refs}
@@ -131,7 +138,7 @@ export function RenderNode({
   }
 
   const props = item ? resolveBindings(node, item) : node.props;
-  const el = def.render({ props, node, slots, className });
+  const el = def.render({ props, node, slots, className, remotePatterns });
 
   const extra: Record<string, string> = {
     ...safeAttributes(node.attributes),

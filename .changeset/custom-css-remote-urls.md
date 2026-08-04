@@ -39,8 +39,10 @@ compiled into the same stylesheet, so a remote image there plus a custom
 selector that suppresses it conditionally still leaks by the request's ABSENCE,
 with no URL in the custom CSS to refuse.
 
-So a block's images are now same-origin by default too, and a site declares the
-hosts it loads from:
+So a block's images are restricted the same way, and a site declares the hosts
+it loads from. A relative path such as `/media/a.png` needs nothing; anything
+carrying a host needs an entry, INCLUDING an absolute URL on your own domain,
+exactly as `next/image` already requires:
 
 ```ts
 <PageRenderer
@@ -58,8 +60,10 @@ leaves as raw text. A protocol-relative `//host/a.png` is refused rather than
 resolved against a guess, since the document's protocol is not knowable when the
 stylesheet is compiled.
 
-BREAKING for pages using a remote block background: it stops rendering until its
-host is declared. The shape is Next.js's `images.remotePatterns`, so an entry can
+BREAKING for pages whose block background is an absolute URL: it stops rendering
+until its host is declared, and that includes absolute URLs pointing at your own
+site. If your media library stores absolute URLs — the cloud storage adapters
+do — add your own host to `remotePatterns` when you upgrade. The shape is Next.js's `images.remotePatterns`, so an entry can
 be copied straight across from `next.config`, and the posture matches
 `next/image` — nothing off-origin unless you said so. Matching uses picomatch
 with the same options `next/image` uses, rather than an approximation of it, so

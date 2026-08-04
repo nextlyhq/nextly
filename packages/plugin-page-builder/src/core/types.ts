@@ -10,6 +10,7 @@ import type { ReactNode } from "react";
 
 import type { MotionConfig } from "./motion";
 import type { BlockSupports } from "./supports";
+import type { RemotePattern } from "./url-policy";
 
 // ---------------------------------------------------------------------------
 // Document + node model (spec §6)
@@ -204,6 +205,15 @@ export interface BlockRenderArgs<P = Record<string, unknown>> {
   slots: Record<string, ReactNode>;
   /** The scoped class the block MUST apply to its own root element (no wrapper div). */
   className: string;
+  /**
+   * The hosts this page may load media from, as `PageRenderer` was given them.
+   *
+   * A block that renders a media URL into an `src` or an inline background is
+   * making a request the style compiler never sees, so the same policy has to
+   * reach here: pass this to `mediaUrl` rather than reading the prop directly.
+   * Absent means same-origin only, which is what an unconfigured page gets.
+   */
+  remotePatterns?: readonly RemotePattern[];
 }
 
 export interface BlockDefinition<P = Record<string, unknown>> {

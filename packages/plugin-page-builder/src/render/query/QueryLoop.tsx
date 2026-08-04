@@ -8,6 +8,7 @@ import type { ReactNode } from "react";
 
 import type { BlockRegistry } from "../../core/registry";
 import type { BlockNode } from "../../core/types";
+import type { RemotePattern } from "../../core/url-policy";
 import type { DataProvider } from "../dataProvider";
 
 import { QueryLoopView } from "./QueryLoopView";
@@ -18,6 +19,8 @@ export interface QueryLoopProps {
   node: BlockNode;
   registry: BlockRegistry;
   dataProvider?: DataProvider;
+  /** Hosts this page may load media from; forwarded to nested blocks. */
+  remotePatterns?: readonly RemotePattern[];
   className: string;
   budget: QueryBudget;
 }
@@ -26,6 +29,7 @@ export async function QueryLoop({
   node,
   registry,
   dataProvider,
+  remotePatterns,
   className,
   budget,
 }: QueryLoopProps): Promise<ReactNode> {
@@ -36,6 +40,7 @@ export async function QueryLoop({
       node={node}
       registry={registry}
       dataProvider={dataProvider}
+      remotePatterns={remotePatterns}
       className={className}
       result={result}
       budget={budget}

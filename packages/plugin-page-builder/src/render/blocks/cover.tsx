@@ -31,8 +31,8 @@ export const cover = defineBlock({
     customCss: true,
     customAttributes: true,
   },
-  render: ({ props, slots, className }) => {
-    const url = mediaUrl(props.image);
+  render: ({ props, slots, className, remotePatterns }) => {
+    const url = mediaUrl(props.image, remotePatterns);
     const overlay = str(props.overlayColor, "#000000");
     const opacity = Number(props.overlayOpacity);
     return (

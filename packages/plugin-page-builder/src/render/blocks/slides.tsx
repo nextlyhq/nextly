@@ -50,13 +50,13 @@ export const slides = defineBlock({
     customCss: true,
     customAttributes: true,
   },
-  render: ({ props, className }) => {
+  render: ({ props, className, remotePatterns }) => {
     const items = Array.isArray(props.items) ? props.items : [];
     return (
       <div className={className} style={track}>
         {items.map((raw, i) => {
           const it = (raw ?? {}) as Record<string, unknown>;
-          const url = mediaUrl(it.image);
+          const url = mediaUrl(it.image, remotePatterns);
           const link = it.link as Record<string, unknown> | undefined;
           const href = safeUrl(link?.href);
           return (

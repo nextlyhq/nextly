@@ -1,3 +1,5 @@
+import { isFetchableUrl, type RemotePattern } from "../../core/url-policy";
+
 /**
  * Reject dangerous URL schemes for image/link/video srcs. Allows http(s)/relative/
  * mailto/tel. Browsers ignore ASCII control chars + whitespace when parsing a scheme
@@ -25,14 +27,32 @@ export function str(v: unknown, fallback = ""): string {
 }
 
 /**
- * Resolve a media prop (raw URL string, `{ url }` object, or a bound value) to a safe URL.
+ * Resolve a media prop (raw URL string, `{ url }` object, or a bound value) to a
+ * safe URL this page is allowed to load.
+ *
+ * Two questions, and the second is the one that was missing. `safeUrl` asks
+ * whether the scheme is dangerous; this also asks whether the ORIGIN is one the
+ * site declared. A block renders its media into an `src` or an inline
+ * background, which never passes through the style compiler, so the policy that
+ * gates a structured `backgroundImage` has to be applied here too — otherwise
+ * an undeclared host is still reachable, and custom CSS can gate the request on
+ * a selector by overriding the inline background conditionally.
+ *
+ * Every block reads its media through this one function, so the check lives
+ * here rather than at the eleven call sites that would each have to remember.
  */
-export function mediaUrl(v: unknown): string | undefined {
-  if (typeof v === "string") return safeUrl(v);
-  if (v && typeof v === "object" && "url" in v) {
-    return safeUrl((v as { url?: unknown }).url);
-  }
-  return undefined;
+export function mediaUrl(
+  v: unknown,
+  remotePatterns: readonly RemotePattern[] = []
+): string | undefined {
+  const raw =
+    typeof v === "string"
+      ? safeUrl(v)
+      : v && typeof v === "object" && "url" in v
+        ? safeUrl((v as { url?: unknown }).url)
+        : undefined;
+  if (raw === undefined) return undefined;
+  return isFetchableUrl(raw, remotePatterns) ? raw : undefined;
 }
 
 /** Read a media prop's alt text if present. */

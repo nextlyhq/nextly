@@ -93,9 +93,9 @@ export const flipBox = defineBlock({
     customCss: true,
     customAttributes: true,
   },
-  render: ({ props, node, className }) => {
+  render: ({ props, node, className, remotePatterns }) => {
     const h = Number(props.height) || 260;
-    const front = mediaUrl(props.frontImage);
+    const front = mediaUrl(props.frontImage, remotePatterns);
     const id = node.id;
     const css = `
 .nx-flip-${id}{perspective:1000px}

@@ -33,9 +33,14 @@ export interface PageRendererProps {
   /**
    * Hosts this page may load block images from, in the shape of Next.js's
    * `images.remotePatterns` so an entry can be copied across from
-   * `next.config`. Absent means same-origin only: a remote image is a request,
-   * and custom CSS in the same stylesheet can make that request conditional on
-   * a selector, so an undeclared host is a way out rather than a broken image.
+   * `next.config`. Absent means relative paths only: a remote image is a
+   * request, and custom CSS in the same stylesheet can make that request
+   * conditional on a selector, so an undeclared host is a way out rather than a
+   * broken image.
+   *
+   * An absolute URL naming THIS site's own host needs an entry too. Nothing
+   * here knows what this site's host is — the page is compiled once and may be
+   * served from anywhere — and `next/image` draws the line in the same place.
    */
   remotePatterns?: readonly RemotePattern[];
   /** Design-token overrides (`{ "color.primary": "#..." }`). Defaults ship a palette. */
@@ -76,6 +81,7 @@ export function PageRenderer({
       <style dangerouslySetInnerHTML={{ __html: css }} />
       <RenderNode
         node={document.root}
+        remotePatterns={remotePatterns}
         registry={registry}
         dataProvider={dataProvider}
         budget={{ n: DEFAULT_QUERY_BUDGET }}

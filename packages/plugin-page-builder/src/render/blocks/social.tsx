@@ -1,12 +1,17 @@
 import type { CSSProperties, ReactNode } from "react";
 
 import { defineBlock } from "../../core/registry";
+import type { RemotePattern } from "../../core/url-policy";
 
 import { iconByName } from "./iconRegistry";
 import { mediaAlt, mediaUrl, str } from "./util";
 
-function testimonialCard(it: Record<string, unknown>, key?: number): ReactNode {
-  const avatar = mediaUrl(it.avatar);
+function testimonialCard(
+  it: Record<string, unknown>,
+  remotePatterns: readonly RemotePattern[] | undefined,
+  key?: number
+): ReactNode {
+  const avatar = mediaUrl(it.avatar, remotePatterns);
   return (
     <figure
       key={key}
@@ -81,8 +86,8 @@ export const testimonial = defineBlock({
     customCss: true,
     customAttributes: true,
   },
-  render: ({ props, className }) => (
-    <div className={className}>{testimonialCard(props)}</div>
+  render: ({ props, className, remotePatterns }) => (
+    <div className={className}>{testimonialCard(props, remotePatterns)}</div>
   ),
 });
 
@@ -116,13 +121,16 @@ export const testimonialCarousel = defineBlock({
     customCss: true,
     customAttributes: true,
   },
-  render: ({ props, className }) => {
+  render: ({ props, className, remotePatterns }) => {
     const items = Array.isArray(props.items) ? props.items : [];
     return (
       <div className={className} style={track}>
         {items.map((raw, i) => (
           <div key={i} style={{ flex: "0 0 80%", scrollSnapAlign: "start" }}>
-            {testimonialCard((raw ?? {}) as Record<string, unknown>)}
+            {testimonialCard(
+              (raw ?? {}) as Record<string, unknown>,
+              remotePatterns
+            )}
           </div>
         ))}
       </div>
@@ -237,7 +245,7 @@ export const logoCloud = defineBlock({
     customCss: true,
     customAttributes: true,
   },
-  render: ({ props, className }) => {
+  render: ({ props, className, remotePatterns }) => {
     const items = Array.isArray(props.items) ? props.items : [];
     return (
       <div
@@ -251,7 +259,7 @@ export const logoCloud = defineBlock({
       >
         {items.map((raw, i) => {
           const it = (raw ?? {}) as Record<string, unknown>;
-          const url = mediaUrl(it.image);
+          const url = mediaUrl(it.image, remotePatterns);
           if (!url) return null;
           return (
             <img

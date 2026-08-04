@@ -273,12 +273,21 @@ export function isAllowedRemoteUrl(
 /**
  * Whether a URL written in a stylesheet may be fetched.
  *
- * Same-origin always; off-origin only from a declared host. Protocol-relative
- * is refused outright rather than resolved against a guess: `//cdn/a.png`
- * inherits the DOCUMENT's protocol, which is not knowable when the stylesheet
- * is compiled, and assuming https accepted it against an https-only pattern on
- * a page that then fetched it over http. An author who wants that host can
- * write the scheme.
+ * A RELATIVE path is always allowed; anything carrying a scheme or a host needs
+ * a declared pattern. Note what that means and does not mean: an absolute URL
+ * naming the site's own host still needs an entry, because nothing here knows
+ * what the site's own host is — the stylesheet is compiled once and may be
+ * served from anywhere, so "same origin" is a property of the request rather
+ * than of the text. This is the same rule `next/image` applies, where
+ * `https://your-own-site.com/a.png` is refused until the host is in
+ * `remotePatterns` while `/a.png` needs nothing. Supplying an origin here
+ * instead would be a second way to express what one pattern entry already says.
+ *
+ * Protocol-relative is refused outright rather than resolved against a guess:
+ * `//cdn/a.png` inherits the DOCUMENT's protocol, which is not knowable when
+ * the stylesheet is compiled, and assuming https accepted it against an
+ * https-only pattern on a page that then fetched it over http. An author who
+ * wants that host can write the scheme.
  */
 export function isFetchableUrl(
   url: string,

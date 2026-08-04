@@ -47,11 +47,11 @@ export const imageCarousel = defineBlock({
     customCss: true,
     customAttributes: true,
   },
-  render: ({ props, className }) => (
+  render: ({ props, className, remotePatterns }) => (
     <div className={className} style={track}>
       {imageItems(props).map((raw, i) => {
         const it = (raw ?? {}) as Record<string, unknown>;
-        const url = mediaUrl(it.image);
+        const url = mediaUrl(it.image, remotePatterns);
         if (!url) return null;
         return (
           <div key={i} style={slide(str(props.perView, "60%"))}>
@@ -94,11 +94,11 @@ export const logoCarousel = defineBlock({
     customCss: true,
     customAttributes: true,
   },
-  render: ({ props, className }) => (
+  render: ({ props, className, remotePatterns }) => (
     <div className={className} style={{ ...track, alignItems: "center" }}>
       {imageItems(props).map((raw, i) => {
         const it = (raw ?? {}) as Record<string, unknown>;
-        const url = mediaUrl(it.image);
+        const url = mediaUrl(it.image, remotePatterns);
         if (!url) return null;
         return (
           <div key={i} style={slide("160px")}>
