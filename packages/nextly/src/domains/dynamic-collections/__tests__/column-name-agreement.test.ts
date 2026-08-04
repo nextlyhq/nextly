@@ -725,6 +725,64 @@ describe("junction storage is a relationship feature only", () => {
   });
 });
 
+describe("a field that moves between storage classes", () => {
+  // A junction-backed field has no column on its row and a row-backed one has no junction table.
+  // Changing a field between those two while keeping its name is therefore not a modification of
+  // anything — read as one, it emitted ALTER COLUMN against a name the table never had, which
+  // fails the whole save. It has to leave one storage and arrive in the other.
+  const named = (type: string) => ({
+    name: "gallery",
+    type,
+    relationTo: "media",
+    options: { relationType: "manyToMany", target: "media" },
+  });
+
+  function alterSql(oldFields: unknown[], newFields: unknown[]): string {
+    const service = new DynamicCollectionSchemaService(undefined, "postgresql");
+    const alter = service as unknown as {
+      generateAlterTableMigration: (
+        table: string,
+        oldFields: unknown[],
+        newFields: unknown[]
+      ) => string;
+    };
+    return alter.generateAlterTableMigration("dc_p", oldFields, newFields);
+  }
+
+  it("adds the column when a junction-backed field becomes row-backed", () => {
+    const sql = alterSql([named("relationship")], [named("upload")]);
+
+    expect({
+      addsColumn: sql.includes("ADD COLUMN"),
+      altersColumn: sql.includes("ALTER COLUMN"),
+    }).toEqual({ addsColumn: true, altersColumn: false });
+  });
+
+  it("drops the column and builds the junction when it goes the other way", () => {
+    const sql = alterSql([named("upload")], [named("relationship")]);
+
+    expect({
+      dropsColumn: sql.includes("DROP COLUMN"),
+      createsJunction: sql.includes("CREATE TABLE"),
+      altersColumn: sql.includes("ALTER COLUMN"),
+    }).toEqual({
+      dropsColumn: true,
+      createsJunction: true,
+      altersColumn: false,
+    });
+  });
+
+  it("still alters a field that stays in the same storage class", () => {
+    // The mirror: an ordinary change to a row-backed field must still reach the modify path.
+    const sql = alterSql(
+      [{ name: "headline", type: "text" }],
+      [{ name: "headline", type: "text", required: true }]
+    );
+
+    expect(sql).toContain("ALTER COLUMN");
+  });
+});
+
 describe("altering a field that has no column", () => {
   // The CREATE path knows a many-to-many stores its links in a junction table. The ALTER paths
   // asked the same question by naming the component type alone, so a many-to-many reached them as
