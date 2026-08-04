@@ -5,7 +5,7 @@
     "nextly-config",
     "collections",
     "singles",
-    "components",
+    "field-groups",
     "fields",
     "environment",
     "media-upload-security"

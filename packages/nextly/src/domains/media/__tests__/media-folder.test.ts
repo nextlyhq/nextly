@@ -175,13 +175,93 @@ describe("MediaService — Folder Operations", () => {
     });
 
     it("should throw DUPLICATE if folder name already exists", async () => {
+      // The folder service names its own code: 409 covers a name clash and a
+      // stale write, and only the producer can tell them apart. A boundary
+      // inferring from the status alone has to read it as staleness, which
+      // would tell someone whose name is taken to reload the page.
+      mockLegacyFolder.createFolder.mockResolvedValue({
+        ...errorResult(409, "A folder with this name already exists"),
+        code: "DUPLICATE",
+      });
+
+      const thrown = await service
+        .createFolder({ name: "Duplicate", parentId: "p-1" }, context)
+        .catch((e: unknown) => e as NextlyError);
+
+      expect(thrown).toBeInstanceOf(NextlyError);
+      expect(thrown.code).toBe("DUPLICATE");
+      expect(thrown.publicMessage).not.toContain("refresh");
+      // The diagnostics used to ride on a status branch that a named code now
+      // skips, so an identified collision became an unidentifiable one in the
+      // operator log. Asserting only `toThrow(NextlyError)` is what hid it.
+      expect(thrown.logContext).toMatchObject({
+        entity: "folder",
+        name: "Duplicate",
+        parentId: "p-1",
+      });
+      // Operator-side only: the name must not reach the caller (spec 13.8).
+      expect(thrown.publicMessage).not.toContain("Duplicate");
+    });
+
+    it("keeps a typed lookup failure instead of reporting absence", async () => {
+      // findFolderById answered every failure as NOT_FOUND, so a database that
+      // was unreachable told the caller the folder does not exist. Nothing
+      // useful follows from that: the caller stops looking rather than retrying.
+      mockLegacyFolder.getFolderById.mockResolvedValue({
+        success: false,
+        statusCode: 503,
+        code: "SERVICE_UNAVAILABLE",
+        message: "database unreachable",
+        data: null,
+      });
+
+      const thrown = await service
+        .findFolderById("f-1", context)
+        .catch((e: unknown) => e as NextlyError);
+
+      expect(thrown.code).toBe("SERVICE_UNAVAILABLE");
+      expect(thrown.logContext).toMatchObject({
+        entity: "folder",
+        folderId: "f-1",
+      });
+    });
+
+    it("still reports a code-less lookup failure as not found", async () => {
+      // The common case has to keep working: a missing row reports 404 with no
+      // code, and that must still read as absence.
+      mockLegacyFolder.getFolderById.mockResolvedValue({
+        success: false,
+        statusCode: 404,
+        message: "not found",
+        data: null,
+      });
+
+      const thrown = await service
+        .findFolderById("f-2", context)
+        .catch((e: unknown) => e as NextlyError);
+
+      expect(thrown.code).toBe("NOT_FOUND");
+      expect(thrown.publicMessage).toBe("Not found.");
+      expect(thrown.publicMessage).not.toContain("f-2");
+    });
+
+    it("keeps the caller's context when the failure names no code", async () => {
+      // The other half of the same guarantee: whichever reading applies, the
+      // log identifies which folder operation failed.
       mockLegacyFolder.createFolder.mockResolvedValue(
-        errorResult(409, "Folder name already exists")
+        errorResult(500, "connection terminated")
       );
 
-      await expect(
-        service.createFolder({ name: "Duplicate" }, context)
-      ).rejects.toThrow(NextlyError);
+      const thrown = await service
+        .createFolder({ name: "Anything", parentId: "p-2" }, context)
+        .catch((e: unknown) => e as NextlyError);
+
+      expect(thrown.code).toBe("INTERNAL_ERROR");
+      expect(thrown.logContext).toMatchObject({
+        entity: "folder",
+        name: "Anything",
+        parentId: "p-2",
+      });
     });
   });
 

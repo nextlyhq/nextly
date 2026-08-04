@@ -388,34 +388,43 @@ function childFields(field: FieldConfig): FieldConfig[] {
 }
 
 /**
- * Child fields for one component instance.
+ * Child fields for a container, given the component type its instance declares.
  *
  * A component field does not carry its children inline. The API enriches it
  * with `componentFields` when the field holds a single component type, and with
- * `componentSchemas` keyed by type when it is a dynamic zone — so the instance
- * decides which schema applies. Reading `field.fields` alone finds neither and
- * renders an empty shell.
+ * `componentSchemas` keyed by type when it is a dynamic zone — so the declared
+ * type decides which schema applies. An inline group carries `fields` directly
+ * and falls back to those. Reading `field.fields` alone finds neither component
+ * shape and renders an empty shell.
  */
-function componentChildFields(
+function componentFieldsFor(
   field: FieldConfig,
-  instance: unknown
+  componentType: string | undefined
 ): FieldConfig[] {
   const enriched = field as {
     componentFields?: FieldConfig[];
     componentSchemas?: Record<string, { fields?: FieldConfig[] }>;
   };
 
+  if (componentType && enriched.componentSchemas?.[componentType]?.fields) {
+    return enriched.componentSchemas[componentType].fields;
+  }
+  if (Array.isArray(enriched.componentFields)) return enriched.componentFields;
+
+  return childFields(field);
+}
+
+/** Child fields for one component instance, keyed by its `_componentType`. */
+function componentChildFields(
+  field: FieldConfig,
+  instance: unknown
+): FieldConfig[] {
   const typeName =
     typeof instance === "object" && instance !== null
       ? (instance as { _componentType?: string })._componentType
       : undefined;
 
-  if (typeName && enriched.componentSchemas?.[typeName]?.fields) {
-    return enriched.componentSchemas[typeName].fields;
-  }
-  if (Array.isArray(enriched.componentFields)) return enriched.componentFields;
-
-  return childFields(field);
+  return componentFieldsFor(field, typeName);
 }
 
 /** A labelled stack of child values, used by every container type. */
@@ -541,28 +550,8 @@ export function FieldValueDisplay({
   dense = false,
   className,
 }: FieldValueDisplayProps) {
-  const normalized = normalizeStoredValue(field, value);
   const label =
     (field as { label?: string }).label ?? field.name ?? "Untitled field";
-
-  // A `json` field may legitimately store the JSON primitive `null`, which
-  // normalizes to the same value as an absent field. The two are separable at
-  // this boundary: an absent key arrives as `undefined`, while a stored null
-  // arrives as `null` (or as the characters "null" from a serialized column).
-  // Only the first is treated as unset.
-  const isStoredJsonNull =
-    field.type === "json" &&
-    (value === null || (typeof value === "string" && value.trim() === "null"));
-
-  const render = registry.get(field.type);
-  const body =
-    normalized === null && !isStoredJsonNull ? (
-      <EmptyValue />
-    ) : (
-      (render?.({ value: normalized, field }) ?? (
-        <PlainText>{toText(normalized)}</PlainText>
-      ))
-    );
 
   return (
     <div
@@ -576,7 +565,51 @@ export function FieldValueDisplay({
       >
         {label}
       </span>
-      <div className={dense ? "text-sm" : "text-base"}>{body}</div>
+      <div className={dense ? "text-sm" : "text-base"}>
+        <FieldValue field={field} value={value} />
+      </div>
     </div>
+  );
+}
+
+/**
+ * A field's stored value rendered read-only by its type, WITHOUT a label. The
+ * diff renderer reuses this so it can supply its own label and status badge
+ * without a second label from the value itself.
+ */
+export function FieldValue({
+  field,
+  value,
+  preNormalized = false,
+}: {
+  field: FieldConfig;
+  value: unknown;
+  /**
+   * Whether `value` has already passed through `normalizeStoredValue`. The
+   * version diff normalizes on the server, so re-normalizing here would run a
+   * JSON-backed value through the parser a second time and could flip a stored
+   * string to its JSON primitive. When set, the value is rendered as-is.
+   */
+  preNormalized?: boolean;
+}) {
+  const normalized = preNormalized ? value : normalizeStoredValue(field, value);
+
+  // A `json` field may legitimately store the JSON primitive `null`, which
+  // normalizes to the same value as an absent field. An absent key arrives as
+  // `undefined`, while a stored null arrives as `null` (or as the characters
+  // "null" from a serialized column); only the first is treated as unset. This
+  // holds for a pre-normalized value too: the engine hands a stored JSON null
+  // through as `null`, which must still render rather than read as empty.
+  const isStoredJsonNull =
+    field.type === "json" &&
+    (value === null || (typeof value === "string" && value.trim() === "null"));
+
+  if (normalized === null && !isStoredJsonNull) return <EmptyValue />;
+
+  const render = registry.get(field.type);
+  return (
+    render?.({ value: normalized, field }) ?? (
+      <PlainText>{toText(normalized)}</PlainText>
+    )
   );
 }

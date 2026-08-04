@@ -22,6 +22,7 @@ describe("registerSingleHooks", () => {
         hooks: {
           beforeRead: [noop],
           afterRead: [noop],
+          beforeValidate: [noop],
           beforeChange: [noop],
           afterChange: [noop],
         },
@@ -33,14 +34,20 @@ describe("registerSingleHooks", () => {
     const ns = "single:branding";
     expect(registry.getHookCount("beforeRead", ns)).toBe(1);
     expect(registry.getHookCount("afterRead", ns)).toBe(1);
-    // beforeChange/afterChange map to the update registry types only — a Single
-    // is auto-created and update-only, so no create hooks are registered.
-    expect(registry.getHookCount("beforeUpdate", ns)).toBe(1);
+    // afterChange maps to the update registry type only — a Single is
+    // auto-created and update-only, so no create hooks are registered.
     expect(registry.getHookCount("afterUpdate", ns)).toBe(1);
-    expect(registry.getHookCount("beforeCreate", ns)).toBe(0);
     expect(registry.getHookCount("afterCreate", ns)).toBe(0);
+    // beforeChange is its own phase, executed after the validation gate.
+    // Registering it as `beforeUpdate` put it on the pre-validation queue,
+    // which runs before the rules its contract says it follows.
+    expect(registry.getHookCount("beforeChange", ns)).toBe(1);
+    // beforeValidate takes the pre-validation queue beforeChange vacated, so a
+    // single still has a phase that runs before the gate.
+    expect(registry.getHookCount("beforeUpdate", ns)).toBe(1);
+    expect(registry.getHookCount("beforeCreate", ns)).toBe(0);
 
-    expect(result.totalHooks).toBe(4);
+    expect(result.totalHooks).toBe(5);
     expect(result.singles).toEqual(["branding"]);
   });
 
@@ -113,7 +120,7 @@ describe("registerSingleHooks", () => {
 
     registerSingleHooks(singles, registry);
 
-    const result = await registry.execute("beforeUpdate", {
+    const result = await registry.execute("beforeChange", {
       collection: "single:branding",
       operation: "update",
       data: { title: "Site" },

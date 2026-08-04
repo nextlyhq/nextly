@@ -32,6 +32,7 @@ const COLS: Record<Cols, string> = {
   6: "grid-cols-6",
 };
 
+/** @experimental */
 export interface StackProps extends HTMLAttributes<HTMLDivElement> {
   /** Main-axis direction. Default `col`. */
   direction?: "col" | "row";
@@ -39,7 +40,9 @@ export interface StackProps extends HTMLAttributes<HTMLDivElement> {
   gap?: Gap;
 }
 
-/** Flex stack: vertical by default, horizontal with `direction="row"`. */
+/** Flex stack: vertical by default, horizontal with `direction="row"`.
+ * @experimental
+ */
 export const Stack = forwardRef<HTMLDivElement, StackProps>(
   ({ direction = "col", gap = 4, className, ...props }, ref) => (
     <div
@@ -56,6 +59,7 @@ export const Stack = forwardRef<HTMLDivElement, StackProps>(
 );
 Stack.displayName = "Stack";
 
+/** @experimental */
 export interface GridProps extends HTMLAttributes<HTMLDivElement> {
   /** Column count. Default `2`. */
   cols?: Cols;
@@ -63,7 +67,9 @@ export interface GridProps extends HTMLAttributes<HTMLDivElement> {
   gap?: Gap;
 }
 
-/** Simple fixed-column grid. */
+/** Simple fixed-column grid.
+ * @experimental
+ */
 export const Grid = forwardRef<HTMLDivElement, GridProps>(
   ({ cols = 2, gap = 4, className, ...props }, ref) => (
     <div
@@ -75,6 +81,7 @@ export const Grid = forwardRef<HTMLDivElement, GridProps>(
 );
 Grid.displayName = "Grid";
 
+/** @experimental */
 export interface StatProps extends HTMLAttributes<HTMLDivElement> {
   /** Muted label above the value. */
   label: string;
@@ -82,7 +89,9 @@ export interface StatProps extends HTMLAttributes<HTMLDivElement> {
   value: ReactNode;
 }
 
-/** Labelled metric block for dashboard-style plugin widgets. */
+/** Labelled metric block for dashboard-style plugin widgets.
+ * @experimental
+ */
 export const Stat = forwardRef<HTMLDivElement, StatProps>(
   ({ label, value, className, ...props }, ref) => (
     <div ref={ref} className={cn("flex flex-col gap-1", className)} {...props}>

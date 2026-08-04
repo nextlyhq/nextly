@@ -35,6 +35,7 @@ import { getNextlyLogger } from "../../observability/logger";
 export type AuditEventKind =
   | "csrf-failed"
   | "login-failed"
+  | "login-succeeded"
   | "password-changed"
   | "role-assigned"
   | "role-revoked"

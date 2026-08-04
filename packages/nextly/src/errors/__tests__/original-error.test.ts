@@ -1,0 +1,178 @@
+/**
+ * The error a public envelope was built from survives alongside it, and is
+ * chained onto whatever the boundary rebuilds.
+ *
+ * A service strips `cause` and `logContext` on the way out because the result
+ * shape is publicly surfaced, and the boundary then rebuilds from what
+ * survived. Correct for the caller, useless for the operator: every unexpected
+ * failure arrives looking identical, with the driver error and the thrower's
+ * identifiers already gone.
+ */
+
+import { describe, expect, it } from "vitest";
+
+import { buildSingleErrorResult } from "../../domains/singles/services/single-utils";
+
+import {
+  errorFromServiceEnvelope,
+  errorEnvelopeFields,
+} from "../from-service-envelope";
+import { NextlyError } from "../nextly-error";
+import {
+  ORIGINAL_ERROR,
+  originalErrorOf,
+  withOriginalError,
+} from "../original-error";
+
+describe("carrying the original error on a public envelope", () => {
+  const original = NextlyError.internal({
+    cause: new Error("driver: duplicate key on users_email_idx"),
+    logContext: { userId: "u-42", table: "users" },
+  });
+
+  it("survives the spread the services build their results with", () => {
+    // The load-bearing property. Every producer writes
+    // `{ ...errorToServiceResult(...) }`, and spread copies only ENUMERABLE
+    // own properties — a non-enumerable symbol would be dropped at exactly
+    // the call sites this exists for, silently.
+    const envelope = withOriginalError({ success: false as const }, original);
+    const spread = { ...envelope };
+
+    expect(originalErrorOf(spread)).toBe(original);
+  });
+
+  it("cannot reach a response body", () => {
+    const envelope = withOriginalError(
+      { success: false as const, message: "It failed." },
+      original
+    );
+
+    // Symbols are invisible to both, which is what makes this safe to attach
+    // to a shape that gets serialised to a caller.
+    expect(JSON.stringify(envelope)).not.toContain("users_email_idx");
+    expect(JSON.stringify(envelope)).not.toContain("u-42");
+    expect(Object.keys(envelope)).toEqual(["success", "message"]);
+  });
+
+  it("is absent from an envelope nothing attached one to", () => {
+    expect(originalErrorOf({ success: false })).toBeUndefined();
+    expect(originalErrorOf(null)).toBeUndefined();
+    expect(originalErrorOf("not an object")).toBeUndefined();
+  });
+
+  it("cannot be overwritten once attached", () => {
+    // The provenance is the point: a later writer replacing it would make the
+    // chained cause describe a different failure than the envelope.
+    const envelope = withOriginalError({ success: false as const }, original);
+
+    expect(() => {
+      Object.defineProperty(envelope, ORIGINAL_ERROR, {
+        value: new Error("x"),
+      });
+    }).toThrow();
+  });
+});
+
+describe("every producer carries provenance, not just the one it was built for", () => {
+  it("rides on the shared flattener the read and single paths spread", () => {
+    // The first version attached this at ONE producer and reached only the
+    // collection writes. `errorEnvelopeFields` IS the flattening for the
+    // read paths and the singles — the same reason they record the error here
+    // rather than each remembering to — so the provenance belongs here too.
+    const thrown = NextlyError.internal({
+      cause: new Error("driver: deadlock detected"),
+      logContext: { table: "posts" },
+    });
+
+    const envelope = { success: false, ...errorEnvelopeFields(thrown) };
+
+    expect(originalErrorOf(envelope)).toBe(thrown);
+    expect(JSON.stringify(envelope)).not.toContain("deadlock");
+  });
+
+  it("chains through the validation branch too", () => {
+    // Validation reconstructs down its own path, which forwarded everything
+    // except the cause.
+    const thrown = NextlyError.internal({
+      logContext: { transform: "slugify" },
+    });
+
+    const rebuilt = errorFromServiceEnvelope(
+      { code: "VALIDATION_ERROR", statusCode: 400, message: "Invalid." },
+      {},
+      thrown
+    );
+
+    expect(rebuilt.cause).toBe(thrown);
+  });
+});
+
+describe("a raw driver failure keeps its provenance too", () => {
+  it("carries the original even with no typed fields to lift", () => {
+    // The case the typed guard used to drop on the floor. A read that rejects
+    // with a driver error has nothing to lift into the envelope, and that is
+    // exactly when the chained cause matters most: it is the only thing that
+    // names the constraint or the connection that actually failed.
+    const raw = new Error("driver: connection terminated unexpectedly");
+
+    const envelope = { success: false, ...errorEnvelopeFields(raw) };
+
+    expect(originalErrorOf(envelope)).toBe(raw);
+    // Nothing was invented for it: an untyped error has no code to guess at.
+    expect(Object.keys(envelope)).toEqual(["success"]);
+    expect(JSON.stringify(envelope)).not.toContain("connection terminated");
+  });
+
+  it("chains that raw error onto what the boundary rebuilds", () => {
+    const raw = new Error("driver: deadlock detected");
+    const envelope = { statusCode: 500, ...errorEnvelopeFields(raw) };
+
+    const rebuilt = errorFromServiceEnvelope(
+      { code: "INTERNAL_ERROR", statusCode: 500, message: "It failed." },
+      {},
+      originalErrorOf(envelope)
+    );
+
+    expect(rebuilt.cause).toBe(raw);
+  });
+
+  it("returns a plain object for a value that is not an Error at all", () => {
+    // A thrown string has no provenance to carry, and the caller still needs
+    // something spreadable rather than a null it has to guard.
+    expect(Object.keys(errorEnvelopeFields("nope"))).toEqual([]);
+    expect(originalErrorOf(errorEnvelopeFields("nope"))).toBeUndefined();
+  });
+});
+
+describe("a single's failure result carries provenance on every branch", () => {
+  it("keeps a raw database rejection", () => {
+    // The branch that returned early. A single's raw failure had nothing to
+    // lift into the envelope and so skipped the helper entirely, which is the
+    // one case where the error itself is all the boundary has to chain.
+    const raw = new Error("driver: could not serialize access");
+
+    const result = buildSingleErrorResult(raw, "Failed.");
+
+    expect(originalErrorOf(result)).toBe(raw);
+    expect(result.statusCode).toBe(500);
+    // The provenance itself stays off the wire. This path separately puts the
+    // driver's own message into `message`, which predates this and is not what
+    // is being asserted here.
+    expect(Object.keys(result)).toEqual(["success", "statusCode", "message"]);
+  });
+
+  it("keeps a typed failure too, so neither branch is the special one", () => {
+    const typed = NextlyError.internal({ logContext: { single: "site" } });
+
+    expect(originalErrorOf(buildSingleErrorResult(typed, "Failed."))).toBe(
+      typed
+    );
+  });
+
+  it("carries nothing for a thrown non-Error, without throwing itself", () => {
+    const result = buildSingleErrorResult("not an error", "Failed.");
+
+    expect(originalErrorOf(result)).toBeUndefined();
+    expect(result.success).toBe(false);
+  });
+});

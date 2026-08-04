@@ -77,6 +77,21 @@ describe("submitForm end-to-end", () => {
         .get()
         .services.collections.count("form-submissions", {}, { as: "system" })
     ).toBe(1);
+
+    // `submission` is the stored DOCUMENT, which the declared result type says
+    // and TypeScript cannot check: the conversion from the service's loose row
+    // shape goes through `unknown`. Asserting only `success` and the row count
+    // is what let the result carry a mutation envelope here instead of the
+    // document, handing every caller `undefined` for `submission.id`.
+    expect(result.submission?.id).toEqual(expect.any(String));
+    // The status the schema stores. `spam` belongs to this union too — the
+    // stored field offers it and the admin has a tab for it — so a document
+    // type that omitted it was describing a shape the database cannot produce.
+    expect(["new", "read", "archived", "spam"]).toContain(
+      result.submission?.status
+    );
+    expect(result.submission?.data).toMatchObject({ message: "hello" });
+    expect(result.submission).not.toHaveProperty("item");
   });
 
   it("stores honeypot hits flagged as spam instead of dropping them", async () => {

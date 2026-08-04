@@ -1,7 +1,7 @@
 /**
  * Components (reusable field group) dispatch handlers.
  *
- * Routes 5 operations against `ComponentRegistryService`:
+ * Routes 5 operations against `FieldGroupRegistryService`:
  * list / create / get / update / delete. The create/update flows run
  * `comp_*` table migrations directly against the DI-registered adapter
  * so UI-edited components have a usable backing table immediately.
@@ -13,7 +13,10 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
-import { assertValidFieldsPayload } from "../../api/fields-payload";
+import {
+  assertValidFieldsPayload,
+  assertValidPluginFieldOptions,
+} from "../../api/fields-payload";
 import {
   respondAction,
   respondData,
@@ -23,8 +26,13 @@ import {
 } from "../../api/response-shapes";
 import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
+import {
+  resolveFieldGroupRegistryName,
+  resolveTypeColumns,
+} from "../../domains/field-groups/storage/resolve-storage-names";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
+import { localizedColumnsOnMain } from "../../domains/i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
@@ -56,8 +64,8 @@ import {
   getI18nArchiveIndexRepairDdl,
 } from "../../schemas/nextly-i18n-archive";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
-import type { ComponentRegistryService } from "../../services/components/component-registry-service";
-import { ComponentSchemaService } from "../../services/components/component-schema-service";
+import type { FieldGroupRegistryService } from "../../services/field-groups/field-group-registry-service";
+import { FieldGroupSchemaService } from "../../services/field-groups/field-group-schema-service";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
@@ -72,7 +80,7 @@ import type { MethodHandler, Params } from "../types";
 import { assertSchemaVersionMatch } from "./schema-version-guard";
 
 interface ComponentsServices {
-  registry: ComponentRegistryService;
+  registry: FieldGroupRegistryService;
 }
 
 // ============================================================
@@ -132,23 +140,45 @@ async function executeMigrationStatements(
 
 // Refresh the cached Drizzle table so the next entry query joining this
 // component uses the new column layout without a server restart.
+/**
+ * The discriminator a component table carries, resolved BEFORE its DDL runs.
+ *
+ * 🔴 Deliberately not inside `registerComponentRuntimeSchema`. That function's
+ * `catch` is a cache-refresh failsafe — it suppresses so a refresh problem does
+ * not fail a request whose schema change already committed — and a catalog
+ * probe inside it inherits that policy, letting a handler report success while
+ * leaving the runtime table unregistered or holding obsolete columns.
+ *
+ * Resolving first is equivalent and safer: the schema change only ever alters
+ * user columns, so the discriminator is the same before and after, and a probe
+ * that cannot answer now fails the request before anything is committed.
+ */
+async function resolveComponentTypeColumn(
+  adapter: DrizzleAdapter,
+  tableName: string
+): Promise<string> {
+  const typeColumns = await resolveTypeColumns(adapter, [tableName]);
+  return typeColumns.get(tableName) ?? STORAGE_FORMAT.columns.type;
+}
+
 function registerComponentRuntimeSchema(
   adapter: DrizzleAdapter,
   dialect: string,
   tableName: string,
   fields: FieldConfig[],
+  typeColumn: string,
   // i18n: when localized, the main comp_ runtime table omits translatable columns and the
   // companion comp_<slug>_locales runtime table is registered for per-language reads/writes.
   localized = false
 ): void {
   try {
-    const componentSchemaService = new ComponentSchemaService(
-      dialect as ConstructorParameters<typeof ComponentSchemaService>[0]
+    const fieldGroupSchemaService = new FieldGroupSchemaService(
+      dialect as ConstructorParameters<typeof FieldGroupSchemaService>[0]
     );
-    const runtimeTable = componentSchemaService.generateRuntimeSchema(
+    const runtimeTable = fieldGroupSchemaService.generateRuntimeSchema(
       tableName,
       fields,
-      { localized }
+      { localized, typeColumn }
     );
     const companion = localized
       ? buildCompanionRuntimeTable({
@@ -237,11 +267,21 @@ async function reconcileComponentCompanion(args: {
     defaultLocale,
     // Components are never Draft/Published — companion has no `_status`.
     status: false,
+    // And never had one, so the disable restore has no status to carry back.
+    wasStatus: false,
     wasLocalized,
     isLocalized: localized,
     oldFields,
     newFields,
     companionExists: await adapter.tableExists(`${tableName}_locales`),
+    // Which translatable columns the main table still carries. A disable must not re-add one that
+    // is already there, and must still restore it: presence says the column exists, never that its
+    // value is current, because every localized write went to the companion alone.
+    existingMainColumns: await localizedColumnsOnMain(
+      adapter,
+      tableName,
+      oldFields
+    ).then(cols => cols.map(c => c.name)),
   });
 
   // A disable archives non-default translations, so ensure `nextly_i18n_archive` exists first
@@ -266,6 +306,28 @@ async function reconcileComponentCompanion(args: {
   }
   for (const stmt of plan.statements) {
     await adapter.executeQuery(stmt);
+  }
+
+  // The transition record describes a companion that no longer exists, so it stops being true
+  // the moment the disable succeeds. Left behind, it would refuse the next enable's real
+  // source locale — the check that protects a live transition would block a legitimate one.
+  if (plan.companionDropped) {
+    // The other half of "this companion is gone": readiness remembers only that one exists.
+    const { forgetCompanionReadiness } = await import(
+      "../../domains/i18n/runtime/companion-readiness"
+    );
+    forgetCompanionReadiness(adapter, `${tableName}_locales`);
+    const { resolveTransitionStore } = await import(
+      "../../domains/i18n/migration/transition-recorder"
+    );
+    const { forgetI18nTransition } = await import(
+      "../../domains/i18n/migration/transition-state"
+    );
+    await forgetI18nTransition(
+      await resolveTransitionStore(adapter),
+      "fieldGroup",
+      slug
+    );
   }
   // Runtime registration of the companion is handled by registerComponentRuntimeSchema(localized)
   // in the calling handlers, so no separate registration is needed here.
@@ -311,6 +373,12 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         throw new Error("Component slug and fields are required");
       }
 
+      // These direct create/update handlers persist and run DDL without the
+      // preview/apply handlers below. Their own rules cover names and shapes;
+      // what none of them can judge is a plugin type's own options, so an
+      // unsatisfiable declaration would be stored and fail on every write.
+      assertValidPluginFieldOptions(b.fields);
+
       const isLocalized = b.localized === true;
       // i18n: a localized component stores translatable values via the
       // app's `localization` config; creating one without that config
@@ -323,14 +391,35 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
       // migrate:create paths, so the created table and the registry row agree.
       const tableName = resolveComponentTableName(b.slug);
 
-      // Use ComponentSchemaService to generate tables with parent
+      // Refused before any DDL runs, and keyed on the TABLE NAME rather than the slug. The two are
+      // not the same key: a slug is normalised on its way to a table name, so `foo-bar` and
+      // `foo_bar` name one physical table while looking like two free slugs. Left to the registry's
+      // own check, which runs after the DDL, `CREATE TABLE IF NOT EXISTS` reports success against
+      // the table that already exists and the runtime registration then rebinds it to this
+      // request's fields — so a rejected create leaves the existing field group reading through a
+      // schema that does not describe it.
+      const owner = (await svc.registry.getAllComponents()).find(
+        c => c.tableName === tableName
+      );
+      if (owner) {
+        throw NextlyError.duplicate({
+          logContext: {
+            reason: "component-table-conflict",
+            slug: b.slug,
+            tableName,
+            ownedBy: owner.slug,
+          },
+        });
+      }
+
+      // Use FieldGroupSchemaService to generate tables with parent
       // reference columns (_parent_id, _parent_table, _parent_field,
       // _order, _component_type).
       const adapter = getAdapterFromDI();
       const dialect = adapter?.dialect || "postgresql";
-      const componentSchemaService = new ComponentSchemaService(dialect);
+      const fieldGroupSchemaService = new FieldGroupSchemaService(dialect);
 
-      const migrationSQL = componentSchemaService.generateMigrationSQL(
+      const migrationSQL = fieldGroupSchemaService.generateMigrationSQL(
         tableName,
         b.fields,
         // i18n: omit translatable columns from the main comp_ table when localized — they live
@@ -354,6 +443,24 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
               dialect,
               tableName,
               b.fields,
+              // 🔴 The constant, NOT a probe — and this is the one path where
+              // that inference is sound, so the reason is worth stating.
+              //
+              // This is the CREATE path for a new slug, and the statement
+              // executed above is the DDL generator's own, which writes
+              // `STORAGE_FORMAT.columns.type`. The storage migration cannot
+              // have moved a table that did not exist a moment ago, and a
+              // migrated table would carry the migrated PREFIX, so it could not
+              // be addressed by this name at all.
+              //
+              // Probing here can only hurt: a transient introspection failure
+              // is caught below, records the registry row as `failed`, and
+              // still returns 201 — leaving a created table with no runtime
+              // schema and its CRUD unavailable until a restart. Contrast the
+              // code-first sync path, where `CREATE TABLE IF NOT EXISTS` may
+              // no-op over a table that is years old; there the probe is
+              // required, and assuming the constant was a real defect.
+              STORAGE_FORMAT.columns.type,
               // i18n: main runtime table omits translatable columns for a localized component.
               isLocalized
             );
@@ -488,6 +595,7 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
       }
 
       if (b?.fields) {
+        assertValidPluginFieldOptions(b.fields);
         updateData.fields = b.fields;
         updateData.schemaHash = calculateSchemaHash(b.fields);
       }
@@ -511,6 +619,7 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
             adapter.getCapabilities().dialect,
             existing.tableName,
             newFields,
+            await resolveComponentTypeColumn(adapter, existing.tableName),
             // i18n: main runtime table omits translatable columns when localized.
             isLocalized
           );
@@ -583,6 +692,8 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         // from the component's main table (they live in comp_<slug>_locales, reconciled
         // out-of-band below) — mirrors the collection/single apply path.
         localized: (component as { localized?: boolean }).localized === true,
+        // Authored in the Schema Builder: this is the Builder's own save path.
+        builderOwned: true,
       };
 
       const pipelinePreview = await previewDesiredSchema({
@@ -687,6 +798,17 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
 
       const adapter = getAdapterFromDI();
       if (!adapter) throw new Error("Database adapter not initialized");
+      // 🔴 Resolved BEFORE the apply. The runtime refresh at the end of this
+      // handler suppresses its own failures by design, so a probe placed there
+      // could let the handler report success over an unregistered or stale
+      // table. The apply only alters user columns, so this answer is the same
+      // either side of it — and asking now means a probe that cannot answer
+      // fails the request before anything commits.
+      const componentTypeColumn = await resolveComponentTypeColumn(
+        adapter,
+        tableName
+      );
+
       const dialect = adapter.dialect;
       const db = adapter.getDrizzle();
       const databaseName =
@@ -703,6 +825,8 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         // from the component's main table (they live in comp_<slug>_locales, reconciled
         // out-of-band below) — mirrors the collection/single apply path.
         localized: isLocalized,
+        // Authored in the Schema Builder: this is the Builder's own save path.
+        builderOwned: true,
       };
 
       const promptDispatcher = new BrowserPromptDispatcher(
@@ -732,6 +856,9 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         promptChannel: "browser",
         databaseName,
         uiTargetSlug: slug,
+        // Named, not defaulted: the scope defaults to a collection, and a field group recorded under
+        // that kind is invisible to every history query filtered by its own.
+        uiTargetKind: "component" as const,
       });
 
       if (!result.success) {
@@ -778,7 +905,11 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
       let versionPersisted = true;
       try {
         await adapter.update(
-          STORAGE_FORMAT.registryTable,
+          // The registry this database holds. The failure is otherwise silent
+          // in the worst way: the DDL has already committed, this write is
+          // treated as non-fatal, and the stale row rebuilds the pre-change
+          // runtime schema on the next restart.
+          await resolveFieldGroupRegistryName(adapter),
           {
             fields: JSON.stringify(fields),
             schema_hash: calculateSchemaHash(fields as FieldConfig[]),
@@ -809,6 +940,7 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         dialect,
         tableName,
         fields as FieldConfig[],
+        componentTypeColumn,
         isLocalized
       );
 

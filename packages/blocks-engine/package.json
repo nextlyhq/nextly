@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/blocks-engine",
-  "version": "0.0.2-alpha.44",
+  "version": "0.0.2-alpha.51",
   "description": "Nextly blocks engine — the runtime-free document model, tree operations, validation, and block-definition contracts behind the Nextly page builder.",
   "license": "MIT",
   "repository": {
@@ -24,7 +24,8 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "docs"
   ],
   "scripts": {
     "build": "tsup",
@@ -34,14 +35,19 @@
     "lint:fix": "eslint . --fix",
     "test": "vitest run",
     "test:watch": "vitest",
+    "bench": "vitest bench --run",
     "clean": "rimraf dist"
   },
   "engines": {
     "node": ">=20.0.0"
   },
+  "dependencies": {
+    "css-tree": "^2.3.1"
+  },
   "devDependencies": {
     "@nextlyhq/eslint-config": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
+    "@types/css-tree": "^2.3.4",
     "@types/node": "^20.19.17",
     "eslint": "^9.39.1",
     "rimraf": "^6.1.3",

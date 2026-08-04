@@ -1,0 +1,61 @@
+---
+"nextly": patch
+"create-nextly-app": patch
+"@nextlyhq/admin": patch
+"@nextlyhq/admin-css": patch
+"@nextlyhq/blocks-engine": patch
+"@nextlyhq/ui": patch
+"@nextlyhq/adapter-drizzle": patch
+"@nextlyhq/adapter-postgres": patch
+"@nextlyhq/adapter-mysql": patch
+"@nextlyhq/adapter-sqlite": patch
+"@nextlyhq/storage-s3": patch
+"@nextlyhq/storage-uploadthing": patch
+"@nextlyhq/storage-vercel-blob": patch
+"@nextlyhq/plugin-form-builder": patch
+"@nextlyhq/plugin-page-builder": patch
+"@nextlyhq/plugin-seo": patch
+"@nextlyhq/plugin-sdk": patch
+"@nextlyhq/eslint-config": patch
+"@nextlyhq/prettier-config": patch
+"@nextlyhq/telemetry": patch
+"@nextlyhq/tsconfig": patch
+---
+
+Record which retention window governs each captured event, and shorten the audit
+window to 90 days.
+
+The event table has carried a `retention_class` column since the outbox shipped,
+but nothing ever wrote anything but `webhook`, so every row was measured against
+the short outbox-hygiene window. The class now follows from why the row was
+recorded: a row admitted by the audit seam is audit-class and outlives outbox
+hygiene, while one admitted only because an endpoint exists stays webhook-class.
+A row that is both takes the longer window, since evicting it on the delivery
+clock would lose history nothing can reconstruct.
+
+The audit window default moves from 365 days to 90. The previous value was
+justified as "SOC 2 practice is a one-year floor", which does not hold up:
+neither SOC 2 nor ISO 27001 A.8.15 mandates a period — both require only that
+retention be defined and risk-based — and the twelve-month figure is PCI DSS
+convention that has spread into the wider discourse. 90 days is where comparable
+products land for content activity. A deployment genuinely in PCI scope should
+raise `auditEventsMaxAgeMs`, which is a decision only the operator can make.
+
+`auditEventsMaxAgeMs` is now raised to `eventsMaxAgeMs` whenever the webhook
+window is the longer of the two, including when it is `false`. A row admitted by
+both the audit seam and an endpoint is labelled `audit` because that is the
+longest retention it needs, so a shorter audit window would have pruned it
+earlier than the webhook setting allows — irreversibly, and in a supported
+configuration.
+
+Upgrading, by deployment:
+
+- **`webhooks.audit` off** (the default, and most installs): nothing changes.
+  Events are still recorded webhook-class and pruned on `eventsMaxAgeMs` exactly
+  as before.
+- **`webhooks.audit` on**: events that used to be recorded webhook-class are now
+  audit-class, so they move from `eventsMaxAgeMs` to `auditEventsMaxAgeMs` — at
+  the defaults, from 30 days to 90. That is the intended behaviour, since those
+  rows are recorded for history rather than delivery, but it retains roughly
+  three times as many events and the storage that implies. Set
+  `webhooks.retention.auditEventsMaxAgeMs` if a shorter window is wanted.

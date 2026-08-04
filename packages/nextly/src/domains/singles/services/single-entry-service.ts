@@ -19,7 +19,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
 import type { HookRegistry } from "../../../hooks/hook-registry";
 import type { CacheRevalidator } from "../../../revalidation/types";
-import type { ComponentDataService } from "../../../services/components/component-data-service";
+import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import { BaseService } from "../../../shared/base-service";
 import type { Logger } from "../../../shared/types";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
@@ -61,7 +61,7 @@ export class SingleEntryService extends BaseService {
     logger: Logger,
     singleRegistryService: SingleRegistryService,
     hookRegistry: HookRegistry,
-    componentDataService?: ComponentDataService,
+    fieldGroupDataService?: FieldGroupDataService,
     rbacAccessControlService?: RBACAccessControlService,
     // i18n: normalized localization config so a localized single resolves/writes
     // translatable fields via its companion `single_<slug>_locales` table.
@@ -97,7 +97,7 @@ export class SingleEntryService extends BaseService {
       logger,
       singleRegistryService,
       hookRegistry,
-      componentDataService,
+      fieldGroupDataService,
       rbacAccessControlService,
       localization
     );
@@ -109,7 +109,7 @@ export class SingleEntryService extends BaseService {
       logger,
       singleRegistryService,
       hookRegistry,
-      componentDataService,
+      fieldGroupDataService,
       rbacAccessControlService,
       localization
     );

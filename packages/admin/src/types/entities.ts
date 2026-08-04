@@ -304,7 +304,7 @@ export interface ApiSingle {
    * shape, so reads carry the object while writes send a boolean — see
    * `UpdateSinglePayload`.
    */
-  versions?: { enabled?: boolean } | null;
+  versions?: { enabled?: boolean; maxPerDoc?: number | false } | null;
 
   /**
    * Resolved cache-revalidation config, or null/absent when revalidation is on
@@ -345,6 +345,9 @@ export type UpdateSinglePayload = Omit<
   "versions" | "revalidate" | "webhooks"
 > & {
   versions?: boolean;
+  /** Durable versions kept per document. `false` = unlimited, a number = keep
+   *  that many, undefined = the default (50). Ignored when `versions` is off. */
+  versionsMaxPerDoc?: number | false;
   revalidate?: boolean;
   webhooks?: boolean;
 };
@@ -355,7 +358,7 @@ export type UpdateSinglePayload = Omit<
  * Source of the Component definition.
  *
  * - `code`: Defined in code via `defineFieldGroup()` in a config file
- * - `ui`: Created through the Visual Component Builder in Admin UI
+ * - `ui`: Created through the Visual Field Group Builder in Admin UI
  *
  * Note: Unlike Collections/Singles, Components do not have a "built-in" source.
  */
@@ -399,7 +402,7 @@ export interface FieldGroupAdminOptions {
  * This interface includes all metadata fields needed for the Component
  * list page, including source tracking, migration status, and locked state.
  */
-export interface ApiComponent {
+export interface ApiFieldGroup {
   id: string;
   slug: string;
   label: string;

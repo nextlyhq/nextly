@@ -31,8 +31,9 @@ import type { FieldConfig } from "@nextly/collections";
  * History:
  * - v1: Initial version (createdAt, updatedAt - camelCase)
  * - v2: Changed to snake_case (created_at, updated_at)
+ * - v3: Added first_published_at to status-enabled collections and singles
  */
-export const SYSTEM_SCHEMA_VERSION = 2;
+export const SYSTEM_SCHEMA_VERSION = 3;
 
 // ============================================================
 // Types

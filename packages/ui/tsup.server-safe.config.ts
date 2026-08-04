@@ -27,6 +27,14 @@ export default defineConfig({
   // tree from the common root and emits `dist/lib/utils.*`, which would not
   // match the exports map.
   entry: {
+    // Builds with a "named and default exports together" warning, and that is
+    // the intended shape rather than an oversight. A preset is consumed as a
+    // value, so `require()` has to return it; CommonJS cannot express a
+    // default-only module without `module.exports =`, which makes the emitted
+    // declarations disagree with the runtime and trips attw's
+    // FalseExportDefault — a rule CI does NOT ignore. Silencing the warning
+    // with `output.exports` would change that shape back. See the export at the
+    // foot of the entry for the same reasoning beside the code.
     "tailwind-preset": "src/tailwind-preset.ts",
     utils: "src/lib/utils.ts",
   },

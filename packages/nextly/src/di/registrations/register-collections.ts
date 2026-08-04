@@ -33,7 +33,7 @@ import { CollectionRegistryService } from "../../services/collections/collection
 import { CollectionRelationshipService } from "../../services/collections/collection-relationship-service";
 import { CollectionService } from "../../services/collections/collection-service";
 import { CollectionsHandler } from "../../services/collections-handler";
-import type { ComponentDataService } from "../../services/components";
+import type { FieldGroupDataService } from "../../services/field-groups";
 import { container } from "../container";
 
 import { createNoOpHookRegistry } from "./no-op-hook-registry";
@@ -132,7 +132,7 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
     }
 
     // Create the relationship service and expose it via the DI container
-    // so other services (e.g. ComponentDataService) can share the same
+    // so other services (e.g. FieldGroupDataService) can share the same
     // instance instead of creating duplicates.
     const relationshipService = new CollectionRelationshipService(
       adapter,
@@ -155,8 +155,8 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
     );
 
     // Component data service may be unavailable in very minimal boots.
-    const componentDataService = container.has("componentDataService")
-      ? container.get<ComponentDataService>("componentDataService")
+    const fieldGroupDataService = container.has("fieldGroupDataService")
+      ? container.get<FieldGroupDataService>("fieldGroupDataService")
       : undefined;
 
     const entryService = new CollectionEntryService(
@@ -167,7 +167,7 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
       relationshipService,
       hookRegistry ?? createNoOpHookRegistry(),
       accessControlService,
-      componentDataService,
+      fieldGroupDataService,
       rbacAccessControlService,
       // i18n M4: forward normalized localization config so localized reads resolve
       // translatable fields from the companion table.

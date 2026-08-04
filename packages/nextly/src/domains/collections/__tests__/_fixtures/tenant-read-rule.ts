@@ -73,6 +73,10 @@ export default function tenantReadRule({
     // it is a valid rule and must NOT be refused.
     case "scalar-in":
       return { region: { in: "eu" } };
+    // Restricts on a column the target really has, so the confirming query in
+    // relationship expansion actually runs rather than short-circuiting.
+    case "name-scoped":
+      return { name: { equals: "Draft Author" } };
     // Keyed on a claim the framework knows nothing about. It survives only if
     // the caller's whole user object reaches the rule rather than a rebuilt
     // subset of the canonical fields.

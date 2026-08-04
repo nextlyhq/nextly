@@ -110,7 +110,11 @@ export class DrizzleMigrationJournal implements MigrationJournal {
         eventType,
         source,
         scopeKind: args.scope ? mapScopeKind(args.scope.kind) : undefined,
-        scopeSlug: args.scope?.slug,
+        // A fresh push replaces the whole schema, so it names no entity to record.
+        scopeSlug:
+          args.scope && args.scope.kind !== "fresh-push"
+            ? args.scope.slug
+            : undefined,
       });
       this.startTimes.set(id, Date.now());
       return id;

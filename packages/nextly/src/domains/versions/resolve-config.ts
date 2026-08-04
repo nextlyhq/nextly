@@ -24,9 +24,11 @@ export const DEFAULT_MAX_PER_DOC = 50;
  * Resolve the effective versioning config for an entity.
  *
  * @param versions - the entity's `versions` option (`boolean | VersionsConfig`)
- * @param status - the legacy `status` flag; `status: true` alone is a
- *   deprecated alias for `versions: { drafts: true }`. An explicit `versions`
- *   option always wins over `status`.
+ * @param status - the draft/publish lifecycle flag. `status: true` alone
+ *   enables history-only versioning (every write is a restorable version) but
+ *   NOT the working-draft split: editing a published document in place stays the
+ *   default. The split is opt-in via an explicit `versions: { drafts: true }`.
+ *   An explicit `versions` option always wins over `status`.
  * @returns the canonical resolved config, or `null` when the entity is
  *   unversioned.
  */
@@ -34,13 +36,17 @@ export function resolveVersionsConfig(
   versions: boolean | VersionsConfig | undefined,
   status?: boolean
 ): ResolvedVersionsConfig | null {
-  // `status: true` (alone) aliases to `versions: { drafts: true }`; an explicit
-  // `versions` option takes precedence over the legacy flag.
+  // `status: true` alone enables the draft/publish lifecycle and history-only
+  // versioning, but NOT the working-draft split — editing a published document
+  // in place stays the default. The split (non-destructive edits to a published
+  // document) is opt-in via an explicit `versions: { drafts: true }`, or
+  // `versions: true` where drafts default on. An explicit `versions` option
+  // always takes precedence over this lifecycle flag.
   const effective: boolean | VersionsConfig | undefined =
     versions !== undefined
       ? versions
       : status === true
-        ? { drafts: true }
+        ? { drafts: false }
         : undefined;
 
   // `null`/`false`/absent all mean unversioned. A falsy check (untyped JS could

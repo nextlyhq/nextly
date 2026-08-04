@@ -29,9 +29,9 @@ const QUICK_ACTIONS: QuickAction[] = [
     Icon: FileText,
   },
   {
-    label: "Create a component",
+    label: "Create a field group",
     description: "Reusable building blocks for layouts and rich text.",
-    href: ROUTES.BUILDER_COMPONENTS,
+    href: ROUTES.BUILDER_FIELD_GROUPS,
     Icon: Puzzle,
   },
   {
@@ -72,8 +72,8 @@ export function GetStartedEmptyState() {
           Get started
         </h2>
         <p className="text-sm text-muted-foreground">
-          Pick a starting point. Collections, singles, components, and users can
-          coexist in any Nextly project.
+          Pick a starting point. Collections, singles, field groups, and users
+          can coexist in any Nextly project.
         </p>
       </header>
 

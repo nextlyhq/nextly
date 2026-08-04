@@ -21,6 +21,7 @@
 
 import { z } from "zod";
 
+import { NextlyError } from "../../errors/nextly-error";
 import type { HookContext, HookType } from "../types";
 
 // ============================================================
@@ -492,7 +493,14 @@ export const uniqueValidation: PrebuiltHookConfig<UniqueValidationConfig> = {
     });
 
     if (isDuplicate) {
-      throw new Error(errorMessage);
+      // Typed, so the duplicate reaches the caller as a validation failure
+      // against the offending field rather than as a server fault whose
+      // message is replaced before anyone sees it.
+      throw NextlyError.validation({
+        errors: [
+          { path: String(field), code: "DUPLICATE", message: errorMessage },
+        ],
+      });
     }
 
     return data;
@@ -592,22 +600,25 @@ export function getPrebuiltHooksByType(
 /**
  * Maps a PrebuiltHookType to the actual HookType(s) it should register for.
  *
- * Virtual types like 'beforeChange' map to multiple actual hook types.
+ * Virtual types like 'afterChange' map to multiple actual hook types.
+ *
+ * `beforeChange` is not one of them: it is a phase of its own, executed after
+ * the validation gate on both write paths, so mapping it onto the
+ * pre-validation `beforeCreate`/`beforeUpdate` queue is what made a stored
+ * hook run at a different point from the field-level phase of the same name.
  *
  * @param prebuiltType - The pre-built hook type
  * @returns Array of actual HookType values
  *
  * @example
  * ```typescript
- * mapHookType('beforeChange'); // ['beforeCreate', 'beforeUpdate']
+ * mapHookType('beforeChange'); // ['beforeChange']
  * mapHookType('afterChange'); // ['afterCreate', 'afterUpdate']
  * mapHookType('beforeCreate'); // ['beforeCreate']
  * ```
  */
 export function mapHookType(prebuiltType: PrebuiltHookType): HookType[] {
   switch (prebuiltType) {
-    case "beforeChange":
-      return ["beforeCreate", "beforeUpdate"];
     case "afterChange":
       return ["afterCreate", "afterUpdate"];
     default:

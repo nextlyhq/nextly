@@ -21,6 +21,7 @@
  */
 
 import type { FieldConfig } from "../../collections/fields/types";
+import type { AuthorableFieldConfig } from "../../collections/fields/types/plugin-field";
 import type { NextlyServiceConfig } from "../../di/register";
 import { NextlyError } from "../../errors";
 import { assertNoLegacyFieldGroupKey } from "../../shared/legacy-field-group-key";
@@ -90,6 +91,17 @@ function mergeKind<T extends Slugged>(
  * Append `fields` to the entity in `arr` whose slug is `target`, returning a NEW
  * array with the touched entity cloned (purity). Returns false if not found.
  */
+/**
+ * Narrow an `extend` clause's authored fields to the canonical union.
+ *
+ * `contributes.extend` is written inline, so it accepts a contributed field
+ * type by name; from here on the pipeline reads the same closed shape as every
+ * other field, a branded declaration being structurally one already.
+ */
+function asDeclaredFields(fields: AuthorableFieldConfig[]): FieldConfig[] {
+  return fields as FieldConfig[];
+}
+
 function tryExtend<T extends Fielded>(
   arr: T[],
   target: string,
@@ -139,9 +151,19 @@ function applyExtends(
         : [clause.target];
       for (const target of targets) {
         const applied =
-          tryExtend(cols, target, clause.fields, plugin.name) ||
-          tryExtend(sin, target, clause.fields, plugin.name) ||
-          tryExtend(comp, target, clause.fields, plugin.name);
+          tryExtend(
+            cols,
+            target,
+            asDeclaredFields(clause.fields),
+            plugin.name
+          ) ||
+          tryExtend(
+            sin,
+            target,
+            asDeclaredFields(clause.fields),
+            plugin.name
+          ) ||
+          tryExtend(comp, target, asDeclaredFields(clause.fields), plugin.name);
         if (!applied) throw extendTargetUnknownError(target, plugin.name);
       }
     }
@@ -191,7 +213,11 @@ function flattenExtends(plugins: PluginDefinition[]): DeferredExtend[] {
         ? clause.target
         : [clause.target];
       for (const target of targets) {
-        clauses.push({ target, fields: clause.fields, owner: plugin.name });
+        clauses.push({
+          target,
+          fields: asDeclaredFields(clause.fields),
+          owner: plugin.name,
+        });
       }
     }
   }

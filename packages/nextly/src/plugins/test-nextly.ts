@@ -20,7 +20,6 @@ import { randomBytes } from "node:crypto";
 import type { WhereClause } from "@nextlyhq/adapter-drizzle/types";
 
 import type { CollectionConfig } from "../collections/config/define-collection";
-import type { FieldGroupConfig } from "../components/config/types";
 import { createAdapter } from "../database/factory";
 import {
   createDatabaseStatement,
@@ -47,6 +46,7 @@ import { resetWebhookRecordingPolicy } from "../domains/webhooks/recording-polic
 import { NextlyError } from "../errors/nextly-error";
 import type { EventBus } from "../events/event-bus";
 import { getEventBus, resetEventBus } from "../events/event-bus";
+import type { FieldGroupConfig } from "../field-groups/config/types";
 import { resetFilterRegistry } from "../filters";
 import { getHookRegistry, resetHookRegistry } from "../hooks/hook-registry";
 import type { HookRegistry } from "../hooks/hook-registry";
@@ -60,6 +60,11 @@ import { _resetEnvCache } from "../shared/lib/env";
 import type { SingleConfig } from "../singles/config/types";
 import { getImageProcessor } from "../storage/image-processor";
 
+import {
+  PG_ABORTED_TRANSACTION_SQLSTATE,
+  isAbortedTransactionError,
+  recordAbortedTransaction,
+} from "./aborted-transaction-sightings";
 import type { PluginDefinition } from "./plugin-context";
 import { resetPluginRouteRegistry } from "./routes/route-registry";
 import { clearPluginServices } from "./services/plugin-services-registry";
@@ -100,6 +105,147 @@ export function getConfiguredTestDialects(): TestDialect[] {
     if (process.env[DIALECT_SERVER_URL_ENV[dialect]]) configured.push(dialect);
   }
   return configured;
+}
+
+/**
+ * Read the driver's text off an unknown thrown value, for the recorded sighting.
+ *
+ * Only the two shapes that can actually carry it. Anything else is not a database error, and
+ * stringifying it would produce "[object Object]" rather than a message worth reporting. The
+ * message is what gets shown to whoever has to find the swallowed error; whether the value counts
+ * as an abort at all is decided structurally by `isAbortedTransactionError`.
+ */
+function driverMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return typeof error === "string"
+    ? error
+    : `aborted transaction reported without a readable message (SQLSTATE ${PG_ABORTED_TRANSACTION_SQLSTATE})`;
+}
+
+/**
+ * The savepoint pair the abort probe needs from a transaction context.
+ *
+ * Both optional on the interface, and only implemented where the dialect has savepoints —
+ * PostgreSQL being the one that matters here, since it is the only dialect that poisons a
+ * transaction in the first place.
+ */
+interface AbortProbeContext {
+  savepoint?: (name: string) => Promise<void>;
+  releaseSavepoint?: (name: string) => Promise<void>;
+}
+
+/**
+ * Fixed name, distinctive enough not to collide with a savepoint a test took itself. Created and
+ * released immediately, so nesting cannot leave more than one of these outstanding.
+ */
+const ABORT_PROBE_SAVEPOINT = "nextly_abort_probe";
+
+/**
+ * Ask the transaction for one more statement to find out whether it is still usable.
+ *
+ * PostgreSQL marks a transaction aborted the moment a statement in it fails and keeps it that
+ * way until COMMIT or ROLLBACK. A COMMIT on an aborted transaction is accepted and silently
+ * downgraded to a rollback, so a callback that catches its own failure and returns normally
+ * leaves `transaction()` resolving over a transaction that discarded every write. From outside,
+ * one more statement is the only thing that reveals it: the aborted state answers, because the
+ * error that caused it is gone.
+ *
+ * The statement is a savepoint rather than a `SELECT`, for two reasons. An aborted transaction
+ * rejects `SAVEPOINT` with the same code it rejects everything else by, so it answers the question
+ * just as well — and it goes through the adapter's own method, which keeps this file free of the
+ * SQL string a shipped module has no business carrying. On a healthy transaction the savepoint is
+ * released immediately, leaving nothing behind.
+ *
+ * A probe failure that is NOT the abort signature propagates. The probe is meant to observe the
+ * transaction rather than change it, and a statement of its own that fails has changed it: the
+ * transaction is now aborted because of this query, and reporting success would be a lie.
+ */
+async function probeForAbortedTransaction(
+  ctx: AbortProbeContext
+): Promise<void> {
+  if (typeof ctx?.savepoint !== "function") return;
+  try {
+    await ctx.savepoint(ABORT_PROBE_SAVEPOINT);
+  } catch (error) {
+    if (isAbortedTransactionError(error)) {
+      recordAbortedTransaction(driverMessage(error));
+      // Left to resolve or reject as it would have. The callback caused this, and changing the
+      // outcome would change the path under test; the recorded sighting is what fails the test.
+      return;
+    }
+    // Anything else means the probe itself broke the transaction — a `statement_timeout` from the
+    // `timeoutMs` option is the realistic case. PostgreSQL would then accept the COMMIT as a
+    // rollback and the call would resolve having discarded every write, so swallowing this would
+    // manufacture exactly the silent loss the guard exists to catch.
+    throw error;
+  }
+  // Reached only when the transaction was healthy, so the savepoint exists and releasing it is
+  // what leaves the transaction exactly as the callback left it.
+  await ctx.releaseSavepoint?.(ABORT_PROBE_SAVEPOINT);
+}
+
+/**
+ * Wrap an adapter so a transaction left in PostgreSQL's aborted state is recorded.
+ *
+ * An existence check is easy to write as "run a query and catch the failure". That is a valid
+ * probe on SQLite and MySQL and a transaction-killer on PostgreSQL: the check catches its own
+ * error, reports "absent", and every later statement in the same transaction fails. The symptom
+ * then surfaces far from its cause, and on one dialect only.
+ *
+ * Two places can see it and both are needed. An abort that propagates out of `transaction()` is
+ * caught below. An abort that never escapes — because the callback swallowed it and returned
+ * normally, which is what the bulk write paths do for per-item errors while `stopOnError` is
+ * false — cannot reach that catch, and is found instead by probing the context once the callback
+ * resolves.
+ *
+ * Recording is all this does. The assertion lives in the shared setup file so it covers every
+ * integration test without each one opting in, and control flow is deliberately left alone:
+ * turning a resolved transaction into a rejected one would change the path under test.
+ *
+ * One case stays uncovered: a callback that swallows the poisoning error and then throws
+ * something unrelated. The probe cannot run, and the outer catch sees only the substitute, so
+ * the sighting is lost — but that failure is at least loud, because the substitute propagates.
+ */
+const GUARDED = Symbol.for("nextly.abortedTransactionGuardInstalled");
+
+function guardAgainstAbortedTransactions<T extends TestAdapter>(adapter: T): T {
+  // An adapter can be handed to `createTestNextly` more than once — that is how a test keeps an
+  // in-memory database alive across boots. Wrapping the wrapper would nest a probe per boot, so a
+  // single abort would report two, three, four times and each transaction would pay for every
+  // boot that ever happened.
+  const marker = adapter as unknown as Record<symbol, boolean>;
+  if (marker[GUARDED]) return adapter;
+
+  const originalTransaction = adapter.transaction?.bind(adapter);
+  if (!originalTransaction) return adapter;
+  const wrapped = async (...args: unknown[]): Promise<unknown> => {
+    const [callback, ...rest] = args;
+    // Probe on the context the callback itself used, so the question reaches the transaction
+    // that may have been poisoned rather than a fresh connection from the pool.
+    const instrumented =
+      typeof callback === "function"
+        ? async (ctx: AbortProbeContext): Promise<unknown> => {
+            const result = await (
+              callback as (c: AbortProbeContext) => Promise<unknown>
+            )(ctx);
+            await probeForAbortedTransaction(ctx);
+            return result;
+          }
+        : callback;
+    try {
+      return await (
+        originalTransaction as (...a: unknown[]) => Promise<unknown>
+      )(instrumented, ...rest);
+    } catch (error) {
+      if (isAbortedTransactionError(error)) {
+        recordAbortedTransaction(driverMessage(error));
+      }
+      throw error;
+    }
+  };
+  (adapter as { transaction: unknown }).transaction = wrapped;
+  marker[GUARDED] = true;
+  return adapter;
 }
 
 export interface CreateTestNextlyOptions {
@@ -157,7 +303,15 @@ export interface CreateTestNextlyOptions {
 }
 
 export interface TestNextly {
-  /** The booted direct-API facade for CRUD assertions. */
+  /**
+   * The booted direct-API facade for CRUD assertions.
+   *
+   * Resolved on access. Resolving it registers the `nextlyDirectAPI` container
+   * binding as a side effect, and that binding is what a hook's `req.nextly`
+   * comes from — so a test that reads this property before asserting anything
+   * about `req.nextly` has supplied the answer itself. Assert the binding
+   * first, then read this.
+   */
   nextly: Nextly;
   /** Container accessor for inspecting any registered service. */
   getService: typeof getService;
@@ -510,6 +664,7 @@ export async function createTestNextly(
     } as Parameters<typeof createAdapter>[0]);
   }
   const logger = opts.logger ?? defaultTestLogger;
+  adapter = guardAgainstAbortedTransactions(adapter);
   active = { provisioned, restoreEnv };
 
   try {
@@ -608,8 +763,28 @@ async function bootServices(
     }
   }
 
+  // A handle a caller assigned over `nextly`. The property was a plain data
+  // property before it became lazy, and `TestNextly.nextly` is not declared
+  // readonly, so `handle.nextly = stub` compiles and has to keep working --
+  // a getter without a setter would turn that into a TypeError under the
+  // strict mode ES modules always run in.
+  let nextlyOverride: Nextly | undefined;
+
   return {
-    nextly: getNextly(),
+    // Resolved on access, not while assembling this object. `getNextly()`
+    // registers the `nextlyDirectAPI` container binding as a side effect of
+    // building its instance, so calling it here made that binding exist under
+    // this harness whatever the code under test did. `req.nextly` resolves
+    // through exactly that binding, so a test asserting a hook receives the
+    // handle passed whether or not service registration had provided it --
+    // the harness was answering the question the test was asking. Deferring
+    // leaves the container the shape service registration alone gives it.
+    get nextly(): Nextly {
+      return nextlyOverride ?? getNextly();
+    },
+    set nextly(replacement: Nextly) {
+      nextlyOverride = replacement;
+    },
     getService,
     hooks: getHookRegistry(),
     events: getEventBus(),

@@ -37,12 +37,14 @@ import type { Nextly } from "../direct-api/nextly";
  * Hook execution order for a create operation:
  * 1. beforeOperation - Run before any operation (can modify args)
  * 2. beforeCreate - Run before validation and database insert
- * 3. afterCreate - Run after database insert completes
+ * 3. beforeChange - Run after validation, on the data about to be written
+ * 4. afterCreate - Run after database insert completes
  *
  * Hook execution order for an update operation:
  * 1. beforeOperation - Run before any operation (can modify args)
  * 2. beforeUpdate - Run before validation and database update
- * 3. afterUpdate - Run after database update completes
+ * 3. beforeChange - Run after validation, on the data about to be written
+ * 4. afterUpdate - Run after database update completes
  *
  * Hook execution order for a delete operation:
  * 1. beforeOperation - Run before any operation (can modify args)
@@ -53,17 +55,71 @@ import type { Nextly } from "../direct-api/nextly";
  * 1. beforeOperation - Run before any operation (can modify args)
  * 2. beforeRead - Run before database query
  * 3. afterRead - Run after database query completes
+ *
+ * `beforeCreate`/`beforeUpdate` and `beforeChange` are both pre-write, and the
+ * difference between them is the validation gate. A `beforeCreate` handler can
+ * supply or repair a value and have the rules applied to what it produced; a
+ * `beforeChange` handler receives data that has already passed them, which is
+ * what makes it the phase for deriving a stored value -- and also means what it
+ * returns is written without being re-checked.
  */
-export type HookType =
-  | "beforeOperation"
-  | "beforeCreate"
-  | "afterCreate"
-  | "beforeUpdate"
-  | "afterUpdate"
-  | "beforeDelete"
-  | "afterDelete"
-  | "beforeRead"
-  | "afterRead";
+export const HOOK_TYPES = [
+  "beforeOperation",
+  "beforeCreate",
+  "afterCreate",
+  "beforeUpdate",
+  "afterUpdate",
+  "beforeChange",
+  "beforeDelete",
+  "afterDelete",
+  "beforeRead",
+  "afterRead",
+] as const;
+
+/**
+ * Derived from {@link HOOK_TYPES} rather than declared separately, so anything
+ * that has to visit every phase -- clearing a collection's handlers, for one --
+ * can iterate the same list the type is built from. A hand-maintained array
+ * annotated `HookType[]` type-checks perfectly while missing a phase, which is
+ * how a newly added one went on being registered but never cleared.
+ */
+export type HookType = (typeof HOOK_TYPES)[number];
+
+/**
+ * The phases whose handlers take a {@link HookContext}, which is every phase
+ * except `beforeOperation`.
+ *
+ * `beforeOperation` handlers take a {@link BeforeOperationContext} instead and
+ * reshape the operation's `args` rather than its `data`. Naming the rest as a
+ * type keeps the two signatures from being registered through one another.
+ */
+export type HookContextPhase = Exclude<HookType, "beforeOperation">;
+
+/**
+ * Who registered a handler, which is really the question "what will put this
+ * back if it is removed?".
+ *
+ * - `"code"` -- a declaration in the config. `registerCollectionHooks` and
+ *   `registerSingleHooks` rebuild these from the config on boot AND on every
+ *   config reload, so a reload may remove them freely. Those two registrars are
+ *   the only callers entitled to claim it, and they pass it explicitly.
+ * - `"app"` -- an imperative registration, whether through `registerHook()` or
+ *   straight into the registry the public API hands out. Nothing re-runs it:
+ *   the module holding the call is evaluated once and a config reload never
+ *   revisits it, so removing one is permanent.
+ * - `"plugin:<name>"` -- registered through `ctx.hooks.on` during a plugin's
+ *   `init`, which re-runs only on a full service registration and not on a
+ *   config reload.
+ *
+ * `"app"` is the DEFAULT, so an unannotated registration survives a reload. The
+ * two failure modes are not symmetric: defaulting to `"code"` costs a handler
+ * that silently disappears for good, while defaulting to `"app"` costs at worst
+ * a stale handler that a restart clears.
+ *
+ * `"code"` and `"plugin:<name>"` follow the vocabulary the webhook recording
+ * provenance already uses, so one concept does not get two spellings.
+ */
+export type HookOwner = "code" | "app" | `plugin:${string}`;
 
 /**
  * Context object passed to hook handlers containing operation metadata.
@@ -285,10 +341,16 @@ export interface HookContext<T = any> {
  *   // No return value needed for after hooks
  * };
  *
- * // Error handling (beforeCreate)
+ * // Rejecting input (beforeCreate). Throw a NextlyError, not a plain Error:
+ * // a plain one is indistinguishable from a crash, so its message is replaced
+ * // with a generic server-fault message before the caller sees it.
  * const validatePrice: HookHandler<Product> = (context) => {
  *   if (context.data.price < 0) {
- *     throw new Error('Price cannot be negative');
+ *     throw NextlyError.validation({
+ *       errors: [
+ *         { path: 'price', code: 'INVALID', message: 'Price cannot be negative.' },
+ *       ],
+ *     });
  *   }
  *   return context.data;
  * };
@@ -297,6 +359,43 @@ export interface HookContext<T = any> {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- generic default requires `any` for type-erased hook registry
 export type HookHandler<T = any> = (
   context: HookContext<T>
+) => Promise<T | void> | T | void;
+
+/**
+ * What a FIELD-level hook is handed.
+ *
+ * A field hook is scoped to one field, so it is given that field's value and
+ * name alongside the row it belongs to. This is deliberately NOT
+ * {@link HookContext}: a collection-level hook receives the whole document as
+ * `data` and has no single field in view, while a field hook is called once per
+ * field and returns that field's replacement value.
+ */
+export interface FieldHookContext<T = unknown> {
+  /** Collection or single the field belongs to. */
+  collection: string;
+
+  /** Operation that triggered the hook. */
+  operation: "create" | "read" | "update" | "delete";
+
+  /** Name of the field this call is for. */
+  fieldName: string;
+
+  /** The field's current value. */
+  value: T;
+
+  /** The row the field belongs to, so a hook can read its siblings. */
+  data: Record<string, unknown>;
+
+  /** The authenticated caller, when there is one. */
+  user?: Record<string, unknown>;
+}
+
+/**
+ * A field-level hook. Returning a value replaces the field's value; returning
+ * nothing leaves it as it was.
+ */
+export type FieldHookHandler<T = unknown> = (
+  context: FieldHookContext<T>
 ) => Promise<T | void> | T | void;
 
 /**
@@ -393,15 +492,15 @@ export interface BeforeOperationArgs<T = any> {
  *
  * @example
  * ```typescript
- * import { registerHook } from 'nextly';
+ * import { registerBeforeOperationHook } from 'nextly';
  *
  * // Global logging for all operations
- * registerHook('beforeOperation', '*', async (context) => {
+ * registerBeforeOperationHook('*', async (context) => {
  *   console.log(`[${context.operation}] ${context.collection}`, context.args);
  * });
  *
  * // Modify operation arguments
- * registerHook('beforeOperation', 'posts', async (context) => {
+ * registerBeforeOperationHook('posts', async (context) => {
  *   if (context.operation === 'create' && context.args.data) {
  *     return {
  *       ...context.args,
@@ -508,10 +607,12 @@ export interface BeforeOperationContext<T = any> {
  *   return context.args;
  * };
  *
- * // Abort operation (throw error)
+ * // Abort the operation. A NextlyError, not a plain one: a plain Error is
+ * // indistinguishable from a crash, so its message and status are replaced
+ * // with a generic server fault before the caller sees them.
  * const rateLimit: BeforeOperationHandler = async (context) => {
  *   if (await isRateLimited(context.user?.id)) {
- *     throw new Error('Rate limit exceeded');
+ *     throw NextlyError.rateLimited({});
  *   }
  * };
  * ```

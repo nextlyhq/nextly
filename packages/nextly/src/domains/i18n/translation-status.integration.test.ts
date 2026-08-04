@@ -68,6 +68,7 @@ describe("populateTranslationStatus (real SQLite)", () => {
       const rows: Record<string, unknown>[] = [{ id: "p1" }];
 
       await populateTranslationStatus({
+        readiness: "ready",
         db: db as never,
         companionTable: makeStatusCompanion(),
         localizedFields: LOCALIZED_FIELDS,
@@ -93,6 +94,7 @@ describe("populateTranslationStatus (real SQLite)", () => {
       const rows: Record<string, unknown>[] = [{ id: "p1" }];
 
       await populateTranslationStatus({
+        readiness: "ready",
         db: db as never,
         companionTable: makeStatusCompanion(),
         localizedFields: LOCALIZED_FIELDS,
@@ -114,6 +116,7 @@ describe("populateTranslationStatus (real SQLite)", () => {
       const rows: Record<string, unknown>[] = [{ id: "p1" }];
 
       await populateTranslationStatus({
+        readiness: "ready",
         db: db as never,
         companionTable: makeStatusCompanion(),
         localizedFields: LOCALIZED_FIELDS,
@@ -131,6 +134,7 @@ describe("populateTranslationStatus (real SQLite)", () => {
       const rows: Record<string, unknown>[] = [{ id: "p1" }];
 
       await populateTranslationStatus({
+        readiness: "ready",
         db: db as never,
         companionTable: makeStatusCompanion(),
         localizedFields: LOCALIZED_FIELDS,
@@ -163,6 +167,7 @@ describe("populateTranslationStatus (real SQLite)", () => {
       const rows: Record<string, unknown>[] = [{ id: "p1" }];
 
       await populateTranslationStatus({
+        readiness: "ready",
         db: db as never,
         companionTable: makeNoStatusCompanion(),
         localizedFields: LOCALIZED_FIELDS,
@@ -197,6 +202,10 @@ describe("populateTranslationStatus (real SQLite)", () => {
           locales: ["en", "de"],
           defaultLocale: "en",
           hasStatus: true,
+          // A missing companion table resolves as not-ready, so the readiness
+          // gate returns before any query runs — the no-op under test. Passing
+          // "ready" would instead query the absent table and throw.
+          readiness: "pre-migration",
         })
       ).resolves.toBeUndefined();
       expect(rows[0]._translations).toBeUndefined();
@@ -205,6 +214,7 @@ describe("populateTranslationStatus (real SQLite)", () => {
     it("is a no-op for empty rows / no locales", async () => {
       const rows: Record<string, unknown>[] = [];
       await populateTranslationStatus({
+        readiness: "ready",
         db: db as never,
         companionTable: makeStatusCompanion(),
         localizedFields: LOCALIZED_FIELDS,

@@ -12,5 +12,10 @@ export default defineConfig({
   test: {
     testTimeout: 30000,
     hookTimeout: 30000,
+    // Component suites request jsdom per file (`@vitest-environment jsdom`)
+    // rather than switching it on globally, so the integration suites above
+    // keep the node environment they actually need. This setup only fills in
+    // globals jsdom lacks, so it is inert for the node ones.
+    setupFiles: ["./src/__tests__/setup.ts"],
   },
 });

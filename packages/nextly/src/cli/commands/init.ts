@@ -277,7 +277,15 @@ async function createNextlyHelper(
   logger.success("Created src/lib/nextly.ts");
 }
 
-function generateNextlyHelperTemplate(): string {
+/**
+ * The `lib/nextly.ts` a generated project gets.
+ *
+ * Exported so its output can be asserted on. It is a template literal, so
+ * nothing here is type-checked or executed by the build, and the two exported
+ * startup paths it defines have to agree about booting, about passing the
+ * config, and about when initialization is complete.
+ */
+export function generateNextlyHelperTemplate(): string {
   return `/**
  * Nextly Instance Helper
  *
@@ -296,7 +304,7 @@ function generateNextlyHelperTemplate(): string {
  * \`\`\`
  */
 
-import { getNextly, registerCollectionHooks, type Nextly } from "nextly";
+import { getNextly, type Nextly } from "nextly";
 import nextlyConfig from "../../nextly.config";
 
 // Track initialization state
@@ -310,14 +318,16 @@ let initialized = false;
  * It also registers any code-first collection hooks.
  */
 export async function getNextlyInstance(): Promise<Nextly> {
-  // Register hooks if not already done
-  if (!initialized) {
-    await initializeNextly();
-  }
+  // Straight to the boot. It registers the config's collection hooks itself,
+  // so there is nothing to arrange first -- and routing through
+  // initializeNextly() would cycle, since that function boots by calling
+  // this one.
 
   // Get the Nextly instance with minimal storage/image processor config
   // In a real app, you'd configure these with actual implementations
-  return getNextly({
+  const instance = await getNextly({
+    // Required on every call, and the reason this module imports the config.
+    config: nextlyConfig,
     storage: {
       upload: async () => ({ path: "", url: "" }),
       delete: async () => {},
@@ -332,6 +342,12 @@ export async function getNextlyInstance(): Promise<Nextly> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Stub image processor for CLI init
     } as any,
   });
+
+  // Only once the boot has resolved. Setting it beforehand marks an app
+  // initialized when the database or config was unavailable, and the retry a
+  // caller then makes returns early without ever booting.
+  initialized = true;
+  return instance;
 }
 
 /**
@@ -346,13 +362,12 @@ export async function initializeNextly(): Promise<void> {
   }
 
   try {
-    // Register code-first collection hooks with the global registry
-    if (nextlyConfig.collections && nextlyConfig.collections.length > 0) {
-      const result = registerCollectionHooks(nextlyConfig.collections);
-      console.log(
-        \`[Nextly] Registered \${result.totalHooks} hooks for \${result.collections.length} collections\`
-      );
-    }
+    // Boot Nextly, which is what registers the config's collection hooks.
+    // Registering them here as well would append the same handlers a second
+    // time and run every hook twice, so this defers to the one boot rather
+    // than repeating it -- and it has to call something, since a function that
+    // reports success without booting leaves an app with no hooks at all.
+    await getNextlyInstance();
 
     initialized = true;
     console.log("[Nextly] Initialized successfully");

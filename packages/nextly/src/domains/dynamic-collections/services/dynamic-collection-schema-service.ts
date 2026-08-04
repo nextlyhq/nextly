@@ -22,11 +22,21 @@
 
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
-import { emptyBlockDocumentJson } from "../../../collections/fields/blocks-document";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { env } from "../../../shared/lib/env";
+import {
+  pluginEmptyColumnDefault,
+  storageTypeToken,
+} from "../../../shared/lib/plugin-storage";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
-import { getColumnDescriptor } from "../../schema/services/field-column-descriptor";
+import {
+  fieldProducesColumn,
+  usesJunctionTable,
+  getColumnDescriptor,
+  getSystemColumnDescriptors,
+  renderSystemColumnSql,
+  toSnakeCase,
+} from "../../schema/services/field-column-descriptor";
 import { quoteJsonSqlDefault } from "../../schema/utils/sql-literal";
 
 import { DynamicCollectionValidationService } from "./dynamic-collection-validation-service";
@@ -56,11 +66,6 @@ export class DynamicCollectionSchemaService {
     return `"${name}"`;
   }
 
-  /** Convert camelCase to snake_case (e.g., publishedAt → published_at) */
-  private toSnakeCase(str: string): string {
-    return str.replace(/([A-Z])/g, "_$1").toLowerCase();
-  }
-
   /**
    * The column type for a declared `slug`, taken from the canonical
    * descriptor rather than this class's own type map.
@@ -78,8 +83,23 @@ export class DynamicCollectionSchemaService {
    * `mapFieldTypeToSQL`.
    */
   private canonicalSlugType(field: FieldDefinition): string | null {
-    if (this.toSnakeCase(field.name) !== "slug") return null;
+    if (toSnakeCase(field.name) !== "slug") return null;
     return getColumnDescriptor(field, this.dialect)?.dialectType ?? null;
+  }
+
+  /**
+   * Whether a field kept its name but moved between storage classes.
+   *
+   * A junction-backed field has no column on this row and a row-backed one has no junction table,
+   * so changing between them is not a modification of anything: it is a removal from one storage
+   * and an addition to the other. Read as a modification instead, it produced an ALTER COLUMN
+   * against a name the table never had.
+   */
+  private storageClassChanged(
+    previous: FieldDefinition,
+    next: FieldDefinition
+  ): boolean {
+    return usesJunctionTable(previous) !== usesJunctionTable(next);
   }
 
   /**
@@ -131,11 +151,10 @@ export class DynamicCollectionSchemaService {
 
     const columns = mainFields
       .map(f => {
-        // Skip many-to-many fields as they don't create columns in the main table
-        if (
-          f.type === "relationship" &&
-          f.options?.relationType === "manyToMany"
-        ) {
+        // Skip junction-backed fields: their links live in a junction table, not on this row.
+        // Asked through the shared predicate so this and the descriptor cannot disagree about
+        // which fields those are — an `upload` is not one of them, whatever option it carries.
+        if (usesJunctionTable(f)) {
           return null;
         }
 
@@ -199,11 +218,11 @@ export class DynamicCollectionSchemaService {
 
             if (this.dialect === "mysql") {
               checks.push(
-                `${this.quoteIdentifier(this.toSnakeCase(f.name))} REGEXP '${escapedRegex}'`
+                `${this.quoteIdentifier(toSnakeCase(f.name))} REGEXP '${escapedRegex}'`
               );
             } else {
               checks.push(
-                `${this.quoteIdentifier(this.toSnakeCase(f.name))} ~ '${escapedRegex}'`
+                `${this.quoteIdentifier(toSnakeCase(f.name))} ~ '${escapedRegex}'`
               );
             }
           }
@@ -227,7 +246,7 @@ export class DynamicCollectionSchemaService {
               f.options.onUpdate || "no action"
             );
 
-            const fkColName = this.toSnakeCase(f.name);
+            const fkColName = toSnakeCase(f.name);
             constraints.push(
               `  CONSTRAINT ${this.quoteIdentifier(`fk_${tableName}_${fkColName}`)} FOREIGN KEY (${this.quoteIdentifier(fkColName)}) REFERENCES ${this.quoteIdentifier(targetTable)}(${this.quoteIdentifier("id")}) ON DELETE ${onDelete} ON UPDATE ${onUpdate}`
             );
@@ -236,7 +255,7 @@ export class DynamicCollectionSchemaService {
 
         // Convert camelCase field names to snake_case for column names
         // (matches the convention used by CollectionEntryService)
-        const colName = this.toSnakeCase(f.name);
+        const colName = toSnakeCase(f.name);
         return `  ${this.quoteIdentifier(colName)} ${type} ${nullable} ${unique} ${defaultVal}`.trim();
       })
       .filter(Boolean)
@@ -249,70 +268,51 @@ export class DynamicCollectionSchemaService {
     // comma before the timestamp section, producing invalid SQL.
     const allColumnDefs: string[] = [];
 
-    // id
-    if (this.dialect === "mysql") {
-      allColumnDefs.push(
-        `  ${this.quoteIdentifier("id")} varchar(36) PRIMARY KEY NOT NULL`
+    // System columns, rendered from the one list that defines them rather than restated here.
+    // Restating them is how a newly added system column reached the runtime schema and missed the
+    // physical table: the generated SELECT then names a column that does not exist and every read
+    // of the entity fails. Iterating the list — rather than sourcing each column in place — is
+    // what makes that impossible, since a new entry needs no edit here to be created.
+    //
+    // A field that produces no column must not suppress the system title or slug column, or the
+    // table would have neither: a component and a many-to-many relationship both keep their values
+    // in their own tables. Asked through the shared predicate rather than a list of the types this
+    // file remembers, because the runtime schema and the diff ask it that way and all three have to
+    // reach the same answer.
+    //
+    // Matched on the COLUMN the field becomes rather than on its declared name. An author writing
+    // `Title` means the same column, and comparing the raw name would inject the system one beside
+    // it — two columns of the same name, which no dialect will create.
+    const declaresColumn = (column: string) =>
+      fields.some(
+        f =>
+          typeof f.name === "string" &&
+          toSnakeCase(f.name) === column &&
+          fieldProducesColumn(f)
       );
-    } else {
+    const hasTitleField = declaresColumn("title");
+    const hasSlugField = declaresColumn("slug");
+    // A single is one global row, so owner-only ownership is meaningless and it gets no
+    // `created_by`. Prefer the explicit flag, but fall back to the `single_` table prefix so this
+    // stays in lockstep with the runtime schema and the diff, which derive it from the name, even
+    // when a caller omits the option.
+    const isSingleTable =
+      _options?.isSingle === true || tableName.startsWith("single_");
+
+    for (const systemColumn of getSystemColumnDescriptors(this.dialect, {
+      hasTitleField,
+      hasSlugField,
+      hasStatus: _options?.hasStatus === true,
+      isSingle: isSingleTable,
+    })) {
       allColumnDefs.push(
-        `  ${this.quoteIdentifier("id")} text PRIMARY KEY NOT NULL`
+        `  ${renderSystemColumnSql(systemColumn, name => this.quoteIdentifier(name))}`
       );
-    }
-
-    // title (only if not user-defined). A component named "title" produces no
-    // column, so it must not suppress the system title column.
-    const hasTitleField = fields.some(
-      f => f.name === "title" && f.type !== STORAGE_FORMAT.fieldType
-    );
-    if (!hasTitleField) {
-      if (this.dialect === "mysql") {
-        allColumnDefs.push(
-          `  ${this.quoteIdentifier("title")} varchar(255) NOT NULL`
-        );
-      } else {
-        allColumnDefs.push(`  ${this.quoteIdentifier("title")} text NOT NULL`);
-      }
-    }
-
-    // slug (only if not user-defined). Same column-less exclusion as title.
-    const hasSlugField = fields.some(
-      f => f.name === "slug" && f.type !== STORAGE_FORMAT.fieldType
-    );
-    if (!hasSlugField) {
-      if (this.dialect === "mysql") {
-        allColumnDefs.push(
-          `  ${this.quoteIdentifier("slug")} varchar(255) NOT NULL`
-        );
-      } else {
-        allColumnDefs.push(`  ${this.quoteIdentifier("slug")} text NOT NULL`);
-      }
     }
 
     // user-defined columns (may be multi-line, already comma-separated internally)
     if (columns.length > 0) {
       allColumnDefs.push(columns);
-    }
-
-    // Status system column: only emitted when the collection / single opts
-    // into the Draft/Published lifecycle. Default 'draft' is critical —
-    // every existing row gets it on enable so writes don't violate NOT NULL.
-    if (_options?.hasStatus) {
-      if (this.dialect === "sqlite") {
-        // SQLite has no varchar; text + default is the equivalent.
-        allColumnDefs.push(
-          `  ${this.quoteIdentifier("status")} text DEFAULT 'draft' NOT NULL`
-        );
-      } else if (this.dialect === "mysql") {
-        // varchar(20) leaves headroom over "published" (9 chars).
-        allColumnDefs.push(
-          `  ${this.quoteIdentifier("status")} varchar(20) DEFAULT 'draft' NOT NULL`
-        );
-      } else {
-        allColumnDefs.push(
-          `  ${this.quoteIdentifier("status")} varchar(20) DEFAULT 'draft' NOT NULL`
-        );
-      }
     }
 
     // CHECK constraints
@@ -327,47 +327,6 @@ export class DynamicCollectionSchemaService {
       allColumnDefs.push(c);
     }
 
-    // timestamp columns
-    if (this.dialect === "sqlite") {
-      allColumnDefs.push(
-        `  ${this.quoteIdentifier("created_at")} integer DEFAULT (strftime('%s', 'now')) NOT NULL`
-      );
-      allColumnDefs.push(
-        `  ${this.quoteIdentifier("updated_at")} integer DEFAULT (strftime('%s', 'now')) NOT NULL`
-      );
-    } else if (this.dialect === "mysql") {
-      allColumnDefs.push(
-        `  ${this.quoteIdentifier("created_at")} timestamp DEFAULT CURRENT_TIMESTAMP NOT NULL`
-      );
-      allColumnDefs.push(
-        `  ${this.quoteIdentifier("updated_at")} timestamp DEFAULT CURRENT_TIMESTAMP NOT NULL`
-      );
-    } else {
-      allColumnDefs.push(
-        `  ${this.quoteIdentifier("created_at")} timestamp DEFAULT now() NOT NULL`
-      );
-      allColumnDefs.push(
-        `  ${this.quoteIdentifier("updated_at")} timestamp DEFAULT now() NOT NULL`
-      );
-    }
-
-    // Owner column — COLLECTIONS ONLY. A single is one global row, so
-    // owner-only ownership is meaningless; singles never stamp or query it.
-    // Nullable with no default (matches getSystemColumnDescriptors) so existing
-    // rows and system creates stay null; sized to the users.id column on MySQL
-    // since it holds a user id, not the row id.
-    // Prefer the explicit flag, but also fall back to the `single_` table
-    // prefix so this stays in lockstep with the runtime schema / diff (which
-    // derive it from the name) even if a caller omits the option.
-    const isSingleTable =
-      _options?.isSingle === true || tableName.startsWith("single_");
-    if (!isSingleTable) {
-      const ownerType = this.dialect === "mysql" ? "varchar(191)" : "text";
-      allColumnDefs.push(
-        `  ${this.quoteIdentifier("created_by")} ${ownerType}`
-      );
-    }
-
     let sql = `-- Create dynamic collection: ${tableName}
 CREATE TABLE IF NOT EXISTS ${this.quoteIdentifier(tableName)} (
 ${allColumnDefs.join(",\n")}
@@ -375,11 +334,7 @@ ${allColumnDefs.join(",\n")}
 
     // Generate many-to-many junction tables
     fields.forEach(f => {
-      if (
-        f.type === "relationship" &&
-        f.options?.relationType === "manyToMany" &&
-        f.options?.target
-      ) {
+      if (usesJunctionTable(f) && f.options?.target) {
         const junctionTableSQL = this.generateJunctionTable(tableName, f);
         junctionTables.push(junctionTableSQL);
       }
@@ -399,7 +354,7 @@ ${allColumnDefs.join(",\n")}
         // Use the snake_case column name for both the index name and the
         // indexed column so this matches the actual physical column (created
         // snake_cased) and the migrate:create desired-state index naming.
-        const col = this.toSnakeCase(f.name);
+        const col = toSnakeCase(f.name);
         const indexName = `idx_${tableName}_${col}`;
         if (this.dialect === "mysql") {
           indexStatements.push(
@@ -423,7 +378,7 @@ ${allColumnDefs.join(",\n")}
         f.type !== "relationship" &&
         f.type !== STORAGE_FORMAT.fieldType
       ) {
-        const col = this.toSnakeCase(f.name);
+        const col = toSnakeCase(f.name);
         const indexName = `idx_${tableName}_${col}`;
         if (this.dialect === "mysql") {
           indexStatements.push(
@@ -536,15 +491,35 @@ ${allColumnDefs.join(",\n")}
     // caller can't accidentally strip Draft/Published.
     const wasStatus = options?.wasStatus === true;
     const hasStatus = options?.hasStatus === true;
-    if (!wasStatus && hasStatus) {
-      const statusType = this.dialect === "sqlite" ? "text" : "varchar(20)";
-      statements.push(
-        `ALTER TABLE ${this.quoteIdentifier(tableName)} ADD COLUMN ${this.quoteIdentifier("status")} ${statusType} DEFAULT 'draft' NOT NULL;`
+    if (
+      wasStatus !== hasStatus &&
+      (hasStatus || options?.hasStatus === false)
+    ) {
+      // The columns the lifecycle owns, derived by asking the descriptor for the set with the
+      // lifecycle on and again with it off: whatever only the first has is what enabling adds and
+      // disabling removes. Naming `status` here instead is how the first-publication marker came
+      // to be expected by the runtime schema while this toggle never created it — the runtime
+      // schema reads the same descriptor, so a column added there arrives here for free.
+      const isSingleTable = tableName.startsWith("single_");
+      const forFlag = (flag: boolean) =>
+        getSystemColumnDescriptors(this.dialect, {
+          hasTitleField: false,
+          hasSlugField: false,
+          hasStatus: flag,
+          isSingle: isSingleTable,
+        });
+      const withoutLifecycle = new Set(forFlag(false).map(c => c.name));
+      const lifecycleColumns = forFlag(true).filter(
+        c => !withoutLifecycle.has(c.name)
       );
-    } else if (wasStatus && options?.hasStatus === false) {
-      statements.push(
-        `ALTER TABLE ${this.quoteIdentifier(tableName)} DROP COLUMN ${this.quoteIdentifier("status")};`
-      );
+
+      for (const column of lifecycleColumns) {
+        statements.push(
+          hasStatus
+            ? `ALTER TABLE ${this.quoteIdentifier(tableName)} ADD COLUMN ${renderSystemColumnSql(column, name => this.quoteIdentifier(name))};`
+            : `ALTER TABLE ${this.quoteIdentifier(tableName)} DROP COLUMN ${this.quoteIdentifier(column.name)};`
+        );
+      }
     }
 
     const oldFieldMap = new Map(oldFields.map(f => [f.name, f]));
@@ -570,13 +545,20 @@ ${allColumnDefs.join(",\n")}
     const renamedFromName = rename?.from.name ?? null;
     const renamedToName = rename?.to.name ?? null;
     if (rename) {
-      const fromCol = this.toSnakeCase(rename.from.name);
-      const toCol = this.toSnakeCase(rename.to.name);
-      // RENAME COLUMN syntax is consistent across PG, MySQL 8.0+,
-      // and SQLite 3.25+ — all dialects we support.
-      statements.push(
-        `ALTER TABLE ${this.quoteIdentifier(tableName)} RENAME COLUMN ${this.quoteIdentifier(fromCol)} TO ${this.quoteIdentifier(toCol)};`
-      );
+      const fromCol = toSnakeCase(rename.from.name);
+      const toCol = toSnakeCase(rename.to.name);
+      // Two spellings of one column — `foo_bar` to `FooBar` — are a rename in the config and no
+      // change at all in the database. Emitting it anyway asks the dialect to rename a column to
+      // its own name, which PostgreSQL rejects because the target already exists, failing an
+      // update that has nothing to do. The pair still skips the add/drop loops below, so the
+      // column is neither dropped nor re-added.
+      if (fromCol !== toCol) {
+        // RENAME COLUMN syntax is consistent across PG, MySQL 8.0+,
+        // and SQLite 3.25+ — all dialects we support.
+        statements.push(
+          `ALTER TABLE ${this.quoteIdentifier(tableName)} RENAME COLUMN ${this.quoteIdentifier(fromCol)} TO ${this.quoteIdentifier(toCol)};`
+        );
+      }
     }
 
     // Find added fields
@@ -584,12 +566,10 @@ ${allColumnDefs.join(",\n")}
       // Phase D: skip the renamed target — it's already been handled
       // above as ALTER TABLE RENAME COLUMN.
       if (field.name === renamedToName) continue;
-      if (!oldFieldMap.has(field.name)) {
+      const previous = oldFieldMap.get(field.name);
+      if (!previous || this.storageClassChanged(previous, field)) {
         // Skip manyToMany fields - they don't get columns, they get junction tables
-        if (
-          field.type === "relationship" &&
-          field.options?.relationType === "manyToMany"
-        ) {
+        if (usesJunctionTable(field)) {
           // Generate junction table instead
           const junctionSQL = this.generateJunctionTable(tableName, field);
           statements.push(junctionSQL);
@@ -616,7 +596,7 @@ ${allColumnDefs.join(",\n")}
           defaultVal = `DEFAULT ${this.getDefaultValueForType(field.type, field)}`;
         }
 
-        const addColName = this.toSnakeCase(field.name);
+        const addColName = toSnakeCase(field.name);
         statements.push(
           `ALTER TABLE ${this.quoteIdentifier(tableName)} ADD COLUMN ${this.quoteIdentifier(addColName)} ${type} ${nullable} ${defaultVal};`.trim()
         );
@@ -654,11 +634,13 @@ ${allColumnDefs.join(",\n")}
 
     // Find fields that were modified to add/remove an index
     for (const field of newFields) {
-      // Component fields have no parent column, so there is no index to add/drop.
-      if (field.type === STORAGE_FORMAT.fieldType) continue;
+      // A field with no parent column has no index to add or drop. Asked through the shared
+      // predicate: a many-to-many relationship has no column either, and indexing one emitted
+      // CREATE INDEX against a name the table does not have, which fails the whole save.
+      if (!fieldProducesColumn(field)) continue;
       const oldField = oldFieldMap.get(field.name);
       if (oldField && oldField.index !== field.index) {
-        const idxCol = this.toSnakeCase(field.name);
+        const idxCol = toSnakeCase(field.name);
         const indexName = `idx_${tableName}_${idxCol}`;
         if (field.index) {
           // Add index
@@ -691,11 +673,13 @@ ${allColumnDefs.join(",\n")}
       // Phase D: skip the renamed source — it's already been handled
       // above as ALTER TABLE RENAME COLUMN.
       if (field.name === renamedFromName) continue;
-      // Component fields never had a parent column, so there is nothing to drop
-      // (and SQLite's DROP COLUMN has no IF EXISTS to tolerate the absence).
-      if (field.type === STORAGE_FORMAT.fieldType) continue;
-      if (!newFieldMap.has(field.name)) {
-        const dropCol = this.toSnakeCase(field.name);
+      // A field with no parent column has nothing to drop, and SQLite's DROP COLUMN has no
+      // IF EXISTS to tolerate the absence. A many-to-many relationship is in that set too: its
+      // links live in a junction table, so dropping one must not touch the parent.
+      if (!fieldProducesColumn(field)) continue;
+      const next = newFieldMap.get(field.name);
+      if (!next || this.storageClassChanged(field, next)) {
+        const dropCol = toSnakeCase(field.name);
         // SQLite doesn't support IF EXISTS on DROP COLUMN
         if (this.dialect === "sqlite") {
           statements.push(
@@ -714,11 +698,15 @@ ${allColumnDefs.join(",\n")}
     // For simplicity, we skip column modifications for SQLite
     if (this.dialect !== "sqlite") {
       for (const field of newFields) {
-        // Component fields have no parent column to alter.
-        if (field.type === STORAGE_FORMAT.fieldType) continue;
+        // A field with no parent column has nothing to alter. Toggling `required` on a
+        // many-to-many emitted ALTER COLUMN against a name the table does not have.
+        if (!fieldProducesColumn(field)) continue;
         const oldField = oldFieldMap.get(field.name);
+        // A storage move is handled by the add and remove loops above; altering the column here
+        // would target one the table does not have yet, or no longer has.
+        if (oldField && this.storageClassChanged(oldField, field)) continue;
         if (oldField && this.isFieldModified(oldField, field)) {
-          const alterCol = this.toSnakeCase(field.name);
+          const alterCol = toSnakeCase(field.name);
           const type = this.mapFieldTypeToSQL(field.type, field.length);
           statements.push(
             `ALTER TABLE ${this.quoteIdentifier(tableName)} ALTER COLUMN ${this.quoteIdentifier(alterCol)} TYPE ${type};`
@@ -851,7 +839,7 @@ ${allColumnDefs.join(",\n")}
     // handling. The caller's add/drop loop will do drop-junction +
     // add-junction (data loss for the join) — admin UI ideally warns
     // before this kind of edit.
-    if (a.type === "relationship" && a.options?.relationType === "manyToMany") {
+    if (usesJunctionTable(a)) {
       return false;
     }
     if (a.type === "relationship") {
@@ -989,11 +977,18 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
    * consolidation rather than with a per-column patch.
    */
   mapFieldTypeToSQL(
-    type: string,
+    declaredType: string,
     length?: number,
     options?: FieldDefinition["options"],
     validation?: FieldDefinition["validation"]
   ): string {
+    // A contributed type persists as its storage primitive, and this map has
+    // never heard of the token it is declared under. Left unresolved it falls
+    // through to `text`, so the column the DDL creates and the column the ORM
+    // binds describe different things. The same resolution `getColumnDescriptor`
+    // and the missing-column scan already make.
+    const type = storageTypeToken({ type: declaredType }) ?? declaredType;
+
     if (this.dialect === "sqlite") {
       // SQLite type mapping. SQLite has dynamic typing, so types are simplified.
       const sqliteTypeMap: Record<string, string> = {
@@ -1008,7 +1003,6 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
         richText: "text",
         json: "text", // JSON stored as text in SQLite
         chips: "text", // Chips stored as JSON text in SQLite
-        blocks: "text", // A page document is JSON, stored as text in SQLite
         relationship: "text", // Store foreign key as text (UUID or ID)
       };
       return sqliteTypeMap[type] || "text";
@@ -1031,7 +1025,6 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
         richText: "text",
         json: "json", // MySQL uses 'json' type, not 'jsonb'
         chips: "json", // Chips stored as JSON array
-        blocks: "json", // A page document is one JSON value
         relationship: "varchar(36)", // Store foreign key as varchar(36) for UUIDs
       };
       return mysqlTypeMap[type] || "text";
@@ -1053,7 +1046,6 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
       richText: "text",
       json: "jsonb",
       chips: "jsonb", // Chips stored as JSON array
-      blocks: "jsonb", // A page document is one JSON value
       relationship: "text", // Store foreign key as text (UUID or ID)
     };
     return typeMap[type] || "text";
@@ -1065,8 +1057,20 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
    */
   private getDefaultValueForType(
     type: string,
-    field?: Pick<FieldDefinition, "blocks">
+    field?: Partial<FieldDefinition>
   ): string {
+    // A contributed type states its own backfill before the primitive's is
+    // derived: `{}` satisfies a json column and then fails every read that
+    // expects the structure the type actually stores. Read from the field as
+    // DECLARED — `type` here may already be the storage primitive, under which
+    // the contributed type is not registered and states nothing.
+    const contributed = pluginEmptyColumnDefault(field ?? { type }, type, {
+      json: serialized => quoteJsonSqlDefault(serialized, this.dialect),
+      literal: (value, storageToken) =>
+        this.formatDefaultValue(value, storageToken),
+    });
+    if (contributed !== undefined) return contributed;
+
     switch (type) {
       case "text":
       case "textarea":
@@ -1088,13 +1092,6 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
       case "repeater":
       case "group":
         return quoteJsonSqlDefault("{}", this.dialect);
-      case "blocks":
-        // A required blocks column needs a document, not an empty object: the
-        // generic `{}` has no formatVersion, kind, or nodes.
-        return quoteJsonSqlDefault(
-          emptyBlockDocumentJson(field?.blocks?.kinds),
-          this.dialect
-        );
       case "chips":
         return quoteJsonSqlDefault("[]", this.dialect);
       case "relationship":
@@ -1112,7 +1109,12 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
   /**
    * Format a default value for SQL (dialect-aware)
    */
-  formatDefaultValue(value: unknown, type: string): string {
+  formatDefaultValue(value: unknown, declaredType: string): string {
+    // Resolved for the same reason the type map is: a contributed token names
+    // none of the branches below, so a structured default would fall through
+    // to the string arm and be written as `[object Object]`.
+    const type = storageTypeToken({ type: declaredType }) ?? declaredType;
+
     // Handle string-like types (need quotes in SQL)
     if (
       type === "text" ||
@@ -1136,7 +1138,7 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
     }
 
     // Handle JSON (needs to be a quoted JSON string)
-    if (type === "json" || type === "blocks") {
+    if (type === "json") {
       return quoteJsonSqlDefault(
         typeof value === "string" ? value : JSON.stringify(value),
         this.dialect

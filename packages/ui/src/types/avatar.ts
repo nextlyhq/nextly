@@ -8,6 +8,7 @@ import type { avatarVariants } from "../components/avatar";
  *
  * Root container for displaying user avatars with image and fallback support.
  * Extends Radix UI Avatar.Root props with size variants.
+ * @experimental
  */
 export type AvatarProps = ComponentPropsWithoutRef<"span"> &
   VariantProps<typeof avatarVariants> & {
@@ -31,6 +32,7 @@ export type AvatarProps = ComponentPropsWithoutRef<"span"> &
  *
  * Note: Both src and alt are optional to support dynamic loading scenarios.
  * When src is undefined/empty, the AvatarFallback will be displayed instead.
+ * @experimental
  */
 export type AvatarImageProps = ComponentPropsWithoutRef<"img">;
 
@@ -39,6 +41,7 @@ export type AvatarImageProps = ComponentPropsWithoutRef<"img">;
  *
  * Displays fallback content (typically user initials) when image fails to load.
  * Extends Radix UI Avatar.Fallback props.
+ * @experimental
  */
 export type AvatarFallbackProps = ComponentPropsWithoutRef<"span"> & {
   /**

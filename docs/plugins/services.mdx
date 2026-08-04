@@ -46,11 +46,11 @@ records should use `{ as: "user", user: ctx.user ?? undefined }`.
 
 | Method | Purpose |
 |---|---|
-| `createEntry(slug, data, opts?)` | Create one entry. |
+| `createEntry(slug, data, opts?)` | Create one entry. Returns `{ message, item, warnings? }`. |
 | `listEntries(slug, query?, opts?)` | List with filter/sort/pagination → `PaginatedResult`. |
 | `findEntryById(slug, id, opts?)` | Fetch one by id. |
-| `updateEntry(slug, id, data, opts?)` | Update one. |
-| `deleteEntry(slug, id, opts?)` | Delete one. |
+| `updateEntry(slug, id, data, opts?)` | Update one. Returns `{ message, item, warnings? }`. |
+| `deleteEntry(slug, id, opts?)` | Delete one. Returns `{ message, item: { id }, warnings? }`. |
 | `count(slug, where?, opts?)` | Count matching rows. |
 | `createMany(slug, rows, opts?)` | Bulk insert → `BatchOperationResult`. |
 
@@ -89,6 +89,29 @@ failure tells you exactly which rows failed:
 const res = await ctx.services.collections.createMany(slug, rows, { as: "system" });
 // { successful, failed, ids: string[], errors: [{ index, error }] }
 ```
+
+## Writes return an envelope
+
+`createEntry`, `updateEntry` and `deleteEntry` resolve to
+`{ message, item, warnings? }` — the same shape the Direct API and the REST API
+return, so the same failure is equally visible however the write was made.
+
+```ts
+const { item, warnings } = await ctx.services.collections.createEntry(
+  slug,
+  data,
+  { as: "system" }
+);
+
+if (warnings) {
+  // The row IS saved. A post-commit hook (`afterCreate` and friends) runs once
+  // the write has committed, so a handler failing there cannot un-save it —
+  // report it, don't retry the write.
+  ctx.logger.warn("side effects failed", { id: item.id, warnings });
+}
+```
+
+`deleteEntry` reports `item` as `{ id }`, since there is no row left to return.
 
 ## When to drop to `ctx.db`
 

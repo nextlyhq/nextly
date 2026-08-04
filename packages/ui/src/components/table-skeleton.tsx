@@ -23,6 +23,7 @@ const GrayBar = ({ className }: { className?: string }) => (
   <Skeleton className={className} />
 );
 
+/** @experimental */
 export interface TableSkeletonProps {
   columns?: number;
   rowCount?: number;
@@ -30,6 +31,7 @@ export interface TableSkeletonProps {
   hideFooter?: boolean;
 }
 
+/** @experimental */
 export const TableSkeleton: React.FC<TableSkeletonProps> = ({
   columns = 5,
   rowCount = 8,

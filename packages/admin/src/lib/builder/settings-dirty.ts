@@ -18,6 +18,7 @@ const COMPARED_KEYS = [
   "status",
   "i18n",
   "versions",
+  "versionsMaxPerDoc",
   "revalidate",
   "webhooks",
 ] as const;

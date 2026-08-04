@@ -26,8 +26,8 @@ describe("schemaFileApi", () => {
     );
   });
 
-  it("writeComponent posts to /_dev/schema/field-group", async () => {
-    await schemaFileApi.writeComponent(entity);
+  it("writeFieldGroup posts to /_dev/schema/field-group", async () => {
+    await schemaFileApi.writeFieldGroup(entity);
     expect(protectedApi.post).toHaveBeenCalledWith(
       "/_dev/schema/field-group",
       entity
@@ -41,12 +41,12 @@ describe("schemaFileApi", () => {
     );
   });
 
-  it("deleteSingle / deleteComponent target the right path", async () => {
+  it("deleteSingle / deleteFieldGroup target the right path", async () => {
     await schemaFileApi.deleteSingle("hero");
     expect(protectedApi.delete).toHaveBeenCalledWith(
       "/_dev/schema/single/hero"
     );
-    await schemaFileApi.deleteComponent("card");
+    await schemaFileApi.deleteFieldGroup("card");
     expect(protectedApi.delete).toHaveBeenCalledWith(
       "/_dev/schema/field-group/card"
     );

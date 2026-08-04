@@ -24,8 +24,6 @@ import {
   timestamp,
 } from "drizzle-orm/mysql-core";
 
-import { users } from "../users/mysql";
-
 // Append-only by application convention — operators should revoke
 // UPDATE / DELETE GRANTs on this table in production for stricter
 // integrity.
@@ -68,17 +66,20 @@ export const activityLog = mysqlTable(
   "activity_log",
   {
     id: varchar("id", { length: 191 }).primaryKey(),
-    userId: varchar("user_id", { length: 191 })
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
-    userName: varchar("user_name", { length: 255 }).notNull(),
-    userEmail: varchar("user_email", { length: 255 }).notNull(),
+    userId: varchar("user_id", { length: 191 }).notNull(),
+    userName: varchar("user_name", { length: 255 }),
+    userEmail: varchar("user_email", { length: 255 }),
     action: varchar("action", { length: 10 }).notNull(), // 'create' | 'update' | 'delete'
     collection: varchar("collection", { length: 255 }).notNull(),
     entryId: varchar("entry_id", { length: 191 }),
     entryTitle: text("entry_title"),
     metadata: text("metadata"), // JSON string for additional context
     createdAt: timestamp("created_at").defaultNow().notNull(),
+    // `datetime`, not `timestamp`: a nullable MySQL TIMESTAMP is subject to
+    // the server's explicit_defaults_for_timestamp mode, which can rewrite it
+    // to NOT NULL DEFAULT CURRENT_TIMESTAMP and make every row read as an
+    // erased actor.
+    identityErasedAt: datetime("identity_erased_at"),
   },
   t => [
     index("idx_activity_log_created_at").on(t.createdAt),

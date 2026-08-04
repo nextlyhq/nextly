@@ -20,15 +20,7 @@
  * @since 1.0.0
  */
 
-// Imported from a leaf data module to avoid the circular dependency that
-// arises when this file imports from collections/config/validate-config and
-// validate-config in turn imports from this file. See shared/sql-reserved.ts
-// for the full rationale.
-import type { DocumentKind } from "@nextlyhq/blocks-engine";
-import { DOCUMENT_KINDS } from "@nextlyhq/blocks-engine";
-
-import { validateBlocksValue } from "../collections/fields/validators/blocks-validator";
-
+import { pluginFieldOptionIssues } from "./lib/plugin-field-options";
 import { RESERVED_SLUGS, SQL_RESERVED_KEYWORDS } from "./sql-reserved";
 
 // ============================================================
@@ -119,8 +111,6 @@ export const VALID_FIELD_TYPES = [
   "chips",
   // Component type
   "component",
-  // Page-builder document
-  "blocks",
 ] as const;
 
 /** Set form of {@link VALID_FIELD_TYPES} for O(1) membership checks. */
@@ -348,12 +338,18 @@ export function validateFieldTypeShared(
       (isCustomType?.(fieldType) ?? false));
 
   if (!isKnown) {
-    errors.push({
-      path: `${path}.type`,
-      // eslint-disable-next-line @typescript-eslint/no-base-to-string
-      message: `Invalid field type '${String(fieldType)}'. Valid types: ${VALID_FIELD_TYPES.join(", ")}`,
-      code: "FIELD_TYPE_INVALID",
-    });
+    // Deferred, not accepted. A plugin contributes its field types when the app
+    // boots, which is after every `define*` call has already run — the config
+    // bundle is evaluated first. Refusing an unrecognised token here therefore
+    // refuses every contributed type, so a plugin field could only be declared
+    // by bypassing these validators entirely.
+    //
+    // A typo is indistinguishable from a not-yet-registered type at this point,
+    // so the answer is not knowable here and the question is asked again at
+    // boot, once `contributes.fieldTypes` has run: see
+    // `assertPluginFieldDeclarations`, which refuses a token no plugin claimed.
+    // `false` still skips the per-type checks below, which have nothing to say
+    // about a type they do not know.
     return false;
   }
 
@@ -370,138 +366,31 @@ export function validateFieldTypeShared(
  * `SELECT_` or `RADIO_` so domain validators surface the correct tag.
  */
 /**
- * A blocks field's default must be a document the same field would accept on
- * write. A code-first default is type-checked but not policy-checked, so a
- * page document on a template-only field, or a block outside `allow`, would
- * otherwise reach the admin and fail only on submit.
+ * Report a plugin type's own declaration checks through the shared error shape.
+ *
+ * The checks themselves live in `pluginFieldOptionIssues`, which the Schema
+ * Builder's zod schema also consumes; this only renders their result, turning
+ * an option-relative path into the absolute one the config validators report.
  */
-/**
- * A blocks field declaring `kinds: []` accepts no document at all, so nothing
- * could ever be stored in it — including the empty document required fields
- * are seeded with. It is rejected here rather than left to fail per write,
- * because the contradiction is in the declaration, not in any value.
- */
-export function validateBlocksPolicyShared(
-  field: { type?: string; blocks?: unknown },
+export function validatePluginFieldOptionsShared(
+  field: { type?: unknown; name?: unknown },
   path: string,
   errors: BaseValidationError[]
 ): void {
-  if (field.type !== "blocks") return;
-  if (field.blocks === undefined) return;
-  const fail = (suffix: string, message: string): void => {
+  for (const issue of pluginFieldOptionIssues(field)) {
     errors.push({
-      path: `${path}.blocks${suffix}`,
-      message,
+      // A returned path names an option, so it is read relative to the field:
+      // the plugin knows its options by name and cannot know its own index.
+      path: issue.path ? `${path}.${issue.path}` : path,
+      message: issue.message,
+      // Always the canonical member. Each domain's error-code union is closed
+      // and public, so emitting a plugin-defined string here would hand a
+      // consumer exhaustively handling those members a value none of them
+      // covers — and the cast at every call site would hide it.
       code: "FIELD_TYPE_INVALID",
     });
-  };
-
-  if (
-    typeof field.blocks !== "object" ||
-    field.blocks === null ||
-    Array.isArray(field.blocks)
-  ) {
-    fail("", "blocks must be an object declaring allow and/or kinds.");
-    return;
-  }
-  const policy = field.blocks as { kinds?: unknown; allow?: unknown };
-
-  // The write-time check calls `.some()` on `allow`, so a non-array here would
-  // surface as a crash on every write rather than as a configuration error.
-  if (policy.allow !== undefined) {
-    if (
-      !Array.isArray(policy.allow) ||
-      policy.allow.some(entry => typeof entry !== "string")
-    ) {
-      fail(".allow", "blocks.allow must be an array of block name strings.");
-    }
-  }
-
-  if (policy.kinds === undefined) return;
-  if (!Array.isArray(policy.kinds)) {
-    fail(".kinds", "blocks.kinds must be an array of document kinds.");
-    return;
-  }
-  if (policy.kinds.length === 0) {
-    fail(
-      ".kinds",
-      "blocks.kinds cannot be empty: the field would accept no document at all. Omit it to accept a page."
-    );
-    return;
-  }
-  // An unrecognized kind is accepted by the field-level check purely because it
-  // appears in this list, so nothing downstream would ever reject it.
-  const unknown = policy.kinds.filter(
-    kind => !(DOCUMENT_KINDS as readonly unknown[]).includes(kind)
-  );
-  if (unknown.length > 0) {
-    fail(
-      ".kinds",
-      `blocks.kinds contains unknown document kinds: ${unknown.map(String).join(", ")}. Accepted: ${DOCUMENT_KINDS.join(", ")}.`
-    );
   }
 }
-
-/**
- * The parts of a declared blocks policy that are safe to enforce.
- *
- * A policy the config validator has already rejected must not also decide how
- * a default is judged: the value checks index into `allow` and compare against
- * `kinds`, so a wrong shape there throws rather than reports.
- */
-function usablePolicy(blocks: unknown): {
-  allow?: string[];
-  kinds?: DocumentKind[];
-} {
-  if (typeof blocks !== "object" || blocks === null || Array.isArray(blocks)) {
-    return {};
-  }
-  const { allow, kinds } = blocks as { allow?: unknown; kinds?: unknown };
-  const policy: { allow?: string[]; kinds?: DocumentKind[] } = {};
-  if (Array.isArray(allow) && allow.every(e => typeof e === "string")) {
-    policy.allow = allow;
-  }
-  if (
-    Array.isArray(kinds) &&
-    kinds.length > 0 &&
-    kinds.every(k => (DOCUMENT_KINDS as readonly unknown[]).includes(k))
-  ) {
-    policy.kinds = kinds as DocumentKind[];
-  }
-  return policy;
-}
-
-export function validateBlocksDefaultShared(
-  field: { type?: string; defaultValue?: unknown; blocks?: unknown },
-  path: string,
-  errors: BaseValidationError[]
-): void {
-  if (field.type !== "blocks") return;
-  const value = field.defaultValue;
-  // A function default produces its value per entry, against data this
-  // validator does not have, so there is nothing to check at config time. It
-  // is checked where it is resolved instead — for a single, before the
-  // auto-created row is inserted.
-  if (value === undefined || typeof value === "function") return;
-  // Only the well-formed parts of the policy are forwarded. A malformed one is
-  // already reported by the policy check, and passing it on would reach
-  // `allow.some(...)` and throw — turning a config with two problems into a
-  // crash instead of the list of errors this validator exists to return.
-  const policy = usablePolicy(field.blocks);
-  for (const issue of validateBlocksValue(
-    value,
-    `${path}.defaultValue`,
-    "defaultValue",
-    policy
-  )) {
-    errors.push({
-      path: `${path}.defaultValue`,
-      message: issue.message,
-      code: "FIELD_DEFAULT_INVALID",
-    });
-  }
-}
-
 export function validateSelectOptionsShared(
   field: Record<string, unknown>,
   path: string,

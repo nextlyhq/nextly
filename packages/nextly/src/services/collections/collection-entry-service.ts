@@ -50,7 +50,7 @@ import type { PaginatedResponse } from "../../types/pagination";
 import type { AccessControlService } from "../access";
 import { BaseService } from "../base-service";
 import type { CollectionFileManager } from "../collection-file-manager";
-import type { ComponentDataService } from "../components/component-data-service";
+import type { FieldGroupDataService } from "../field-groups/field-group-data-service";
 import type { Logger } from "../shared";
 
 import type { CollectionRelationshipService } from "./collection-relationship-service";
@@ -89,7 +89,7 @@ export class CollectionEntryService extends BaseService {
     relationshipService: CollectionRelationshipService,
     hookRegistry: HookRegistry,
     accessControlService: AccessControlService,
-    componentDataService?: ComponentDataService,
+    fieldGroupDataService?: FieldGroupDataService,
     rbacAccessControlService?: RBACAccessControlService,
     /** Normalized localization config (i18n M4) — forwarded to the query service. */
     localization?: SanitizedLocalizationConfig,
@@ -137,7 +137,7 @@ export class CollectionEntryService extends BaseService {
       relationshipService,
       this.accessService,
       this.hookService,
-      componentDataService,
+      fieldGroupDataService,
       localization
     );
     this.mutationService = new CollectionMutationService(
@@ -148,7 +148,7 @@ export class CollectionEntryService extends BaseService {
       relationshipService,
       this.accessService,
       this.hookService,
-      componentDataService,
+      fieldGroupDataService,
       localization
     );
     this.bulkService = new CollectionBulkService(
@@ -221,6 +221,12 @@ export class CollectionEntryService extends BaseService {
      * query service which maps it to a SQL predicate.
      */
     status?: "published" | "draft" | "all";
+    /**
+     * Opt in to the working-draft overlay (draft/published split): a trusted
+     * editor read returns the pending working draft in place of the live row.
+     * Forwarded to the query service, which gates it on update trust.
+     */
+    includeWorkingDraft?: boolean;
     /** Requested content locale (i18n M4) — forwarded to the query service. */
     locale?: string;
     /** Fallback control (`false`/`"none"` disables fallback). */
@@ -550,9 +556,43 @@ export class CollectionEntryService extends BaseService {
     return result;
   }
 
+  /**
+   * Resolve this collection's localized companion verdicts on the pooled connection.
+   *
+   * Call it BEFORE opening a transaction whose body uses the `*InTransaction` methods below.
+   * Those cannot do it themselves: resolving issues a query, a query against a missing relation
+   * aborts the whole transaction on PostgreSQL, and a pooled probe taken while a transaction is
+   * open waits for a connection that transaction will not release.
+   *
+   * Skipping it throws nothing. The write commits and its durable version snapshot and outbound
+   * event silently omit every localized component value.
+   */
+  async warmLocalizedReadiness(collectionName: string): Promise<void> {
+    return this.mutationService.warmLocalizedReadiness(collectionName);
+  }
+
+  /**
+   * Remove a document's pending working-draft sidecar under the same parent-row
+   * lock a draft save takes, so a discard cannot delete a draft that a
+   * concurrent save committed after the discard's checks. The discard handler
+   * has already authorized read and update on the document.
+   */
+  async discardWorkingDraft(params: {
+    collectionName: string;
+    entryId: string;
+  }): Promise<void> {
+    return this.mutationService.discardWorkingDraft(params);
+  }
+
+  // Params are taken from the method being delegated to rather than restated here. Restating them
+  // had already dropped `overrideAccess`, `routeAuthorized` and `transitionAuth`: the object is
+  // forwarded whole, so those kept working at runtime while the type denied they existed, and a
+  // caller doing a trusted server write through this facade could not say so without a cast.
   async createEntryInTransaction(
     tx: TransactionContext,
-    params: { collectionName: string; user?: UserContext },
+    params: Parameters<
+      CollectionMutationService["createEntryInTransaction"]
+    >[1],
     body: Record<string, unknown>
   ): Promise<CollectionServiceResult<unknown>> {
     return this.mutationService.createEntryInTransaction(tx, params, body);
@@ -560,7 +600,9 @@ export class CollectionEntryService extends BaseService {
 
   async updateEntryInTransaction(
     tx: TransactionContext,
-    params: { collectionName: string; entryId: string; user?: UserContext },
+    params: Parameters<
+      CollectionMutationService["updateEntryInTransaction"]
+    >[1],
     body: Record<string, unknown>
   ): Promise<CollectionServiceResult<unknown>> {
     return this.mutationService.updateEntryInTransaction(tx, params, body);

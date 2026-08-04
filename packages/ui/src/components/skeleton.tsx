@@ -74,6 +74,7 @@ import { cn } from "../lib/utils";
  *
  * @see {@link https://ui.shadcn.com/docs/components/skeleton shadcn/ui Skeleton}
  * @see {@link https://adrianroselli.com/2020/11/more-accessible-skeletons.html More Accessible Skeletons}
+ * @experimental
  */
 const Skeleton = React.forwardRef<HTMLDivElement, SkeletonProps>(
   ({ className, ...props }, ref) => {
@@ -94,6 +95,7 @@ const Skeleton = React.forwardRef<HTMLDivElement, SkeletonProps>(
 
 Skeleton.displayName = "Skeleton";
 
+/** @experimental */
 export type SkeletonProps = React.ComponentProps<"div">;
 
 export { Skeleton };

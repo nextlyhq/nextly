@@ -21,6 +21,15 @@ export default function singleReadRule({
     // No predicate: the caller alone decides, so nothing is filtered.
     case "always":
       return true;
+    // Admitted here so a test can pair this caller with a TARGET rule that
+    // refuses only some of the rows a relationship points at.
+    case "partial":
+      return true;
+    // Decides on the SHAPE of a relationship: true only while the target is a
+    // populated row. Distinguishes a view that was shown a target the response
+    // will withhold from one that was not.
+    case "needs-populated-author":
+      return typeof (data as { author?: unknown })?.author === "object";
     // A dotted path, whose suffix translation discards while comparing the base
     // column instead — a different predicate than the rule states.
     case "dotted":

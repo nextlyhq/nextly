@@ -41,6 +41,7 @@ describe("settingsAreDirty", () => {
     status: { ...base, status: false },
     i18n: { ...base, i18n: true },
     versions: { ...base, versions: true },
+    versionsMaxPerDoc: { ...base, versionsMaxPerDoc: 10 },
     revalidate: { ...base, revalidate: false },
     webhooks: { ...base, webhooks: false },
   };

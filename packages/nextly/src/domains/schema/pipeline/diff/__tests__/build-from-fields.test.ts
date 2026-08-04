@@ -229,10 +229,9 @@ describe("buildDesiredTableFromFields - postgresql user fields", () => {
     expect(findColumn(table.columns, "published_at")?.type).toBe("timestamp");
   });
 
-  it("maps json/repeater/group/blocks fields to jsonb", () => {
+  it("maps json/repeater/group fields to jsonb", () => {
     const fields: MinimalField[] = [
       { name: "tags", type: "chips" },
-      { name: "blocks_field", type: "blocks" },
       { name: "meta", type: "json" },
     ];
 
@@ -243,7 +242,6 @@ describe("buildDesiredTableFromFields - postgresql user fields", () => {
     );
 
     expect(findColumn(table.columns, "tags")?.type).toBe("jsonb");
-    expect(findColumn(table.columns, "blocks_field")?.type).toBe("jsonb");
     expect(findColumn(table.columns, "meta")?.type).toBe("jsonb");
   });
 
@@ -332,7 +330,7 @@ describe("buildDesiredTableFromFields - mysql user fields", () => {
     expect(findColumn(table.columns, "price")?.type).toBe("double");
   });
 
-  it("maps json/blocks/group fields to json", () => {
+  it("maps json/group fields to json", () => {
     const fields: MinimalField[] = [{ name: "meta", type: "json" }];
 
     const table = buildDesiredTableFromFields(
@@ -410,7 +408,7 @@ describe("buildDesiredTableFromFields - sqlite user fields", () => {
     expect(findColumn(table.columns, "ts")?.type).toBe("integer");
   });
 
-  it("maps json/blocks/group fields to lowercase 'text' (no native json)", () => {
+  it("maps json/group fields to lowercase 'text' (no native json)", () => {
     const fields: MinimalField[] = [{ name: "meta", type: "json" }];
 
     const table = buildDesiredTableFromFields(
@@ -493,7 +491,7 @@ describe("buildDesiredTableFromFields with status enabled", () => {
 });
 
 describe("buildDesiredTableFromComponentFields - per-field indexes", () => {
-  // ComponentSchemaService creates idx_<table>_<column> for an indexed field
+  // FieldGroupSchemaService creates idx_<table>_<column> for an indexed field
   // and uq_<table>_<column> for a unique one. The snapshot has to carry them
   // too: it is what the index restore replays after a SQLite rebuild, and a
   // unique index missing from it is a constraint that silently disappears.
@@ -562,5 +560,48 @@ describe("owner index", () => {
     expect(table.indexes?.map(i => i.name)).not.toContain(
       "idx_comp_hero_created_by"
     );
+  });
+});
+
+/**
+ * 🔴 The discriminator is a SYSTEM column, so its name is never a preference.
+ *
+ * The only two spellings are the two storage generations, and which one a table
+ * carries is a fact about that table. A desired shape that names the other one
+ * turns the diff into "add this column, drop that one" — a destructive pair the
+ * classifier refuses and fresh-push strips, so the operation never applies and
+ * never goes away, and every later apply carries it.
+ */
+describe("buildDesiredTableFromComponentFields - the discriminator column", () => {
+  const DIALECTS = ["postgresql", "mysql", "sqlite"] as const;
+  const noFields = [] as unknown as Parameters<
+    typeof buildDesiredTableFromComponentFields
+  >[1];
+
+  describe.each(DIALECTS)("%s", dialect => {
+    it("writes the spelling this release's DDL creates by default", () => {
+      const names = buildDesiredTableFromComponentFields(
+        "comp_hero",
+        noFields,
+        dialect
+      ).columns.map(column => column.name);
+
+      expect(names).toContain("_component_type");
+      expect(names).not.toContain("_field_group_type");
+    });
+
+    // Both halves matter: naming the migrated column is not enough on its own,
+    // because leaving the legacy one in the desired shape is what emits the ADD.
+    it("writes the migrated spelling when the table carries it", () => {
+      const names = buildDesiredTableFromComponentFields(
+        "fg_hero",
+        noFields,
+        dialect,
+        { typeColumn: "_field_group_type" }
+      ).columns.map(column => column.name);
+
+      expect(names).toContain("_field_group_type");
+      expect(names).not.toContain("_component_type");
+    });
   });
 });

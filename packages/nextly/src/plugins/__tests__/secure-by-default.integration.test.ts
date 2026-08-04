@@ -83,8 +83,11 @@ describe("secure-by-default write path (B3/T1, D35)", () => {
       { title: "y" },
       { as: "system" }
     );
-    expect(created).toBeTruthy();
-    expect((created as { title?: string }).title).toBe("y");
+    expect(created.item).toBeTruthy();
+    expect((created.item as { title?: string }).title).toBe("y");
+    // A clean write carries no `warnings` key at all, so a plugin branching on
+    // its presence is not told about a failure that did not happen.
+    expect(created.warnings).toBeUndefined();
     expect(beforeCreate.fired).toBeGreaterThanOrEqual(1);
   });
 });

@@ -14,5 +14,4 @@ export * from "./supports";
 export * from "./motion";
 export * from "./tokens";
 export * from "./templates";
-export * from "./revisions";
 export * from "./embed-sanitize";

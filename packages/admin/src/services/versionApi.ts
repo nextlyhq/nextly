@@ -9,8 +9,30 @@
  * @module services/versionApi
  */
 
+import type {
+  FieldDiff,
+  FieldDisplay,
+  ListItemDiff,
+  RelationTarget,
+  TextSegment,
+  ValueFieldDiff,
+  VersionDiff,
+} from "nextly/api/versions-diff";
+
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import type { ListResponse } from "@admin/lib/api/response-types";
+
+// The diff wire types live in core (the engine produces them); re-exported here
+// so admin components import them from the same place as the other version types.
+export type {
+  FieldDiff,
+  FieldDisplay,
+  ListItemDiff,
+  RelationTarget,
+  TextSegment,
+  ValueFieldDiff,
+  VersionDiff,
+};
 
 /**
  * Which document's history to read.
@@ -64,6 +86,8 @@ export interface ListVersionsParams {
    * not an opaque token.
    */
   cursor?: number;
+  /** Scope the listing to one locale's versions. Absent lists every locale. */
+  locale?: string;
 }
 
 /** Base path for a scope's history. */
@@ -90,6 +114,12 @@ export interface SetVersionLabelResponse {
   item: VersionMeta;
 }
 
+/** What a discard reports back: the live published document, now authoritative. */
+export interface DiscardWorkingDraftResponse {
+  message: string;
+  item: Record<string, unknown>;
+}
+
 export const versionApi = {
   list: (
     scope: VersionScope,
@@ -101,6 +131,8 @@ export const versionApi = {
     // so an absent one must stay absent rather than become "undefined".
     if (params.cursor !== undefined)
       search.set("cursor", String(params.cursor));
+    // Only sent when a locale filter is active; absent lists every locale.
+    if (params.locale !== undefined) search.set("locale", params.locale);
 
     const query = search.toString();
     return protectedApi.get<VersionListResponse>(
@@ -141,4 +173,40 @@ export const versionApi = {
       `${basePath(scope)}/${versionNo}`,
       { label }
     ),
+
+  /**
+   * Discard a collection entry's pending working draft (draft/published split),
+   * reverting the editor to the live published row. A DELETE on the sidecar
+   * sub-resource; the response carries the live published document.
+   *
+   * Collection-only: the split gives a published document a separate draft head,
+   * which a Single — one row, no published/draft pair — never has.
+   */
+  discardWorkingDraft: (
+    scope: Extract<VersionScope, { kind: "collection" }>
+  ): Promise<DiscardWorkingDraftResponse> =>
+    protectedApi.delete<DiscardWorkingDraftResponse>(
+      `${basePath(scope)}/working-draft`
+    ),
+
+  /**
+   * Compare two versions. A read of history, gated and field-redacted exactly
+   * like reading one version; both versions must share a locale. `from`/`to`
+   * are ordered older -> newer by the caller.
+   */
+  diff: (
+    scope: VersionScope,
+    from: number,
+    to: number,
+    opts: { modifiedOnly?: boolean } = {}
+  ): Promise<VersionDiff> => {
+    const search = new URLSearchParams({
+      from: String(from),
+      to: String(to),
+    });
+    if (opts.modifiedOnly) search.set("modifiedOnly", "1");
+    return protectedApi.get<VersionDiff>(
+      `${basePath(scope)}/diff?${search.toString()}`
+    );
+  },
 };

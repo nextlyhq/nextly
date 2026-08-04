@@ -9,7 +9,7 @@
  */
 
 import type { FieldConfig } from "nextly/config";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   Alert,
@@ -32,10 +32,18 @@ import {
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import type { VersionScope } from "@admin/services/versionApi";
 
+import { VersionDiffView } from "./diff/VersionDiffView";
 import { RestoreConfirmDialog } from "./RestoreConfirmDialog";
 import { VersionLabelDialog } from "./VersionLabelDialog";
+import { VersionLocaleFilter } from "./VersionLocaleFilter";
 import { VersionPreview } from "./VersionPreview";
 import { VersionRow } from "./VersionRow";
+
+// How many extra history pages the panel will auto-fetch while searching for a
+// previewed version's previous same-locale version before deferring to the
+// manual "Load more" control. Bounds the search in a long, retention-disabled,
+// multi-locale history where a lone-locale row would otherwise page to the end.
+const MAX_AUTO_PREVIOUS_PAGES = 3;
 
 export interface VersionHistorySheetProps {
   open: boolean;
@@ -55,6 +63,13 @@ export interface VersionHistorySheetProps {
    * about whether this change is publicly visible.
    */
   liveStatus?: string | null;
+  /**
+   * Whether the document's entity is localized. This is the authoritative
+   * signal for the locale filter: a localized document can record shared-field
+   * writes with a null locale, so the loaded rows alone cannot prove one way or
+   * the other. Absent, the panel falls back to inferring it from the rows.
+   */
+  entityLocalized?: boolean;
 }
 
 function ListSkeleton() {
@@ -80,27 +95,81 @@ export function VersionHistorySheet({
   fields,
   canRestore = false,
   liveStatus = null,
+  entityLocalized,
 }: VersionHistorySheetProps) {
   const [selected, setSelected] = useState<number | null>(null);
+  // The version pair being compared (older -> newer), or null when not
+  // comparing. Compare is a third mode of the panel alongside list and preview.
+  const [comparing, setComparing] = useState<{
+    from: number;
+    to: number;
+  } | null>(null);
   const [confirmingRestore, setConfirmingRestore] = useState(false);
   // The version being renamed, which is not necessarily the one being previewed
   // — an editor can name a row without opening it.
   const [renaming, setRenaming] = useState<number | null>(null);
+  // Active locale filter for the listing, or undefined for every locale. Only
+  // meaningful for a localized document; the filter control hides otherwise.
+  const [localeFilter, setLocaleFilter] = useState<string | undefined>(
+    undefined
+  );
 
   // Reopening the panel should start at the list. Without this the previously
   // previewed version would still be showing, which reads as a stale panel.
   useEffect(() => {
     if (!open) {
       setSelected(null);
+      setComparing(null);
       setConfirmingRestore(false);
       // The rename dialog is mounted outside the panel, so closing the panel
       // does not close it. Left set, it would stay on screen over a dismissed
       // panel, or reappear the moment the panel was reopened.
       setRenaming(null);
+      // Start every open showing all locales rather than a filter left from a
+      // previous document.
+      setLocaleFilter(undefined);
     }
   }, [open]);
 
-  const list = useVersions({ scope, enabled: open });
+  // Identity of the document this sheet is bound to, as a stable string so a
+  // re-created `scope` object with the same target does not read as a change.
+  const scopeId =
+    scope.kind === "single"
+      ? `single:${scope.slug}:${scope.documentId ?? ""}`
+      : `collection:${scope.slug}:${scope.entryId ?? ""}`;
+
+  // Reset every mode when the document changes under a still-open sheet: the
+  // custom admin router can navigate between entries without unmounting. This
+  // resets DURING render, not in an effect, so the very first render under the
+  // new scope already has the modes cleared. An effect would run one render too
+  // late, letting that interim render mount the diff view with the previous
+  // document's version pair, fetch it against the new document, and briefly
+  // paint the old diff via keepPreviousData.
+  const [renderedScopeId, setRenderedScopeId] = useState(scopeId);
+  if (renderedScopeId !== scopeId) {
+    setRenderedScopeId(scopeId);
+    setSelected(null);
+    setComparing(null);
+    setConfirmingRestore(false);
+    setRenaming(null);
+    // A different document may not have the previously filtered locale at all,
+    // so the filter resets with the rest of the panel's per-document state.
+    setLocaleFilter(undefined);
+  }
+
+  const list = useVersions({ scope, enabled: open, locale: localeFilter });
+  // Destructured so the boundary-fetch effect can depend on the paging members
+  // by identity rather than on the whole query object, which changes each render.
+  // `isRefetching` is a whole-list revalidation (not a page fetch), during which
+  // the cached head may be one save behind the server.
+  const {
+    hasNextPage,
+    isFetchingNextPage,
+    isFetchNextPageError,
+    isRefetching,
+    isRefetchError,
+    fetchNextPage,
+  } = list;
   const detail = useVersion({ scope, versionNo: selected, enabled: open });
 
   const restore = useRestoreVersion({
@@ -131,6 +200,122 @@ export function VersionHistorySheet({
   });
 
   const versions = list.data?.pages.flatMap(page => page.items) ?? [];
+
+  // Whether THIS document is localized, not just whether the app is. The
+  // authoritative signal is the entity's own localization flag: a localized
+  // document can record shared-field writes with a null locale, so a loaded page
+  // that happens to hold only such rows (or only one locale) cannot prove it
+  // either way. When the flag is not supplied, fall back to inferring it — any
+  // locale present in the history, or an active filter (which could not have
+  // been set on a non-localized document).
+  const isLocalizedDocument =
+    entityLocalized ??
+    (localeFilter !== undefined || versions.some(v => v.locale !== null));
+
+  // Compare targets for the version being previewed. A comparison must stay
+  // within one locale (the server rejects a cross-locale pair), so both the
+  // "current" and "previous" targets are drawn only from versions sharing the
+  // selected row's locale. "Previous" is the next-older row in that set, not
+  // `selected - 1`, since retention can leave gaps in the numbering.
+  const selectedLocale =
+    selected === null
+      ? null
+      : (versions.find(v => v.versionNo === selected)?.locale ?? null);
+  const sameLocaleVersions =
+    selected === null
+      ? []
+      : versions.filter(
+          v => v.versionNo !== null && (v.locale ?? null) === selectedLocale
+        );
+  const latestVersionNo = sameLocaleVersions[0]?.versionNo ?? null;
+  const sameLocaleIndex = sameLocaleVersions.findIndex(
+    v => v.versionNo === selected
+  );
+  const previousVersionNo =
+    sameLocaleIndex >= 0
+      ? (sameLocaleVersions[sameLocaleIndex + 1]?.versionNo ?? null)
+      : null;
+  // The previewed version must still be in the refreshed list. Retention can
+  // prune it out from under the preview (a save in another tab, then a focus
+  // refetch), and comparing a version that no longer exists would request a diff
+  // whose `from` 404s.
+  const selectedPresent =
+    selected !== null && versions.some(v => v.versionNo === selected);
+  // "Current" is only offered once the list has revalidated: reopening after a
+  // save serves the cached head while `staleTime: 0` refetches, and comparing
+  // against that stale head would mislabel an outdated version as current. A
+  // failed revalidation clears `isRefetching` but leaves the head stale, so
+  // `isRefetchError` keeps the action disabled until a fetch succeeds.
+  const canCompareCurrent =
+    selectedPresent &&
+    latestVersionNo !== null &&
+    selected !== latestVersionNo &&
+    !isRefetching &&
+    !isRefetchError;
+  // Same freshness gate as "current": a stale or failed revalidation could point
+  // "previous" at a version retention has already pruned, 404-ing the diff.
+  const canComparePrevious =
+    selectedPresent &&
+    previousVersionNo !== null &&
+    !isRefetching &&
+    !isRefetchError;
+
+  // When previewing a version whose previous same-locale version has not loaded
+  // yet, page forward until it resolves or history runs out. Interleaved locales
+  // can place that previous version beyond the current page even when the
+  // selected row is not the last one loaded overall, so this keys off "no
+  // previous target found" rather than the loaded bottom. It stops after a
+  // failed fetch (React Query leaves `hasNextPage` true while `isFetchingNextPage`
+  // clears, which would otherwise spin the pager) and after a bounded number of
+  // pages, so a lone-locale version in a long history does not walk the whole
+  // list to prove no target exists. The manual "Load more" control stays
+  // available to search deeper.
+  const previousSearchRef = useRef<{
+    scopeId: string | null;
+    selected: number | null;
+    pages: number;
+  }>({
+    scopeId: null,
+    selected: null,
+    pages: 0,
+  });
+  useEffect(() => {
+    if (selected === null || canComparePrevious) return;
+    // Do not page while a head revalidation is running OR has failed. Firing
+    // `fetchNextPage` mid-revalidation would cancel it (default `cancelRefetch`),
+    // and firing it after a failed one would clear `isRefetchError` without
+    // refreshing the stale head, both re-enabling "Compare with current" against
+    // a stale head. Paging resumes once a revalidation succeeds.
+    if (isRefetching || isRefetchError) return;
+    const search = previousSearchRef.current;
+    // Keyed by document too: version numbers repeat across documents, so a spent
+    // budget for version N in one document must not suppress paging for version N
+    // in another.
+    if (search.scopeId !== scopeId || search.selected !== selected) {
+      search.scopeId = scopeId;
+      search.selected = selected;
+      search.pages = 0;
+    }
+    if (
+      hasNextPage &&
+      !isFetchingNextPage &&
+      !isFetchNextPageError &&
+      search.pages < MAX_AUTO_PREVIOUS_PAGES
+    ) {
+      search.pages += 1;
+      void fetchNextPage();
+    }
+  }, [
+    scopeId,
+    selected,
+    canComparePrevious,
+    isRefetching,
+    isRefetchError,
+    hasNextPage,
+    isFetchingNextPage,
+    isFetchNextPageError,
+    fetchNextPage,
+  ]);
 
   // The row being renamed, so the dialog opens seeded with its current name
   // rather than blank.
@@ -163,16 +348,78 @@ export function VersionHistorySheet({
         className="w-[480px] sm:max-w-[480px] p-0 flex flex-col"
       >
         <SheetHeader className="p-4 border-b border-border">
-          <SheetTitle>
-            {selected === null ? "Version history" : `Version ${selected}`}
-          </SheetTitle>
+          <div className="flex items-center justify-between gap-2">
+            <SheetTitle>
+              {comparing !== null
+                ? `Compare ${comparing.from} → ${comparing.to}`
+                : selected === null
+                  ? "Version history"
+                  : `Version ${selected}`}
+            </SheetTitle>
+            {/* Locale filter, only while browsing the list (a chosen version or
+                a compare pair is already locale-fixed) and only for a document
+                whose own history carries locales — so it never appears on a
+                non-localized document in an otherwise localized app. */}
+            {comparing === null && selected === null && isLocalizedDocument && (
+              <VersionLocaleFilter
+                value={localeFilter}
+                onChange={locale => {
+                  // Changing the visible locale set can drop the previewed or
+                  // compared version out of view, so clear both modes.
+                  setLocaleFilter(locale);
+                  setSelected(null);
+                  setComparing(null);
+                }}
+              />
+            )}
+          </div>
           <SheetDescription className="sr-only">
             Past versions of this document, newest first.
           </SheetDescription>
         </SheetHeader>
 
+        {/* A head revalidation (on open or window focus) can fail after history
+            has already loaded. The rows stay on screen but may be stale, so the
+            freshness gate hides "Compare with current" and disables "Load more"
+            until a refetch succeeds — which, without this, only a reopen or
+            another window focus could trigger. This keeps the gate but gives the
+            recovery a visible control. Suppressed in compare mode (the pair is
+            already chosen, so head staleness no longer affects what is shown) and
+            when there are no rows (the full-panel load error covers that). */}
+        {isRefetchError && comparing === null && versions.length > 0 ? (
+          <div className="px-4 pt-4">
+            <Alert variant="warning" role="status">
+              <div className="flex flex-1 flex-wrap items-center justify-between gap-3">
+                <AlertDescription>
+                  Couldn&apos;t refresh this history. It may be out of date.
+                </AlertDescription>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  // Disabled while a retry is in flight; the same refetch also
+                  // fires from window focus, so this reflects either trigger.
+                  disabled={isRefetching}
+                  onClick={() => void list.refetch()}
+                >
+                  {isRefetching ? "Retrying…" : "Try again"}
+                </Button>
+              </div>
+            </Alert>
+          </div>
+        ) : null}
+
         <div className="flex-1 overflow-y-auto">
-          {selected !== null ? (
+          {comparing !== null ? (
+            // Keyed by the pair so a different comparison always mounts fresh,
+            // and `keepPreviousData` can never carry one pair's fields into
+            // another while the new diff loads.
+            <VersionDiffView
+              key={`${comparing.from}-${comparing.to}`}
+              scope={scope}
+              from={comparing.from}
+              to={comparing.to}
+            />
+          ) : selected !== null ? (
             <VersionPreview
               versionNo={selected}
               fields={fields}
@@ -181,10 +428,15 @@ export function VersionHistorySheet({
               error={detail.error}
               onRetry={() => void detail.refetch()}
               locale={detail.data?.locale ?? null}
+              sourceVersionNo={detail.data?.sourceVersionNo ?? null}
             />
           ) : list.isLoading ? (
             <ListSkeleton />
-          ) : list.isError ? (
+          ) : list.isError && versions.length === 0 ? (
+            // Only a genuine load failure (no pages) replaces the panel. A failed
+            // speculative next-page (from the automatic previous-version search)
+            // also flips the query to error, but the loaded history stays on
+            // screen; its "Load more" control offers the retry.
             <div className="p-4 flex flex-col gap-3">
               <Alert variant="destructive">
                 <AlertDescription>
@@ -220,16 +472,21 @@ export function VersionHistorySheet({
                 />
               ))}
 
-              {list.hasNextPage ? (
+              {hasNextPage ? (
                 <div className="p-4">
                   <Button
                     variant="outline"
                     size="sm"
                     className="w-full"
-                    disabled={list.isFetchingNextPage}
-                    onClick={() => void list.fetchNextPage()}
+                    // Disabled while the head is revalidating or its revalidation
+                    // failed: `fetchNextPage` would otherwise cancel the refetch
+                    // or clear the error, leaving a stale head trusted as current.
+                    disabled={
+                      isFetchingNextPage || isRefetching || isRefetchError
+                    }
+                    onClick={() => void fetchNextPage()}
                   >
-                    {list.isFetchingNextPage ? "Loading…" : "Load more"}
+                    {isFetchingNextPage ? "Loading…" : "Load more"}
                   </Button>
                 </div>
               ) : null}
@@ -237,8 +494,17 @@ export function VersionHistorySheet({
           )}
         </div>
 
-        <div className="p-4 border-t border-border flex items-center gap-2">
-          {selected !== null ? (
+        <div className="p-4 border-t border-border flex flex-wrap items-center gap-2">
+          {comparing !== null ? (
+            // Compare returns to the version that was on screen, not the list.
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setComparing(null)}
+            >
+              Back
+            </Button>
+          ) : selected !== null ? (
             <>
               <Button
                 variant="outline"
@@ -247,8 +513,30 @@ export function VersionHistorySheet({
               >
                 Back to history
               </Button>
-              {/* Offered only from the preview: restoring is easier to get
-                  right having seen what the version actually holds. */}
+              {/* Compare is offered from the preview, where a version is already
+                  chosen: against the one before it, and against the current. */}
+              {canComparePrevious && previousVersionNo !== null ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() =>
+                    setComparing({ from: previousVersionNo, to: selected })
+                  }
+                >
+                  Compare with previous
+                </Button>
+              ) : null}
+              {canCompareCurrent && latestVersionNo !== null ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() =>
+                    setComparing({ from: selected, to: latestVersionNo })
+                  }
+                >
+                  Compare with current
+                </Button>
+              ) : null}
               {/* Available only once the snapshot is on screen: restoring is
                   offered from the preview so the choice is made having seen
                   what the version holds, which a skeleton or an error is not. */}

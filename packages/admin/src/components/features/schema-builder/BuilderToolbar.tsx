@@ -25,7 +25,15 @@ type Props = {
 const KIND_BREADCRUMB: Record<BuilderConfig["kind"], string> = {
   collection: "Collections",
   single: "Singles",
-  component: "Components",
+  "field-group": "Field Groups",
+};
+
+// Singular wording for prose. The kind is a slug, so interpolating it directly
+// into a sentence reads as "This field-group is managed in code".
+const KIND_NOUN: Record<BuilderConfig["kind"], string> = {
+  collection: "collection",
+  single: "single",
+  "field-group": "field group",
 };
 
 export function BuilderToolbar({
@@ -38,7 +46,7 @@ export function BuilderToolbar({
 }: Props) {
   const saveDisabled = unsavedCount === 0 || locked;
   const lockedSaveTitle = locked
-    ? `This ${config.kind} is managed in code. Update its definition in code to make changes.`
+    ? `This ${KIND_NOUN[config.kind]} is managed in code. Update its definition in code to make changes.`
     : undefined;
 
   return (

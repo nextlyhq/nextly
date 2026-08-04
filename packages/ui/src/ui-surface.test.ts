@@ -12,11 +12,17 @@
  * with `"use client"` and pulls in the whole component tree, which does not
  * belong in a Node test process.
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+
+import {
+  DECLARATION_ENTRIES,
+  ensureDeclarations,
+} from "./__tests__/ensure-declarations";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { describe, expect, it } from "vitest";
+import ts from "typescript";
+import { beforeAll, describe, expect, it } from "vitest";
 
 const SRC = path.dirname(fileURLToPath(import.meta.url));
 const PKG_ROOT = path.join(SRC, "..");
@@ -235,5 +241,275 @@ describe("ui STABILITY.md ledger", () => {
     expect(documentedPublic().names).toContain("toast");
     expect(documentedPublic().names.length).toBeGreaterThan(20);
     expect(publicPerSource().size).toBeGreaterThan(20);
+  });
+});
+
+/**
+ * The barrel's tags are a ledger; the tags on the declarations are what ships.
+ *
+ * They are the same fact written twice, which is only safe if something forces
+ * them to agree. The barrel's tags reached no consumer at all until the
+ * declarations carried them too: the DTS bundler flattens every re-export into
+ * one `export { … }` clause and drops the doc comment that sat on the export
+ * statement, so `@experimental` was visible in the source and absent from the
+ * published `.d.ts` that editors and API tooling actually read.
+ *
+ * Reads the BUILT declarations, so `turbo.json` makes this package's `test`
+ * task depend on its own `build`. It fails rather than skipping when they are
+ * missing: a guard that quietly does nothing on a clean checkout is the same
+ * as no guard, and this one exists precisely because something was silently
+ * absent from an artifact.
+ */
+describe("ui release tags reach the published types", () => {
+  // Vitest initialises a global setup once per project, so a watch rerun after
+  // an edit would otherwise read declarations built before it. Regenerating
+  // here — where it is re-evaluated every run — means the assertions below
+  // always describe the current source rather than merely detecting that they
+  // do not.
+  beforeAll(() => {
+    ensureDeclarations();
+  });
+
+  /** Symbols re-exported from a dependency, whose declarations are not ours. */
+  const FOREIGN = new Set(["toast", "ToasterProps"]);
+
+  const distTypes = path.join(PKG_ROOT, "dist", "index.d.ts");
+
+  /** Each declaration's name, mapped to the release tag written above it. */
+  function taggedPerDeclaration(built: string): Map<string, string> {
+    const byName = new Map<string, string>();
+    for (const m of built.matchAll(
+      // A doc block, the tag inside it, then the declaration it belongs to.
+      // Anchored on `/**` so the capture cannot start mid-comment and pick up
+      // a tag belonging to something further up the file.
+      /\/\*\*(?:(?!\*\/)[\s\S])*?@(public|experimental)(?:(?!\*\/)[\s\S])*\*\/\s*(?:declare\s+)?(?:const|function|interface|type|class)\s+([A-Za-z0-9_$]+)/g
+    )) {
+      byName.set(m[2], m[1]);
+    }
+    return byName;
+  }
+
+  /** Every published entry point, as `package.json` exports names them. */
+  const DIST_ENTRIES = DECLARATION_ENTRIES;
+
+  it("has built declarations to check", () => {
+    for (const entry of DIST_ENTRIES) {
+      expect(
+        existsSync(path.join(PKG_ROOT, "dist", entry)),
+        `dist/${entry} is missing; run \`pnpm --filter @nextlyhq/ui build\`.`
+      ).toBe(true);
+    }
+    expect(
+      existsSync(distTypes),
+      `${distTypes} is missing. This guard reads the built declarations, so ` +
+        "run `pnpm --filter @nextlyhq/ui build` first. It fails rather than " +
+        "skipping, because a guard that does nothing on a clean checkout is " +
+        "indistinguishable from a passing one."
+    ).toBe(true);
+  });
+
+  it("carries every barrel tag through to dist/index.d.ts, with the same tag", () => {
+    const built = readFileSync(distTypes, "utf8");
+    const declared = taggedPerDeclaration(built);
+    const tagged = taggedPerSource();
+
+    const missing: string[] = [];
+    const mismatched: string[] = [];
+    for (const [kind, names] of [
+      ["public", tagged.public],
+      ["experimental", tagged.experimental],
+    ] as const) {
+      for (const name of names) {
+        if (FOREIGN.has(name)) continue;
+        const actual = declared.get(name);
+        if (actual === undefined) {
+          missing.push(name);
+          // The tag kind is compared as well as its presence. Checking only
+          // that SOME tag reached the declaration let a symbol ship
+          // `@experimental` while the ledger promised `@public`, which is a
+          // worse failure than no tag at all: it advertises a guarantee
+          // nobody agreed to.
+        } else if (actual !== kind) {
+          mismatched.push(`${name}: barrel @${kind}, declaration @${actual}`);
+        }
+      }
+    }
+
+    expect(
+      missing.sort(),
+      "Tagged in index.ts but the tag does not reach dist/index.d.ts. The " +
+        "bundler keeps a doc comment attached to a DECLARATION and drops one " +
+        "attached to an export statement, so the tag has to live on the " +
+        `declaration: ${missing.join(", ")}`
+    ).toEqual([]);
+    expect(
+      mismatched.sort(),
+      `The published tag contradicts the ledger: ${mismatched.join("; ")}`
+    ).toEqual([]);
+  });
+
+  it("gives a prop type the same tag as its component", () => {
+    // STABILITY.md states this as a guarantee, and it is not a convention
+    // anyone has to remember: a stable component whose props type is
+    // experimental cannot be wrapped or forwarded to stably, so the weaker tag
+    // silently withdraws what the component promises. It had drifted on twenty
+    // of them, all in that direction.
+    const tagged = taggedPerSource();
+    const kindOf = (name: string): string | undefined =>
+      tagged.public.has(name)
+        ? "public"
+        : tagged.experimental.has(name)
+          ? "experimental"
+          : undefined;
+
+    const mismatched: string[] = [];
+    for (const name of [...tagged.public, ...tagged.experimental]) {
+      if (!name.endsWith("Props")) continue;
+      const component = name.slice(0, -"Props".length);
+      const componentKind = kindOf(component);
+      // Only checked where the component is exported too; a props type for
+      // something not on the surface has no component tag to agree with.
+      if (componentKind === undefined) continue;
+      const propKind = kindOf(name);
+      if (propKind !== componentKind) {
+        mismatched.push(
+          `${name} @${propKind} but ${component} @${componentKind}`
+        );
+      }
+    }
+    expect(
+      mismatched.sort(),
+      "STABILITY.md: prop types carry the same guarantee as the component they " +
+        `belong to.\n${mismatched.join("\n")}`
+    ).toEqual([]);
+  });
+
+  it("tags every published entry point, not only the barrel", () => {
+    // `cn` and `uiPreset` ship from their own subpaths and STABILITY.md
+    // classifies them, so a consumer importing `@nextlyhq/ui/utils` should see
+    // the same stability metadata as one importing the root. A guard that reads
+    // only `index.d.ts` reports success while those subpaths carry none.
+    for (const entry of DIST_ENTRIES) {
+      const built = readFileSync(path.join(PKG_ROOT, "dist", entry), "utf8");
+      expect(
+        /@(?:public|experimental)/.test(built),
+        `dist/${entry} carries no release tag; its declarations need one on ` +
+          "the declaration itself, not on an export statement."
+      ).toBe(true);
+    }
+  });
+
+  it("checks declarations that are newer than the source", () => {
+    // A global setup runs once per Vitest project, not once per rerun, so in
+    // watch mode an edited tag would otherwise be compared against the
+    // declarations built before the edit. Staleness is asserted here, where it
+    // is re-evaluated on every run, rather than assumed by the setup.
+    const newestSource = (dir: string): number => {
+      let newest = 0;
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          newest = Math.max(newest, newestSource(full));
+          continue;
+        }
+        if (!/\.(ts|tsx)$/.test(entry.name)) continue;
+        newest = Math.max(newest, statSync(full).mtimeMs);
+      }
+      return newest;
+    };
+    expect(
+      statSync(distTypes).mtimeMs,
+      "dist/index.d.ts predates the newest source file, so these assertions " +
+        "would be checking declarations that no longer describe the code. " +
+        "Rebuild: `pnpm --filter @nextlyhq/ui build`."
+    ).toBeGreaterThanOrEqual(newestSource(path.join(SRC)));
+  });
+
+  it("is not passing vacuously", () => {
+    const built = readFileSync(distTypes, "utf8");
+    const declared = taggedPerDeclaration(built);
+    expect(
+      [...declared.values()].filter(t => t === "public").length
+    ).toBeGreaterThan(20);
+    expect(
+      [...declared.values()].filter(t => t === "experimental").length
+    ).toBeGreaterThan(50);
+  });
+});
+
+describe("ui release tags do not shadow the documentation", () => {
+  /**
+   * A release tag written as its own doc block SILENTLY DELETES the
+   * description. TypeScript associates only the LAST leading doc block with a
+   * declaration, so `/** description *\/` followed by `/** @experimental *\/`
+   * yields a symbol whose tag is right and whose documentation is empty --
+   * editor hovers and API tooling lose exactly what the tag was added
+   * alongside. The tag belongs INSIDE the existing block.
+   *
+   * Parsed rather than pattern-matched: an intervening `//` comment separates
+   * the two blocks on some declarations, and a regex written against the
+   * adjacent case walks straight past those.
+   */
+  function shadowed(file: string): string[] {
+    const text = readFileSync(file, "utf8");
+    const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+    const found: string[] = [];
+    for (const stmt of sf.statements) {
+      const blocks = (
+        ts.getLeadingCommentRanges(text, stmt.getFullStart()) ?? []
+      )
+        .filter(r => text.slice(r.pos, r.pos + 3) === "/**")
+        .map(r => text.slice(r.pos, r.end));
+      if (blocks.length < 2) continue;
+
+      // Only the last block reaches the symbol, so the defect is a last block
+      // that is nothing BUT tags while an earlier one carries prose. A module
+      // header sitting above the first statement also produces two blocks, and
+      // is not this: there the last block is the real documentation.
+      const prose = (b: string) =>
+        b
+          .replace(/^\/\*\*|\*\/$/g, "")
+          .replace(/^\s*\*\s?/gm, "")
+          .replace(/@\w+/g, "")
+          .trim();
+      if (prose(blocks[blocks.length - 1]!) !== "") continue;
+      if (!blocks.slice(0, -1).some(b => prose(b) !== "")) continue;
+
+      const line = sf.getLineAndCharacterOfPosition(stmt.getStart(sf)).line + 1;
+      found.push(`${path.relative(SRC, file)}:${line}`);
+    }
+    return found;
+  }
+
+  function sourceFiles(dir: string): string[] {
+    const out: string[] = [];
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (!/^(__tests__|__snapshots__)$/.test(entry.name))
+          out.push(...sourceFiles(full));
+        continue;
+      }
+      if (/\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name))
+        out.push(full);
+    }
+    return out;
+  }
+
+  it("keeps every tag inside the block that documents the symbol", () => {
+    const offenders = sourceFiles(SRC).flatMap(shadowed);
+    expect(
+      offenders,
+      "these declarations carry a release tag in a doc block of its own, so " +
+        "their description never reaches the symbol. Move the tag into the " +
+        "existing block as a trailing `@experimental` / `@public` line."
+    ).toEqual([]);
+  });
+
+  it("is not passing vacuously", () => {
+    // The detector must actually fire, or an empty result above would mean
+    // "nothing was parsed" just as readily as "nothing is wrong".
+    const probe = path.join(SRC, "__tests__", "shadowed-tag-probe.fixture.ts");
+    expect(shadowed(probe)).toHaveLength(1);
   });
 });

@@ -22,7 +22,15 @@
 import { fetcher } from "../lib/api/fetcher";
 import { protectedApi } from "../lib/api/protectedApi";
 import type { BulkResponse, ListResponse } from "../lib/api/response-types";
+import type { HookWarning, MutationResult } from "../lib/mutation-warnings";
 import type { Entry, EntryValue, FieldDefinition } from "../types/collection";
+
+/** The canonical mutation envelope, exactly as the server sends it. */
+interface MutationResponse<T> {
+  message: string;
+  item: T;
+  warnings?: HookWarning[];
+}
 
 /**
  * Parameters for find operation
@@ -171,6 +179,36 @@ export const entryKeys = {
   /** Key for a specific entry detail */
   detail: (collectionSlug: string, id: string) =>
     [...entryKeys.detailsByCollection(collectionSlug), id] as const,
+
+  /**
+   * The FULL detail cache identity, including the per-view read dimensions that
+   * change which document the server returns: content locale, fallback locale,
+   * the translation-status overview flag, and draft mode (the working-draft
+   * overlay). The read hook (useEntry) and the mutation hook (useUpdateEntry)
+   * MUST build the key through this one function — React Query hashes the object,
+   * so any divergence makes the optimistic write, rollback, and cancelQueries
+   * silently target a query the editor is not reading. Values are null/false
+   * normalised here so callers cannot drift on `undefined` vs `null`.
+   */
+  detailScoped: (
+    collectionSlug: string,
+    id: string,
+    params: {
+      locale?: string | null;
+      fallbackLocale?: string | null;
+      translationStatus?: boolean;
+      draft?: boolean;
+    }
+  ) =>
+    [
+      ...entryKeys.detail(collectionSlug, id),
+      {
+        locale: params.locale ?? null,
+        fallbackLocale: params.fallbackLocale ?? null,
+        translationStatus: params.translationStatus ?? false,
+        draft: params.draft ?? false,
+      },
+    ] as const,
 
   /** Key for count queries */
   counts: () => [...entryKeys.all, "count"] as const,
@@ -569,12 +607,15 @@ export const entryApi = {
   create: async (
     collectionSlug: string,
     data: CreateEntryPayload
-  ): Promise<Entry> => {
-    const result = await protectedApi.post<{ message: string; item: Entry }>(
+  ): Promise<MutationResult<Entry>> => {
+    // The whole envelope, not just `item`. `warnings` reports side effects that
+    // failed AFTER the row committed, and returning only the row is what made
+    // a save whose webhook never fired indistinguishable from a clean one.
+    const result = await protectedApi.post<MutationResponse<Entry>>(
       `/collections/${collectionSlug}/entries`,
       data
     );
-    return result.item;
+    return { item: result.item, warnings: result.warnings };
   },
 
   /**
@@ -598,18 +639,18 @@ export const entryApi = {
     id: string,
     data: UpdateEntryPayload,
     options?: Pick<FindParams, "locale" | "fallbackLocale">
-  ): Promise<Entry> => {
+  ): Promise<MutationResult<Entry>> => {
     // i18n M7: `?locale=de` updates only the German translatable values for this entry.
     const query = new URLSearchParams();
     if (options?.locale) query.set("locale", options.locale);
     if (options?.fallbackLocale)
       query.set("fallback-locale", options.fallbackLocale);
     const qs = query.toString();
-    const result = await protectedApi.patch<{ message: string; item: Entry }>(
+    const result = await protectedApi.patch<MutationResponse<Entry>>(
       `/collections/${collectionSlug}/entries/${id}${qs ? `?${qs}` : ""}`,
       data
     );
-    return result.item;
+    return { item: result.item, warnings: result.warnings };
   },
 
   /**
@@ -692,11 +733,14 @@ export const entryApi = {
    * const deleted = await entryApi.delete('posts', 'abc123');
    * ```
    */
-  delete: async (collectionSlug: string, id: string): Promise<Entry> => {
-    const result = await protectedApi.delete<{ message: string; item: Entry }>(
+  delete: async (
+    collectionSlug: string,
+    id: string
+  ): Promise<MutationResult<Entry>> => {
+    const result = await protectedApi.delete<MutationResponse<Entry>>(
       `/collections/${collectionSlug}/entries/${id}`
     );
-    return result.item;
+    return { item: result.item, warnings: result.warnings };
   },
 
   /**

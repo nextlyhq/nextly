@@ -331,6 +331,14 @@ export interface BuilderField extends FieldConfig {
    */
   blocks?: { allow?: string[]; kinds?: string[] };
   /**
+   * Options belonging to the field's own type, carried verbatim.
+   *
+   * A plugin-contributed field type declares its own option names, so the
+   * builder cannot model them. Holding them here keeps a save that rebuilds
+   * every field from dropping options the type requires.
+   */
+  pluginOptions?: Record<string, unknown>;
+  /**
    * Field description/help text
    */
   description?: string;

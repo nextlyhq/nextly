@@ -16,7 +16,11 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { FieldConfig } from "../collections/fields/types";
-import { STORAGE_FORMAT } from "../schemas/storage-format";
+import {
+  isFieldGroupRegistry,
+  resolveFieldGroupRegistryName,
+  type FieldGroupRegistryName,
+} from "../domains/field-groups/storage/resolve-storage-names";
 
 /**
  * Row shape returned by the `SELECT table_name, fields, slug, status FROM
@@ -35,7 +39,7 @@ export type DynamicTableRow = {
  * Read every row of `sourceTable` and call `register` for each. The
  * callback decides how to translate the row into a runtime Drizzle table
  * (Collections / Singles use `generateRuntimeSchema`; Components use
- * `ComponentSchemaService.generateRuntimeSchema`).
+ * `FieldGroupSchemaService.generateRuntimeSchema`).
  *
  * Why an empty-field row still calls register: a freshly-created UI
  * Single is committed with `fields: []` and the user adds fields one
@@ -50,7 +54,7 @@ export async function loadDynamicTables(
   sourceTable:
     | "dynamic_collections"
     | "dynamic_singles"
-    | typeof STORAGE_FORMAT.registryTable,
+    | FieldGroupRegistryName,
   register: (
     tableName: string,
     fields: unknown[],
@@ -60,8 +64,10 @@ export async function loadDynamicTables(
 ): Promise<void> {
   // Components have no `status` column (they're not Draft/Published) — selecting it
   // would fail. They DO carry `localized` (i18n). Collections/singles carry both.
-  const statusCol =
-    sourceTable !== STORAGE_FORMAT.registryTable ? ", status" : "";
+  // Asked under both registry spellings: the storage migration renames this
+  // table, and comparing against the legacy name alone would add `status` to the
+  // select the moment it has run.
+  const statusCol = isFieldGroupRegistry(sourceTable) ? "" : ", status";
 
   // Read the rows, tolerating an existing DB that predates the i18n `localized`
   // column: try the full select first, and on failure fall back to one without
@@ -137,10 +143,7 @@ export async function loadDynamicSlugs(
   const all = new Set<string>();
   const collections = new Set<string>();
   const read = async (
-    table:
-      | "dynamic_collections"
-      | "dynamic_singles"
-      | typeof STORAGE_FORMAT.registryTable,
+    table: "dynamic_collections" | "dynamic_singles" | FieldGroupRegistryName,
     into?: Set<string>
   ): Promise<void> => {
     try {
@@ -159,7 +162,12 @@ export async function loadDynamicSlugs(
   };
   await read("dynamic_collections", collections);
   await read("dynamic_singles");
-  await read(STORAGE_FORMAT.registryTable);
+  try {
+    await read(await resolveFieldGroupRegistryName(adapter));
+  } catch {
+    // Same contract as `read` itself: a catalog probe that cannot answer leaves
+    // the sets as they are rather than failing the boot that called it.
+  }
   return { all, collections };
 }
 
@@ -191,10 +199,7 @@ export async function loadBuilderEntities(
   adapter: DrizzleAdapter
 ): Promise<LoadedBuilderEntities> {
   const read = async (
-    table:
-      | "dynamic_collections"
-      | "dynamic_singles"
-      | typeof STORAGE_FORMAT.registryTable,
+    table: "dynamic_collections" | "dynamic_singles" | FieldGroupRegistryName,
     hasStatusColumn: boolean
   ): Promise<LoadedBuilderEntity[]> => {
     const selectSql = hasStatusColumn
@@ -228,9 +233,22 @@ export async function loadBuilderEntities(
     }
   };
 
+  // The registry NAME is resolved inside the same best-effort boundary as the
+  // read it feeds. Resolving outside it turns a transient catalog failure — a
+  // `listTables` blip, or a denied `lower_case_table_names` query on MySQL —
+  // into a rejection that aborts service registration, where this helper's
+  // whole contract is to answer with an empty list instead.
+  const readComponents = async (): Promise<LoadedBuilderEntity[]> => {
+    try {
+      return await read(await resolveFieldGroupRegistryName(adapter), false);
+    } catch {
+      return [];
+    }
+  };
+
   return {
     collections: await read("dynamic_collections", true),
     singles: await read("dynamic_singles", true),
-    components: await read(STORAGE_FORMAT.registryTable, false),
+    components: await readComponents(),
   };
 }

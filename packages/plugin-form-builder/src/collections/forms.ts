@@ -8,6 +8,7 @@
  * @since 0.1.0
  */
 
+import { NextlyError } from "@nextlyhq/plugin-sdk";
 import type { CollectionConfig, FieldConfig, HookContext } from "nextly";
 import {
   text,
@@ -378,14 +379,31 @@ export function formsCollection(
               .replace(/^-+|-+$/g, "");
           }
 
-          // Validation: Ensure fields array is not empty
-          // We check for length 0 to prevent empty forms from being saved
+          // A form must have at least one field, checked against what the
+          // write actually sets. An update carries the patch rather than the
+          // merged document, so treating an absent `fields` as empty rejects
+          // every partial update -- renaming a form, or changing a setting --
+          // even though its fields are untouched and still there.
+          const setsFields =
+            operation === "create" || data?.fields !== undefined;
           if (
             data &&
+            setsFields &&
             (data.fields === undefined ||
               (Array.isArray(data.fields) && data.fields.length === 0))
           ) {
-            throw new Error("Form must have at least one field.");
+            // Typed, so the rejection survives as a validation failure with
+            // its field issue rather than being read as a crash and replaced
+            // with a generic server-fault message.
+            throw NextlyError.validation({
+              errors: [
+                {
+                  path: "fields",
+                  code: "REQUIRED",
+                  message: "Form must have at least one field.",
+                },
+              ],
+            });
           }
 
           return data;

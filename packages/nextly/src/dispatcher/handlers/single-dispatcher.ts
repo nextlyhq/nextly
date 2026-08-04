@@ -19,7 +19,10 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
-import { assertValidFieldsPayload } from "../../api/fields-payload";
+import {
+  assertValidFieldsPayload,
+  assertValidPluginFieldOptions,
+} from "../../api/fields-payload";
 import {
   respondAction,
   respondData,
@@ -27,16 +30,22 @@ import {
   respondList,
   respondMutation,
 } from "../../api/response-shapes";
-import { resolveSingleDocumentId } from "../../api/versions-access";
+import {
+  assertDiffVersionPair,
+  resolveSingleDocumentId,
+} from "../../api/versions-access";
 import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
-import { teardownEntityComponentData } from "../../domains/components/services/teardown-entity-component-data";
 import { DynamicCollectionSchemaService } from "../../domains/dynamic-collections/services/dynamic-collection-schema-service";
+import { teardownEntityComponentData } from "../../domains/field-groups/services/teardown-entity-field-group-data";
 import { resolveLocalizedFieldNames } from "../../domains/i18n/classify-fields";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
 import { teardownEntityI18n } from "../../domains/i18n/migration/teardown-entity-i18n";
-import { companionHasStatusColumn } from "../../domains/i18n/runtime/companion-io";
+import {
+  companionHasStatusColumn,
+  localizedColumnsOnMain,
+} from "../../domains/i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
@@ -57,6 +66,7 @@ import type { Resolution } from "../../domains/schema/pipeline/resolution/types"
 import { isIdempotencyError } from "../../domains/schema/pipeline/sql-statement-utils";
 import type { DesiredSingle } from "../../domains/schema/pipeline/types";
 import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
+import { columnsDeclaredBy } from "../../domains/schema/services/field-column-descriptor";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
@@ -110,6 +120,7 @@ import type { MethodHandler, Params } from "../types";
 import { assertSchemaVersionMatch } from "./schema-version-guard";
 import {
   assertLabelRequestValid,
+  getVersionDiffForDocument,
   getVersionForDocument,
   restoreVersionForDocument,
   setVersionLabelForDocument,
@@ -241,10 +252,26 @@ async function reconcileSingleCompanion(args: {
   /** Localization state BEFORE this save (persisted). Drives enable/disable detection. */
   wasLocalized: boolean;
   status: boolean;
+  /**
+   * Whether the single had Draft/Published BEFORE this apply.
+   *
+   * Separate from `status` because the disable restore asks a different question: not what the
+   * single is being saved as, but whether main carried `status` and the companion `_status`
+   * beforehand — a copy from columns that were not there fails the whole migration.
+   */
+  wasStatus: boolean;
   adapter: DrizzleAdapter;
 }): Promise<void> {
-  const { slug, tableName, oldFields, newFields, localized, status, adapter } =
-    args;
+  const {
+    slug,
+    tableName,
+    oldFields,
+    newFields,
+    localized,
+    status,
+    wasStatus,
+    adapter,
+  } = args;
   const wasLocalized = args.wasLocalized;
   // Nothing to do when the single was and remains non-localized.
   if (!wasLocalized && !localized) return;
@@ -275,6 +302,15 @@ async function reconcileSingleCompanion(args: {
     newFields,
     companionExists,
     companionHasStatus,
+    wasStatus,
+    // Which translatable columns the main table still carries. A disable must not re-add one that
+    // is already there, and must still restore it: presence says the column exists, never that its
+    // value is current, because every localized write went to the companion alone.
+    existingMainColumns: await localizedColumnsOnMain(
+      adapter,
+      tableName,
+      oldFields
+    ).then(cols => cols.map(c => c.name)),
   });
 
   // A disable archives non-default translations, so ensure `nextly_i18n_archive` exists first
@@ -299,6 +335,28 @@ async function reconcileSingleCompanion(args: {
   }
   for (const stmt of plan.statements) {
     await adapter.executeQuery(stmt);
+  }
+
+  // The transition record describes a companion that no longer exists, so it stops being true the
+  // moment the disable succeeds. Left behind, it would refuse the next enable's real source locale
+  // — the check that protects a live transition would block a legitimate one instead.
+  if (plan.companionDropped) {
+    // The other half of "this companion is gone": readiness remembers only that one exists.
+    const { forgetCompanionReadiness } = await import(
+      "../../domains/i18n/runtime/companion-readiness"
+    );
+    forgetCompanionReadiness(adapter, `${tableName}_locales`);
+    const { resolveTransitionStore } = await import(
+      "../../domains/i18n/migration/transition-recorder"
+    );
+    const { forgetI18nTransition } = await import(
+      "../../domains/i18n/migration/transition-state"
+    );
+    await forgetI18nTransition(
+      await resolveTransitionStore(adapter),
+      "single",
+      slug
+    );
   }
 
   // Register the companion runtime table (best-effort — next boot re-registers it). Skipped when
@@ -356,6 +414,7 @@ export const SINGLE_VERSION_METHODS: Record<
         authenticatedScope: readAuthenticatedScope(p),
         limit: p.limit !== undefined ? Number(p.limit) : undefined,
         cursor: p.cursor !== undefined ? Number(p.cursor) : undefined,
+        locale: p.locale !== undefined ? String(p.locale) : undefined,
       });
       return respondList(result.items, result.meta);
     },
@@ -391,6 +450,29 @@ export const SINGLE_VERSION_METHODS: Record<
         versionNo: Number(p.versionNo),
       });
       return respondDoc(row);
+    },
+  },
+  getSingleVersionDiff: {
+    execute: async (_svc, p) => {
+      const slug = String(p.slug ?? "");
+      const from = Number(p.from);
+      const to = Number(p.to);
+      // Validate the version pair before resolving the live Single, so a
+      // malformed comparison fails as a validation error whether or not the
+      // Single has been materialized.
+      assertDiffVersionPair(from, to);
+      const entryId = await requireLiveSingleId(slug);
+      const diff = await getVersionDiffForDocument({
+        scopeKind: "single",
+        slug,
+        entryId,
+        user: userFromParams(p),
+        authenticatedScope: readAuthenticatedScope(p),
+        from,
+        to,
+        modifiedOnly: p.modifiedOnly === "1" || p.modifiedOnly === "true",
+      });
+      return respondDoc(diff);
     },
   },
   setSingleVersionLabel: {
@@ -516,6 +598,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             localized?: boolean;
             // Version history opt-in; persists to dynamic_singles.versions.
             versions?: boolean;
+            // Retention: durable versions kept per document (`false` = unlimited,
+            // a number = keep that many, undefined = the default 50).
+            versionsMaxPerDoc?: number | false;
             // Cache-revalidation opt-out; persists to dynamic_singles.revalidate.
             revalidate?: boolean;
             // Webhook recording opt-out; persists to dynamic_singles.webhooks.
@@ -545,10 +630,35 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       if (!b?.fields || !Array.isArray(b.fields))
         throw new Error("Single fields array is required");
 
+      // This create path persists and runs DDL without the schema
+      // preview/apply handlers. It keeps its own field rules, but nothing here
+      // can judge a plugin type's own options, so an unsatisfiable declaration
+      // would be stored and then fail on every write to the single.
+      assertValidPluginFieldOptions(b.fields);
+
       const schemaHash = calculateSchemaHash(b.fields);
       // Canonical resolver keeps the UI-create path in sync with registry
       // and DDL so every call site writes and reads the same physical table.
       const tableName = resolveSingleTableName({ slug: b.slug });
+
+      // Refused before any DDL runs, and keyed on the TABLE NAME rather than the slug. A slug is
+      // normalised on its way to a table name, so `foo-bar` and `foo_bar` name one physical table
+      // while looking like two free slugs. The registry's own check runs after the DDL, by which
+      // point `CREATE TABLE IF NOT EXISTS` has reported success against the table that already
+      // exists and the runtime registration has rebound it to this request's fields.
+      const owner = (await svc.registry.getAllSingles()).find(
+        s => s.tableName === tableName
+      );
+      if (owner) {
+        throw NextlyError.duplicate({
+          logContext: {
+            reason: "single-table-conflict",
+            slug: b.slug,
+            tableName,
+            ownedBy: owner.slug,
+          },
+        });
+      }
 
       // Generate migration SQL for the Single's data table. Passing
       // isSingle: true skips the slug column and auto-adds updated_at.
@@ -647,6 +757,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
                 // A brand-new single was never localized before, so a localized create is a
                 // create-only companion (no seed/drop) rather than an enable transition.
                 wasLocalized: false,
+                // A single being created has no prior state at all.
+                wasStatus: false,
                 status: b.status === true,
                 adapter,
               });
@@ -697,8 +809,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         localized: isLocalized,
         // Persist version history from the create payload; without it a Single
         // created with the switch on is written unversioned and the switch
-        // reads as off the moment the editor loads.
-        versions: resolveBuilderVersions(b.versions),
+        // reads as off the moment the editor loads. Retention rides along.
+        versions: resolveBuilderVersions(b.versions, b.versionsMaxPerDoc),
         // Cache-revalidation opt-out from the create payload (null = standard
         // tags, { disable: true } = off), so the write path reads it back.
         revalidate: resolveBuilderRevalidate(b.revalidate),
@@ -892,7 +1004,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // Remove the companion `_locales` table and this single's archive rows before
         // the main table. The companion holds an FK to `<main>.id`, so it must go first
         // or the main drop orphans it (Postgres) / is rejected by the FK (MySQL).
-        await teardownEntityI18n({ adapter, slug, tableName });
+        await teardownEntityI18n({ adapter, slug, tableName, kind: "single" });
 
         // Use dialect-appropriate quoting for the table name.
         const dialect = adapter.dialect || "postgresql";
@@ -997,6 +1109,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             // Version history toggle; honoured when defined, undefined leaves
             // the existing value untouched. Persists to dynamic_singles.versions.
             versions?: boolean;
+            // Retention: durable versions kept per document (`false` = unlimited,
+            // a number = keep that many, undefined = the default 50).
+            versionsMaxPerDoc?: number | false;
             // Cache-revalidation toggle; honoured when defined, undefined leaves
             // the existing value untouched. Persists to dynamic_singles.revalidate.
             revalidate?: boolean;
@@ -1034,8 +1149,25 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // stored; off writes null. `status` is deliberately not passed to the
       // resolver: it aliases to a versioned config for back-compat, which would
       // stop the toggle from turning versioning off on a Draft/Published single.
+      // Retention without the on/off switch is ambiguous — the resolver needs
+      // the enabled state — so a retention-only patch is rejected rather than
+      // silently ignored. Mirrors the schema-detail routes.
+      if (b.versionsMaxPerDoc !== undefined && b.versions === undefined) {
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: "versionsMaxPerDoc",
+              code: "MISSING_DEPENDENCY",
+              message: "versionsMaxPerDoc requires versions to be set.",
+            },
+          ],
+        });
+      }
       if (b.versions !== undefined) {
-        updateData.versions = resolveBuilderVersions(b.versions);
+        updateData.versions = resolveBuilderVersions(
+          b.versions,
+          b.versionsMaxPerDoc
+        );
       }
       // Cache-revalidation toggle, normalized to the resolved config the write
       // path reads; on writes null (standard tags), off writes the disable config.
@@ -1104,12 +1236,15 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           );
           return fields.filter(f => !localizedNames.has(f.name));
         };
+        // Keyed by the COLUMN each field becomes, matching `defineSingle` and the generators. A
+        // field named `Title` already owns the `title` column, so prepending the system one beside
+        // it hands the alter two fields for a single column.
+        const declaredColumns = (fields: FieldDefinition[]): Set<string> =>
+          columnsDeclaredBy(fields);
         const existingFieldsForAlter = omitLocalized(existingFields);
-        const existingFieldNames = new Set(
-          existingFieldsForAlter.map(f => f.name)
-        );
+        const existingFieldColumns = declaredColumns(existingFieldsForAlter);
         const normalizedOldFields: FieldDefinition[] = [
-          ...systemFields.filter(sf => !existingFieldNames.has(sf.name)),
+          ...systemFields.filter(sf => !existingFieldColumns.has(sf.name)),
           ...existingFieldsForAlter,
           {
             name: "updatedAt",
@@ -1120,9 +1255,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
 
         const newFieldsRaw = b.fields as unknown as FieldDefinition[];
         const newFieldsForAlter = omitLocalized(newFieldsRaw);
-        const newFieldNames = new Set(newFieldsForAlter.map(f => f.name));
+        const newFieldColumns = declaredColumns(newFieldsForAlter);
         const normalizedNewFields: FieldDefinition[] = [
-          ...systemFields.filter(sf => !newFieldNames.has(sf.name)),
+          ...systemFields.filter(sf => !newFieldColumns.has(sf.name)),
           ...newFieldsForAlter,
           {
             name: "updatedAt",
@@ -1219,6 +1354,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
                   localized: isLocalized,
                   wasLocalized,
                   status: hasStatus,
+                  // Already computed above from the persisted record, for the shared ALTER. The
+                  // disable restore needs the same fact.
+                  wasStatus,
                   adapter,
                 });
               } catch (companionErr) {
@@ -1267,10 +1405,13 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             const tableName = existing.tableName;
             const existingFields =
               existing.fields as unknown as FieldDefinition[];
+            // What the single is being saved AS, and what it currently IS. The disable restore
+            // needs the second: whether main carried `status` and the companion `_status` before
+            // this apply.
+            const wasStatus =
+              (existing as { status?: boolean }).status === true;
             const hasStatus =
-              b.status !== undefined
-                ? b.status === true
-                : (existing as { status?: boolean }).status === true;
+              b.status !== undefined ? b.status === true : wasStatus;
             await reconcileSingleCompanion({
               slug,
               tableName,
@@ -1279,6 +1420,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
               localized: isLocalized,
               wasLocalized,
               status: hasStatus,
+              wasStatus,
               adapter,
             });
             // Re-register the main runtime table so it reflects the new column shape: a disable
@@ -1373,6 +1515,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // i18n: carry localized so the preview omits translatable columns from the
         // single's main table (mirrors the apply path).
         localized: (single as { localized?: boolean }).localized === true,
+        // Authored in the Schema Builder: this is the Builder's own save path.
+        builderOwned: true,
       };
 
       const pipelinePreview = await previewDesiredSchema({
@@ -1495,6 +1639,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // from the single's main table (they live in single_<slug>_locales, reconciled
         // out-of-band below) — mirrors the collection apply path.
         localized: isLocalized,
+        // Authored in the Schema Builder: this is the Builder's own save path.
+        builderOwned: true,
       };
 
       const promptDispatcher = new BrowserPromptDispatcher(
@@ -1524,6 +1670,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         promptChannel: "browser",
         databaseName,
         uiTargetSlug: slug,
+        // Named, not defaulted: the scope defaults to a collection, and a single recorded under that
+        // kind is invisible to every history query filtered by its own.
+        uiTargetKind: "single" as const,
       });
 
       if (!result.success) {
@@ -1546,6 +1695,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           // seeds/restores existing rows rather than only creating an empty companion.
           wasLocalized: (single as { localized?: boolean }).localized === true,
           status: single.status === true,
+          // Read from the same persisted record as `wasLocalized`, so both describe the state
+          // before this apply.
+          wasStatus: single.status === true,
           adapter,
         });
       } catch (err) {

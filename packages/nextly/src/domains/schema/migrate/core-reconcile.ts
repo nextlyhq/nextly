@@ -15,9 +15,9 @@
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
-import { getDialectTables } from "../../../database/index";
+import { getDialectTablesForPush } from "../../../database/index";
 import { NextlyError } from "../../../errors";
-import { CORE_TABLE_NAMES, getCoreSchema } from "../../../schemas";
+import { getCoreSchema, getCoreTableNames } from "../../../schemas";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
 import {
   classifyForMode,
@@ -56,7 +56,20 @@ export interface ReconcileCoreDeps {
     dialect: SupportedDialect,
     tableNames: string[]
   ) => Promise<NextlySchemaSnapshot>;
-  /** Injectable for tests. Default: freshPushSchema over getDialectTables. */
+  /**
+   * Which field-group registry this database holds.
+   *
+   * 🔴 Resolved by the CALLER, which is the layer that holds an adapter, and
+   * passed in rather than probed here. A probe inside this function would sit
+   * in a block whose failure policy is "abort the reconcile", so a metadata
+   * blip would refuse a migration; at the caller it can fail the command
+   * cleanly, before anything is applied.
+   *
+   * Omitted means the legacy spelling, which is correct for a fresh database
+   * and for every caller with no database to ask.
+   */
+  fieldGroupRegistryTable?: string;
+  /** Injectable for tests. Default: freshPushSchema over the dialect bundle. */
   applyCore?: (
     dialect: FreshPushDialect,
     db: unknown
@@ -77,13 +90,20 @@ export async function reconcileCore(
 ): Promise<{ changed: boolean }> {
   const { db, dialect, logger } = deps;
   const introspect = deps.introspect ?? introspectLiveSnapshot;
+  // The registry name travels with every one of the three: the shape to compare
+  // against, the list of tables to ask the database about, and the bundle the
+  // push creates from. A mismatch between them asks about a table that is not
+  // there, then diffs the answer against one that is, and creates it.
+  const coreOptions = {
+    fieldGroupRegistryTable: deps.fieldGroupRegistryTable,
+  };
   const applyCore =
     deps.applyCore ??
     ((d: FreshPushDialect, database: unknown) =>
-      freshPushSchema(d, database, getDialectTables(d)));
+      freshPushSchema(d, database, getDialectTablesForPush(d, coreOptions)));
 
-  const desired = getCoreSchema(dialect);
-  const live = await introspect(db, dialect, [...CORE_TABLE_NAMES]);
+  const desired = getCoreSchema(dialect, coreOptions);
+  const live = await introspect(db, dialect, getCoreTableNames(coreOptions));
   const ops = diffSnapshots(live, desired);
 
   if (ops.length === 0) {

@@ -7,8 +7,10 @@
  * @packageDocumentation
  */
 
+import { collectingWarnings } from "../../hooks/side-effect-warnings";
 import { transformRichTextFields } from "../../lib/field-transform";
 import type {
+  MutationResult,
   DataFromSingleSlug,
   FindSingleArgs,
   FindSinglesArgs,
@@ -18,7 +20,11 @@ import type {
 } from "../types/index";
 
 import type { NextlyContext } from "./context";
-import { createErrorFromSingleResult, mergeConfig } from "./helpers";
+import {
+  buildMutationMessage,
+  createErrorFromSingleResult,
+  mergeConfig,
+} from "./helpers";
 
 /**
  * Retrieve the content of a single by slug.
@@ -75,22 +81,28 @@ export async function findSingle<TSlug extends SingleSlug>(
 export async function updateSingle<TSlug extends SingleSlug>(
   ctx: NextlyContext,
   args: UpdateSingleArgs<TSlug>
-): Promise<DataFromSingleSlug<TSlug>> {
+): Promise<MutationResult<DataFromSingleSlug<TSlug>>> {
   const config = mergeConfig(ctx.defaultConfig, args);
 
-  const result = await ctx.singleEntryService.update(args.slug, args.data, {
-    locale: config.locale,
-    user: config.user,
-    overrideAccess: config.overrideAccess,
-    context: config.context,
-    disableRevalidate: config.disableRevalidate,
-  });
+  const { result, warnings } = await collectingWarnings(() =>
+    ctx.singleEntryService.update(args.slug, args.data, {
+      locale: config.locale,
+      user: config.user,
+      overrideAccess: config.overrideAccess,
+      context: config.context,
+      disableRevalidate: config.disableRevalidate,
+    })
+  );
 
   if (!result.success) {
     throw createErrorFromSingleResult(result);
   }
 
-  return result.data as DataFromSingleSlug<TSlug>;
+  return {
+    message: buildMutationMessage(args.slug, "updated"),
+    item: result.data as DataFromSingleSlug<TSlug>,
+    ...(warnings ? { warnings } : {}),
+  };
 }
 
 /**

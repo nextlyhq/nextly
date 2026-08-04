@@ -145,6 +145,84 @@ describe("AdvancedTab -- version history", () => {
     render(<Controlled fields={["versions"]} />);
     expect(screen.getByText(/does not add drafts/i)).toBeInTheDocument();
   });
+
+  it("shows the retention count only for a custom cap", () => {
+    // A stored number is the "keep last N" mode, so the count field is visible.
+    render(
+      <Controlled
+        fields={["versions"]}
+        initial={{ versions: true, versionsMaxPerDoc: 20 }}
+      />
+    );
+    expect(
+      screen.getByRole("spinbutton", { name: /versions to keep per document/i })
+    ).toHaveValue(20);
+  });
+
+  it("keeps the prior cap when the field is cleared and restores it on blur", async () => {
+    // Clearing mid-edit must not drop the committed cap (to the default or 0);
+    // it stays until a valid replacement is typed, and blur restores the field.
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(
+      <Controlled
+        fields={["versions"]}
+        initial={{ versions: true, versionsMaxPerDoc: 20 }}
+        onChange={onChange}
+      />
+    );
+    const input = screen.getByRole("spinbutton", {
+      name: /versions to keep per document/i,
+    });
+    await user.clear(input);
+    await user.tab(); // blur
+
+    // Clearing never committed a change away from the prior cap...
+    const committed = onChange.mock.calls.map(
+      c => (c[0] as BuilderSettingsValues).versionsMaxPerDoc
+    );
+    expect(committed).not.toContain(undefined);
+    // ...and the field is restored to the committed value, still on screen.
+    expect(input).toHaveValue(20);
+  });
+
+  it("keeps the saved cap and restores the field when invalid text is entered", async () => {
+    // An invalid entry (fractional/negative) is never committed, and on blur the
+    // field snaps back to the committed value so a save can't persist a cap
+    // different from what is shown.
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(
+      <Controlled
+        fields={["versions"]}
+        initial={{ versions: true, versionsMaxPerDoc: 20 }}
+        onChange={onChange}
+      />
+    );
+    const input = screen.getByRole("spinbutton", {
+      name: /versions to keep per document/i,
+    });
+    await user.clear(input);
+    await user.type(input, "20.5");
+    await user.tab(); // blur
+
+    const last = onChange.mock.lastCall?.[0] as
+      | BuilderSettingsValues
+      | undefined;
+    // The invalid value was never committed, so the cap is still the last valid
+    // one (or unchanged), and the field shows that value, not "20.5".
+    expect(last?.versionsMaxPerDoc).not.toBe(20.5);
+    expect(input).toHaveValue(20);
+  });
+
+  it("does not show a retention count when versioning is off", () => {
+    render(<Controlled fields={["versions"]} initial={{ versions: false }} />);
+    expect(
+      screen.queryByRole("spinbutton", {
+        name: /versions to keep per document/i,
+      })
+    ).not.toBeInTheDocument();
+  });
 });
 
 describe("AdvancedTab -- cache revalidation", () => {

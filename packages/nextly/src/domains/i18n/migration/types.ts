@@ -1,6 +1,31 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 /**
+ * Every storage kind a localized column may declare.
+ *
+ * Stated once, as a value, because both a type and a runtime check need it: the generator writes
+ * one of these into a migration file's header and the parser that reads that file back has to
+ * accept exactly the same set. Kept as two independent lists, the parser rejected a kind the
+ * generator had just written and aborted the run — so the list is the value, and the type is
+ * derived from it.
+ */
+export const LOCALIZED_COLUMN_KINDS = [
+  "text",
+  "longText",
+  "shortText",
+  "boolean",
+  "integer",
+  "double",
+  "decimal",
+  "timestamp",
+  "json",
+  "fkSingle",
+] as const;
+
+/** Logical storage kind — drives the per-dialect DDL type. */
+export type LocalizedColumnKind = (typeof LOCALIZED_COLUMN_KINDS)[number];
+
+/**
  * A single localized column, described independently of the field system.
  * M3 will derive these from field descriptors; M1 accepts them directly so the
  * migration generator is self-contained and testable.
@@ -8,23 +33,27 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 export interface LocalizedColumnSpec {
   /** snake_case column name; identical on the main and companion tables. */
   name: string;
-  /** logical storage kind — drives the per-dialect DDL type. */
-  kind:
-    | "text"
-    | "longText"
-    | "boolean"
-    | "integer"
-    | "double"
-    | "decimal"
-    | "timestamp"
-    | "json"
-    | "fkSingle";
+  kind: LocalizedColumnKind;
   /** optional length for text/varchar-like columns. */
   length?: number;
   /** precision/scale for the `decimal` kind (DECIMAL/NUMERIC); ignored otherwise. */
   precision?: number;
   scale?: number;
 }
+
+/**
+ * Just enough of a {@link CompanionMigrationSpec} to move values between a main table and its
+ * companion in one named locale.
+ *
+ * The correlated copies in either direction need the two table names, the dialect's quoting and
+ * the locale, and take the columns to copy as an argument. Naming that subset lets a caller that
+ * only wants a copy pass what it actually knows, instead of inventing a column list and a
+ * parent-id DDL type that nothing reads.
+ */
+export type CompanionCopyRef = Pick<
+  CompanionMigrationSpec,
+  "dialect" | "mainTable" | "companionTable" | "defaultLocale"
+>;
 
 /**
  * Everything the generator needs to emit an enable/disable localization migration for

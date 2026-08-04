@@ -102,12 +102,14 @@ function GalleryComponent({ images, columns, caption }: GalleryComponentProps) {
         </figcaption>
       )}
 
-      {/* Lightbox. The scrim and its controls stay literal black/white: they
-          are read against the user's image, not against a themed surface, so
-          they must not follow the admin palette in either mode. */}
+      {/* Lightbox. `--nx-overlay-strong` rather than the modal scrim: the
+          caption and controls are read ON this surface, and the see-through
+          variant leaves a mid-grey backdrop in light mode that muted white text
+          cannot clear AA against. They stay literal white because they are read
+          against the user's image rather than the admin palette. */}
       {lightboxIndex !== null && (
         <div
-          className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4"
+          className="fixed inset-0 z-50 bg-overlay-strong flex items-center justify-center p-4"
           onClick={() => setLightboxIndex(null)}
           role="dialog"
           aria-modal="true"

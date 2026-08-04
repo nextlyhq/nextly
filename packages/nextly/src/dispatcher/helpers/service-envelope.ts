@@ -34,7 +34,7 @@
  */
 
 import type { PaginationMeta } from "../../api/response-shapes";
-import { NextlyError } from "../../errors/nextly-error";
+import { errorFromServiceEnvelope } from "../../errors/from-service-envelope";
 
 /**
  * Translate the service-result `{ total, page, limit, totalPages }`
@@ -128,7 +128,10 @@ export function offsetPaginationToMeta(args: {
  * sees only the canonical NextlyError publicMessage (per spec §13.8:
  * no driver text, no identifier echo, no value leaking).
  *
- * Status-to-NextlyError mapping:
+ * Reconstruction is keyed on the envelope's canonical `code` when it carries
+ * one, because the envelope carries everything an exact rebuild needs.
+ * The status mapping below is the fallback for envelopes built by hand that
+ * carry no code:
  *   400: NextlyError.validation (with publicData.errors[])
  *   403: NextlyError.forbidden
  *   404: NextlyError.notFound
@@ -154,6 +157,11 @@ export function unwrapServiceResult<T>(
     // NextlyError; disambiguates statuses shared by several codes (409).
     code?: string;
     message?: string;
+    /** Translation key for the public message. */
+    messageKey?: string;
+    // The error's own public data, so a rebuild keeps meaning that lives there
+    // rather than in the code -- a rate limit's retry interval, for instance.
+    publicData?: unknown;
     data?: unknown;
     // Canonical {path, code} from collection results; legacy {field} from
     // SingleResult. Both normalize below.
@@ -169,41 +177,6 @@ export function unwrapServiceResult<T>(
   if (result.success) {
     return result.data as T;
   }
-  const status = result.statusCode ?? 500;
   const ctx = { legacyMessage: result.message, ...logContext };
-  if (status === 404) throw NextlyError.notFound({ logContext: ctx });
-  if (status === 403) throw NextlyError.forbidden({ logContext: ctx });
-  if (status === 409) {
-    // 409 is shared by two distinct failures: a unique-constraint duplicate
-    // ("Resource already exists.") and an optimistic-concurrency conflict
-    // ("The resource has changed..."). Only the envelope's code can tell
-    // them apart; without one, staleness is the safer default because it
-    // tells the user to refresh rather than implying the write is invalid.
-    if (result.code === "DUPLICATE") {
-      throw NextlyError.duplicate({ logContext: ctx });
-    }
-    throw NextlyError.conflict({ logContext: ctx });
-  }
-  if (status === 400) {
-    // Per-field issues from the service survive into the wire envelope so
-    // the admin can map them onto form fields; the generic single-issue
-    // shape is only the fallback for detail-less 400s.
-    throw NextlyError.validation({
-      errors: result.errors?.length
-        ? result.errors.map(e => ({
-            path: e.path ?? e.field ?? "",
-            code: e.code ?? "INVALID",
-            message: e.message,
-          }))
-        : [
-            {
-              path: "request",
-              code: "INVALID",
-              message: "The submitted data is invalid.",
-            },
-          ],
-      logContext: ctx,
-    });
-  }
-  throw NextlyError.internal({ logContext: ctx });
+  throw errorFromServiceEnvelope(result, ctx);
 }

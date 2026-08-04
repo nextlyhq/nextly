@@ -42,15 +42,19 @@ function silentLogger() {
 }
 
 /**
- * Minimal adapter whose Drizzle handle answers the single-row
- * `select().from().where().limit()` chain fetchRelatedEntry uses.
+ * Minimal adapter whose Drizzle handle answers the
+ * `select().from().where()` chain every related-row read uses.
+ *
+ * Resolves at `where()` rather than at a trailing `limit()`: one reader now
+ * fetches by id list, so a single reference is a one-element list rather than a
+ * limited query. A double that still answered only the limited shape would
+ * resolve to nothing here and report a refusal that never happened.
  */
 function adapterReturning(row: Record<string, unknown> | null) {
   const chain = {
     select: () => chain,
     from: () => chain,
-    where: () => chain,
-    limit: () => Promise.resolve(row ? [row] : []),
+    where: () => Promise.resolve(row ? [row] : []),
   };
   return {
     getDrizzle: () => chain,
@@ -480,5 +484,71 @@ describe("relationship expansion secret redaction", () => {
       }));
       expect(await service.getBestLabelField("members", "secret")).toBe("name");
     });
+  });
+});
+
+/**
+ * Two relationship fields can point at the SAME related row while asking for
+ * DIFFERENT display labels. Batch expansion fetches per field, so each holds its
+ * own row object carrying its own label, and rebuilding the response has to keep
+ * them apart: a snapshot keyed on the row alone would let one field's
+ * presentation replace the other's.
+ */
+describe("related-row re-derivation keeps per-field presentation", () => {
+  afterEach(() => {
+    clearFieldFunctions();
+  });
+
+  function labelledService() {
+    const collectionService = {
+      getCollection: vi.fn().mockImplementation((slug: string) => {
+        if (slug === "posts") {
+          return Promise.resolve({
+            fields: [
+              { name: "author", type: "relationship", relationTo: "authors" },
+              {
+                name: "reviewer",
+                type: "relationship",
+                relationTo: "authors",
+                options: { targetLabelField: "handle" },
+              },
+            ],
+          });
+        }
+        return Promise.resolve({
+          fields: [
+            { name: "name", type: "text" },
+            { name: "handle", type: "text" },
+          ],
+        });
+      }),
+    };
+    return new CollectionRelationshipService(
+      adapterReturning(null),
+      silentLogger(),
+      { loadDynamicSchema: vi.fn().mockResolvedValue({ id: {} }) } as never,
+      collectionService as never
+    );
+  }
+
+  it("keeps each field's own label when both point at the same row", async () => {
+    const service = labelledService();
+    // Distinct objects with the same id, as per-field batch expansion produces.
+    const entry = {
+      id: "p1",
+      author: { id: "a1", name: "Ada", handle: "adah", label: "Ada" },
+      reviewer: { id: "a1", name: "Ada", handle: "adah", label: "adah" },
+    };
+    const access = { enforceFieldAccess: true, user: { id: "u1" } };
+    const state = service.createNestedHookState();
+
+    await service.applyNestedFieldHooks(entry, "posts", access, state);
+    await service.finalizeRelatedRows(state, access);
+    await service.reprojectRelatedRows([entry], "posts", access, state);
+
+    const author = entry.author as Record<string, unknown>;
+    const reviewer = entry.reviewer as Record<string, unknown>;
+    expect(author.label).toBe("Ada");
+    expect(reviewer.label).toBe("adah");
   });
 });

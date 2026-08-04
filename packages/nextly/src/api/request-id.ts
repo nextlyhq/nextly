@@ -53,3 +53,29 @@ export function readOrGenerateRequestId(req: Request): string {
     generateRequestId()
   );
 }
+
+/**
+ * Return a response carrying `x-request-id`, without mutating one that refuses.
+ *
+ * A handler may return a response whose headers are immutable — anything from
+ * `Response.redirect(...)`, or one passed straight through from `fetch()` —
+ * and setting a header on those throws, which would turn a working route into
+ * a rejected request. Rebuilding is what the CORS and security middleware
+ * already do to every response for the same reason.
+ *
+ * A response that already carries an id keeps it: a handler that set one meant
+ * it, and the caller may already have been told.
+ */
+export function withRequestIdHeader(
+  response: Response,
+  requestId: string
+): Response {
+  if (response.headers.has("x-request-id")) return response;
+  const headers = new Headers(response.headers);
+  headers.set("x-request-id", requestId);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}

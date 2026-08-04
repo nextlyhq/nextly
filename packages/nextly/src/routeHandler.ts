@@ -54,7 +54,7 @@ import {
   updateImageSize,
   deleteImageSize,
 } from "./api/image-sizes";
-import { readOrGenerateRequestId } from "./api/request-id";
+import { readOrGenerateRequestId, withRequestIdHeader } from "./api/request-id";
 // canonical respondX wire shapes (spec §5.1) instead of the
 // hand-rolled `{ data: <payload> }` envelope.
 import { respondData, respondMutation } from "./api/response-shapes";
@@ -78,6 +78,11 @@ import { readAccessTokenCookie } from "./auth/cookies/access-token-cookie";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
 import { container } from "./di/container";
 import { NextlyError } from "./errors/nextly-error";
+import {
+  currentFlattenedErrors,
+  logFlattenedErrors,
+  withSideEffectWarnings,
+} from "./hooks/side-effect-warnings";
 import { withTimezoneFormatting } from "./lib/date-formatting";
 import { createCorsMiddleware } from "./middleware/cors";
 import { createRateLimiter } from "./middleware/rate-limit";
@@ -515,12 +520,17 @@ const COLLECTION_ENTRY_METHODS = new Set([
   // the entry itself; the document-level rules run inside the methods.
   "listEntryVersions",
   "getEntryVersion",
+  "getEntryVersionDiff",
   // Restoring writes the document, so the route parser marks it an `update`
   // operation and this resolves to the `update-{slug}` permission.
   "restoreEntryVersion",
   // Naming a version writes history rather than the document, but it is still
   // a write and resolves to the same permission.
   "setEntryVersionLabel",
+  // Discarding the working draft reverts the document to its live row; the
+  // route parser marks it an `update` operation, so it resolves to the
+  // `update-{slug}` permission rather than a definition mutation's manage-settings.
+  "discardWorkingDraft",
 ]);
 
 /** Single document methods (read/update content, not schema definitions). */
@@ -530,6 +540,7 @@ const SINGLE_DOCUMENT_METHODS = new Set([
   // Read-only history for the document, guarded by the same read permission.
   "listSingleVersions",
   "getSingleVersion",
+  "getSingleVersionDiff",
   // A write, authorized as an update of the document.
   "restoreSingleVersion",
   // Also a write. Deliberately absent from the read allowlist below, so the
@@ -566,8 +577,10 @@ const ROLE_AWARE_READ_METHODS = new Set([
   "getSingleDocument",
   "listEntryVersions",
   "getEntryVersion",
+  "getEntryVersionDiff",
   "listSingleVersions",
   "getSingleVersion",
+  "getSingleVersionDiff",
 ]);
 
 /**
@@ -633,7 +646,8 @@ async function resolveAuthorization(
       const action =
         method === "getSingleDocument" ||
         method === "listSingleVersions" ||
-        method === "getSingleVersion"
+        method === "getSingleVersion" ||
+        method === "getSingleVersionDiff"
           ? "read"
           : "update";
       const slug = routeParams?.slug || "";
@@ -1462,9 +1476,56 @@ export function createDynamicHandlers(options?: {
       return applySecurityHeaders(corsRateLimited);
     }
 
-    // Run the handler, then layer on CORS + security headers
-    const response = await handler();
-    const formattedResponse = await applyGlobalDateFormatting(response, req);
+    // Run the handler, then layer on CORS + security headers.
+    //
+    // Wrapped in a side-effect warning scope because this is the one place
+    // every verb converges on, and a post-commit hook failure has to reach the
+    // response the client is waiting on. The response builders read the scope
+    // from inside it, so nothing between here and them has to carry the
+    // failures; a request whose hooks all succeed collects an empty array and
+    // its body is unchanged.
+    // Captured inside the scope, which closes when this returns. The dynamic
+    // routes do not pass through `withErrorHandler`, so without this the
+    // detail an envelope flattened on the ordinary `/api/...` surface reaches
+    // the log only as the boundary's reconstruction, with neither the cause
+    // nor the context the thrower attached.
+    let flattenedInRequest: NextlyError[] = [];
+    const { result: response } = await withSideEffectWarnings(async () => {
+      try {
+        return await handler();
+      } finally {
+        flattenedInRequest = currentFlattenedErrors();
+      }
+    });
+    // Settled BEFORE logging and put on the response, so the id an operator
+    // reads in the log is one the caller actually received. The response
+    // helpers do not set it for a 200 carrying per-item failures, so without
+    // this the log would carry an id generated here and shown to nobody,
+    // which is the join the diagnostics exist for.
+    const effectiveRequestId =
+      response.headers.get("x-request-id") ?? readOrGenerateRequestId(req);
+    const identifiedResponse = withRequestIdHeader(
+      response,
+      effectiveRequestId
+    );
+    // Imported here rather than at module scope, matching how this file already
+    // reaches the logger, so the route entry point keeps its import graph.
+    const { getNextlyLogger: resolveLogger } = await import(
+      "./observability/logger"
+    );
+    logFlattenedErrors(
+      flattenedInRequest,
+      entry => resolveLogger().error(entry),
+      {
+        requestId: effectiveRequestId,
+        route: new URL(req.url).pathname,
+        method: req.method,
+      }
+    );
+    const formattedResponse = await applyGlobalDateFormatting(
+      identifiedResponse,
+      req
+    );
     const corsResponse = cors.applyHeaders(req, formattedResponse);
     return applySecurityHeaders(corsResponse);
   }

@@ -6,11 +6,13 @@ import { getHookRegistry } from "@nextly/hooks/hook-registry";
 
 import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import type { RequestActor } from "../auth/request-actor";
+import type { FieldConfig } from "../collections/fields/types";
 import { container } from "../di/container";
 import type { PermissionSeedService } from "../domains/auth/services/permission-seed-service";
 import type { RBACAccessControlService } from "../domains/auth/services/rbac-access-control-service";
 import { DynamicCollectionService } from "../domains/dynamic-collections";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
+import { schemaDraftsEnabled } from "../domains/versions/draft-split-eligibility";
 import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
 import type { ResolvedWebhookRetentionConfig } from "../domains/webhooks/retention-config";
 import { MetaRetentionGate } from "../domains/webhooks/retention-gate";
@@ -29,8 +31,8 @@ import {
   type WhereFilter,
   type UserContext,
 } from "./collections/index";
-import type { ComponentDataService } from "./components/component-data-service";
-import type { ComponentRegistryService } from "./components/component-registry-service";
+import type { FieldGroupDataService } from "./field-groups/field-group-data-service";
+import type { FieldGroupRegistryService } from "./field-groups/field-group-registry-service";
 import { consoleLogger } from "./shared";
 import type { Logger } from "./shared";
 
@@ -163,8 +165,8 @@ export class CollectionsHandler {
 
     const accessControlService = new AccessControlService();
 
-    const componentDataService = container.has("componentDataService")
-      ? container.get<ComponentDataService>("componentDataService")
+    const fieldGroupDataService = container.has("fieldGroupDataService")
+      ? container.get<FieldGroupDataService>("fieldGroupDataService")
       : undefined;
 
     // Shared post-response drain fast path (registered by the webhook services),
@@ -180,9 +182,9 @@ export class CollectionsHandler {
         ? container.get<CacheRevalidator>("cacheRevalidator")
         : undefined;
 
-    // Late-inject relationshipService if componentDataService was created before it was available
-    if (componentDataService) {
-      componentDataService.setRelationshipService(this.relationshipService);
+    // Late-inject relationshipService if fieldGroupDataService was created before it was available
+    if (fieldGroupDataService) {
+      fieldGroupDataService.setRelationshipService(this.relationshipService);
     }
 
     // The RBAC service the write gates evaluate `update`/`publish`/`unpublish`
@@ -203,7 +205,7 @@ export class CollectionsHandler {
       this.relationshipService,
       hookRegistry,
       accessControlService,
-      componentDataService,
+      fieldGroupDataService,
       rbacAccessControlService,
       this.localization,
       retentionRunner,
@@ -378,11 +380,15 @@ export class CollectionsHandler {
     // form rendering works without extra API calls per component.
     const data = result.data as Record<string, unknown> | null;
     if (result.success && data?.fields) {
+      // The ORIGINAL fields, captured before enrichment replaces them: the
+      // working-draft eligibility below needs the un-enriched shape (the enriched
+      // one drops the component localized/resolved markers it inspects).
+      const originalFields = data.fields as unknown as FieldConfig[];
       try {
-        const hasComponentRegistry = container.has("componentRegistryService");
+        const hasComponentRegistry = container.has("fieldGroupRegistryService");
         if (hasComponentRegistry) {
-          const componentRegistry = container.get<ComponentRegistryService>(
-            "componentRegistryService"
+          const componentRegistry = container.get<FieldGroupRegistryService>(
+            "fieldGroupRegistryService"
           );
 
           const enrichedFields =
@@ -404,6 +410,31 @@ export class CollectionsHandler {
             : String(enrichError)
         );
       }
+
+      // Surface whether the draft/published working-draft split will run for this
+      // collection so the admin editor offers the matching Save / Publish /
+      // Discard affordances. This is the dispatcher path the built-in admin
+      // actually fetches through, and it derives the flag from the SAME predicate
+      // the mutation service gates on, so the editor can never present a
+      // status-less save as a pending draft while the server writes the live row.
+      //
+      // A failure to resolve component eligibility is propagated, not defaulted
+      // to false: the only path that throws is a drafts-configured collection
+      // whose components could not be resolved (a transient registry/database
+      // error), and false is the DESTRUCTIVE answer there — the admin would send
+      // an explicit published save that overwrites the live row instead of the
+      // status-less save that stores a working draft. Failing the read keeps the
+      // editor from acting on an unknown verdict; it is retryable, and mirrors
+      // resolveComponentSchemas, which is fail-closed for the same reason.
+      data.draftsEnabled = await schemaDraftsEnabled({
+        status: data.status as boolean | undefined,
+        versions: data.versions as
+          | { drafts?: { enabled?: boolean } }
+          | null
+          | undefined,
+        localized: data.localized as boolean | undefined,
+        fields: originalFields,
+      });
     }
 
     return result;
@@ -595,6 +626,14 @@ export class CollectionsHandler {
      * pass 'all' to see drafts too. Forwarded to query service as-is.
      */
     status?: "published" | "draft" | "all";
+    /**
+     * Opt in to the working-draft overlay (draft/published split): a trusted
+     * editor read returns the pending working draft in place of the live row.
+     * Forwarded wholesale to the entry/query service, which gates it on an
+     * update-capability probe, so a read-only caller passing it still sees the
+     * live row.
+     */
+    includeWorkingDraft?: boolean;
     /** Requested content locale (i18n M4) — forwarded to the query service. */
     locale?: string;
     /** Fallback control (`false`/`"none"` disables fallback). */
@@ -618,6 +657,19 @@ export class CollectionsHandler {
     authenticatedScope?: AuthenticatedScope;
   }) {
     return this.entryService.getEntry(params);
+  }
+
+  /**
+   * Remove a document's pending working-draft sidecar under the same parent-row
+   * lock a draft save takes. Serializing the discard with concurrent draft saves
+   * keeps it from deleting a draft another editor committed after this request's
+   * authorization checks. The discard handler authorizes read and update first.
+   */
+  async discardWorkingDraft(params: {
+    collectionName: string;
+    entryId: string;
+  }): Promise<void> {
+    return this.entryService.discardWorkingDraft(params);
   }
 
   /**

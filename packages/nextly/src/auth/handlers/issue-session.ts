@@ -1,11 +1,12 @@
 import { respondAction } from "../../api/response-shapes";
+import type { AuditLogWriter } from "../../domains/audit/audit-log-writer";
 import type { PluginContext } from "../../plugins/plugin-context";
 import type { AuthUser } from "../../types/auth";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
 import { setAccessTokenCookie } from "../cookies/access-token-cookie";
 import { setRefreshTokenCookie } from "../cookies/refresh-token-cookie";
 import { buildClaims } from "../jwt/claims";
-import { signAccessToken } from "../jwt/sign";
+import { signAccessTokenWithExpiry } from "../jwt/sign";
 import type { AuthHookRegistry } from "../pipeline/hooks";
 import {
   generateRefreshToken,
@@ -41,6 +42,12 @@ export interface IssueSessionDeps {
   authHooks: AuthHookRegistry;
   /** The plugin context handed to auth hooks. */
   pluginCtx: PluginContext;
+  /**
+   * Records the successful login. Required rather than optional: a session
+   * issued without one is a login absent from the audit trail, and the point of
+   * recording here is that no path can opt out by forgetting.
+   */
+  auditLog: AuditLogWriter;
 }
 
 /**
@@ -49,6 +56,15 @@ export interface IssueSessionDeps {
  * rotate-in a fresh refresh token, and respond with the canonical login body +
  * HttpOnly cookies (spec §7.6). Extracted from the login handler so the
  * challenge-resolve path issues sessions identically.
+ *
+ * It also runs the post-login hooks and records the successful login, for that
+ * same reason. Three handlers complete a login — password login, second-factor
+ * resolution, and the forced first-sign-in password change — and each ran the
+ * identical pair of steps after issuing the session. A user who always completes
+ * a second factor never passes through the first, so recording at each call site
+ * left that population out of the trail entirely; and the ORDER of those steps
+ * decides whether the trail can contradict itself, which is not something three
+ * copies should each be trusted to get right.
  */
 export async function issueSession(
   user: AuthUser,
@@ -76,11 +92,8 @@ export async function issueSession(
     deps.pluginCtx
   );
 
-  const accessToken = await signAccessToken(
-    claims,
-    deps.secret,
-    deps.accessTokenTTL
-  );
+  const { token: accessToken, expiresAt: accessTokenExpiresAt } =
+    await signAccessTokenWithExpiry(claims, deps.secret, deps.accessTokenTTL);
 
   const rawRefreshToken = generateRefreshToken();
   const refreshTokenHash = hashRefreshToken(rawRefreshToken);
@@ -94,6 +107,29 @@ export async function issueSession(
       trustedProxyIps: deps.trustedProxyIps,
     }),
     expiresAt: new Date(Date.now() + deps.refreshTokenTTL * 1000),
+  });
+
+  // Last, after the post-login hooks. A hook that throws sends the caller into
+  // its failure path, which returns an error and records a failure — the client
+  // never receives the token body or the cookies. Recording the success before
+  // that point left the trail asserting both outcomes for one attempt and
+  // claiming the account was reached when nothing was delivered.
+  //
+  // Running the hooks here rather than in each caller is what makes that
+  // ordering a property of the code instead of a convention: all three handlers
+  // ran exactly this pair, and one of them getting the order wrong is invisible
+  // until an audit is read.
+  await deps.authHooks.runAfterLogin(user, deps.pluginCtx);
+  // Attributed on purpose — naming the account is the account-state leak a
+  // FAILURE must avoid, and is the whole value of a success.
+  await deps.auditLog.write({
+    kind: "login-succeeded",
+    actorUserId: user.id,
+    ipAddress: getTrustedClientIp(request, {
+      trustProxy: deps.trustProxy,
+      trustedProxyIps: deps.trustedProxyIps,
+    }),
+    userAgent: request.headers.get("user-agent"),
   });
 
   const cookies = [
@@ -117,9 +153,9 @@ export async function issueSession(
       },
       accessToken,
       refreshToken: rawRefreshToken,
-      expiresAt: new Date(
-        Date.now() + deps.accessTokenTTL * 1000
-      ).toISOString(),
+      // The token's own expiry, not a fresh reading: the hooks and the audit
+      // write above are awaited, and a plugin hook is arbitrary code.
+      expiresAt: accessTokenExpiresAt.toISOString(),
     },
     {
       status: 200,

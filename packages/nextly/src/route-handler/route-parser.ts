@@ -829,6 +829,26 @@ function parseCollectionEntryVersionRoutes(
     };
   }
 
+  // `versions/working-draft` DELETE discards the pending working draft
+  // (draft/published split), reverting the document to its live published row.
+  // `working-draft` is a named sub-resource, never a version number, so it can
+  // never collide with `versions/{versionNo}`. Authorized as an update: it
+  // changes what the editor sees, not the document's history.
+  if (
+    additionalParams.length === 2 &&
+    additionalParams[1] === "working-draft" &&
+    httpMethod === "DELETE"
+  ) {
+    routeParams.collectionName = id;
+    routeParams.entryId = subId;
+    return {
+      service: "collections",
+      operation: "update",
+      method: "discardWorkingDraft",
+      routeParams,
+    };
+  }
+
   if (
     // Only `versions` or `versions/{versionNo}`; anything deeper is not a
     // route this owns and must not be silently truncated to one that is.
@@ -840,6 +860,18 @@ function parseCollectionEntryVersionRoutes(
 
   routeParams.collectionName = id;
   routeParams.entryId = subId;
+
+  // `versions/diff?from=A&to=B` compares two versions. It is a read of history,
+  // authorized like reading a single version; `diff` can never collide with a
+  // version number, which is always numeric.
+  if (additionalParams[1] === "diff") {
+    return {
+      service: "collections",
+      operation: "single",
+      method: "getEntryVersionDiff",
+      routeParams,
+    };
+  }
 
   const versionNo = additionalParams[1];
   if (versionNo) {
@@ -917,6 +949,17 @@ function parseSingleVersionRoutes(
   }
 
   routeParams.slug = id;
+
+  // `versions/diff?from=A&to=B` compares two versions; a read of history like
+  // reading one version. `diff` cannot collide with a numeric version number.
+  if (subId === "diff") {
+    return {
+      service: "singles",
+      operation: "single",
+      method: "getSingleVersionDiff",
+      routeParams,
+    };
+  }
 
   if (subId) {
     routeParams.versionNo = subId;

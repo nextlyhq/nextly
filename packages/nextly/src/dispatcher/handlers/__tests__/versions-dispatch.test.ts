@@ -41,7 +41,9 @@ describe("version methods are registered", () => {
     // being registered for authorization, which decides whether it is
     // permitted as a read or as a write.
     expect(Object.keys(COLLECTION_VERSION_METHODS).sort()).toEqual([
+      "discardWorkingDraft",
       "getEntryVersion",
+      "getEntryVersionDiff",
       "listEntryVersions",
       "restoreEntryVersion",
       "setEntryVersionLabel",
@@ -51,6 +53,7 @@ describe("version methods are registered", () => {
   it("exposes every single version method", () => {
     expect(Object.keys(SINGLE_VERSION_METHODS).sort()).toEqual([
       "getSingleVersion",
+      "getSingleVersionDiff",
       "listSingleVersions",
       "restoreSingleVersion",
       "setSingleVersionLabel",
@@ -150,6 +153,18 @@ describe("version methods reach the router", () => {
       method: "setEntryVersionLabel",
       path: ["collections", "posts", "entries", "e1", "versions", "2"],
       verb: "PATCH",
+    },
+    {
+      method: "discardWorkingDraft",
+      path: [
+        "collections",
+        "posts",
+        "entries",
+        "e1",
+        "versions",
+        "working-draft",
+      ],
+      verb: "DELETE",
     },
     {
       method: "listSingleVersions",

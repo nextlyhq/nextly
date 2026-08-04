@@ -5,8 +5,12 @@
  * assertions pin the emitted statement per dialect, since the failure only
  * appears when the migration runs.
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
+import {
+  clearFieldTypes,
+  registerFieldType,
+} from "../../schema/field-types/field-type-registry";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import {
   DynamicCollectionSchemaService,
@@ -25,7 +29,7 @@ function alterAdding(type: string, dialect: SupportedDialect): string {
   return service.generateAlterTableMigration("dc_probe", before, after);
 }
 
-const jsonBackedTypes = ["blocks", "json", "repeater", "group", "chips"];
+const jsonBackedTypes = ["json", "repeater", "group", "chips"];
 
 describe.each(jsonBackedTypes)("adding a required %s column", type => {
   it("uses a mode-independent expression default for mysql", () => {
@@ -46,17 +50,27 @@ describe.each(jsonBackedTypes)("adding a required %s column", type => {
   });
 });
 
-describe("a required blocks column", () => {
-  it("defaults to a real document rather than an empty object", () => {
-    // The generic `{}` other JSON types fall back to carries no formatVersion,
-    // kind, or nodes, so the backfilled rows would hold a value the field's
-    // own validator rejects.
+describe("a required column of a type that declares an empty value", () => {
+  afterEach(() => clearFieldTypes());
+
+  it("backfills with the declared value rather than the primitive's", () => {
+    // The generic `{}` a json-backed type falls back to is right for a bag and
+    // wrong for a structured document: it satisfies the column and then fails
+    // every read that expects the structure. A type states its own value, and
+    // the DDL quotes it per dialect rather than the type writing SQL.
+    registerFieldType({
+      type: "doc",
+      storage: "json",
+      component: "@acme/doc/admin#Input",
+      emptyValue: () => ({ formatVersion: 1, kind: "page", nodes: [] }),
+    });
+
     for (const dialect of [
       "mysql",
       "postgresql",
       "sqlite",
     ] as SupportedDialect[]) {
-      const sql = alterAdding("blocks", dialect);
+      const sql = alterAdding("doc", dialect);
       const hex = sql.match(/X'([0-9a-f]*)'/)?.[1];
       const literal =
         hex !== undefined
@@ -69,5 +83,20 @@ describe("a required blocks column", () => {
         nodes: [],
       });
     }
+  });
+
+  it("leaves a type that declares none to the existing fallback", () => {
+    // Only a declared value is substituted. A type that states nothing keeps
+    // whatever this path already produced for it, so adding the seam changed
+    // no column that did not ask for it.
+    registerFieldType({
+      type: "bag",
+      storage: "json",
+      component: "@acme/bag/admin#Input",
+    });
+
+    const sql = alterAdding("bag", "postgresql");
+
+    expect(sql).not.toContain("formatVersion");
   });
 });

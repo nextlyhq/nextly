@@ -10,6 +10,7 @@
 
 import type { PluginContext } from "nextly";
 
+import { asFormDocument, asSubmissionDocument } from "../document-shapes";
 import type {
   FormDocument,
   SubmissionDocument,
@@ -305,9 +306,22 @@ export async function submitForm(
 
     logger.info?.("Form submission created successfully", {
       formSlug,
-      submissionId: submission.id,
+      submissionId: submission.item.id,
       flaggedAsSpam: isContentSpam,
     });
+
+    // A post-commit hook cannot un-save the submission, so a failure there is
+    // logged against the row rather than turned into a failed submission: the
+    // notification email is the one that fails this way, and telling the
+    // visitor their submission did not go through would have them send it
+    // again.
+    if (submission.warnings) {
+      logger.warn?.("Form submission side effects failed", {
+        formSlug,
+        submissionId: submission.item.id,
+        warnings: submission.warnings,
+      });
+    }
 
     // Email notifications are sent via the afterCreate hook registered in
     // plugin.ts init(), so they fire for all submission paths (HTTP + direct).
@@ -323,7 +337,11 @@ export async function submitForm(
 
     return {
       success: true,
-      submission: submission as unknown as SubmissionDocument,
+      // The created ROW, not the envelope around it. Through the shared
+      // conversion, which is where the unchecked step lives and says so; the
+      // integration test reads `submission.id` off the result because nothing
+      // at compile time will.
+      submission: asSubmissionDocument(submission.item),
       redirect,
     };
   } catch (error) {
@@ -369,7 +387,7 @@ export async function fetchFormBySlug(
     );
 
     const form = result.data?.[0];
-    return form ? (form as unknown as FormDocument) : null;
+    return form ? asFormDocument(form) : null;
   } catch {
     return null;
   }

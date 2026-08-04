@@ -27,8 +27,13 @@ import {
   setWebhookAuditEnabled,
 } from "../../../domains/webhooks/recording-activation";
 import { NextlyError } from "../../../errors/nextly-error";
-import { registerHook, unregisterHook } from "../../../hooks";
-import type { HookHandler } from "../../../hooks/types";
+import {
+  registerBeforeOperationHook,
+  registerHook,
+  unregisterBeforeOperationHook,
+  unregisterHook,
+} from "../../../hooks";
+import type { BeforeOperationHandler, HookHandler } from "../../../hooks/types";
 import {
   createTestNextly,
   type TestNextly,
@@ -609,7 +614,7 @@ describePg(
       const adapter = await connectSingleConnection();
       let handle: TestNextly | undefined;
       // A beforeOperation hook that reads the registry via context.executor.
-      const beforeOpHook: HookHandler = async context => {
+      const beforeOpHook: BeforeOperationHandler = async context => {
         const registry = container.get<CollectionRegistryService>(
           "collectionRegistryService"
         );
@@ -623,7 +628,7 @@ describePg(
           adapter,
           collections: [openCollection(BEFOREOP_SLUG)],
         });
-        registerHook("beforeOperation", BEFOREOP_SLUG, beforeOpHook);
+        registerBeforeOperationHook(BEFOREOP_SLUG, beforeOpHook);
         const entries = handle
           .getService<CollectionsHandler>("collectionsHandler")
           .getEntryService() as CollectionEntryService;
@@ -642,7 +647,7 @@ describePg(
         expect(result.successful).toBe(1);
         expect(result.failed).toBe(0);
       } finally {
-        unregisterHook("beforeOperation", BEFOREOP_SLUG, beforeOpHook);
+        unregisterBeforeOperationHook(BEFOREOP_SLUG, beforeOpHook);
         await handle?.destroy();
       }
     }, 30_000);

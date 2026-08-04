@@ -39,8 +39,12 @@
  * ```
  */
 
-import type { FieldConfig } from "../../collections/fields/types";
+import type {
+  AuthorableFieldConfig,
+  FieldConfig,
+} from "../../collections/fields/types";
 import type { SingleAccessControl } from "../../domains/auth/services/access-control-types";
+import { columnsDeclaredBy } from "../../domains/schema/services/field-column-descriptor";
 
 import type {
   SingleConfig,
@@ -182,7 +186,30 @@ function toTitleCase(str: string): string {
  * });
  * ```
  */
-export function defineSingle(config: SingleConfig): SingleConfig {
+/**
+ * A single as an author writes it: `SingleConfig` with a fields array that
+ * also admits a contributed type declared through `pluginField()`.
+ */
+
+/**
+ * The authored fields as the rest of the system reads them.
+ *
+ * A contributed declaration is structurally a field — a name, a type, and the
+ * options its own type reads — and every internal consumer dispatches on
+ * `type` as a string. The authoring widening exists so a plugin type can be
+ * written down; it is dropped at this boundary, after validation, rather than
+ * carried into the union every reader shares, where an index-signature member
+ * would widen property access for all of them.
+ */
+function asDeclaredFields(fields: AuthorableFieldConfig[]): FieldConfig[] {
+  return fields as FieldConfig[];
+}
+
+export type SingleConfigInput = Omit<SingleConfig, "fields"> & {
+  fields: AuthorableFieldConfig[];
+};
+
+export function defineSingle(config: SingleConfigInput): SingleConfig {
   // ============================================================
   // Comprehensive Validation
   // ============================================================
@@ -193,7 +220,11 @@ export function defineSingle(config: SingleConfig): SingleConfig {
   // - Field-specific validation (select options, relationship targets, etc.)
   // - Nested field validation (array, group, blocks)
   // - Access function type validation (read/update only)
-  assertValidSingleConfig(config);
+  // Validated as declared; narrowed to the shared union only after.
+  assertValidSingleConfig({
+    ...config,
+    fields: asDeclaredFields(config.fields),
+  });
 
   // ============================================================
   // Auto-inject system fields (title, slug)
@@ -202,18 +233,14 @@ export function defineSingle(config: SingleConfig): SingleConfig {
   // (createDefaultDocument always writes them). If the user already defined
   // fields with these names, their definitions take priority.
 
-  const userFieldNames = new Set(
-    config.fields
-      .filter(
-        (f): f is FieldConfig & { name: string } =>
-          "name" in f && typeof f.name === "string"
-      )
-      .map(f => f.name)
-  );
+  // Keyed by the COLUMN each field becomes, not by its declared name. A field named `Title` owns
+  // the `title` column, so injecting the system one beside it declares that column twice and the
+  // table cannot be created — the injection has to ask the same question the generators do.
+  const userFieldColumns = columnsDeclaredBy(config.fields);
 
   const systemFields: FieldConfig[] = [];
 
-  if (!userFieldNames.has("title")) {
+  if (!userFieldColumns.has("title")) {
     systemFields.push({
       type: "text",
       name: "title",
@@ -228,7 +255,7 @@ export function defineSingle(config: SingleConfig): SingleConfig {
     });
   }
 
-  if (!userFieldNames.has("slug")) {
+  if (!userFieldColumns.has("slug")) {
     systemFields.push({
       type: "text",
       name: "slug",
@@ -240,7 +267,10 @@ export function defineSingle(config: SingleConfig): SingleConfig {
     });
   }
 
-  const fieldsWithSystem = [...systemFields, ...config.fields];
+  const fieldsWithSystem = [
+    ...systemFields,
+    ...asDeclaredFields(config.fields),
+  ];
 
   // ============================================================
   // Apply Defaults
