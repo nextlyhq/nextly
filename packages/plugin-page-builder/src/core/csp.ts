@@ -44,6 +44,13 @@ export const CSP_FETCH_DIRECTIVES = [
   "media-src",
   "frame-src",
   "font-src",
+  // `'none'`, and present even though nothing here contributes sources to it.
+  // A block registered outside this package renders its own markup, and an
+  // `<object data="…">` fetches without a user action like any other resource.
+  // With no `default-src` in a policy built from these directives alone, an
+  // omitted `object-src` falls back to nothing and objects load freely — on
+  // exactly the unparsed surface this policy exists to cover.
+  "object-src",
 ] as const;
 
 export type CspFetchDirective = (typeof CSP_FETCH_DIRECTIVES)[number];
@@ -67,47 +74,90 @@ export interface CspOptions {
   allowBlobMedia?: boolean;
 }
 
-/** A pattern's origin as a CSP source expression, or `undefined` if unusable. */
+/**
+ * A pattern as a CSP source expression, or `undefined` when it has none.
+ *
+ * `undefined` is the answer whenever the translation would not be EXACT, and
+ * the reasons are worth stating because each is a place the two systems use the
+ * same word differently:
+ *
+ * - `protocol` must be `https`. A CSP `http://` source matches https requests
+ *   too (CSP 3 upgrades insecure schemes), while the matcher compares schemes
+ *   exactly — so an http pattern becomes a source allowing more than the
+ *   pattern does. An omitted protocol means either scheme to the matcher and
+ *   the document's own scheme to CSP, which is a mismatch in the other
+ *   direction.
+ * - `port` must be absent, meaning ANY port to the matcher, which CSP writes as
+ *   `:*`. An explicit port is refused: the URL parser canonicalises a default
+ *   port away before the matcher compares it, so `port: "443"` on https matches
+ *   no request at all, and emitting it would allow an origin the pattern
+ *   forbids.
+ * - `hostname` must be literal, or one leading `*.` and literal after. The rest
+ *   of picomatch has no CSP equivalent and no safe approximation: widening
+ *   `cdn-*.co.uk` to `*.co.uk` allows every site under a public suffix.
+ * - `pathname` must be absent or a `/prefix/**` glob, which CSP expresses as a
+ *   path ending in `/`. `/img/*` bounds the match to one segment and CSP cannot
+ *   say that.
+ * - `search` must be absent. CSP does not match query strings, so a pattern
+ *   restricting one would become a source that does not.
+ */
 function sourceExpression(input: RemotePatternInput): string | undefined {
-  let pattern: RemotePattern;
-  if (input instanceof URL) {
-    // The origin policy refuses anything that is not http(s), so a `URL`
-    // carrying another scheme allows nothing there. Emitting its host — which
-    // dropping the scheme would do — would let the CSP permit a host the
-    // parser refuses, which is the one direction these must never differ in.
-    if (input.protocol !== "http:" && input.protocol !== "https:")
-      return undefined;
-    pattern = {
-      // A `URL` writes `https:` where a pattern writes `https`.
-      protocol: input.protocol.slice(0, -1) as "http" | "https",
-      hostname: input.hostname,
-      ...(input.port ? { port: input.port } : {}),
-    };
-  } else {
-    pattern = input;
-  }
+  const pattern: RemotePattern | undefined =
+    input instanceof URL ? fromUrl(input) : input;
+  if (pattern === undefined) return undefined;
 
-  const host = pattern.hostname.trim();
-  if (host === "") return undefined;
+  // Exactly `https`. See the note above for why `http` and an omitted protocol
+  // are both refused rather than approximated.
+  if (pattern.protocol !== "https") return undefined;
 
-  // CSP host sources accept ONE leading `*.` and nothing else, while
-  // `remotePatterns` hostnames are picomatch globs. A glob this cannot express
-  // is REFUSED rather than widened: widening `cdn-*.com` to `*.com` would allow
-  // every registrable domain under a public suffix, which defeats the backstop
-  // it is meant to be. Identifying a public suffix needs a list this package has
-  // no business shipping, so the safe reading is that any host needing a
-  // wildcard beyond the one CSP grammar allows cannot be expressed here.
+  // Untrimmed: the matcher hands the raw value to picomatch, so a hostname with
+  // surrounding whitespace matches nothing there. Trimming it here would emit a
+  // host the pattern does not actually allow.
+  const host = pattern.hostname;
   if (!isExpressibleHost(host)) return undefined;
 
-  // A port reaches the header as text, so anything that is not digits could
-  // close the source and open another directive — `443; script-src *` is a
-  // policy of the caller's choosing. The type says `string`, so this checks
-  // rather than trusts.
-  const port = pattern.port?.trim() ?? "";
-  if (port !== "" && !/^[0-9]+$/.test(port)) return undefined;
+  // An explicit port cannot be expressed faithfully; an absent one means any
+  // port, which is `:*`.
+  if (pattern.port !== undefined && pattern.port !== "") return undefined;
+  if (pattern.search !== undefined && pattern.search !== "") return undefined;
 
-  const scheme = pattern.protocol ? `${pattern.protocol}://` : "";
-  return `${scheme}${host}${port === "" ? "" : `:${port}`}`;
+  const path = cspPath(pattern.pathname);
+  if (path === undefined) return undefined;
+
+  return `https://${host}:*${path}`;
+}
+
+/** A `URL` reduced to the pattern fields, or `undefined` when it cannot be. */
+function fromUrl(url: URL): RemotePattern | undefined {
+  if (url.protocol !== "https:") return undefined;
+  // A `URL` always carries a pathname, and `/` means "this path only" to the
+  // matcher — which is not what a bare origin usually intends and not something
+  // to guess about.
+  if (url.pathname !== "/" || url.search !== "") return undefined;
+  return {
+    protocol: "https",
+    hostname: url.hostname,
+    // An empty port on a `URL` means the default port, which the matcher
+    // compares against the request's canonicalised (empty) port. That is a
+    // faithful "any port" only because both sides are empty.
+    ...(url.port === "" ? {} : { port: url.port }),
+  };
+}
+
+/**
+ * A pattern pathname as a CSP path, or `undefined` when it cannot be expressed.
+ *
+ * CSP path matching is a prefix when the path ends in `/`, and exact otherwise.
+ * That covers `/img/**` and a literal path; `/img/*` bounds the match to a
+ * single segment, which CSP has no way to say.
+ */
+function cspPath(pathname: string | undefined): string | undefined {
+  if (pathname === undefined || pathname === "" || pathname === "**") return "";
+  if (!pathname.startsWith("/")) return undefined;
+  const prefix = pathname.slice(0, -3);
+  if (pathname.endsWith("/**") && !prefix.includes("*")) return `${prefix}/`;
+  if (!pathname.includes("*")) return pathname;
+  return undefined;
 }
 
 /**
@@ -177,6 +227,7 @@ export function cspDirectives(
     "media-src": [...base(), ...(allowBlobMedia ? ["blob:"] : [])],
     "frame-src": base(),
     "font-src": base(),
+    "object-src": ["'none'"],
   };
 }
 
@@ -213,14 +264,41 @@ export function mergeCspDirectives(
   existing: Readonly<Record<string, readonly string[]>>,
   generated: Readonly<Record<string, readonly string[]>>
 ): Record<string, string[]> {
+  // Directive names are case-insensitive to CSP. Comparing them as written
+  // would emit `IMG-SRC` and `img-src` as two directives, and a browser honours
+  // the FIRST — so the generated sources would be the ones ignored.
+  const normalise = (
+    source: Readonly<Record<string, readonly string[]>>
+  ): Map<string, readonly string[]> => {
+    const out = new Map<string, readonly string[]>();
+    // First occurrence wins, which is what a browser does with a repeated
+    // directive. Taking the last would activate sources the browser was
+    // ignoring, widening the host's policy by reserialising it.
+    for (const [name, sources] of Object.entries(source)) {
+      const key = name.toLowerCase();
+      if (!out.has(key)) out.set(key, sources);
+    }
+    return out;
+  };
+
+  const before = normalise(existing);
+  const add = normalise(generated);
   const merged: Record<string, string[]> = {};
-  for (const name of new Set([
-    ...Object.keys(existing),
-    ...Object.keys(generated),
-  ])) {
-    merged[name] = [
-      ...new Set([...(existing[name] ?? []), ...(generated[name] ?? [])]),
-    ];
+
+  for (const [name, sources] of before) merged[name] = [...sources];
+
+  for (const [name, sources] of add) {
+    // A directive the host does not declare is INHERITED from `default-src`
+    // (or, for `frame-src`, from `child-src` first). Writing an explicit one
+    // stops that inheritance, so it has to start from what was being inherited
+    // — otherwise adding an image source removes every image source the host
+    // was relying on `default-src` to provide.
+    const inherited =
+      merged[name] ??
+      (name === "frame-src" ? before.get("child-src") : undefined) ??
+      before.get("default-src") ??
+      [];
+    merged[name] = [...new Set([...inherited, ...sources])];
   }
   return merged;
 }
@@ -231,7 +309,13 @@ export function parseCspHeader(value: string): Record<string, string[]> {
   for (const clause of value.split(";")) {
     const [name, ...sources] = clause.trim().split(/\s+/);
     if (!name) continue;
-    directives[name.toLowerCase()] = sources;
+    const key = name.toLowerCase();
+    // First occurrence wins, which is what a browser does with a repeated
+    // directive. Overwriting with the last would activate sources the browser
+    // was ignoring, so merely parsing and reserialising a policy would widen
+    // it — before anything was even merged in.
+    if (key in directives) continue;
+    directives[key] = sources;
   }
   return directives;
 }

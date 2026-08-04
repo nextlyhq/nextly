@@ -22,22 +22,27 @@
 "@nextlyhq/tsconfig": patch
 ---
 
-The page builder can now generate the Content-Security-Policy fetch directives
-for the hosts it is configured to allow.
+The page builder can now generate Content-Security-Policy fetch directives for
+the hosts it is configured to allow, as a backstop to the origin policy already
+enforced when compiling styles and markup.
 
-Custom CSS and block markup can make a request conditional on a secret, and the
-parser refuses what it can read. A CSP refuses the REQUEST, which covers the
-places a parser cannot reach — a block registered outside the package, and a
-cross-origin `<base href>` that re-points every relative URL on the page.
-
-`cspDirectives(remotePatterns)` builds `img-src`, `media-src`, `frame-src` and
-`font-src` from the same allowlist the parser uses, so the hosts are declared
-once. Your app sends the header from its own middleware or `next.config`.
+`cspDirectives(remotePatterns)` builds `img-src`, `media-src`, `frame-src`,
+`font-src` and `object-src 'none'`. Your app sends the header from its own
+middleware or `next.config`.
 
 If the response already carries a policy — Nextly's own security headers send
-one — UNION these sources into its directives with `mergeCspDirectives` rather
-than sending a second header. Policies intersect rather than extend, so an
-existing `img-src 'self'` refuses your CDN however many other policies allow it.
+one — union these into it with `mergeCspDirectives` rather than sending a second
+header. Policies intersect rather than extend, so an existing `img-src 'self'`
+refuses your CDN however many other policies allow it.
+
+Only patterns that translate EXACTLY produce a source: `https`, a literal or
+single-wildcard hostname, no explicit port, no query, and a path that is either
+absent or a `/prefix/**` glob. Anything else is refused and named by
+`unexpressibleHosts`, because CSP and `remotePatterns` read several of the same
+words differently — a CSP `http://` source also matches https, and an omitted
+port means "the default port" rather than "any port". The generated policy is
+therefore never broader than the one it backstops; where it cannot express a
+host, you add that source yourself.
 
 No `script-src`: a nonce-based script policy forces dynamic rendering on every
 page and would defeat ISR. Scripts stay your application's business.
