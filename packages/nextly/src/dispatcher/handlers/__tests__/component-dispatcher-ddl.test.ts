@@ -20,13 +20,29 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../../helpers/di", () => ({
   getComponentRegistryFromDI: vi.fn(),
   getAdapterFromDI: vi.fn(),
+  getConfigFromDI: vi.fn(() => undefined),
   // Reached by the companion reconciliation a localized create runs. Omitted, calling it throws and
   // the handler catches that as a companion-provisioning failure — so the assertions below would
   // describe a FAILED migration while passing.
-  getConfigFromDI: vi.fn(() => undefined),
 }));
 
 const executed: string[] = [];
+
+/**
+ * What the handler recorded about its own schema change.
+ *
+ * Asserted alongside the SQL because the SQL alone cannot tell a real run from a swallowed
+ * failure. This path catches its own errors and records `failed` rather than throwing, so a test
+ * inspecting only the emitted statements passes just as happily when the operation fell over.
+ */
+const registerComponent = vi.fn(async (row: unknown) => row);
+
+function recordedOutcome(): string | undefined {
+  const row = registerComponent.mock.calls[0]?.[0] as
+    | { migrationStatus?: string }
+    | undefined;
+  return row?.migrationStatus;
+}
 
 /**
  * The adapter surface a create actually touches: the dialect it reports decides which DDL is
@@ -66,7 +82,7 @@ import { dispatchComponents } from "../component-dispatcher";
 function wireRegistry() {
   const registry = {
     listComponents: vi.fn(),
-    registerComponent: vi.fn(async (row: unknown) => row),
+    registerComponent,
     getComponent: vi.fn(),
     updateComponent: vi.fn(),
     deleteComponent: vi.fn(),
@@ -100,6 +116,7 @@ async function ddlFor(
 }
 
 beforeEach(() => {
+  registerComponent.mockClear();
   vi.mocked(getComponentRegistryFromDI).mockReset();
   vi.mocked(getAdapterFromDI).mockReset();
 });
@@ -117,6 +134,7 @@ describe("createComponent — what the request forwards into the DDL", () => {
   it("creates the table the request names, with its fields", async () => {
     const sql = await ddlFor(base);
 
+    expect(recordedOutcome()).toBe("applied");
     expect(sql).toContain("comp_hero");
     expect(sql).toContain("heading");
     expect(sql).toContain("weight");
@@ -151,6 +169,10 @@ describe("createComponent — what the request forwards into the DDL", () => {
     const companionCreate = executed.find(
       s => s.includes("CREATE TABLE") && s.includes("comp_hero_locales")
     );
+
+    // FIRST, because it is the informative failure: it says the operation fell over rather than
+    // that a variable came back empty.
+    expect(recordedOutcome()).toBe("applied");
 
     expect(mainCreate, "the main table is created").toBeDefined();
     expect(companionCreate, "the companion is created").toBeDefined();

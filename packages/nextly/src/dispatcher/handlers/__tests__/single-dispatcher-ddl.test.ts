@@ -21,13 +21,32 @@ vi.mock("../../helpers/di", () => ({
   getSingleEntryServiceFromDI: vi.fn(),
   getComponentRegistryFromDI: vi.fn().mockReturnValue(undefined),
   getAdapterFromDI: vi.fn(),
+  getConfigFromDI: vi.fn(() => undefined),
   // Reached by the companion reconciliation a localized create runs. Omitted, calling it throws and
   // the handler catches that as a companion-provisioning failure — so the assertions below would
   // describe a FAILED migration while passing.
-  getConfigFromDI: vi.fn(() => undefined),
 }));
 
 const executed: string[] = [];
+
+/**
+ * What the handler recorded about its own schema change.
+ *
+ * Asserted alongside the SQL because the SQL alone cannot tell a real run from a swallowed
+ * failure. Every DDL path here catches its own errors and records `failed` rather than throwing,
+ * so a test that only inspects the emitted statements passes just as happily when the operation
+ * fell over — which is exactly what happened before `getConfigFromDI` was mocked.
+ *
+ * This is the product's own success signal, and the same value the admin shows a user.
+ */
+const registerSingle = vi.fn(async (row: unknown) => row);
+
+function recordedOutcome(): string | undefined {
+  const row = registerSingle.mock.calls[0]?.[0] as
+    | { migrationStatus?: string }
+    | undefined;
+  return row?.migrationStatus;
+}
 
 /**
  * The adapter surface a create actually touches: the dialect it reports decides which DDL is
@@ -76,7 +95,7 @@ function wireRegistry() {
     // Answers "no single owns that table" so the create reaches the DDL path.
     getAllSingles: vi.fn().mockResolvedValue([]),
     getSingleBySlug: vi.fn(),
-    registerSingle: vi.fn(async (row: unknown) => row),
+    registerSingle,
     updateSingle: vi.fn(),
     deleteSingle: vi.fn(),
   };
@@ -103,6 +122,7 @@ async function ddlFor(
 }
 
 beforeEach(() => {
+  registerSingle.mockClear();
   vi.mocked(getSingleRegistryFromDI).mockReset();
   vi.mocked(getSingleEntryServiceFromDI).mockReset();
 });
@@ -120,6 +140,7 @@ describe("createSingle — what the request forwards into the DDL", () => {
   it("creates the table the request names, with its fields", async () => {
     const sql = await ddlFor(base);
 
+    expect(recordedOutcome()).toBe("applied");
     expect(sql).toContain("single_page");
     expect(sql).toContain("body");
     expect(sql).toContain("views");
@@ -180,6 +201,11 @@ describe("createSingle — what the request forwards into the DDL", () => {
     const companionCreate = executed.find(
       s => s.includes("CREATE TABLE") && s.includes("single_page_locales")
     );
+
+    // FIRST, because it is the informative failure: "the handler recorded failed" says the
+    // operation fell over, where a later "companionCreate is undefined" only says a variable is
+    // empty and leaves the reader to work out why.
+    expect(recordedOutcome()).toBe("applied");
 
     expect(mainCreate, "the main table is created").toBeDefined();
     expect(companionCreate, "the companion is created").toBeDefined();
