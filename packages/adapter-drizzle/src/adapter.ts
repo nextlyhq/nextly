@@ -70,7 +70,27 @@ const DATE_DATA_TYPE = /(?:^|\s)date$/;
  * Every real UTC offset is at least fifteen minutes, so a shift is never
  * mistaken for rounding.
  */
-const MAX_STORED_ROUNDING_MS = 1000;
+/**
+ * Suffix for the alias a statement spells a timestamp's wall clock out under.
+ *
+ * Distinctive because it shares a row with the table's own columns, and a
+ * collision would overwrite one of them.
+ */
+const WALL_CLOCK_ALIAS_SUFFIX = "__nextly_wall_clock";
+
+/**
+ * Read a database's own rendering of a timestamp as UTC.
+ *
+ * The statement wrote a UTC wall clock, so reading one back as UTC is what
+ * makes a write agree with a later read. Anything unparseable answers nothing,
+ * leaving the driver's value in place rather than replacing it with an
+ * `Invalid Date`.
+ */
+function parseWallClockAsUtc(text: string): Date | undefined {
+  const normalized = text.trim().replace(" ", "T");
+  const parsed = new Date(`${normalized}Z`);
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+}
 
 /** Whether a table property is a date column that can convert its own values. */
 function isDateColumn(colDef: unknown): colDef is DecodableColumn {
@@ -652,87 +672,86 @@ export abstract class DrizzleAdapter {
   protected mapRowFromRawSql<T = unknown>(
     tableObj: unknown,
     row: T,
-    written?: Record<string, unknown>
+    aliases: ReadonlyArray<{ alias: string; jsName: string }> = []
   ): T {
     const mapped = this.mapDateValuesFromDriver(
       tableObj,
       this.mapRowKeysToJs(tableObj, row)
     );
-    return written === undefined
-      ? mapped
-      : this.correctEchoedDateZone(tableObj, mapped, written);
+    return this.applyWallClockAliases(mapped, aliases);
   }
 
   /**
-   * Read an echoed date in the zone the statement wrote it in, keeping whatever
-   * the database actually stored.
+   * The date columns a statement is about to return, and the alias each one's
+   * wall clock is spelled out under.
    *
-   * A column declared without a time zone holds a wall clock. The statement
-   * binds a UTC one; a driver reads it back in ITS zone, which is the local one,
-   * so the same row comes back shifted by the offset. Only the reading is
-   * wrong -- the wall clock in the database is right -- so the correction is to
-   * read it again as UTC rather than to substitute the value that was bound.
+   * A driver turns a timestamp into a `Date` using ITS zone before any of this
+   * code runs, and that conversion is lossy: a wall clock inside a
+   * daylight-saving gap is a local time that does not exist, so the driver
+   * normalizes it and the original is gone. Asking the database for the wall
+   * clock as text alongside the row is the only way to read it exactly.
    *
-   * Substituting would report an instant the database never stored: a MySQL
-   * `DATETIME` without fractional precision keeps whole seconds, so the row it
-   * holds is not the one that was handed to it, and a later read would disagree
-   * with the write by up to a second.
-   *
-   * Whether the driver shifted anything is DECIDED, not assumed. The value that
-   * was bound is the reference: within a second of it, the driver already read
-   * the wall clock the way the statement wrote it and nothing is done. Every
-   * real offset is at least fifteen minutes, so the two cases cannot be
-   * confused, and a driver configured to read UTC is left alone rather than
-   * corrected twice.
-   *
-   * A column the statement did not return is not added, so a projection stays
-   * what the caller asked for. A column with no bound value -- a database
-   * default -- has no reference to judge against and is left as it came back.
+   * `"*"` covers every date column; a projection covers only the ones it asked
+   * for, so a caller still gets back what it requested and nothing more.
    */
-  private correctEchoedDateZone<T>(
+  protected dateWallClockAliases(
     tableObj: unknown,
-    row: T,
-    written: Record<string, unknown>
-  ): T {
-    if (!tableObj || typeof tableObj !== "object" || !row) return row;
-    const record = row as Record<string, unknown>;
+    returning: string[] | "*" | undefined
+  ): Array<{ sqlName: string; alias: string; jsName: string }> {
+    if (!tableObj || typeof tableObj !== "object" || returning === undefined) {
+      return [];
+    }
+    const requested =
+      returning === "*" ? undefined : new Set(returning.map(String));
 
-    let corrected: Record<string, unknown> | undefined;
+    const aliases: Array<{ sqlName: string; alias: string; jsName: string }> =
+      [];
     for (const [jsName, colDef] of Object.entries(
       tableObj as Record<string, unknown>
     )) {
       if (!isDateColumn(colDef)) continue;
-      if (!(jsName in record)) continue;
-
-      const echoed = record[jsName];
-      if (!(echoed instanceof Date)) continue;
-
       const sqlName = (colDef as { name?: unknown }).name;
-      const bound =
-        written[jsName] ??
-        (typeof sqlName === "string" ? written[sqlName] : undefined);
-      if (!(bound instanceof Date)) continue;
-
-      if (
-        Math.abs(echoed.getTime() - bound.getTime()) <= MAX_STORED_ROUNDING_MS
-      ) {
+      if (typeof sqlName !== "string") continue;
+      if (requested && !requested.has(sqlName) && !requested.has(jsName)) {
         continue;
       }
-
-      corrected ??= { ...record };
-      corrected[jsName] = new Date(
-        Date.UTC(
-          echoed.getFullYear(),
-          echoed.getMonth(),
-          echoed.getDate(),
-          echoed.getHours(),
-          echoed.getMinutes(),
-          echoed.getSeconds(),
-          echoed.getMilliseconds()
-        )
-      );
+      aliases.push({
+        sqlName,
+        alias: `${sqlName}${WALL_CLOCK_ALIAS_SUFFIX}`,
+        jsName,
+      });
     }
-    return (corrected as T | undefined) ?? row;
+    return aliases;
+  }
+
+  /**
+   * Replace each date in a row with the wall clock the database spelled out,
+   * read as UTC, and drop the aliases that carried it.
+   *
+   * The statement writes a UTC wall clock, so reading one back as UTC is what
+   * makes a write and a later read agree. Whatever the column actually stored
+   * is what arrives -- a column keeping only whole seconds reports whole
+   * seconds -- because this is the database's own text, not a value
+   * reconstructed from the one that was bound.
+   */
+  protected applyWallClockAliases<T>(
+    row: T,
+    aliases: ReadonlyArray<{ alias: string; jsName: string }>
+  ): T {
+    if (!row || typeof row !== "object" || aliases.length === 0) return row;
+    const record = row as Record<string, unknown>;
+
+    let resolved: Record<string, unknown> | undefined;
+    for (const { alias, jsName } of aliases) {
+      if (!(alias in record)) continue;
+      resolved ??= { ...record };
+      const text = resolved[alias];
+      delete resolved[alias];
+      if (typeof text !== "string") continue;
+      const parsed = parseWallClockAsUtc(text);
+      if (parsed !== undefined) resolved[jsName] = parsed;
+    }
+    return (resolved as T | undefined) ?? row;
   }
 
   /**

@@ -846,12 +846,25 @@ export class MySqlAdapter extends DrizzleAdapter {
 
         // MySQL has no RETURNING; select the inserted row back. Project only the
         // requested columns so a large JSON snapshot is not read unless asked.
-        const selectList =
+        const insertTableObj = this.getTableObject(table);
+        // Each timestamp's wall clock, spelled out by the database. mysql2
+        // turns one into a `Date` in the LOCAL zone before this code sees it,
+        // and that conversion cannot be undone: a wall clock inside a
+        // daylight-saving gap is normalized away.
+        const aliases = this.dateWallClockAliases(insertTableObj, ret ?? "*");
+        const spelled = aliases
+          .map(
+            a =>
+              `CAST(${this.escapeIdentifier(a.sqlName)} AS CHAR) AS ${this.escapeIdentifier(a.alias)}`
+          )
+          .join(", ");
+        const projected =
           !ret || ret === "*"
             ? "*"
-            : this.mapColumnNamesToSql(this.getTableObject(table), ret)
+            : this.mapColumnNamesToSql(insertTableObj, ret)
                 .map(c => this.escapeIdentifier(c))
                 .join(", ");
+        const selectList = spelled ? `${projected}, ${spelled}` : projected;
 
         // Prefer the primary key: auto-increment via insertId, otherwise a
         // supplied id (manually-keyed tables like nextly_versions). Matching by
@@ -863,11 +876,7 @@ export class MySqlAdapter extends DrizzleAdapter {
             `SELECT ${selectList} FROM ${this.escapeIdentifier(table)} WHERE id = ?`,
             [idValue]
           );
-          return this.mapRowFromRawSql(
-            this.getTableObject(table),
-            rows[0] as T,
-            data
-          );
+          return this.mapRowFromRawSql(insertTableObj, rows[0] as T, aliases);
         }
 
         const whereClauses = columns.map(
@@ -877,11 +886,7 @@ export class MySqlAdapter extends DrizzleAdapter {
           `SELECT ${selectList} FROM ${this.escapeIdentifier(table)} WHERE ${whereClauses.join(" AND ")} LIMIT 1`,
           values
         );
-        return this.mapRowFromRawSql(
-          this.getTableObject(table),
-          rows[0] as T,
-          data
-        );
+        return this.mapRowFromRawSql(insertTableObj, rows[0] as T, aliases);
       },
 
       insertMany: async <T = unknown>(
@@ -923,12 +928,19 @@ export class MySqlAdapter extends DrizzleAdapter {
             ids.push(result.insertId + i);
           }
           const placeholders = ids.map(() => "?").join(", ");
+          const bulkAliases = this.dateWallClockAliases(tableObj, "*");
+          const bulkSpelled = bulkAliases
+            .map(
+              a =>
+                `CAST(${this.escapeIdentifier(a.sqlName)} AS CHAR) AS ${this.escapeIdentifier(a.alias)}`
+            )
+            .join(", ");
           const [rows] = await connection.query<RowDataPacket[]>(
-            `SELECT * FROM ${this.escapeIdentifier(table)} WHERE id IN (${placeholders})`,
+            `SELECT *${bulkSpelled ? `, ${bulkSpelled}` : ""} FROM ${this.escapeIdentifier(table)} WHERE id IN (${placeholders})`,
             ids
           );
-          return (rows as T[]).map((r, index) =>
-            this.mapRowFromRawSql(tableObj, r, data[index])
+          return (rows as T[]).map(r =>
+            this.mapRowFromRawSql(tableObj, r, bulkAliases)
           );
         }
 

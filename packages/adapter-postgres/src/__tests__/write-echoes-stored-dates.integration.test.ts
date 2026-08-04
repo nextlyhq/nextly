@@ -99,6 +99,36 @@ describe.skipIf(!TEST_DB_URL)("PostgreSQL write echoes the stored date", () => {
     expect(stored.w).toContain("15:04:01");
   });
 
+  it("survives a wall clock inside the server's daylight-saving gap", async () => {
+    // 02:00-02:59 does not exist in New York on 2026-03-08, and the process is
+    // in that zone for this suite's sibling cases. A driver handed such a wall
+    // clock normalizes it to 03:30 while constructing its `Date`, so the
+    // original is destroyed before any correction could run -- which is why
+    // the value is read from the database's own text rather than rebuilt.
+    const inGap = new Date("2026-03-08T02:30:00.000Z");
+    const previous = process.env.TZ;
+    process.env.TZ = "America/New_York";
+    try {
+      const written = await adapter.transaction(ctx =>
+        ctx.insert<{ occurredAt: Date }>(
+          TABLE,
+          { id: "dst-1", label: "d", occurred_at: inGap },
+          { returning: "*" }
+        )
+      );
+
+      const read = await adapter.selectOne<{ occurredAt: Date }>(TABLE, {
+        where: { and: [{ column: "id", op: "=", value: "dst-1" }] },
+      });
+
+      expect(written.occurredAt).toEqual(inGap);
+      expect(written.occurredAt).toEqual(read?.occurredAt);
+    } finally {
+      if (previous === undefined) delete process.env.TZ;
+      else process.env.TZ = previous;
+    }
+  });
+
   it("adds no column the caller did not ask to have returned", async () => {
     // A projection is a contract. A row answering with a timestamp the
     // statement never selected would be carrying a column out of thin air.
