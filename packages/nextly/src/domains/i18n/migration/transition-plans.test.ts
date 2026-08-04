@@ -13,6 +13,7 @@ import { describe, expect, it } from "vitest";
 import { buildCompanionTransitionPlans } from "./reconcile-companion";
 
 const disable = {
+  builtBy: "codeFirst" as const,
   slug: "posts",
   tableName: "dc_posts",
   dialect: "postgresql" as const,

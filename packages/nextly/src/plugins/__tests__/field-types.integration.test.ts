@@ -42,7 +42,8 @@ describe("custom field types", () => {
     expect(
       getColumnDescriptor(
         { name: "score", type: "rating" } as unknown as FieldDefinition,
-        "sqlite"
+        "sqlite",
+        "codeFirst"
       )?.kind
     ).toBe("integer");
   });
@@ -51,7 +52,8 @@ describe("custom field types", () => {
     expect(
       getColumnDescriptor(
         { name: "x", type: "totally-unknown" } as unknown as FieldDefinition,
-        "sqlite"
+        "sqlite",
+        "codeFirst"
       )?.kind
     ).toBe("text");
   });

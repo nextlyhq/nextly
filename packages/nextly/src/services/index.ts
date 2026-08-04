@@ -11,9 +11,9 @@ import { RoleInheritanceService } from "../domains/auth/services/role-inheritanc
 import { RolePermissionService } from "../domains/auth/services/role-permission-service";
 import { RoleService } from "../domains/auth/services/role-service";
 import { UserRoleService } from "../domains/auth/services/user-role-service";
+import { MetaRetentionGate } from "../domains/retention/gate";
+import { buildRetentionRunner } from "../domains/retention/passes";
 import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
-import { MetaRetentionGate } from "../domains/webhooks/retention-gate";
-import { WebhookRetentionRunner } from "../domains/webhooks/retention-runner";
 import { resolveWebhookWritePathInfra } from "../domains/webhooks/write-path-infra";
 import type { DatabaseInstance } from "../types/database-operations";
 
@@ -388,14 +388,13 @@ export class ServiceContainer {
       const config = container.has("config")
         ? container.get<NextlyServiceConfig>("config")
         : undefined;
-      const retentionRunner = config?.webhookRetention
-        ? new WebhookRetentionRunner({
-            policy: config.webhookRetention,
-            prune: { adapter: this.adapter, logger },
-            gate: new MetaRetentionGate(this.adapter),
-            logger,
-          })
-        : undefined;
+      const retentionRunner = buildRetentionRunner({
+        adapter: this.adapter,
+        webhookPolicy: config?.webhookRetention,
+        auditPolicy: config?.auditRetention,
+        gate: new MetaRetentionGate(this.adapter),
+        logger,
+      });
       this._media = new LegacyMediaService(
         this.adapter,
         logger,

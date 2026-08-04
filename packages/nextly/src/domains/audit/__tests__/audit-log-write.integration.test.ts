@@ -17,6 +17,12 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { getDialectTables } from "../../../database/index";
+import {
+  auditFailureMetadata,
+  projectAuditMetadata,
+} from "../audit-log-writer";
+import { AUDIT_REASONS } from "../audit-reasons";
+import { NextlyError } from "../../../errors/nextly-error";
 import { getNextlyLogger } from "../../../observability/logger";
 import { buildAuditLogWriter } from "../audit-log-writer";
 
@@ -150,5 +156,368 @@ describe("dialect resolution", () => {
 
     expect(usedTable).toBe(getDialectTables("postgresql").auditLog);
     expect(usedTable).not.toBe(getDialectTables("sqlite").auditLog);
+  });
+});
+
+/**
+ * A NextlyError's `logContext` is written for operator triage and the auth
+ * failures put an attempted email and a user id in it. A failure event is
+ * recorded with NO actor, precisely so it cannot reveal which account was
+ * reached — which also means nothing links the row to a person and the deletion
+ * that erases their other rows can never find it. So the identifier must not be
+ * stored at all rather than erased later.
+ */
+describe("projectAuditMetadata", () => {
+  it("drops identifiers the error context carried", () => {
+    const projected = projectAuditMetadata({
+      email: "victim@example.com",
+      userId: "u-123",
+      reason: "password-mismatch",
+    });
+
+    expect(projected).toEqual({ reason: "password-mismatch" });
+    expect(JSON.stringify(projected)).not.toContain("victim@example.com");
+    expect(JSON.stringify(projected)).not.toContain("u-123");
+  });
+
+  it("drops a reason a plugin chose rather than one we produce", () => {
+    // An AuthStrategy is application code and its failure result carries a
+    // free-text reason, which the login handler copies into the error context.
+    // Allowlisting the KEY would let that text through under an approved name —
+    // onto a row with no actor, which no later deletion can find.
+    expect(
+      projectAuditMetadata({ reason: "no account for ada@example.com" })
+    ).toEqual({});
+    // What this package produces is still kept, so the diagnostic value the
+    // allowlist exists for survives.
+    expect(projectAuditMetadata({ reason: "password-mismatch" })).toEqual({
+      reason: "password-mismatch",
+    });
+  });
+
+  it("drops a strategy's own text while keeping that it failed", () => {
+    // A strategy failing is a fact this package states; the words the strategy
+    // chose are its own, and travel under a key the trail does not retain.
+    expect(
+      projectAuditMetadata({
+        reason: "strategy-fail",
+        strategyReason: "no SAML assertion for ada@example.com",
+      })
+    ).toEqual({ reason: "strategy-fail" });
+  });
+
+  it("keeps nothing when the context is only identifiers", () => {
+    // Default-deny: a key nobody listed is dropped, so a field added for
+    // logging cannot silently become a new column of the audit trail.
+    expect(projectAuditMetadata({ email: "a@b.c", ipHint: "1.2.3.4" })).toEqual(
+      {}
+    );
+  });
+
+  it("drops a diagnostic code outside the canonical table", () => {
+    // `originalCode` and `legacyCode` are copied from an error's own `code`,
+    // and that code is `NextlyErrorCodeLike` — any string. An application hook
+    // can therefore name a person in it, and the row it lands on has no actor.
+    expect(projectAuditMetadata({ originalCode: "ada@example.com" })).toEqual(
+      {}
+    );
+    expect(projectAuditMetadata({ legacyCode: "acct-8891-ada" })).toEqual({});
+  });
+
+  it("keeps a diagnostic code the canonical table defines", () => {
+    expect(
+      projectAuditMetadata({
+        originalCode: "TOKEN_EXPIRED",
+        legacyCode: "NOT_FOUND",
+      })
+    ).toEqual({ originalCode: "TOKEN_EXPIRED", legacyCode: "NOT_FOUND" });
+  });
+
+  it("keeps every reason the audited handlers can reach", () => {
+    // Stated here independently of the vocabulary the projection consults: a
+    // list checked against itself stays true when an entry is deleted from
+    // both. Each of these is emitted on a path whose failure is recorded, so
+    // dropping one leaves the operator the same INVALID_CREDENTIALS for
+    // materially different failures.
+    const reachable = [
+      // auth/credentials/verify-credentials.ts
+      "user-not-found",
+      "password-mismatch",
+      "unverified",
+      "inactive",
+      "locked",
+      // domains/auth/services/auth-service.ts
+      "no-password-hash",
+      "current-password-mismatch",
+      // auth/handlers/login.ts
+      "strategy-fail",
+      "no-strategy-matched",
+      // auth/handlers/challenge-resolve.ts
+      "pending-token-invalid",
+      "challenge-attempts-exhausted",
+      "challenge-failed-final",
+      "challenge-user-missing",
+      // auth/handlers/set-initial-password.ts
+      "pending-token-wrong-challenge",
+      "not-in-must-change-state",
+      "user-missing",
+    ];
+
+    for (const reason of reachable) {
+      expect(projectAuditMetadata({ reason })).toEqual({ reason });
+    }
+    // Nothing is admitted to the trail that no audited handler emits.
+    expect([...AUDIT_REASONS].sort()).toEqual([...reachable].sort());
+  });
+});
+
+/**
+ * Everything a failure row stores is decided here, so the three handlers that
+ * record one cannot drift apart — and so no value reaches the row without
+ * having been checked against a vocabulary this package controls.
+ */
+describe("auditFailureMetadata", () => {
+  it("replaces an error code the canonical table does not define", () => {
+    // A plugin builds its own NextlyError, and `code` accepts any string.
+    // Storing it verbatim would put whatever it says on an unattributed row.
+    expect(
+      auditFailureMetadata(
+        new NextlyError({
+          code: "ada@example.com",
+          publicMessage: "Invalid email or password.",
+        })
+      )
+    ).toEqual({ code: "INTERNAL_ERROR" });
+  });
+
+  it("keeps a canonical error code and its projected context", () => {
+    expect(
+      auditFailureMetadata(
+        NextlyError.invalidCredentials({
+          logContext: { reason: "password-mismatch", userId: "u-1" },
+        })
+      )
+    ).toEqual({
+      code: "AUTH_INVALID_CREDENTIALS",
+      reason: "password-mismatch",
+    });
+  });
+
+  it("replaces a code that only the prototype chain would supply", () => {
+    // `in` accepts these; they are not entries in the canonical table, and the
+    // value is chosen by whoever threw the error.
+    for (const code of [
+      "constructor",
+      "toString",
+      "__proto__",
+      "hasOwnProperty",
+    ]) {
+      expect(
+        auditFailureMetadata(
+          new NextlyError({ code, publicMessage: "Invalid email or password." })
+        )
+      ).toEqual({ code: "INTERNAL_ERROR" });
+    }
+    expect(projectAuditMetadata({ originalCode: "constructor" })).toEqual({});
+  });
+
+  it("reports the withheld detail wherever it is called from", () => {
+    // Every handler that records a failure gets the operator report by calling
+    // this, rather than by remembering to log alongside it. Reporting and
+    // projecting are one contract — what the trail withholds reaches the
+    // operator or nowhere — so deciding both here is what keeps a handler from
+    // silently discarding the detail its failure carried.
+    const logged: Record<string, unknown>[] = [];
+    const logger = getNextlyLogger();
+    const originalWarn = logger.warn.bind(logger);
+    logger.warn = (payload: unknown) => {
+      logged.push(payload as Record<string, unknown>);
+      return undefined as never;
+    };
+
+    try {
+      const metadata = auditFailureMetadata(
+        NextlyError.invalidCredentials({
+          logContext: {
+            reason: "strategy-fail",
+            strategyReason: "no SAML assertion for ada@example.com",
+            email: "ada@example.com",
+          },
+        }),
+        "req-42"
+      );
+      // Withheld from the row...
+      expect(metadata).toEqual({
+        code: "AUTH_INVALID_CREDENTIALS",
+        reason: "strategy-fail",
+      });
+    } finally {
+      logger.warn = originalWarn;
+    }
+
+    // ...and reported to the operator, which is the other half of the contract.
+    const entry = logged.find(e => e.kind === "auth-failed");
+    expect(entry?.requestId).toBe("req-42");
+    expect(entry?.context).toMatchObject({
+      strategyReason: "no SAML assertion for ada@example.com",
+    });
+  });
+
+  it("reports a failure that is not ours at all", () => {
+    // An untyped failure has the LEAST in the row and the most in the error:
+    // nothing but INTERNAL_ERROR is recorded, so its message reaches the
+    // operator here or is lost entirely.
+    const logged: Record<string, unknown>[] = [];
+    const logger = getNextlyLogger();
+    const originalWarn = logger.warn.bind(logger);
+    logger.warn = (payload: unknown) => {
+      logged.push(payload as Record<string, unknown>);
+      return undefined as never;
+    };
+
+    try {
+      expect(
+        auditFailureMetadata(new TypeError("afterLogin exploded"))
+      ).toEqual({ code: "INTERNAL_ERROR" });
+      // A canonical code with no context still has a cause worth reading.
+      auditFailureMetadata(
+        NextlyError.internal({ cause: new Error("connection reset") })
+      );
+    } finally {
+      logger.warn = originalWarn;
+    }
+
+    expect(logged[0]?.error).toBe("afterLogin exploded");
+    expect(logged[1]?.cause).toBe("connection reset");
+  });
+
+  it("reports an operator message the row has nowhere to keep", () => {
+    // `logMessage` is operator-only by design, so an error carrying its whole
+    // diagnosis there and nothing else would leave a generic code and no
+    // explanation anywhere.
+    const logged: Record<string, unknown>[] = [];
+    const logger = getNextlyLogger();
+    const originalWarn = logger.warn.bind(logger);
+    logger.warn = (payload: unknown) => {
+      logged.push(payload as Record<string, unknown>);
+      return undefined as never;
+    };
+
+    try {
+      auditFailureMetadata(
+        NextlyError.serviceUnavailable({
+          logMessage: "SAML provider unavailable",
+        })
+      );
+    } finally {
+      logger.warn = originalWarn;
+    }
+
+    expect(logged[0]?.logMessage).toBe("SAML provider unavailable");
+  });
+
+  it("survives an error whose diagnostic accessors throw", () => {
+    // Every field of an application-supplied error may be accessor-backed. A
+    // read that escapes takes down the request, since this runs inside the auth
+    // handlers' catch blocks — the caller would lose the typed response and the
+    // audit row to a check about whether to write a log line.
+    const hostile = NextlyError.invalidCredentials({});
+    for (const field of ["logContext", "cause", "logMessage"]) {
+      Object.defineProperty(hostile, field, {
+        get() {
+          throw new Error(`hostile ${field}`);
+        },
+        configurable: true,
+      });
+    }
+
+    expect(auditFailureMetadata(hostile, "req-1")).toEqual({
+      code: "AUTH_INVALID_CREDENTIALS",
+    });
+  });
+
+  it("keeps its own classification when a hook supplies those keys", () => {
+    // `logContext` is written by application code. Spread, it could overwrite
+    // the fields this adds — making a failure unsearchable as an auth failure,
+    // or attributing it to a request that never happened.
+    const logged: Record<string, unknown>[] = [];
+    const logger = getNextlyLogger();
+    const originalWarn = logger.warn.bind(logger);
+    logger.warn = (payload: unknown) => {
+      logged.push(payload as Record<string, unknown>);
+      return undefined as never;
+    };
+
+    try {
+      auditFailureMetadata(
+        NextlyError.invalidCredentials({
+          logContext: {
+            kind: "not-auth",
+            requestId: "forged",
+            code: "FORGED",
+          },
+        }),
+        "req-real"
+      );
+    } finally {
+      logger.warn = originalWarn;
+    }
+
+    expect(logged).toHaveLength(1);
+    expect(logged[0].kind).toBe("auth-failed");
+    expect(logged[0].requestId).toBe("req-real");
+    expect(logged[0].code).toBe("AUTH_INVALID_CREDENTIALS");
+  });
+
+  it("still returns metadata when reading a key throws", () => {
+    // `logContext` is written by application code, which may expose a getter or
+    // a Proxy trap. The read happens inside the auth handlers' catch blocks, so
+    // an escaping exception costs the caller both the typed response and the
+    // audit row.
+    const hostile: Record<string, unknown> = {
+      get reason(): string {
+        throw new Error("hostile getter");
+      },
+      originalCode: "TOKEN_EXPIRED",
+    };
+
+    expect(projectAuditMetadata(hostile)).toEqual({
+      originalCode: "TOKEN_EXPIRED",
+    });
+  });
+
+  it("still returns metadata when the context cannot be serialised", () => {
+    // This runs inside the auth handlers' catch blocks, and the default logger
+    // serialises with JSON.stringify. A second exception there would escape the
+    // handler, so the caller would get neither the typed response nor the row.
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    const logger = getNextlyLogger();
+    const originalWarn = logger.warn.bind(logger);
+    logger.warn = (payload: unknown) => {
+      JSON.stringify(payload);
+      return undefined as never;
+    };
+
+    try {
+      expect(
+        auditFailureMetadata(
+          NextlyError.invalidCredentials({
+            logContext: { reason: "password-mismatch", cyclic, big: 1n },
+          })
+        )
+      ).toEqual({
+        code: "AUTH_INVALID_CREDENTIALS",
+        reason: "password-mismatch",
+      });
+    } finally {
+      logger.warn = originalWarn;
+    }
+  });
+
+  it("reports a non-NextlyError as an internal failure", () => {
+    expect(auditFailureMetadata(new TypeError("boom"))).toEqual({
+      code: "INTERNAL_ERROR",
+    });
   });
 });

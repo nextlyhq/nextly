@@ -15,6 +15,8 @@
  * @module domains/schema/pipeline/registered-collections
  */
 
+import type { ColumnOrigin } from "../services/field-column-descriptor";
+
 import type { DesiredCollection } from "./types";
 
 /**
@@ -60,6 +62,22 @@ export function isCodeOwned(row: RegisteredCollectionRow): boolean {
   if (row.locked === true) return true;
   const source = row.source;
   return source === "code" || (!!source && source.startsWith("plugin:"));
+}
+
+/**
+ * Which builder made an entity's table, from the ownership the registry recorded.
+ *
+ * The Schema Builder's two creators disagree with each other about a text field that states no
+ * width, so the entity kind matters as much as the ownership: a collection and a single come from
+ * one creator, a field group from another. An entity the Builder does not own was built by the
+ * pipeline, whichever kind it is.
+ */
+export function builtByFor(
+  kind: "collection" | "single" | "fieldGroup",
+  builderOwned: boolean | undefined
+): ColumnOrigin {
+  if (builderOwned !== true) return "codeFirst";
+  return kind === "fieldGroup" ? "fieldGroup" : "collection";
 }
 
 /** Logger slice used to report a registry that could not be read. */

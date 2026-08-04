@@ -14,6 +14,7 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 import { toSnakeCase as toCanonicalSnakeCase } from "../../schema/services/field-column-descriptor";
 import { resolveLocalizedFieldNames } from "../classify-fields";
 import type { LocalizedFieldRef } from "../companion-join";
@@ -223,6 +224,13 @@ export interface CompanionIntrospectAdapter extends CompanionWriteAdapter {
 export async function reconcileCompanionColumns(
   adapter: CompanionIntrospectAdapter,
   args: {
+    /**
+     * Which builder made the main table. This function CREATES or ALTERS the physical companion, so
+     * its columns have to match the ones the main table's builder would produce — a translatable
+     * field bounded here while the same declaration is unbounded on main refuses in one language
+     * what it accepts in another.
+     */
+    builtBy: ColumnOrigin;
     slug: string;
     tableName: string;
     fields: CompanionFieldLike[];
@@ -306,6 +314,7 @@ export async function reconcileCompanionColumns(
       dialect: args.dialect,
       // Report the companion's ACTUAL status shape on both sides, so the builder sees no status
       // change and emits only the column difference — never an ADD or DROP of `_status`.
+      builtBy: args.builtBy,
       status: hasStatus,
       companionHasStatus: hasStatus,
       companionExists: true,
@@ -567,7 +576,9 @@ export async function localizedColumnsOnBothTables(
     // it then acts on.
     companionExists: companionColumns !== undefined,
     columns: fields
-      .map(f => fieldToLocalizedColumnSpec(f, adapter.dialect)?.name)
+      .map(
+        f => fieldToLocalizedColumnSpec(f, adapter.dialect, "codeFirst")?.name
+      )
       .filter((name): name is string => typeof name === "string")
       .filter(name => onMain.has(name) && onCompanion.has(name)),
     statusOnBoth: onMain.has("status") && onCompanion.has("_status"),
@@ -800,6 +811,8 @@ async function resumeInterruptedSeed(
     slug: string;
     tableName: string;
     dialect: SupportedDialect;
+    /** Which builder made the main table — forwarded to the create it resumes. */
+    builtBy: ColumnOrigin;
     status?: boolean;
     sourceLocale?: string;
     overwriteExisting?: boolean;
@@ -946,6 +959,8 @@ async function buildSeedingCreateStatements(
     slug: string;
     tableName: string;
     dialect: SupportedDialect;
+    /** Which builder made the main table — the companion it creates has to match. */
+    builtBy: ColumnOrigin;
     status?: boolean;
     sourceLocale?: string;
     requireColumnsOnMain?: boolean;
@@ -970,6 +985,7 @@ async function buildSeedingCreateStatements(
     dbName: args.tableName,
     fields: newLocalized,
     dialect: args.dialect,
+    builtBy: args.builtBy,
     defaultLocale: args.sourceLocale,
     collectionLocalized: true,
     status: args.status === true,
@@ -1017,6 +1033,13 @@ async function buildSeedingCreateStatements(
 export async function ensureCompanionTable(
   adapter: CompanionIntrospectAdapter,
   args: {
+    /**
+     * Which builder made the main table. This function CREATES or ALTERS the physical companion, so
+     * its columns have to match the ones the main table's builder would produce — a translatable
+     * field bounded here while the same declaration is unbounded on main refuses in one language
+     * what it accepts in another.
+     */
+    builtBy: ColumnOrigin;
     slug: string;
     tableName: string;
     fields: CompanionFieldLike[];
@@ -1152,6 +1175,7 @@ export async function ensureCompanionTable(
       buildCompanionReconcileStatements({
         slug: args.slug,
         tableName: args.tableName,
+        builtBy: args.builtBy,
         oldLocalized: [],
         newLocalized,
         dialect: args.dialect,

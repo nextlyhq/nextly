@@ -164,3 +164,52 @@ describe("buildDefaultLocaleRestoreStatements", () => {
     expect(buildDefaultLocaleRestoreStatements(spec, [])).toEqual([]);
   });
 });
+
+/**
+ * Disabling localization must not narrow the column it is about to fill.
+ *
+ * The re-added main column is immediately populated FROM the companion, so it has to hold whatever
+ * that column can hold. On a MySQL installation created before the shared renderer emitted TEXT, a
+ * `longText` companion column is physically LONGTEXT — re-adding TEXT and copying into it truncates
+ * a default-locale value past 65 535 characters, silently on a non-strict server.
+ *
+ * These statements go into a migration file with no database to introspect, so the target is sized
+ * to the widest the source could be rather than read from the live column.
+ */
+describe("buildLocalizationDownStatements — the restored column's width", () => {
+  const longTextSpec = (
+    dialect: CompanionMigrationSpec["dialect"]
+  ): CompanionMigrationSpec => ({
+    ...spec,
+    dialect,
+    columns: [{ name: "body", kind: "longText" }],
+  });
+
+  it("re-adds a MySQL long text column wide enough for a legacy companion", () => {
+    expect(buildLocalizationDownStatements(longTextSpec("mysql"))[0]).toContain(
+      "ADD COLUMN `body` LONGTEXT"
+    );
+  });
+
+  // The other dialects have one unbounded text type, so there is nothing wider to reach for.
+  it.each(["postgresql", "sqlite"] as const)(
+    "keeps TEXT on %s, which has no wider type to restore into",
+    dialect => {
+      expect(
+        buildLocalizationDownStatements(longTextSpec(dialect))[0]
+      ).toContain(`ADD COLUMN "body" TEXT`);
+    }
+  );
+
+  // The narrow kinds are unaffected: only the kind whose renderer changed is widened here.
+  it("does not widen a bounded column", () => {
+    const bounded: CompanionMigrationSpec = {
+      ...spec,
+      dialect: "mysql",
+      columns: [{ name: "code", kind: "shortText", length: 32 }],
+    };
+    expect(buildLocalizationDownStatements(bounded)[0]).toContain(
+      "ADD COLUMN `code` VARCHAR(32)"
+    );
+  });
+});

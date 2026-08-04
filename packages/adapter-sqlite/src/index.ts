@@ -770,6 +770,10 @@ export class SqliteAdapter extends DrizzleAdapter {
         }
       },
 
+      // Keys only, unlike the PostgreSQL and MySQL raw paths, which also encode
+      // their date values. `sanitizeSqliteValue` below binds a `Date` as unix
+      // seconds, and an instant carries no zone -- so what SQLite stores does
+      // not depend on the server's timezone and there is nothing to correct.
       // eslint-disable-next-line @typescript-eslint/require-await
       insert: async <T = unknown>(
         table: string,

@@ -25,6 +25,7 @@ import type {
   PluginCategory,
   PluginDefinition,
 } from "./plugin-context";
+import { validatedClientConfig } from "./validate-client-config";
 
 /**
  * The serialized admin-meta entry for a single plugin, consumed by the admin
@@ -64,6 +65,12 @@ export interface PluginAdminMeta {
   singles?: string[];
   /** Slugs of contributed field groups, for the detail page's contributions view. */
   fieldGroups?: string[];
+  /**
+   * The plugin's own configuration for its admin components. Served to
+   * anonymous callers, because this endpoint needs no authentication, and
+   * JSON-only; see `PluginAdminContributions.clientConfig`.
+   */
+  clientConfig?: Record<string, unknown>;
   /**
    * Declared custom permissions (identity + display fields only) — present
    * only for enabled plugins, like the rest of the behavioral surface.
@@ -135,6 +142,16 @@ export function pluginAdminSlug(name: string): string {
 }
 
 /**
+ * The value if it survives a JSON round trip unchanged, otherwise `undefined`.
+ *
+ * Round-tripped rather than type-walked, because the question is exactly "will
+ * the client see what the plugin wrote". A structural check would have to keep
+ * its own list of things JSON drops, and that list is the thing that goes out
+ * of date — `Date`, `Map`, `Set`, `BigInt`, `undefined` in an array, a getter
+ * that throws, a `toJSON` that rewrites the value. Comparing the result to the
+ * input catches all of them, including the ones nobody enumerated.
+ */
+/**
  * Build the `plugins[]` admin-meta array from the registered plugins, applying
  * host `pluginOverrides` (placement/order/after/appearance) and folding each
  * enabled plugin's `contributes.admin` menu/pages/settings.
@@ -188,6 +205,24 @@ export function buildPluginAdminMeta(
     if (singles.length > 0) meta.singles = singles;
     const fieldGroups = plugin.contributes?.fieldGroups?.map(c => c.slug) ?? [];
     if (fieldGroups.length > 0) meta.fieldGroups = fieldGroups;
+
+    // Serialized regardless of enabled state, on the same reasoning as
+    // `fieldTypes` below: a disabled plugin keeps its collections and their
+    // fields, so its field editors still MOUNT, and an editor configured by
+    // this reads `undefined` without it. For the page builder that turns a
+    // configured allowlist into an empty one and makes remote media vanish
+    // from entries that render perfectly well otherwise. Menus and pages are
+    // withheld because a disabled plugin does not render them at all; a
+    // component that still renders still needs its configuration.
+    //
+    // Rejected rather than repaired when it will not round-trip. A config that
+    // arrives with its `Date`s turned into strings and its functions turned
+    // into nothing is harder to diagnose than one that never arrives, because
+    // the shape the component reads still looks plausible.
+    // The same validator boot runs, so this path cannot accept what boot
+    // rejected. Called again here because the reduced value is what publishes.
+    const validated = validatedClientConfig(plugin);
+    if (validated !== undefined) meta.clientConfig = validated;
 
     // Behavioral admin UI only for enabled plugins.
     const admin = plugin.contributes?.admin;

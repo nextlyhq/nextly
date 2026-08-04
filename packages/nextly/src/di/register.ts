@@ -36,6 +36,8 @@ import type { FieldConfig } from "../collections/fields/types";
 import { createAdapterFromEnv, validateDatabaseEnv } from "../database/factory";
 import type { SchemaRegistry } from "../database/schema-registry";
 import { getNextly } from "../direct-api/nextly";
+import type { ResolvedAuditRetentionConfig } from "../domains/audit/retention-config";
+import { setAuditRetention } from "../domains/audit/retention-config";
 import type { ApiKeyService } from "../domains/auth/services/api-key-service";
 import type { AuthService } from "../domains/auth/services/auth-service";
 import type { PermissionSeedService } from "../domains/auth/services/permission-seed-service";
@@ -56,7 +58,9 @@ import {
   registerFieldType,
   withoutDisabledBehavior,
 } from "../domains/schema/field-types/field-type-registry";
+import { builtByFor } from "../domains/schema/pipeline/registered-collections";
 import type { DesiredCollection } from "../domains/schema/pipeline/types";
+import type { ColumnOrigin } from "../domains/schema/services/field-column-descriptor";
 import type { SingleEntryService } from "../domains/singles/services/single-entry-service";
 import type {
   SingleRegistryService,
@@ -290,6 +294,14 @@ export interface NextlyServiceConfig {
    * retention off; absent when this container was built without app config.
    */
   webhookRetention?: ResolvedWebhookRetentionConfig | null;
+  /**
+   * Resolved audit-trail retention windows.
+   *
+   * Always a policy once the sanitizer has run, since the windows have
+   * defaults; `undefined` means it was never carried through initialization, in
+   * which case no audit pass is registered and neither trail is pruned.
+   */
+  auditRetention?: ResolvedAuditRetentionConfig;
 
   /**
    * Whether the audit seam forces outbox recording regardless of endpoints.
@@ -642,6 +654,9 @@ export async function registerServices(
       // row, then re-register the runtime table so reads in THIS boot see the
       // new column. A per-entity failure is logged + skipped (retried next boot).
       const materializeKind = async (
+        // Which builder made these tables. This adds columns to an existing table, so the column it
+        // emits has to match the one a fresh table of the same kind would get.
+        builtBy: ColumnOrigin,
         kind: string,
         changed: ReadonlyArray<{ slug: string; fields?: FieldConfig[] }>,
         loaded: LoadedBuilderEntity[],
@@ -667,7 +682,7 @@ export async function registerServices(
               resolvedLogger,
               before.tableName,
               fields,
-              { timestamps: true }
+              { timestamps: true, builtBy }
             );
             await persist(ent.slug, fields);
             if (schemaRegistry) {
@@ -709,6 +724,7 @@ export async function registerServices(
         );
         await materializeKind(
           "collection",
+          "collection",
           collChanged,
           builderEntities.collections,
           (slug, fields) =>
@@ -725,6 +741,7 @@ export async function registerServices(
         );
         const reg = new SingleRegistryService(adapter, resolvedLogger);
         await materializeKind(
+          "collection",
           "single",
           singleChanged,
           builderEntities.singles,
@@ -743,6 +760,7 @@ export async function registerServices(
         const reg = new FieldGroupRegistryService(adapter, resolvedLogger);
         const compSchema = new FieldGroupSchemaService(dialect);
         await materializeKind(
+          "fieldGroup",
           "component",
           compChanged,
           builderEntities.components,
@@ -1112,7 +1130,7 @@ async function initializeSchemaRegistry(
     await loadDynamicTables(
       adapter,
       "dynamic_collections",
-      async (tableName, fields, hasStatus, localized) => {
+      async (tableName, fields, hasStatus, localized, builderOwned) => {
         const { generateRuntimeSchema } = await import(
           "../domains/schema/services/runtime-schema-generator"
         );
@@ -1133,6 +1151,9 @@ async function initializeSchemaRegistry(
             "../domains/i18n/runtime/companion-io"
           );
           await ensureCompanionTable(adapter, {
+            // These registries hold code-first and plugin rows as well as Builder ones, and their
+            // creators size a text column differently, so the row's own ownership decides.
+            builtBy: builtByFor("collection", builderOwned),
             slug: tableName,
             tableName,
             fields: fields as { name: string; type: string }[],
@@ -1168,7 +1189,7 @@ async function initializeSchemaRegistry(
     await loadDynamicTables(
       adapter,
       "dynamic_singles",
-      async (tableName, fields, hasStatus, localized) => {
+      async (tableName, fields, hasStatus, localized, builderOwned) => {
         const { generateRuntimeSchema } = await import(
           "../domains/schema/services/runtime-schema-generator"
         );
@@ -1184,6 +1205,9 @@ async function initializeSchemaRegistry(
             "../domains/i18n/runtime/companion-io"
           );
           await ensureCompanionTable(adapter, {
+            // A single is built by the same service as a collection, but only when the Builder owns
+            // it — this registry carries code-first singles too, and those came from the pipeline.
+            builtBy: builtByFor("single", builderOwned),
             slug: tableName,
             tableName,
             fields: fields as { name: string; type: string }[],
@@ -1228,6 +1252,8 @@ async function initializeSchemaRegistry(
       tableName: string;
       fields: FieldConfig[];
       localized: boolean;
+      /** Ownership as the registry reported it; `undefined` where it is too old to say. */
+      builderOwned: boolean | undefined;
     }> = [];
     // Resolved inside the same best-effort boundary as the load it feeds. An
     // `await` in the argument position rejects BEFORE `loadDynamicTables`
@@ -1241,11 +1267,12 @@ async function initializeSchemaRegistry(
     await loadDynamicTables(
       adapter,
       fieldGroupRegistry ?? STORAGE_FORMAT.registryTable,
-      (tableName, fields, _hasStatus, localized) => {
+      (tableName, fields, _hasStatus, localized, builderOwned) => {
         loadedFieldGroups.push({
           tableName,
           fields: fields as FieldConfig[],
           localized,
+          builderOwned,
         });
         return Promise.resolve();
       }
@@ -1262,7 +1289,12 @@ async function initializeSchemaRegistry(
       adapter,
       loadedFieldGroups.map(entry => entry.tableName)
     );
-    for (const { tableName, fields, localized } of loadedFieldGroups) {
+    for (const {
+      tableName,
+      fields,
+      localized,
+      builderOwned,
+    } of loadedFieldGroups) {
       const typeColumn = fieldGroupTypeColumns.get(tableName);
       if (typeColumn === undefined) {
         // 🔴 Left unregistered rather than registered on a guess.
@@ -1297,6 +1329,9 @@ async function initializeSchemaRegistry(
           "../domains/i18n/runtime/companion-io"
         );
         await ensureCompanionTable(adapter, {
+          // As above: a field group's own creator sizes a text column from a different key again,
+          // and a code-first row in this registry was not built by it at all.
+          builtBy: builtByFor("fieldGroup", builderOwned),
           slug: tableName,
           tableName,
           fields: fields as { name: string; type: string }[],
@@ -1876,6 +1911,8 @@ async function syncCodeFirstCollections(
                   "../domains/i18n/runtime/companion-io"
                 );
                 await ensureCompanionTable(adapter, {
+                  // This branch boots entities declared in nextly.config.ts.
+                  builtBy: "codeFirst" as const,
                   slug,
                   tableName: desired.tableName,
                   fields,
@@ -2089,6 +2126,8 @@ async function syncCodeFirstComponents(
                   "../domains/i18n/runtime/companion-io"
                 );
                 await ensureCompanionTable(adapter, {
+                  // A code-first component's companion, created on a fresh boot.
+                  builtBy: "codeFirst" as const,
                   slug,
                   tableName,
                   fields: compConfig.fields as { name: string; type: string }[],
@@ -2355,6 +2394,8 @@ async function reconcileSingleTablesForBoot(
                   "../domains/i18n/runtime/companion-io"
                 );
                 await ensureCompanionTable(adapter, {
+                  // From codeFirstConfig, so the pipeline owns this table.
+                  builtBy: "codeFirst" as const,
                   slug: single.slug,
                   tableName: single.tableName,
                   fields: fields,
@@ -2672,6 +2713,7 @@ export async function shutdownServices(): Promise<void> {
     // process-global too, and its provider closes over this container's
     // registry; clear it so a later instance never resolves a dead one.
     resetWebhookActivation();
+    setAuditRetention(undefined);
     // Hooks live in a registry that outlives the container. Registration runs
     // from config on every init, so leaving it populated means a second
     // instance in the same process appends a fresh copy of every handler and
@@ -2694,6 +2736,7 @@ export function clearServices(): void {
   // Clear the process-global recording activation for the same reason; its
   // provider closes over this container's registry.
   resetWebhookActivation();
+  setAuditRetention(undefined);
   // Cleared with the container for the same reason: re-initializing would
   // otherwise register every configured hook a second time.
   clearActiveHookRegistry();

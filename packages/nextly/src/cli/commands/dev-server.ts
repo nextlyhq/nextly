@@ -653,7 +653,7 @@ export async function performSinglesAutoSync(
           serviceLogger,
           tableName,
           [...systemFields, ...singleConfig.fields] as unknown as FieldConfig[],
-          { timestamps: true }
+          { timestamps: true, builtBy: "collection" }
         );
 
         if (addedColumns.length > 0) {
@@ -930,7 +930,7 @@ export async function performComponentsAutoSync(
           serviceLogger,
           tableName,
           componentConfig.fields,
-          { timestamps: true }
+          { timestamps: true, builtBy: "fieldGroup" }
         );
 
         if (addedColumns.length > 0) {

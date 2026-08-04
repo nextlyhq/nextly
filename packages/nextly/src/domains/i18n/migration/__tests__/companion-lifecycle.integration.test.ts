@@ -54,6 +54,7 @@ describe("companion lifecycle (real SQLite)", () => {
     );
 
     const spec = deriveCompanionSpec({
+      builtBy: "codeFirst" as const,
       slug: "pages",
       dbName: "dc_pages",
       fields: PAGES_FIELDS,
@@ -100,6 +101,7 @@ describe("companion lifecycle (real SQLite)", () => {
     );
 
     const spec = deriveCompanionSpec({
+      builtBy: "codeFirst" as const,
       slug: "docs",
       dbName: "dc_docs",
       fields: PAGES_FIELDS,
@@ -137,6 +139,7 @@ describe("companion lifecycle (real SQLite)", () => {
     );
     db.run(sql`INSERT INTO "dc_pages" ("id","price") VALUES ('p1',10)`);
     const spec = deriveCompanionSpec({
+      builtBy: "codeFirst" as const,
       slug: "pages",
       dbName: "dc_pages",
       fields: PAGES_FIELDS,

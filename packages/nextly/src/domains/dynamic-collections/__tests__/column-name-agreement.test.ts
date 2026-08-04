@@ -89,7 +89,7 @@ describe("collection column names agree across the generators", () => {
 
       for (const name of FIELD_NAMES) {
         const field = { name, type: "text" } as FieldDefinition;
-        const expected = getColumnDescriptor(field, dialect)?.name;
+        const expected = getColumnDescriptor(field, dialect, "codeFirst")?.name;
         const columns = declaredColumns(
           generate.generateMigrationSQL("dc_agree", [field], {
             hasStatus: false,
@@ -204,7 +204,9 @@ describe("all three descriptions of the main table agree", () => {
       "dc_agree",
       fields as Parameters<typeof buildDesiredTableFromFields>[1],
       dialect,
-      options
+      // This compares the collection creator's column names against the descriptor's, so the
+      // descriptor is asked as that same creator.
+      { ...options, builtBy: "collection" as const }
     ).columns.map(column => column.name);
     // The runtime generator spells the publish-lifecycle toggle `status` where the other two
     // spell it `hasStatus`; passing the wrong one silently omits the system column instead of
@@ -702,7 +704,8 @@ describe("junction storage is a relationship feature only", () => {
         expect({
           [`${at}.parentColumn`]: declaredColumns(sql).includes("gallery"),
           [`${at}.descriptorColumn`]:
-            getColumnDescriptor(m2m(type) as never, dialect) !== null,
+            getColumnDescriptor(m2m(type) as never, dialect, "collection") !==
+            null,
           [`${at}.createTables`]: (sql.match(/CREATE TABLE/g) ?? []).length,
         }).toEqual({
           [`${at}.parentColumn`]: want.parentColumn,
@@ -719,7 +722,11 @@ describe("junction storage is a relationship feature only", () => {
     const single = { name: "cover", type: "upload", relationTo: "media" };
 
     expect({
-      descriptor: getColumnDescriptor(single as never, "postgresql")?.name,
+      descriptor: getColumnDescriptor(
+        single as never,
+        "postgresql",
+        "collection"
+      )?.name,
       producesColumn: fieldProducesColumn(single),
     }).toEqual({ descriptor: "cover", producesColumn: true });
   });
@@ -1036,7 +1043,11 @@ describe("the duplicate-column rule and the generator agree on which fields have
         const field = { type, name: "probe", ...variant };
         for (const dialect of DIALECTS) {
           const emitsColumn =
-            getColumnDescriptor(field as FieldDefinition, dialect) !== null;
+            getColumnDescriptor(
+              field as FieldDefinition,
+              dialect,
+              "codeFirst"
+            ) !== null;
           if (fieldProducesColumn(field) !== emitsColumn) {
             disagreements.push(`${type}|v${index}|${dialect}`);
           }

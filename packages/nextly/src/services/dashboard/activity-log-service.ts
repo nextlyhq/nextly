@@ -354,38 +354,6 @@ export class ActivityLogService extends BaseService {
     }
   }
 
-  /**
-   * Delete activity log records older than the specified number of days.
-   *
-   * @param olderThanDays - Delete records older than this many days (default: 90)
-   * @returns Number of deleted records
-   */
-  async cleanupOldActivities(olderThanDays: number = 90): Promise<number> {
-    try {
-      const cutoff = new Date();
-      cutoff.setDate(cutoff.getDate() - olderThanDays);
-      const cutoffStr = this.formatDateForDb(cutoff);
-
-      const deleted = await this.adapter.delete(TABLE, {
-        and: [{ column: "created_at", op: "<", value: cutoffStr }],
-      });
-
-      if (deleted > 0) {
-        this.logger.info(
-          `Cleaned up ${deleted} activity log entries older than ${olderThanDays} days`
-        );
-      }
-
-      return deleted;
-    } catch (error) {
-      this.logger.error("Failed to cleanup old activities", {
-        error: error instanceof Error ? error.message : String(error),
-        olderThanDays,
-      });
-      return 0;
-    }
-  }
-
   private async countActivities(filters: ActivityFilter[]): Promise<number> {
     try {
       let sql = `SELECT COUNT(*) as count FROM ${TABLE}`;

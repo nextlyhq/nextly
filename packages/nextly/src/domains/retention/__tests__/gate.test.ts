@@ -4,13 +4,17 @@
  * There is no scheduler to hang retention off, so passes are gated on a stored
  * marker instead. Any caller may offer to run one; the claim decides.
  */
+import type {
+  WhereClause,
+  WhereCondition,
+} from "@nextlyhq/adapter-drizzle/types";
 import { describe, expect, it, vi } from "vitest";
 
 import {
   claimRetentionPass,
   MetaRetentionGate,
-  RETENTION_GATE_KEY,
-} from "../retention-gate";
+  WEBHOOK_RETENTION_GATE_KEY,
+} from "../../../domains/retention/gate";
 
 const T0 = new Date("2026-07-21T12:00:00.000Z");
 const HOUR = 60 * 60 * 1000;
@@ -31,17 +35,32 @@ function recordingStore(result: boolean) {
   };
 }
 
+/**
+ * The flat conditions of a where clause. `and` may also hold nested clauses;
+ * the gate only ever emits conditions, so anything else is not a case to
+ * handle here.
+ */
+function conditionsOf(where: WhereClause): WhereCondition[] {
+  return (where.and ?? []).filter(
+    (entry): entry is WhereCondition => "column" in entry
+  );
+}
+
 describe("claimRetentionPass", () => {
   it("asks the store to claim the marker as of one interval ago", async () => {
     const store = recordingStore(true);
-    await expect(claimRetentionPass(store, HOUR, T0)).resolves.toBe(true);
-    expect(store.calls[0].key).toBe(RETENTION_GATE_KEY);
+    await expect(
+      claimRetentionPass(store, WEBHOOK_RETENTION_GATE_KEY, HOUR, T0)
+    ).resolves.toBe(true);
+    expect(store.calls[0].key).toBe(WEBHOOK_RETENTION_GATE_KEY);
     expect(store.calls[0].dueBefore).toEqual(new Date(T0.getTime() - HOUR));
   });
 
   it("does not run when the claim is refused", async () => {
     const store = recordingStore(false);
-    await expect(claimRetentionPass(store, HOUR, T0)).resolves.toBe(false);
+    await expect(
+      claimRetentionPass(store, WEBHOOK_RETENTION_GATE_KEY, HOUR, T0)
+    ).resolves.toBe(false);
   });
 
   it("declines rather than pruning ungated when the store fails", async () => {
@@ -51,7 +70,9 @@ describe("claimRetentionPass", () => {
         throw new Error("meta table unavailable");
       }),
     };
-    await expect(claimRetentionPass(broken, HOUR, T0)).resolves.toBe(false);
+    await expect(
+      claimRetentionPass(broken, WEBHOOK_RETENTION_GATE_KEY, HOUR, T0)
+    ).resolves.toBe(false);
   });
 });
 
@@ -66,12 +87,9 @@ describe("MetaRetentionGate", () => {
         return row;
       },
       adapter: {
-        delete: async (
-          _t: string,
-          where: { and: { column: string; value?: unknown }[] }
-        ): Promise<number> => {
+        delete: async (_t: string, where: WhereClause): Promise<number> => {
           ops.push("delete");
-          const before = where.and.find(c => c.column === "updatedAt")
+          const before = conditionsOf(where).find(c => c.column === "updatedAt")
             ?.value as Date;
           if (row && row.updatedAt < before) {
             row = undefined;
@@ -97,7 +115,7 @@ describe("MetaRetentionGate", () => {
     const f = fakeAdapter();
     const gate = new MetaRetentionGate(f.adapter);
     await expect(
-      gate.claim(RETENTION_GATE_KEY, new Date(T0.getTime() - HOUR), T0)
+      gate.claim(WEBHOOK_RETENTION_GATE_KEY, new Date(T0.getTime() - HOUR), T0)
     ).resolves.toBe(true);
     expect(f.row?.updatedAt).toEqual(T0);
   });
@@ -106,7 +124,7 @@ describe("MetaRetentionGate", () => {
     const f = fakeAdapter({ updatedAt: new Date(T0.getTime() - 2 * HOUR) });
     const gate = new MetaRetentionGate(f.adapter);
     await expect(
-      gate.claim(RETENTION_GATE_KEY, new Date(T0.getTime() - HOUR), T0)
+      gate.claim(WEBHOOK_RETENTION_GATE_KEY, new Date(T0.getTime() - HOUR), T0)
     ).resolves.toBe(true);
     // The conditional delete IS the claim; the insert only restamps it.
     expect(f.ops).toEqual(["delete", "insert"]);
@@ -117,7 +135,7 @@ describe("MetaRetentionGate", () => {
     const f = fakeAdapter({ updatedAt: new Date(T0.getTime() - 60_000) });
     const gate = new MetaRetentionGate(f.adapter);
     await expect(
-      gate.claim(RETENTION_GATE_KEY, new Date(T0.getTime() - HOUR), T0)
+      gate.claim(WEBHOOK_RETENTION_GATE_KEY, new Date(T0.getTime() - HOUR), T0)
     ).resolves.toBe(false);
     // Nothing stale to delete, and the primary key rejects a duplicate.
     expect(f.ops).toEqual(["delete", "insert"]);
@@ -134,8 +152,8 @@ describe("MetaRetentionGate", () => {
     // retest that a freshly stamped marker blocks the next claim, not the
     // delete-to-restamp contention the atomic claim exists for.
     const [first, second] = await Promise.all([
-      gate.claim(RETENTION_GATE_KEY, dueBefore, T0),
-      gate.claim(RETENTION_GATE_KEY, dueBefore, T0),
+      gate.claim(WEBHOOK_RETENTION_GATE_KEY, dueBefore, T0),
+      gate.claim(WEBHOOK_RETENTION_GATE_KEY, dueBefore, T0),
     ]);
 
     expect([first, second]).toEqual([true, false]);

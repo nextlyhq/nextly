@@ -1,28 +1,49 @@
 /**
- * Bring the built declarations up to date with the source, if they are behind.
+ * Build the declarations the surface guard reads, into a directory of its own.
  *
  * `ui-surface.test.ts` asserts that release tags survive the declaration
- * bundler, which it can only do against the files in `dist`. Skipping when
- * those are missing is the exact failure the guard exists to catch, so they are
+ * bundler, which it can only do against built files. Skipping when they are
+ * missing is the exact failure the guard exists to catch, so they are
  * generated instead.
  *
- * Every published entry point is built, not just the barrel: `index.d.ts` comes
- * from the default config, and `utils.d.ts` and `tailwind-preset.d.ts` only
- * from the server-safe one. Building one of the two leaves the guard asserting
- * against files that were never written.
+ * ## Not into `dist`, and that matters
  *
- * Deliberately NOT `build:js`: that begins with `rimraf dist`, and in the
- * parallel task graph other packages read this package's `dist` while their own
- * tests run. Removing it mid-run makes them fail for a reason of our making.
- * `tsup` alone rewrites the files in place.
+ * `dist` is what every other package imports this one through. Turbo runs
+ * `@nextlyhq/ui#test` and `@nextlyhq/admin#test` concurrently — both depend on
+ * `@nextlyhq/ui#build`, neither depends on the other, and admin has no path
+ * alias for this package, so its Vitest run resolves the workspace import
+ * through `dist`. Rebuilding there would rewrite the bundle while another
+ * package's tests are reading it, and the resulting failure would appear in a
+ * suite that did nothing wrong.
  *
- * Exported rather than inlined into the global setup because Vitest initialises
- * a global setup once per project, not once per run — so a watch rerun after an
- * edit would otherwise compare against declarations built before it. The suite
- * that depends on these calls this too, where it is re-evaluated every run.
+ * Writing somewhere private removes the shared resource rather than trying to
+ * schedule around it, and it costs nothing: the guard needs to INSPECT a
+ * declaration build, never to replace the shipped one.
+ *
+ * ## The directory is emptied first, so presence proves emission
+ *
+ * Both tsup configs set `clean: false`. Against `dist` that made existence
+ * meaningless — an entry point dropped from a config leaves its previous
+ * declaration behind, present and stale, so the guard would check a file
+ * nothing had produced. Starting from an empty directory answers the same
+ * question exactly, and without comparing timestamps around the build.
+ *
+ * ## It builds every time, on purpose
+ *
+ * An earlier version computed whether the output was stale — walking the
+ * tsconfig `extends` chain, resolving bare and relative specifiers, reading
+ * manifest `tsconfig` fields and `exports` maps, timestamping the workspace
+ * lockfile. That is a build system's dependency tracking, re-implemented in a
+ * test helper, and it did not converge: each correction uncovered another case
+ * it answered wrongly, and every one of those was a case where stale
+ * declarations passed. Rebuilding unconditionally costs about two seconds and
+ * is correct by construction.
+ *
+ * Deliberately NOT `build:js`: that begins by removing `dist`, which is the
+ * shared directory this exists to stay out of.
  */
 import { execFileSync } from "node:child_process";
-import { readdirSync, statSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -30,13 +51,21 @@ const here = dirname(fileURLToPath(import.meta.url));
 const pkgRoot = join(here, "..", "..");
 
 /**
+ * Where the guard's own declaration build lands.
+ *
+ * Under `node_modules` so it is already ignored by git and by every tool that
+ * walks the package, and outside `dist` so no consumer can resolve into it.
+ */
+const OUT_DIR = join(pkgRoot, "node_modules", ".cache", "surface-declarations");
+
+/**
  * Every declaration a published entry point resolves to.
  *
  * Both module systems, because `package.json` gives each entry point an
  * `import.types` AND a `require.types` condition. Listing only the ESM `.d.ts`
- * left the files served to CommonJS consumers unbuilt, unchecked for freshness
- * and unchecked for release tags — so `dist/index.d.cts` could be missing or
- * untagged while every assertion here stayed green.
+ * left the files served to CommonJS consumers unbuilt and unchecked for release
+ * tags, so `index.d.cts` could be missing or untagged while every assertion
+ * here stayed green.
  */
 export const DECLARATION_ENTRIES = [
   "index.d.ts",
@@ -47,39 +76,34 @@ export const DECLARATION_ENTRIES = [
   "tailwind-preset.d.cts",
 ];
 
-function newestSourceMtime(dir: string): number {
-  let newest = 0;
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const full = join(dir, entry.name);
-    if (entry.isDirectory()) {
-      newest = Math.max(newest, newestSourceMtime(full));
-      continue;
-    }
-    if (!/\.(ts|tsx)$/.test(entry.name)) continue;
-    newest = Math.max(newest, statSync(full).mtimeMs);
-  }
-  return newest;
-}
+/**
+ * Build the declarations and return the directory holding them.
+ *
+ * Callers read from the returned path rather than assuming one, so the guard
+ * and the build cannot disagree about where the files are.
+ */
+export function ensureDeclarations(): string {
+  rmSync(OUT_DIR, { recursive: true, force: true });
 
-/** The oldest declaration, or 0 when any of them is missing entirely. */
-function oldestDeclarationMtime(): number {
-  let oldest = Number.POSITIVE_INFINITY;
-  for (const entry of DECLARATION_ENTRIES) {
-    try {
-      oldest = Math.min(oldest, statSync(join(pkgRoot, "dist", entry)).mtimeMs);
-    } catch {
-      return 0;
-    }
-  }
-  return oldest === Number.POSITIVE_INFINITY ? 0 : oldest;
-}
+  const run = (args: string[]) =>
+    execFileSync("npx", ["tsup", ...args, "--out-dir", OUT_DIR], {
+      cwd: pkgRoot,
+      stdio: "inherit",
+    });
+  run([]);
+  run(["--config", "tsup.server-safe.config.ts"]);
 
-export function ensureDeclarations(): void {
-  if (oldestDeclarationMtime() > newestSourceMtime(join(pkgRoot, "src")))
-    return;
-  execFileSync("npx", ["tsup"], { cwd: pkgRoot, stdio: "inherit" });
-  execFileSync("npx", ["tsup", "--config", "tsup.server-safe.config.ts"], {
-    cwd: pkgRoot,
-    stdio: "inherit",
-  });
+  const missing = DECLARATION_ENTRIES.filter(
+    entry => !existsSync(join(OUT_DIR, entry))
+  );
+  if (missing.length > 0) {
+    throw new Error(
+      `The declaration build did not produce: ${missing.join(", ")}. ` +
+        "Every entry in DECLARATION_ENTRIES is a published entry point, so " +
+        "one the current tsup config no longer emits would otherwise be " +
+        "checked in its previous form. Add the entry back, or remove it here " +
+        "and from the package's `exports` together."
+    );
+  }
+  return OUT_DIR;
 }

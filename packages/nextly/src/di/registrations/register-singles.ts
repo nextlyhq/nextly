@@ -12,11 +12,11 @@
 
 import type { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
+import { MetaRetentionGate } from "../../domains/retention/gate";
+import { buildRetentionRunner } from "../../domains/retention/passes";
 import { SingleEntryService } from "../../domains/singles/services/single-entry-service";
 import { SingleRegistryService } from "../../domains/singles/services/single-registry-service";
 import type { WebhookFastDrainScheduler } from "../../domains/webhooks/after-drain";
-import { MetaRetentionGate } from "../../domains/webhooks/retention-gate";
-import { WebhookRetentionRunner } from "../../domains/webhooks/retention-runner";
 import type { CacheRevalidator } from "../../revalidation/types";
 import type { FieldGroupDataService } from "../../services/field-groups";
 import { container } from "../container";
@@ -72,14 +72,13 @@ export function registerSingleServices(ctx: RegistrationContext): void {
       // The single write path appends outbox events through this service, so it
       // gets its own retention runner (the handler's is not on this path),
       // matching the collection write path.
-      ctx.config.webhookRetention
-        ? new WebhookRetentionRunner({
-            policy: ctx.config.webhookRetention,
-            prune: { adapter, logger },
-            gate: new MetaRetentionGate(adapter),
-            logger,
-          })
-        : undefined,
+      buildRetentionRunner({
+        adapter,
+        webhookPolicy: ctx.config.webhookRetention,
+        auditPolicy: ctx.config.auditRetention,
+        gate: new MetaRetentionGate(adapter),
+        logger,
+      }),
       // Shared post-response drain fast path (registered by the webhook
       // services). Absent only when webhooks were never registered.
       container.has("webhookFastDrainScheduler")

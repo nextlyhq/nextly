@@ -12,6 +12,11 @@
 
 import type { AuthStrategy } from "../../auth/pipeline/types";
 import type { CollectionConfig } from "../../collections/config/define-collection";
+import { resolveAuditRetentionConfig } from "../../domains/audit/retention-config";
+import type {
+  AuditRetentionConfig,
+  ResolvedAuditRetentionConfig,
+} from "../../domains/audit/retention-config";
 import { normalizeLocalization } from "../../domains/i18n/config/normalize";
 import type {
   LocalizationConfig,
@@ -643,6 +648,26 @@ export interface NextlyConfig {
 
   /** Outbound webhook configuration. */
   webhooks?: WebhookConfig;
+  /** Audit and activity trail policy. */
+  audit?: AuditConfig;
+}
+
+/**
+ * Audit trail configuration.
+ *
+ * Retention lives here rather than under `webhooks` because these windows bound
+ * a record of who did what, not a delivery ledger, and an operator setting how
+ * long activity is kept would not think to look under webhooks for it.
+ */
+export interface AuditConfig {
+  /**
+   * How long the two trails are kept.
+   *
+   * Enabled by default: content activity for 90 days, auth events for 180.
+   * `false` keeps everything forever and accepts the growth. Each window can
+   * also be set to `false` on its own.
+   */
+  retention?: AuditRetentionConfig | false;
 }
 
 /**
@@ -745,6 +770,15 @@ export interface SanitizedNextlyConfig {
    * Always present after sanitization so consumers never re-resolve it.
    */
   webhookRetention: ResolvedWebhookRetentionConfig | null;
+  /**
+   * Resolved audit-trail retention windows.
+   *
+   * Always a policy after sanitization, since both windows have defaults — 90
+   * days of content activity, 180 of auth events. Either may be `false`, which
+   * is how keeping that trail forever is expressed; `audit: { retention: false }`
+   * sets both.
+   */
+  auditRetention: ResolvedAuditRetentionConfig;
 
   /**
    * Whether the audit seam forces outbox recording regardless of endpoints.
@@ -922,6 +956,11 @@ export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
     // user switched retention off; an absent `webhooks` key resolves to the
     // defaults, since the event ledger fills whether or not webhooks are used.
     webhookRetention: resolveWebhookRetentionConfig(config.webhooks?.retention),
+    // Resolved rather than passed through, and the resolution is the part that
+    // matters: omitting `audit` entirely produces the default windows, which
+    // DELETE rows past them. Keeping everything is `false` — at a single window
+    // or at the whole block — so it is stated rather than implied by absence.
+    auditRetention: resolveAuditRetentionConfig(config.audit?.retention),
     // Off unless explicitly enabled; the org-wide audit log flips this to keep
     // recording events when an install has no delivery endpoints.
     webhookAuditEnabled: config.webhooks?.audit ?? false,

@@ -421,6 +421,8 @@ export {
   type Middleware,
   type RouteMethod,
   type ComponentPath,
+  type JsonObject,
+  type JsonValue,
   type PluginAdminContributions,
   type PluginAdminPage,
   type PluginAdminWidget,

@@ -12,6 +12,8 @@
  * expired.
  */
 
+import { MetaRetentionGate } from "../../domains/retention/gate";
+import { buildRetentionRunner } from "../../domains/retention/passes";
 import { WebhookFastDrainScheduler } from "../../domains/webhooks/after-drain";
 import type {
   RunWebhookDrainOptions,
@@ -26,7 +28,6 @@ import {
   setEndpointPresenceRefresher,
   setWebhookAuditEnabled,
 } from "../../domains/webhooks/recording-activation";
-import { MetaRetentionGate } from "../../domains/webhooks/retention-gate";
 import { WebhookDeliveryQueryService } from "../../domains/webhooks/services/webhook-delivery-query-service";
 import { WebhookEndpointService } from "../../domains/webhooks/services/webhook-endpoint-service";
 import { container } from "../container";
@@ -103,16 +104,44 @@ export function registerWebhookServices(ctx: RegistrationContext): void {
   // Retention deps the drain route runs after delivery. Content writes already
   // offer a retention pass (register-collections.ts), but an install driven only
   // by the cron drain never writes on that path, so the drain must be able to
-  // prune too. The gate is DB-backed, so this instance and the content-write
-  // runner's coordinate through the same persisted claim — the interval holds
-  // whichever fires first, and the other's pass is a no-op. `undefined` when the
-  // operator switched retention off (or no app config was supplied).
+  // prune too.
+  //
+  // Resolved by the audit writer, which is the only trigger an installation
+  // taking authentication traffic and no content writes ever reaches. It shares
+  // the request-path gate with the content-write runners — the interval holds
+  // whichever fires first and the others' passes are no-ops — while the drain
+  // claims a separate marker, so a capped request pass cannot consume the
+  // full-budget turn.
+  //
+  // Present whenever EITHER policy has something to prune, so an install with
+  // webhook retention off and audit retention on still gets one.
+  container.registerSingleton("retentionRunner", () =>
+    buildRetentionRunner({
+      adapter,
+      webhookPolicy: ctx.config.webhookRetention,
+      auditPolicy: ctx.config.auditRetention,
+      gate: new MetaRetentionGate(adapter),
+      logger,
+    })
+  );
+
   container.registerSingleton<RunWebhookDrainOptions["retention"]>(
     "webhookRetentionDeps",
     () =>
-      ctx.config.webhookRetention
+      // Built whenever EITHER policy has something to prune. Keying it on the
+      // webhook policy alone made the audit trails' only full-budget trigger
+      // disappear the moment an operator switched webhook retention off, which
+      // is an unrelated decision: every remaining audit trigger is a request
+      // path capped at a batch, so the configured budget became unreachable and
+      // a busy trail could grow indefinitely.
+      ctx.config.webhookRetention || ctx.config.auditRetention
         ? {
-            policy: ctx.config.webhookRetention,
+            policy: ctx.config.webhookRetention ?? undefined,
+            // Carried whenever a policy exists rather than only when it prunes
+            // today: whether it prunes is decided when the pass runs, so a hot
+            // reload that widens an entirely-`false` policy reaches this
+            // dependency instead of needing a restart.
+            auditPolicy: ctx.config.auditRetention,
             prune: { adapter, logger },
             gate: new MetaRetentionGate(adapter),
           }

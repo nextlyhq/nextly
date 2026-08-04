@@ -39,6 +39,7 @@ import { handleRegister } from "../register";
 import { handleAcceptInvite } from "../accept-invite";
 import { handleResetPassword } from "../reset-password";
 import { NextlyError } from "../../../errors/nextly-error";
+import { getNextlyLogger } from "../../../observability/logger";
 import { handleSession } from "../session";
 import { handleSetup, handleSetupStatus } from "../setup";
 import { handleResendVerification, handleVerifyEmail } from "../verify-email";
@@ -360,6 +361,64 @@ describe("login handler: respondAction shape", () => {
       );
     }
   );
+
+  it("reports the withheld detail to the operator log", async () => {
+    // The trail keeps only core-controlled values, so anything an error carried
+    // reaches the operator here or nowhere. The projection and the report are
+    // two halves of one contract, and asserting either alone leaves the other
+    // free to stop happening.
+    const logged: Record<string, unknown>[] = [];
+    const logger = getNextlyLogger();
+    const originalWarn = logger.warn.bind(logger);
+    logger.warn = (payload: unknown) => {
+      logged.push(payload as Record<string, unknown>);
+      return undefined as never;
+    };
+
+    try {
+      await loginWithRejectingAfterLogin(
+        NextlyError.internal({
+          logContext: { strategyReason: "no SAML assertion for ada" },
+        })
+      );
+    } finally {
+      logger.warn = originalWarn;
+    }
+
+    const entry = logged.find(e => e.kind === "auth-failed");
+    expect(entry).toBeDefined();
+    expect((entry?.context as Record<string, unknown>)?.strategyReason).toBe(
+      "no SAML assertion for ada"
+    );
+  });
+
+  it("stores no identifier a failing plugin hook put on its error", async () => {
+    // The projection is asserted directly elsewhere; this pins that the handler
+    // routes through it. A plugin names its own error code and writes its own
+    // log context, and the row this produces has no actor — so anything
+    // identifying that reaches it can never be erased for its subject.
+    const { write } = await loginWithRejectingAfterLogin(
+      new NextlyError({
+        code: "ada@example.com",
+        publicMessage: "Login failed.",
+        logContext: {
+          email: "ada@example.com",
+          userId: "u-77",
+          reason: "no account for ada@example.com",
+          originalCode: "acct-8891-ada",
+        },
+      })
+    );
+
+    const recorded = write.mock.calls
+      .map(([event]: [{ kind: string; metadata?: unknown }]) => event)
+      .find(event => event.kind === "login-failed");
+
+    expect(recorded?.metadata).toEqual({ code: "INTERNAL_ERROR" });
+    expect(JSON.stringify(recorded)).not.toContain("ada@example.com");
+    expect(JSON.stringify(recorded)).not.toContain("u-77");
+    expect(JSON.stringify(recorded)).not.toContain("acct-8891-ada");
+  });
 
   it("returns password_change_required with a pending token (no session) for a must-change account", async () => {
     const passwordHash = await hashPassword("Pass1234!");
