@@ -40,18 +40,32 @@ function classNameFor(
   return nodeClass ? `${nodeClass} ${typeClass}` : typeClass;
 }
 
-/** Validates a block's output and substitutes a placeholder when it is unusable. */
-function checkedOutput(value: unknown, node: BlockNode): ReactNode {
+/**
+ * Validates a block's output and substitutes a placeholder when it is unusable.
+ *
+ * A promise found inside the output gets a boundary here. React 19 renders a
+ * promise child by suspending on it, and without one the suspension travels up
+ * to whatever boundary sits above the whole page — so a single async child
+ * inside an otherwise ordinary block would hold back everything around it.
+ */
+function checkedOutput(
+  value: unknown,
+  node: BlockNode,
+  fallback: ReactNode
+): ReactNode {
   const result = normalizeRenderable(value);
-  if (result.ok) return result.node;
-  return (
-    <BlockPlaceholder
-      reason="invalid-output"
-      type={node.type}
-      id={node.id}
-      detail={`Expected a React node, received ${result.reason}`}
-    />
-  );
+  if (!result.ok) {
+    return (
+      <BlockPlaceholder
+        reason="invalid-output"
+        type={node.type}
+        id={node.id}
+        detail={`Expected a React node, received ${result.reason}`}
+      />
+    );
+  }
+  if (!result.hasAsyncChildren) return result.node;
+  return <Suspense fallback={fallback}>{result.node}</Suspense>;
 }
 
 /**
@@ -67,12 +81,14 @@ function checkedOutput(value: unknown, node: BlockNode): ReactNode {
 async function AsyncBlockOutput({
   pending,
   node,
+  fallback,
 }: {
   pending: PromiseLike<unknown>;
   node: BlockNode;
+  fallback: ReactNode;
 }): Promise<ReactNode> {
   try {
-    return checkedOutput(await pending, node);
+    return checkedOutput(await pending, node, fallback);
   } catch (error) {
     return (
       <BlockPlaceholder
@@ -171,11 +187,11 @@ export function BlockBoundary({
     );
   }
 
-  if (!isThenable(output)) return checkedOutput(output, node);
+  if (!isThenable(output)) return checkedOutput(output, node, fallback);
 
   return (
     <Suspense fallback={fallback}>
-      <AsyncBlockOutput pending={output} node={node} />
+      <AsyncBlockOutput pending={output} node={node} fallback={fallback} />
     </Suspense>
   );
 }

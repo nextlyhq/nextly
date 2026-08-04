@@ -45,6 +45,33 @@ async function renderToHtml(element: ReactElement): Promise<string> {
   return html + decoder.decode();
 }
 
+/**
+ * Render and keep the stream's chunks separate.
+ *
+ * Whether a boundary was placed is not visible in the finished HTML — the page
+ * contains the same markup either way. It is visible in WHEN each part arrives:
+ * with a boundary the shell flushes while the slow part is still pending,
+ * without one the whole page waits for it.
+ */
+async function renderToChunks(element: ReactElement): Promise<string[]> {
+  const stream = await renderToReadableStream(element, {
+    onError(error) {
+      throw error;
+    },
+  });
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  const chunks: string[] = [];
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(decoder.decode(value, { stream: true }));
+  }
+  const tail = decoder.decode();
+  if (tail) chunks.push(tail);
+  return chunks;
+}
+
 /** A node with the fields every document node carries. */
 function node(
   id: string,
@@ -333,6 +360,167 @@ describe("PageRenderer", () => {
       // Failing closed is the point: an unbounded iterable handed to React
       // would never finish rendering the page.
       expect(placeholderReasons(html)).toEqual(["invalid-output"]);
+    });
+
+    it("renders promise children inside a list", async () => {
+      // React 19 renders a promise child by suspending on it, so this is valid
+      // output; refusing it would reject a block that composes async children.
+      const withPromises = defineBlock({
+        name: "test/promise-children",
+        version: 1,
+        description: "Returns a list containing a promise child.",
+        example: { props: {} },
+        render: () => [
+          <span key="s">sync part</span>,
+          Promise.resolve(<span key="a">async part</span>),
+        ],
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(node("a", "test/promise-children"))}
+          blocks={createBlockResolver([withPromises as AnyBlockDefinition])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual([]);
+      expect(html).toContain("sync part");
+      expect(html).toContain("async part");
+    });
+
+    it("does not let a promise child hold back the rest of the page", async () => {
+      // The reason the boundary exists. Without one the suspension travels up
+      // past every sibling to whatever boundary sits above the whole page, so
+      // one slow async child delays everything around it. Asserting only that
+      // the content eventually appears cannot tell the two apart: the finished
+      // HTML is identical. The arrival ORDER is what differs.
+      const slowChild = defineBlock({
+        name: "test/slow-child",
+        version: 1,
+        description: "Returns a list containing a slow promise child.",
+        example: { props: {} },
+        render: () => [
+          new Promise<ReactElement>(resolve => {
+            setTimeout(() => resolve(<span key="a">late part</span>), 50);
+          }),
+        ],
+      });
+
+      const chunks = await renderToChunks(
+        <PageRenderer
+          document={doc(
+            node("a", "test/slow-child"),
+            node("b", "test/text", { props: { value: "immediate part" } })
+          )}
+          blocks={createBlockResolver([
+            slowChild as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+        />
+      );
+
+      expect(chunks.length).toBeGreaterThan(1);
+      expect(chunks[0]).toContain("immediate part");
+      expect(chunks[0]).not.toContain("late part");
+      expect(chunks.join("")).toContain("late part");
+    });
+
+    it("contains an invalid value embedded in returned JSX", async () => {
+      // The common shape of this mistake. React throws on it from inside its own
+      // render, after the block-level try/catch has finished, so it has to be
+      // caught while the value is still just data.
+      const embedded = defineBlock({
+        name: "test/embedded",
+        version: 1,
+        description: "Puts a plain object inside its JSX.",
+        example: { props: {} },
+        render: ({ className }) => (
+          <div className={className}>
+            <span>{{ not: "a node" } as unknown as string}</span>
+          </div>
+        ),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/embedded"),
+            node("b", "test/text", { props: { value: "survivor" } })
+          )}
+          blocks={createBlockResolver([
+            embedded as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual(["invalid-output"]);
+      expect(html).toContain("survivor");
+    });
+
+    it("does not consume a generator passed as a JSX child", async () => {
+      // Checking a borrowed iterable would exhaust it and leave React nothing
+      // to render, so children are inspected without being read.
+      const withGenerator = defineBlock({
+        name: "test/generator-child",
+        version: 1,
+        description: "Puts a generator inside its JSX.",
+        example: { props: {} },
+        render: ({ className }) => (
+          <div className={className}>
+            {(function* () {
+              yield <span key="a">first</span>;
+              yield <span key="b">second</span>;
+            })()}
+          </div>
+        ),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(node("a", "test/generator-child"))}
+          blocks={createBlockResolver([withGenerator as AnyBlockDefinition])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual([]);
+      expect(html).toContain("first");
+      expect(html).toContain("second");
+    });
+
+    it("contains an iterable that throws while being read", async () => {
+      // Reading the iterable happens after the block returned, so an exception
+      // here would be raised outside the try block that wraps the render call.
+      const hostile = defineBlock({
+        name: "test/hostile-iterable",
+        version: 1,
+        description: "Returns an iterable whose next() throws.",
+        example: { props: {} },
+        render: () => ({
+          [Symbol.iterator]: () => ({
+            next: () => {
+              throw new Error("iteration failure");
+            },
+          }),
+        }),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/hostile-iterable"),
+            node("b", "test/text", { props: { value: "survivor" } })
+          )}
+          blocks={createBlockResolver([
+            hostile as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual(["invalid-output"]);
+      expect(html).toContain("iteration failure");
+      expect(html).toContain("survivor");
     });
 
     it("shows nothing but a marker in production", async () => {
