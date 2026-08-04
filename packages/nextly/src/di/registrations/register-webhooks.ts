@@ -13,6 +13,7 @@
  */
 
 import { MetaRetentionGate } from "../../domains/retention/gate";
+import { buildRetentionRunner } from "../../domains/retention/passes";
 import { WebhookFastDrainScheduler } from "../../domains/webhooks/after-drain";
 import type {
   RunWebhookDrainOptions,
@@ -107,12 +108,27 @@ export function registerWebhookServices(ctx: RegistrationContext): void {
   // runner's coordinate through the same persisted claim — the interval holds
   // whichever fires first, and the other's pass is a no-op. `undefined` when the
   // operator switched retention off (or no app config was supplied).
+  // Resolved by the audit writer, which is the only trigger an installation
+  // taking authentication traffic and no content writes ever reaches.
+  container.registerSingleton("retentionRunner", () =>
+    buildRetentionRunner({
+      adapter,
+      webhookPolicy: ctx.config.webhookRetention,
+      auditPolicy: ctx.config.auditRetention,
+      gate: new MetaRetentionGate(adapter),
+      logger,
+    })
+  );
+
   container.registerSingleton<RunWebhookDrainOptions["retention"]>(
     "webhookRetentionDeps",
     () =>
       ctx.config.webhookRetention
         ? {
             policy: ctx.config.webhookRetention,
+            // Carried so the drain can offer the audit trails their pass at the
+            // full configured budget, which no write path can spend.
+            auditPolicy: ctx.config.auditRetention,
             prune: { adapter, logger },
             gate: new MetaRetentionGate(adapter),
           }

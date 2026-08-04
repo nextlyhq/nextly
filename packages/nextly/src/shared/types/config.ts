@@ -770,6 +770,14 @@ export interface SanitizedNextlyConfig {
    * Always present after sanitization so consumers never re-resolve it.
    */
   webhookRetention: ResolvedWebhookRetentionConfig | null;
+  /**
+   * Resolved audit-trail retention windows.
+   *
+   * Always a policy after sanitization, since both windows have defaults — 90
+   * days of content activity, 180 of auth events. Either may be `false`, which
+   * is how keeping that trail forever is expressed; `audit: { retention: false }`
+   * sets both.
+   */
   auditRetention: ResolvedAuditRetentionConfig;
 
   /**

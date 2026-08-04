@@ -12,11 +12,14 @@
 
 import { deliverDueDeliveries, type DeliverDeps } from "./deliver";
 import { fanOutDueEvents, type FanOutDeps } from "./fan-out";
+import { pruneAuditDataSafely } from "../audit/prune";
+import type { ResolvedAuditRetentionConfig } from "../audit/retention-config";
 import { pruneWebhookDataSafely, type PruneDeps } from "./prune";
 import type { ResolvedWebhookRetentionConfig } from "./retention-config";
 import {
   claimRetentionPass,
   type RetentionGateStore,
+  AUDIT_RETENTION_GATE_KEY,
   WEBHOOK_RETENTION_GATE_KEY,
 } from "../../domains/retention/gate";
 
@@ -45,6 +48,8 @@ export interface RunDrainDeps {
    */
   retention?: {
     policy: ResolvedWebhookRetentionConfig;
+    /** Absent when the audit trails are configured to keep everything. */
+    auditPolicy?: ResolvedAuditRetentionConfig;
     prune: PruneDeps;
     gate: RetentionGateStore;
   };
@@ -137,6 +142,25 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
       );
       result.pruned.events = pruned.events.webhook + pruned.events.audit;
       result.pruned.deliveries = pruned.deliveries;
+    }
+
+    // The audit trails are offered here too, and at their FULL budget. Every
+    // other trigger is a user's write, which passes a small override so a save
+    // is not held up by a backlog sweep — so without this the configured
+    // budget is never reachable and a busy site accumulates faster than the
+    // capped passes can retire. Nothing waits on the drain, which is what makes
+    // it the right place to spend it. Gated on its own key, so a webhook pass
+    // taken this round does not consume the audit trails' turn.
+    const auditPolicy = deps.retention?.auditPolicy;
+    if (auditPolicy) {
+      const auditDue = await claimRetentionPass(
+        retention.gate,
+        AUDIT_RETENTION_GATE_KEY,
+        auditPolicy.intervalMs
+      );
+      if (auditDue) {
+        await pruneAuditDataSafely(retention.prune, auditPolicy);
+      }
     }
   }
 
