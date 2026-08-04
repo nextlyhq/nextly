@@ -1358,14 +1358,25 @@ export class UserMutationService extends BaseService {
     // suppress the activity erasure, leaving behind exactly the names and
     // emails the deletion exists to remove.
     const auditTables = this.tables;
-    const activityShape = await this.supportsErasure(
-      "activity_log",
-      "their name and email"
-    );
-    const authShape = await this.supportsErasure(
-      "audit_log",
-      "the address and client they connected from"
-    );
+    // Normalized here rather than left to the caller: the probes read the
+    // catalogue, and a transient metadata failure is a database error like any
+    // other. Outside this the raw driver exception would escape ahead of the
+    // block that converts one, and the caller would get an untyped throw from
+    // an operation whose whole surface is typed.
+    let activityShape: ErasureShape;
+    let authShape: ErasureShape;
+    try {
+      activityShape = await this.supportsErasure(
+        "activity_log",
+        "their name and email"
+      );
+      authShape = await this.supportsErasure(
+        "audit_log",
+        "the address and client they connected from"
+      );
+    } catch (err) {
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
+    }
     // The two answer a legacy shape differently, because what happens to an
     // un-erased row differs. A legacy `activity_log` still cascades from the
     // account, so its rows go with the deletion and there is nothing left to
@@ -1521,9 +1532,9 @@ export class UserMutationService extends BaseService {
       // that finds nothing to delete. Loud enough to act on, quiet enough not
       // to undo a committed write.
       this.logger.error(
-        `activity-log erasure sweep after deleteUser failed: ${
-          err instanceof Error ? err.message : String(err)
-        }`
+        `audit erasure sweep after deleteUser failed for ${Object.keys(
+          erasableAuditTables
+        ).join(", ")}: ${err instanceof Error ? err.message : String(err)}`
       );
     }
 

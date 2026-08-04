@@ -113,7 +113,10 @@ const TYPE_MAPPINGS: Record<SupportedDialect, Record<string, string>> = {
     boolean: "INTEGER", // SQLite uses 0/1 for boolean
     timestamp: "TEXT", // SQLite stores timestamps as TEXT (ISO8601)
     timestamptz: "TEXT",
-    datetime: "TEXT",
+    // INTEGER, matching the production definition: the audit stamps are Drizzle
+    // `integer(..., { mode: "timestamp" })` columns, so TEXT here would build a
+    // table that reads and writes differently from the one it stands in for.
+    datetime: "INTEGER",
     date: "TEXT",
     time: "TEXT",
     jsonb: "TEXT", // SQLite stores JSON as TEXT

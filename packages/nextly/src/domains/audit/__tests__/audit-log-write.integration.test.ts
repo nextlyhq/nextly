@@ -323,9 +323,10 @@ describe("auditFailureMetadata", () => {
 
   it("reports the withheld detail wherever it is called from", () => {
     // Every handler that records a failure gets the operator report by calling
-    // this, rather than by remembering to log alongside it. That was the defect
-    // the first time: one of the three handlers logged and the other two
-    // discarded the only actionable detail their failures carried.
+    // this, rather than by remembering to log alongside it. Reporting and
+    // projecting are one contract — what the trail withholds reaches the
+    // operator or nowhere — so deciding both here is what keeps a handler from
+    // silently discarding the detail its failure carried.
     const logged: Record<string, unknown>[] = [];
     const logger = getNextlyLogger();
     const originalWarn = logger.warn.bind(logger);
@@ -393,6 +394,30 @@ describe("auditFailureMetadata", () => {
     expect(logged[0].kind).toBe("auth-failed");
     expect(logged[0].requestId).toBe("req-real");
     expect(logged[0].code).toBe("AUTH_INVALID_CREDENTIALS");
+  });
+
+  it("still returns metadata when reading a key throws", () => {
+    // `logContext` is written by application code, which may expose a getter or
+    // a Proxy trap. The read happens inside the auth handlers' catch blocks, so
+    // an escaping exception costs the caller both the typed response and the
+    // audit row.
+    const hostile: Record<string, unknown> = {
+      get reason(): string {
+        throw new Error("hostile getter");
+      },
+      originalCode: "TOKEN_EXPIRED",
+    };
+    Object.defineProperty(hostile, "reason", {
+      get() {
+        throw new Error("hostile getter");
+      },
+      enumerable: true,
+      configurable: true,
+    });
+
+    expect(projectAuditMetadata(hostile)).toEqual({
+      originalCode: "TOKEN_EXPIRED",
+    });
   });
 
   it("still returns metadata when the context cannot be serialised", () => {

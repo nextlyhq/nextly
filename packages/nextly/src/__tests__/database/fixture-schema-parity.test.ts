@@ -110,4 +110,13 @@ describe("emitted erasure stamp", () => {
     expect(sql).toMatch(/`identity_erased_at`\s+DATETIME/i);
     expect(sql).not.toMatch(/`identity_erased_at`\s+TIMESTAMP/i);
   });
+
+  it("is a SQLite INTEGER, as the production column is", () => {
+    // The production definition is `integer(..., { mode: "timestamp" })`, so a
+    // TEXT column here would read and write differently from the table this
+    // fixture stands in for.
+    const sql = generateCreateTableSql(auditLog!, "sqlite");
+    expect(sql).toMatch(/"identity_erased_at"\s+INTEGER/i);
+    expect(sql).not.toMatch(/"identity_erased_at"\s+TEXT/i);
+  });
 });

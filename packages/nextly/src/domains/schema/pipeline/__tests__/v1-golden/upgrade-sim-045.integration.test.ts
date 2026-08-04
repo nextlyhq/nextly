@@ -244,9 +244,14 @@ const migratesActivityLogActor = (stmt: string): boolean => {
  * future unintended change to `audit_log` still fails as a phantom diff.
  */
 const addsAuditLogErasureStamp = (stmt: string): boolean => {
-  const s = stmt.trim();
-  if (!/^ALTER TABLE [`"]?audit_log[`"]? /i.test(s)) return false;
-  return /\bADD (COLUMN )?[`"]?identity_erased_at[`"]?\b/i.test(s);
+  const s = stmt.trim().replace(/;$/, "");
+  // The WHOLE statement must be the single ADD, not merely contain one. A
+  // substring match would admit `ALTER TABLE audit_log ADD identity_erased_at
+  // ..., DROP COLUMN ip_address` — a destructive change riding through the
+  // guard on the additive clause beside it.
+  return /^ALTER TABLE [`"]?audit_log[`"]? ADD (COLUMN )?[`"]?identity_erased_at[`"]?[^,]*$/i.test(
+    s
+  );
 };
 
 // Positive guard: the sim must actually create each new table (an empty first

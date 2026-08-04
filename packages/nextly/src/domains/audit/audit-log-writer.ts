@@ -112,8 +112,18 @@ export function projectAuditMetadata(
   const projected: Record<string, unknown> = {};
   if (!context) return projected;
   for (const key of AUDIT_METADATA_KEYS) {
-    if (!Object.prototype.hasOwnProperty.call(context, key)) continue;
-    const value = context[key];
+    // Reading the key can itself throw: `logContext` is written by application
+    // code, which may expose a getter or a Proxy trap. This runs inside the
+    // auth handlers' catch blocks, so an escaping exception costs the caller
+    // both the typed error response and the audit row — a key that cannot be
+    // read is simply not retained.
+    let value: unknown;
+    try {
+      if (!Object.prototype.hasOwnProperty.call(context, key)) continue;
+      value = context[key];
+    } catch {
+      continue;
+    }
     if (!isRetainableValue(key, value)) continue;
     projected[key] = value;
   }
@@ -174,10 +184,15 @@ export function auditFailureMetadata(
   // and a caller that projects without reporting silently discards the only
   // actionable detail a failure carried. Keeping both in one place is what
   // stops them diverging per handler.
-  if (err.logContext) reportWithheldDetail(err, requestId);
+  // Reported whenever anything is withheld, which includes a code the trail
+  // will not keep: a plugin naming its own code and carrying no context would
+  // otherwise leave INTERNAL_ERROR as the only trace of a failure it alone can
+  // explain.
+  const codeIsOurs = isCanonicalErrorCode(err.code);
+  if (err.logContext || !codeIsOurs) reportWithheldDetail(err, requestId);
 
   return {
-    code: isCanonicalErrorCode(err.code) ? err.code : "INTERNAL_ERROR",
+    code: codeIsOurs ? err.code : "INTERNAL_ERROR",
     ...projectAuditMetadata(err.logContext),
   };
 }

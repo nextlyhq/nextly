@@ -202,9 +202,12 @@ export async function handleLogin(
     // Every login failure (bad password, locked, unverified, inactive,
     // internal) records a single 'login-failed' event. We deliberately do
     // not split by reason here; that would re-introduce the account-state
-    // leak the unified error wire shape collapses. The internal
-    // `logContext` on the NextlyError still carries the specific cause for
-    // operators reading the audit row's metadata.
+    // leak the unified error wire shape collapses. The row keeps only values
+    // this package controls — a failure is recorded with no actor precisely so
+    // it cannot say which account was reached, which also means nothing links
+    // it to a person and no later deletion can find it, so an identifier must
+    // not enter rather than be erased afterwards. The specific cause reaches
+    // the operator through the log instead.
     await deps.auditLog.write({
       kind: "login-failed",
       ipAddress: getTrustedClientIp(request, {

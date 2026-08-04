@@ -364,10 +364,9 @@ describe("login handler: respondAction shape", () => {
 
   it("reports the withheld detail to the operator log", async () => {
     // The trail keeps only core-controlled values, so anything an error carried
-    // reaches the operator here or nowhere. Asserting the projection alone
-    // would leave that half of the contract unproven — and it WAS unproven: the
-    // detail was described as reaching the log by a comment, and nothing wrote
-    // it.
+    // reaches the operator here or nowhere. The projection and the report are
+    // two halves of one contract, and asserting either alone leaves the other
+    // free to stop happening.
     const logged: Record<string, unknown>[] = [];
     const logger = getNextlyLogger();
     const originalWarn = logger.warn.bind(logger);
