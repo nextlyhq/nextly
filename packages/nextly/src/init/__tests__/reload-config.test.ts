@@ -228,7 +228,7 @@ describe("reloadNextlyConfig", () => {
   // column — so the fixture is asked per table rather than shared.
   function reservedColumns(
     tableName: string,
-    options: BuildDesiredTableOptions = {}
+    options: BuildDesiredTableOptions = { builtBy: "codeFirst" }
   ): ColumnSpec[] {
     return buildDesiredTableFromFields(tableName, [], "sqlite", options)
       .columns;
@@ -1667,6 +1667,7 @@ describe("reloadNextlyConfig", () => {
       introspectSpy.mockResolvedValue({
         tables: [
           buildDesiredTableFromFields("dc_posts", fields, "sqlite", {
+            builtBy: "codeFirst" as const,
             hasStatus: false,
             localized: false,
           }),
@@ -1860,6 +1861,7 @@ describe("reloadNextlyConfig", () => {
       introspectSpy.mockResolvedValue({
         tables: [
           buildDesiredTableFromFields("dc_posts", fields, "sqlite", {
+            builtBy: "codeFirst" as const,
             hasStatus: false,
             localized: false,
           }),

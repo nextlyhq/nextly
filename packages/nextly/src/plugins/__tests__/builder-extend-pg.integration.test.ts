@@ -81,7 +81,7 @@ describePg("boot-safe column apply on Postgres (P8 dialect gate)", () => {
         { name: "body", type: "text" },
         { name: "meta_title", type: "text" },
       ] as unknown as FieldConfig[],
-      { timestamps: true }
+      { timestamps: true, builtBy: "codeFirst" }
     );
     expect(added).toContain("meta_title");
 

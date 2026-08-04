@@ -26,6 +26,7 @@
  * lockstep automatically.
  */
 
+import { NextlyError } from "../../../errors/nextly-error";
 import {
   SYSTEM_COLUMNS,
   systemColumnDefaultSql,
@@ -217,11 +218,12 @@ export function usesJunctionTable(field: {
  */
 export function getColumnDescriptor(
   field: FieldDefinition,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  builtBy: ColumnOrigin
 ): ColumnDescriptor | null {
   const name = toSnakeCase(field.name);
   // "skip" covers every column-less field type, layout ones included, via fieldProducesColumn.
-  const kind = classifyFieldKind(field);
+  const kind = classifyFieldKind(field, builtBy);
   // FK columns are always created without NOT NULL in the DDL (both generateMigrationSQL
   // and the Drizzle runtime builder). `required` is enforced at the application layer.
   const nullable = kind === "fkSingle" ? true : field.required !== true;
@@ -238,7 +240,7 @@ export function getColumnDescriptor(
         }
       : undefined;
 
-  const length = lengthForField(kind, field);
+  const length = lengthForField(kind, field, builtBy);
 
   const dialectType = renderDialectType(kind, dialect, {
     length,
@@ -270,20 +272,86 @@ export function getColumnDescriptor(
  * answer this question the same way. Asking it in only one of the two places left a contributed
  * field the caller had declared unbounded sitting in a bounded column.
  */
-function textKindForDeclaredWidth(field: FieldDefinition): ColumnKind {
+/**
+ * Which builder made the table a column belongs to.
+ *
+ * A text field that states no width does not have one right answer: three builders exist and they
+ * read a width from different keys and read silence differently. That is a property of the ENTITY,
+ * never of the field, so it is passed in rather than guessed from the field's shape.
+ *
+ * Stated as a required argument on purpose. Every consumer that decided a column's shape without
+ * this fact got it wrong for at least one builder — the localization intent parser, Single identity
+ * seeding, the incremental column path, the companion `_locales` layer — and each was found one at a
+ * time by review. Required, a consumer that has not decided does not compile.
+ */
+export type ColumnOrigin =
+  /**
+   * `DynamicCollectionSchemaService`, which builds collections AND singles. Bounds a text column on
+   * `options.variant === "short"` and takes the width from `validation.maxLength`; anything else is
+   * unbounded.
+   */
+  | "collection"
+  /**
+   * `FieldGroupSchemaService`. Bounds on a top-level `maxLength` and reads no variant at all, so a
+   * field saying it is both short and 120 characters is bounded by the 120 and nothing else.
+   */
+  | "fieldGroup"
+  /**
+   * The pipeline's Drizzle builder, which is this module's own default and therefore what every
+   * code-first table was built with. It reads no width signal: a text field is the bounded default.
+   */
+  | "codeFirst";
+
+/**
+ * The kind a text-storing field gets, according to the builder that owns its table.
+ *
+ * One function, three rules, stated once. Keeping the rules here rather than normalising the fields
+ * before they arrive is what stops a value synthesised for one consumer reaching another that reads
+ * the same key for a different purpose.
+ */
+function textKindFor(
+  field: FieldDefinition,
+  builtBy: ColumnOrigin
+): ColumnKind {
   const options = field.options;
-  if (options?.variant === "long") return "longText";
-  // Declared short, so bounded on every dialect that has a bounded string. Its own kind rather
-  // than the existing `varchar` one, which renders PostgreSQL `text` and is what the system
-  // `status` column uses — widening that to a real varchar would make every existing status
-  // column read as a type change.
-  if (options?.variant === "short") return "shortText";
-  // `options` is the choice list on a select, and the payload schema permits that shape on any
-  // field. A text field carrying one states no width, and every generator reads it the same
-  // way — as unbounded — so reading it as bounded here would report an untouched column as a
-  // narrowing on every diff.
-  if (Array.isArray(options)) return "longText";
-  return "text";
+
+  // Read by no builder as a width. `options` is also the choice list on a select and the payload
+  // schema permits that shape on any field, so a field carrying one states nothing about its column.
+  const variant = Array.isArray(options) ? undefined : options?.variant;
+
+  switch (builtBy) {
+    case "collection":
+      if (variant === "short") return "shortText";
+      // Silence is unbounded here, which is the opposite of the code-first default and the reason
+      // this argument exists: the same declaration is 65 535 characters on a Builder table and 255
+      // on a code-first one, on MySQL.
+      return "longText";
+
+    case "fieldGroup":
+      // A declared width wins outright, because this builder never looks at the variant: a field
+      // saying `{ maxLength: 120, variant: "long" }` is created bounded, and reading the variant
+      // described as unbounded a column that was built bounded.
+      return declaredMaxLength(field, builtBy) !== undefined
+        ? "shortText"
+        : "longText";
+
+    case "codeFirst":
+      // No width signal at all. `variant` is a Schema Builder concept — nothing in this package
+      // produces one — so honouring it here would bound a column the pipeline built unbounded.
+      return "text";
+
+    default:
+      // Unreachable through the type, and reachable from an untyped caller. Refused rather than
+      // defaulted: the whole point of naming the builder is that no column shape is chosen by
+      // accident, and returning a kind here would put back the silent default this replaced.
+      throw NextlyError.internal({
+        logContext: {
+          reason: "column_origin_missing",
+          builtBy: String(builtBy),
+          field: field.name,
+        },
+      });
+  }
 }
 
 /**
@@ -309,12 +377,15 @@ export function isTextStorageKind(kind: ColumnKind): boolean {
  * "promote relationship to JSON" rule lives here too; previously
  * `build-from-fields.ts` ignored it and shipped wrong types.
  */
-function classifyFieldKind(field: FieldDefinition): ColumnKind {
+function classifyFieldKind(
+  field: FieldDefinition,
+  builtBy: ColumnOrigin
+): ColumnKind {
   if (!fieldProducesColumn(field)) return "skip";
 
   switch (field.type) {
     case "text":
-      return textKindForDeclaredWidth(field);
+      return textKindFor(field, builtBy);
 
     case "email":
     case "password":
@@ -375,13 +446,13 @@ function classifyFieldKind(field: FieldDefinition): ColumnKind {
         // field does, and its column is rendered by the same branch, so it is asked in the same
         // way. Answering it here with a narrower rule left a contributed field bounded while the
         // creators made it unbounded, which reports an untouched column as a narrowing.
-        return kind === "text" ? textKindForDeclaredWidth(field) : kind;
+        return kind === "text" ? textKindFor(field, builtBy) : kind;
       }
       // An unregistered type: the field schema accepts any slug-shaped token, so a stored field can
       // name a type whose plugin is not loaded. It lands in a text column like the rest of this
       // branch, so it answers the width question the same way rather than being forced to the
       // bounded default.
-      return textKindForDeclaredWidth(field);
+      return textKindFor(field, builtBy);
     }
   }
 }
@@ -477,7 +548,8 @@ function renderDialectType(
  */
 function lengthForField(
   kind: ColumnKind,
-  field: FieldDefinition
+  field: FieldDefinition,
+  builtBy: ColumnOrigin
 ): number | undefined {
   // The one kind a field asks for by declaring a width, so it is the one kind built at the width
   // asked for. The others are sized by what they hold, not by the field.
@@ -487,7 +559,7 @@ function lengthForField(
   // convergence and no resize is emitted. Creating at the declared width is still strictly better
   // than creating at 255 — a field declaring 500 characters otherwise gets a column that rejects
   // what its own stored validation accepts — but resizing needs the diff to compare widths first.
-  if (kind === "shortText") return declaredMaxLength(field) ?? 255;
+  if (kind === "shortText") return declaredMaxLength(field, builtBy) ?? 255;
   if (kind === "text") return 255;
   if (kind === "varchar") return 255;
   if (kind === "fkSingle") return 36;
@@ -495,20 +567,31 @@ function lengthForField(
 }
 
 /**
- * The width a field declares, or nothing when it declares none.
+ * The width a field declares, read from the key its own builder sizes a bounded column from.
  *
- * Read from `validation.maxLength` and from nowhere else, because that is the only key the creators
- * size a bounded string from. A top-level `length` is deliberately NOT consulted: a field declaring
- * `{ variant: "short", length: 500 }` gets `varchar(255)` from the creator, so honouring the 500
- * here gave the same declaration one capacity when created directly and another through the
- * pipeline, with the width normalisation then hiding the difference from any later diff.
+ * The two builders read different keys, which is the whole reason builtBy is passed: a field group's
+ * width is a top-level `maxLength`, and a collection's is `validation.maxLength` alongside a short
+ * variant. Reading both for either one is what made a field declaring 120 characters come out 255
+ * through one path and 120 through the other.
+ *
+ * A top-level `length` is deliberately consulted by neither. No builder sizes a column from it, so
+ * honouring it would give a declaration a capacity nothing else agrees with — and because the diff
+ * strips length modifiers, nothing would ever reconcile the two afterwards.
  *
  * Rejects anything that is not a whole positive count. These reach DDL as `VARCHAR(n)`, so a
  * fraction, a zero or a negative would be rendered into the statement as written and the create
  * would fail on a value the field system had already accepted.
  */
-function declaredMaxLength(field: FieldDefinition): number | undefined {
-  const declared = field.validation?.maxLength;
+function declaredMaxLength(
+  field: FieldDefinition,
+  builtBy: ColumnOrigin
+): number | undefined {
+  // A field group's fields reach here through the same entry point but carry their width at the top
+  // level, which `FieldDefinition` does not name.
+  const declared =
+    builtBy === "fieldGroup"
+      ? (field as { maxLength?: unknown }).maxLength
+      : field.validation?.maxLength;
   if (typeof declared !== "number") return undefined;
   if (!Number.isInteger(declared) || declared <= 0) return undefined;
   return declared;

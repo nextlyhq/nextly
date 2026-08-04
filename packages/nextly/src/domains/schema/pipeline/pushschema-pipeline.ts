@@ -38,7 +38,6 @@ import {
   chooseTypeColumns,
   resolveRegistryNameFromCatalog,
 } from "../../field-groups/storage/resolve-storage-names";
-import { withResolvedBuilderTextWidths } from "../services/builder-text-width";
 import { generateRuntimeSchema } from "../services/runtime-schema-generator";
 import { identifierCaseRules } from "../utils/resolve-catalog-name";
 
@@ -84,6 +83,7 @@ import type {
   RenameCandidate,
   RenameDetector,
 } from "./pushschema-pipeline-interfaces";
+import { builtByFor } from "./registered-collections";
 import type { ClassifierEvent, Resolution } from "./resolution/types";
 import { withCapturedStdout } from "./stdout-capture";
 import type { DesiredSchema } from "./types";
@@ -523,7 +523,7 @@ export class PushSchemaPipeline {
     // snapshot the diff compares and the Drizzle tables drizzle-kit turns into DDL — and resolving
     // inside either leaves the other on the raw fields, so a table would converge and then report a
     // type change against itself on every following diff.
-    const desired = withResolvedBuilderTextWidths(args.desired);
+    const desired = args.desired;
     const scope = computeJournalScope(
       source,
       args.uiTargetSlug,
@@ -675,6 +675,7 @@ export class PushSchemaPipeline {
               // main table's desired snapshot (they live in the companion
               // `_locales` table) rather than being re-added by the diff.
               {
+                builtBy: builtByFor("collection", c.builderOwned),
                 hasStatus: c.status === true,
                 localized: c.localized === true,
               }
@@ -688,6 +689,7 @@ export class PushSchemaPipeline {
               >[1],
               dialect,
               {
+                builtBy: builtByFor("single", s.builderOwned),
                 hasStatus: s.status === true,
                 localized: (s as { localized?: boolean }).localized === true,
               }
@@ -701,6 +703,7 @@ export class PushSchemaPipeline {
               >[1],
               dialect,
               {
+                builtBy: builtByFor("fieldGroup", c.builderOwned),
                 localized: (c as { localized?: boolean }).localized === true,
                 typeColumn: fieldGroupTypeColumns.get(c.tableName),
               }
@@ -1301,6 +1304,9 @@ export class PushSchemaPipeline {
         c.fields as unknown as Parameters<typeof generateRuntimeSchema>[1],
         dialect,
         {
+          // This schema is what drizzle-kit renders as DDL, so the width rule matters here and the
+          // builder that made the table has to be named.
+          builtBy: builtByFor("collection", c.builderOwned),
           status: c.status === true,
           localized: (c as { localized?: boolean }).localized === true,
         }
@@ -1319,6 +1325,8 @@ export class PushSchemaPipeline {
         s.fields as unknown as Parameters<typeof generateRuntimeSchema>[1],
         dialect,
         {
+          // Rendered as DDL by drizzle-kit, so the builder that made it is named here too.
+          builtBy: builtByFor("single", s.builderOwned),
           status: s.status === true,
           localized: (s as { localized?: boolean }).localized === true,
         }

@@ -30,7 +30,10 @@ import type { FieldDefinition } from "../../../schemas/dynamic-collections/legac
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { Logger } from "../../../shared/types/index";
 import type { SupportedDialect } from "../../../types/database";
-import { getColumnDescriptor } from "../services/field-column-descriptor";
+import {
+  getColumnDescriptor,
+  type ColumnOrigin,
+} from "../services/field-column-descriptor";
 import { pluginStorageFieldType } from "../services/plugin-codegen";
 
 // Convert camelCase / PascalCase identifiers to snake_case column names.
@@ -53,11 +56,13 @@ function toSnakeCase(name: string): string {
  */
 function ddlTypeForKind(
   field: FieldConfig,
-  dialect: string
+  dialect: string,
+  builtBy: ColumnOrigin
 ): string | undefined {
   const descriptor = getColumnDescriptor(
     field as unknown as FieldDefinition,
-    dialect as SupportedDialect
+    dialect as SupportedDialect,
+    builtBy
   );
   if (!descriptor) return undefined;
 
@@ -124,7 +129,10 @@ function ddlTypeForKind(
 // without a migration story for existing user data.
 export function fieldToColumnDef(
   field: FieldConfig,
-  dialect: string
+  dialect: string,
+  // Which builder made the table this column is being added to. A column added later must match the
+  // one a fresh table gets, and the two Schema Builder creators size a text column differently.
+  builtBy: ColumnOrigin
 ): string | null {
   if (!("name" in field) || !field.name) {
     return null;
@@ -158,7 +166,7 @@ export function fieldToColumnDef(
       // A field that declared its own width gets the bounded column the descriptor binds and a
       // freshly created table gets; every other string field keeps TEXT, which is what the
       // descriptor says for them on all three dialects.
-      columnType = ddlTypeForKind(field, dialect) ?? "TEXT";
+      columnType = ddlTypeForKind(field, dialect, builtBy) ?? "TEXT";
       break;
 
     case "number":
@@ -170,7 +178,7 @@ export function fieldToColumnDef(
       // The descriptor also honours the two ways a field asks for fractions —
       // `dbType: "decimal"` and `options.format: "float"` — which a fixed
       // string here silently overrode in both directions.
-      columnType = ddlTypeForKind(field, dialect) ?? "INTEGER";
+      columnType = ddlTypeForKind(field, dialect, builtBy) ?? "INTEGER";
       break;
 
     case "checkbox": {
@@ -196,7 +204,7 @@ export function fieldToColumnDef(
           ? "TIMESTAMP WITH TIME ZONE"
           : dialect === "mysql"
             ? "DATETIME"
-            : (ddlTypeForKind(field, dialect) ?? "INTEGER");
+            : (ddlTypeForKind(field, dialect, builtBy) ?? "INTEGER");
       break;
 
     case "select":
@@ -357,14 +365,14 @@ export async function addMissingColumnsForFields(
   logger: Logger,
   tableName: string,
   fields: FieldConfig[],
-  options?: { timestamps?: boolean }
+  options: { timestamps?: boolean; builtBy: ColumnOrigin }
 ): Promise<string[]> {
   const dialect = adapter.getCapabilities().dialect as string;
   const columns = new Map<string, string>();
 
   for (const field of fields) {
     if ("name" in field && field.name) {
-      const colDef = fieldToColumnDef(field, dialect);
+      const colDef = fieldToColumnDef(field, dialect, options.builtBy);
       if (colDef) {
         columns.set(toSnakeCase(field.name), colDef);
       }

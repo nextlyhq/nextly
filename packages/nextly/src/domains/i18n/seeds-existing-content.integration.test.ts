@@ -66,6 +66,7 @@ describe.each(getConfiguredTestDialects())(
       const created = await ensureCompanionTable(
         t.adapter as Parameters<typeof ensureCompanionTable>[0],
         {
+          builtBy: "codeFirst" as const,
           slug: "seedsrc",
           tableName: "dc_seedsrc",
           fields: [{ name: "title", type: "text", localized: true }],
@@ -95,6 +96,7 @@ describe.each(getConfiguredTestDialects())(
       await ensureCompanionTable(
         t.adapter as Parameters<typeof ensureCompanionTable>[0],
         {
+          builtBy: "codeFirst" as const,
           slug: "seedsrc",
           tableName: "dc_seedsrc",
           fields: [{ name: "title", type: "text", localized: true }],
@@ -119,6 +121,7 @@ describe.each(getConfiguredTestDialects())(
       const created = await ensureCompanionTable(
         t.adapter as Parameters<typeof ensureCompanionTable>[0],
         {
+          builtBy: "codeFirst" as const,
           slug: "seedsrc",
           tableName: "dc_seedsrc",
           fields: [{ name: "title", type: "text", localized: true }],
@@ -143,6 +146,7 @@ describe.each(getConfiguredTestDialects())(
       const created = await ensureCompanionTable(
         t.adapter as Parameters<typeof ensureCompanionTable>[0],
         {
+          builtBy: "codeFirst" as const,
           slug: "seedsrc",
           tableName: "dc_seedsrc",
           fields: [{ name: "title", type: "text", localized: true }],
@@ -172,6 +176,7 @@ describe.each(getConfiguredTestDialects())(
       await ensureCompanionTable(
         t.adapter as Parameters<typeof ensureCompanionTable>[0],
         {
+          builtBy: "codeFirst" as const,
           slug: "seedsrc",
           tableName: "dc_seedsrc",
           fields: [{ name: "title", type: "text", localized: true }],

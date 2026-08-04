@@ -10,6 +10,7 @@ import {
   getColumnDescriptor,
   isTextStorageKind,
   type ColumnKind,
+  type ColumnOrigin,
 } from "../field-column-descriptor";
 
 const field = (overrides: Partial<FieldDefinition>): FieldDefinition =>
@@ -28,7 +29,8 @@ describe("getColumnDescriptor — toggle", () => {
   it("maps a toggle field to a boolean column (Postgres)", () => {
     const desc = getColumnDescriptor(
       { name: "is_active", type: "toggle" } as never,
-      "postgresql"
+      "postgresql",
+      "collection"
     );
     expect(desc?.dialectType).toBe("bool");
   });
@@ -49,7 +51,8 @@ describe("getColumnDescriptor — a declared text width", () => {
   ] as const)("renders the declared width on %s", (dialect, expected) => {
     const desc = getColumnDescriptor(
       field({ options: { variant: "short" }, validation: { maxLength: 120 } }),
-      dialect
+      dialect,
+      "collection"
     );
 
     expect(desc?.dialectType).toBe(expected);
@@ -61,7 +64,8 @@ describe("getColumnDescriptor — a declared text width", () => {
   it("renders a width wider than the default", () => {
     const desc = getColumnDescriptor(
       field({ options: { variant: "short" }, validation: { maxLength: 400 } }),
-      "mysql"
+      "mysql",
+      "collection"
     );
 
     expect(desc?.dialectType).toBe("varchar(400)");
@@ -72,7 +76,8 @@ describe("getColumnDescriptor — a declared text width", () => {
   it("stays text on sqlite", () => {
     const desc = getColumnDescriptor(
       field({ options: { variant: "short" }, validation: { maxLength: 120 } }),
-      "sqlite"
+      "sqlite",
+      "collection"
     );
 
     expect(desc?.dialectType).toBe("text");
@@ -84,7 +89,8 @@ describe("getColumnDescriptor — a declared text width", () => {
   it("ignores a top-level length the creators do not read", () => {
     const desc = getColumnDescriptor(
       field({ options: { variant: "short" }, length: 500 }),
-      "mysql"
+      "mysql",
+      "collection"
     );
 
     expect(desc?.dialectType).toBe("varchar(255)");
@@ -93,7 +99,8 @@ describe("getColumnDescriptor — a declared text width", () => {
   it("falls back to the default width when none is declared", () => {
     const desc = getColumnDescriptor(
       field({ options: { variant: "short" } }),
-      "postgresql"
+      "postgresql",
+      "collection"
     );
 
     expect(desc?.dialectType).toBe("varchar(255)");
@@ -106,7 +113,8 @@ describe("getColumnDescriptor — a declared text width", () => {
     maxLength => {
       const desc = getColumnDescriptor(
         field({ options: { variant: "short" }, validation: { maxLength } }),
-        "postgresql"
+        "postgresql",
+        "collection"
       );
 
       expect(desc?.dialectType).toBe("varchar(255)");
@@ -141,7 +149,8 @@ describe("getColumnDescriptor — a contributed text type", () => {
         type: "acme-slug",
         options: [{ label: "A", value: "a" }],
       }),
-      "mysql"
+      "mysql",
+      "collection"
     );
 
     expect(desc?.dialectType).toBe("text");
@@ -156,7 +165,8 @@ describe("getColumnDescriptor — a contributed text type", () => {
         options: { variant: "short" },
         validation: { maxLength: 64 },
       }),
-      "postgresql"
+      "postgresql",
+      "collection"
     );
 
     expect(desc?.dialectType).toBe("varchar(64)");
@@ -167,7 +177,8 @@ describe("getColumnDescriptor — a contributed text type", () => {
 
     const desc = getColumnDescriptor(
       contributedField({ type: "acme-slug", options: { variant: "long" } }),
-      "mysql"
+      "mysql",
+      "collection"
     );
 
     expect(desc?.dialectType).toBe("text");
@@ -199,5 +210,50 @@ describe("isTextStorageKind", () => {
     "skip",
   ])("rejects %s", kind => {
     expect(isTextStorageKind(kind)).toBe(false);
+  });
+});
+
+/**
+ * The same field, read as each builder would have built it.
+ *
+ * This is the property the origin argument exists for: a text field that states no width has three
+ * correct answers, and which one applies is a fact about the entity rather than the field. Asserted
+ * together so a change that collapses two of them cannot pass.
+ */
+describe("getColumnDescriptor — the same field, per builder", () => {
+  const unstated = field({ name: "body" });
+
+  it.each([
+    // The Schema Builder's collection creator reads silence as unbounded.
+    ["collection", "text"],
+    // So does its field-group creator, which bounds only on a top-level maxLength.
+    ["fieldGroup", "text"],
+    // The pipeline built every code-first table with the bounded default.
+    ["codeFirst", "varchar(255)"],
+  ] as [ColumnOrigin, string][])(
+    "an unstated text field is %s -> %s on MySQL",
+    (builtBy, expected) => {
+      expect(getColumnDescriptor(unstated, "mysql", builtBy)?.dialectType).toBe(
+        expected
+      );
+    }
+  );
+
+  // A field group states its width at the top level and its creator never reads a variant, so the
+  // two Builder creators disagree about this same field.
+  it("reads a field group's top-level maxLength, and only for that builder", () => {
+    const declared = contributedField({
+      name: "body",
+      type: "text",
+      maxLength: 120,
+    });
+
+    expect(
+      getColumnDescriptor(declared, "mysql", "fieldGroup")?.dialectType
+    ).toBe("varchar(120)");
+    // The collection creator bounds on `options.variant` alone, so the same field is unbounded.
+    expect(
+      getColumnDescriptor(declared, "mysql", "collection")?.dialectType
+    ).toBe("text");
   });
 });

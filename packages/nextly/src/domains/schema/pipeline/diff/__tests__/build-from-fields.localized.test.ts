@@ -12,7 +12,7 @@ describe("buildDesiredTableFromFields — localized collections", () => {
         { name: "body", type: "richText", localized: true },
       ],
       "postgresql",
-      { localized: true }
+      { builtBy: "codeFirst", localized: true }
     );
     const names = spec.columns.map(c => c.name);
     expect(names).toContain("price");
@@ -31,7 +31,7 @@ describe("buildDesiredTableFromFields — localized collections", () => {
         { name: "price", type: "number" },
       ],
       "postgresql",
-      { localized: false }
+      { builtBy: "codeFirst", localized: false }
     );
     const names = spec.columns.map(c => c.name);
     expect(names).toContain("title");

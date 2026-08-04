@@ -1,5 +1,6 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 import { resolveCollectionTableName } from "../../schema/utils/resolve-table-name";
 import { isFieldLocalized } from "../classify-fields";
 
@@ -21,6 +22,12 @@ interface DeriveArgs {
   collectionLocalized: boolean;
   /** Whether the collection has Draft/Published (i18n M6) → companion gets a per-locale `_status`. */
   status?: boolean;
+  /**
+   * Which builder made the main table. A companion column mirrors the main table's, so it is
+   * described as whatever built that one; deciding it locally left a translatable field bounded on
+   * the companion while the same declaration was unbounded on the main table.
+   */
+  builtBy: ColumnOrigin;
 }
 
 /** Parent-id DDL type must match the main table's `id` column. */
@@ -41,7 +48,7 @@ export function deriveCompanionSpec(
   const columns: LocalizedColumnSpec[] = [];
   for (const f of args.fields) {
     if (!isFieldLocalized(f, true)) continue;
-    const col = fieldToLocalizedColumnSpec(f, args.dialect);
+    const col = fieldToLocalizedColumnSpec(f, args.dialect, args.builtBy);
     if (col) columns.push(col);
   }
   if (columns.length === 0) return null;

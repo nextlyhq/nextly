@@ -14,6 +14,7 @@ const num = (name: string): CompanionFieldLike => ({ name, type: "number" });
 describe("buildCompanionReconcileSql", () => {
   it("creates the companion (CREATE TABLE) when it does not yet exist", () => {
     const sql = buildCompanionReconcileSql({
+      builtBy: "codeFirst" as const,
       slug: "posts",
       tableName: "dc_posts",
       oldLocalized: [],
@@ -32,6 +33,7 @@ describe("buildCompanionReconcileSql", () => {
 
   it("adds a per-locale _status column when the collection has Draft/Published", () => {
     const sql = buildCompanionReconcileSql({
+      builtBy: "codeFirst" as const,
       slug: "posts",
       tableName: "dc_posts",
       oldLocalized: [],
@@ -47,6 +49,7 @@ describe("buildCompanionReconcileSql", () => {
     // Fresh localized collection created with only non-localized fields — nothing to store
     // per-language, so no companion is created.
     const sql = buildCompanionReconcileSql({
+      builtBy: "codeFirst" as const,
       slug: "posts",
       tableName: "dc_posts",
       oldLocalized: [],
@@ -60,6 +63,7 @@ describe("buildCompanionReconcileSql", () => {
 
   it("ALTERs ADD COLUMN for a newly-translatable field when the companion exists", () => {
     const sql = buildCompanionReconcileSql({
+      builtBy: "codeFirst" as const,
       slug: "posts",
       tableName: "dc_posts",
       oldLocalized: [text("body")],
@@ -77,6 +81,7 @@ describe("buildCompanionReconcileSql", () => {
 
   it("ALTERs DROP COLUMN for a removed translatable field when the companion exists", () => {
     const sql = buildCompanionReconcileSql({
+      builtBy: "codeFirst" as const,
       slug: "posts",
       tableName: "dc_posts",
       oldLocalized: [text("body"), text("summary")],
@@ -91,6 +96,7 @@ describe("buildCompanionReconcileSql", () => {
 
   it("returns empty when the existing companion needs no column changes", () => {
     const sql = buildCompanionReconcileSql({
+      builtBy: "codeFirst" as const,
       slug: "posts",
       tableName: "dc_posts",
       oldLocalized: [text("body")],
@@ -105,6 +111,7 @@ describe("buildCompanionReconcileSql", () => {
   it("ignores non-localized fields (only translatable ones reach the companion)", () => {
     // `num` fields are not text-like; deriveCompanionSpec/fieldToLocalizedColumnSpec skip them.
     const sql = buildCompanionReconcileSql({
+      builtBy: "codeFirst" as const,
       slug: "posts",
       tableName: "dc_posts",
       oldLocalized: [],
@@ -121,6 +128,7 @@ describe("buildCompanionReconcileSql", () => {
     // seeds every row at 'draft', so the default-locale row must be synced from
     // the main row's status instead of being stranded at 'draft'.
     const sql = buildCompanionReconcileSql({
+      builtBy: "codeFirst" as const,
       slug: "posts",
       tableName: "dc_posts",
       oldLocalized: [text("body")],
@@ -144,6 +152,7 @@ describe("buildCompanionReconcileSql", () => {
     // A migrate/DDL path without a live default locale still adds the column but
     // leaves the back-fill to the runtime path (backwards-compatible default).
     const sql = buildCompanionReconcileSql({
+      builtBy: "codeFirst" as const,
       slug: "posts",
       tableName: "dc_posts",
       oldLocalized: [text("body")],
@@ -163,6 +172,7 @@ describe("buildCompanionReconcileSql", () => {
     // is nothing to seed — emitting an UPDATE against the just-dropped column
     // would reference a column that no longer exists.
     const sql = buildCompanionReconcileSql({
+      builtBy: "codeFirst" as const,
       slug: "posts",
       tableName: "dc_posts",
       oldLocalized: [text("body")],

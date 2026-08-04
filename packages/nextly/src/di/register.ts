@@ -57,6 +57,7 @@ import {
   withoutDisabledBehavior,
 } from "../domains/schema/field-types/field-type-registry";
 import type { DesiredCollection } from "../domains/schema/pipeline/types";
+import type { ColumnOrigin } from "../domains/schema/services/field-column-descriptor";
 import type { SingleEntryService } from "../domains/singles/services/single-entry-service";
 import type {
   SingleRegistryService,
@@ -642,6 +643,9 @@ export async function registerServices(
       // row, then re-register the runtime table so reads in THIS boot see the
       // new column. A per-entity failure is logged + skipped (retried next boot).
       const materializeKind = async (
+        // Which builder made these tables. This adds columns to an existing table, so the column it
+        // emits has to match the one a fresh table of the same kind would get.
+        builtBy: ColumnOrigin,
         kind: string,
         changed: ReadonlyArray<{ slug: string; fields?: FieldConfig[] }>,
         loaded: LoadedBuilderEntity[],
@@ -667,7 +671,7 @@ export async function registerServices(
               resolvedLogger,
               before.tableName,
               fields,
-              { timestamps: true }
+              { timestamps: true, builtBy }
             );
             await persist(ent.slug, fields);
             if (schemaRegistry) {
@@ -709,6 +713,7 @@ export async function registerServices(
         );
         await materializeKind(
           "collection",
+          "collection",
           collChanged,
           builderEntities.collections,
           (slug, fields) =>
@@ -725,6 +730,7 @@ export async function registerServices(
         );
         const reg = new SingleRegistryService(adapter, resolvedLogger);
         await materializeKind(
+          "collection",
           "single",
           singleChanged,
           builderEntities.singles,
@@ -743,6 +749,7 @@ export async function registerServices(
         const reg = new FieldGroupRegistryService(adapter, resolvedLogger);
         const compSchema = new FieldGroupSchemaService(dialect);
         await materializeKind(
+          "fieldGroup",
           "component",
           compChanged,
           builderEntities.components,
@@ -1133,6 +1140,8 @@ async function initializeSchemaRegistry(
             "../domains/i18n/runtime/companion-io"
           );
           await ensureCompanionTable(adapter, {
+            // Loaded from the registry, so the Schema Builder made this table.
+            builtBy: "collection" as const,
             slug: tableName,
             tableName,
             fields: fields as { name: string; type: string }[],
@@ -1184,6 +1193,8 @@ async function initializeSchemaRegistry(
             "../domains/i18n/runtime/companion-io"
           );
           await ensureCompanionTable(adapter, {
+            // A single is built by the same service as a collection.
+            builtBy: "collection" as const,
             slug: tableName,
             tableName,
             fields: fields as { name: string; type: string }[],
@@ -1297,6 +1308,8 @@ async function initializeSchemaRegistry(
           "../domains/i18n/runtime/companion-io"
         );
         await ensureCompanionTable(adapter, {
+          // A field group's builder sizes a text column from a different key.
+          builtBy: "fieldGroup" as const,
           slug: tableName,
           tableName,
           fields: fields as { name: string; type: string }[],
@@ -1876,6 +1889,8 @@ async function syncCodeFirstCollections(
                   "../domains/i18n/runtime/companion-io"
                 );
                 await ensureCompanionTable(adapter, {
+                  // This branch boots entities declared in nextly.config.ts.
+                  builtBy: "codeFirst" as const,
                   slug,
                   tableName: desired.tableName,
                   fields,
@@ -2089,6 +2104,8 @@ async function syncCodeFirstComponents(
                   "../domains/i18n/runtime/companion-io"
                 );
                 await ensureCompanionTable(adapter, {
+                  // A code-first component's companion, created on a fresh boot.
+                  builtBy: "codeFirst" as const,
                   slug,
                   tableName,
                   fields: compConfig.fields as { name: string; type: string }[],
@@ -2355,6 +2372,8 @@ async function reconcileSingleTablesForBoot(
                   "../domains/i18n/runtime/companion-io"
                 );
                 await ensureCompanionTable(adapter, {
+                  // From codeFirstConfig, so the pipeline owns this table.
+                  builtBy: "codeFirst" as const,
                   slug: single.slug,
                   tableName: single.tableName,
                   fields: fields,

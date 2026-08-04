@@ -31,6 +31,7 @@ import { STORAGE_FORMAT } from "../../../../schemas/storage-format";
 import { resolveLocalizedFieldNames } from "../../../i18n/classify-fields";
 import {
   getColumnDescriptor,
+  type ColumnOrigin,
   getSystemColumnDescriptors,
   toSnakeCase,
 } from "../../services/field-column-descriptor";
@@ -80,6 +81,12 @@ export interface BuildDesiredTableOptions {
    * dropped.
    */
   localized?: boolean;
+  /**
+   * Which builder made this table. Required, because a text field with no stated width has no one
+   * right answer: the Schema Builder's two creators and the pipeline each read silence differently,
+   * and the diff has to describe the column the way whatever built it did.
+   */
+  builtBy: ColumnOrigin;
 }
 
 /**
@@ -188,7 +195,7 @@ export function buildDesiredTableFromFields(
   tableName: string,
   fields: MinimalFieldDef[],
   dialect: SupportedDialect,
-  options: BuildDesiredTableOptions = {}
+  options: BuildDesiredTableOptions
 ): TableSpec {
   const columns: ColumnSpec[] = [];
 
@@ -206,7 +213,8 @@ export function buildDesiredTableFromFields(
   const producesColumn = (f: (typeof fields)[number]): boolean =>
     getColumnDescriptor(
       f as unknown as Parameters<typeof getColumnDescriptor>[0],
-      dialect
+      dialect,
+      options.builtBy
     ) !== null;
 
   // Inject reserved system columns first - mirrors runtime-schema-generator's
@@ -252,7 +260,8 @@ export function buildDesiredTableFromFields(
       // keys). Cast through unknown to bridge the two surface types
       // without leaking either back through the module graph.
       field as unknown as Parameters<typeof getColumnDescriptor>[0],
-      dialect
+      dialect,
+      options.builtBy
     );
     if (!desc) continue;
     columns.push({
@@ -271,7 +280,8 @@ export function buildDesiredTableFromFields(
     columnNameFor: field =>
       getColumnDescriptor(
         field as unknown as Parameters<typeof getColumnDescriptor>[0],
-        dialect
+        dialect,
+        options.builtBy
       )?.name ?? null,
   });
 
@@ -290,6 +300,8 @@ export function buildDesiredTableFromComponentFields(
   dialect: SupportedDialect,
   options: {
     localized?: boolean;
+    /** Which builder made this table — see `BuildDesiredTableOptions`. */
+    builtBy: ColumnOrigin;
     /**
      * The discriminator this table actually carries.
      *
@@ -303,7 +315,7 @@ export function buildDesiredTableFromComponentFields(
      * table about to be created and for every database that has not migrated.
      */
     typeColumn?: string;
-  } = {}
+  }
 ): TableSpec {
   const typeColumn = options.typeColumn ?? STORAGE_FORMAT.columns.type;
   const columns: ColumnSpec[] = [];
@@ -444,7 +456,8 @@ export function buildDesiredTableFromComponentFields(
     if (localizedNames.has(field.name)) continue; // lives in the companion table
     const desc = getColumnDescriptor(
       field as unknown as Parameters<typeof getColumnDescriptor>[0],
-      dialect
+      dialect,
+      options.builtBy
     );
     if (!desc) continue;
     columns.push({
@@ -531,7 +544,8 @@ export function buildDesiredTableFromComponentFields(
       columnNameFor: field =>
         getColumnDescriptor(
           field as unknown as Parameters<typeof getColumnDescriptor>[0],
-          dialect
+          dialect,
+          options.builtBy
         )?.name ?? null,
     }),
   ];

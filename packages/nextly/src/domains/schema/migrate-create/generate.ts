@@ -104,7 +104,7 @@ export interface MinimalConfigEntity {
   status?: boolean;
   /**
    * Whether content-localization is enabled for this collection, single, OR component
-   * (`defineCollection({ localized: true })` / `defineSingle` / `defineFieldGroup`). When
+   * (`defineCollection({ builtBy: "codeFirst" as const, localized: true })` / `defineSingle` / `defineFieldGroup`). When
    * true, fields resolved as translatable are omitted from the main-table desired snapshot
    * and relocated to the migration-owned companion `_locales` table (i18n Option B).
    */
@@ -343,7 +343,7 @@ function buildDisableSpec(
 
   const columns: LocalizedColumnSpec[] = [];
   for (const f of entity.fields) {
-    const col = fieldToLocalizedColumnSpec(f, dialect);
+    const col = fieldToLocalizedColumnSpec(f, dialect, "codeFirst");
     if (col && recorded.includes(col.name)) columns.push(col);
   }
   if (columns.length === 0) return null;
@@ -410,6 +410,7 @@ function planCompanionMigrations(
     // for one being DISABLED it is the starting point that the previous snapshot's recorded
     // column list then corrects (see below). Returns null when no field is translatable.
     const spec = deriveCompanionSpec({
+      builtBy: "codeFirst" as const,
       slug: c.slug,
       dbName: c.tableName,
       fields: c.fields,
@@ -502,6 +503,7 @@ function withLocalizedMarker(
   if (entity.localized !== true) return table;
   // `defaultLocale` does not affect column names, so any value works here.
   const spec = deriveCompanionSpec({
+    builtBy: "codeFirst" as const,
     slug: entity.slug,
     dbName: entity.tableName,
     fields: entity.fields,
@@ -588,6 +590,7 @@ export function buildDesiredSnapshotFromConfig(
     tables.push(
       withLocalizedMarker(
         buildDesiredTableFromFields(c.tableName, c.fields, dialect, {
+          builtBy: "codeFirst" as const,
           hasStatus: c.status === true,
           localized: c.localized === true,
         }),
@@ -604,6 +607,7 @@ export function buildDesiredSnapshotFromConfig(
     tables.push(
       withLocalizedMarker(
         buildDesiredTableFromFields(c.tableName, c.fields, dialect, {
+          builtBy: "codeFirst" as const,
           hasStatus: c.status === true,
           localized: c.localized === true,
         }),
@@ -623,6 +627,7 @@ export function buildDesiredSnapshotFromConfig(
     tables.push(
       withLocalizedMarker(
         buildDesiredTableFromComponentFields(c.tableName, c.fields, dialect, {
+          builtBy: "codeFirst" as const,
           localized: c.localized === true,
         }),
         c,

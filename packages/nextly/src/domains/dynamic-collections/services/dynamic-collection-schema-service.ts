@@ -84,7 +84,11 @@ export class DynamicCollectionSchemaService {
    */
   private canonicalSlugType(field: FieldDefinition): string | null {
     if (toSnakeCase(field.name) !== "slug") return null;
-    return getColumnDescriptor(field, this.dialect)?.dialectType ?? null;
+    // This service builds collections and singles, so it asks the descriptor as that builder.
+    return (
+      getColumnDescriptor(field, this.dialect, "collection")?.dialectType ??
+      null
+    );
   }
 
   /**
