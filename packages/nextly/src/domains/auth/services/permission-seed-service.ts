@@ -319,6 +319,14 @@ export class PermissionSeedService extends BaseService {
   async seedSystemPermissions(): Promise<SeedResult> {
     const result = this.emptySeedResult();
 
+    // Before seeding, repair rows an older version wrote with the two halves
+    // of the slug the wrong way round. Here because this is the one method
+    // every boot path already calls — the CLI build, post-init and the auth
+    // handler — so no call site has to remember it. Ensuring a permission
+    // heals a DECLARED slug, but the rows this reaches were never declared:
+    // they came from the REST grant path, so nothing else revisits them.
+    await this.normalizeReversedSlugs();
+
     for (const perm of SYSTEM_PERMISSIONS) {
       result.total++;
       try {
@@ -796,6 +804,71 @@ export class PermissionSeedService extends BaseService {
    *
    * First removes permissions from all roles, then deletes the permissions.
    */
+  /**
+   * Rename permissions whose slug is exactly its own `resource-action`.
+   *
+   * A slug is what every authorization check resolves — the middleware, the
+   * guards, `hasPermission`, and the scopes an API key is issued with — so a
+   * row written the other way round is a permission nothing can find. It
+   * denies rather than escalates, which is why it goes unnoticed: the grant is
+   * listed as assigned and simply never applies.
+   *
+   * Renaming revokes nothing. Identity is `(action, resource)` and grants
+   * reference the row by id, so this brings a label into line and leaves every
+   * assignment intact.
+   *
+   * Only the exactly-reversed form. A slug that merely differs from the
+   * convention was chosen by whoever declared it — `manage-api-keys` on action
+   * `update` is in the seed set on purpose — and renaming those would break
+   * the declarations that use them.
+   *
+   * A rename can still collide, because `slug` is unique and some other row
+   * may already hold the canonical name. That is left in place rather than
+   * resolved: guessing which of two permissions should own a name is not
+   * something a boot-time repair should decide, and failing the boot over it
+   * would be worse than the stale slug.
+   */
+  private async normalizeReversedSlugs(): Promise<number> {
+    const { permissions } = this.tables;
+    let repaired = 0;
+
+    const rows = (await this.db
+      .select({
+        id: permissions.id,
+        slug: permissions.slug,
+        action: permissions.action,
+        resource: permissions.resource,
+      })
+      .from(permissions)) as Array<{
+      id: string;
+      slug: string;
+      action: string;
+      resource: string;
+    }>;
+
+    for (const row of rows) {
+      const canonical = permissionSlug(row.action, row.resource);
+      const reversed = permissionSlug(row.resource, row.action);
+      // A palindrome pair has nothing to repair, and comparing them keeps a
+      // one-word action on a same-named resource from being "fixed" in place.
+      if (canonical === reversed) continue;
+      if (row.slug !== reversed) continue;
+
+      try {
+        await (this.db as RBACDatabaseInstance)
+          .update(permissions)
+          .set({ slug: canonical })
+          .where(eq(permissions.id, row.id));
+        repaired++;
+      } catch {
+        // Almost certainly the unique index: another row already answers to
+        // the canonical name. Left as it is, for the reason above.
+      }
+    }
+
+    return repaired;
+  }
+
   async cleanupOrphanedPermissions(): Promise<SeedResult> {
     const result = this.emptySeedResult();
 

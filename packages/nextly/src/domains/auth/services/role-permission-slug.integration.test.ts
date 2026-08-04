@@ -179,3 +179,39 @@ describe("addPermissionToRole, creating the permission", () => {
     );
   });
 });
+
+describe("normalizing reversed slugs at boot", () => {
+  it("repairs a granted row nobody re-adds", async () => {
+    // The add path only reaches a row when someone grants that pair again. An
+    // upgraded install has its grants already in place and no reason to touch
+    // them, while API-key scopes are resolved by selecting the slug — so those
+    // keys keep being issued a name no check resolves.
+    current = await bootWithCoreTables();
+    await current.adapter.executeQuery(
+      `INSERT INTO permissions (id, name, slug, action, resource, created_at, updated_at) VALUES ('perm-boot', 'Export Reports', 'reports-export', 'export', 'reports', 0, 0)`
+    );
+
+    await current.getService("permissionSeedService").seedSystemPermissions();
+
+    expect((await readPermission(current, "export", "reports"))?.slug).toBe(
+      "export-reports"
+    );
+  });
+
+  it("leaves a slug that is merely non-conventional alone", async () => {
+    // An ad-hoc pair, deliberately: a DECLARED permission is healed onto its
+    // declared slug by `ensurePermission`, which would make this assert the
+    // wrong mechanism. Nothing declares this one, so only the reversed-form
+    // repair could touch it — and `invoices-archive` is not what it holds.
+    current = await bootWithCoreTables();
+    await current.adapter.executeQuery(
+      `INSERT INTO permissions (id, name, slug, action, resource, created_at, updated_at) VALUES ('perm-boot-2', 'Archive Invoices', 'legacy-archive-name', 'archive', 'invoices', 0, 0)`
+    );
+
+    await current.getService("permissionSeedService").seedSystemPermissions();
+
+    expect((await readPermission(current, "archive", "invoices"))?.slug).toBe(
+      "legacy-archive-name"
+    );
+  });
+});
