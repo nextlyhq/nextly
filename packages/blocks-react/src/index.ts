@@ -7,8 +7,8 @@
  * helpers live at `@nextlyhq/blocks-react/next`, and `layering.test.ts` turns
  * that separation into a hard failure rather than a convention.
  *
- * R-1 lands the package boundary and its guarantees. The renderer itself
- * arrives in R-2.
+ * The renderer components are added on top of this boundary; what ships here
+ * is the boundary itself and the context contract every block renders against.
  *
  * @module index
  */

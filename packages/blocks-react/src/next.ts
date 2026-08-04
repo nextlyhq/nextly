@@ -5,7 +5,8 @@
  * `next/*` into a consumer's module graph. Everything that touches Next
  * (routing, metadata, draft mode) belongs here and nowhere else.
  *
- * `createBlocksPage()` lands in R-4, over the existing `createContentRoute`.
+ * Route helpers built on the CMS's existing content-route factory belong
+ * here, alongside anything else that needs `next/*`.
  *
  * @module next
  */

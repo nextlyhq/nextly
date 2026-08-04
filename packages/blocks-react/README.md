@@ -47,5 +47,5 @@ fixtures. The editor canvas supplies its own. One seam, four consumers.
 
 ## Status
 
-`R-1` of implementation plan 03 lands the package boundary and its guarantees.
-`PageRenderer` arrives in `R-2`.
+Alpha. What ships today is the package boundary, its layering guarantees, and
+the `PageContext` contract. `PageRenderer` follows.

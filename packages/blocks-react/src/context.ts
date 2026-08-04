@@ -116,11 +116,21 @@ export interface PageContext {
 export function createStandaloneContext(
   overrides: Partial<PageContext> = {}
 ): PageContext {
-  return {
+  const defaults: PageContext = {
     entry: null,
     data: emptyDataProvider,
     resolveMedia: () => Promise.resolve(null),
     resolveEntryPath: () => Promise.resolve(null),
-    ...overrides,
   };
+
+  // Spreading `overrides` wholesale would let an explicit `undefined` replace a
+  // default: `exactOptionalPropertyTypes` is off, so
+  // `createStandaloneContext({ data: maybeProvider })` typechecks and then
+  // produces a context whose `data` is undefined, which crashes at the first
+  // dynamic block instead of falling back. Only defined values win.
+  const defined = Object.fromEntries(
+    Object.entries(overrides).filter(([, value]) => value !== undefined)
+  ) as Partial<PageContext>;
+
+  return { ...defaults, ...defined };
 }

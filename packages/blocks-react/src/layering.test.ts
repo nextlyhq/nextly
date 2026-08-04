@@ -114,12 +114,23 @@ function runtimeImports(file: string): string[] {
     if (specifier) specifiers.push(specifier);
   }
 
-  // A dynamic import whose specifier is not a literal cannot be checked here.
-  // Fail loudly rather than pass silently: the point of this guard is that a
-  // route into the module graph cannot be opened without a deliberate act.
-  const computed = /(?<![.\w])(?:import|require)\s*\(\s*[^"')\s]/g;
-  if (computed.test(source)) {
-    specifiers.push("<computed-dynamic-import>");
+  // A dynamic import whose specifier is not a single literal cannot be checked
+  // here. Fail loudly rather than pass silently: the point of this guard is
+  // that a route into the module graph cannot be opened without a deliberate
+  // act.
+  //
+  // The test is "the argument is not EXACTLY one string literal", not "the
+  // argument does not start with a quote". `import("next/" + "headers")` starts
+  // with a quote, so a first-character test waves it through while the literal
+  // matcher above also skips it for the concatenation.
+  const anyDynamic = /(?<![.\w])(?:import|require)\s*\(([^)]*)\)/g;
+  const singleLiteral = /^\s*["'][^"']*["']\s*$/;
+  let dynamicMatch: RegExpExecArray | null;
+  while ((dynamicMatch = anyDynamic.exec(source)) !== null) {
+    const argument = dynamicMatch[1] ?? "";
+    if (!singleLiteral.test(argument)) {
+      specifiers.push("<computed-dynamic-import>");
+    }
   }
 
   return specifiers;
@@ -188,6 +199,9 @@ function isNodeBuiltin(specifier: string): boolean {
 
 describe("the package's layering contract", () => {
   const files = sourceFiles();
+  // Everything the `/next` entry can reach. Membership, not filename, decides
+  // whether a module is allowed to import Next.
+  const nextGraph = reachableFrom(join(SRC_DIR, "next.ts"));
 
   it("has source files to check", () => {
     // A traversal bug that returned nothing would make every assertion below
@@ -199,7 +213,7 @@ describe("the package's layering contract", () => {
     const violations: string[] = [];
 
     for (const file of files) {
-      const isNextEntry = relative(SRC_DIR, file) === "next.ts";
+      const isNextSide = nextGraph.has(file);
       for (const specifier of runtimeImports(file)) {
         if (isInternal(specifier)) continue;
 
@@ -208,7 +222,10 @@ describe("the package's layering contract", () => {
           continue;
         }
         if (ALLOWED_RUNTIME_IMPORTS.includes(specifier)) continue;
-        if (isNextEntry && NEXT_ONLY_IMPORTS.includes(specifier)) continue;
+        // Any module reachable only from the `/next` entry may use Next, not
+        // just the entry file itself: splitting that entry into helpers must
+        // not require every helper to re-export through one file.
+        if (isNextSide && NEXT_ONLY_IMPORTS.includes(specifier)) continue;
 
         violations.push(`${relative(SRC_DIR, file)}: ${specifier}`);
       }
@@ -241,11 +258,11 @@ describe("the package's layering contract", () => {
     expect(leaks, leaks.join("\n")).toEqual([]);
   });
 
-  it("keeps next/* out of every file except the next entry", () => {
+  it("keeps next/* out of every file outside the next graph", () => {
     const leaks: string[] = [];
 
     for (const file of files) {
-      if (relative(SRC_DIR, file) === "next.ts") continue;
+      if (nextGraph.has(file)) continue;
       for (const specifier of runtimeImports(file)) {
         if (specifier === "next" || specifier.startsWith("next/")) {
           leaks.push(`${relative(SRC_DIR, file)}: ${specifier}`);
