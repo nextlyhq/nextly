@@ -111,6 +111,8 @@ export function createPocDriver(page: Page): CanvasDriver {
           return {
             id: el.getAttribute("data-nx-id") ?? "",
             top: Math.round(r.top),
+            left: Math.round(r.left),
+            width: Math.round(r.width),
             height: Math.round(r.height),
           };
         })

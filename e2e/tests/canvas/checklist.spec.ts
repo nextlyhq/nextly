@@ -95,7 +95,13 @@ test("[acceptance] point 4: siblings do not move during a drag", async ({
     "zones expand from 0px to 6px and push every block below them down"
   );
 
-  const read = async () => (await driver.readBlockBoxes()).map(box => box.top);
+  // Whole boxes, not just tops: a canvas that shifts siblings sideways or
+  // resizes a block without moving its top would produce identical arrays and
+  // pass a top-only comparison, while point 4 says siblings must not move.
+  const read = async () =>
+    (await driver.readBlockBoxes()).map(
+      box => `${box.id}:${box.top}:${box.left}:${box.width}:${box.height}`
+    );
 
   const before = await read();
   await startLibraryDrag(driver);
@@ -103,9 +109,7 @@ test("[acceptance] point 4: siblings do not move during a drag", async ({
   const during = await read();
   await driver.cancel();
 
-  const shifted = before
-    .map((top, i) => Math.abs(top - (during[i] ?? top)))
-    .filter(delta => delta > 0);
+  const shifted = before.filter((box, i) => box !== during[i]);
 
   test.info().annotations.push({
     type: "layout-shift",
@@ -117,7 +121,7 @@ test("[acceptance] point 4: siblings do not move during a drag", async ({
   // v2 canvas has a figure to beat rather than a slogan.
   test.info().annotations.push({
     type: "shifted-count",
-    description: `${shifted.length} of ${before.length} nodes moved; max ${Math.max(0, ...shifted)}px`,
+    description: `${shifted.length} of ${before.length} nodes changed geometry`,
   });
 
   expect(before.length).toBe(during.length);
@@ -247,10 +251,6 @@ test("[acceptance] point 12: Escape cancels a drag without changing the tree", a
   page,
   request,
 }) => {
-  test.fail(
-    true,
-    "the admin shell claims Escape and navigates out of the editor"
-  );
   const fixture = await seedPage(request, FLAT_LIST_FIXTURE);
   const driver = createPocDriver(page);
   await driver.mountTree(fixture);
@@ -269,6 +269,14 @@ test("[acceptance] point 12: Escape cancels a drag without changing the tree", a
     type: "after-cancel",
     description: JSON.stringify(afterCancel),
   });
+
+  // Declared immediately before the assertion it excuses, so a seeding,
+  // navigation or mount failure is reported as itself rather than absorbed as
+  // the known Escape gap.
+  test.fail(
+    true,
+    "the admin shell claims Escape and navigates out of the editor"
+  );
 
   // Asserted, not annotated. When Escape unmounts the editor the poll below
   // spends its full 30s timing out on a canvas that is never coming back, which

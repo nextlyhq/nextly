@@ -131,7 +131,16 @@ test("scenario 2: droppable geometry survives a host scroll mid-drag", async ({
   expect(before).toBeGreaterThanOrEqual(0);
   await expectIndicatorAtPointer(driver, "pre-scroll");
 
+  const originBefore = await driver.frameOrigin();
   await driver.scrollHost(200);
+  const originAfter = await driver.frameOrigin();
+  // Without this the scenario silently degrades to an at-rest pointer check
+  // whenever the overflow ancestor is already at its limit.
+  expect(
+    Math.abs(originAfter.y - originBefore.y),
+    "the host must actually scroll for #1705 to be exercised"
+  ).toBeGreaterThan(50);
+
   await driver.moveBy(0, 1);
   const after = await driver.readActiveTarget();
 
@@ -234,9 +243,32 @@ test("scenario 4: a steady drag over variable-height blocks never reverses", asy
     "the target must advance across the drag, not stall on one zone"
   ).toBeGreaterThan(1);
   expect(findReversal(sequence)).toBeNull();
+
+  // The pointer only ever moves down and zones are numbered top-to-bottom, so
+  // a monotonically RETREATING walk has no reversal and multiple ordinals —
+  // it clears every guard above while being completely backwards.
+  const first = observed[0]!;
+  const last = observed[observed.length - 1]!;
+  expect(
+    last,
+    `targets must advance downward: ${JSON.stringify(observed)}`
+  ).toBeGreaterThan(first);
 });
 
-test("scenario 4b: a 2px oscillation at a boundary never flips the indicator", async ({
+/**
+ * Expected failure, and the reason is structural rather than a bug in dnd-kit.
+ *
+ * Master plan §2.8 point 3 assumes a boundary BETWEEN TWO drop targets. This
+ * canvas has no such boundary: zones are thin gaps separated by whole blocks of
+ * dead space, so the only edge a pointer can straddle is zone-versus-nothing.
+ * Bracketed to 1px, a 2px jitter there yields [-1 x20] — the indicator is
+ * absent, not flickering between two candidates.
+ *
+ * That is the same structural fact that makes #2088 unreproducible (§3 of the
+ * report) seen from its costly side, and it is what compensation C4 has to fix:
+ * insertion feedback must exist between the gaps, not only within them.
+ */
+test("scenario 4b: a 2px jitter at a zone edge keeps the indicator stable", async ({
   page,
   request,
 }) => {
@@ -273,10 +305,13 @@ test("scenario 4b: a 2px oscillation at a boundary never flips the indicator", a
     "a boundary must actually be crossed, or this measures the middle of one zone"
   ).toBeGreaterThanOrEqual(0);
 
-  // Straddle the boundary: step back 2px BEFORE sampling, so the run covers
-  // P-2 and P+2 rather than only P and P+2. Sampling one side lets an algorithm
-  // that flips the instant the pointer crosses still report a single target.
-  await driver.moveBy(0, -2);
+  // The 4px search only proves the boundary lies somewhere in (P-4, P]. Walk
+  // back 1px at a time until the old target returns, which brackets it to 1px,
+  // so the +/-2px samples below genuinely land on opposite sides.
+  for (let step = 0; step < 6; step++) {
+    await driver.moveBy(0, -1);
+    if ((await driver.readActiveTarget()) === previous) break;
+  }
   const observed: number[] = [];
   for (let step = 0; step < 20; step++) {
     await driver.moveBy(0, step % 2 === 0 ? 4 : -4);
@@ -289,6 +324,13 @@ test("scenario 4b: a 2px oscillation at a boundary never flips the indicator", a
     description: JSON.stringify(observed),
   });
 
+  // Declared here, after the evidence is collected: the run above is the
+  // measurement, and it is what the annotation records either way.
+  test.fail(
+    true,
+    "zones do not tile the canvas, so a catchment edge borders dead space"
+  );
+
   // -1 is NOT filtered out. A run of [2,-1,2,-1,...] has one active value but
   // the indicator vanishes on every other move, which is the same defect seen
   // from the other side. Counting the inactive state makes that fail.
@@ -297,6 +339,12 @@ test("scenario 4b: a 2px oscillation at a boundary never flips the indicator", a
     distinct.size,
     `the indicator must neither flip nor disappear: ${JSON.stringify(observed)}`
   ).toBe(1);
+  // [-1,-1,...] also has one distinct value: the indicator was simply gone the
+  // whole time.
+  expect(
+    [...distinct][0],
+    `the indicator must stay visible: ${JSON.stringify(observed)}`
+  ).toBeGreaterThanOrEqual(0);
 });
 
 /**
@@ -328,9 +376,15 @@ test("scenario 5: a keyboard move actually moves a block", async ({
     description: `before=${JSON.stringify(before)} moved=${JSON.stringify(moved)}`,
   });
 
-  // Asserting that the keyboard CHANGES the tree, not that it round-trips.
-  // A round-trip holds vacuously when nothing happens, which is exactly the
-  // state today; this fails for the real reason and will turn into an
-  // unexpected pass the moment keyboard dragging lands.
-  expect(moved).not.toEqual(before);
+  // A reorder, not any mutation: deleting the focused block or inserting a
+  // different one also makes `moved` differ, and that is corruption rather than
+  // a successful move. Same length, same ids, different order.
+  expect(moved.length, "a move must not change the block count").toBe(
+    before.length
+  );
+  expect(
+    [...moved].sort(),
+    "a move must not change which blocks exist"
+  ).toEqual([...before].sort());
+  expect(moved, "a keyboard move must reorder the tree").not.toEqual(before);
 });
