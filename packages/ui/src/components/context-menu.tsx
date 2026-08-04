@@ -19,8 +19,11 @@
  * - Highlight: `bg-muted`, driven off `data-[highlighted]` so pointer and keyboard agree
  *
  * **Accessibility**:
- * - Opens on the context-menu event, so the keyboard route (Shift+F10, or the menu key) works
- *   without anything extra
+ * - Opens on the context-menu event, so the keyboard route (Shift+F10, or the menu key) reaches
+ *   it — but only once the trigger can hold focus. Radix wires the event handlers onto whatever
+ *   `asChild` is given and does not make it focusable, so a plain `div` trigger is reachable by
+ *   pointer only. Use an already-focusable element, or give it `tabIndex` and a role, as the
+ *   example below does
  * - Full keyboard navigation (arrows, Enter, Escape, Home/End, typeahead)
  * - ARIA roles from Radix: `menu`, `menuitem`, `menuitemcheckbox`, `menuitemradio`
  * - Focus returns to the element that opened the menu on close
@@ -33,7 +36,9 @@
  * ```tsx
  * <ContextMenu>
  *   <ContextMenuTrigger asChild>
- *     <div className="p-8">Right-click anywhere in here</div>
+ *     <div className="p-8" tabIndex={0} role="group" aria-label="Canvas">
+ *       Right-click anywhere in here
+ *     </div>
  *   </ContextMenuTrigger>
  *   <ContextMenuContent>
  *     <ContextMenuItem onSelect={duplicate}>Duplicate</ContextMenuItem>
@@ -66,6 +71,20 @@ import { usePortalContainer } from "../providers/portal-provider";
  */
 const menuItemBase =
   "cursor-pointer transition-colors data-[highlighted]:bg-muted data-[highlighted]:text-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50";
+
+/**
+ * The popover surface, shared by the root menu and every submenu.
+ *
+ * Shared rather than repeated because the two drifted once already: the submenu was written with
+ * `overflow-hidden` and no height bound, so a long one near the edge of the viewport clipped with
+ * nothing to scroll. A submenu opens beside its parent item, further down the screen with less
+ * room left than the menu that spawned it, so it needs the bound at least as much.
+ *
+ * The available-height variable is what supplies that bound: Radix measures the space the surface
+ * actually has and publishes it, so the menu scrolls instead of overflowing the viewport.
+ */
+const menuSurface =
+  "z-50 max-h-[var(--radix-context-menu-content-available-height)] min-w-[8rem] overflow-y-auto overflow-x-hidden rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-md data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 origin-[--radix-context-menu-content-transform-origin]";
 
 /** @experimental */
 const ContextMenu = ContextMenuPrimitive.Root;
@@ -116,10 +135,7 @@ const ContextMenuSubContent = React.forwardRef<
     <ContextMenuPrimitive.Portal container={portalContainer}>
       <ContextMenuPrimitive.SubContent
         ref={ref}
-        className={cn(
-          "z-50 min-w-[8rem] overflow-hidden rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-md data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 origin-[--radix-context-menu-content-transform-origin]",
-          className
-        )}
+        className={cn(menuSurface, className)}
         {...props}
       />
     </ContextMenuPrimitive.Portal>
@@ -138,12 +154,7 @@ const ContextMenuContent = React.forwardRef<
     <ContextMenuPrimitive.Portal container={portalContainer}>
       <ContextMenuPrimitive.Content
         ref={ref}
-        className={cn(
-          // The available-height variable bounds the menu to the space it actually has, so a
-          // long menu opened near the bottom of the viewport scrolls instead of overflowing it.
-          "z-50 max-h-[var(--radix-context-menu-content-available-height)] min-w-[8rem] overflow-y-auto overflow-x-hidden rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-md data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 origin-[--radix-context-menu-content-transform-origin]",
-          className
-        )}
+        className={cn(menuSurface, className)}
         {...props}
       />
     </ContextMenuPrimitive.Portal>

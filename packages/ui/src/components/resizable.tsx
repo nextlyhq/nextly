@@ -11,10 +11,16 @@
  * groups. `react-resizable-panels` implements all of them, and is the library the wider React
  * ecosystem settled on for this control.
  *
- * **Sizes are percentages, not pixels.** A layout stored in pixels is wrong on the next monitor;
- * one stored in percentages survives a window resize. `defaultLayout` seeds it, and persisting a
- * shell layout is the caller's to store wherever it already keeps preferences — this kit does not
- * reach for browser storage on their behalf.
+ * **Sizes are relative, not pixels.** A layout stored in pixels is wrong on the next monitor; one
+ * stored proportionally survives a window resize. Persisting a shell layout is the caller's to
+ * store wherever it already keeps preferences — this kit does not reach for browser storage on
+ * their behalf.
+ *
+ * The two size props are not the same shape, which is easy to get wrong in both directions:
+ * `defaultLayout` is a map of panel id to a **number** (a flex-grow weight, conventionally read as
+ * a percentage by making them sum to 100), while per-panel bounds such as `minSize` take a CSS
+ * **string** like `"15%"`. Handing `defaultLayout` strings is a type error, and a JavaScript
+ * caller who does it stores a layout the library cannot restore.
  *
  * Persist from **`onLayoutChanged`**, not `onLayoutChange`: the first fires once the drag has
  * settled, the second fires continuously while the pointer moves. Writing on every frame of a
@@ -37,7 +43,7 @@
  * ```tsx
  * <ResizablePanelGroup
  *   orientation="horizontal"
- *   defaultLayout={{ layers: "20%", canvas: "55%", inspector: "25%" }}
+ *   defaultLayout={{ layers: 20, canvas: 55, inspector: 25 }}
  *   onLayoutChanged={saveLayout}
  * >
  *   <ResizablePanel id="layers" minSize="15%" collapsible>
