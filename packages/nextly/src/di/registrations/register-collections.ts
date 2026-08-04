@@ -21,9 +21,9 @@
 import type { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
 import { DynamicCollectionService } from "../../domains/dynamic-collections";
+import { MetaRetentionGate } from "../../domains/retention/gate";
+import { buildRetentionRunner } from "../../domains/retention/passes";
 import type { WebhookFastDrainScheduler } from "../../domains/webhooks/after-drain";
-import { MetaRetentionGate } from "../../domains/webhooks/retention-gate";
-import { WebhookRetentionRunner } from "../../domains/webhooks/retention-runner";
 import type { CacheRevalidator } from "../../revalidation/types";
 import { AccessControlService } from "../../services/access";
 import { CollectionFileManager } from "../../services/collection-file-manager";
@@ -174,14 +174,13 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
       ctx.config.localization,
       // CollectionService writes append events through this same service, so it
       // needs its own runner — the handler's is not on this path.
-      ctx.config.webhookRetention
-        ? new WebhookRetentionRunner({
-            policy: ctx.config.webhookRetention,
-            prune: { adapter, logger },
-            gate: new MetaRetentionGate(adapter),
-            logger,
-          })
-        : undefined,
+      buildRetentionRunner({
+        adapter,
+        webhookPolicy: ctx.config.webhookRetention,
+        auditPolicy: ctx.config.auditRetention,
+        gate: new MetaRetentionGate(adapter),
+        logger,
+      }),
       // Shared post-response drain fast path (registered by the webhook
       // services). Absent only when webhooks were never registered.
       container.has("webhookFastDrainScheduler")

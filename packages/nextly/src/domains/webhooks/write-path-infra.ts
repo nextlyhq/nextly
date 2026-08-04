@@ -21,16 +21,17 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { container } from "../../di/container";
 import type { NextlyServiceConfig } from "../../di/register";
+import { MetaRetentionGate } from "../../domains/retention/gate";
+import { buildRetentionRunner } from "../../domains/retention/passes";
+import type { RetentionRunner } from "../../domains/retention/runner";
 import type { Logger } from "../../shared/types";
 
 import type { WebhookFastDrainScheduler } from "./after-drain";
-import { MetaRetentionGate } from "./retention-gate";
-import { WebhookRetentionRunner } from "./retention-runner";
 
 /** The optional post-commit hooks a webhook-recording write path offers. */
 export interface WebhookWritePathInfra {
   fastDrainScheduler?: WebhookFastDrainScheduler;
-  retentionRunner?: WebhookRetentionRunner;
+  retentionRunner?: RetentionRunner;
 }
 
 /**
@@ -53,14 +54,13 @@ export function resolveWebhookWritePathInfra(
     ? container.get<NextlyServiceConfig>("config")
     : undefined;
 
-  const retentionRunner = config?.webhookRetention
-    ? new WebhookRetentionRunner({
-        policy: config.webhookRetention,
-        prune: { adapter, logger },
-        gate: new MetaRetentionGate(adapter),
-        logger,
-      })
-    : undefined;
+  const retentionRunner = buildRetentionRunner({
+    adapter: adapter,
+    webhookPolicy: config?.webhookRetention,
+    auditPolicy: config?.auditRetention,
+    gate: new MetaRetentionGate(adapter),
+    logger,
+  });
 
   return { fastDrainScheduler, retentionRunner };
 }

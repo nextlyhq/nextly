@@ -29,8 +29,8 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { RequestActor } from "../auth/request-actor";
+import type { RetentionRunner } from "../domains/retention/runner";
 import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
-import type { WebhookRetentionRunner } from "../domains/webhooks/retention-runner";
 import type { MinimalUser } from "../types/auth";
 import type { UserConfig } from "../users/config/types";
 
@@ -79,7 +79,7 @@ export class UsersService extends BaseService {
     fastDrainScheduler?: WebhookFastDrainScheduler,
     // Forwarded alongside the drain so user events also offer a bounded outbox
     // prune; optional, absent when webhook retention is not configured.
-    retentionRunner?: WebhookRetentionRunner
+    retentionRunner?: RetentionRunner
   ) {
     super(adapter, logger);
 

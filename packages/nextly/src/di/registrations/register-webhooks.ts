@@ -12,6 +12,7 @@
  * expired.
  */
 
+import { MetaRetentionGate } from "../../domains/retention/gate";
 import { WebhookFastDrainScheduler } from "../../domains/webhooks/after-drain";
 import type {
   RunWebhookDrainOptions,
@@ -26,7 +27,6 @@ import {
   setEndpointPresenceRefresher,
   setWebhookAuditEnabled,
 } from "../../domains/webhooks/recording-activation";
-import { MetaRetentionGate } from "../../domains/webhooks/retention-gate";
 import { WebhookDeliveryQueryService } from "../../domains/webhooks/services/webhook-delivery-query-service";
 import { WebhookEndpointService } from "../../domains/webhooks/services/webhook-endpoint-service";
 import { container } from "../container";

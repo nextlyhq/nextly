@@ -73,7 +73,8 @@ export const auditLog = pgTable(
  * deletion happened — so naming it for the deletion would put a number in an
  * audit field that no record supports.
  *
- * Retention: 90-day default cleanup via ActivityLogService.cleanupOldActivities()
+ * Retention: pruned on the schedule in `audit.retention.activityMaxAgeMs`,
+ * 90 days by default.
  */
 export const activityLog = pgTable(
   "activity_log",

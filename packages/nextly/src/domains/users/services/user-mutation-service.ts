@@ -132,7 +132,7 @@ interface WebhookDrainOffer {
 /**
  * The single capability the user write paths need from the webhook retention
  * runner: a bounded, self-gating prune offered after a committed write. Narrow
- * (which `WebhookRetentionRunner` satisfies) for the same reason as
+ * (which `RetentionRunner` satisfies) for the same reason as
  * {@link WebhookDrainOffer}.
  */
 interface WebhookRetentionOffer {

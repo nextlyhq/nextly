@@ -49,9 +49,9 @@
 // with NextlyError factories. Identifiers (mediaId/folderId/etc) move to
 // logContext per §13.8; public messages remain generic and end with a period.
 import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
+import type { RetentionRunner } from "../../../domains/retention/runner";
 import type { WebhookFastDrainScheduler } from "../../../domains/webhooks/after-drain";
 import { isUnscopedRecordingActive } from "../../../domains/webhooks/recording-activation";
-import type { WebhookRetentionRunner } from "../../../domains/webhooks/retention-runner";
 import { NextlyError } from "../../../errors";
 import { errorFromServiceEnvelope } from "../../../errors/from-service-envelope";
 import { emitMediaEvent } from "../../../events/domain-events";
@@ -198,7 +198,7 @@ export class MediaService {
      * path records events through this service, so it carries its own runner
      * (the webhook handler's is not on this path), mirroring collections.
      */
-    private readonly retentionRunner?: WebhookRetentionRunner,
+    private readonly retentionRunner?: RetentionRunner,
     /**
      * Shared post-response drain fast path. A media write commits its outbox
      * row inside the DB transaction; `offer()` then schedules the immediate

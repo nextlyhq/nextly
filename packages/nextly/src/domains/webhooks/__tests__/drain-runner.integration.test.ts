@@ -25,7 +25,7 @@ import { WebhookEndpointRegistry } from "../endpoint-registry";
 import { buildEnvelope } from "../envelope";
 import { recordEvent } from "../record-event";
 import type { ResolvedWebhookRetentionConfig } from "../retention-config";
-import type { RetentionGateStore } from "../retention-gate";
+import type { RetentionGateStore } from "../../../domains/retention/gate";
 import { runWebhookDrain } from "../drain-runner";
 
 process.env.DB_DIALECT = "sqlite";

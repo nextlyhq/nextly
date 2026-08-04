@@ -36,6 +36,7 @@ import type { FieldConfig } from "../collections/fields/types";
 import { createAdapterFromEnv, validateDatabaseEnv } from "../database/factory";
 import type { SchemaRegistry } from "../database/schema-registry";
 import { getNextly } from "../direct-api/nextly";
+import type { ResolvedAuditRetentionConfig } from "../domains/audit/retention-config";
 import type { ApiKeyService } from "../domains/auth/services/api-key-service";
 import type { AuthService } from "../domains/auth/services/auth-service";
 import type { PermissionSeedService } from "../domains/auth/services/permission-seed-service";
@@ -290,6 +291,7 @@ export interface NextlyServiceConfig {
    * retention off; absent when this container was built without app config.
    */
   webhookRetention?: ResolvedWebhookRetentionConfig | null;
+  auditRetention?: ResolvedAuditRetentionConfig;
 
   /**
    * Whether the audit seam forces outbox recording regardless of endpoints.

@@ -14,7 +14,11 @@ import { deliverDueDeliveries, type DeliverDeps } from "./deliver";
 import { fanOutDueEvents, type FanOutDeps } from "./fan-out";
 import { pruneWebhookDataSafely, type PruneDeps } from "./prune";
 import type { ResolvedWebhookRetentionConfig } from "./retention-config";
-import { claimRetentionPass, type RetentionGateStore } from "./retention-gate";
+import {
+  claimRetentionPass,
+  type RetentionGateStore,
+  WEBHOOK_RETENTION_GATE_KEY,
+} from "../../domains/retention/gate";
 
 /** Hard cap on rounds so a persistently-retrying backlog can't loop unbounded. */
 const DEFAULT_MAX_ROUNDS = 100;
@@ -123,6 +127,7 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
   if (retention) {
     const due = await claimRetentionPass(
       retention.gate,
+      WEBHOOK_RETENTION_GATE_KEY,
       retention.policy.intervalMs
     );
     if (due) {

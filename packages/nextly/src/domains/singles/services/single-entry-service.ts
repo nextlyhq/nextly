@@ -17,6 +17,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
+import type { RetentionRunner } from "../../../domains/retention/runner";
 import type { HookRegistry } from "../../../hooks/hook-registry";
 import type { CacheRevalidator } from "../../../revalidation/types";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
@@ -24,7 +25,6 @@ import { BaseService } from "../../../shared/base-service";
 import type { Logger } from "../../../shared/types";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import type { WebhookFastDrainScheduler } from "../../webhooks/after-drain";
-import type { WebhookRetentionRunner } from "../../webhooks/retention-runner";
 import type {
   GetSingleOptions,
   SingleResult,
@@ -71,7 +71,7 @@ export class SingleEntryService extends BaseService {
      * frequently-written single trims old outbox rows without waiting for a
      * scheduled drain. Absent when webhook retention is not configured.
      */
-    private readonly retentionRunner?: WebhookRetentionRunner,
+    private readonly retentionRunner?: RetentionRunner,
     /**
      * Kicks an immediate, bounded drain after a write (via Next `after()`) so a
      * single's outbox rows are delivered without waiting for the scheduled

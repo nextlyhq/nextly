@@ -41,9 +41,9 @@ import {
 // Actor threading + outbox recording for media writes. Each write records a
 // durable `media.*` event in the same transaction as the row change.
 import { actorForWrite, type RequestActor } from "../auth/request-actor";
+import type { RetentionRunner } from "../domains/retention/runner";
 import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
 import { recordMutationEvent } from "../domains/webhooks/record-mutation-event";
-import type { WebhookRetentionRunner } from "../domains/webhooks/retention-runner";
 import { keysToSnakeCase } from "../lib/case-conversion";
 import { isImageMimeType, validateFileSize } from "../types/media";
 import type {
@@ -87,7 +87,7 @@ export class MediaService extends BaseService {
      */
     private readonly fastDrainScheduler?: WebhookFastDrainScheduler,
     /** Prunes the outbox after a write, paired with the drain fast path. */
-    private readonly retentionRunner?: WebhookRetentionRunner
+    private readonly retentionRunner?: RetentionRunner
   ) {
     super(adapter, logger);
   }

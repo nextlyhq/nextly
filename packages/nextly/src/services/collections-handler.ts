@@ -8,15 +8,16 @@ import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import type { RequestActor } from "../auth/request-actor";
 import type { FieldConfig } from "../collections/fields/types";
 import { container } from "../di/container";
+import type { ResolvedAuditRetentionConfig } from "../domains/audit/retention-config";
 import type { PermissionSeedService } from "../domains/auth/services/permission-seed-service";
 import type { RBACAccessControlService } from "../domains/auth/services/rbac-access-control-service";
 import { DynamicCollectionService } from "../domains/dynamic-collections";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
+import { MetaRetentionGate } from "../domains/retention/gate";
+import { buildRetentionRunner } from "../domains/retention/passes";
 import { schemaDraftsEnabled } from "../domains/versions/draft-split-eligibility";
 import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
 import type { ResolvedWebhookRetentionConfig } from "../domains/webhooks/retention-config";
-import { MetaRetentionGate } from "../domains/webhooks/retention-gate";
-import { WebhookRetentionRunner } from "../domains/webhooks/retention-runner";
 import type { RichTextOutputFormat } from "../lib/rich-text-html";
 import type { CacheRevalidator } from "../revalidation/types";
 import type { FieldDefinition } from "../schemas/dynamic-collections";
@@ -78,21 +79,21 @@ export class CollectionsHandler {
      * the event ledger stays bounded in installs that never configure a webhook
      * and therefore never run the drain. Null or absent disables it.
      */
-    webhookRetention?: ResolvedWebhookRetentionConfig | null
+    webhookRetention?: ResolvedWebhookRetentionConfig | null,
+    auditRetention?: ResolvedAuditRetentionConfig
   ) {
     this.logger = logger;
     this.collectionService = new DynamicCollectionService(adapter, logger);
 
     // Built here because this is where the resolved policy arrives, but handed
     // to the entry service, which is the seam every write path runs through.
-    const retentionRunner = webhookRetention
-      ? new WebhookRetentionRunner({
-          policy: webhookRetention,
-          prune: { adapter, logger },
-          gate: new MetaRetentionGate(adapter),
-          logger,
-        })
-      : undefined;
+    const retentionRunner = buildRetentionRunner({
+      adapter: adapter,
+      webhookPolicy: webhookRetention,
+      auditPolicy: auditRetention,
+      gate: new MetaRetentionGate(adapter),
+      logger,
+    });
 
     const hookRegistry = getHookRegistry();
 

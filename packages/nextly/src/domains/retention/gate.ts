@@ -1,5 +1,5 @@
 /**
- * Webhook domain — retention pass scheduling.
+ * Retention pass scheduling, shared by every domain that prunes.
  *
  * Retention has no scheduler to hang off. Nextly is a library inside someone
  * else's Next.js app: there is no daemon, and an in-process timer would run on a
@@ -25,13 +25,20 @@
  * cost of a loss is only a second bounded, idempotent pass — the overlapping
  * deletes simply remove fewer rows.
  *
- * @module domains/webhooks/retention-gate
+ * @module domains/retention/gate
  */
 
 import type { WhereClause } from "@nextlyhq/adapter-drizzle/types";
 
-/** Where the last-pass timestamp lives, in the `nextly_meta` KV table. */
-export const RETENTION_GATE_KEY = "webhooks.retention.lastPassAt";
+/**
+ * Where a pass's last-run timestamp lives, in the `nextly_meta` KV table.
+ *
+ * One key PER PASS, never one shared key. A shared marker would let whichever
+ * pass ran first consume the interval for all of them, so a domain could be
+ * starved indefinitely by a busier neighbour and never prune at all.
+ */
+export const WEBHOOK_RETENTION_GATE_KEY = "webhooks.retention.lastPassAt";
+export const AUDIT_RETENTION_GATE_KEY = "audit.retention.lastPassAt";
 
 /**
  * The atomic claim primitive. Implemented against `nextly_meta` in
@@ -109,15 +116,12 @@ export class MetaRetentionGate implements RetentionGateStore {
  */
 export async function claimRetentionPass(
   store: RetentionGateStore,
+  key: string,
   intervalMs: number,
   now: Date = new Date()
 ): Promise<boolean> {
   try {
-    return await store.claim(
-      RETENTION_GATE_KEY,
-      new Date(now.getTime() - intervalMs),
-      now
-    );
+    return await store.claim(key, new Date(now.getTime() - intervalMs), now);
   } catch {
     return false;
   }

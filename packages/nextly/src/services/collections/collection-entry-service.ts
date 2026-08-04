@@ -40,8 +40,8 @@ import type {
 } from "../../domains/collections/services/collection-types";
 import type { DynamicCollectionService } from "../../domains/dynamic-collections";
 import type { SanitizedLocalizationConfig } from "../../domains/i18n/config/types";
+import type { RetentionRunner } from "../../domains/retention/runner";
 import type { WebhookFastDrainScheduler } from "../../domains/webhooks/after-drain";
-import type { WebhookRetentionRunner } from "../../domains/webhooks/retention-runner";
 import type {
   CacheRevalidator,
   RevalidationIntent,
@@ -99,7 +99,7 @@ export class CollectionEntryService extends BaseService {
      * service — the dispatcher-facing handler, `CollectionService`, and direct
      * callers alike — so this is the one place that covers them all.
      */
-    private readonly retentionRunner?: WebhookRetentionRunner,
+    private readonly retentionRunner?: RetentionRunner,
     /**
      * Kicks an immediate, bounded drain after a write (via Next `after()`), so
      * the first delivery attempt does not wait for the next scheduled trigger.
