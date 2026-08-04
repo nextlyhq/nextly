@@ -111,9 +111,13 @@ describe("ctx.services.collections write envelope", () => {
       { as: "system" }
     );
 
+    // `String(...)` rather than an assertion: this harness runs without
+    // generated types, so a row resolves to the loose fallback and its `id` is
+    // `unknown`. That IS the contract for an app that has not run codegen, and
+    // the test should read the way such an app reads.
     const result = await services.collections.updateEntry(
       "widgets",
-      created.item.id,
+      String(created.item.id),
       { title: "y" },
       { as: "system" }
     );
@@ -132,14 +136,14 @@ describe("ctx.services.collections write envelope", () => {
 
     const result = await services.collections.deleteEntry(
       "widgets",
-      created.item.id,
+      String(created.item.id),
       { as: "system" }
     );
 
     expect(result.message).toBe("Widgets deleted.");
     // The facade's delete resolves to `void`, so the id the caller passed is
     // the only thing that can identify what went.
-    expect(result.item).toEqual({ id: created.item.id });
+    expect(result.item).toEqual({ id: String(created.item.id) });
   });
 
   it("carries a post-commit failure the plugin's own write caused", async () => {

@@ -1,12 +1,18 @@
 import { buildMutationMessage } from "../direct-api/namespaces/helpers";
-import type { MutationResult } from "../direct-api/types/shared";
+import type {
+  CollectionSlug,
+  DataFromCollectionSlug,
+  MutationResult,
+} from "../direct-api/types/shared";
+import type { BatchOperationResult } from "../domains/collections/services/collection-types";
 import { NextlyError } from "../errors/nextly-error";
 import { collectingWarnings } from "../hooks/side-effect-warnings";
+import type { CollectionService } from "../services/collections/collection-service";
 import type {
-  CollectionEntry,
-  CollectionService,
-} from "../services/collections/collection-service";
-import type { RequestContext } from "../services/shared";
+  PaginatedResult,
+  QueryOptions,
+  RequestContext,
+} from "../services/shared";
 import type { AuthUser } from "../types/auth";
 
 /**
@@ -89,51 +95,98 @@ const WRITE_VERB = {
 
 type WriteMethod = keyof typeof WRITE_VERB;
 
-/** Replace a method's trailing `RequestContext` arg with an optional `ServiceOpts`. */
-type ReplaceTrailingContext<F> = F extends (
-  ...args: [...infer Head, RequestContext]
-) => infer R
-  ? (...args: [...Head, ServiceOpts?]) => R
-  : F;
-
 /**
- * The plugin-facing return type for a write.
+ * The row a slug resolves to.
  *
- * `deleteEntry` resolves to `void` on the facade, so the deleted row is
- * reported as the minimal `{ id }` the Direct API already uses for it -- a
- * caller that wants to log or re-key what it removed has the id, and there is
- * no row left to return.
+ * Reads the types `nextly generate:types` writes, and falls back to a loose
+ * record when an app has not run it -- the same fallback the Direct API has
+ * always had, so both paths degrade identically and a project that never
+ * generates types is no worse off than it is today.
  */
-type WriteResult<K extends WriteMethod> = K extends "deleteEntry"
-  ? MutationResult<{ id: string }>
-  : MutationResult<CollectionEntry>;
-
-/** Replace a write's trailing context AND widen its result to the envelope. */
-type PluginWriteMethod<K extends WriteMethod> =
-  ReplaceTrailingContext<CollectionService[K]> extends (
-    ...args: infer A
-  ) => unknown
-    ? (...args: A) => Promise<WriteResult<K>>
-    : never;
+type RowFor<TSlug extends CollectionSlug> = DataFromCollectionSlug<TSlug>;
 
 /**
  * @public Plugin-facing collection service.
  *
- * Access methods take `ServiceOpts` in place of a `RequestContext`, and the
- * writes resolve to the same `{ message, item, warnings? }` envelope the Direct
- * API and the wire API return. Returning the bare row left a plugin unable to
- * see a post-commit hook failure that every other caller of the same write is
- * told about.
+ * Two differences from the facade underneath, both so a plugin writes what an
+ * application writes:
+ *
+ * 1. Access methods take {@link ServiceOpts} in place of a `RequestContext`, so
+ *    a plugin never touches `overrideAccess` directly.
+ * 2. They are generic over the collection slug, so a row comes back as the type
+ *    generated for that collection rather than an index-signature record. The
+ *    Direct API has always done this; the plugin path did not, which is why
+ *    plugin code asserts a row into its own document type -- and why those
+ *    assertions cannot be checked, an index-signature record and a concrete
+ *    document having no overlap for TypeScript to verify.
+ *
+ * Written out rather than mapped from `CollectionService`: a mapped type cannot
+ * introduce a type parameter per method, and this IS the surface a plugin
+ * author reads.
  */
 export type PluginCollectionService = Omit<
   CollectionService,
   AccessMethod | WriteMethod
 > & {
-  [K in Exclude<AccessMethod, WriteMethod>]: ReplaceTrailingContext<
-    CollectionService[K]
-  >;
-} & {
-  [K in WriteMethod]: PluginWriteMethod<K>;
+  /** Create one entry. Resolves to `{ message, item, warnings? }`. */
+  createEntry<TSlug extends CollectionSlug>(
+    collectionName: TSlug,
+    data: Record<string, unknown>,
+    opts?: ServiceOpts
+  ): Promise<MutationResult<RowFor<TSlug>>>;
+
+  /** Update one entry. Resolves to `{ message, item, warnings? }`. */
+  updateEntry<TSlug extends CollectionSlug>(
+    collectionName: TSlug,
+    entryId: string,
+    data: Record<string, unknown>,
+    opts?: ServiceOpts
+  ): Promise<MutationResult<RowFor<TSlug>>>;
+
+  /**
+   * Delete one entry. Resolves to `{ message, item: { id }, warnings? }`.
+   *
+   * The deleted row is reported as its id alone: the facade's delete resolves
+   * to `void`, and there is no row left to return.
+   */
+  deleteEntry<TSlug extends CollectionSlug>(
+    collectionName: TSlug,
+    entryId: string,
+    opts?: ServiceOpts
+  ): Promise<MutationResult<{ id: string }>>;
+
+  /** Fetch one entry by id. */
+  findEntryById<TSlug extends CollectionSlug>(
+    collectionName: TSlug,
+    entryId: string,
+    opts?: ServiceOpts
+  ): Promise<RowFor<TSlug>>;
+
+  /** List entries with filter, sort and pagination. */
+  listEntries<TSlug extends CollectionSlug>(
+    collectionName: TSlug,
+    options?: QueryOptions,
+    opts?: ServiceOpts
+  ): Promise<PaginatedResult<RowFor<TSlug>>>;
+
+  /** Count entries matching a filter. */
+  count<TSlug extends CollectionSlug>(
+    collectionName: TSlug,
+    options?: { where?: Record<string, unknown>; search?: string },
+    opts?: ServiceOpts
+  ): Promise<number>;
+
+  /**
+   * Bulk insert.
+   *
+   * Keeps `BatchOperationResult`, which already models per-row outcomes -- an
+   * envelope around it would describe the batch and hide the rows.
+   */
+  createMany<TSlug extends CollectionSlug>(
+    collectionName: TSlug,
+    data: Record<string, unknown>[],
+    opts?: ServiceOpts
+  ): Promise<BatchOperationResult>;
 };
 
 /**

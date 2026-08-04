@@ -90,6 +90,23 @@ const res = await ctx.services.collections.createMany(slug, rows, { as: "system"
 // { successful, failed, ids: string[], errors: [{ index, error }] }
 ```
 
+## Rows are typed by their collection
+
+The methods are generic over the slug, so a row comes back as the type
+`nextly generate:types` wrote for that collection — the same way the Direct API
+has always worked:
+
+```ts
+const { item } = await ctx.services.collections.createEntry("posts", data, {
+  as: "system",
+});
+item.title; // typed, no cast
+```
+
+An app that has not run codegen gets a loose record instead, exactly as it does
+from the Direct API. Nothing breaks; the fields are just `unknown` until types
+are generated.
+
 ## Writes return an envelope
 
 `createEntry`, `updateEntry` and `deleteEntry` resolve to
