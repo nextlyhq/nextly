@@ -52,3 +52,18 @@ person and the deletion that erases their other rows can never find it — the
 identifier has to not be stored rather than be erased later. Only an allowlisted
 set of diagnostic keys is now copied, default-deny, so a key added for logging
 cannot silently become a field of the audit trail.
+
+**Upgrading, PostgreSQL and MySQL: one required action.** If you hardened
+`audit_log` by revoking UPDATE — the posture this package previously documented —
+grant it back for the three columns an erasure touches, or deleting a user will
+fail and roll back:
+
+```sql
+GRANT UPDATE (ip_address, user_agent, identity_erased_at) ON audit_log TO app_role;
+```
+
+Erasing the address and client a deleted account connected from is an UPDATE, and
+it runs inside the deletion's transaction, so a blanket revoke now blocks account
+deletion outright. DELETE stays revoked and every other column stays immutable.
+Deployments that never restricted these grants, and all SQLite deployments, need
+no action.
