@@ -1,3 +1,7 @@
+import {
+  findUnnamespacedGlobals,
+  namespacedGlobalName,
+} from "@nextlyhq/blocks-engine";
 import { describe, it, expect } from "vitest";
 
 import {
@@ -612,6 +616,126 @@ describe("custom CSS may not reach off this origin", () => {
     expect(out.css).not.toContain("@import");
     expect(out.warnings.map(w => w.code)).toContain("unsupported-at-rule");
     expect(out.warnings[0]?.message).toContain("@import");
+    // Naming what IS allowed, so the refusal is actionable rather than a wall.
+    expect(out.warnings[0]?.message).toContain("@keyframes");
+  });
+
+  describe("document-global names", () => {
+    const ns = (name: string): string => namespacedGlobalName(name, SCOPE);
+
+    it("keeps @keyframes, under a name that cannot collide", () => {
+      const out = sanitizeCustomCss(
+        `@keyframes fade { from { opacity: 0 } to { opacity: 1 } }`,
+        SCOPE
+      );
+      expect(out.warnings).toEqual([]);
+      expect(out.css).toContain(`@keyframes ${ns("fade")}`);
+      // The bare name must be gone: a document and its host that both define
+      // `fade` do not get one each, the later definition wins for both.
+      expect(out.css).not.toMatch(/@keyframes\s+fade\b/);
+    });
+
+    it("points the author's own animation at the renamed keyframes", () => {
+      const out = sanitizeCustomCss(
+        `@keyframes fade { from { opacity: 0 } } .a { animation: fade 1s ease-in-out infinite }`,
+        SCOPE
+      );
+      expect(out.css).toContain(
+        `animation:${ns("fade")} 1s ease-in-out infinite`
+      );
+    });
+
+    it("leaves a name the stylesheet did not define exactly as written", () => {
+      // Deciding which ident in the shorthand is the NAME needs the grammar;
+      // matching against what this stylesheet defined needs none. It also
+      // keeps custom CSS able to use an animation the page itself provides.
+      // A definition IS present, so the rewrite pass runs — otherwise this
+      // asserts nothing about the guard, only that nothing happened at all.
+      const out = sanitizeCustomCss(
+        `@keyframes mine { from { opacity: 0 } } .a { animation: nx-fade-in 1s ease-in-out }`,
+        SCOPE
+      );
+      expect(out.css).toContain("animation:nx-fade-in 1s ease-in-out");
+    });
+
+    it("keeps @font-face, under a family that cannot take over the host's", () => {
+      // The sharp case: family names match case-insensitively, so redefining
+      // `Inter` from inside a scoped region would restyle the whole site.
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: Inter; src: url("/f.woff2") } .a { font-family: Inter, sans-serif }`,
+        SCOPE
+      );
+      expect(out.css).not.toMatch(/font-family:\s*Inter\b/i);
+      expect(out.css).toContain(ns("Inter"));
+      // …and the author's own reference still resolves to their font.
+      expect(out.css).toContain("sans-serif");
+    });
+
+    it("matches a family reference without regard to case, as CSS does", () => {
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: "My Font"; src: url("/f.woff2") } .a { font-family: my font }`,
+        SCOPE
+      );
+      // Declared "My Font", referenced `my font`: one family to CSS, so one
+      // rewrite. A case-sensitive map would leave the reference dangling.
+      expect(out.css.match(new RegExp(ns("My Font"), "g"))?.length).toBe(2);
+    });
+
+    it("drops a @font-face left with no font this site can load", () => {
+      // The remote `src` goes to the origin policy; what is left declares a
+      // family that resolves to nothing, and CSS does NOT fall back to the
+      // next family when a face fails to load — it renders the default.
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: X; src: url("https://fonts.example/f.woff2") }`,
+        SCOPE
+      );
+      expect(out.css).not.toContain("@font-face");
+      const message = out.warnings.map(w => w.message).join(" ");
+      expect(message).toContain("upload the font file");
+    });
+
+    it("does not scope a keyframe step, which selects no element", () => {
+      // `from`, `to` and `50%` are positions in an animation, not selectors.
+      // Prefixed, they become `.scope from`, which matches nothing — and the
+      // animation stops running with no warning anywhere.
+      const out = sanitizeCustomCss(
+        `@keyframes fade { from { opacity: 0 } 50% { opacity: .5 } to { opacity: 1 } }`,
+        SCOPE
+      );
+      expect(out.css).not.toContain(`${SCOPE} from`);
+      expect(out.css).toContain("from{opacity:0}");
+      expect(out.css).toContain("50%{opacity:.5}");
+    });
+
+    it("leaves nothing the isolation invariant would call un-namespaced", () => {
+      // The check the compiler's own output answers to, pointed at this
+      // output. It is why the namespacing helper is shared rather than
+      // reimplemented: two spellings of "namespaced" would let this pass while
+      // the browser still resolved the name globally.
+      const out = sanitizeCustomCss(
+        `@keyframes fade { from { opacity: 0 } }
+         @font-face { font-family: Inter; src: url("/f.woff2") }
+         .a { animation: fade 1s; font-family: Inter }`,
+        SCOPE
+      );
+      // Both at-rules must actually be there: a check that the output holds
+      // no un-namespaced global is satisfied just as well by an output holding
+      // no global, which is what refusing them again would produce.
+      expect(out.css).toContain("@keyframes");
+      expect(out.css).toContain("@font-face");
+      expect(findUnnamespacedGlobals(out.css, SCOPE)).toEqual([]);
+    });
+
+    it("still refuses a remote url inside a keyframe step", () => {
+      // The step blocks are ordinary declarations, so the origin policy has to
+      // reach them — allowing the at-rule must not open a door beneath it.
+      const out = sanitizeCustomCss(
+        `@keyframes x { from { background: url("https://evil.example/a.png") } }`,
+        SCOPE
+      );
+      expect(out.css).not.toContain("evil.example");
+      expect(out.warnings.map(w => w.code)).toContain("remote-url");
+    });
   });
 
   it("does not repeat one message for every rule that trips it", () => {

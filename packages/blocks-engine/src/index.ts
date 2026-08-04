@@ -163,6 +163,16 @@ export {
 } from "./style/validate-style-value";
 export type { StyleIssueBudget } from "./style/validate-style-value";
 export { compilePageCss, BASE_BREAKPOINT } from "./style/compile-page";
+// The one rule for how a document-global CSS name wears its scope. Public
+// because more than one place has to produce it and they must agree exactly:
+// the compiler namespaces the names it emits, the custom-CSS sanitizer
+// namespaces the names an author writes, and `findUnnamespacedGlobals` checks
+// the result. Two spellings of "namespaced" would make that check pass on
+// output the browser still resolves globally.
+export {
+  findUnnamespacedGlobals,
+  namespacedGlobalName,
+} from "./style/isolation";
 export type {
   CompiledPageCss,
   StyleCompileContext,

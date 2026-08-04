@@ -15,6 +15,11 @@ import * as csstree from "css-tree";
 import type { CssNode, List, ListItem, Rule } from "css-tree";
 
 import {
+  fontFaceHasSrc,
+  namespaceDefinedNames,
+  rewriteNameReferences,
+} from "./css-global-names";
+import {
   attrFetchesFromDom,
   isRemoteUrl,
   MAX_VALUE_NESTING,
@@ -370,6 +375,35 @@ function escapeMarkupSequences(css: string): string {
   return css.replaceAll("</", "\\3c /").replaceAll("<!", "\\3c !");
 }
 
+/**
+ * The at-rules custom CSS may contain.
+ *
+ * `@media` and `@supports` wrap ordinary rules, so everything inside them is
+ * already reached by the scoping and by the checks below. `@keyframes` and
+ * `@font-face` are here on a condition rather than outright: each defines a
+ * name CSS resolves for the whole document, so they are only safe once those
+ * names carry the scope's namespace.
+ *
+ * Everything else is refused, and the list is short on purpose. `@import`
+ * fetches a stylesheet this cannot see inside, `@layer` reorders the host's
+ * cascade, `@page` reaches the printed document — none of them are things a
+ * region of somebody's page should be able to do.
+ */
+const SUPPORTED_AT_RULES = new Set([
+  "media",
+  "supports",
+  "keyframes",
+  "font-face",
+]);
+
+/** The same list as prose, so a refusal can say what IS allowed. */
+const SUPPORTED_AT_RULE_LIST = "@media, @supports, @keyframes and @font-face";
+
+/** Whether the walker is currently inside a `@keyframes` block. */
+function insideKeyframes(atrule: csstree.Atrule | null): boolean {
+  return atrule !== null && atrule.name.toLowerCase() === "keyframes";
+}
+
 export function sanitizeCustomCss(
   css: string,
   scopeClass: string
@@ -407,15 +441,19 @@ export function sanitizeCustomCss(
     };
   }
 
-  // Drop at-rules other than @media / @supports.
+  // Drop at-rules this cannot support. The four that survive split in two:
+  // `@media` and `@supports` wrap ordinary rules, which the scoping and the
+  // checks below already reach; `@keyframes` and `@font-face` define a
+  // document-global NAME, and are allowed only because those names are
+  // namespaced further down — see `core/css-global-names`.
   csstree.walk(ast, {
     visit: "Atrule",
     enter(node: CssNode, item: ListItem<CssNode>, list: List<CssNode>) {
       const name = (node as csstree.Atrule).name.toLowerCase();
-      if (name === "media" || name === "supports") return;
+      if (SUPPORTED_AT_RULES.has(name)) return;
       warn(
         "unsupported-at-rule",
-        `"@${name}" is not allowed in custom CSS, so that rule was removed. Only @media and @supports are supported here.`
+        `"@${name}" is not allowed in custom CSS, so that rule was removed. You can use ${SUPPORTED_AT_RULE_LIST} here.`
       );
       list.remove(item);
     },
@@ -462,6 +500,30 @@ export function sanitizeCustomCss(
         );
         list.remove(item);
       }
+    },
+  });
+
+  // Namespace what the author defined, and point their own references at it.
+  // AFTER the declaration walk, so a `@font-face` whose only `src` reached off
+  // this origin has already lost it and can be recognised as unusable below.
+  const definedNames = namespaceDefinedNames(ast, scopeClass, csstree.walk);
+  rewriteNameReferences(ast, definedNames, csstree.walk);
+
+  // A `@font-face` with no `src` left declares a family that can never load,
+  // and CSS resolves it to nothing rather than falling back — so text asking
+  // for that family renders in the browser's default instead of the author's
+  // next choice. Dropping the rule restores the fallback and says why.
+  csstree.walk(ast, {
+    visit: "Atrule",
+    enter(node: CssNode, item: ListItem<CssNode>, list: List<CssNode>) {
+      const atrule = node as csstree.Atrule;
+      if (atrule.name.toLowerCase() !== "font-face") return;
+      if (fontFaceHasSrc(atrule)) return;
+      warn(
+        "unsupported-at-rule",
+        "A @font-face rule was removed because it has no font file this site can load. Custom CSS may only load fonts from this site's own origin, so upload the font file and point `src` at a path on this site."
+      );
+      list.remove(item);
     },
   });
 
@@ -529,6 +591,13 @@ export function sanitizeCustomCss(
   csstree.walk(ast, {
     visit: "Rule",
     enter(node: Rule) {
+      // A `@keyframes` step is parsed as a Rule with a SelectorList prelude,
+      // but `from`, `to` and `50%` select no elements — they are positions in
+      // the animation. Prefixing one produces `.scope from`, which matches
+      // nothing, so the whole animation silently stops running. Scoping is
+      // also unnecessary here: a step can only ever apply to whatever the
+      // animation is attached to, and that selector is scoped already.
+      if (insideKeyframes(this.atrule)) return;
       if (node.prelude.type !== "SelectorList") return;
       for (const sel of node.prelude.children) {
         if (sel.type !== "Selector") continue;
