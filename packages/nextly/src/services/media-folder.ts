@@ -74,6 +74,14 @@ export interface FolderContents {
 export interface FolderResponse {
   success: boolean;
   statusCode: number;
+  /**
+   * The canonical error code, when this service knows which one it means.
+   *
+   * A status is coarser than a code -- 409 covers both a name clash and a stale
+   * write -- so a failure that knows the difference says so here rather than
+   * leaving a boundary to infer the safer reading from the number alone.
+   */
+  code?: string;
   message: string;
   data?: MediaFolder | null;
 }
@@ -86,6 +94,14 @@ export interface FolderListResponse {
 }
 
 export interface FolderContentsResponse {
+  /**
+   * The canonical error code, when this service knows which one it means.
+   *
+   * A status is coarser than a code -- 409 covers both a name clash and a stale
+   * write -- so a failure that knows the difference says so here rather than
+   * leaving a boundary to infer the safer reading from the number alone.
+   */
+  code?: string;
   success: boolean;
   statusCode: number;
   message: string;
@@ -149,6 +165,12 @@ export class MediaFolderService extends BaseService {
         return {
           success: false,
           statusCode: 409,
+          // The service names its own meaning. 409 covers both a name clash and
+          // a stale write, so a boundary inferring from the status alone has to
+          // pick the safer reading -- which would tell someone whose folder
+          // name is taken to refresh the page, advice that cannot rename
+          // anything.
+          code: "DUPLICATE",
           message: "A folder with this name already exists in this location",
           data: null,
         };
@@ -539,6 +561,8 @@ export class MediaFolderService extends BaseService {
   ): Promise<{
     success: boolean;
     statusCode: number;
+    /** The canonical error code, when this service knows which one it means. */
+    code?: string;
     message: string;
     deletedMedia?: number;
     deletedFolders?: number;
@@ -635,9 +659,7 @@ export class MediaFolderService extends BaseService {
       }
 
       // Delete folder (CASCADE handles subfolder records)
-      await this.db
-        .delete(mediaFolders)
-        .where(eq(mediaFolders.id, folderId));
+      await this.db.delete(mediaFolders).where(eq(mediaFolders.id, folderId));
 
       return {
         success: true,
