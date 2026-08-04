@@ -135,6 +135,22 @@ export class DynamicCollectionSchemaService {
   }
 
   /**
+   * What happens to this row when the row it points at is deleted.
+   *
+   * A required relationship cannot be nulled out: the column forbids it. MySQL says so when the
+   * constraint is created — "Column cannot be NOT NULL: needed in a foreign key constraint SET
+   * NULL" — and PostgreSQL accepts the pair and fails later, at the delete, which is worse. So a
+   * required relationship restricts the delete instead, and an optional one nulls the reference.
+   * That is the same rule Prisma applies, for the same reason: the action has to be one the
+   * column can actually perform.
+   */
+  private relationOnDelete(field: FieldDefinition): string {
+    const declared = field.options?.onDelete;
+    if (declared) return declared;
+    return field.required ? "restrict" : "set null";
+  }
+
+  /**
    * `CREATE INDEX` for one column, in the spelling the dialect accepts.
    *
    * MySQL cannot index a `BLOB`/`TEXT` column without a key length and rejects the statement
@@ -329,9 +345,7 @@ export class DynamicCollectionSchemaService {
             relationType === "manyToOne" ||
             relationType === "oneToMany"
           ) {
-            const onDelete = this.mapOnDeleteAction(
-              f.options.onDelete || "set null"
-            );
+            const onDelete = this.mapOnDeleteAction(this.relationOnDelete(f));
             const onUpdate = this.mapOnUpdateAction(
               f.options.onUpdate || "no action"
             );
@@ -719,7 +733,7 @@ ${allColumnDefs.join(",\n")}
           // Add foreign key for non-manyToMany relations
           if (field.type === "relationship" && field.options?.target) {
             const targetTable = `dc_${field.options.target}`;
-            const onDelete = field.options.onDelete || "set null";
+            const onDelete = this.relationOnDelete(field);
             const onUpdate = field.options.onUpdate || "no action";
             statements.push(
               `ALTER TABLE ${this.quoteIdentifier(tableName)} ADD CONSTRAINT ${this.quoteIdentifier(`fk_${tableName}_${addColName}`)} FOREIGN KEY (${this.quoteIdentifier(addColName)}) REFERENCES ${this.quoteIdentifier(targetTable)}(${this.quoteIdentifier("id")}) ON DELETE ${this.mapOnDeleteAction(onDelete)} ON UPDATE ${this.mapOnUpdateAction(onUpdate)};`
@@ -1032,6 +1046,45 @@ ${allColumnDefs.join(",\n")}
   /**
    * Generate DROP TABLE migration SQL
    */
+  /**
+   * The indexes and foreign keys a table WILL carry once its creation migration has run.
+   *
+   * A collection saved but not yet deployed has a registry record and no table. Reading the
+   * absent table reports no attachments, and an edit made in that window then emits a bare
+   * `DROP COLUMN` — which is correct against nothing and wrong against what the deployment
+   * actually produces, because the create artefact runs first and installs the index and the
+   * constraint the drop then trips over.
+   *
+   * Answered by the class that emits the CREATE, so what is predicted here and what is written
+   * there cannot describe different tables.
+   */
+  plannedAttachments(
+    tableName: string,
+    fields: FieldDefinition[]
+  ): {
+    indexNames: Set<string>;
+    foreignKeysByColumn: Map<string, string[]>;
+  } {
+    const indexNames = new Set<string>();
+    const foreignKeysByColumn = new Map<string, string[]>();
+    // The system indexes every generated table carries, named as `generateMigrationSQL` names
+    // them, so a system column removed by an edit is not treated as unindexed.
+    for (const column of ["slug", "created_at", "created_by"]) {
+      indexNames.add(`idx_${tableName}_${column}`);
+    }
+    for (const field of fields) {
+      if (!fieldProducesColumn(field)) continue;
+      const column = toSnakeCase(field.name);
+      if (this.columnIsIndexed(field)) {
+        indexNames.add(`idx_${tableName}_${column}`);
+      }
+      if (field.type === "relationship" && field.options?.target) {
+        foreignKeysByColumn.set(column, [`fk_${tableName}_${column}`]);
+      }
+    }
+    return { indexNames, foreignKeysByColumn };
+  }
+
   generateDropTableMigration(
     collectionName: string,
     tableName: string

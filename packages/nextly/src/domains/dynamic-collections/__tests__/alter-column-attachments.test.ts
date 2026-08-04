@@ -607,6 +607,125 @@ describe("a required column that no value can backfill", () => {
   );
 });
 
+describe("the delete action a required relationship can actually perform", () => {
+  const required = field({
+    name: "author",
+    type: "relationship",
+    required: true,
+    options: { target: "authors", relationType: "manyToOne" },
+  });
+  const optional = field({
+    name: "editor",
+    type: "relationship",
+    options: { target: "authors", relationType: "manyToOne" },
+  });
+
+  // The ALTER path attaches no foreign key on SQLite, so the action it carries is only
+  // observable on the two dialects that can add one to an existing table.
+  it.each(["postgresql", "mysql"] as const)(
+    "restricts the delete for a required relationship rather than nulling it (%s)",
+    dialect => {
+      const sql = unquote(
+        service(dialect).generateAlterTableMigration(TABLE, [], [required], {
+          tableHasRows: false,
+        })
+      );
+      // MySQL rejects the pair outright: "Column cannot be NOT NULL: needed in a foreign key
+      // constraint SET NULL". PostgreSQL accepts it and fails later, at the delete.
+      expect(sql).toMatch(/FOREIGN KEY \(author\)[^;]*ON DELETE RESTRICT/i);
+      expect(sql).not.toMatch(/FOREIGN KEY \(author\)[^;]*SET NULL/i);
+    }
+  );
+
+  it.each(["postgresql", "mysql"] as const)(
+    "still nulls the reference for an optional relationship (%s)",
+    dialect => {
+      const sql = unquote(
+        service(dialect).generateAlterTableMigration(TABLE, [], [optional], {
+          tableHasRows: false,
+        })
+      );
+      expect(sql).toMatch(/FOREIGN KEY \(editor\)[^;]*SET NULL/i);
+    }
+  );
+
+  it.each(DIALECTS)(
+    "creates the table with the same rule, so the two paths agree (%s)",
+    dialect => {
+      const sql = unquote(
+        service(dialect).generateMigrationSQL(TABLE, [required, optional])
+      );
+      expect(sql).toMatch(/FOREIGN KEY \(author\)[^,\n]*ON DELETE RESTRICT/i);
+      expect(sql).toMatch(/FOREIGN KEY \(editor\)[^,\n]*SET NULL/i);
+    }
+  );
+
+  it.each(["postgresql", "mysql"] as const)(
+    "honours an explicit action over the rule (%s)",
+    dialect => {
+      const explicit = field({
+        name: "author",
+        type: "relationship",
+        required: true,
+        options: {
+          target: "authors",
+          relationType: "manyToOne",
+          onDelete: "cascade",
+        },
+      });
+      const sql = unquote(
+        service(dialect).generateAlterTableMigration(TABLE, [], [explicit], {
+          tableHasRows: false,
+        })
+      );
+      expect(sql).toMatch(/ON DELETE CASCADE/i);
+    }
+  );
+});
+
+describe("a table its creation migration has not built yet", () => {
+  it("reports the attachments the pending create will install, not none", () => {
+    const svc = service("sqlite");
+    const planned = svc.plannedAttachments(TABLE, [
+      field({
+        name: "author",
+        type: "relationship",
+        options: { target: "authors", relationType: "manyToOne" },
+      }),
+      field({ name: "rank", type: "number", index: true }),
+      field({ name: "note", type: "text" }),
+    ]);
+
+    // The two artefacts replay in order: the create installs these, then the update removes a
+    // column. Reporting none emits a bare DROP COLUMN that the built table refuses.
+    expect(planned.indexNames.has(`idx_${TABLE}_author`)).toBe(true);
+    expect(planned.indexNames.has(`idx_${TABLE}_rank`)).toBe(true);
+    expect(planned.indexNames.has(`idx_${TABLE}_note`)).toBe(false);
+    expect(planned.foreignKeysByColumn.get("author")).toEqual([
+      `fk_${TABLE}_author`,
+    ]);
+    expect(planned.foreignKeysByColumn.has("rank")).toBe(false);
+  });
+
+  it("carries the system indexes every generated table gets", () => {
+    const planned = service("postgresql").plannedAttachments(TABLE, []);
+    expect(planned.indexNames.has(`idx_${TABLE}_slug`)).toBe(true);
+    expect(planned.indexNames.has(`idx_${TABLE}_created_at`)).toBe(true);
+  });
+
+  it("gives a junction-backed field no column attachments", () => {
+    const planned = service("postgresql").plannedAttachments(TABLE, [
+      field({
+        name: "tags",
+        type: "relationship",
+        options: { target: "tags", relationType: "manyToMany" },
+      }),
+    ]);
+    expect(planned.indexNames.has(`idx_${TABLE}_tags`)).toBe(false);
+    expect(planned.foreignKeysByColumn.has("tags")).toBe(false);
+  });
+});
+
 describe("removing a column that a foreign key references", () => {
   const relationship = field({
     name: "author",

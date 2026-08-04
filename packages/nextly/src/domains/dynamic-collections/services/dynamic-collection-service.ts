@@ -165,21 +165,27 @@ export class DynamicCollectionService extends BaseService {
    * Both are read together and once per save, so the two cannot be observed at different
    * moments and a table is not queried twice for one edit.
    */
-  private async readTableFacts(tableName: string): Promise<{
+  private async readTableFacts(
+    tableName: string,
+    pendingFields: FieldDefinition[]
+  ): Promise<{
     tableHasRows: boolean;
     foreignKeysByColumn: ReadonlyMap<string, readonly string[]>;
     indexNames: ReadonlySet<string>;
   }> {
     // A collection whose creation migration has not been deployed yet has a registry record and
     // no table. Reading from it throws, which would block every follow-up edit to a collection
-    // the author has only just created. There is nothing to conflict with in that state: no
-    // rows to backfill, no constraint or index to remove, and the artefact this save produces
-    // runs after the one that creates the table.
+    // the author has only just created.
+    //
+    // The attachments still have to be modelled, and as the table WILL be rather than as it is:
+    // the two artefacts replay in order, so the create runs first and installs the index and the
+    // constraint that this update then has to remove. Reporting none emits a bare DROP COLUMN
+    // that is correct against the absent table and refused by the one the deployment builds.
+    // There are no rows either way, because nothing has ever been inserted.
     if (!(await this.adapter.tableExists(tableName))) {
       return {
         tableHasRows: false,
-        foreignKeysByColumn: new Map(),
-        indexNames: new Set(),
+        ...this.schemaService.plannedAttachments(tableName, pendingFields),
       };
     }
 
@@ -660,7 +666,11 @@ export class DynamicCollectionService extends BaseService {
     // and there is nothing for these facts to decide.
     let tableFacts: ReturnType<typeof this.readTableFacts> | null = null;
     const liveTable = () =>
-      (tableFacts ??= this.readTableFacts(collection.tableName));
+      (tableFacts ??= this.readTableFacts(
+        collection.tableName,
+        // What the pending create artefact builds from, for the not-yet-deployed case.
+        collection.fields ?? []
+      ));
 
     // Why: the alter-table block runs when fields change, but a status-only
     // flip also needs a migration (ADD/DROP status column) so the data

@@ -1292,6 +1292,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
                 // i18n: fresh (re)create omits translatable columns when localized.
                 { isSingle: true, hasStatus, localized: isLocalized }
               );
+              // Same boundary as the ALTER branch below: once a statement is sent, a failure
+              // has left the table partly built rather than untouched.
+              migrationBegan = true;
               await executeMigrationStatements(adapter, createSQL);
             } else {
               const db = adapter.getDrizzle();
