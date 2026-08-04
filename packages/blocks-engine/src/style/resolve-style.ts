@@ -21,7 +21,7 @@
 // a page means without executing anything.
 
 import type { NodeStyles, StyleState, StyleValue } from "../document";
-import { STYLE_STATES } from "../document";
+import { isTokenRef, STYLE_STATES } from "../document";
 import { isPlainRecord } from "../plain-record";
 
 import { BREAKPOINT_AXES } from "./breakpoint-axes";
@@ -29,6 +29,7 @@ import {
   compositeFieldNames,
   cssPropertiesForField,
   propertiesAlsoMatching,
+  propertyDescendantSelector,
   propertyInheritsToDescendants,
   propertyPseudoClassCount,
   propertyUsesDescendantSelector,
@@ -104,6 +105,15 @@ export interface ResolvedStyle {
  * where the parent gets its colour from a class, which is the common one.
  */
 export interface StyledNode {
+  /**
+   * The block type, needed only for the properties that write to a descendant selector.
+   *
+   * The compiler emits one block-default rule per type, sorted by type name, so which of two
+   * block defaults wins on a link inside a nested block is decided by the names — not by which
+   * block is the ancestor. Without it those rules can only be ordered by depth, which is a
+   * different answer.
+   */
+  blockType?: string;
   /** The node's own styles. */
   node?: NodeStyles;
   /** The classes the node applies, already in library order (see `resolveNodeClasses`). */
@@ -240,7 +250,15 @@ function tiers(
     ): { styles: NodeStyles; source: StyleSource } =>
       "nodeId" in styled ? ancestorTier(styled, tier) : tier;
 
-    for (const styled of chain) {
+    // By type name, matching `usedTypes.sort()` in the compiler. A parent typed `z/parent` and a
+    // child typed `a/child` put the CHILD default first and the parent's last, so the parent wins
+    // on a link inside the child — the reverse of what depth would say. Entries with no type
+    // keep their position, since nothing better is known about them.
+    const defaults = chain.filter(styled => styled.blockBase !== undefined);
+    const typed = defaults.filter(styled => styled.blockType !== undefined);
+    const untyped = defaults.filter(styled => styled.blockType === undefined);
+    typed.sort((a, b) => (a.blockType ?? "").localeCompare(b.blockType ?? ""));
+    for (const styled of [...typed, ...untyped]) {
       if (styled.blockBase === undefined) continue;
       ordered.push(
         label(styled, {
@@ -256,7 +274,12 @@ function tiers(
     for (const styled of chain) {
       for (const cls of styled.classes ?? []) {
         if (!isUsableNamedClass(cls)) continue;
-        if (applied.some(seen => seen.cls.id === cls.id)) continue;
+        // One `.nx-c-* a` rule exists for a class however many nodes apply it, so when both an
+        // ancestor and the inspected node apply it, the LAST occurrence is the one to keep:
+        // reporting the ancestor sends an author to a parent when the class is right there on the
+        // node they are editing.
+        const already = applied.findIndex(seen => seen.cls.id === cls.id);
+        if (already >= 0) applied.splice(already, 1);
         applied.push({ cls, styled });
       }
     }
@@ -362,8 +385,20 @@ function valuesAt(
 function compilerWrites(values: Record<string, unknown>): Set<string> {
   return new Set(
     compileStyleValues(values, "").declarations.map(
-      declaration => declaration.property
+      // Keyed by selector AND property. Two catalog keys can write one CSS property to different
+      // elements — `color` to the block, `linkColor` to an `a` inside it — so a set of bare
+      // property names lets a sibling declaration vouch for a value the compiler refused: an
+      // invalid root `color` looked written because `linkColor` had produced `a { color: … }`.
+      declaration => `${declaration.descendant ?? ""}|${declaration.property}`
     )
+  );
+}
+
+/** The keys a candidate property would produce, in the same form `compilerWrites` records. */
+function writeKeysFor(property: string, path: readonly string[]): string[] {
+  const descendant = propertyDescendantSelector(property) ?? "";
+  return cssPropertiesForField(property, path).map(
+    css => `${descendant}|${css}`
   );
 }
 
@@ -417,14 +452,21 @@ function fold(
   path: readonly string[],
   emitted: ReadonlySet<string>
 ): Accumulated | undefined {
-  if (!isPlainRecord(value)) {
+  // A token reference is a record in storage and a VALUE in meaning. Descended into, its `$token`
+  // key names no catalog leaf and the whole reference is refused.
+  if (!isPlainRecord(value) || isTokenRef(value)) {
     // The compiler refuses a bad declaration one leaf at a time: `padding` with a valid
     // `blockStart` and a nonsense `blockEnd` still writes the first. Folding the whole record
     // would record the refused side too, and report it as the source over a lower tier the
     // browser is still showing there.
-    const writes = cssPropertiesForField(property, path);
-    if (writes.length > 0 && !writes.some(css => emitted.has(css)))
+    //
+    // A path with NO catalog leaf is refused for the same reason rather than waved through: the
+    // compiler had nothing to write for it. Read as "no claim", a stored key the catalog does not
+    // define — `padding: { blockStart: "16px", bogus: "4px" }` — reported `bogus` as a value with
+    // a local source over a page carrying no such declaration.
+    if (!writeKeysFor(property, path).some(key => emitted.has(key))) {
       return current;
+    }
     return { kind: "whole", value, source };
   }
   // A record with no fields states no declarations, so it neither wins nor clears what is
@@ -554,15 +596,15 @@ export function resolveStyle(
         // written — so asking about one property in isolation can report a value the browser
         // never received because of the company it was stored with.
         const emitted = compilerWrites(values);
-        // Stored key order, because that is the order the compiler writes a map in, and two keys
-        // that emit the same CSS property are decided by which of them it writes last.
-        for (const candidate of Object.keys(values)) {
+        // Sorted, because that is the order the compiler writes a map in — it sorts the keys so
+        // two documents differing only in the order they were written compile to the same bytes.
+        // Stored order looks like the write order and is not: with `backgroundGradient` stored
+        // first, the compiler still emits `background` first and the gradient last.
+        for (const candidate of Object.keys(values).sort()) {
           if (!properties.has(candidate)) continue;
           const value = values[candidate] as StyleValue;
           if (value === undefined) continue;
-          if (
-            !cssPropertiesForField(candidate, []).some(css => emitted.has(css))
-          ) {
+          if (!writeKeysFor(candidate, []).some(key => emitted.has(key))) {
             continue;
           }
           const source: StyleSource =

@@ -549,6 +549,100 @@ describe("a class library too large to be real", () => {
   });
 });
 
+describe("block defaults competing on a descendant selector", () => {
+  it("orders them by type name, which is what the compiler emits", () => {
+    // One block-default rule exists per TYPE, written in sorted order, so which of two wins on a
+    // link inside a nested block is decided by the names — not by which block is the ancestor.
+    // A parent typed `z/outer` is emitted after a child typed `a/inner`, so the parent wins.
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "outer",
+          type: "z/outer",
+          version: 1,
+          props: {},
+          slots: {
+            default: [{ id: "inner", type: "a/inner", version: 1, props: {} }],
+          },
+        },
+      ],
+    };
+    const blockBases = {
+      "z/outer": styles({ linkColor: "red" }),
+      "a/inner": styles({ linkColor: "blue" }),
+    };
+    const { css } = compilePageCss(
+      document as never,
+      {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        namedClasses: [],
+        blockBases,
+      } as never
+    );
+
+    expect(css.indexOf(".nx-bt-a--inner a")).toBeLessThan(
+      css.indexOf(".nx-bt-z--outer a")
+    );
+
+    const resolved = resolveStyle("linkColor", "base", BP, {
+      blockType: "a/inner",
+      blockBase: blockBases["a/inner"],
+      ancestors: [
+        {
+          nodeId: "outer",
+          blockType: "z/outer",
+          blockBase: blockBases["z/outer"],
+        },
+      ],
+    });
+
+    expect(resolved?.value).toBe("red");
+  });
+});
+
+describe("one class applied by both an ancestor and the node", () => {
+  it("names the node being edited, where the class can actually be changed", () => {
+    // A single `.nx-c-card a` rule exists however many nodes apply the class. Reporting the
+    // ancestor sends an author to a parent when the class is right there on the node in front of
+    // them.
+    const linkCard: NamedClass = {
+      id: "c1",
+      slug: "card",
+      orderIndex: 0,
+      styles: styles({ linkColor: "blue" }),
+    };
+    const resolved = resolveStyle("linkColor", "base", BP, {
+      classes: [linkCard],
+      ancestors: [{ nodeId: "parent", classes: [linkCard] }],
+    });
+
+    expect(resolved?.source).toEqual({
+      tier: "class",
+      id: "c1",
+      slug: "card",
+    });
+  });
+});
+
+describe("a class beyond the library cap", () => {
+  it("is not resolved, because the compiler never wrote it", () => {
+    const huge = Array.from(
+      { length: MAX_NAMED_CLASSES + 1 },
+      (_unused, index): NamedClass => ({
+        id: `c${index}`,
+        slug: `cls-${index}`,
+        orderIndex: index,
+        styles: styles({ color: "blue" }),
+      })
+    );
+    const beyond = huge[MAX_NAMED_CLASSES];
+
+    expect(resolveNodeClasses([beyond.id], huge)).toHaveLength(0);
+  });
+});
+
 describe("a class library that is not a library", () => {
   it("survives a stored library that is not a list at all", () => {
     // One site-settings record, read by every page compile. A spread over `{}` throws, which

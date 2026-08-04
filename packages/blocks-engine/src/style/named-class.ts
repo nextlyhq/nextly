@@ -17,6 +17,7 @@
 // and it is the documented way one class overrides another.
 
 import type { NodeStyles } from "../document";
+import { MAX_NAMED_CLASSES } from "../document";
 import { isPlainRecord } from "../plain-record";
 
 /** The prefix every named class carries in the emitted CSS. */
@@ -168,8 +169,15 @@ export function resolveNodeClasses(
   // Narrowed to what the compiler writes BEFORE anything is looked up, so a class dropped for
   // colliding on its name or its id cannot be reported as the source of a value it never
   // contributed.
+  // Capped exactly where the compiler caps it. The compiler slices the stored library before
+  // building its usable list, so a class past the bound is never written; resolving from the whole
+  // library would hand one back and report its values as visible on a page that has no rule for it.
   const emitted = new Map(
-    usableNamedClasses(library).map(cls => [cls.id, cls])
+    usableNamedClasses(
+      library.length > MAX_NAMED_CLASSES
+        ? library.slice(0, MAX_NAMED_CLASSES)
+        : library
+    ).map(cls => [cls.id, cls])
   );
   const found: NamedClass[] = [];
   const seen = new Set<string>();

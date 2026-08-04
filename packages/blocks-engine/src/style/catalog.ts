@@ -1003,6 +1003,19 @@ export function propertyUsesDescendantSelector(property: string): boolean {
   return descendantOf(CATALOG_BY_PROPERTY.get(property)) !== undefined;
 }
 
+/**
+ * The descendant selector a property emits under, if any.
+ *
+ * Needed to tell two catalog keys apart when they write the same CSS property: `color` lands on
+ * the element and `linkColor` lands on `a` inside it, so a declaration is only evidence that a
+ * key was written if the selector matches too.
+ */
+export function propertyDescendantSelector(
+  property: string
+): string | undefined {
+  return descendantOf(CATALOG_BY_PROPERTY.get(property));
+}
+
 export function propertyPseudoClassCount(property: string): number {
   const descendant = descendantOf(CATALOG_BY_PROPERTY.get(property));
   if (descendant === undefined) return 0;

@@ -469,24 +469,26 @@ describe("two catalog keys writing one CSS property", () => {
     expect(found?.source).toEqual({ tier: "local" });
   });
 
-  it("keeps the stored order within one tier, which is the order the compiler writes", () => {
-    // Both keys in one map: whichever the compiler writes second wins, and that is the order the
-    // record holds them in, not a preference of ours.
-    const gradientLast = resolveStyle("background", "base", "desktop", {
+  it("orders two keys in one map the way the compiler sorts them, not as stored", () => {
+    // The compiler SORTS a map's keys before emitting, so two documents differing only in the
+    // order they were written compile to the same bytes. `background` sorts before
+    // `backgroundGradient`, so the gradient is written last and wins — from either storage order.
+    // Reading the stored order instead looks like the write order and is not.
+    const gradientStoredLast = resolveStyle("background", "base", "desktop", {
       node: at("desktop", {
         background: { url: "/a.png" },
         backgroundGradient: "linear-gradient(red, blue)",
       }),
     });
-    const imageLast = resolveStyle("background", "base", "desktop", {
+    const gradientStoredFirst = resolveStyle("background", "base", "desktop", {
       node: at("desktop", {
         backgroundGradient: "linear-gradient(red, blue)",
         background: { url: "/a.png" },
       }),
     });
 
-    expect(gradientLast?.value).toBe("linear-gradient(red, blue)");
-    expect(imageLast?.value).toEqual({ url: "/a.png" });
+    expect(gradientStoredLast?.value).toBe("linear-gradient(red, blue)");
+    expect(gradientStoredFirst?.value).toBe("linear-gradient(red, blue)");
   });
 });
 
@@ -507,6 +509,44 @@ describe("a style map the compiler refuses whole", () => {
 
     expect(found?.value).toBe("blue");
     expect(found?.source).toEqual({ tier: "class", id: "card", slug: "card" });
+  });
+});
+
+describe("a declaration is evidence only for the key that wrote it", () => {
+  it("does not let a sibling on another selector vouch for a refused value", () => {
+    // `color` lands on the block and `linkColor` lands on an `a` inside it. Both emit the CSS
+    // property `color`, so a set of bare property names lets the valid link colour make the
+    // invalid root colour look written — and it is reported over the class the browser shows.
+    const found = resolveStyle("color", "base", "desktop", {
+      classes: [namedClass("card", 0, at("desktop", { color: "blue" }))],
+      node: at("desktop", { color: "not a color", linkColor: "blue" }),
+    });
+
+    expect(found?.value).toBe("blue");
+    expect(found?.source).toEqual({ tier: "class", id: "card", slug: "card" });
+  });
+
+  it("refuses a composite field the catalog does not define", () => {
+    // `padding` compiles because `blockStart` is valid; `bogus` names no leaf, so the compiler
+    // writes nothing for it. Kept, it reports a value with a local source over a page that has no
+    // such declaration at all.
+    const found = resolveStyle("padding", "base", "desktop", {
+      node: at("desktop", { padding: { blockStart: "16px", bogus: "4px" } }),
+    });
+
+    expect(found?.value).toEqual({ blockStart: "16px" });
+    expect(found?.parts?.bogus).toBeUndefined();
+  });
+
+  it("reads a token reference as a value rather than descending into it", () => {
+    // A token ref is a record in storage and a value in meaning. Walked as a composite, `$token`
+    // names no catalog leaf and the whole reference would be refused.
+    const found = resolveStyle("color", "base", "desktop", {
+      node: at("desktop", { color: { $token: "brand.primary" } }),
+    });
+
+    expect(found?.value).toEqual({ $token: "brand.primary" });
+    expect(found?.source).toEqual({ tier: "local" });
   });
 });
 
