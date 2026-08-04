@@ -94,7 +94,16 @@ function jsonOnly(value: object): Record<string, unknown> | undefined {
  * `undefined` or a function and is simply gone, an `undefined` in an array that
  * arrives as `null`.
  */
-function sameShape(before: unknown, after: unknown): boolean {
+function sameShape(
+  before: unknown,
+  after: unknown,
+  // Source objects already visited. JSON has no way to say "the same object
+  // twice": `{ a: x, b: x }` decodes as two distinct objects, so a component
+  // reading `config.a === config.b` sees `true` before delivery and `false`
+  // after. A repeat is therefore a shape change, and a cycle is caught here as
+  // well rather than by `JSON.stringify` throwing.
+  seen: Set<object> = new Set()
+): boolean {
   // `Object.is` rather than `===`, so `-0` is not accepted as unchanged after
   // JSON turns it into `0`. The browser can tell them apart (`1 / value`), so
   // that is a mangled copy like any other.
@@ -110,6 +119,8 @@ function sameShape(before: unknown, after: unknown): boolean {
     return false;
   const a = before as Record<string, unknown>;
   const b = after as Record<string, unknown>;
+  if (seen.has(a)) return false;
+  seen.add(a);
   const keys = Object.keys(a);
   // Own keys JSON cannot carry: a symbol key, or a non-enumerable one. Both are
   // invisible to `Object.keys` on BOTH sides, so comparing only enumerable
@@ -129,7 +140,7 @@ function sameShape(before: unknown, after: unknown): boolean {
   if (keys.length !== decodedKeys.length) return false;
   const inDecoded = new Set(decodedKeys);
   if (!keys.every(key => inDecoded.has(key))) return false;
-  return keys.every(key => sameShape(a[key], b[key]));
+  return keys.every(key => sameShape(a[key], b[key], seen));
 }
 
 /**

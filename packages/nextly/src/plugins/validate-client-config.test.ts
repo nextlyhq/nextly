@@ -149,3 +149,22 @@ describe("a sparse array with an extra property", () => {
     );
   });
 });
+
+describe("a shared object reference", () => {
+  it("is refused, because JSON cannot say the same object twice", () => {
+    // `config.a === config.b` is true on the declared value and false after
+    // delivery, which a component can observe — so the copy the browser reads
+    // is not the value the plugin wrote.
+    const shared = { n: 1 };
+    expect(() =>
+      assertClientConfigs([plugin({ a: shared, b: shared })])
+    ).toThrow(NextlyError);
+  });
+
+  it("still accepts two objects that merely look alike", () => {
+    // Equal shape, distinct identity: nothing is lost in the trip.
+    expect(() =>
+      assertClientConfigs([plugin({ a: { n: 1 }, b: { n: 1 } })])
+    ).not.toThrow();
+  });
+});

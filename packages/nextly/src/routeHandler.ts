@@ -148,6 +148,22 @@ function getSchemaVersionHeader(): number {
 // Global API Date/Time Formatting
 // ============================================================================
 
+/**
+ * Marks a response the global date/time pass must leave alone.
+ *
+ * That pass renders CONTENT timestamps in the viewer's timezone. A payload of
+ * configuration carries none, so every date-like string in it is opaque text
+ * belonging to whoever wrote it — a plugin's `clientConfig` most clearly, which
+ * is promised to arrive exactly as declared. Rewriting `"2026-08-04T12:34Z"`
+ * into a normalised, timezone-shifted form breaks that promise for a value the
+ * pass cannot know the meaning of.
+ *
+ * A header rather than a path test: the handler knows what it is returning,
+ * whereas a path can be matched by a plugin route that happens to end in the
+ * same segment and should keep its ordinary formatting.
+ */
+const SKIP_DATE_FORMATTING_HEADER = "x-nextly-skip-date-formatting";
+
 async function applyGlobalDateFormatting(
   response: Response,
   req?: Request
@@ -157,22 +173,24 @@ async function applyGlobalDateFormatting(
     return response;
   }
 
+  // A response that opted out. Marked by the handler rather than matched by
+  // path: a plugin may mount its own route ending in the same segment, and it
+  // should keep the formatting every other plugin response gets. The header is
+  // internal, so it is removed on the way out.
+  if (response.headers.has(SKIP_DATE_FORMATTING_HEADER)) {
+    const headers = new Headers(response.headers);
+    headers.delete(SKIP_DATE_FORMATTING_HEADER);
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    });
+  }
+
   // Skip formatting for auth endpoints to avoid interfering with auth flow
   if (req) {
     const url = new URL(req.url);
     if (url.pathname.includes("/auth/")) {
-      return response;
-    }
-    // And for admin metadata, which is CONFIGURATION rather than content.
-    // This pass exists to render content timestamps in the viewer's timezone;
-    // admin-meta carries none, so every date-like string it holds is opaque
-    // text belonging to whoever wrote it. A plugin's `clientConfig` is the
-    // clearest case — it is promised to arrive exactly as declared, and
-    // rewriting `"2026-08-04T12:34Z"` into a normalised, timezone-shifted form
-    // breaks that promise for a value this pass cannot know the meaning of.
-    // Both spellings: a host with Next's `trailingSlash` enabled requests
-    // `/api/admin-meta/`, which `handleGet` still dispatches from `params[0]`.
-    if (/\/admin-meta\/?$/.test(url.pathname)) {
       return response;
     }
   }
@@ -1269,7 +1287,10 @@ async function handleAdminMetaRequest(): Promise<Response> {
   // migrated fetcher. `respondData` requires a Record-shaped argument and
   // `payload` is built as `Record<string, unknown>` above so the bound is
   // satisfied without a cast.
-  return respondData(payload);
+  const response = respondData(payload);
+  // Configuration, not content: see `SKIP_DATE_FORMATTING_HEADER`.
+  response.headers.set(SKIP_DATE_FORMATTING_HEADER, "1");
+  return response;
 }
 
 /**
