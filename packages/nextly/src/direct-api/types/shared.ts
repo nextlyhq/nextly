@@ -144,25 +144,143 @@ export type SingleSlug = GeneratedTypes extends { singles: infer C }
  * type AnyDoc = DataFromCollectionSlug<string>; // → Record<string, unknown>
  * ```
  */
+export type DataFromCollectionSlugFrom<
+  TGenerated,
+  TSlug extends string,
+> = TGenerated extends { collections: infer C }
+  ? TSlug extends keyof C
+    ? C[TSlug]
+    : Record<string, unknown>
+  : Record<string, unknown>;
+
 export type DataFromCollectionSlug<TSlug extends string> =
-  GeneratedTypes extends { collections: infer C }
-    ? TSlug extends keyof C
-      ? C[TSlug]
-      : Record<string, unknown>
-    : Record<string, unknown>;
+  DataFromCollectionSlugFrom<GeneratedTypes, TSlug>;
 
 /**
  * Resolves the document type for a given single/global slug.
  *
  * @typeParam TSlug - The single slug string literal
  */
-export type DataFromSingleSlug<TSlug extends string> = GeneratedTypes extends {
-  singles: infer C;
-}
+export type DataFromSingleSlugFrom<
+  TGenerated,
+  TSlug extends string,
+> = TGenerated extends { singles: infer C }
   ? TSlug extends keyof C
     ? C[TSlug]
     : Record<string, unknown>
   : Record<string, unknown>;
+
+export type DataFromSingleSlug<TSlug extends string> = DataFromSingleSlugFrom<
+  GeneratedTypes,
+  TSlug
+>;
+
+/**
+ * The timestamp fields every entity carries, whatever its own fields are.
+ *
+ * Used as the in-process shape for a project whose generated types predate
+ * `collectionDateFields`: the built-in timestamps are true of every collection,
+ * so they can be named without consulting the schema.
+ */
+type BuiltInDateField = "createdAt" | "updatedAt";
+
+/**
+ * A document as it exists inside the running process, given the fields the
+ * database returns as `Date`.
+ *
+ * The generated interfaces describe the WIRE: `routeHandler` formats every REST
+ * response, so a timestamp really is a string by the time a browser sees it. In
+ * process there is no such step and a timestamp column arrives as the `Date` the
+ * driver decoded, so the two shapes differ in exactly those fields.
+ *
+ * Homomorphic on purpose: `?` and `readonly` are carried over, so an optional
+ * `publishedAt?: string` becomes an optional `publishedAt?: Date` rather than a
+ * required one.
+ */
+export type InProcessRow<TData, TDateField extends PropertyKey> = {
+  [K in keyof TData]: K extends TDateField ? Date : TData[K];
+};
+
+/**
+ * The `Date`-backed field names of a collection, as codegen recorded them.
+ *
+ * Falls back to the built-in timestamps when a project has no generated types,
+ * or has types generated before this map existed — the fields that are always
+ * right, rather than none at all.
+ *
+ * The key here MUST match the one `TypeGenerator` emits into `Config`. If the
+ * two drift, this conditional silently takes the fallback branch and a `date`
+ * field goes back to being typed as a string — no compile error anywhere, just
+ * a row type that is wrong again. Pinned by
+ * `__tests__/generated-config-contract.test.ts`.
+ */
+type DateFieldsOfCollectionFrom<
+  TGenerated,
+  TSlug extends string,
+> = TGenerated extends { collectionDateFields: infer D }
+  ? TSlug extends keyof D
+    ? Extract<D[TSlug], PropertyKey>
+    : BuiltInDateField
+  : BuiltInDateField;
+
+/** See {@link DateFieldsOfCollectionFrom}. */
+type DateFieldsOfSingleFrom<
+  TGenerated,
+  TSlug extends string,
+> = TGenerated extends { singleDateFields: infer D }
+  ? TSlug extends keyof D
+    ? Extract<D[TSlug], PropertyKey>
+    : BuiltInDateField
+  : BuiltInDateField;
+
+/**
+ * Resolves the in-process document type for a collection slug — what the Direct
+ * API hands back, as opposed to what the REST API serializes.
+ *
+ * Factored through a `From` generic for the same reason the field-group types
+ * are: a test asserting against a locally re-declared copy of the conditional
+ * would pass even when this alias reads the wrong key, which is the failure
+ * being guarded.
+ *
+ * @typeParam TSlug - The collection slug string literal
+ *
+ * @example
+ * ```typescript
+ * const post = await nextly.findByID({ collection: "posts", id });
+ * post?.createdAt.getTime(); // a Date in process
+ *
+ * type Wire = DataFromCollectionSlug<"posts">;
+ * // Wire["createdAt"] is a string: the REST response is formatted text.
+ * ```
+ */
+export type RowFromCollectionSlugFrom<
+  TGenerated,
+  TSlug extends string,
+> = InProcessRow<
+  DataFromCollectionSlugFrom<TGenerated, TSlug>,
+  DateFieldsOfCollectionFrom<TGenerated, TSlug>
+>;
+
+export type RowFromCollectionSlug<TSlug extends string> =
+  RowFromCollectionSlugFrom<GeneratedTypes, TSlug>;
+
+/**
+ * Resolves the in-process document type for a single slug.
+ *
+ * @typeParam TSlug - The single slug string literal
+ */
+export type RowFromSingleSlugFrom<
+  TGenerated,
+  TSlug extends string,
+> = InProcessRow<
+  DataFromSingleSlugFrom<TGenerated, TSlug>,
+  DateFieldsOfSingleFrom<TGenerated, TSlug>
+>;
+
+export type RowFromSingleSlug<TSlug extends string> = RowFromSingleSlugFrom<
+  GeneratedTypes,
+  TSlug
+>;
 
 /**
  * User context for access control when `overrideAccess` is false.

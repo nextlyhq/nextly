@@ -1367,6 +1367,33 @@ ${properties}
     }
     lines.push("  };");
 
+    // Which fields above are backed by a timestamp column. The interfaces
+    // describe the WIRE, where every timestamp is formatted text; in process
+    // the driver hands back a Date for exactly these fields, and
+    // `RowFromCollectionSlug` reads this map to say so. Names only: the rule
+    // that applies them lives in the library, so it can improve without every
+    // project regenerating.
+    lines.push("  collectionDateFields: {");
+    for (const collection of collections) {
+      lines.push(
+        `    "${collection.slug}": ${this.dateFieldUnion(
+          collection.fields,
+          collection.timestamps ? ["createdAt", "updatedAt"] : []
+        )};`
+      );
+    }
+    lines.push("  };");
+
+    lines.push("  singleDateFields: {");
+    for (const single of singles) {
+      // A single has no createdAt: there is one row and it is never "created"
+      // from the caller's point of view.
+      lines.push(
+        `    "${single.slug}": ${this.dateFieldUnion(single.fields, ["updatedAt"])};`
+      );
+    }
+    lines.push("  };");
+
     // Permissions section (D47) — key union only; permission payloads are not
     // typed. Sorted + deduped for deterministic output. Narrows `PermissionSlug`.
     // Emitted ONLY when non-empty: an empty map would make `keyof P` resolve to
@@ -1429,6 +1456,31 @@ ${properties}
   // ============================================================
   // Utility Methods
   // ============================================================
+
+  /**
+   * The union of field names an entity stores in a timestamp column, written as
+   * a TypeScript type expression.
+   *
+   * A `date` field is stored as a timestamp, and so is a plugin field whose
+   * declared storage primitive is `date` — the same two cases the column
+   * descriptor maps to a timestamp column, so the emitted names are exactly the
+   * ones the driver decodes. `never` when there are none, which leaves the row
+   * type equal to the wire type.
+   */
+  private dateFieldUnion(
+    fields: readonly FieldConfig[],
+    builtIn: readonly string[]
+  ): string {
+    const names = [...builtIn];
+    for (const field of fields) {
+      if (!("name" in field) || !field.name) continue;
+      if (isDateField(field) || pluginStorageFieldType(field) === "date") {
+        names.push(field.name);
+      }
+    }
+    if (names.length === 0) return "never";
+    return names.map(name => `"${name}"`).join(" | ");
+  }
 
   /**
    * Converts a slug to PascalCase.

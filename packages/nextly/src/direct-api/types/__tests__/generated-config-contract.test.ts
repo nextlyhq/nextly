@@ -26,6 +26,28 @@ const collection = (slug: string) =>
     fields: [],
   }) as never;
 
+/** A field as the generator reads it: a name and a type are all it consults. */
+type Field = { name: string; type: string };
+
+const datedCollection = (slug: string, fields: Field[]) =>
+  ({
+    slug,
+    labels: { singular: slug, plural: slug },
+    fields,
+    timestamps: true,
+  }) as never;
+
+const untimestampedCollection = (slug: string, fields: Field[]) =>
+  ({
+    slug,
+    labels: { singular: slug, plural: slug },
+    fields,
+    timestamps: false,
+  }) as never;
+
+const single = (slug: string, fields: Field[]) =>
+  ({ slug, label: slug, fields }) as never;
+
 describe("generated Config contract", () => {
   it("emits the key the Direct API slug types read", () => {
     const { code } = new TypeGenerator().generateTypesFile(
@@ -89,5 +111,68 @@ describe("generated Config contract", () => {
         [fieldGroup("seo")]
       )
     ).not.toThrow();
+  });
+});
+
+/**
+ * The other half of the same split contract: `RowFromCollectionSlug` is a
+ * conditional on `GeneratedTypes extends { collectionDateFields: infer D }`, so
+ * a renamed key silently takes the fallback branch and every row loses the
+ * fields codegen knows about. Nothing fails to compile.
+ *
+ * The compile-time half lives in `../in-process-row.test-d.ts`.
+ */
+describe("generated date-field contract", () => {
+  it("emits the key the in-process row types read, with the built-in timestamps", () => {
+    const { code } = new TypeGenerator().generateTypesFile(
+      [datedCollection("posts", [])],
+      [single("settings", [])]
+    );
+
+    // The literal keys, not a paraphrase: the conditionals match on them exactly.
+    expect(code).toContain("collectionDateFields: {");
+    expect(code).toContain('"posts": "createdAt" | "updatedAt";');
+    expect(code).toContain("singleDateFields: {");
+    // A single has one row that is never created from the caller's side.
+    expect(code).toContain('"settings": "updatedAt";');
+  });
+
+  it("names a date field alongside the built-in timestamps", () => {
+    const { code } = new TypeGenerator().generateTypesFile([
+      datedCollection("posts", [
+        { name: "title", type: "text" },
+        { name: "publishedAt", type: "date" },
+      ]),
+    ]);
+
+    expect(code).toContain(
+      '"posts": "createdAt" | "updatedAt" | "publishedAt";'
+    );
+    // The field a date field is NOT: a text column comes back as text.
+    expect(code).not.toContain('"title"');
+  });
+
+  it("says never for a collection with no date-backed field at all", () => {
+    const { code } = new TypeGenerator().generateTypesFile([
+      // `timestamps: false` removes the built-ins too, which is the only way to
+      // reach an empty set.
+      untimestampedCollection("events", [{ name: "label", type: "text" }]),
+    ]);
+
+    // `never` leaves the row type equal to the wire type, rather than mapping
+    // every key through the date branch.
+    expect(code).toContain('"events": never;');
+  });
+
+  it("leaves the wire interface describing a timestamp as a string", () => {
+    const { code } = new TypeGenerator().generateTypesFile([
+      datedCollection("posts", [{ name: "publishedAt", type: "date" }]),
+    ]);
+
+    // The REST response is formatted text, so the generated interface is
+    // correct as it stands and must not follow the row type to `Date`.
+    expect(code).toContain("  createdAt: string;");
+    expect(code).toContain("  publishedAt?: string;");
+    expect(code).not.toContain("createdAt: Date");
   });
 });
