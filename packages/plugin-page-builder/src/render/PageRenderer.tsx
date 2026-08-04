@@ -14,7 +14,7 @@ import {
   compileDocumentMotionCss,
   compileTokensCss,
   type BreakpointDef,
-  type RemotePattern,
+  type RemotePatternInput,
 } from "../core/style-compiler";
 import type { BlockDocument, BlockNode } from "../core/types";
 
@@ -42,7 +42,7 @@ export interface PageRendererProps {
    * here knows what this site's host is — the page is compiled once and may be
    * served from anywhere — and `next/image` draws the line in the same place.
    */
-  remotePatterns?: readonly RemotePattern[];
+  remotePatterns?: readonly RemotePatternInput[];
   /** Design-token overrides (`{ "color.primary": "#..." }`). Defaults ship a palette. */
   tokens?: Record<string, string>;
   /** Reserved (i18n, spec §13) — threaded through but ignored in the MVP. */

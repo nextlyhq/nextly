@@ -3,15 +3,20 @@ import { describe, expect, it } from "vitest";
 
 import { sanitizeEmbedHtml } from "../../core/embed-sanitize";
 import { defaultBlockRegistry } from "../../core/registry";
+import type { RemotePattern } from "../../core/url-policy";
 import { makeNode } from "../../core/tree";
 import type { BlockNode } from "../../core/types";
 import { RenderNode } from "../RenderNode";
 
 import "./index";
 
-const html = (node: BlockNode) =>
+const html = (node: BlockNode, remotePatterns?: RemotePattern[]) =>
   renderToStaticMarkup(
-    <RenderNode node={node} registry={defaultBlockRegistry} />
+    <RenderNode
+      node={node}
+      registry={defaultBlockRegistry}
+      remotePatterns={remotePatterns}
+    />
   );
 
 describe("interactive & utility blocks", () => {
@@ -71,14 +76,21 @@ describe("interactive & utility blocks", () => {
     expect(out).toContain("<svg");
   });
 
-  it("embed url mode renders a validated https iframe", () => {
-    const ok = html(
-      makeNode("core/embed", { mode: "url", url: "https://example.com/x" })
-    );
+  it("embeds an https iframe only from a declared host", () => {
+    // The iframe is lazy, so whether it loads depends on where it renders and
+    // CSS decides that. https says the transport is encrypted and nothing about
+    // where the request goes, so the host is declared like any other media.
+    const node = makeNode("core/embed", {
+      mode: "url",
+      url: "https://example.com/x",
+    });
+    expect(html(node)).toBe("");
+    const ok = html(node, [{ protocol: "https", hostname: "example.com" }]);
     expect(ok).toContain("<iframe");
     expect(ok).toContain('src="https://example.com/x"');
     const bad = html(
-      makeNode("core/embed", { mode: "url", url: "http://insecure.com" })
+      makeNode("core/embed", { mode: "url", url: "http://insecure.com" }),
+      [{ hostname: "insecure.com" }]
     );
     expect(bad).toBe("");
   });

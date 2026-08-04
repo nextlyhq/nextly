@@ -1,7 +1,7 @@
 import { sanitizeEmbedHtml } from "../../core/embed-sanitize";
 import { defineBlock } from "../../core/registry";
 
-import { safeUrl, str } from "./util";
+import { mediaUrl, str } from "./util";
 
 /**
  * HTML / Embed. Two modes: an https iframe URL (safe), or raw HTML passed through a
@@ -36,7 +36,7 @@ export const embed = defineBlock({
     customCss: true,
     customAttributes: true,
   },
-  render: ({ props, className }) => {
+  render: ({ props, className, remotePatterns }) => {
     const height = Number(props.height) || 320;
     if (props.mode === "html") {
       const clean = sanitizeEmbedHtml(str(props.html));
@@ -48,7 +48,12 @@ export const embed = defineBlock({
         />
       );
     }
-    const url = safeUrl(props.url);
+    // The iframe is lazy, so whether this request happens depends on where the
+    // element renders — which CSS decides. That makes it the same conditional
+    // fetch a lazy image is, so the host has to be one the site declared:
+    // requiring https says the transport is encrypted and nothing about where
+    // the request goes.
+    const url = mediaUrl(props.url, remotePatterns);
     if (!url || !/^https:\/\//i.test(url)) return null;
     return (
       <div className={className}>

@@ -22,7 +22,7 @@ import type {
 import {
   fetchableValues,
   isFetchableUrl,
-  type RemotePattern,
+  type RemotePatternInput,
 } from "./url-policy";
 
 export interface BreakpointDef {
@@ -36,7 +36,7 @@ export const DEFAULT_BREAKPOINTS: BreakpointDef[] = [
   { id: "mobile", maxWidth: 640 },
 ];
 
-export type { RemotePattern } from "./url-policy";
+export type { RemotePatternInput } from "./url-policy";
 export { isAllowedRemoteUrl } from "./url-policy";
 
 export interface CompileOptions {
@@ -46,7 +46,7 @@ export interface CompileOptions {
    * same-origin only, which is the default because an undeclared host is a
    * request a custom-CSS selector can gate on a secret.
    */
-  remotePatterns?: readonly RemotePattern[];
+  remotePatterns?: readonly RemotePatternInput[];
 }
 
 /**
@@ -109,7 +109,7 @@ function resolveScalar(v: StyleScalar): string {
  */
 function safeValue(
   v: string,
-  remotePatterns: readonly RemotePattern[] = []
+  remotePatterns: readonly RemotePatternInput[] = []
 ): string | null {
   if (v == null || v === "") return null;
   if (/[{};<>]/.test(v)) return null; // fast reject declaration/tag breakout
@@ -142,7 +142,7 @@ function safeValue(
  */
 function safeUrl(
   url: string,
-  remotePatterns: readonly RemotePattern[]
+  remotePatterns: readonly RemotePatternInput[]
 ): string | null {
   const u = url.trim();
   if (/^(javascript|data|vbscript):/i.test(u)) return null;
@@ -187,7 +187,7 @@ const SIMPLE: [keyof StyleValues, string][] = [
 
 function compileStyleValues(
   sv: StyleValues,
-  remotePatterns: readonly RemotePattern[]
+  remotePatterns: readonly RemotePatternInput[]
 ): string[] {
   const out: string[] = [];
 

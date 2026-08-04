@@ -8,7 +8,7 @@ import type { ReactNode } from "react";
 
 import type { BlockRegistry } from "../../core/registry";
 import type { BlockNode } from "../../core/types";
-import type { RemotePattern } from "../../core/url-policy";
+import type { RemotePatternInput } from "../../core/url-policy";
 import type { DataProvider } from "../dataProvider";
 
 import { QueryLoopView } from "./QueryLoopView";
@@ -20,7 +20,7 @@ export interface QueryLoopProps {
   registry: BlockRegistry;
   dataProvider?: DataProvider;
   /** Hosts this page may load media from; forwarded to nested blocks. */
-  remotePatterns?: readonly RemotePattern[];
+  remotePatterns?: readonly RemotePatternInput[];
   className: string;
   budget: QueryBudget;
 }

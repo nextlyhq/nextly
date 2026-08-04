@@ -16,7 +16,7 @@ import { resolveBindings } from "../core/bindings";
 import type { BlockRegistry } from "../core/registry";
 import { nodeClass } from "../core/style-compiler";
 import type { BlockNode } from "../core/types";
-import type { RemotePattern } from "../core/url-policy";
+import type { RemotePatternInput } from "../core/url-policy";
 
 import type { DataProvider } from "./dataProvider";
 import { BlockErrorBoundary } from "./ErrorBoundary";
@@ -47,7 +47,7 @@ export interface RenderNodeProps {
   registry: BlockRegistry;
   dataProvider?: DataProvider;
   /** Hosts this page may load media from; passed to every block's render args. */
-  remotePatterns?: readonly RemotePattern[];
+  remotePatterns?: readonly RemotePatternInput[];
   /** Current Query Loop item — threaded to resolve bindings at any depth. */
   item?: Record<string, unknown>;
   /** Remaining query budget shared across nested loops on this page render. */

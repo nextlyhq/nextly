@@ -50,6 +50,8 @@ export const gallery = defineBlock({
       >
         {items.map((raw, i) => {
           const it = (raw ?? {}) as Record<string, unknown>;
+          // Gated on `remotePatterns`: each image here is a request the browser
+          // makes on its own, so an undeclared host is refused.
           const url = mediaUrl(it.image, remotePatterns);
           if (!url) return null;
           const alt = str(it.alt) || mediaAlt(it.image);

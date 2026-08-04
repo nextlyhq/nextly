@@ -8,7 +8,7 @@ import type { ReactNode } from "react";
 
 import type { BlockRegistry } from "../../core/registry";
 import { DEFAULT_SLOT, type BlockNode } from "../../core/types";
-import type { RemotePattern } from "../../core/url-policy";
+import type { RemotePatternInput } from "../../core/url-policy";
 import type { DataProvider } from "../dataProvider";
 import { RenderNode } from "../RenderNode";
 
@@ -21,7 +21,7 @@ export interface QueryLoopViewProps {
   registry: BlockRegistry;
   dataProvider?: DataProvider;
   /** Hosts this page may load media from; forwarded to nested blocks. */
-  remotePatterns?: readonly RemotePattern[];
+  remotePatterns?: readonly RemotePatternInput[];
   className: string;
   result: QueryResult;
   budget: QueryBudget;

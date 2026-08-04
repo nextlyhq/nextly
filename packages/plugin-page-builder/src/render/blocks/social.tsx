@@ -1,14 +1,14 @@
 import type { CSSProperties, ReactNode } from "react";
 
 import { defineBlock } from "../../core/registry";
-import type { RemotePattern } from "../../core/url-policy";
+import type { RemotePatternInput } from "../../core/url-policy";
 
 import { iconByName } from "./iconRegistry";
 import { mediaAlt, mediaUrl, str } from "./util";
 
 function testimonialCard(
   it: Record<string, unknown>,
-  remotePatterns: readonly RemotePattern[] | undefined,
+  remotePatterns: readonly RemotePatternInput[] | undefined,
   key?: number
 ): ReactNode {
   const avatar = mediaUrl(it.avatar, remotePatterns);

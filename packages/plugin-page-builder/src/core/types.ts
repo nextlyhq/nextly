@@ -10,7 +10,7 @@ import type { ReactNode } from "react";
 
 import type { MotionConfig } from "./motion";
 import type { BlockSupports } from "./supports";
-import type { RemotePattern } from "./url-policy";
+import type { RemotePatternInput } from "./url-policy";
 
 // ---------------------------------------------------------------------------
 // Document + node model (spec §6)
@@ -213,7 +213,7 @@ export interface BlockRenderArgs<P = Record<string, unknown>> {
    * reach here: pass this to `mediaUrl` rather than reading the prop directly.
    * Absent means same-origin only, which is what an unconfigured page gets.
    */
-  remotePatterns?: readonly RemotePattern[];
+  remotePatterns?: readonly RemotePatternInput[];
 }
 
 export interface BlockDefinition<P = Record<string, unknown>> {

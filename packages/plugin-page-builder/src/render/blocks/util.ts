@@ -1,4 +1,4 @@
-import { isFetchableUrl, type RemotePattern } from "../../core/url-policy";
+import { isFetchableUrl, type RemotePatternInput } from "../../core/url-policy";
 
 /**
  * A URL safe to NAVIGATE to: an `href`, a form `action`.
@@ -53,7 +53,7 @@ export function str(v: unknown, fallback = ""): string {
  */
 export function mediaUrl(
   v: unknown,
-  remotePatterns: readonly RemotePattern[] = []
+  remotePatterns: readonly RemotePatternInput[] = []
 ): string | undefined {
   const raw =
     typeof v === "string"
@@ -63,6 +63,33 @@ export function mediaUrl(
         : undefined;
   if (raw === undefined) return undefined;
   return isFetchableUrl(raw, remotePatterns) ? raw : undefined;
+}
+
+/**
+ * A media URL safe to interpolate into a CSS `url("…")`.
+ *
+ * Everything {@link mediaUrl} checks, plus the delimiters that would end the
+ * `url()` it is placed inside. An attribute and a stylesheet escape differently:
+ * React writes `"` into an attribute as `&quot;`, which is correct HTML, and the
+ * HTML parser turns it back into a quote before the CSS parser reads the style —
+ * so a value like
+ *
+ *     x");background-image:url("https://elsewhere/a")/*
+ *
+ * closes the original declaration and opens a second one pointing anywhere.
+ * Attributes need no such rejection, which is why this is separate rather than
+ * folded into `mediaUrl`: a parenthesis is perfectly legal in an `<img src>` and
+ * refusing it there would drop real images.
+ */
+export function cssMediaUrl(
+  v: unknown,
+  remotePatterns: readonly RemotePatternInput[] = []
+): string | undefined {
+  const url = mediaUrl(v, remotePatterns);
+  if (url === undefined) return undefined;
+  // The same delimiter set the style compiler rejects, for the same reason.
+  if (/["'()\\]/.test(url) || /[\n\r]/.test(url)) return undefined;
+  return url;
 }
 
 /** Read a media prop's alt text if present. */

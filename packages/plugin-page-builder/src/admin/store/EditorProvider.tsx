@@ -16,7 +16,7 @@ import {
 } from "react";
 
 import type { BlockDocument } from "../../core/types";
-import type { RemotePattern } from "../../core/url-policy";
+import type { RemotePatternInput } from "../../core/url-policy";
 
 import {
   editorReducer,
@@ -26,7 +26,7 @@ import {
 } from "./editorStore";
 
 /** Stable identity so the context value does not change on every render. */
-const EMPTY_PATTERNS: readonly RemotePattern[] = [];
+const EMPTY_PATTERNS: readonly RemotePatternInput[] = [];
 
 interface EditorContextValue {
   state: EditorState;
@@ -38,7 +38,7 @@ interface EditorContextValue {
    * them. The preview compiles with the same list so an allowed off-origin
    * background does not vanish in the editor and reappear on the page.
    */
-  remotePatterns: readonly RemotePattern[];
+  remotePatterns: readonly RemotePatternInput[];
 }
 
 const EditorContext = createContext<EditorContextValue | null>(null);
@@ -82,7 +82,7 @@ export function EditorProvider({
    * for plugin configuration to reach the client, which is a framework
    * capability rather than something this component can reach for.
    */
-  remotePatterns?: readonly RemotePattern[];
+  remotePatterns?: readonly RemotePatternInput[];
   /**
    * Initial page-level custom CSS. Passing a string (even "") enables the page-CSS
    * editor panel; leaving it undefined (field mount) hides it.

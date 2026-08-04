@@ -8,10 +8,10 @@
  * whether that request happens can be made conditional by CSS, which is the
  * channel the allowlist closes.
  *
- * `core/image` — the package's primary image block — used the navigation helper
- * for its source, so it kept reaching undeclared hosts after every background
- * had been gated. This scans for that shape rather than trusting the next
- * person to pick the right one.
+ * Both helpers take a URL and return a URL, so nothing about a call site makes
+ * the wrong one look wrong. This scans for the shape instead: a URL flowing
+ * into a fetched attribute from the scheme-only helper reaches whatever host it
+ * names, whatever the allowlist says.
  */
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -37,7 +37,11 @@ describe("fetched URLs use the origin-gated helper", () => {
           "g"
         );
         const inline = new RegExp(`\\b${attr}=\\{?\\s*safeUrl\\(`, "g");
-        for (const re of [direct, inline]) {
+        // `style={{ backgroundImage: safeUrl(v) }}` — a property, not an
+        // assignment or a JSX attribute, and the commonest shape for the
+        // inline backgrounds that are fetched most conditionally of all.
+        const property = new RegExp(`\\b${attr}\\s*:\\s*safeUrl\\(`, "g");
+        for (const re of [direct, inline, property]) {
           if (re.test(text)) offenders.push(`${entry}: ${attr} = safeUrl(...)`);
         }
       }

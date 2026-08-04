@@ -1,6 +1,6 @@
 import { defineBlock } from "../../core/registry";
 
-import { mediaUrl, str } from "./util";
+import { cssMediaUrl, str } from "./util";
 
 /** A full-bleed hero: background image + color overlay, centered inner blocks. */
 export const cover = defineBlock({
@@ -32,7 +32,9 @@ export const cover = defineBlock({
     customAttributes: true,
   },
   render: ({ props, slots, className, remotePatterns }) => {
-    const url = mediaUrl(props.image, remotePatterns);
+    // `cssMediaUrl`: this is interpolated into a CSS `url("…")`, so the
+    // delimiters that would end it are refused as well as the origin.
+    const url = cssMediaUrl(props.image, remotePatterns);
     const overlay = str(props.overlayColor, "#000000");
     const opacity = Number(props.overlayOpacity);
     return (

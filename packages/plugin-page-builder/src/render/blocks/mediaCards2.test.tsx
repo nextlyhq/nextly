@@ -9,6 +9,8 @@ import { RenderNode } from "../RenderNode";
 
 import "./index";
 
+/** Forwards the media policy the way `PageRenderer` does, so these render the
+ *  way a real page would rather than with the policy silently absent. */
 const html = (node: BlockNode, remotePatterns?: RemotePattern[]) =>
   renderToStaticMarkup(
     <RenderNode

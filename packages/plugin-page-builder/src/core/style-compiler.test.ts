@@ -540,6 +540,22 @@ describe("isAllowedRemoteUrl", () => {
     ).toContain("var(--blur, blur(2px))");
   });
 
+  it("accepts a URL entry, as next.config does", () => {
+    // `remotePatterns: [new URL("https://cdn.example/img/**")]` is a supported
+    // Next.js form, and a URL already carries every field this matches on. Its
+    // protocol keeps a trailing colon, so the comparison strips one from both
+    // sides rather than appending one.
+    const p = [new URL("https://cdn.example/img/**")];
+    expect(isAllowedRemoteUrl("https://cdn.example/img/a.png", p)).toBe(true);
+    expect(isAllowedRemoteUrl("https://cdn.example/other/a.png", p)).toBe(
+      false
+    );
+    expect(isAllowedRemoteUrl("http://cdn.example/img/a.png", p)).toBe(false);
+    expect(isAllowedRemoteUrl("https://other.example/img/a.png", p)).toBe(
+      false
+    );
+  });
+
   it("allows nothing when nothing is declared", () => {
     expect(isAllowedRemoteUrl("https://cdn.example.com/a.png", [])).toBe(false);
   });

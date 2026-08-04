@@ -191,6 +191,17 @@ export function isRemoteUrl(value: string): boolean {
  * app already declares the same thing there for `next/image` and copying the
  * entry across should just work.
  */
+/**
+ * A pattern, or a `URL` standing in for one.
+ *
+ * `next.config` accepts `remotePatterns: [new URL("https://cdn.example/img/**")]`
+ * as well as the object form, and a `URL` already carries every field this
+ * matches on. The only difference is that its `protocol` keeps the trailing
+ * colon, which is why the comparison below strips one from both sides rather
+ * than appending one — the same accommodation `matchRemotePattern` makes.
+ */
+export type RemotePatternInput = URL | RemotePattern;
+
 export interface RemotePattern {
   protocol?: "http" | "https";
   /** A picomatch glob, as `next/image` reads it: `**.example.com`, `cdn.example`. */
@@ -230,7 +241,7 @@ function glob(pattern: string, dot = false): RegExp {
  */
 export function isAllowedRemoteUrl(
   url: string,
-  patterns: readonly RemotePattern[]
+  patterns: readonly RemotePatternInput[]
 ): boolean {
   let parsed: URL;
   try {
@@ -247,15 +258,20 @@ export function isAllowedRemoteUrl(
   // allows", not "any scheme".
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
   return patterns.some(pattern => {
-    // Field order and glob options mirror `matchRemotePattern` in Next.js,
-    // because this type says a `next.config` entry can be copied across.
-    // Reimplementing the globs disagreed with it three separate ways —
-    // `/img/*`, `/img/**` against its own prefix, and `*.example.com` against a
-    // deeper subdomain — so it uses the same matcher instead of an
-    // approximation that has to be corrected one report at a time.
+    // Field order and glob options mirror `matchRemotePattern` in Next.js, and
+    // the matching is delegated to the same library it uses. This type says a
+    // `next.config` entry can be copied across, and that claim only holds if
+    // the globs mean the same thing: picomatch's `*` spans dots in a hostname,
+    // `/img/*` is one path segment, and a terminal `/img/**` matches `/img`
+    // itself. Any reimplementation is a second definition of those semantics,
+    // free to drift from the one the copied config was written against.
+    // Stripped from both sides: an object pattern writes `https`, a `URL`
+    // writes `https:`, and both mean the same scheme.
+    const scheme = (value: string): string => value.replace(/:$/, "");
     if (
       pattern.protocol !== undefined &&
-      `${pattern.protocol}:` !== parsed.protocol
+      pattern.protocol !== "" &&
+      scheme(pattern.protocol) !== scheme(parsed.protocol)
     ) {
       return false;
     }
@@ -291,7 +307,7 @@ export function isAllowedRemoteUrl(
  */
 export function isFetchableUrl(
   url: string,
-  patterns: readonly RemotePattern[]
+  patterns: readonly RemotePatternInput[]
 ): boolean {
   if (!isRemoteUrl(url)) return true;
   if (normalizeUrl(url).startsWith("//")) return false;

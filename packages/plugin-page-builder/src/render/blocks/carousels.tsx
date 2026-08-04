@@ -51,6 +51,8 @@ export const imageCarousel = defineBlock({
     <div className={className} style={track}>
       {imageItems(props).map((raw, i) => {
         const it = (raw ?? {}) as Record<string, unknown>;
+        // Gated on `remotePatterns`: each image here is a request the browser
+        // makes on its own, so an undeclared host is refused.
         const url = mediaUrl(it.image, remotePatterns);
         if (!url) return null;
         return (
