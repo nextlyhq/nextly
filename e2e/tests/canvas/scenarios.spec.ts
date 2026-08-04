@@ -262,14 +262,20 @@ test("scenario 4: a steady drag over variable-height blocks never reverses", asy
 });
 
 /**
- * The pointer is parked 1px inside a zone's catchment edge, then jittered +/-2px
- * across it. The indicator must not change.
+ * Expected failure: **this canvas has no target-switch hysteresis.**
  *
- * An earlier revision reported [-1 x20] here and concluded the zones did not
- * tile the canvas. That was wrong: the bracket loop waited for the PREVIOUS
- * zone, which sits a whole block away, so it never matched and left the pointer
- * stranded in dead space. Bracketing against the edge of the CURRENT zone gives
- * [2 x20] — stable.
+ * Master plan §2.8 point 3 requires a sticky target with an 8-12px dead-zone
+ * margin or a >100ms dwell, so that "oscillating the pointer 2px around any
+ * boundary must never flip the indicator". Bracketed to 1px and sampled on
+ * genuinely opposite sides of the edge, the observed run is
+ * `[1,2,1,2,1,2,...]` — the indicator flips on every 2px move.
+ *
+ * Two earlier revisions of this test reported it stable, and both were
+ * measurement artifacts: the first jittered inside one zone's catchment rather
+ * than at its edge, the second sampled P and P+2 (one side) rather than P-2 and
+ * P+2. The requirement is real, the gap is real, and it is unrelated to
+ * dnd-kit #2088 — nothing upstream is at fault, the hysteresis was simply never
+ * built.
  */
 test("scenario 4b: a 2px jitter at a zone edge keeps the indicator stable", async ({
   page,
@@ -323,10 +329,15 @@ test("scenario 4b: a 2px jitter at a zone edge keeps the indicator stable", asyn
     }
   }
   expect(bracketed, "the zone edge must be bracketed to 1px").toBe(true);
+  // Step to P-2 first, then alternate by 4px so the samples are P+2 and P-2 —
+  // genuinely opposite sides of the edge. Alternating +/-2 from P samples P+2
+  // and P, both on the same side, which an implementation that switches the
+  // instant the pointer crosses would still pass.
+  await driver.moveBy(0, -2);
   const observed: number[] = [];
   for (let step = 0; step < 20; step++) {
-    await driver.moveBy(0, step % 2 === 0 ? 2 : -2);
     observed.push(await driver.readActiveTarget());
+    await driver.moveBy(0, step % 2 === 0 ? 4 : -4);
   }
   await driver.cancel();
 
@@ -334,6 +345,11 @@ test("scenario 4b: a 2px jitter at a zone edge keeps the indicator stable", asyn
     type: "boundary-jitter",
     description: JSON.stringify(observed),
   });
+
+  test.fail(
+    true,
+    "no target-switch hysteresis: the indicator flips on every 2px move"
+  );
 
   // -1 is NOT filtered out. A run of [2,-1,2,-1,...] has one active value but
   // the indicator vanishes on every other move, which is the same defect seen

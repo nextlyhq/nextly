@@ -86,15 +86,6 @@ test("[acceptance] point 4: siblings do not move during a drag", async ({
   const driver = createPocDriver(page);
   await driver.mountTree(fixture);
 
-  // Declared here, not at the top: annotating before setup would classify an
-  // API failure, a missing frame or a selector regression as the known point-4
-  // gap, letting the body stop before producing any evidence while the suite
-  // still exits green.
-  test.fail(
-    true,
-    "zones expand from 0px to 6px and push every block below them down"
-  );
-
   // Whole boxes, not just tops: a canvas that shifts siblings sideways or
   // resizes a block without moving its top would produce identical arrays and
   // pass a top-only comparison, while point 4 says siblings must not move.
@@ -115,6 +106,16 @@ test("[acceptance] point 4: siblings do not move during a drag", async ({
     type: "layout-shift",
     description: `before=${JSON.stringify(before)} during=${JSON.stringify(during)}`,
   });
+
+  // The marker sits here, immediately before the assertion it excuses and after
+  // every read. Declared any earlier, a broken block-box query, a missing
+  // library item or a drag-activation failure would all be classified as the
+  // known layout-shift gap, and the test would "pass" without ever reaching the
+  // zero-shift assertion.
+  test.fail(
+    true,
+    "zones expand from 0px to 6px and push every block below them down"
+  );
 
   // Zones expand from 0px to 6px when a drag starts, so the blocks below them
   // DO move. The requirement is zero shift; this records the real number so the

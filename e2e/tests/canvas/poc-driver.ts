@@ -242,7 +242,20 @@ export function createPocDriver(page: Page): CanvasDriver {
       return canvasFrame().evaluate(
         ([all, active]) => {
           const zones = Array.from(document.querySelectorAll(all));
-          return zones.findIndex(el => el.matches(active));
+          const activeIndexes = zones
+            .map((el, index) => (el.matches(active) ? index : -1))
+            .filter(index => index >= 0);
+          // Exclusivity is checked HERE and not only in `readIndicatorRect`:
+          // the oscillation scenarios read ordinals without ever asking for a
+          // rectangle, so a stale zone left active alongside the real target
+          // would otherwise show up as a perfectly stable ordinal while two
+          // insertion indicators were visible on screen.
+          if (activeIndexes.length > 1) {
+            throw new Error(
+              `${activeIndexes.length} drop zones are active at once (${activeIndexes.join(", ")}); exactly one may be`
+            );
+          }
+          return activeIndexes[0] ?? -1;
         },
         [DROP_ZONES, ACTIVE_ZONE] as const
       );
