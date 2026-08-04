@@ -135,6 +135,21 @@ describe("SQLite write paths return Drizzle-decoded dates", () => {
     }
   });
 
+  it("adds no column the caller did not ask to have returned", async () => {
+    // A projection is a contract: `recordEvent()` writes a timestamp while
+    // asking only for the id, and a row that answered with more than was
+    // requested would be carrying a column the statement never selected.
+    const written = await adapter.transaction(ctx =>
+      ctx.insert<Record<string, unknown>>(
+        TABLE,
+        { id: "proj-1", label: "h", occurred_at: OCCURRED_AT },
+        { returning: ["id"] }
+      )
+    );
+
+    expect(Object.keys(written)).toEqual(["id"]);
+  });
+
   it("leaves a null date null rather than decoding it to the epoch", async () => {
     const written = await adapter.transaction(ctx =>
       ctx.insert<{ occurredAt: unknown }>(
