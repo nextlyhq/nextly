@@ -1,4 +1,4 @@
-import type { ReactElement } from "react";
+import { memo, type ReactElement } from "react";
 import { renderToReadableStream } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -520,6 +520,166 @@ describe("PageRenderer", () => {
 
       expect(placeholderReasons(html)).toEqual(["invalid-output"]);
       expect(html).toContain("iteration failure");
+      expect(html).toContain("survivor");
+    });
+
+    it("refuses a component type returned in place of an element", async () => {
+      // `React.memo(C)` carries a `react.*` tag but is a component TYPE, not a
+      // node: `isValidElement` is false and React throws on it as a child. A
+      // rule that accepted every React-tagged object would wave it through.
+      const Component = () => <span>never</span>;
+      const wrong = defineBlock({
+        name: "test/component-type",
+        version: 1,
+        description: "Returns a memo component instead of an element.",
+        example: { props: {} },
+        render: () => memo(Component),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/component-type"),
+            node("b", "test/text", { props: { value: "survivor" } })
+          )}
+          blocks={createBlockResolver([
+            wrong as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual(["invalid-output"]);
+      expect(html).toContain("survivor");
+    });
+
+    it("inspects a re-readable iterable passed as a JSX child", async () => {
+      // A Set can be read without being used up, so declining to check it would
+      // let an invalid entry through for no benefit. Only single-use iterables
+      // are exempt.
+      const withSet = defineBlock({
+        name: "test/set-child",
+        version: 1,
+        description: "Puts a Set containing an invalid entry inside its JSX.",
+        example: { props: {} },
+        render: ({ className }) => (
+          <div className={className}>
+            {new Set([{ bad: true }]) as unknown as ReactElement}
+          </div>
+        ),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/set-child"),
+            node("b", "test/text", { props: { value: "survivor" } })
+          )}
+          blocks={createBlockResolver([
+            withSet as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual(["invalid-output"]);
+      expect(html).toContain("survivor");
+    });
+
+    it("contains a throw that cannot be converted to a string", async () => {
+      // `String(Object.create(null))` throws, and it would throw inside the
+      // handler that exists to contain the first failure.
+      const hostile = defineBlock({
+        name: "test/undescribable",
+        version: 1,
+        description: "Throws a value with no string form.",
+        example: { props: {} },
+        render: () => {
+          throw Object.create(null) as Error;
+        },
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/undescribable"),
+            node("b", "test/text", { props: { value: "survivor" } })
+          )}
+          blocks={createBlockResolver([
+            hostile as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual(["render-error"]);
+      expect(html).toContain("survivor");
+    });
+
+    it("contains a value whose then getter throws", async () => {
+      // The thenable check runs after the render try/catch, so a throwing
+      // getter there would escape the block boundary entirely.
+      const hostile = defineBlock({
+        name: "test/hostile-thenable",
+        version: 1,
+        description: "Returns an object whose then getter throws.",
+        example: { props: {} },
+        render: () => ({
+          get then() {
+            throw new Error("then getter");
+          },
+        }),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/hostile-thenable"),
+            node("b", "test/text", { props: { value: "survivor" } })
+          )}
+          blocks={createBlockResolver([
+            hostile as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual(["invalid-output"]);
+      expect(html).toContain("survivor");
+    });
+
+    it("contains a promise child that rejects", async () => {
+      // Suspense resolves a promise child; it does not catch one that rejects.
+      // Without substituting something that awaits under containment, the
+      // rejection surfaces inside React after the boundary has returned.
+      const rejecting = defineBlock({
+        name: "test/rejecting-child",
+        version: 1,
+        description: "Returns a list containing a rejecting promise.",
+        example: { props: {} },
+        render: () => [
+          <span key="s">kept</span>,
+          Promise.reject(new Error("child rejected")),
+        ],
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/rejecting-child"),
+            node("b", "test/text", { props: { value: "survivor" } })
+          )}
+          blocks={createBlockResolver([
+            rejecting as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual(["render-error"]);
+      expect(html).toContain("child rejected");
+      // The rest of the block survives too: only the failing child is replaced.
+      expect(html).toContain("kept");
       expect(html).toContain("survivor");
     });
 

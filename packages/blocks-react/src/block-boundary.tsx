@@ -3,7 +3,7 @@ import { Suspense, type ReactNode } from "react";
 
 import type { PageContext } from "./context";
 import { BlockPlaceholder } from "./placeholder";
-import { isThenable, normalizeRenderable } from "./renderable";
+import { describeThrown, isThenable, normalizeRenderable } from "./renderable";
 import type { BlockResolver } from "./resolver";
 
 /** What a render needs to turn one node into output. */
@@ -15,12 +15,6 @@ export interface BlockBoundaryProps {
   classes: Record<string, string>;
   /** Shown while an async block is still producing output. */
   fallback?: ReactNode;
-}
-
-/** The message to show for a thrown value, which need not be an `Error`. */
-function errorDetail(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  return String(error);
 }
 
 /**
@@ -53,7 +47,19 @@ function checkedOutput(
   node: BlockNode,
   fallback: ReactNode
 ): ReactNode {
-  const result = normalizeRenderable(value);
+  const result = normalizeRenderable(value, {
+    // A promise the block returned inside a list is awaited under the same
+    // containment its own render gets, so a rejection becomes this block's
+    // placeholder instead of an error React raises after the boundary has
+    // already returned. Each gets its own boundary, so one slow child does not
+    // hold back the siblings beside it.
+    wrapOwnedThenable: (pending, index) => (
+      <Suspense key={`nx-async-${index}`} fallback={fallback}>
+        <AsyncBlockOutput pending={pending} node={node} fallback={fallback} />
+      </Suspense>
+    ),
+  });
+
   if (!result.ok) {
     return (
       <BlockPlaceholder
@@ -64,7 +70,11 @@ function checkedOutput(
       />
     );
   }
-  if (!result.hasAsyncChildren) return result.node;
+
+  // Only promises inside borrowed JSX children reach here unwrapped, since
+  // nothing can be substituted into an element that already exists. React
+  // suspends on them, so they still need a boundary above.
+  if (!result.hasUnwrappedThenable) return result.node;
   return <Suspense fallback={fallback}>{result.node}</Suspense>;
 }
 
@@ -95,7 +105,7 @@ async function AsyncBlockOutput({
         reason="render-error"
         type={node.type}
         id={node.id}
-        detail={errorDetail(error)}
+        detail={describeThrown(error)}
       />
     );
   }
@@ -182,11 +192,15 @@ export function BlockBoundary({
         reason="render-error"
         type={node.type}
         id={node.id}
-        detail={errorDetail(error)}
+        detail={describeThrown(error)}
       />
     );
   }
 
+  // `isThenable` is total, so a value whose `then` getter throws is reported as
+  // not-a-promise and falls into the checked path, where it becomes this
+  // block's placeholder. A predicate that could raise would do so out here,
+  // past the try block above, and take the page with it.
   if (!isThenable(output)) return checkedOutput(output, node, fallback);
 
   return (

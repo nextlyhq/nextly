@@ -8,20 +8,40 @@ import { isValidElement, type ReactNode } from "react";
  */
 const MAX_CHECKED_VALUES = 10_000;
 
+/** The only React-tagged object that is a NODE rather than a component type. */
+const PORTAL_TYPE = Symbol.for("react.portal");
+
 /** A block's output, checked and in a form React can render. */
 export type NormalizedOutput =
   | {
       ok: true;
       node: ReactNode;
       /**
-       * True when a promise was found somewhere in the output. React 19 renders
-       * a promise child by suspending on it, so the caller has to place a
-       * boundary or the suspension escapes to whatever boundary is above the
-       * whole page.
+       * True when a promise was left in place rather than substituted — which
+       * happens only inside borrowed JSX children, where nothing can be
+       * replaced. React suspends on such a child, so the caller still has to
+       * provide a boundary above it.
        */
-      hasAsyncChildren: boolean;
+      hasUnwrappedThenable: boolean;
     }
   | { ok: false; reason: string };
+
+export interface NormalizeOptions {
+  /**
+   * Substitutes a promise this renderer OWNS with something that awaits it
+   * under containment.
+   *
+   * Without this, a promise in a returned list reaches React as-is and a
+   * rejection surfaces inside React's render — after the block boundary has
+   * returned, so no placeholder happens and the page goes down for one bad
+   * child. The substitution is the caller's to make because what to substitute
+   * is a React component question, and this module renders nothing itself.
+   */
+  wrapOwnedThenable?: (
+    pending: PromiseLike<unknown>,
+    index: number
+  ) => ReactNode;
+}
 
 /**
  * Whether a value is awaitable.
@@ -30,13 +50,38 @@ export type NormalizedOutput =
  * block returns is whatever its own runtime produced: an async function in a
  * different realm, a bundler's promise polyfill and a library's thenable are
  * all awaitable and none of them is `Promise` from this module's perspective.
+ *
+ * Total, because reading `then` can itself throw — it is an ordinary property
+ * access and a getter may do anything. A value whose `then` cannot be read is
+ * not usable as a promise by anyone, so answering `false` sends it down the
+ * path that refuses it rather than raising out of a predicate.
  */
 export function isThenable(value: unknown): value is PromiseLike<unknown> {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    typeof (value as PromiseLike<unknown>).then === "function"
-  );
+  if (typeof value !== "object" || value === null) return false;
+  try {
+    return typeof (value as PromiseLike<unknown>).then === "function";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A description of a thrown value, which is not necessarily an `Error`.
+ *
+ * Total: `String(value)` throws for a null-prototype object and for anything
+ * with a throwing `toString`, and this runs inside catch blocks that exist to
+ * keep a failure contained. Throwing here would defeat the containment it is
+ * part of.
+ */
+export function describeThrown(error: unknown): string {
+  try {
+    if (error instanceof Error && typeof error.message === "string") {
+      return error.message;
+    }
+    return String(error);
+  } catch {
+    return "a value that could not be described";
+  }
 }
 
 /** A short description of a value, for a placeholder's detail line. */
@@ -44,27 +89,29 @@ export function describeValue(value: unknown): string {
   if (value === null) return "null";
   const type = typeof value;
   if (type === "object") {
-    const name = (value as object).constructor?.name;
-    return name && name !== "Object" ? `a ${name} instance` : "a plain object";
+    try {
+      const name = (value as object).constructor?.name;
+      return name && name !== "Object"
+        ? `a ${name} instance`
+        : "a plain object";
+    } catch {
+      return "an object that could not be described";
+    }
   }
   return `a ${type}`;
 }
 
 /**
- * Anything React tags as one of its own node types.
+ * A portal: the one React-tagged object that is a child rather than a type.
  *
- * Broader than `isValidElement` on purpose: portals, lazy components and
- * whatever React tags next all carry a `react.*` symbol in `$$typeof`, and
- * refusing one because this module had not heard of it would replace working
- * output with a placeholder.
+ * Checked by exact tag rather than by "any `react.*` symbol". The looser rule
+ * looks equivalent and is not — `React.memo(C)` and `React.lazy(f)` carry
+ * `react.*` tags too, and both are component TYPES whose `isValidElement` is
+ * false. Rendering one as a child throws inside React, so the broad rule would
+ * have opened the very hole this module exists to shut.
  */
-function isReactNodeObject(value: object): boolean {
-  const tag = (value as { $$typeof?: unknown }).$$typeof;
-  return (
-    typeof tag === "symbol" &&
-    typeof tag.description === "string" &&
-    tag.description.startsWith("react.")
-  );
+function isPortal(value: object): boolean {
+  return (value as { $$typeof?: unknown }).$$typeof === PORTAL_TYPE;
 }
 
 /** An element's children, without assuming `props` is shaped any particular way. */
@@ -79,6 +126,24 @@ function isIterable(value: object): value is Iterable<unknown> {
 }
 
 /**
+ * Whether reading an iterable would use it up.
+ *
+ * A generator is its own iterator, so iterating it once leaves nothing behind;
+ * a `Set` hands out a fresh iterator each time and can be read repeatedly. That
+ * decides whether a borrowed value may be inspected at all, and asking for the
+ * iterator to find out is itself free — it is exactly what returns `this` for a
+ * generator and a new object for a collection.
+ */
+function isSingleUse(value: Iterable<unknown>): boolean {
+  try {
+    return (value[Symbol.iterator]() as unknown) === (value as unknown);
+  } catch {
+    // An iterator that cannot even be requested is not one to read.
+    return true;
+  }
+}
+
+/**
  * Checks a block's output and returns it in the form React should receive.
  *
  * The engine types a block's output as `unknown` and leaves narrowing to this
@@ -89,40 +154,43 @@ function isIterable(value: object): value is Iterable<unknown> {
  *
  * Two modes, and the difference between them is ownership:
  *
- * - The returned value is OURS. A non-array iterable is materialised, because
- *   checking one any other way consumes it and would hand React an iterator
- *   with nothing left in it.
- * - An element's children are NOT ours. They are inspected without being
- *   consumed or rebuilt, so a generator passed as a JSX child still arrives at
- *   React intact. That costs the ability to check inside such a child, which is
- *   the right trade: destroying valid output to check it is worse than not
- *   checking it.
+ * - The returned value is OURS. Iterables are materialised and promises are
+ *   substituted for something that awaits them under containment.
+ * - An element's children are NOT ours. They are inspected but never rebuilt,
+ *   and a single-use iterable among them is left alone entirely, because
+ *   reading a generator to check it would leave React nothing to render.
+ *   Re-readable collections like `Set` ARE walked, since reading one costs
+ *   nothing.
  *
- * **The limit of the guarantee.** Children produced by a component only exist
- * once React renders it, so `<Thing />` whose own render returns a bad value is
- * not visible here and reaches the route's error handling instead. What IS
- * caught is everything present in the value the block returned, which is where
- * the ordinary mistake lives.
+ * **The limits of the guarantee**, both properties of borrowed children rather
+ * than gaps that can be closed here: a promise inside existing JSX cannot be
+ * substituted, so its rejection still reaches the route's error handling; and
+ * children produced by a component exist only once React renders it, so
+ * `<Thing />` returning a bad value is not visible from here.
  *
- * Total: it never throws. A custom iterable that fails while being read becomes
- * a refusal, because the alternative is an exception raised outside the caller's
- * try block, which is the very escape this exists to close.
+ * Total: it never throws. A hostile iterable, a throwing getter and an
+ * undescribable value all become refusals, because the alternative is an
+ * exception raised outside the caller's try block — the very escape this exists
+ * to close.
  */
-export function normalizeRenderable(value: unknown): NormalizedOutput {
+export function normalizeRenderable(
+  value: unknown,
+  options: NormalizeOptions = {}
+): NormalizedOutput {
   let remaining = MAX_CHECKED_VALUES;
-  let hasAsyncChildren = false;
+  let hasUnwrappedThenable = false;
+  let wrappedCount = 0;
 
   const overBudget = () =>
     `more than ${MAX_CHECKED_VALUES} values, which is past the point this renderer will inspect`;
 
-  /** Consumes one unit of budget; false once it is gone. */
   const spend = (): boolean => {
     if (remaining <= 0) return false;
     remaining -= 1;
     return true;
   };
 
-  /** Classifies a value without consuming or rebuilding it. Returns a reason, or null. */
+  /** Classifies a borrowed value: never consumed, never rebuilt. */
   const inspect = (current: unknown): string | null => {
     if (!spend()) return overBudget();
     if (current === null || current === undefined) return null;
@@ -140,14 +208,14 @@ export function normalizeRenderable(value: unknown): NormalizedOutput {
     if (type !== "object" && type !== "function") return describeValue(current);
 
     if (isThenable(current)) {
-      hasAsyncChildren = true;
+      // Nothing can be substituted inside an element that already exists, so
+      // this one passes through and the caller is told a boundary is needed.
+      hasUnwrappedThenable = true;
       return null;
     }
 
-    if (isValidElement(current) || isReactNodeObject(current)) {
-      return inspect(childrenOf(current));
-    }
-
+    if (isValidElement(current)) return inspect(childrenOf(current));
+    if (type === "object" && isPortal(current)) return null;
     if (type === "function") return describeValue(current);
 
     if (current instanceof Map) {
@@ -162,18 +230,24 @@ export function normalizeRenderable(value: unknown): NormalizedOutput {
       return null;
     }
 
-    // A non-array iterable belongs to whoever created it. Reading it here to
-    // check it would leave React nothing to render, so it is accepted as-is.
-    if (isIterable(current)) return null;
+    if (!isIterable(current)) return describeValue(current);
 
-    return describeValue(current);
+    // Reading a single-use iterable would leave React nothing to render, so it
+    // is the one thing accepted unchecked. A re-readable collection has no such
+    // cost and is walked.
+    if (isSingleUse(current)) return null;
+    for (const item of current) {
+      const reason = inspect(item);
+      if (reason !== null) return reason;
+    }
+    return null;
   };
 
-  /** Classifies a value this renderer owns, materialising iterables. */
+  /** Classifies a value this renderer owns, materialising and substituting. */
   const take = (current: unknown): NormalizedOutput => {
     if (!spend()) return { ok: false, reason: overBudget() };
     if (current === null || current === undefined) {
-      return { ok: true, node: current, hasAsyncChildren };
+      return { ok: true, node: current, hasUnwrappedThenable };
     }
 
     const type = typeof current;
@@ -185,7 +259,7 @@ export function normalizeRenderable(value: unknown): NormalizedOutput {
       type === "number" ||
       type === "bigint"
     ) {
-      return { ok: true, node: current as ReactNode, hasAsyncChildren };
+      return { ok: true, node: current as ReactNode, hasUnwrappedThenable };
     }
 
     if (type !== "object" && type !== "function") {
@@ -193,19 +267,29 @@ export function normalizeRenderable(value: unknown): NormalizedOutput {
     }
 
     if (isThenable(current)) {
-      hasAsyncChildren = true;
-      return { ok: true, node: current as ReactNode, hasAsyncChildren };
+      const wrap = options.wrapOwnedThenable;
+      if (!wrap) {
+        hasUnwrappedThenable = true;
+        return { ok: true, node: current as ReactNode, hasUnwrappedThenable };
+      }
+      const node = wrap(current, wrappedCount);
+      wrappedCount += 1;
+      return { ok: true, node, hasUnwrappedThenable };
     }
 
-    if (isValidElement(current) || isReactNodeObject(current)) {
+    if (isValidElement(current)) {
       const reason = inspect(childrenOf(current));
       return reason === null
-        ? { ok: true, node: current as ReactNode, hasAsyncChildren }
+        ? { ok: true, node: current as ReactNode, hasUnwrappedThenable }
         : { ok: false, reason };
     }
+    if (type === "object" && isPortal(current)) {
+      return { ok: true, node: current as ReactNode, hasUnwrappedThenable };
+    }
 
-    if (type === "function")
+    if (type === "function") {
       return { ok: false, reason: describeValue(current) };
+    }
 
     // React refuses a Map as a child even though it is iterable: its entries
     // are `[key, value]` pairs, which would render as their contents rather
@@ -230,7 +314,7 @@ export function normalizeRenderable(value: unknown): NormalizedOutput {
       if (!item.ok) return item;
       items.push(item.node);
     }
-    return { ok: true, node: items, hasAsyncChildren };
+    return { ok: true, node: items, hasUnwrappedThenable };
   };
 
   try {
@@ -238,10 +322,9 @@ export function normalizeRenderable(value: unknown): NormalizedOutput {
   } catch (error) {
     // Reading an iterable can throw, and it would throw here rather than where
     // the block was called, which is outside the caller's try block.
-    const message = error instanceof Error ? error.message : String(error);
     return {
       ok: false,
-      reason: `output that failed while being read (${message})`,
+      reason: `output that failed while being read (${describeThrown(error)})`,
     };
   }
 }
