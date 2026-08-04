@@ -133,6 +133,45 @@ export const LARGE_FIXTURE: SeedOptions = {
   ],
 };
 
+/**
+ * Block ids in the entry's STORED document, in document order, root first.
+ *
+ * Read through the API rather than the canvas so tree integrity can still be
+ * checked after the editor has unmounted: a gesture that navigates away AND
+ * persists a mutation is invisible to any assertion that needs a live canvas.
+ *
+ * `?status=all` is required: entries are seeded as drafts, and the plain read
+ * is published-only.
+ */
+export async function readStoredBlockIds(
+  request: APIRequestContext,
+  entryId: string
+): Promise<string[]> {
+  const response = await request.get(
+    `/admin/api/collections/pages/entries/${entryId}?status=all`
+  );
+  if (!response.ok()) {
+    throw new Error(
+      `readStoredBlockIds failed: ${response.status()} ${await response.text()}`
+    );
+  }
+  const body = (await response.json()) as {
+    content?: { root?: unknown };
+  };
+
+  const ids: string[] = [];
+  const walk = (node: unknown): void => {
+    if (typeof node !== "object" || node === null) return;
+    const record = node as { id?: unknown; slots?: Record<string, unknown> };
+    if (typeof record.id === "string") ids.push(record.id);
+    for (const children of Object.values(record.slots ?? {})) {
+      if (Array.isArray(children)) children.forEach(walk);
+    }
+  };
+  walk(body.content?.root);
+  return ids;
+}
+
 /** Create a page whose builder document is exactly `content`, and return its id. */
 export async function seedPage(
   request: APIRequestContext,

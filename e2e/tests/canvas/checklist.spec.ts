@@ -10,6 +10,7 @@ import { expect, test } from "@playwright/test";
 
 import {
   FLAT_LIST_FIXTURE,
+  readStoredBlockIds,
   LARGE_FIXTURE,
   NESTED_FIXTURE,
   seedPage,
@@ -367,53 +368,30 @@ test("[acceptance] point 12b: Escape does not mutate the tree", async ({
   const driver = createPocDriver(page);
   await driver.mountTree(fixture);
 
-  const before = await driver.readTreeShape();
+  // The STORED document is the subject, not the canvas. Escape currently
+  // navigates out of the editor, so a canvas read would be unavailable exactly
+  // on the path most likely to have persisted something — and skipping the
+  // check there would leave "navigated away AND saved a deletion" untested,
+  // which is the worst version of this defect.
+  const before = await readStoredBlockIds(request, fixture.entryId);
+  expect(before, "the seeded document must have blocks").not.toEqual([]);
+
   await startLibraryDrag(driver);
   for (let step = 0; step < 30; step++) await driver.moveBy(0, 8);
   await driver.cancel();
 
-  // Editor presence goes through the driver: a v2 canvas will not use this
-  // canvas's chrome class, and asking for it directly would report "editor
-  // gone" for a canvas that cancelled correctly.
-  const afterCancel = {
-    url: page.url(),
-    hasEditor: await driver.isEditorPresent(),
-  };
   test.info().annotations.push({
     type: "after-cancel",
-    description: JSON.stringify(afterCancel),
+    description: JSON.stringify({
+      url: page.url(),
+      hasEditor: await driver.isEditorPresent(),
+    }),
   });
 
-  // `test.fail` marks the WHOLE test, so the tree assertions below cannot share
-  // it: an Escape implementation that kept the editor but deleted or reordered
-  // blocks would be reported as the known unmount gap. Tree integrity is
-  // therefore skipped-with-a-reason when the editor is gone, and asserted for
-  // real when it survives, while the unmount itself is covered by point 12a.
-  test.skip(
-    !afterCancel.hasEditor,
-    `cannot assess tree integrity: Escape unmounted the editor (${JSON.stringify(afterCancel)}); see point 12a`
+  // No marker and no skip: cancelling must never change what is stored,
+  // whether or not the editor survived. Point 12a owns the unmount itself.
+  const after = await readStoredBlockIds(request, fixture.entryId);
+  expect(after, "cancelling a drag must not change the stored tree").toEqual(
+    before
   );
-
-  // The canvas iframe may legitimately remount, so a single read can land while
-  // it is absent. Poll for the valid remount path only.
-  let after: string[] = [];
-  await expect
-    .poll(
-      async () => {
-        try {
-          after = await driver.readTreeShape();
-          return after.length;
-        } catch {
-          return -1;
-        }
-      },
-      { timeout: 30_000 }
-    )
-    .toBe(before.length);
-
-  test.info().annotations.push({
-    type: "escape",
-    description: `before=${before.length} after=${after.length}`,
-  });
-  expect(after).toEqual(before);
 });

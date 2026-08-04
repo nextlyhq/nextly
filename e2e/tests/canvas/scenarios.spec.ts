@@ -131,10 +131,17 @@ test("scenario 1: a library block drags across the iframe boundary", async ({
     before.filter(id => !after.includes(id)),
     "a drop must not remove existing blocks"
   ).toEqual([]);
+  const added = after.filter(id => !before.includes(id));
+  expect(added, "a drop must add exactly one block").toHaveLength(1);
+
+  // Position, not just presence. A drop handler that ignored the indicated
+  // insertion point and always appended would satisfy every assertion above.
+  // Zone `k` sits before child `k`, and `readTreeShape` puts the root first,
+  // so the new block belongs at index `k + 1`.
   expect(
-    after.filter(id => !before.includes(id)),
-    "a drop must add exactly one block"
-  ).toHaveLength(1);
+    after.indexOf(added[0]!),
+    `the block must land at the indicated target (zone ${active}); tree was ${JSON.stringify(after)}`
+  ).toBe(active + 1);
 });
 
 test("scenario 2: droppable geometry survives a host scroll mid-drag", async ({
@@ -375,13 +382,18 @@ test("scenario 4b: a 2px jitter at a zone edge keeps the indicator stable", asyn
     description: JSON.stringify(observed),
   });
 
-  // Total indicator loss is a DIFFERENT defect from missing hysteresis, so it
-  // is rejected before the marker: an all -1 run satisfies the distinct-count
-  // assertion below and would otherwise be reported as the known gap.
+  // NEVER finding a target is a different defect from missing hysteresis:
+  // it means detection is broken on this fixture, and an all -1 run would
+  // otherwise satisfy the distinct-count assertion below and be reported as
+  // the known gap. Rejected before the marker.
+  //
+  // A run that ALTERNATES between a zone and nothing is not that: it is the
+  // indicator changing on a 2px move, which is precisely the missing
+  // hysteresis, and it belongs under the marker with the zone-to-zone flip.
   expect(
-    observed.filter(value => value < 0),
-    `the indicator must stay visible throughout: ${JSON.stringify(observed)}`
-  ).toEqual([]);
+    observed.some(value => value >= 0),
+    `the drag must find a target at all: ${JSON.stringify(observed)}`
+  ).toBe(true);
 
   test.fail(
     true,
@@ -427,19 +439,15 @@ test("scenario 5: a keyboard move actually moves a block", async ({
   await driver.keyboardInsert("down");
   const moved = await driver.readTreeShape();
 
-  // Declared after the gesture and both reads: a driver or focus regression
-  // throwing here is a different failure from "keyboard moves are unbuilt", and
-  // marking it expected would hide it.
-  test.fail(true, "this canvas has no keyboard move path at all");
-
   test.info().annotations.push({
     type: "keyboard-shape",
     description: `before=${JSON.stringify(before)} moved=${JSON.stringify(moved)}`,
   });
 
-  // A reorder, not any mutation: deleting the focused block or inserting a
-  // different one also makes `moved` differ, and that is corruption rather than
-  // a successful move. Same length, same ids, different order.
+  // Corruption invariants run OUTSIDE the expected failure. Once keyboard
+  // dragging partially exists, an implementation that deletes or replaces the
+  // focused block fails one of these, and that is a different defect from
+  // "keyboard moves are unbuilt".
   expect(moved.length, "a move must not change the block count").toBe(
     before.length
   );
@@ -447,5 +455,8 @@ test("scenario 5: a keyboard move actually moves a block", async ({
     [...moved].sort(),
     "a move must not change which blocks exist"
   ).toEqual([...before].sort());
+
+  // Only the absence of a reorder is the known gap.
+  test.fail(true, "this canvas has no keyboard move path at all");
   expect(moved, "a keyboard move must reorder the tree").not.toEqual(before);
 });
