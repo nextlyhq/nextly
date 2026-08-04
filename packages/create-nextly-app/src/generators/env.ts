@@ -12,8 +12,18 @@ function generateNextlySecret(): string {
   return crypto.randomBytes(32).toString("base64");
 }
 
-/** The variable name, so presence is tested against one spelling. */
-const DIAGNOSTICS_KEY = "NEXTLY_DEV_DIAGNOSTICS";
+/**
+ * Whether a `.env` already mentions the diagnostics setting.
+ *
+ * Anchored to the start of a line and to the `=` that follows, so a DIFFERENT
+ * variable whose name merely starts the same way -- `NEXTLY_DEV_DIAGNOSTICS_URL`
+ * and the like -- does not read as this one and silently suppress the note. A
+ * commented form counts: the note is what is being added, and adding a second
+ * copy of it below the first would be noise rather than help.
+ */
+function mentionsDiagnostics(env: string): boolean {
+  return /^\s*#?\s*NEXTLY_DEV_DIAGNOSTICS\s*=/m.test(env);
+}
 
 /**
  * The diagnostics note, shared by the full template and the append-only path.
@@ -84,7 +94,7 @@ export async function generateEnv(
     // DATABASE_URL. Sharing that condition meant the setting only ever reached
     // brand-new apps, so the file the developer actually runs never mentioned
     // it while .env.example did.
-    if (!existingEnv.includes(DIAGNOSTICS_KEY)) {
+    if (!mentionsDiagnostics(existingEnv)) {
       await fs.appendFile(envPath, "\n" + DIAGNOSTICS_BLOCK, "utf-8");
       return { created: false, updated: true };
     }
