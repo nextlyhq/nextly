@@ -203,6 +203,48 @@ describe("MediaService — Folder Operations", () => {
       expect(thrown.publicMessage).not.toContain("Duplicate");
     });
 
+    it("keeps a typed lookup failure instead of reporting absence", async () => {
+      // findFolderById answered every failure as NOT_FOUND, so a database that
+      // was unreachable told the caller the folder does not exist. Nothing
+      // useful follows from that: the caller stops looking rather than retrying.
+      mockLegacyFolder.getFolderById.mockResolvedValue({
+        success: false,
+        statusCode: 503,
+        code: "SERVICE_UNAVAILABLE",
+        message: "database unreachable",
+        data: null,
+      });
+
+      const thrown = await service
+        .findFolderById("f-1", context)
+        .catch((e: unknown) => e as NextlyError);
+
+      expect(thrown.code).toBe("SERVICE_UNAVAILABLE");
+      expect(thrown.logContext).toMatchObject({
+        entity: "folder",
+        folderId: "f-1",
+      });
+    });
+
+    it("still reports a code-less lookup failure as not found", async () => {
+      // The common case has to keep working: a missing row reports 404 with no
+      // code, and that must still read as absence.
+      mockLegacyFolder.getFolderById.mockResolvedValue({
+        success: false,
+        statusCode: 404,
+        message: "not found",
+        data: null,
+      });
+
+      const thrown = await service
+        .findFolderById("f-2", context)
+        .catch((e: unknown) => e as NextlyError);
+
+      expect(thrown.code).toBe("NOT_FOUND");
+      expect(thrown.publicMessage).toBe("Not found.");
+      expect(thrown.publicMessage).not.toContain("f-2");
+    });
+
     it("keeps the caller's context when the failure names no code", async () => {
       // The other half of the same guarantee: whichever reading applies, the
       // log identifies which folder operation failed.
