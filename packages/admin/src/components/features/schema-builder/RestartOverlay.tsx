@@ -9,9 +9,10 @@ export function RestartOverlay() {
 
   if (!isRestarting) return null;
 
-  // The scrim and its contents stay literal black/white on purpose: this covers
-  // the whole app while the server is down, so it is its own dark surface rather
-  // than a themed one, and the dots and text are read against that scrim.
+  // This covers the whole app while the server is down, so it is its own dark
+  // surface rather than a themed one: the scrim is `--nx-overlay` and the dots
+  // and text stay literal white, read against that scrim rather than against
+  // the palette underneath it.
   return (
     <div
       className="fixed inset-0 z-[9998] flex items-center justify-center bg-overlay backdrop-blur-sm"

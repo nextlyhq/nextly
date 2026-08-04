@@ -102,9 +102,10 @@ function GalleryComponent({ images, columns, caption }: GalleryComponentProps) {
         </figcaption>
       )}
 
-      {/* Lightbox. The scrim and its controls stay literal black/white: they
-          are read against the user's image, not against a themed surface, so
-          they must not follow the admin palette in either mode. */}
+      {/* Lightbox. The scrim comes from `--nx-overlay` and its controls stay
+          literal white: they are read against the user's image rather than a
+          themed surface, so they must not follow the admin palette. The scrim
+          itself still varies per mode, because the page behind it does. */}
       {lightboxIndex !== null && (
         <div
           className="fixed inset-0 z-50 bg-overlay flex items-center justify-center p-4"

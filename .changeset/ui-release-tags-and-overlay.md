@@ -38,5 +38,7 @@ Modal scrims are a theme token. Six components wrote the backdrop inline as
 it could be neither themed nor white-labelled and was invisible to every token
 check the package has. `--nx-overlay` (and `--nx-overlay-soft`, for a scrim over
 content rather than the page) is defined for both modes and used everywhere,
-with `bg-overlay` / `bg-overlay-soft` utilities. Dialogs, sheets and the command
-palette now share one backdrop strength rather than three.
+with `bg-overlay` / `bg-overlay-soft` utilities in the v4 theme AND in
+`@nextlyhq/ui/tailwind-preset`, so the documented Tailwind v3 path generates
+them too. Dialogs, sheets and the command palette now share one backdrop
+strength rather than three.

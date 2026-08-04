@@ -86,9 +86,11 @@ const CommandDialogOverlay = forwardRef<
   <DialogPrimitive.Overlay
     ref={ref}
     className={cn(
-      // A modal scrim: a black wash is the point, so it stays a literal
-      // rather than a surface token. Painting it from `background` would
-      // make it a white veil in light mode and near-invisible in dark.
+      // A modal scrim, from the `--nx-overlay` token rather than a surface
+      // token. A black wash is the point — painting it from `background` would
+      // make it a white veil in light mode — but the alpha still has to differ
+      // per mode, because what it composites over is white in one and mid-tone
+      // in the other.
       "fixed inset-0 z-[99] bg-overlay backdrop-blur-sm",
       "data-[state=open]:animate-in data-[state=closed]:animate-out",
       "data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",

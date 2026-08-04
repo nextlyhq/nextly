@@ -247,52 +247,91 @@ describe("ui STABILITY.md ledger", () => {
  * one `export { … }` clause and drops the doc comment that sat on the export
  * statement, so `@experimental` was visible in the source and absent from the
  * published `.d.ts` that editors and API tooling actually read.
+ *
+ * Reads the BUILT declarations, so `turbo.json` makes this package's `test`
+ * task depend on its own `build`. It fails rather than skipping when they are
+ * missing: a guard that quietly does nothing on a clean checkout is the same
+ * as no guard, and this one exists precisely because something was silently
+ * absent from an artifact.
  */
 describe("ui release tags reach the published types", () => {
   /** Symbols re-exported from a dependency, whose declarations are not ours. */
   const FOREIGN = new Set(["toast", "ToasterProps"]);
 
-  const builtTypes = (): string => {
-    const file = path.join(PKG_ROOT, "dist", "index.d.ts");
-    return readFileSync(file, "utf8");
-  };
+  const distTypes = path.join(PKG_ROOT, "dist", "index.d.ts");
 
-  const built = existsSync(path.join(PKG_ROOT, "dist", "index.d.ts"))
-    ? builtTypes()
-    : undefined;
-
-  it.runIf(built !== undefined)(
-    "carries every barrel tag through to dist/index.d.ts",
-    () => {
-      const tagged = taggedPerSource();
-      const declared = new Set(
-        [
-          ...(built ?? "").matchAll(
-            // The tag sits in a doc block immediately above the declaration it
-            // describes; capture the name that follows it.
-            /@(?:public|experimental)[\s\S]{0,400}?\*\/\s*(?:declare\s+)?(?:const|function|interface|type|class)\s+([A-Za-z0-9_$]+)/g
-          ),
-        ].map(m => m[1])
-      );
-      const missing = [...tagged.public, ...tagged.experimental]
-        .filter(name => !FOREIGN.has(name))
-        .filter(name => !declared.has(name))
-        .sort();
-
-      expect(
-        missing,
-        "Tagged in index.ts but the tag does not reach dist/index.d.ts. The " +
-          "bundler keeps a doc comment attached to a DECLARATION and drops one " +
-          "attached to an export statement, so the tag has to live on the " +
-          `declaration: ${missing.join(", ")}`
-      ).toEqual([]);
+  /** Each declaration's name, mapped to the release tag written above it. */
+  function taggedPerDeclaration(built: string): Map<string, string> {
+    const byName = new Map<string, string>();
+    for (const m of built.matchAll(
+      // A doc block, the tag inside it, then the declaration it belongs to.
+      // Anchored on `/**` so the capture cannot start mid-comment and pick up
+      // a tag belonging to something further up the file.
+      /\/\*\*(?:(?!\*\/)[\s\S])*?@(public|experimental)(?:(?!\*\/)[\s\S])*\*\/\s*(?:declare\s+)?(?:const|function|interface|type|class)\s+([A-Za-z0-9_$]+)/g
+    )) {
+      byName.set(m[2], m[1]);
     }
-  );
+    return byName;
+  }
 
-  it.runIf(built !== undefined)("is not passing vacuously", () => {
-    expect((built ?? "").match(/@public/g)?.length ?? 0).toBeGreaterThan(20);
-    expect((built ?? "").match(/@experimental/g)?.length ?? 0).toBeGreaterThan(
-      50
-    );
+  it("has built declarations to check", () => {
+    expect(
+      existsSync(distTypes),
+      `${distTypes} is missing. This guard reads the built declarations, so ` +
+        "run `pnpm --filter @nextlyhq/ui build` first. It fails rather than " +
+        "skipping, because a guard that does nothing on a clean checkout is " +
+        "indistinguishable from a passing one."
+    ).toBe(true);
+  });
+
+  it("carries every barrel tag through to dist/index.d.ts, with the same tag", () => {
+    const built = readFileSync(distTypes, "utf8");
+    const declared = taggedPerDeclaration(built);
+    const tagged = taggedPerSource();
+
+    const missing: string[] = [];
+    const mismatched: string[] = [];
+    for (const [kind, names] of [
+      ["public", tagged.public],
+      ["experimental", tagged.experimental],
+    ] as const) {
+      for (const name of names) {
+        if (FOREIGN.has(name)) continue;
+        const actual = declared.get(name);
+        if (actual === undefined) {
+          missing.push(name);
+          // The tag kind is compared as well as its presence. Checking only
+          // that SOME tag reached the declaration let a symbol ship
+          // `@experimental` while the ledger promised `@public`, which is a
+          // worse failure than no tag at all: it advertises a guarantee
+          // nobody agreed to.
+        } else if (actual !== kind) {
+          mismatched.push(`${name}: barrel @${kind}, declaration @${actual}`);
+        }
+      }
+    }
+
+    expect(
+      missing.sort(),
+      "Tagged in index.ts but the tag does not reach dist/index.d.ts. The " +
+        "bundler keeps a doc comment attached to a DECLARATION and drops one " +
+        "attached to an export statement, so the tag has to live on the " +
+        `declaration: ${missing.join(", ")}`
+    ).toEqual([]);
+    expect(
+      mismatched.sort(),
+      `The published tag contradicts the ledger: ${mismatched.join("; ")}`
+    ).toEqual([]);
+  });
+
+  it("is not passing vacuously", () => {
+    const built = readFileSync(distTypes, "utf8");
+    const declared = taggedPerDeclaration(built);
+    expect(
+      [...declared.values()].filter(t => t === "public").length
+    ).toBeGreaterThan(20);
+    expect(
+      [...declared.values()].filter(t => t === "experimental").length
+    ).toBeGreaterThan(50);
   });
 });
