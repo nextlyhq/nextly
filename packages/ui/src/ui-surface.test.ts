@@ -13,10 +13,15 @@
  * belong in a Node test process.
  */
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+
+import {
+  DECLARATION_ENTRIES,
+  ensureDeclarations,
+} from "./__tests__/ensure-declarations";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 const SRC = path.dirname(fileURLToPath(import.meta.url));
 const PKG_ROOT = path.join(SRC, "..");
@@ -255,6 +260,15 @@ describe("ui STABILITY.md ledger", () => {
  * absent from an artifact.
  */
 describe("ui release tags reach the published types", () => {
+  // Vitest initialises a global setup once per project, so a watch rerun after
+  // an edit would otherwise read declarations built before it. Regenerating
+  // here — where it is re-evaluated every run — means the assertions below
+  // always describe the current source rather than merely detecting that they
+  // do not.
+  beforeAll(() => {
+    ensureDeclarations();
+  });
+
   /** Symbols re-exported from a dependency, whose declarations are not ours. */
   const FOREIGN = new Set(["toast", "ToasterProps"]);
 
@@ -275,7 +289,7 @@ describe("ui release tags reach the published types", () => {
   }
 
   /** Every published entry point, as `package.json` exports names them. */
-  const DIST_ENTRIES = ["index.d.ts", "utils.d.ts", "tailwind-preset.d.ts"];
+  const DIST_ENTRIES = DECLARATION_ENTRIES;
 
   it("has built declarations to check", () => {
     for (const entry of DIST_ENTRIES) {

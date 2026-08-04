@@ -104,6 +104,29 @@ describe("overlay scrim token", () => {
     expect(contrastRatio(muted, scrim)).toBeGreaterThanOrEqual(4.5);
   });
 
+  it("does not put muted text on the see-through scrim", () => {
+    // `bg-overlay` is a scrim you look THROUGH: it sits under a modal, which
+    // brings its own surface for text. A file that pairs it with muted white
+    // text is reading on it instead, and in light mode that composites to a
+    // mid-grey no muted white clears AA against. `bg-overlay-strong` exists for
+    // that case, so the pairing is the signal rather than the ratio.
+    const offenders: string[] = [];
+    for (const pkg of ["ui", "admin"]) {
+      for (const file of sources(pkg)) {
+        const text = readFileSync(file, "utf8");
+        // The see-through token exactly — not `-strong`, not `-soft`.
+        if (!/\bbg-overlay(?![\w-])/.test(text)) continue;
+        if (!/\btext-white\/\d+/.test(text)) continue;
+        offenders.push(file.slice(repo.length + 1));
+      }
+    }
+    expect(
+      offenders,
+      "These pair the see-through scrim with muted white text. Use " +
+        `bg-overlay-strong for a surface that carries text:\n${offenders.join("\n")}`
+    ).toEqual([]);
+  });
+
   it("is the only way a scrim is written", () => {
     // The call-site half. A token nothing uses does not fix anything, and a
     // literal reintroduced next to it is invisible to the checks above.

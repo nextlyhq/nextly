@@ -47,8 +47,8 @@ Modal scrims are a theme token. Six components wrote the backdrop inline as
 `bg-black/80`, identical in light and dark and at four different strengths, so
 it could be neither themed nor white-labelled and was invisible to every token
 check the package has. `--nx-overlay` (with `--nx-overlay-soft` for a scrim over
-content rather than the page, and `--nx-overlay-strong` for one a full-screen
-state screen writes its message directly onto — a see-through scrim tops out
+content rather than the page, and `--nx-overlay-strong` for one that carries
+text directly — a full-screen state screen, an image lightbox and its caption — a see-through scrim tops out
 below AA over a white page even for pure white text) is defined for both modes
 and used everywhere,
 with `bg-overlay` / `bg-overlay-soft` utilities in the v4 theme AND in
