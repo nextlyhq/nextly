@@ -318,6 +318,36 @@ describe("generateEnv", () => {
     expect(envContent).toContain("DB_DIALECT=postgresql");
   });
 
+  it("documents the diagnostics opt-in without enabling it", async () => {
+    // Without the note the feature exists and nobody finds it: an author hitting
+    // an error sees the generic public shape and has no reason to suspect there
+    // is a flag that would have named the cause.
+    mockPathExists.mockResolvedValue(false as never);
+
+    await generateEnv("/test/project", {
+      type: "sqlite",
+      adapter: "@nextlyhq/adapter-sqlite",
+      databaseDriver: "better-sqlite3",
+      connectionUrl: "file:./nextly.db",
+      envExample: "file:./nextly.db",
+    });
+
+    // Both files, since a contributor working from .env.example should get the
+    // same experience as the person who ran the scaffold.
+    for (const [, content] of mockWriteFile.mock.calls) {
+      const text = content as string;
+      // Present and explained, so the setting is discoverable...
+      expect(text).toContain("NEXTLY_DEV_DIAGNOSTICS");
+      // ...and COMMENTED, so it is not enabled by a file that ships with the
+      // app. The flag is the second of two independent signals, and the second
+      // exists because NODE_ENV is a runtime value a deployment can carry by
+      // mistake. A default here would be true in exactly that case — the one it
+      // guards against — which collapses two signals back into one.
+      expect(text).toContain("# NEXTLY_DEV_DIAGNOSTICS=1");
+      expect(text).not.toMatch(/^NEXTLY_DEV_DIAGNOSTICS=/m);
+    }
+  });
+
   it("should not include storage configuration", async () => {
     mockPathExists.mockResolvedValue(false as never);
 
@@ -359,11 +389,15 @@ describe("generateEnv", () => {
     expect(appendContent).toContain("DB_DIALECT=mysql");
   });
 
-  it("should not modify .env if DATABASE_URL already present", async () => {
+  it("should not re-add database config when DATABASE_URL is already present", async () => {
+    // A configured .env keeps its database settings. It does still gain the
+    // diagnostics note, which is keyed on its OWN absence — see below.
     mockPathExists.mockImplementation((async (path: unknown) => {
       return String(path).endsWith(".env");
     }) as never);
-    mockReadFile.mockResolvedValue("DATABASE_URL=existing_url\n" as never);
+    mockReadFile.mockResolvedValue(
+      "DATABASE_URL=existing_url\nNEXTLY_DEV_DIAGNOSTICS=1\n" as never
+    );
 
     const database: DatabaseConfig = {
       type: "sqlite",
@@ -379,6 +413,34 @@ describe("generateEnv", () => {
     expect(mockAppendFile).not.toHaveBeenCalled();
     // Should still update .env.example
     expect(mockWriteFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("adds the diagnostics note to an already-configured .env", async () => {
+    // Installing into an existing Next.js project is a supported flow, and its
+    // .env already has DATABASE_URL. Sharing that condition meant the file the
+    // developer actually runs never mentioned the setting while .env.example
+    // did, so the note reached only brand-new apps.
+    mockPathExists.mockImplementation((async (path: unknown) => {
+      return String(path).endsWith(".env");
+    }) as never);
+    mockReadFile.mockResolvedValue("DATABASE_URL=existing_url\n" as never);
+
+    const result = await generateEnv("/test/project", {
+      type: "sqlite",
+      adapter: "@nextlyhq/adapter-sqlite",
+      databaseDriver: "better-sqlite3",
+      connectionUrl: "file:./data/nextly.db",
+      envExample: "file:./data/nextly.db",
+    });
+
+    expect(result).toEqual({ created: false, updated: true });
+    const [, appended] = mockAppendFile.mock.calls[0] as [string, string];
+    expect(appended).toContain("NEXTLY_DEV_DIAGNOSTICS");
+    // Appended commented, like everywhere else: the note is discoverable, the
+    // setting is not enabled by a file that ships with the app.
+    expect(appended).toContain("# NEXTLY_DEV_DIAGNOSTICS=1");
+    // And it does not re-add the database block it was told is already there.
+    expect(appended).not.toContain("DATABASE_URL=");
   });
 
   it("should generate correct content for SQLite", async () => {
