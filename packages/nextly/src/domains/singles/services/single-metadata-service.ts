@@ -72,8 +72,8 @@ import type { SingleRegistryService } from "./single-registry-service";
 export type CreateSingleInput = Omit<DynamicSingleInsert, "migrationStatus">;
 
 /** What the caller gets back: the row, and how far the schema change actually got. */
-export interface SchemaChangeResult<T> {
-  record: T;
+export interface CreateSingleResult {
+  record: DynamicSingleRecord;
   migrationStatus: SingleMigrationStatus;
 }
 
@@ -119,9 +119,7 @@ export class SingleMetadataService {
    * The caller has already validated the input and established that no other Single owns this
    * table name. Rejecting after this point would leave a `pending` row behind.
    */
-  async createSingle(
-    input: CreateSingleInput
-  ): Promise<SchemaChangeResult<DynamicSingleRecord>> {
+  async createSingle(input: CreateSingleInput): Promise<CreateSingleResult> {
     // 1. INTENT. Durable before anything is touched, so an interruption from here on leaves a row
     // that `getPendingMigrations()` can find and finish.
     const record = await this.registry.registerSingle({
