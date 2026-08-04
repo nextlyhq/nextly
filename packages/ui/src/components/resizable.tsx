@@ -12,13 +12,18 @@
  * ecosystem settled on for this control.
  *
  * **Sizes are percentages, not pixels.** A layout stored in pixels is wrong on the next monitor;
- * one stored in percentages survives a window resize. `defaultLayout` seeds it and
- * `onLayoutChange` reports it, so persisting a shell layout is the caller's to store wherever it
- * already stores preferences — this kit does not reach for browser storage on their behalf.
+ * one stored in percentages survives a window resize. `defaultLayout` seeds it, and persisting a
+ * shell layout is the caller's to store wherever it already keeps preferences — this kit does not
+ * reach for browser storage on their behalf.
+ *
+ * Persist from **`onLayoutChanged`**, not `onLayoutChange`: the first fires once the drag has
+ * settled, the second fires continuously while the pointer moves. Writing on every frame of a
+ * drag thrashes whatever is behind it, which for a remote preference store means a request per
+ * frame.
  *
  * **Design specifications**:
  * - Handle: 1px visible line in `bg-border`, with a larger invisible hit area around it
- * - Grip: optional 3x4 handle in `bg-border`, `rounded-xs`, for discoverability
+ * - Grip: optional 3x4 handle in `bg-border`, `rounded-sm`, for discoverability
  * - Focus: `focus-visible` ring in the focus token, because a splitter is keyboard-operable
  *
  * **Accessibility**:
@@ -33,7 +38,7 @@
  * <ResizablePanelGroup
  *   orientation="horizontal"
  *   defaultLayout={{ layers: "20%", canvas: "55%", inspector: "25%" }}
- *   onLayoutChange={saveLayout}
+ *   onLayoutChanged={saveLayout}
  * >
  *   <ResizablePanel id="layers" minSize="15%" collapsible>
  *     <LayersPanel />
@@ -104,17 +109,21 @@ const ResizableHandle = ({
       // The drawn line is 1px; the element around it is wider and transparent, so the pointer
       // target is comfortably larger than what it appears to grab (WCAG 2.5.8).
       "relative flex items-center justify-center bg-border",
-      "data-[orientation=horizontal]:w-px data-[orientation=vertical]:h-px",
+      // Keyed off `aria-orientation`, which is what the separator actually carries, and read as
+      // the ARIA spec defines it: the attribute describes the SEPARATOR, not the group. A
+      // horizontal group puts its panels side by side, so its separator is a vertical line.
+      "aria-[orientation=vertical]:w-px aria-[orientation=horizontal]:h-px",
       "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
-      // Reachable without precision pointing, without drawing a heavier divider.
+      // Reachable without precision pointing, without drawing a heavier divider: the hit area
+      // grows across the line, so a vertical line widens and a horizontal one deepens.
       "after:absolute after:inset-0",
-      "data-[orientation=horizontal]:after:-inset-x-1 data-[orientation=vertical]:after:-inset-y-1",
+      "aria-[orientation=vertical]:after:-inset-x-1 aria-[orientation=horizontal]:after:-inset-y-1",
       className
     )}
     {...props}
   >
     {withGrip ? (
-      <div className="z-10 flex h-4 w-3 items-center justify-center rounded-xs border border-border bg-border">
+      <div className="z-10 flex h-4 w-3 items-center justify-center rounded-sm border border-border bg-border">
         <GripVertical className="h-2.5 w-2.5 text-muted-foreground" />
       </div>
     ) : null}
