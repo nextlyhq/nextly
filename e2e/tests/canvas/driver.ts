@@ -69,6 +69,15 @@ export interface CanvasDriver {
   frameOrigin(): Promise<Point>;
 
   /**
+   * The canvas frame's current transform scale, 1 when untransformed.
+   *
+   * Exposed so a scenario can prove the zoom it asked for was actually
+   * applied: a `setZoom` that silently stopped working would otherwise let a
+   * scaled test degrade into an unscaled one and still pass.
+   */
+  frameScale(): Promise<number>;
+
+  /**
    * Whether the editor is still mounted.
    *
    * On the driver because what "the editor" is made of differs per canvas;

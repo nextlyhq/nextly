@@ -130,6 +130,10 @@ export function createPocDriver(page: Page): CanvasDriver {
       );
     },
 
+    async frameScale() {
+      return frameScale();
+    },
+
     async frameOrigin() {
       const box = await page.locator("iframe").boundingBox();
       if (!box) throw new Error("canvas iframe has no box");

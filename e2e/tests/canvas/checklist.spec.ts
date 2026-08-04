@@ -149,9 +149,15 @@ test("[acceptance] point 4: siblings do not move during a drag", async ({
   // Outside the expected failure: a drag that INSERTS or DELETES nodes is a
   // different defect from the known geometry shift, and marking it expected
   // would let real content loss ride in under the layout gap.
-  expect(during.length, "a drag must not change the node count").toBe(
-    before.length
-  );
+  // Identity, not just count. A drag that reorders or replaces blocks while
+  // keeping the count would otherwise be classified as the known geometry gap
+  // by the marker below. Geometry is stripped from the comparison because the
+  // geometry IS what the marker excuses.
+  const idsOf = (boxes: string[]) => boxes.map(box => box.split(":")[0]);
+  expect(
+    idsOf(during),
+    "a drag must not add, remove or reorder blocks"
+  ).toEqual(idsOf(before));
 
   // Only the geometry assertion is the known gap: zones expand from 0px to 6px
   // when a drag starts and push every block below them down.
@@ -268,13 +274,25 @@ test("[informational] point 9: the library's Insert button adds a block", async 
       timeout: 30_000,
     })
     .toBe(before.length + 1);
+
+  // A net increase of one can also mean "removed one, added two". The non-drag
+  // insertion path gets the same identity guard as the drag path.
+  const after = await driver.readTreeShape();
+  expect(
+    before.filter(id => !after.includes(id)),
+    "inserting must not remove existing blocks"
+  ).toEqual([]);
+  expect(
+    after.filter(id => !before.includes(id)),
+    "inserting must add exactly one block"
+  ).toHaveLength(1);
 });
 
 /**
  * Marked failing because Escape does not cancel the drag: it leaves the editor.
  *
  * Measured immediately after the keypress:
- *   {"url":"/admin/collections/pages","iframes":0,"hasEditor":false}
+ *   {"url":".../admin/collections/pages","hasEditor":false}
  *
  * The admin shell treats Escape as "go back", so mid-drag it navigates out of
  * the entry editor and unmounts the canvas entirely. Point 12 asks for a

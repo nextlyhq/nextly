@@ -186,6 +186,16 @@ test("scenario 3: droppable geometry survives a scaled canvas frame", async ({
   await driver.mountTree(fixture);
   await driver.setZoom(0.75);
 
+  // Prove the transform took. If `setZoom` silently stopped applying it, this
+  // scenario would quietly degrade to an ordinary unscaled drag: a zone is
+  // still found and it is still the nearest, so every assertion below passes
+  // without scaled coordinate handling being exercised at all.
+  const appliedScale = await driver.frameScale();
+  expect(appliedScale, "the canvas frame must actually be scaled").toBeCloseTo(
+    0.75,
+    2
+  );
+
   await startPanelDrag(driver);
   const active = await dragUntilTarget(driver);
   test
@@ -355,6 +365,14 @@ test("scenario 4b: a 2px jitter at a zone edge keeps the indicator stable", asyn
     type: "boundary-jitter",
     description: JSON.stringify(observed),
   });
+
+  // Total indicator loss is a DIFFERENT defect from missing hysteresis, so it
+  // is rejected before the marker: an all -1 run satisfies the distinct-count
+  // assertion below and would otherwise be reported as the known gap.
+  expect(
+    observed.filter(value => value < 0),
+    `the indicator must stay visible throughout: ${JSON.stringify(observed)}`
+  ).toEqual([]);
 
   test.fail(
     true,
