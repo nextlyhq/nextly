@@ -232,26 +232,37 @@ test("scenario 4b: a 2px oscillation at a boundary never flips the indicator", a
   expect(distinct.size).toBeLessThanOrEqual(2);
 });
 
-test("scenario 5: keyboard insertion position round-trips", async ({
-  page,
-  request,
-}) => {
-  const fixture = await seedPage(request, FLAT_LIST_FIXTURE);
-  const driver = createPocDriver(page);
-  await driver.mountTree(fixture);
+/**
+ * Marked failing, not passing, because it CANNOT fail here.
+ *
+ * Probed directly: a block takes focus (`document.activeElement` is the right
+ * `data-nx-id`, and every block carries `tabindex=0` and `role=button`), but
+ * Space, ArrowDown, ArrowDown, Space leaves the tree byte-identical. There is
+ * no keyboard move path in this canvas at all, so the round-trip assertion
+ * holds vacuously and would keep holding if dnd-kit #1991 were far worse than
+ * reported. Assessing #1991 needs driver #2, against a canvas that implements
+ * keyboard dragging.
+ */
+test.fixme(
+  "scenario 5: keyboard insertion position round-trips",
+  async ({ page, request }) => {
+    const fixture = await seedPage(request, FLAT_LIST_FIXTURE);
+    const driver = createPocDriver(page);
+    await driver.mountTree(fixture);
 
-  const before = await driver.readTreeShape();
-  await driver.keyboardInsert("down");
-  await driver.keyboardInsert("up");
-  const after = await driver.readTreeShape();
+    const before = await driver.readTreeShape();
+    await driver.keyboardInsert("down");
+    await driver.keyboardInsert("up");
+    const after = await driver.readTreeShape();
 
-  test.info().annotations.push({
-    type: "keyboard-shape",
-    description: `before=${JSON.stringify(before)} after=${JSON.stringify(after)}`,
-  });
+    test.info().annotations.push({
+      type: "keyboard-shape",
+      description: `before=${JSON.stringify(before)} after=${JSON.stringify(after)}`,
+    });
 
-  // #1991 reports `position.current` lagging one frame under keyboard
-  // navigation, and "insert above vs below" is computed from it, so a lag shows
-  // up as a move that does not come back.
-  expect(after).toEqual(before);
-});
+    // #1991 reports `position.current` lagging one frame under keyboard
+    // navigation, and "insert above vs below" is computed from it, so a lag shows
+    // up as a move that does not come back.
+    expect(after).toEqual(before);
+  }
+);
