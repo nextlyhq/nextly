@@ -195,6 +195,14 @@ type BuiltInDateField = "createdAt" | "updatedAt";
  *
  * Homomorphic on purpose: `?` and `readonly` are carried over, so an optional
  * `publishedAt?: string` stays optional rather than becoming required.
+ *
+ * TOP LEVEL ONLY. A relationship field is typed `string | Related`, and at a
+ * depth that populates it the related row carries decoded `Date`s while that
+ * `Related` interface still spells them as strings. Reaching into it needs the
+ * generated types to record which fields are relations and to what, which this
+ * mapping has no way to know from the document type alone. A date nested in a
+ * field group or repeater needs nothing: those are stored as JSON, so their
+ * dates really are strings in process too.
  */
 export type InProcessRow<TData, TDateField extends PropertyKey> = {
   [K in keyof TData]: K extends TDateField ? InProcessDate<TData[K]> : TData[K];
@@ -246,15 +254,24 @@ type DateFieldsOfCollectionFrom<
     : BuiltInDateField
   : BuiltInDateField;
 
-/** See {@link DateFieldsOfCollectionFrom}. */
+/**
+ * The `Date`-backed field names of a single.
+ *
+ * Falls back to NOTHING rather than to the built-in timestamps, unlike
+ * {@link DateFieldsOfCollectionFrom}. A single is read through a deserializer
+ * that normalizes its system timestamps to ISO strings, so `updatedAt` is a
+ * string here and naming it would be the one guess that is always wrong. Only
+ * a single's own date fields are decoded, and those are known only from the
+ * generated map.
+ */
 type DateFieldsOfSingleFrom<
   TGenerated,
   TSlug extends string,
 > = TGenerated extends { singleDateFields: infer D }
   ? TSlug extends keyof D
     ? Extract<D[TSlug], PropertyKey>
-    : BuiltInDateField
-  : BuiltInDateField;
+    : never
+  : never;
 
 /**
  * Resolves the in-process document type for a collection slug — what the Direct
@@ -264,6 +281,13 @@ type DateFieldsOfSingleFrom<
  * are: a test asserting against a locally re-declared copy of the conditional
  * would pass even when this alias reads the wrong key, which is the failure
  * being guarded.
+ *
+ * The document and its date fields are resolved inside ONE conditional on
+ * `TSlug`, which distributes, so a union of slugs pairs each document with its
+ * own date fields. Resolving the two separately and combining them afterwards
+ * would union the date sets first, and a field one collection stores as text
+ * would be typed `Date` because a different collection happens to store a date
+ * under that name.
  *
  * @typeParam TSlug - The collection slug string literal
  *
@@ -279,10 +303,11 @@ type DateFieldsOfSingleFrom<
 export type RowFromCollectionSlugFrom<
   TGenerated,
   TSlug extends string,
-> = InProcessRow<
-  DataFromCollectionSlugFrom<TGenerated, TSlug>,
-  DateFieldsOfCollectionFrom<TGenerated, TSlug>
->;
+> = TGenerated extends { collections: infer C }
+  ? TSlug extends keyof C
+    ? InProcessRow<C[TSlug], DateFieldsOfCollectionFrom<TGenerated, TSlug>>
+    : Record<string, unknown>
+  : Record<string, unknown>;
 
 export type RowFromCollectionSlug<TSlug extends string> =
   RowFromCollectionSlugFrom<GeneratedTypes, TSlug>;
@@ -295,10 +320,11 @@ export type RowFromCollectionSlug<TSlug extends string> =
 export type RowFromSingleSlugFrom<
   TGenerated,
   TSlug extends string,
-> = InProcessRow<
-  DataFromSingleSlugFrom<TGenerated, TSlug>,
-  DateFieldsOfSingleFrom<TGenerated, TSlug>
->;
+> = TGenerated extends { singles: infer C }
+  ? TSlug extends keyof C
+    ? InProcessRow<C[TSlug], DateFieldsOfSingleFrom<TGenerated, TSlug>>
+    : Record<string, unknown>
+  : Record<string, unknown>;
 
 export type RowFromSingleSlug<TSlug extends string> = RowFromSingleSlugFrom<
   GeneratedTypes,

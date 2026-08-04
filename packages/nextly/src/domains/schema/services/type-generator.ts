@@ -1384,12 +1384,15 @@ ${properties}
     }
     lines.push("  };");
 
+    // A single's own date fields, and deliberately NOT its `updatedAt`. A
+    // single is read through a deserializer that normalizes the system
+    // timestamps to ISO strings, so `updatedAt` really is a string in process
+    // here, unlike everywhere else. Its user-declared date fields are not
+    // touched by that step and arrive as the `Date` the driver decoded.
     lines.push("  singleDateFields: {");
     for (const single of singles) {
-      // A single has no createdAt: there is one row and it is never "created"
-      // from the caller's point of view.
       lines.push(
-        `    "${single.slug}": ${this.dateFieldUnion(single.fields, ["updatedAt"])};`
+        `    "${single.slug}": ${this.dateFieldUnion(single.fields, [])};`
       );
     }
     lines.push("  };");

@@ -133,8 +133,10 @@ describe("generated date-field contract", () => {
     expect(code).toContain("collectionDateFields: {");
     expect(code).toContain('"posts": "createdAt" | "updatedAt";');
     expect(code).toContain("singleDateFields: {");
-    // A single has one row that is never created from the caller's side.
-    expect(code).toContain('"settings": "updatedAt";');
+    // Empty, and deliberately so. A single is read through a deserializer that
+    // normalizes its system timestamps to ISO strings, so `updatedAt` is a
+    // string in process and naming it would type every single wrongly.
+    expect(code).toContain('"settings": never;');
   });
 
   it("names a date field alongside the built-in timestamps", () => {
@@ -150,6 +152,15 @@ describe("generated date-field contract", () => {
     );
     // The field a date field is NOT: a text column comes back as text.
     expect(code).not.toContain('"title"');
+  });
+
+  it("names a single's own date field, which the deserializer leaves decoded", () => {
+    const { code } = new TypeGenerator().generateTypesFile(
+      [],
+      [single("site-config", [{ name: "launchedAt", type: "date" }])]
+    );
+
+    expect(code).toContain('"site-config": "launchedAt";');
   });
 
   it("says never for a collection with no date-backed field at all", () => {

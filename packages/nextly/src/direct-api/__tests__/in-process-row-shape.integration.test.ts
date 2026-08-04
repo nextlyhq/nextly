@@ -12,7 +12,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { date, defineCollection, text } from "../../config";
+import { date, defineCollection, defineSingle, text } from "../../config";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -32,10 +32,25 @@ const articles = () =>
     fields: [text({ name: "title" }), date({ name: "publishedAt" })],
   });
 
+/**
+ * A single, whose read path differs from a collection's in exactly the way that
+ * matters here: it normalizes the system timestamps and leaves everything else
+ * as the driver decoded it.
+ */
+const siteConfig = () =>
+  defineSingle({
+    slug: "site-config",
+    fields: [text({ name: "tagline" }), date({ name: "launchedAt" })],
+  });
+
 const PUBLISHED_AT = new Date("2026-08-04T09:33:20.000Z");
 
 async function boot(dialect: TestDialect): Promise<TestNextly> {
-  current = await createTestNextly({ dialect, collections: [articles()] });
+  current = await createTestNextly({
+    dialect,
+    collections: [articles()],
+    singles: [siteConfig()],
+  });
   return current;
 }
 
@@ -95,6 +110,28 @@ describe.each(getConfiguredTestDialects())(
       expect(items).toHaveLength(1);
       expect(items[0]?.createdAt).toBeInstanceOf(Date);
       expect(items[0]?.publishedAt).toBeInstanceOf(Date);
+    });
+
+    it("reports a single's own date field as a Date and its updatedAt as a string", async () => {
+      // The two halves of a single disagree, so both are pinned. `updatedAt` is
+      // put through a deserializer that normalizes the system timestamps to ISO
+      // strings; a user-declared date field is not, and arrives decoded. Typing
+      // either one after the other would compile and then fail on every single.
+      const { nextly } = await boot(dialect);
+
+      await nextly.updateSingle({
+        slug: "site-config",
+        data: { tagline: "x", launchedAt: PUBLISHED_AT.toISOString() },
+        overrideAccess: true,
+      });
+
+      const single = await nextly.findSingle({
+        slug: "site-config",
+        overrideAccess: true,
+      });
+
+      expect(single.launchedAt).toBeInstanceOf(Date);
+      expect(typeof single.updatedAt).toBe("string");
     });
 
     it("leaves a date field null rather than decoding an absent value", async () => {

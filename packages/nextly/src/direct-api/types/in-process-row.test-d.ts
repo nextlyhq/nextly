@@ -24,6 +24,10 @@ declare function assertType<T extends true>(proof: T): void;
 /** Stands in for what `generate:types` augments `GeneratedTypes` with. */
 interface AugmentedTypes {
   collections: {
+    // `startsAt` is a DATE here and TEXT on `notes` below. A union of the two
+    // slugs must not let one collection's date field retype the other's.
+    events: { id: string; startsAt: string };
+    notes: { id: string; startsAt: string };
     posts: {
       id: string;
       title: string;
@@ -38,9 +42,13 @@ interface AugmentedTypes {
   collectionDateFields: {
     posts: "createdAt" | "updatedAt" | "publishedAt";
     tags: never;
+    events: "startsAt";
+    notes: never;
   };
   singles: { settings: { id: string; launchedAt?: string; updatedAt: string } };
-  singleDateFields: { settings: "updatedAt" | "launchedAt" };
+  // No `updatedAt`: a single's system timestamps are normalized to strings on
+  // the way out, so only its own date fields are decoded.
+  singleDateFields: { settings: "launchedAt" };
 }
 
 type Post = RowFromCollectionSlugFrom<AugmentedTypes, "posts">;
@@ -86,9 +94,11 @@ assertType<
   >
 >(true);
 
-// A single's own date field is mapped too, not just its `updatedAt`.
+// A single's own date field is decoded, and its `updatedAt` is NOT: the read
+// path normalizes the system timestamps to ISO strings, so claiming a `Date`
+// there would compile and then fail on every single there is.
 type Settings = RowFromSingleSlugFrom<AugmentedTypes, "settings">;
-assertType<Exact<Settings["updatedAt"], Date>>(true);
+assertType<Exact<Settings["updatedAt"], string>>(true);
 assertType<Exact<Settings["launchedAt"], Date | null | undefined>>(true);
 
 // An unrecognised slug widens to the open record rather than erroring, matching
@@ -97,6 +107,18 @@ assertType<
   Exact<
     RowFromCollectionSlugFrom<AugmentedTypes, "ghost">,
     Record<string, unknown>
+  >
+>(true);
+
+// A union of slugs keeps each document paired with its OWN date fields. The
+// two collections below both declare `startsAt`; only one stores it as a date,
+// and a caller narrowing the union must not be handed a `Date` method on the
+// other's text value.
+type EitherRow = RowFromCollectionSlugFrom<AugmentedTypes, "events" | "notes">;
+assertType<
+  Exact<
+    EitherRow,
+    { id: string; startsAt: Date } | { id: string; startsAt: string }
   >
 >(true);
 
