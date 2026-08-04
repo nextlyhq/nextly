@@ -726,6 +726,80 @@ describe("custom CSS may not reach off this origin", () => {
       expect(findUnnamespacedGlobals(out.css, SCOPE)).toEqual([]);
     });
 
+    it("namespaces every font-family descriptor, not only the first", () => {
+      // CSS applies the LAST valid `font-family` in a `@font-face`, so
+      // namespacing the first leaves the effective family bare — the whole
+      // collision, still open, behind a decoy that looks handled.
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: decoy; font-family: Inter; src: url("/f.woff2") }`,
+        SCOPE
+      );
+      expect(out.css).not.toMatch(/font-family:\s*["']?Inter["']?/i);
+      expect(out.css).toContain(ns("Inter"));
+    });
+
+    it("reads an escaped descriptor as the property it is", () => {
+      // `font\2d family` IS `font-family` to a browser, so a raw comparison is
+      // one an author can write straight past — and the family stays global.
+      const out = sanitizeCustomCss(
+        `@font-face { font\\2d family: Inter; src: url("/f.woff2") }`,
+        SCOPE
+      );
+      expect(out.css).not.toMatch(/:\s*Inter\b/i);
+      expect(out.css).toContain(ns("Inter"));
+    });
+
+    it("reads an escaped keyframes name as the name it is", () => {
+      // `@keyframes \66 ade` is named `fade`, so a plain `animation: fade`
+      // reference has to find it after the rename.
+      const out = sanitizeCustomCss(
+        `@keyframes \\66 ade { from { opacity: 0 } } .a { animation: fade 1s }`,
+        SCOPE
+      );
+      expect(out.css).toContain(`animation:${ns("fade")} 1s`);
+      expect(out.css).toContain(`@keyframes ${ns("fade")}`);
+    });
+
+    it("rewrites a quoted keyframes reference too", () => {
+      // `<keyframes-name>` is a custom-ident OR a string, so both spellings
+      // have to follow the rename.
+      const out = sanitizeCustomCss(
+        `@keyframes "fade" { from { opacity: 0 } } .a { animation-name: "fade" }`,
+        SCOPE
+      );
+      expect(out.css).toContain(`animation-name:"${ns("fade")}"`);
+    });
+
+    it("leaves an animation keyword alone even when it names a keyframes rule", () => {
+      // A stylesheet may define `@keyframes infinite`; the `infinite` in
+      // `animation: pulse 1s infinite` is still the iteration count, and
+      // renaming it changes what the declaration says.
+      const out = sanitizeCustomCss(
+        `@keyframes infinite { from { opacity: 0 } } .a { animation: pulse 1s infinite }`,
+        SCOPE
+      );
+      expect(out.css).toContain("animation:pulse 1s infinite");
+    });
+
+    it("leaves the font shorthand's style keyword alone", () => {
+      // Everything before the font size is style, variant, weight or stretch.
+      // A family called `italic` must not swallow the `italic` of
+      // `font: italic 16px Arial`.
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: italic; src: url("/f.woff2") } .a { font: italic 16px Arial }`,
+        SCOPE
+      );
+      expect(out.css).toContain("font:italic 16px Arial");
+    });
+
+    it("still rewrites the family that follows the size", () => {
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: Brand; src: url("/f.woff2") } .a { font: italic 16px/1.5 Brand, serif }`,
+        SCOPE
+      );
+      expect(out.css).toContain(`16px/1.5"${ns("Brand")}",serif`);
+    });
+
     it("still refuses a remote url inside a keyframe step", () => {
       // The step blocks are ordinary declarations, so the origin policy has to
       // reach them — allowing the at-rule must not open a door beneath it.

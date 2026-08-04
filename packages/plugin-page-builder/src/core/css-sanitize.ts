@@ -11,6 +11,7 @@
  * explanation is the thing authors file bugs about, and the editor has nowhere
  * to say "your Google Fonts import went and here is why" unless this says so.
  */
+import { decodeIdentifier } from "@nextlyhq/blocks-engine";
 import * as csstree from "css-tree";
 import type { CssNode, List, ListItem, Rule } from "css-tree";
 
@@ -401,7 +402,10 @@ const SUPPORTED_AT_RULE_LIST = "@media, @supports, @keyframes and @font-face";
 
 /** Whether the walker is currently inside a `@keyframes` block. */
 function insideKeyframes(atrule: csstree.Atrule | null): boolean {
-  return atrule !== null && atrule.name.toLowerCase() === "keyframes";
+  return (
+    atrule !== null &&
+    decodeIdentifier(atrule.name).toLowerCase() === "keyframes"
+  );
 }
 
 export function sanitizeCustomCss(
@@ -449,7 +453,11 @@ export function sanitizeCustomCss(
   csstree.walk(ast, {
     visit: "Atrule",
     enter(node: CssNode, item: ListItem<CssNode>, list: List<CssNode>) {
-      const name = (node as csstree.Atrule).name.toLowerCase();
+      // Decoded first: `@\6d edia` IS `@media` to a browser, so a raw
+      // comparison is one an author can write straight past.
+      const name = decodeIdentifier(
+        (node as csstree.Atrule).name
+      ).toLowerCase();
       if (SUPPORTED_AT_RULES.has(name)) return;
       warn(
         "unsupported-at-rule",
@@ -517,7 +525,7 @@ export function sanitizeCustomCss(
     visit: "Atrule",
     enter(node: CssNode, item: ListItem<CssNode>, list: List<CssNode>) {
       const atrule = node as csstree.Atrule;
-      if (atrule.name.toLowerCase() !== "font-face") return;
+      if (decodeIdentifier(atrule.name).toLowerCase() !== "font-face") return;
       if (fontFaceHasSrc(atrule)) return;
       warn(
         "unsupported-at-rule",

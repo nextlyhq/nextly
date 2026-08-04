@@ -21,30 +21,88 @@
  * writes `fade` and `MyFont`, sees them work, and never learns that the
  * document holds something longer.
  *
- * ## Only names this stylesheet defines are rewritten
+ * ## Read what CSS reads, not what was typed
+ *
+ * Every comparison here decodes escapes first. `font\2d family` IS the
+ * `font-family` descriptor to a browser, and `@keyframes \66 ade` IS named
+ * `fade` — so a check against the raw text is a check an author can walk
+ * straight past. That is a bypass rather than a nuisance: the un-namespaced
+ * descriptor keeps its global name, and the host's font goes with it.
+ *
+ * ## Rewriting a reference needs the shorthand's grammar
+ *
+ * Knowing which names this stylesheet defines is what makes a rewrite safe to
+ * attempt, but it is not enough on its own, because the same token can be a
+ * NAME in one place and a keyword in another. A stylesheet defining
+ * `@keyframes infinite` must still leave the `infinite` in
+ * `animation: pulse 1s infinite` alone — it is the iteration count there. So
+ * the shorthands are read positionally: `animation` skips its own keywords, and
+ * `font` rewrites nothing before the font size, where the tokens are style,
+ * variant and weight rather than families.
  *
  * A reference to a name the author did NOT define is left exactly as written,
- * which is what makes the rewrite safe to do at all. Deciding whether a bare
- * ident inside `animation: fade 1s ease-in-out infinite` is the name or one of
- * the six other components means implementing the shorthand's grammar, and
- * getting it wrong renames a keyword. Matching against the set of names defined
- * in the same stylesheet needs no grammar: `ease-in-out` is only rewritten by
- * an author who defined `@keyframes ease-in-out`, and renaming that one is
- * correct anyway.
- *
- * It also leaves the useful case working — custom CSS may still reference an
- * animation the page itself defines, because that name is not in the map.
+ * which also leaves the useful case working — custom CSS may still reference an
+ * animation the page itself provides.
  *
  * @module core/css-global-names
  */
-import { namespacedGlobalName } from "@nextlyhq/blocks-engine";
+import {
+  decodeIdentifier,
+  namespacedGlobalName,
+} from "@nextlyhq/blocks-engine";
 import type * as csstree from "css-tree";
 
-/** Properties whose value may name a `@keyframes` rule. */
-const ANIMATION_PROPERTIES = new Set(["animation", "animation-name"]);
+/**
+ * Keywords `animation` may hold that are not the animation's name.
+ *
+ * Timing functions, direction, fill mode, play state, iteration count, and the
+ * CSS-wide keywords. A token in this set is never rewritten, even when the
+ * stylesheet defines a keyframes rule of the same name: in the shorthand it is
+ * that component, and renaming it changes what the declaration says.
+ *
+ * Functional timing values — `cubic-bezier()`, `steps()`, `linear()` — arrive
+ * as Function nodes rather than identifiers, so they never reach the check.
+ */
+const ANIMATION_KEYWORDS = new Set([
+  "normal",
+  "reverse",
+  "alternate",
+  "alternate-reverse",
+  "none",
+  "forwards",
+  "backwards",
+  "both",
+  "running",
+  "paused",
+  "infinite",
+  "linear",
+  "ease",
+  "ease-in",
+  "ease-out",
+  "ease-in-out",
+  "step-start",
+  "step-end",
+  "initial",
+  "inherit",
+  "unset",
+  "revert",
+  "revert-layer",
+]);
 
-/** Properties whose value may name a font family. */
-const FONT_PROPERTIES = new Set(["font", "font-family"]);
+/**
+ * Keywords `animation-name` may hold that are not a name.
+ *
+ * Far shorter than the shorthand's list, because every other value of this
+ * longhand IS a keyframes name — that is what the property is for.
+ */
+const ANIMATION_NAME_KEYWORDS = new Set([
+  "none",
+  "initial",
+  "inherit",
+  "unset",
+  "revert",
+  "revert-layer",
+]);
 
 /**
  * The names an author's stylesheet defines, mapped to their namespaced form.
@@ -66,17 +124,43 @@ export function emptyGlobalNameMap(): GlobalNameMap {
   return { keyframes: new Map(), fontFamilies: new Map() };
 }
 
-/** The `font-family` descriptor inside a `@font-face` block, if it has one. */
-export function fontFaceFamilyDeclaration(
-  node: csstree.Atrule
-): csstree.Declaration | undefined {
-  const block = node.block;
-  if (!block) return undefined;
-  for (const child of block.children.toArray()) {
-    if (child.type !== "Declaration") continue;
-    if (child.property.toLowerCase() === "font-family") return child;
-  }
+/** A property or descriptor name as CSS reads it: decoded, then case-folded. */
+function propertyName(raw: string): string {
+  return decodeIdentifier(raw).toLowerCase();
+}
+
+/** The text of a node that can carry a name, decoded, or `undefined`. */
+function nameOf(node: csstree.CssNode): string | undefined {
+  if (node.type === "Identifier") return decodeIdentifier(node.name);
+  if (node.type === "String") return node.value;
   return undefined;
+}
+
+/** Write a name back onto the node it came from. */
+function setName(node: csstree.CssNode, name: string): void {
+  if (node.type === "Identifier") node.name = name;
+  else if (node.type === "String") node.value = name;
+}
+
+/**
+ * Every `font-family` descriptor in a `@font-face`, in source order.
+ *
+ * All of them, because CSS applies the LAST valid one, and namespacing only the
+ * first leaves the effective family bare — the whole collision, still open,
+ * behind a decoy that looks handled.
+ */
+export function fontFaceFamilyDeclarations(
+  node: csstree.Atrule
+): csstree.Declaration[] {
+  const block = node.block;
+  if (!block) return [];
+  return block.children
+    .toArray()
+    .filter(
+      (child): child is csstree.Declaration =>
+        child.type === "Declaration" &&
+        propertyName(child.property) === "font-family"
+    );
 }
 
 /** Whether a `@font-face` block still declares a `src` after sanitizing. */
@@ -87,25 +171,23 @@ export function fontFaceHasSrc(node: csstree.Atrule): boolean {
     .toArray()
     .some(
       child =>
-        child.type === "Declaration" && child.property.toLowerCase() === "src"
+        child.type === "Declaration" && propertyName(child.property) === "src"
     );
 }
 
 /**
  * The single name a value denotes, or `undefined` if it is not a plain name.
  *
- * A keyframes name is a `<custom-ident>` or a string, so anything with more
- * than one meaningful token is not one — and a `@font-face` family that arrives
- * as several unquoted identifiers is joined, since `font-family: My Font` names
- * one family rather than two.
+ * A `@font-face` family that arrives as several unquoted identifiers is joined,
+ * since `font-family: My Font` names one family rather than two.
  */
 function valueAsName(value: csstree.CssNode): string | undefined {
   if (value.type !== "Value") return undefined;
   const parts: string[] = [];
   for (const child of value.children.toArray()) {
-    if (child.type === "Identifier") parts.push(child.name);
-    else if (child.type === "String") parts.push(child.value);
-    else return undefined;
+    const part = nameOf(child);
+    if (part === undefined) return undefined;
+    parts.push(part);
   }
   return parts.length > 0 ? parts.join(" ") : undefined;
 }
@@ -114,7 +196,7 @@ function valueAsName(value: csstree.CssNode): string | undefined {
  * Namespace the names a stylesheet defines, recording what changed.
  *
  * Mutates the AST, because the alternative is serializing and reparsing to
- * apply a rename that the parser already located precisely.
+ * apply a rename the parser already located precisely.
  */
 export function namespaceDefinedNames(
   ast: csstree.CssNode,
@@ -127,43 +209,49 @@ export function namespaceDefinedNames(
     visit: "Atrule",
     enter(node: csstree.CssNode) {
       const atrule = node as csstree.Atrule;
-      const name = atrule.name.toLowerCase();
+      const name = propertyName(atrule.name);
 
       if (name === "keyframes") {
         // The name arrives as the single child of the prelude — an identifier,
         // or a string for a name that needs quoting. A `Raw` prelude is the
         // parser saying it could not read one, and renaming text it did not
-        // understand is how a rename becomes a syntax error, so that is left
-        // alone and the rule keeps whatever it had.
+        // understand is how a rename becomes a syntax error.
         const prelude = atrule.prelude;
         if (!prelude || prelude.type !== "AtrulePrelude") return;
         const first = prelude.children.first;
         if (!first) return;
-        if (first.type === "Identifier") {
-          if (first.name === "") return;
-          const namespaced = namespacedGlobalName(first.name, scopeClass);
-          map.keyframes.set(first.name, namespaced);
-          first.name = namespaced;
-        } else if (first.type === "String") {
-          if (first.value === "") return;
-          const namespaced = namespacedGlobalName(first.value, scopeClass);
-          map.keyframes.set(first.value, namespaced);
-          first.value = namespaced;
-        }
+        const original = nameOf(first);
+        if (original === undefined || original === "") return;
+        const namespaced = namespacedGlobalName(original, scopeClass);
+        // Keyed by the DECODED name, because that is what a reference elsewhere
+        // in the stylesheet reads as.
+        map.keyframes.set(original, namespaced);
+        setName(first, namespaced);
         return;
       }
 
       if (name === "font-face") {
-        const declaration = fontFaceFamilyDeclaration(atrule);
-        if (!declaration) return;
-        const original = valueAsName(declaration.value);
-        if (original === undefined || original === "") return;
-        const namespaced = namespacedGlobalName(original, scopeClass);
-        map.fontFamilies.set(original.toLowerCase(), namespaced);
-        // Written as a string rather than an identifier: a namespaced family
-        // is one token, but quoting it keeps the value valid whatever
-        // characters the author's original name contained.
-        replaceValueWithString(declaration.value as csstree.Value, namespaced);
+        const declarations = fontFaceFamilyDeclarations(atrule);
+        if (declarations.length === 0) return;
+        // Every descriptor is namespaced so none is left holding a global
+        // name; the LAST readable one is what the browser applies, so that is
+        // the one a reference has to be pointed at.
+        let effective: string | undefined;
+        for (const declaration of declarations) {
+          const original = valueAsName(declaration.value);
+          if (original === undefined || original === "") continue;
+          replaceValueWithString(
+            declaration.value as csstree.Value,
+            namespacedGlobalName(original, scopeClass)
+          );
+          effective = original;
+        }
+        if (effective !== undefined) {
+          map.fontFamilies.set(
+            effective.toLowerCase(),
+            namespacedGlobalName(effective, scopeClass)
+          );
+        }
       }
     },
   });
@@ -191,25 +279,92 @@ export function rewriteNameReferences(
       // already by the pass above. Letting this pass reach it too would make
       // each of the two look unnecessary while both were running, and only one
       // of them is the rule that has to be right.
-      if (this.atrule?.name.toLowerCase() === "font-face") return;
+      if (propertyName(this.atrule?.name ?? "") === "font-face") return;
       const declaration = node as csstree.Declaration;
-      const property = declaration.property.toLowerCase();
+      const property = propertyName(declaration.property);
       const value = declaration.value;
       if (value.type !== "Value") return;
 
-      if (map.keyframes.size > 0 && ANIMATION_PROPERTIES.has(property)) {
-        for (const child of value.children.toArray()) {
-          if (child.type !== "Identifier") continue;
-          const namespaced = map.keyframes.get(child.name);
-          if (namespaced !== undefined) child.name = namespaced;
+      if (map.keyframes.size > 0) {
+        if (property === "animation-name") {
+          rewriteKeyframeNames(
+            value,
+            map.keyframes,
+            ANIMATION_NAME_KEYWORDS,
+            0
+          );
+        } else if (property === "animation") {
+          rewriteKeyframeNames(value, map.keyframes, ANIMATION_KEYWORDS, 0);
         }
       }
 
-      if (map.fontFamilies.size > 0 && FONT_PROPERTIES.has(property)) {
-        rewriteFontFamilyRun(value, map.fontFamilies);
+      if (map.fontFamilies.size > 0) {
+        if (property === "font-family") {
+          rewriteFontFamilies(value, map.fontFamilies, 0);
+        } else if (property === "font") {
+          // Everything before the font size is style, variant, weight or
+          // stretch. A stylesheet defining a family called `italic` must not
+          // turn the `italic` of `font: italic 16px Arial` into a family.
+          const start = familyStartIndex(value);
+          if (start !== undefined) {
+            rewriteFontFamilies(value, map.fontFamilies, start);
+          }
+        }
       }
     },
   });
+}
+
+/**
+ * Where the family list begins in a `font` shorthand, or `undefined`.
+ *
+ * The font size is the anchor: the shorthand requires it, everything before it
+ * is a style/variant/weight/stretch token, and the families follow it — after
+ * an optional `/ line-height`. Without a size there is no family list either;
+ * `font: caption` is a system font and names nothing.
+ */
+function familyStartIndex(value: csstree.Value): number | undefined {
+  const nodes = value.children.toArray();
+  const sizeAt = nodes.findIndex(
+    node =>
+      node.type === "Dimension" ||
+      node.type === "Percentage" ||
+      node.type === "Number"
+  );
+  if (sizeAt === -1) return undefined;
+
+  let index = sizeAt + 1;
+  // `16px/1.5` — the line-height and its slash sit between size and family.
+  const next = nodes[index];
+  if (next?.type === "Operator" && next.value === "/") index += 2;
+  return index < nodes.length ? index : undefined;
+}
+
+/**
+ * Rewrite the keyframes names a value references, leaving keywords alone.
+ *
+ * `skip` holds the tokens that mean something else in this property, which is
+ * what stops a stylesheet defining `@keyframes infinite` from rewriting the
+ * iteration count of an unrelated declaration.
+ */
+function rewriteKeyframeNames(
+  value: csstree.Value,
+  names: Map<string, string>,
+  skip: Set<string>,
+  from: number
+): void {
+  const nodes = value.children.toArray();
+  for (let index = from; index < nodes.length; index++) {
+    const node = nodes[index];
+    if (node === undefined) continue;
+    const original = nameOf(node);
+    if (original === undefined) continue;
+    // A keyword is compared case-insensitively, as CSS reads it; the name it
+    // shadows is not, since a keyframes name is a case-sensitive custom-ident.
+    if (skip.has(original.toLowerCase())) continue;
+    const namespaced = names.get(original);
+    if (namespaced !== undefined) setName(node, namespaced);
+  }
 }
 
 /**
@@ -220,14 +375,12 @@ export function rewriteNameReferences(
  * compared — and replaced as a whole, since the namespaced name is one token
  * where the original was several.
  */
-function rewriteFontFamilyRun(
+function rewriteFontFamilies(
   value: csstree.Value,
-  families: Map<string, string>
+  families: Map<string, string>,
+  from: number
 ): void {
   const children = value.children;
-
-  // Collected first, because the runs are decided by looking across items and
-  // the list is mutated once that decision is made.
   const items: csstree.ListItem<csstree.CssNode>[] = [];
   children.forEach(
     (_child: csstree.CssNode, item: csstree.ListItem<csstree.CssNode>) => {
@@ -252,18 +405,16 @@ function rewriteFontFamilyRun(
     parts = [];
   };
 
-  for (const item of items) {
-    const node = item.data;
-    if (node.type === "Identifier") {
+  for (let index = from; index < items.length; index++) {
+    const item = items[index];
+    if (item === undefined) continue;
+    const part = nameOf(item.data);
+    if (part !== undefined) {
       run.push(item);
-      parts.push(node.name);
-    } else if (node.type === "String") {
-      run.push(item);
-      parts.push(node.value);
+      parts.push(part);
     } else {
-      // A comma ends one family. Anything else — a size or a line-height in the
-      // `font` shorthand — ends the run without matching, since a family name
-      // is only ever identifiers and strings.
+      // A comma ends one family. Anything else ends the run without matching,
+      // since a family name is only ever identifiers and strings.
       closeRun();
     }
   }

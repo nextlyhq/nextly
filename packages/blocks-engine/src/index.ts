@@ -148,6 +148,11 @@ export {
   checkCssValue,
   checkDimensionValue,
   checkUrlValue,
+  // How CSS reads an identifier that carries escapes. Public for the same
+  // reason as the namespacing rule: anything deciding what a name IS has to
+  // decode it the same way, or `font\2d family` reads as a different property
+  // here than it does in a browser.
+  decodeIdentifier,
 } from "./style/css-value";
 export type { CssValueRejection } from "./style/css-value";
 export {
