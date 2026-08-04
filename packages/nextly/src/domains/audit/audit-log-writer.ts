@@ -132,6 +132,36 @@ export function projectAuditMetadata(
  * A code the canonical table does not define is reported as an internal
  * failure, which is the status `NextlyError` already resolves such a code to.
  */
+/**
+ * Report the detail a failure carried but the trail does not retain.
+ *
+ * Two things the shape of this has to defend against, because `logContext` is
+ * an open channel an application hook writes:
+ *
+ * Its keys are nested rather than spread. Spreading let a hook supply `kind`,
+ * `requestId` or `code` and overwrite the classification and correlation this
+ * adds — so a failure could be made unsearchable as an auth failure, or
+ * attributed to a request that never happened.
+ *
+ * And it cannot throw. This runs inside the auth handlers' catch blocks, and
+ * the default logger serialises with `JSON.stringify`, which throws on a
+ * BigInt or a cycle. A second exception there escapes the handler, so the
+ * caller gets neither the typed error response nor the audit row — a diagnostic
+ * aid taking down the request it exists to explain.
+ */
+function reportWithheldDetail(err: NextlyError, requestId?: string): void {
+  try {
+    getNextlyLogger().warn({
+      kind: "auth-failed",
+      requestId,
+      code: err.code,
+      context: err.logContext,
+    });
+  } catch {
+    /* an unserialisable context is not a reason to fail the request */
+  }
+}
+
 export function auditFailureMetadata(
   err: unknown,
   requestId?: string
@@ -144,14 +174,7 @@ export function auditFailureMetadata(
   // and a caller that projects without reporting silently discards the only
   // actionable detail a failure carried. Keeping both in one place is what
   // stops them diverging per handler.
-  if (err.logContext) {
-    getNextlyLogger().warn({
-      kind: "auth-failed",
-      requestId,
-      code: err.code,
-      ...err.logContext,
-    });
-  }
+  if (err.logContext) reportWithheldDetail(err, requestId);
 
   return {
     code: isCanonicalErrorCode(err.code) ? err.code : "INTERNAL_ERROR",

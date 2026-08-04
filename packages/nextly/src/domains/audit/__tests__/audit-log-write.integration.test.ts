@@ -357,7 +357,71 @@ describe("auditFailureMetadata", () => {
     // ...and reported to the operator, which is the other half of the contract.
     const entry = logged.find(e => e.kind === "auth-failed");
     expect(entry?.requestId).toBe("req-42");
-    expect(entry?.strategyReason).toBe("no SAML assertion for ada@example.com");
+    expect(entry?.context).toMatchObject({
+      strategyReason: "no SAML assertion for ada@example.com",
+    });
+  });
+
+  it("keeps its own classification when a hook supplies those keys", () => {
+    // `logContext` is written by application code. Spread, it could overwrite
+    // the fields this adds — making a failure unsearchable as an auth failure,
+    // or attributing it to a request that never happened.
+    const logged: Record<string, unknown>[] = [];
+    const logger = getNextlyLogger();
+    const originalWarn = logger.warn.bind(logger);
+    logger.warn = (payload: unknown) => {
+      logged.push(payload as Record<string, unknown>);
+      return undefined as never;
+    };
+
+    try {
+      auditFailureMetadata(
+        NextlyError.invalidCredentials({
+          logContext: {
+            kind: "not-auth",
+            requestId: "forged",
+            code: "FORGED",
+          },
+        }),
+        "req-real"
+      );
+    } finally {
+      logger.warn = originalWarn;
+    }
+
+    expect(logged).toHaveLength(1);
+    expect(logged[0].kind).toBe("auth-failed");
+    expect(logged[0].requestId).toBe("req-real");
+    expect(logged[0].code).toBe("AUTH_INVALID_CREDENTIALS");
+  });
+
+  it("still returns metadata when the context cannot be serialised", () => {
+    // This runs inside the auth handlers' catch blocks, and the default logger
+    // serialises with JSON.stringify. A second exception there would escape the
+    // handler, so the caller would get neither the typed response nor the row.
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    const logger = getNextlyLogger();
+    const originalWarn = logger.warn.bind(logger);
+    logger.warn = (payload: unknown) => {
+      JSON.stringify(payload);
+      return undefined as never;
+    };
+
+    try {
+      expect(
+        auditFailureMetadata(
+          NextlyError.invalidCredentials({
+            logContext: { reason: "password-mismatch", cyclic, big: 1n },
+          })
+        )
+      ).toEqual({
+        code: "AUTH_INVALID_CREDENTIALS",
+        reason: "password-mismatch",
+      });
+    } finally {
+      logger.warn = originalWarn;
+    }
   });
 
   it("reports a non-NextlyError as an internal failure", () => {

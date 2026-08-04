@@ -388,7 +388,9 @@ describe("login handler: respondAction shape", () => {
 
     const entry = logged.find(e => e.kind === "auth-failed");
     expect(entry).toBeDefined();
-    expect(entry?.strategyReason).toBe("no SAML assertion for ada");
+    expect((entry?.context as Record<string, unknown>)?.strategyReason).toBe(
+      "no SAML assertion for ada"
+    );
   });
 
   it("stores no identifier a failing plugin hook put on its error", async () => {

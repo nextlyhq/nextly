@@ -62,11 +62,13 @@ export interface ErasableAuditTables {
  * Runs inside the caller's transaction so it commits with the account removal
  * and rolls back with it. A failure here therefore aborts the deletion, which
  * is deliberate: the invariant worth protecting is that an account is never
- * removed while the data identifying its owner stays behind. The cost is that
- * an installation whose `activity_log` table is missing cannot delete a user
- * until it is provisioned — that describes only the degraded SQLite bootstrap
- * fallback, which already omits half the core tables and is not a working
- * installation.
+ * removed while the data identifying its owner stays behind.
+ *
+ * Each table is erased only when the caller supplies it, and the caller decides
+ * that per table. A table a database does not have holds nothing to erase, so
+ * omitting it does not weaken the invariant — while answering for the pair
+ * would let one missing table suppress the other's erasure and leave behind
+ * exactly what the deletion exists to remove.
  *
  * @param db - The caller's open transaction.
  * @param tables - The dialect's table bundle.
