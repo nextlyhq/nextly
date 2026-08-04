@@ -2925,23 +2925,22 @@ export class CollectionRelationshipService extends BaseService {
     const allMediaIds = collectAllMediaIds(expandedEntry, fields);
 
     if (allMediaIds.length > 0) {
-      try {
-        // Batch fetch all media records at once
-        const uniqueMediaIds = [...new Set(allMediaIds)];
-        const mediaRecords = await this.fetchMediaByIds(uniqueMediaIds);
+      // Not wrapped in a catch that returns the entry unexpanded: doing so put
+      // the raw ids on the wire, which reads to a caller exactly like media
+      // that is absent, and is what kept a broken media fetch invisible until
+      // images appeared to vanish. The batch path above does not swallow here
+      // either, so both expansions in this service fail the same way.
+      const uniqueMediaIds = [...new Set(allMediaIds)];
+      const mediaRecords = await this.fetchMediaByIds(uniqueMediaIds);
 
-        // Build lookup map for O(1) access
-        const mediaMap = new Map<string, Record<string, unknown>>();
-        for (const media of mediaRecords) {
-          mediaMap.set(String(media.id), media);
-        }
-
-        // Use recursive function to expand media at any nesting depth
-        return expandMediaInData(expandedEntry, fields, mediaMap);
-      } catch (error) {
-        // If expansion fails, keep the original entry
-        console.error("Failed to expand upload fields:", error);
+      // Build lookup map for O(1) access
+      const mediaMap = new Map<string, Record<string, unknown>>();
+      for (const media of mediaRecords) {
+        mediaMap.set(String(media.id), media);
       }
+
+      // Use recursive function to expand media at any nesting depth
+      return expandMediaInData(expandedEntry, fields, mediaMap);
     }
 
     return expandedEntry;

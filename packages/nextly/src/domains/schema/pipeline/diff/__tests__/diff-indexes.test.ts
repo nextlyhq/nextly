@@ -56,6 +56,26 @@ describe("diffIndexes", () => {
     ).toEqual([]);
   });
 
+  it("creates a replacement index before dropping the one it replaces", () => {
+    // Flipping a field from `index` to `unique` rekeys its index, so the diff
+    // emits a drop and an add for the same column. The drop must come second:
+    // where DDL auto-commits, a CREATE UNIQUE INDEX that existing duplicate
+    // rows reject would otherwise leave the table with neither the old index
+    // nor the new constraint.
+    const prev = snap([
+      { name: "idx_dc_x_code", columns: ["code"], unique: false },
+    ]);
+    const cur = snap([
+      { name: "uq_dc_x_code", columns: ["code"], unique: true },
+    ]);
+
+    const types = diffSnapshots(prev, cur).map(o => o.type);
+
+    expect(types.indexOf("add_index")).toBeLessThan(
+      types.indexOf("drop_index")
+    );
+  });
+
   it("orders drop_index before column ops and add_index after them", () => {
     // Removing an indexed column while adding another indexed one: the
     // removed field's index drop must precede its drop_column (SQLite cannot
