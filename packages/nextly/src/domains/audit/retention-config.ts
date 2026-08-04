@@ -173,7 +173,14 @@ export function resolveAuditRetentionConfig(
  */
 let publishedAuditRetention: ResolvedAuditRetentionConfig | undefined;
 
-/** Publish a reloaded policy. `undefined` restores whatever was built in. */
+/**
+ * Publish a reloaded policy. `undefined` restores whatever was built in.
+ *
+ * Cleared alongside the other process-global registries when the container is
+ * torn down: a value left behind would be preferred over the built-in policy of
+ * whatever configuration initialises next, so a short window from a previous
+ * app could go on deleting rows in one that configured `audit.retention: false`.
+ */
 export function setAuditRetention(
   policy: ResolvedAuditRetentionConfig | undefined
 ): void {
