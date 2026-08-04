@@ -108,7 +108,7 @@ function parseWallClockAsUtc(text: string): Date | undefined {
   // Milliseconds, whatever precision the dialect rendered: a shorter fraction
   // is padded and a longer one truncated, which is what a `Date` can hold.
   const millis = Number(`${fraction}000`.slice(0, 3));
-  return new Date(
+  const parsed = new Date(
     Date.UTC(
       Number(year),
       Number(month) - 1,
@@ -119,6 +119,10 @@ function parseWallClockAsUtc(text: string): Date | undefined {
       millis
     )
   );
+  // `Date.UTC` reads a year under 100 as shorthand for the 1900s, so year 50
+  // would land in 1950. The database said 0050 and meant it.
+  if (Number(year) < 100) parsed.setUTCFullYear(Number(year));
+  return parsed;
 }
 
 /** Whether a table property is a date column that can convert its own values. */
@@ -130,6 +134,18 @@ function isDateColumn(colDef: unknown): colDef is DecodableColumn {
     typeof candidate.mapToDriverValue === "function" &&
     DATE_DATA_TYPE.test(String(candidate.dataType))
   );
+}
+
+/**
+ * Whether a date column records the zone its value belongs to.
+ *
+ * A column declared WITH a time zone stores an instant, so a driver reading it
+ * back gets the same moment whatever zone either end is in -- there is nothing
+ * ambiguous to resolve and nothing to correct. Rendering one as text would
+ * spell it in the session's zone, and reading that as UTC would move it.
+ */
+function carriesTimeZone(colDef: unknown): boolean {
+  return (colDef as { withTimezone?: unknown }).withTimezone === true;
 }
 
 /**
@@ -761,6 +777,10 @@ export abstract class DrizzleAdapter {
       tableObj as Record<string, unknown>
     )) {
       if (!isDateColumn(colDef)) continue;
+      // A column carrying its own zone is already unambiguous; spelling it out
+      // would render it in the session's zone and reading that as UTC would
+      // move an instant that was correct to begin with.
+      if (carriesTimeZone(colDef)) continue;
       const sqlName = (colDef as { name?: unknown }).name;
       if (typeof sqlName !== "string") continue;
       if (requested && !requested.has(sqlName) && !requested.has(jsName)) {

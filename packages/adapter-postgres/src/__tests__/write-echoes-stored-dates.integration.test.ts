@@ -27,6 +27,7 @@ const TABLE_DEFINITION: TableDefinition = {
     { name: "label", type: "text", nullable: false },
     // Without a time zone, which is what every generated timestamp column is.
     { name: "occurred_at", type: "timestamp" },
+    { name: "zoned_at", type: "timestamptz" },
   ],
 };
 
@@ -34,6 +35,8 @@ const events = pgTable(TABLE, {
   id: text("id").primaryKey(),
   label: text("label").notNull(),
   occurredAt: timestamp("occurred_at", { withTimezone: false }),
+  // Carries its own zone, so it is already unambiguous and must be left alone.
+  zonedAt: timestamp("zoned_at", { withTimezone: true }),
 });
 
 const OCCURRED_AT = new Date("2026-08-04T15:04:01.860Z");
@@ -194,6 +197,49 @@ describe.skipIf(!TEST_DB_URL)("PostgreSQL write echoes the stored date", () => {
       });
       await adapter.executeQuery(`DROP TABLE IF EXISTS ${longTable}`);
     }
+  });
+
+  it("leaves a zone-carrying column alone", async () => {
+    // A `timestamptz` stores an instant, so the driver already reads back the
+    // moment that was written. Spelling it out would render it in the session's
+    // zone, and reading that as UTC would move a value that was correct.
+    await adapter.executeQuery("SET TimeZone = 'Asia/Karachi'");
+    try {
+      const written = await adapter.transaction(ctx =>
+        ctx.insert<{ zonedAt: Date }>(
+          TABLE,
+          { id: "tz-zoned", label: "f", zoned_at: OCCURRED_AT },
+          { returning: "*" }
+        )
+      );
+
+      const read = await adapter.selectOne<{ zonedAt: Date }>(TABLE, {
+        where: { and: [{ column: "id", op: "=", value: "tz-zoned" }] },
+      });
+
+      expect(written.zonedAt).toEqual(OCCURRED_AT);
+      expect(written.zonedAt).toEqual(read?.zonedAt);
+    } finally {
+      await adapter.executeQuery("SET TimeZone = 'UTC'");
+    }
+  });
+
+  it("keeps a year below 0100 in its own century", async () => {
+    // `Date.UTC` reads a year under 100 as shorthand for the 1900s, so year 50
+    // would otherwise land in 1950. PostgreSQL can store it and said 0050.
+    const ancient = new Date("2026-01-01T00:00:00.000Z");
+    ancient.setUTCFullYear(50);
+
+    const written = await adapter.transaction(ctx =>
+      ctx.insert<{ occurredAt: Date }>(
+        TABLE,
+        { id: "old-1", label: "g", occurred_at: ancient },
+        { returning: "*" }
+      )
+    );
+
+    expect(written.occurredAt.getUTCFullYear()).toBe(50);
+    expect(written.occurredAt).toEqual(ancient);
   });
 
   it("adds no column the caller did not ask to have returned", async () => {
