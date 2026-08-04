@@ -174,6 +174,25 @@ export class DynamicCollectionSchemaService {
   }
 
   /**
+   * Every name this generator may have given one column's index, current first.
+   *
+   * Bounding long names changed what they are called, and an index already in a database still
+   * carries the name it was created under. Looking only for the current one leaves the old index
+   * in place while the field records that it was removed — the table then keeps enforcing
+   * something the schema no longer says. The dialects even disagree on the legacy name: SQLite
+   * stored it whole, PostgreSQL truncated it to 63 characters, and MySQL could not create it at
+   * all, so an over-long name never existed there to find.
+   *
+   * Which of these the table actually has is decided by the live index list, never guessed.
+   */
+  private indexNameCandidates(tableName: string, column: string): string[] {
+    const full = `idx_${tableName}_${column}`;
+    const candidates = [this.indexName(tableName, column), full];
+    if (this.dialect === "postgresql") candidates.push(full.slice(0, 63));
+    return [...new Set(candidates)];
+  }
+
+  /**
    * `CREATE INDEX` for one column, in the spelling the dialect accepts.
    *
    * MySQL cannot index a `BLOB`/`TEXT` column without a key length and rejects the statement
@@ -210,8 +229,8 @@ export class DynamicCollectionSchemaService {
    * references the column, reporting it as a missing column inside the index rather than as the
    * removal it refused.
    */
-  private dropIndexSql(tableName: string, column: string): string {
-    const name = this.quoteIdentifier(this.indexName(tableName, column));
+  private dropIndexSql(tableName: string, indexName: string): string {
+    const name = this.quoteIdentifier(indexName);
     if (this.dialect === "mysql") {
       return `DROP INDEX ${name} ON ${this.quoteIdentifier(tableName)};`;
     }
@@ -819,12 +838,21 @@ ${allColumnDefs.join(",\n")}
         } else {
           // Same guard as the removal path: turning an index off that the table never carried
           // aborts on MySQL, which cannot express `DROP INDEX IF EXISTS`.
+          // And whichever name the table carries it under, for the same reason as the removal
+          // path: bounding long names changed what they are called, and an index already in a
+          // database still answers to the name it was created under.
           const known = options?.indexNames !== undefined;
-          const exists =
-            options?.indexNames?.has(this.indexName(tableName, idxCol)) ===
-            true;
-          if (known ? exists : this.dialect !== "mysql") {
-            statements.push(this.dropIndexSql(tableName, idxCol));
+          const present = this.indexNameCandidates(tableName, idxCol).find(
+            name => options?.indexNames?.has(name) === true
+          );
+          if (known) {
+            if (present !== undefined) {
+              statements.push(this.dropIndexSql(tableName, present));
+            }
+          } else if (this.dialect !== "mysql") {
+            statements.push(
+              this.dropIndexSql(tableName, this.indexName(tableName, idxCol))
+            );
           }
         }
       }
@@ -889,11 +917,18 @@ ${allColumnDefs.join(",\n")}
         // Asked of the live table, not of the field: an index is created by whichever path
         // added the column, so a field that looks indexed may have none. MySQL cannot guard the
         // drop itself, so without the answer it is not attempted there.
-        const indexName = this.indexName(tableName, dropCol);
         const indexIsKnown = options?.indexNames !== undefined;
-        const indexExists = options?.indexNames?.has(indexName) === true;
-        if (indexIsKnown ? indexExists : this.dialect !== "mysql") {
-          statements.push(this.dropIndexSql(tableName, dropCol));
+        const present = this.indexNameCandidates(tableName, dropCol).find(
+          name => options?.indexNames?.has(name) === true
+        );
+        if (indexIsKnown) {
+          if (present !== undefined) {
+            statements.push(this.dropIndexSql(tableName, present));
+          }
+        } else if (this.dialect !== "mysql") {
+          statements.push(
+            this.dropIndexSql(tableName, this.indexName(tableName, dropCol))
+          );
         }
 
         // SQLite doesn't support IF EXISTS on DROP COLUMN

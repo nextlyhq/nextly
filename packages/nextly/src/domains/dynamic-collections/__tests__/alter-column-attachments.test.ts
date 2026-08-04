@@ -563,6 +563,61 @@ describe("an index name every dialect accepts", () => {
     }
   });
 
+  it.each(["postgresql", "sqlite"] as const)(
+    "drops an index stored under the name an earlier version gave it (%s)",
+    dialect => {
+      const svc = service(dialect);
+      const indexed = field({ name: longColumn, type: "number", index: true });
+      // What a table created before the name was bounded actually carries: SQLite kept it
+      // whole, PostgreSQL truncated it to 63. Looking only for the current name would leave
+      // that index in place while the field records that it was removed.
+      const legacyFull = `idx_${longTable}_${longColumn}`;
+      const legacy =
+        dialect === "sqlite" ? legacyFull : legacyFull.slice(0, 63);
+
+      const sql = unquote(
+        svc.generateAlterTableMigration(longTable, [indexed], [], {
+          foreignKeysByColumn: new Map(),
+          indexNames: new Set([legacy]),
+        })
+      );
+
+      expect(sql).toContain(`DROP INDEX IF EXISTS ${legacy};`);
+    }
+  );
+
+  it("drops the current name when that is what the table carries", () => {
+    const svc = service("sqlite");
+    const indexed = field({ name: longColumn, type: "number", index: true });
+    // The one name that is not a system index, which is this column's.
+    const systemNames = [...svc.plannedAttachments(longTable, []).indexNames];
+    const current = [
+      ...svc.plannedAttachments(longTable, [indexed]).indexNames,
+    ].find(n => !systemNames.includes(n));
+    const sql = unquote(
+      svc.generateAlterTableMigration(longTable, [indexed], [], {
+        foreignKeysByColumn: new Map(),
+        indexNames: new Set([current!]),
+      })
+    );
+
+    expect(sql).toContain(`DROP INDEX IF EXISTS ${current};`);
+  });
+
+  it("drops nothing when the table carries neither name", () => {
+    const sql = unquote(
+      service("sqlite").generateAlterTableMigration(
+        longTable,
+        [field({ name: longColumn, type: "number", index: true })],
+        [],
+        { foreignKeysByColumn: new Map(), indexNames: new Set<string>() }
+      )
+    );
+
+    expect(sql).not.toContain("DROP INDEX");
+    expect(sql).toContain("DROP COLUMN");
+  });
+
   it("leaves a short name readable and unhashed", () => {
     expect(
       service("mysql")
