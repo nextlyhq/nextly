@@ -1,6 +1,6 @@
 import { defineBlock } from "../../core/registry";
 
-import { mediaUrl, safeUrl, str } from "./util";
+import { mediaUrl, str } from "./util";
 
 interface Flags {
   autoplay: boolean;
@@ -85,7 +85,7 @@ export const video = defineBlock({
     visibility: true,
     customCss: true,
   },
-  render: ({ props, className }) => {
+  render: ({ props, className, remotePatterns }) => {
     const provider = str(props.provider, "youtube");
     const flags: Flags = {
       autoplay: props.autoplay === true,
@@ -95,9 +95,11 @@ export const video = defineBlock({
     };
 
     if (provider === "self") {
-      const src = safeUrl(props.src);
+      // The poster beside this was already gated; the source it belongs to is
+      // the same media-library content reaching the same network.
+      const src = mediaUrl(props.src, remotePatterns);
       if (!src) return null;
-      const poster = mediaUrl(props.poster);
+      const poster = mediaUrl(props.poster, remotePatterns);
       return (
         <video
           className={className}

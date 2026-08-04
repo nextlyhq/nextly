@@ -1,7 +1,8 @@
 import { defineBlock } from "../../core/registry";
+import { isFetchableUrl } from "../../core/url-policy";
 
 import { renderMarkdown } from "./markdown";
-import { safeUrl, str } from "./util";
+import { mediaUrl, str } from "./util";
 
 /** A single collapsible toggle (native <details>, no JS). */
 export const toggle = defineBlock({
@@ -133,16 +134,20 @@ export const map = defineBlock({
     customCss: true,
     customAttributes: true,
   },
-  render: ({ props, className }) => {
+  render: ({ props, className, remotePatterns }) => {
     const height = Number(props.height) || 320;
-    const explicit = safeUrl(props.src);
+    const explicit = mediaUrl(props.src, remotePatterns);
     const src =
       explicit && /^https:\/\//i.test(explicit)
         ? explicit
         : props.query
           ? `https://www.google.com/maps?q=${encodeURIComponent(str(props.query))}&output=embed`
           : "";
-    if (!src) return null;
+    // Gated even for the built-in maps URL. The iframe is lazy, so a page can
+    // carry several of these with different queries and let a secret-dependent
+    // selector decide which ones load — the query travels in the request, so a
+    // fixed host does not make it harmless.
+    if (!src || !isFetchableUrl(src, remotePatterns ?? [])) return null;
     return (
       <div className={className}>
         <iframe
