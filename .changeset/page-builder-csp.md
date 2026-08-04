@@ -43,13 +43,19 @@ one — union these into it with `mergeCspDirectives` rather than sending a seco
 header. Policies intersect rather than extend, so an existing `img-src 'self'`
 refuses your CDN however many other policies allow it.
 
-Only patterns that translate EXACTLY produce a source: `https`, a lowercase
-literal or single-wildcard hostname, an absent or empty port, no `search`, and no
-path constraint. Anything else is refused and named by `unexpressibleHosts`,
-because CSP and `remotePatterns` read several of the same words differently — a
-CSP `http://` source also matches https, an omitted port means "the default port"
-rather than "any port", CSP compares hosts case-insensitively while the matcher
-does not, and CSP never matches a query at all.
+Only patterns that translate EXACTLY produce a source: an absent or `https`
+protocol, a lowercase domain (literal or with one leading wildcard label), an
+absent, empty or non-default port, no `search`, and no path constraint. Anything
+else is refused and named by `unexpressibleHosts`.
+
+The awkward cases are where the two grammars read the same word differently. A
+CSP `http://` source also matches https — which is why an absent protocol
+translates (it means either scheme on both sides) while an explicit `http` one
+cannot. A default port is refused because the URL parser removes it before the
+matcher compares, so the pattern matches nothing while the source matches the
+canonical form. An IP address is refused because CSP host matching ignores any
+host that is not a domain, so the source could never match. `**.example.com` is
+normalised to `*.example.com`, which accepts the same hostnames on both sides.
 
 A `pathname` is refused outright, which is worth calling out because it looks
 translatable and is not. CSP enforces a source's path only on the initial
@@ -60,5 +66,16 @@ and is reported instead. The generated policy is therefore never broader than
 the one it backstops; where it cannot express a host, you add that source
 yourself.
 
-No `script-src`: a nonce-based script policy forces dynamic rendering on every
-page and would defeat ISR. Scripts stay your application's business.
+No `script-src` and no `default-src`, which is one decision: a nonce-based
+script policy forces dynamic rendering on every page and would defeat ISR, and
+`default-src` is the fallback for `script-src`, so emitting one would take that
+choice back silently. This is therefore a backstop rather than a complete
+policy — `prefetch` and `prerender` fall back to `default-src` and are not
+covered by it. Nextly's own security headers already send `default-src 'self'`,
+which is the other reason merging into your existing policy is the recommended
+path rather than sending this value alone.
+
+`unmergeableStylePolicy(existing)` names a style directive carrying a nonce or
+hash. CSP stops honouring `'unsafe-inline'` once one is present, so merging into
+such a policy would look successful and still block every inline style the
+renderer emits.

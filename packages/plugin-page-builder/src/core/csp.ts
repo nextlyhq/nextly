@@ -33,18 +33,36 @@
  * or its CDN, merged with whatever it already sends. It owns the response, so
  * it owns the header.
  *
- * ## No `script-src`
+ * ## No `script-src`, and no `default-src`
  *
- * Deliberately. The canonical Next.js recipe uses a per-request nonce, which
- * forces dynamic rendering on every page and would defeat tag-based ISR. A
- * nonce governs scripts; the channel this closes is where a RESOURCE comes
- * from, and a host allowlist is a static string that works unchanged under
- * static generation, ISR and dynamic rendering alike. Scripts remain the host
- * application's business.
+ * Deliberately, and they are the same decision. The canonical Next.js recipe
+ * governs scripts with a per-request nonce, which forces dynamic rendering on
+ * every page and would defeat tag-based ISR. The channel this closes is where
+ * a RESOURCE comes from, and a host allowlist is a static string that works
+ * unchanged under static generation, ISR and dynamic rendering alike. Scripts
+ * remain the host application's business — and `default-src` is the fallback
+ * for every directive not named here, `script-src` among them, so emitting one
+ * would take that decision back without saying so.
  *
  * What IS emitted is the fetch directives plus `base-uri`. The one non-fetch
  * directive earns its place because a cross-origin `<base href>` re-points
  * every relative url on the page, and no fetch directive can express that.
+ *
+ * ## So this is a backstop, not a complete policy
+ *
+ * Request types CSP routes through neither these directives nor a fallback are
+ * not covered. `prefetch` and `prerender` are the concrete example: their
+ * effective directive is `default-src`, so a block rendering
+ * `<link rel="prefetch" href={…}>` reaches any origin when this value is sent
+ * on its own.
+ *
+ * That gap is closed by the recommended path rather than by this function.
+ * Nextly's own security headers already send `default-src 'self'`, and
+ * {@link mergeCspDirectives} unions into a policy that has one — which is why
+ * merging is what the docs tell a host to do, and why
+ * {@link cspHeaderValue} is documented for the case where no other policy
+ * exists at all. A host sending this standalone should add its own
+ * `default-src`, chosen against its own script needs.
  *
  * @module core/csp
  */
@@ -121,25 +139,13 @@ export interface CspOptions {
  * the reasons are worth stating because each is a place the two systems use the
  * same word differently:
  *
- * - `protocol` must be `https`. A CSP `http://` source matches https requests
- *   too (CSP 3 upgrades insecure schemes), while the matcher compares schemes
- *   exactly — so an http pattern becomes a source allowing more than the
- *   pattern does. An omitted protocol means either scheme to the matcher and
- *   the document's own scheme to CSP, which is a mismatch in the other
- *   direction.
- * - `port` distinguishes three cases, because to the matcher an ABSENT field
- *   and an empty one mean different things. Absent is any port, which CSP
- *   writes `:*`. Empty compares against the request's port after the URL
- *   parser has canonicalised a default away, so it means the default port —
- *   exactly what CSP means by omitting the port. Anything else is refused:
- *   `port: "443"` on https matches no request at all, since the parser removed
- *   the 443 before the comparison, and emitting it would allow an origin the
- *   pattern forbids.
- * - `hostname` must be literal, or one leading `*.` and literal after, and
- *   must already be lowercase. The rest of picomatch has no CSP equivalent and
- *   no safe approximation: widening `cdn-*.co.uk` to `*.co.uk` allows every
- *   site under a public suffix. Case matters because the two disagree about
- *   it — see {@link isExpressibleHost}.
+ * - `protocol` may be absent or `https`; an explicit `http` cannot be written
+ *   — see {@link cspScheme}.
+ * - `port` may be absent, empty, or a non-default number — see
+ *   {@link cspPort}.
+ * - `hostname` must be a lowercase domain, literal or with one leading
+ *   wildcard label — see {@link cspHost}, which also normalises the `**.`
+ *   spelling and refuses IP literals.
  * - `pathname` must not CONSTRAIN the path at all — see
  *   {@link pathIsUnconstrained}. CSP cannot hold a path constraint, so a
  *   pattern carrying one is reported rather than translated.
@@ -159,37 +165,78 @@ function sourceExpression(input: RemotePatternInput): string | undefined {
   if (input instanceof URL) return undefined;
   const pattern: RemotePattern = input;
 
-  // Exactly `https`. See the note above for why `http` and an omitted protocol
-  // are both refused rather than approximated.
-  if (pattern.protocol !== "https") return undefined;
+  const scheme = cspScheme(pattern.protocol);
+  if (scheme === undefined) return undefined;
 
-  // Untrimmed: the matcher hands the raw value to picomatch, so a hostname with
-  // surrounding whitespace matches nothing there. Trimming it here would emit a
-  // host the pattern does not actually allow.
-  const host = pattern.hostname;
-  if (!isExpressibleHost(host)) return undefined;
+  const host = cspHost(pattern.hostname);
+  if (host === undefined) return undefined;
 
-  const port = cspPort(pattern.port);
+  const port = cspPort(pattern.port, scheme);
   if (port === undefined) return undefined;
 
   if (pattern.search !== undefined) return undefined;
 
   if (!pathIsUnconstrained(pattern.pathname)) return undefined;
 
-  return `https://${host}${port}`;
+  return `${scheme}://${host}${port}`;
 }
+
+/**
+ * The scheme to write, or `undefined` when no scheme says what the pattern does.
+ *
+ * CSP upgrades: "`http` `scheme-part` matches `https`", so `http://example.com`
+ * is defined as equivalent to `http://example.com https://example.com`. That
+ * makes the mapping the opposite way round from the obvious one:
+ *
+ * - an ABSENT (or empty) protocol means either scheme to the matcher, which is
+ *   exactly what a CSP `http://` source means. It translates, and this is the
+ *   shape a `next.config` entry copied across most often has;
+ * - `https` translates to itself, matching https only on both sides;
+ * - an explicit `http` is the one that cannot be written. The matcher compares
+ *   schemes exactly and would allow http alone, while every CSP spelling of it
+ *   also allows https.
+ */
+function cspScheme(protocol: string | undefined): string | undefined {
+  if (protocol === undefined || protocol === "") return "http";
+  if (protocol === "https") return "https";
+  return undefined;
+}
+
+/**
+ * Default ports the emitted scheme's sources also match, by CSP's port rules.
+ *
+ * A source with an explicit port matches a URL whose port is absent when the
+ * number is that scheme's default — and an `http` source covers https as well,
+ * so both defaults are in play there. The matcher compares the pattern's port
+ * against the parser's canonical one, where a default has already been removed,
+ * so a pattern naming one matches nothing at all.
+ */
+const DEFAULT_PORTS: Record<string, readonly string[]> = {
+  http: ["80", "443"],
+  https: ["443"],
+};
 
 /**
  * A pattern port as a CSP port suffix, or `undefined` when it cannot be one.
  *
- * Absent and empty are both meaningful and they are not the same: the matcher
- * skips the comparison entirely for an absent port and requires equality with
- * the request's canonicalised port for an empty one.
+ * Three cases, because absent and empty are not the same to the matcher:
+ *
+ * - ABSENT skips the comparison entirely — any port — which CSP writes `:*`;
+ * - EMPTY requires equality with the parser's canonical port, which is blank
+ *   for a default, and CSP means the same by omitting the port;
+ * - a number translates as itself, and matches exactly, EXCEPT where it is a
+ *   default port for a scheme this source covers.
+ *
+ * Written as digits with no leading zero, because that is both the CSP grammar
+ * and what the matcher compares against: CSP reads `0443` as decimal 443 while
+ * the matcher compares the string to a canonical port and never matches.
  */
-function cspPort(port: string | undefined): string | undefined {
+function cspPort(port: string | undefined, scheme: string): string | undefined {
   if (port === undefined) return ":*";
   if (port === "") return "";
-  return undefined;
+  if (!/^[1-9][0-9]*$/.test(port)) return undefined;
+  if ((DEFAULT_PORTS[scheme] ?? []).includes(port)) return undefined;
+  return `:${port}`;
 }
 
 /**
@@ -223,24 +270,53 @@ function pathIsUnconstrained(pathname: string | undefined): boolean {
 }
 
 /**
- * Whether a hostname is something CSP can express exactly.
+ * A hostname as a CSP host-source, or `undefined` when it cannot be one.
  *
- * A literal host, or one leading `*.` followed by literal labels — the whole of
- * the CSP host-source grammar. Everything else is a picomatch glob with no CSP
- * equivalent, and there is no safe approximation: the nearest expressible
- * ancestor of `cdn-*.co.uk` is `*.co.uk`, which allows every site under a public
- * suffix. Refusing is the direction that keeps the CSP a backstop; the host adds
- * an explicit source if it needs one, and {@link unexpressibleHosts} names them.
+ * Returns the host to WRITE rather than a yes/no, because one common form
+ * needs normalising rather than refusing.
  *
- * Lowercase only, and that is a real restriction rather than a tidiness rule.
- * CSP matches hosts case-insensitively while picomatch is case-sensitive
- * against a hostname the URL parser has already lowercased — so `CDN.example`
- * matches no request at all through the matcher, and a source emitted from it
- * would allow every request to `cdn.example`.
+ * - `**.example.com` is written `*.example.com`. Measured against the same
+ *   picomatch the matcher uses, the two accept an identical set — every depth
+ *   of subdomain, never the apex — and CSP's own rule is the same suffix test
+ *   ("if host ends with `.example.com`"). Refusing it cost a common copied
+ *   pattern its source for no gain.
+ * - Any other glob is refused. There is no safe approximation: the nearest
+ *   expressible ancestor of `cdn-*.co.uk` is `*.co.uk`, which allows every site
+ *   under a public suffix.
+ * - `*` alone is refused. CSP accepts it and it would allow every host, which
+ *   is not a backstop.
+ * - An IP literal is refused. CSP host matching begins "if host is not a
+ *   domain, return Does Not Match", so a source naming an address matches no
+ *   request at all while the matcher accepts one — a directive that silently
+ *   blocks what the site allows.
+ * - Lowercase only. CSP matches hosts case-insensitively while picomatch is
+ *   case-sensitive against a hostname the URL parser already lowercased, so
+ *   `CDN.example` matches no request through the matcher and a source emitted
+ *   from it would allow every request to `cdn.example`.
  */
-function isExpressibleHost(host: string): boolean {
+function cspHost(hostname: string): string | undefined {
+  // Untrimmed: the matcher hands the raw value to picomatch, so a hostname
+  // with surrounding whitespace matches nothing there, and trimming it here
+  // would emit a host the pattern does not actually allow.
+  const host = hostname.startsWith("**.") ? `*.${hostname.slice(3)}` : hostname;
   const body = host.startsWith("*.") ? host.slice(2) : host;
-  return /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.?$/.test(body);
+
+  if (!/^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.?$/.test(body)) return undefined;
+  if (isIpLiteral(body)) return undefined;
+  return host;
+}
+
+/**
+ * Whether a host reads as an IP address rather than a domain.
+ *
+ * The URL parser treats a final all-digit label as IPv4, and CSP refuses any
+ * host that is not a domain, so this is the test that matters: the last label.
+ * A registrable domain never ends in an all-numeric label.
+ */
+function isIpLiteral(host: string): boolean {
+  const labels = host.replace(/\.$/, "").split(".");
+  const last = labels[labels.length - 1] ?? "";
+  return /^[0-9]+$/.test(last);
 }
 
 /**
@@ -260,6 +336,46 @@ export function unexpressibleHosts(
         .map(p => (p instanceof URL ? p.href : p.hostname))
     ),
   ];
+}
+
+/**
+ * Why merging into this policy would not give the renderer its inline styles.
+ *
+ * `undefined` when it would work. A string naming the directive otherwise, so
+ * the host is told rather than left with a page whose layout silently does not
+ * apply.
+ *
+ * CSP stops honouring `'unsafe-inline'` for a directive as soon as that
+ * directive carries a nonce or a hash — the strict-CSP posture, and a
+ * deliberate one. Unioning our `'unsafe-inline'` into such a directive is a
+ * no-op, so a merge that looks successful still blocks every inline `<style>`
+ * the renderer emits and every `style="…"` on its nodes.
+ *
+ * There is no fix this side of the boundary: carrying the host's per-request
+ * nonce into the rendered markup is the only way through, and that is the host
+ * threading it into the renderer, not something a header helper can do. So it
+ * is reported.
+ */
+export function unmergeableStylePolicy(
+  existing: Readonly<Record<string, readonly string[]>>
+): string | undefined {
+  const carriesNonceOrHash = (sources: readonly string[]): boolean =>
+    sources.some(source =>
+      /^'(?:nonce-|sha(?:256|384|512)-)/i.test(source.trim())
+    );
+
+  for (const [name, sources] of Object.entries(existing)) {
+    const directive = name.toLowerCase();
+    if (
+      directive !== "style-src" &&
+      directive !== "style-src-elem" &&
+      directive !== "style-src-attr"
+    ) {
+      continue;
+    }
+    if (carriesNonceOrHash(sources)) return directive;
+  }
+  return undefined;
 }
 
 /**
@@ -319,6 +435,11 @@ export function cspDirectives(
  *
  * Use this only when the response carries NO other policy. Where one exists,
  * {@link mergeCspDirectives} is the operation that works — see why there.
+ *
+ * Not a complete policy on its own: it names no `default-src`, so request
+ * types that fall back to one — `prefetch` and `prerender` — are unrestricted.
+ * See the module docblock for why that fallback is not emitted here and what
+ * to pair this with.
  */
 export function cspHeaderValue(
   remotePatterns: readonly RemotePatternInput[] = [],
@@ -418,24 +539,27 @@ export function mergeCspDirectives(
     merged[name] = [...new Set([...(inherited ?? []), ...sources])];
   }
 
-  // `style-src-elem` governs a `<link rel="stylesheet">` IN PLACE OF
-  // `style-src`, which only applies where the more specific directive is
-  // absent. A host that splits the two would take the generated hosts into
-  // `style-src` and keep blocking the stylesheet, so the same sources go
-  // wherever the decision is actually made. Only when the host already
-  // declares it: writing one otherwise would split a policy they kept whole.
+  // `style-src-elem` and `style-src-attr` govern a stylesheet element and a
+  // `style="…"` attribute IN PLACE OF `style-src`, which applies only where
+  // the more specific directive is absent. A host that splits them would take
+  // the generated sources into the directive that is never consulted: their
+  // `style-src-elem` would go on blocking a block's `<link rel=stylesheet>`,
+  // and their `style-src-attr` would go on blocking the inline `style={…}` the
+  // renderer and its built-in blocks put on almost every node.
+  //
+  // So the sources follow to whichever directive decides — but only where the
+  // host declared it (writing one otherwise would split a policy they kept
+  // whole) and only where they have not closed it (a union would move `'none'`
+  // out of the single-item position where CSP honours it).
   const styleSources = add.get("style-src");
-  const styleElem = before.get("style-src-elem");
-  if (
-    styleSources !== undefined &&
-    // Undeclared, so `style-src` already governs and there is nothing to
-    // mirror into.
-    styleElem !== undefined &&
-    // Declared as permitting nothing, which a union would silently reopen.
-    !isNoSources(styleElem)
-  ) {
-    merged["style-src-elem"] = [...new Set([...styleElem, ...styleSources])];
+  if (styleSources !== undefined) {
+    for (const name of ["style-src-elem", "style-src-attr"] as const) {
+      const declared = before.get(name);
+      if (declared === undefined || isNoSources(declared)) continue;
+      merged[name] = [...new Set([...declared, ...styleSources])];
+    }
   }
+
   return merged;
 }
 

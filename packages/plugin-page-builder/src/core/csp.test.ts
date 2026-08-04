@@ -18,6 +18,7 @@ import {
   parseCspHeader,
   serializeCspDirectives,
   unexpressibleHosts,
+  unmergeableStylePolicy,
 } from "./csp";
 
 /** What `img-src` holds before any pattern contributes a source. */
@@ -61,6 +62,30 @@ describe("cspDirectives — what translates exactly", () => {
       ).toContain("https://cdn.example:*");
   });
 
+  it("expresses a protocol-less pattern as http, which covers both schemes", () => {
+    // CSP defines `http://h` as equivalent to `http://h https://h`, which is
+    // exactly what an absent protocol means to the matcher. Writing `https`
+    // instead would drop the http half the pattern allows.
+    const d = cspDirectives([{ hostname: "cdn.example" }]);
+    expect(d["img-src"]).toContain("http://cdn.example:*");
+  });
+
+  it("expresses a non-default port exactly", () => {
+    const d = cspDirectives([
+      { protocol: "https", hostname: "cdn.example", port: "8443" },
+    ]);
+    expect(d["img-src"]).toContain("https://cdn.example:8443");
+  });
+
+  it("normalises a double-star subdomain glob to the single-star form", () => {
+    // The two accept an identical set through picomatch — every depth of
+    // subdomain, never the apex — and CSP's rule is the same suffix test.
+    const d = cspDirectives([
+      { protocol: "https", hostname: "**.example.com" },
+    ]);
+    expect(d["img-src"]).toContain("https://*.example.com:*");
+  });
+
   it("carries a host into every fetch directive", () => {
     const d = cspDirectives([{ protocol: "https", hostname: "cdn.example" }]);
     // Every directive that takes hosts, so a newly added one cannot quietly
@@ -94,33 +119,46 @@ describe("cspDirectives — what is refused rather than approximated", () => {
     );
   });
 
-  it("refuses an omitted protocol, which the two read differently", () => {
-    // Either scheme to the matcher; the document's own scheme to CSP.
-    expect(refused({ hostname: "cdn.example" })).toEqual(SELF_ONLY);
+  it("refuses a DEFAULT port, which the matcher can never match", () => {
+    // The URL parser removes a default port before the matcher compares it, so
+    // `port: "443"` on https matches no request — while a CSP source naming it
+    // matches the canonical form, which is wider. Non-canonical spellings go
+    // the same way: CSP reads `0443` as decimal 443, the matcher compares the
+    // string and never matches.
+    for (const port of ["443", "0443", "44a", ""])
+      if (port !== "")
+        expect(
+          refused({ protocol: "https", hostname: "cdn.example", port }),
+          port
+        ).toEqual(SELF_ONLY);
   });
 
-  it("refuses an explicit port, which the matcher can never match", () => {
-    // The URL parser canonicalises a default port away before the matcher
-    // compares it, so `port: "443"` on https matches nothing — and emitting it
-    // would allow an origin the pattern forbids.
-    for (const port of ["443", "8443", "0443"])
-      expect(
-        refused({ protocol: "https", hostname: "cdn.example", port }),
-        port
-      ).toEqual(SELF_ONLY);
+  it("refuses a default port of EITHER scheme when the protocol is absent", () => {
+    // A protocol-less pattern is written `http://`, which CSP also matches
+    // against https — so both 80 and 443 are defaults this source could match
+    // where the matcher would not.
+    for (const port of ["80", "443"])
+      expect(refused({ hostname: "cdn.example", port }), port).toEqual(
+        SELF_ONLY
+      );
   });
 
   it("refuses a glob CSP cannot express, rather than widening it", () => {
     // Widening `cdn-*.co.uk` to `*.co.uk` allows every site under a public
     // suffix, and telling a public suffix apart needs a list this package has
-    // no business shipping.
-    for (const hostname of [
-      "cdn-*.com",
-      "cdn-*.co.uk",
-      "**.example.com",
-      "*",
-      "",
-    ])
+    // no business shipping. `*` alone would allow every host, which is not a
+    // backstop.
+    for (const hostname of ["cdn-*.com", "cdn-*.co.uk", "*", ""])
+      expect(refused({ protocol: "https", hostname }), hostname).toEqual(
+        SELF_ONLY
+      );
+  });
+
+  it("refuses an IP literal, which matches no host-source at all", () => {
+    // CSP host matching begins "if host is not a domain, return Does Not
+    // Match", so a source naming an address can never match — it would
+    // silently block media the allowlist permits.
+    for (const hostname of ["192.168.0.1", "127.0.0.1", "10.0.0.1"])
       expect(refused({ protocol: "https", hostname }), hostname).toEqual(
         SELF_ONLY
       );
@@ -402,6 +440,17 @@ describe("merging into an existing policy", () => {
     expect(Object.keys(merged)).not.toContain("style-src-elem");
   });
 
+  it("carries the style hosts into style-src-attr when the host splits it", () => {
+    // `style-src-attr` governs a `style="…"` attribute in place of
+    // `style-src`, and the renderer puts one on almost every node — so a host
+    // that splits it would go on blocking the layout it is rendering.
+    const merged = mergeCspDirectives(
+      parseCspHeader("style-src 'self'; style-src-attr 'self'"),
+      cspDirectives([{ protocol: "https", hostname: "cdn.example" }])
+    );
+    expect(merged["style-src-attr"]).toContain("'unsafe-inline'");
+  });
+
   it("does not reopen a style-src-elem the host closed", () => {
     // Declared as permitting nothing. A union would drop the `'none'` to a
     // non-single position, where CSP ignores it and the CDN would load.
@@ -445,5 +494,30 @@ describe("cspHeaderValue", () => {
   it("round-trips through parse and serialize", () => {
     const value = "img-src 'self' data:; frame-src 'self'";
     expect(serializeCspDirectives(parseCspHeader(value))).toBe(value);
+  });
+});
+
+describe("unmergeableStylePolicy", () => {
+  it("names a directive whose nonce makes the inline allowance a no-op", () => {
+    // CSP stops honouring `'unsafe-inline'` once a nonce or hash is present,
+    // so merging into this policy would look successful and still block every
+    // inline style the renderer emits.
+    expect(
+      unmergeableStylePolicy(parseCspHeader("style-src 'self' 'nonce-abc123'"))
+    ).toBe("style-src");
+    expect(
+      unmergeableStylePolicy(parseCspHeader("style-src-elem 'sha256-Zm9vYmFy'"))
+    ).toBe("style-src-elem");
+  });
+
+  it("says nothing about a policy the merge can serve", () => {
+    expect(
+      unmergeableStylePolicy(parseCspHeader("style-src 'self' 'unsafe-inline'"))
+    ).toBeUndefined();
+    // A nonce elsewhere is not this function's business: only the style
+    // directives decide whether inline STYLES apply.
+    expect(
+      unmergeableStylePolicy(parseCspHeader("script-src 'nonce-abc123'"))
+    ).toBeUndefined();
   });
 });
