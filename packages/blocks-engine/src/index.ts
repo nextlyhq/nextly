@@ -173,6 +173,26 @@ export {
   findUnnamespacedGlobals,
   namespacedGlobalName,
 } from "./style/isolation";
+// Site tokens and self-hosted fonts: the table a token name resolves in, and
+// the faces a site serves. Public because the admin's tokens studio and the
+// site-sheet compiler both build on these types.
+export {
+  DARK_MODE_ATTRIBUTE,
+  TOKEN_MODES,
+  defaultSiteTokens,
+  emitFontFaces,
+  emitTokenBlocks,
+  resolveTokenPrefix,
+  validateFontFace,
+} from "./style/site-tokens";
+export type {
+  DarkModeStrategy,
+  FontFaceDef,
+  FontSource,
+  SiteToken,
+  SiteTokenSet,
+  TokenMode,
+} from "./style/site-tokens";
 export type {
   CompiledPageCss,
   StyleCompileContext,
