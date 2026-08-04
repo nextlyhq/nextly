@@ -55,6 +55,17 @@ export interface CanvasDriver {
   /** Where the pointer was last commanded to, in host coordinates. */
   pointer(): Point;
 
+  /**
+   * Whether a drag is currently in flight.
+   *
+   * Distinguishes "no drag started" from "a drag started and mutated nothing",
+   * which a tree-shape check alone cannot tell apart.
+   */
+  isDragging(): Promise<boolean>;
+
+  /** The canvas frame's top-left in host coordinates. */
+  frameOrigin(): Promise<Point>;
+
   /** Press the pointer at a top-level viewport point and pass the drag threshold. */
   startDragAt(point: Point): Promise<void>;
   /** Move the pointer by a delta, in one step. */

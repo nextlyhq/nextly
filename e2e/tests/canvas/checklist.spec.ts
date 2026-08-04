@@ -55,8 +55,17 @@ test("[acceptance] point 1: the innermost container owns the drop target", async
   expect(owners.length, "the drag must find some target").toBeGreaterThan(0);
   expect(
     owners,
-    "the nested container must win at least once, or depth priority is absent"
+    "the nested container must win while the pointer is inside it"
   ).toContain("nx-inner");
+
+  // Ownership must be CONTIGUOUS per container. Depth priority that only wins
+  // on some samples produces root, inner, root, inner interleaving, which a
+  // "contains" check accepts and a user experiences as a flickering indicator.
+  const runs = owners.filter((owner, i) => owner !== owners[i - 1]);
+  expect(
+    runs.filter(owner => owner === "nx-inner").length,
+    `ownership must not interleave; runs were ${JSON.stringify(runs)}`
+  ).toBe(1);
 });
 
 /**
@@ -69,50 +78,54 @@ test("[acceptance] point 1: the innermost container owns the drop target", async
  * down. Point 4 asks for zero shift, so the assertion states zero and this is
  * recorded as a known gap rather than a green check.
  */
-test.fixme(
-  "[acceptance] point 4: siblings do not move during a drag",
-  async ({ page, request }) => {
-    const fixture = await seedPage(request, FLAT_LIST_FIXTURE);
-    const driver = createPocDriver(page);
-    await driver.mountTree(fixture);
+test("[acceptance] point 4: siblings do not move during a drag", async ({
+  page,
+  request,
+}) => {
+  test.fail(
+    true,
+    "zones expand from 0px to 6px and push every block below them down"
+  );
+  const fixture = await seedPage(request, FLAT_LIST_FIXTURE);
+  const driver = createPocDriver(page);
+  await driver.mountTree(fixture);
 
-    const frame = page.frames().find(f => f.url() === "about:blank")!;
-    const read = () =>
-      frame.evaluate(() =>
-        Array.from(document.querySelectorAll("[data-nx-id]")).map(el =>
-          Math.round(el.getBoundingClientRect().top)
-        )
-      );
-
-    const before = await read();
-    await startLibraryDrag(driver);
-    for (let step = 0; step < 20; step++) await driver.moveBy(0, 8);
-    const during = await read();
-    await driver.cancel();
-
-    const shifted = before
-      .map((top, i) => Math.abs(top - (during[i] ?? top)))
-      .filter(delta => delta > 0);
-
-    test.info().annotations.push({
-      type: "layout-shift",
-      description: `before=${JSON.stringify(before)} during=${JSON.stringify(during)}`,
-    });
-
-    // Zones expand from 0px to 6px when a drag starts, so the blocks below them
-    // DO move. The requirement is zero shift; this records the real number so the
-    // v2 canvas has a figure to beat rather than a slogan.
-    test.info().annotations.push({
-      type: "shifted-count",
-      description: `${shifted.length} of ${before.length} nodes moved; max ${Math.max(0, ...shifted)}px`,
-    });
-
-    expect(before.length).toBe(during.length);
-    expect(shifted, "point 4 requires zero layout shift during a drag").toEqual(
-      []
+  const frame = page.frames().find(f => f.url() === "about:blank")!;
+  const read = () =>
+    frame.evaluate(() =>
+      Array.from(document.querySelectorAll("[data-nx-id]")).map(el =>
+        Math.round(el.getBoundingClientRect().top)
+      )
     );
-  }
-);
+
+  const before = await read();
+  await startLibraryDrag(driver);
+  for (let step = 0; step < 20; step++) await driver.moveBy(0, 8);
+  const during = await read();
+  await driver.cancel();
+
+  const shifted = before
+    .map((top, i) => Math.abs(top - (during[i] ?? top)))
+    .filter(delta => delta > 0);
+
+  test.info().annotations.push({
+    type: "layout-shift",
+    description: `before=${JSON.stringify(before)} during=${JSON.stringify(during)}`,
+  });
+
+  // Zones expand from 0px to 6px when a drag starts, so the blocks below them
+  // DO move. The requirement is zero shift; this records the real number so the
+  // v2 canvas has a figure to beat rather than a slogan.
+  test.info().annotations.push({
+    type: "shifted-count",
+    description: `${shifted.length} of ${before.length} nodes moved; max ${Math.max(0, ...shifted)}px`,
+  });
+
+  expect(before.length).toBe(during.length);
+  expect(shifted, "point 4 requires zero layout shift during a drag").toEqual(
+    []
+  );
+});
 
 test("[acceptance] point 8: a 500-block tree stays responsive during a drag", async ({
   page,
@@ -137,11 +150,13 @@ test("[acceptance] point 8: a 500-block tree stays responsive during a drag", as
 
   const sorted = [...samples].sort((a, b) => a - b);
   const median = sorted[Math.floor(sorted.length / 2)]!;
+  const p95 =
+    sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))]!;
   const worst = sorted[sorted.length - 1]!;
 
   test.info().annotations.push({
     type: "latency-500",
-    description: `median=${median.toFixed(1)}ms worst=${worst.toFixed(1)}ms n=${samples.length}`,
+    description: `median=${median.toFixed(1)}ms p95=${p95.toFixed(1)}ms worst=${worst.toFixed(1)}ms n=${samples.length}`,
   });
 
   expect(fixture.blockIds.length).toBe(501);
@@ -149,6 +164,10 @@ test("[acceptance] point 8: a 500-block tree stays responsive during a drag", as
   // regression, not the 60fps budget, which needs frame instrumentation the v2
   // canvas will have to provide.
   expect(median).toBeLessThan(500);
+  // A median alone hides intermittent stalls: 19 of 40 moves could freeze for
+  // seconds and the median would still pass. The tail is what a user feels.
+  expect(p95, "the 95th-percentile move must not stall").toBeLessThan(500);
+  expect(worst, "no single move may hang the drag").toBeLessThan(2000);
 });
 
 test("[informational] point 2: a click below the drag threshold does not drag", async ({
@@ -164,13 +183,22 @@ test("[informational] point 2: a click below the drag threshold does not drag", 
   await page.mouse.move(item.x, item.y);
   await page.mouse.down();
   await page.mouse.move(item.x + 2, item.y);
+
+  // Checked while the button is still held. Releasing first would let a started
+  // drag end harmlessly over the panel, leaving the tree unchanged and the
+  // regression invisible.
+  const draggingAtTwoPixels = await driver.isDragging();
   await page.mouse.up();
 
   const after = await driver.readTreeShape();
   test.info().annotations.push({
     type: "threshold",
-    description: `before=${before.length} after=${after.length}`,
+    description: `before=${before.length} after=${after.length} dragging=${draggingAtTwoPixels}`,
   });
+  expect(
+    draggingAtTwoPixels,
+    "a 2px movement must not pass the activation threshold"
+  ).toBe(false);
   expect(after.length).toBe(before.length);
 });
 
@@ -203,49 +231,53 @@ test("[informational] point 9: the library's Insert button adds a block", async 
  * cancelled drag and an unchanged tree; what happens is an abandoned editing
  * session. The v2 canvas must claim Escape while a drag is in flight.
  */
-test.fixme(
-  "[informational] point 12: Escape cancels a drag without changing the tree",
-  async ({ page, request }) => {
-    const fixture = await seedPage(request, FLAT_LIST_FIXTURE);
-    const driver = createPocDriver(page);
-    await driver.mountTree(fixture);
+test("[informational] point 12: Escape cancels a drag without changing the tree", async ({
+  page,
+  request,
+}) => {
+  test.fail(
+    true,
+    "the admin shell claims Escape and navigates out of the editor"
+  );
+  const fixture = await seedPage(request, FLAT_LIST_FIXTURE);
+  const driver = createPocDriver(page);
+  await driver.mountTree(fixture);
 
-    const before = await driver.readTreeShape();
-    await startLibraryDrag(driver);
-    for (let step = 0; step < 30; step++) await driver.moveBy(0, 8);
-    await driver.cancel();
+  const before = await driver.readTreeShape();
+  await startLibraryDrag(driver);
+  for (let step = 0; step < 30; step++) await driver.moveBy(0, 8);
+  await driver.cancel();
 
-    const afterCancel = await page.evaluate(() => ({
-      url: window.location.pathname,
-      iframes: document.querySelectorAll("iframe").length,
-      hasEditor: !!document.querySelector(".nx-pb-editor"),
-    }));
-    test.info().annotations.push({
-      type: "after-cancel",
-      description: JSON.stringify(afterCancel),
-    });
+  const afterCancel = await page.evaluate(() => ({
+    url: window.location.pathname,
+    iframes: document.querySelectorAll("iframe").length,
+    hasEditor: !!document.querySelector(".nx-pb-editor"),
+  }));
+  test.info().annotations.push({
+    type: "after-cancel",
+    description: JSON.stringify(afterCancel),
+  });
 
-    // Cancelling remounts the canvas iframe, so a single read can land while no
-    // about:blank frame exists at all. Poll until it is back.
-    let after: string[] = [];
-    await expect
-      .poll(
-        async () => {
-          try {
-            after = await driver.readTreeShape();
-            return after.length;
-          } catch {
-            return -1;
-          }
-        },
-        { timeout: 30_000 }
-      )
-      .toBe(before.length);
+  // Cancelling remounts the canvas iframe, so a single read can land while no
+  // about:blank frame exists at all. Poll until it is back.
+  let after: string[] = [];
+  await expect
+    .poll(
+      async () => {
+        try {
+          after = await driver.readTreeShape();
+          return after.length;
+        } catch {
+          return -1;
+        }
+      },
+      { timeout: 30_000 }
+    )
+    .toBe(before.length);
 
-    test.info().annotations.push({
-      type: "escape",
-      description: `before=${before.length} after=${after.length}`,
-    });
-    expect(after).toEqual(before);
-  }
-);
+  test.info().annotations.push({
+    type: "escape",
+    description: `before=${before.length} after=${after.length}`,
+  });
+  expect(after).toEqual(before);
+});

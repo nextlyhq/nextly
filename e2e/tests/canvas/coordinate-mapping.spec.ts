@@ -87,12 +87,25 @@ test("point 5: the mapping survives a host scroll", async ({
   const fixture = await seedPage(request, FLAT_LIST_FIXTURE);
   const driver = createPocDriver(page);
   await driver.mountTree(fixture);
+
+  const originBefore = await driver.frameOrigin();
   await driver.scrollHost(300);
+  const originAfter = await driver.frameOrigin();
+  const moved = Math.abs(originAfter.y - originBefore.y);
+
+  // Without this the probe silently degrades to the at-rest case whenever the
+  // overflow ancestor is already at its limit or the admin's scroll container
+  // moves, and a zero delta then proves nothing.
+  expect(
+    moved,
+    "the host must actually scroll for this to test anything"
+  ).toBeGreaterThan(50);
 
   const delta = worstDelta(await mapped(page, 1), await groundTruth(page));
-  test
-    .info()
-    .annotations.push({ type: "delta-scrolled", description: String(delta) });
+  test.info().annotations.push({
+    type: "delta-scrolled",
+    description: `delta=${delta} originMoved=${Math.round(moved)}`,
+  });
 
   // Scroll moves the frame's origin; re-reading the origin each time is what
   // absorbs it, which is why the mapping takes the origin as an argument
@@ -139,12 +152,20 @@ test("point 5: the mapping survives scroll and scale together", async ({
   const driver = createPocDriver(page);
   await driver.mountTree(fixture);
   await driver.setZoom(0.75);
+
+  const originBefore = await driver.frameOrigin();
   await driver.scrollHost(300);
+  const originAfter = await driver.frameOrigin();
+  const moved = Math.abs(originAfter.y - originBefore.y);
+  expect(
+    moved,
+    "the host must actually scroll for this to test anything"
+  ).toBeGreaterThan(50);
 
   const delta = worstDelta(await mapped(page, 0.75), await groundTruth(page));
   test.info().annotations.push({
     type: "delta-scaled-scrolled",
-    description: String(delta),
+    description: `delta=${delta} originMoved=${Math.round(moved)}`,
   });
   expect(delta).toBeLessThanOrEqual(1);
 });

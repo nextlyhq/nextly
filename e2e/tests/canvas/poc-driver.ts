@@ -88,6 +88,21 @@ export function createPocDriver(page: Page): CanvasDriver {
       return { ...pointer };
     },
 
+    async isDragging() {
+      // dnd-kit flips aria-grabbed on the source while a drag is active, so the
+      // signal is the library's own accessibility state rather than a class the
+      // canvas happens to add.
+      return page.evaluate(
+        () => !!document.querySelector('[aria-grabbed="true"]')
+      );
+    },
+
+    async frameOrigin() {
+      const box = await page.locator("iframe").boundingBox();
+      if (!box) throw new Error("canvas iframe has no box");
+      return { x: box.x, y: box.y };
+    },
+
     async readBlockBoxes() {
       return canvasFrame().evaluate(() =>
         Array.from(document.querySelectorAll("[data-nx-id]")).map(el => {

@@ -304,23 +304,28 @@ test("scenario 4b: a 2px oscillation at a boundary never flips the indicator", a
  * reported. Assessing #1991 needs driver #2, against a canvas that implements
  * keyboard dragging.
  */
-test.fixme(
-  "scenario 5: keyboard insertion position round-trips",
-  async ({ page, request }) => {
-    const fixture = await seedPage(request, FLAT_LIST_FIXTURE);
-    const driver = createPocDriver(page);
-    await driver.mountTree(fixture);
+test("scenario 5: a keyboard move actually moves a block", async ({
+  page,
+  request,
+}) => {
+  test.fail(true, "this canvas has no keyboard move path at all");
 
-    const before = await driver.readTreeShape();
-    await driver.keyboardInsert("down");
-    await driver.keyboardInsert("up");
-    const after = await driver.readTreeShape();
+  const fixture = await seedPage(request, FLAT_LIST_FIXTURE);
+  const driver = createPocDriver(page);
+  await driver.mountTree(fixture);
 
-    test.info().annotations.push({
-      type: "keyboard-shape",
-      description: `before=${JSON.stringify(before)} after=${JSON.stringify(after)}`,
-    });
+  const before = await driver.readTreeShape();
+  await driver.keyboardInsert("down");
+  const moved = await driver.readTreeShape();
 
-    expect(after).toEqual(before);
-  }
-);
+  test.info().annotations.push({
+    type: "keyboard-shape",
+    description: `before=${JSON.stringify(before)} moved=${JSON.stringify(moved)}`,
+  });
+
+  // Asserting that the keyboard CHANGES the tree, not that it round-trips.
+  // A round-trip holds vacuously when nothing happens, which is exactly the
+  // state today; this fails for the real reason and will turn into an
+  // unexpected pass the moment keyboard dragging lands.
+  expect(moved).not.toEqual(before);
+});
