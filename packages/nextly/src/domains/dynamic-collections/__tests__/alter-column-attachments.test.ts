@@ -707,6 +707,22 @@ describe("a table its creation migration has not built yet", () => {
     expect(planned.foreignKeysByColumn.has("rank")).toBe(false);
   });
 
+  it("does not predict an index the create cannot emit", () => {
+    const indexedJson = [field({ name: "payload", type: "json", index: true })];
+    // MySQL cannot index a JSON column, so the create emits none. Predicting one makes a later
+    // edit drop an index that was never installed, which aborts the whole migration there.
+    expect(
+      service("mysql")
+        .plannedAttachments(TABLE, indexedJson)
+        .indexNames.has(`idx_${TABLE}_payload`)
+    ).toBe(false);
+    expect(
+      service("postgresql")
+        .plannedAttachments(TABLE, indexedJson)
+        .indexNames.has(`idx_${TABLE}_payload`)
+    ).toBe(true);
+  });
+
   it("carries the system indexes every generated table gets", () => {
     const planned = service("postgresql").plannedAttachments(TABLE, []);
     expect(planned.indexNames.has(`idx_${TABLE}_slug`)).toBe(true);

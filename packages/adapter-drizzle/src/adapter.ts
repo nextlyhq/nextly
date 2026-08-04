@@ -1491,11 +1491,15 @@ export abstract class DrizzleAdapter {
           sql = `
             SELECT EXISTS (
               SELECT FROM information_schema.tables
-              WHERE table_schema = $1
+              WHERE table_schema = COALESCE($1, current_schema())
               AND table_name = $2
             ) as exists
           `;
-          params.push(schema ?? "public", tableName);
+          // Unqualified DDL and DML land in the first schema on the search path, which is not
+          // always `public`. Defaulting the catalog lookup to `public` reported a populated
+          // table as absent whenever a deployment used a schema of its own, and a caller that
+          // reads "absent" to mean "nothing to conflict with" then acts on the wrong table.
+          params.push(schema ?? null, tableName);
           break;
 
         case "mysql":

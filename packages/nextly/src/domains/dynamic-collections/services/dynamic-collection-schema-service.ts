@@ -1075,7 +1075,23 @@ ${allColumnDefs.join(",\n")}
     for (const field of fields) {
       if (!fieldProducesColumn(field)) continue;
       const column = toSnakeCase(field.name);
-      if (this.columnIsIndexed(field)) {
+      // Asked through the statement builder, not through `columnIsIndexed` alone. Wanting an
+      // index and being able to have one are different questions: MySQL cannot index a JSON
+      // column, so the create emits nothing for one. Predicting it anyway makes a later edit
+      // drop an index that was never installed, which on MySQL aborts the whole migration.
+      if (
+        this.columnIsIndexed(field) &&
+        this.createIndexSql(
+          tableName,
+          column,
+          this.mapFieldTypeToSQL(
+            field.type,
+            field.length,
+            field.options,
+            field.validation
+          )
+        ) !== null
+      ) {
         indexNames.add(`idx_${tableName}_${column}`);
       }
       if (field.type === "relationship" && field.options?.target) {

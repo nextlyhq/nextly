@@ -106,7 +106,7 @@ export async function readIndexNames(
   if (dialect === "postgresql") {
     const result = (await (db as PgMysqlExecute).execute(
       sql`SELECT indexname FROM pg_indexes
-          WHERE schemaname = 'public' AND tablename = ${tableName}`
+          WHERE schemaname = current_schema() AND tablename = ${tableName}`
     )) as { rows: { indexname: string }[] };
     for (const row of result.rows) names.add(row.indexname);
     return names;
@@ -158,7 +158,7 @@ export async function readForeignKeyColumns(
             ON tc.constraint_name = kcu.constraint_name
            AND tc.constraint_schema = kcu.constraint_schema
           WHERE tc.constraint_type = 'FOREIGN KEY'
-            AND tc.table_schema = 'public'
+            AND tc.table_schema = current_schema()
             AND tc.table_name = ${tableName}`
     )) as { rows: PgForeignKeyRow[] };
     for (const row of result.rows) record(row.column_name, row.constraint_name);
