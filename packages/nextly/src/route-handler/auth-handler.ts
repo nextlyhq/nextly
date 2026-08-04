@@ -115,6 +115,12 @@ export async function ensureServicesInitialized(): Promise<void> {
       // endpoint.
       if (nextlyConfig.webhookAuditEnabled !== undefined)
         serviceConfig.webhookAuditEnabled = nextlyConfig.webhookAuditEnabled;
+      // Audit retention: carry the resolved windows for the same reason. This
+      // path copies each field by hand, so one left out is a policy that
+      // resolves, defaults, and prunes nothing — the pass is never registered,
+      // and an unregistered pass does not run, log, or appear anywhere.
+      if (nextlyConfig.auditRetention !== undefined)
+        serviceConfig.auditRetention = nextlyConfig.auditRetention;
       if (nextlyConfig.db) {
         const dbConfig = nextlyConfig.db as Record<string, unknown>;
         if (dbConfig.schemasDir) serviceConfig.schemasDir = dbConfig.schemasDir;

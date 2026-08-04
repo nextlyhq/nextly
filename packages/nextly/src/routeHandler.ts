@@ -90,6 +90,7 @@ import { createSecurityHeadersMiddleware } from "./middleware/security-headers";
 import { buildPluginAdminMeta } from "./plugins/admin-meta";
 import { runPluginRoute } from "./plugins/routes/dispatch";
 import { getPluginRouteRegistry } from "./plugins/routes/route-registry";
+import { assertClientConfigs } from "./plugins/validate-client-config";
 import {
   parseRestRoute,
   getActionFromMethod,
@@ -147,6 +148,22 @@ function getSchemaVersionHeader(): number {
 // Global API Date/Time Formatting
 // ============================================================================
 
+/**
+ * Marks a response the global date/time pass must leave alone.
+ *
+ * That pass renders CONTENT timestamps in the viewer's timezone. A payload of
+ * configuration carries none, so every date-like string in it is opaque text
+ * belonging to whoever wrote it — a plugin's `clientConfig` most clearly, which
+ * is promised to arrive exactly as declared. Rewriting `"2026-08-04T12:34Z"`
+ * into a normalised, timezone-shifted form breaks that promise for a value the
+ * pass cannot know the meaning of.
+ *
+ * A header rather than a path test: the handler knows what it is returning,
+ * whereas a path can be matched by a plugin route that happens to end in the
+ * same segment and should keep its ordinary formatting.
+ */
+const SKIP_DATE_FORMATTING_HEADER = "x-nextly-skip-date-formatting";
+
 async function applyGlobalDateFormatting(
   response: Response,
   req?: Request
@@ -154,6 +171,20 @@ async function applyGlobalDateFormatting(
   const contentType = response.headers.get("content-type") || "";
   if (!contentType.toLowerCase().includes("application/json")) {
     return response;
+  }
+
+  // A response that opted out. Marked by the handler rather than matched by
+  // path: a plugin may mount its own route ending in the same segment, and it
+  // should keep the formatting every other plugin response gets. The header is
+  // internal, so it is removed on the way out.
+  if (response.headers.has(SKIP_DATE_FORMATTING_HEADER)) {
+    const headers = new Headers(response.headers);
+    headers.delete(SKIP_DATE_FORMATTING_HEADER);
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    });
   }
 
   // Skip formatting for auth endpoints to avoid interfering with auth flow
@@ -1256,7 +1287,10 @@ async function handleAdminMetaRequest(): Promise<Response> {
   // migrated fetcher. `respondData` requires a Record-shaped argument and
   // `payload` is built as `Record<string, unknown>` above so the bound is
   // satisfied without a cast.
-  return respondData(payload);
+  const response = respondData(payload);
+  // Configuration, not content: see `SKIP_DATE_FORMATTING_HEADER`.
+  response.headers.set(SKIP_DATE_FORMATTING_HEADER, "1");
+  return response;
 }
 
 /**
@@ -1411,6 +1445,14 @@ export function createDynamicHandlers(options?: {
 }) {
   // Store the config so ensureServicesInitialized() can use it
   if (options?.config) {
+    // Before the config is stored, so no request can be served against a
+    // plugin whose `clientConfig` cannot be delivered. `resolvePlugins` runs
+    // the same check, but service initialisation is lazy and `/api/admin-meta`
+    // is served WITHOUT it — so on an admin's first request that check has not
+    // happened yet, and the failure would land on the branding response
+    // instead of at startup. This module runs when the route file is imported,
+    // which is the earliest deterministic point the config exists.
+    assertClientConfigs(options.config.plugins ?? []);
     setHandlerConfig(options.config);
   }
 

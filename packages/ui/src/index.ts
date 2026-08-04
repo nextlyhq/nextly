@@ -426,3 +426,33 @@ export {
 // Utilities
 
 // Tailwind Preset
+
+/**
+ * @experimental Editor-shell primitives.
+ *
+ * A right-click menu and a resizable split. Nothing in a first-party plugin imports them yet, so
+ * they stay experimental: this kit graduates a surface only once one does.
+ */
+export {
+  ContextMenu,
+  ContextMenuCheckboxItem,
+  ContextMenuContent,
+  ContextMenuGroup,
+  ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuRadioGroup,
+  ContextMenuRadioItem,
+  ContextMenuSeparator,
+  ContextMenuShortcut,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
+  ContextMenuTrigger,
+} from "./components/context-menu";
+
+/** @experimental */
+export {
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+} from "./components/resizable";

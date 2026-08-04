@@ -1,6 +1,11 @@
 {
   "$schema": "https://unpkg.com/@changesets/config@3.0.0/schema.json",
-  "changelog": ["@changesets/changelog-github", { "repo": "nextlyhq/nextly" }],
+  "changelog": [
+    "@changesets/changelog-github",
+    {
+      "repo": "nextlyhq/nextly"
+    }
+  ],
   "commit": false,
   "fixed": [
     [
@@ -9,6 +14,7 @@
       "@nextlyhq/admin",
       "@nextlyhq/admin-css",
       "@nextlyhq/blocks-engine",
+      "@nextlyhq/blocks-react",
       "@nextlyhq/ui",
       "@nextlyhq/adapter-drizzle",
       "@nextlyhq/adapter-postgres",

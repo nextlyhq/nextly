@@ -36,6 +36,8 @@ import type { FieldConfig } from "../collections/fields/types";
 import { createAdapterFromEnv, validateDatabaseEnv } from "../database/factory";
 import type { SchemaRegistry } from "../database/schema-registry";
 import { getNextly } from "../direct-api/nextly";
+import type { ResolvedAuditRetentionConfig } from "../domains/audit/retention-config";
+import { setAuditRetention } from "../domains/audit/retention-config";
 import type { ApiKeyService } from "../domains/auth/services/api-key-service";
 import type { AuthService } from "../domains/auth/services/auth-service";
 import type { PermissionSeedService } from "../domains/auth/services/permission-seed-service";
@@ -292,6 +294,14 @@ export interface NextlyServiceConfig {
    * retention off; absent when this container was built without app config.
    */
   webhookRetention?: ResolvedWebhookRetentionConfig | null;
+  /**
+   * Resolved audit-trail retention windows.
+   *
+   * Always a policy once the sanitizer has run, since the windows have
+   * defaults; `undefined` means it was never carried through initialization, in
+   * which case no audit pass is registered and neither trail is pruned.
+   */
+  auditRetention?: ResolvedAuditRetentionConfig;
 
   /**
    * Whether the audit seam forces outbox recording regardless of endpoints.
@@ -2703,6 +2713,7 @@ export async function shutdownServices(): Promise<void> {
     // process-global too, and its provider closes over this container's
     // registry; clear it so a later instance never resolves a dead one.
     resetWebhookActivation();
+    setAuditRetention(undefined);
     // Hooks live in a registry that outlives the container. Registration runs
     // from config on every init, so leaving it populated means a second
     // instance in the same process appends a fresh copy of every handler and
@@ -2725,6 +2736,7 @@ export function clearServices(): void {
   // Clear the process-global recording activation for the same reason; its
   // provider closes over this container's registry.
   resetWebhookActivation();
+  setAuditRetention(undefined);
   // Cleared with the container for the same reason: re-initializing would
   // otherwise register every configured hook a second time.
   clearActiveHookRegistry();

@@ -215,5 +215,16 @@ export interface RunDrainResult {
   retried: number;
   failed: number;
   abandoned: number;
-  pruned: { events: number; deliveries: number };
+  /**
+   * Rows retention removed on this pass. `events` and `deliveries` are the
+   * webhook ledger; `activity` and `auth` are the audit trails, which the drain
+   * prunes on their own windows. Reported separately rather than summed — they
+   * are different tables answering different questions.
+   */
+  pruned: {
+    events: number;
+    deliveries: number;
+    activity: number;
+    auth: number;
+  };
 }
