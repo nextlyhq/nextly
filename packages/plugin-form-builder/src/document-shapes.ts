@@ -20,16 +20,7 @@
  *
  * The point of this module is therefore not safety it cannot provide. It is
  * that the unchecked step happens in ONE place a reviewer can find, rather than
- * at five call sites where it reads as ordinary code. It has already cost
- * something: a mutation envelope was once assigned straight into
- * `SubmissionDocument`, compiled, and handed every caller `undefined` for
- * `submission.id`.
- *
- * The real guarantee is meant to come from elsewhere. Nextly generates
- * per-collection types from the schema, and the Direct API is generic over the
- * collection slug, so `nextly.find({ collection: "posts" })` is typed. The
- * plugin-facing services are not generic yet; when they are, these functions
- * lose their reason to exist and the call sites can hold the row directly.
+ * at six call sites where it reads as ordinary code.
  *
  * @module document-shapes
  */

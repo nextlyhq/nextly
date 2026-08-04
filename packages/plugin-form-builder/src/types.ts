@@ -1125,8 +1125,17 @@ export interface FormSubmission {
   /** Submission data (JSON) */
   data: Record<string, unknown>;
 
-  /** Submission status */
-  status: "new" | "read" | "archived";
+  /**
+   * Submission status.
+   *
+   * `spam` is one of them, not a separate flag: the stored field offers it, the
+   * admin has a Spam tab and filters its other views with `not_equals: "spam"`,
+   * and marking something "Not spam" moves it back to `new`.
+   */
+  status: "new" | "read" | "archived" | "spam";
+
+  /** Which spam check flagged this, when one did. */
+  spamReason?: string | null;
 
   /** Internal notes (admin only) */
   notes?: string;
