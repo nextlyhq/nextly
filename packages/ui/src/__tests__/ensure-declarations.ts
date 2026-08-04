@@ -137,34 +137,50 @@ function relativeExtends(fromDir: string, spec: string): string {
  * A specifier carrying a subpath (`@scope/pkg/base.json`) names the file
  * directly and needs no such treatment, which is the form this repository uses.
  */
-function bareExtends(req: NodeRequire, spec: string): string {
+function bareExtends(
+  req: NodeRequire,
+  spec: string,
+  consulted: string[]
+): string {
   const segments = spec.split("/");
   const isPackageName = segments.length === (spec.startsWith("@") ? 2 : 1);
-  // A specifier carrying a subpath names the file directly, which is the form
-  // this repository uses.
+  // A specifier carrying a subpath names the file directly. Its manifest is
+  // still consulted, because an `exports` map can redirect that subpath.
+  const manifest = ((): string | undefined => {
+    try {
+      return req.resolve(
+        `${segments.slice(0, spec.startsWith("@") ? 2 : 1).join("/")}/package.json`
+      );
+    } catch {
+      // Encapsulated by an `exports` map; resolution below does not need it.
+      return undefined;
+    }
+  })();
+  // A manifest that SELECTS the target is an input in its own right: changing
+  // its `tsconfig` field or its `exports` map points the chain at a different
+  // file, and if that file predates `dist` nothing else would notice.
+  if (manifest !== undefined) consulted.push(manifest);
+
   if (!isPackageName) return req.resolve(spec);
 
-  // Three ways a package can name its config, tried in TypeScript's order. Each
+  // The three forms a package can name its config, in TypeScript's order. Each
   // is attempted independently, because an `exports` map may expose one and
-  // encapsulate another: a package can export its config at the root while
-  // refusing `./package.json`, and reading the manifest first would then throw
-  // on a package that resolves perfectly well.
-  const fromManifest = (): string | undefined => {
-    const manifest = req.resolve(`${spec}/package.json`);
-    const declared = (
-      JSON.parse(readFileSync(manifest, "utf8")) as { tsconfig?: unknown }
-    ).tsconfig;
-    return typeof declared === "string"
-      ? resolve(dirname(manifest), declared)
-      : undefined;
-  };
+  // encapsulate another.
   for (const attempt of [
-    fromManifest,
+    (): string | undefined => {
+      if (manifest === undefined) return undefined;
+      const declared = (
+        JSON.parse(readFileSync(manifest, "utf8")) as { tsconfig?: unknown }
+      ).tsconfig;
+      return typeof declared === "string"
+        ? resolve(dirname(manifest), declared)
+        : undefined;
+    },
     () => req.resolve(`${spec}/tsconfig.json`),
     // The root export, which is how an `exports`-mapped config package is
-    // reached. Only accepted when it actually names a config: resolving a
-    // package's JavaScript entry point and timestamping that would be a wrong
-    // answer wearing the shape of a right one.
+    // reached. Accepted only when it names a config: resolving a package's
+    // JavaScript entry and timestamping that is a wrong answer wearing the
+    // shape of a right one.
     () => {
       const target = req.resolve(spec);
       return target.endsWith(".json") ? target : undefined;
@@ -183,6 +199,9 @@ function bareExtends(req: NodeRequire, spec: string): string {
 function tsconfigChain(entry: string): string[] | undefined {
   const seen = new Set<string>();
   const chain: string[] = [];
+  // Manifests read to CHOOSE a config. They are not configs themselves, but
+  // editing one repoints the chain, so they are inputs.
+  const consulted: string[] = [];
 
   const visit = (file: string): boolean => {
     if (seen.has(file)) return true;
@@ -210,7 +229,7 @@ function tsconfigChain(entry: string): string[] | undefined {
         // a path that happens not to exist.
         target = spec.startsWith(".")
           ? relativeExtends(dirname(file), spec)
-          : bareExtends(req, spec);
+          : bareExtends(req, spec, consulted);
       } catch {
         return false;
       }
@@ -222,7 +241,7 @@ function tsconfigChain(entry: string): string[] | undefined {
   // A chain that cannot be followed is reported as unknown rather than as the
   // part of it that was readable, so the caller can refuse instead of trusting
   // a partial answer.
-  return visit(entry) ? chain : undefined;
+  return visit(entry) ? [...chain, ...consulted] : undefined;
 }
 
 /**
