@@ -26,6 +26,13 @@
  *   main and companion together. This is what keeps a localization,
  *   Draft/Published, or field-set change made by ANOTHER worker from being
  *   served through a table whose columns no longer match the physical one.
+ * - **Foreign registration, but the row says localized and no companion is
+ *   registered** — refresh it. Main and companion are always registered
+ *   together, so a missing companion proves that registration was made
+ *   before localization was enabled, and its main table still declares the
+ *   translatable columns the enable moved away. This is the one case where
+ *   the row is provably newer, so adopting would serve reads that select
+ *   columns the physical table no longer has.
  *
  * The baseline recorded in the second case is what makes the third work for
  * foreign registrations too: the first touch adopts them, and any LATER row
