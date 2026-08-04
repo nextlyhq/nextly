@@ -266,14 +266,26 @@ describe("ui release tags reach the published types", () => {
   // here — where it is re-evaluated every run — means the assertions below
   // always describe the current source rather than merely detecting that they
   // do not.
+  // The ONLY place the declarations are built. A global setup ran once per
+  // project and this hook ran per suite, so both together built twice per run
+  // for no gain; this one covers the watch case a global setup cannot, because
+  // it is re-evaluated on every rerun.
+  //
+  // A generous timeout because it BUILDS. The build is unconditional rather
+  // than guarded by a staleness computation — see `ensure-declarations` for why
+  // that computation was removed — and two tsup invocations do not fit in
+  // Vitest's ten-second hook default. Allowing the time the operation takes is
+  // the honest fix, not making the operation guess less carefully.
+  // The directory the guard built for itself. Read from what the build
+  // returned rather than assuming `dist`: the build stays out of `dist`
+  // because other packages import this one through it while these tests run.
+  let builtDir = "";
   beforeAll(() => {
-    ensureDeclarations();
-  });
+    builtDir = ensureDeclarations();
+  }, 120_000);
 
   /** Symbols re-exported from a dependency, whose declarations are not ours. */
   const FOREIGN = new Set(["toast", "ToasterProps"]);
-
-  const distTypes = path.join(PKG_ROOT, "dist", "index.d.ts");
 
   /** Each declaration's name, mapped to the release tag written above it. */
   function taggedPerDeclaration(built: string): Map<string, string> {
@@ -293,60 +305,64 @@ describe("ui release tags reach the published types", () => {
   const DIST_ENTRIES = DECLARATION_ENTRIES;
 
   it("has built declarations to check", () => {
+    // `ensureDeclarations` throws on a missing entry, so this asserts the
+    // guard's own precondition rather than the state of a checkout: a guard
+    // that quietly checks nothing is indistinguishable from a passing one.
     for (const entry of DIST_ENTRIES) {
       expect(
-        existsSync(path.join(PKG_ROOT, "dist", entry)),
-        `dist/${entry} is missing; run \`pnpm --filter @nextlyhq/ui build\`.`
+        existsSync(path.join(builtDir, entry)),
+        `${entry} was not produced by the declaration build.`
       ).toBe(true);
     }
-    expect(
-      existsSync(distTypes),
-      `${distTypes} is missing. This guard reads the built declarations, so ` +
-        "run `pnpm --filter @nextlyhq/ui build` first. It fails rather than " +
-        "skipping, because a guard that does nothing on a clean checkout is " +
-        "indistinguishable from a passing one."
-    ).toBe(true);
   });
 
-  it("carries every barrel tag through to dist/index.d.ts, with the same tag", () => {
-    const built = readFileSync(distTypes, "utf8");
-    const declared = taggedPerDeclaration(built);
-    const tagged = taggedPerSource();
+  // BOTH barrels, because `package.json` resolves `require` to the `.cts` one.
+  // Requiring only that the CommonJS barrel contain SOME tag let every symbol
+  // but one lose or change its tag while this stayed green, so `require`
+  // consumers could be served stability metadata nothing had compared.
+  it.each(["index.d.ts", "index.d.cts"])(
+    "carries every barrel tag through to dist/%s, with the same tag",
+    entry => {
+      const built = readFileSync(path.join(builtDir, entry), "utf8");
+      const declared = taggedPerDeclaration(built);
+      const tagged = taggedPerSource();
 
-    const missing: string[] = [];
-    const mismatched: string[] = [];
-    for (const [kind, names] of [
-      ["public", tagged.public],
-      ["experimental", tagged.experimental],
-    ] as const) {
-      for (const name of names) {
-        if (FOREIGN.has(name)) continue;
-        const actual = declared.get(name);
-        if (actual === undefined) {
-          missing.push(name);
-          // The tag kind is compared as well as its presence. Checking only
-          // that SOME tag reached the declaration let a symbol ship
-          // `@experimental` while the ledger promised `@public`, which is a
-          // worse failure than no tag at all: it advertises a guarantee
-          // nobody agreed to.
-        } else if (actual !== kind) {
-          mismatched.push(`${name}: barrel @${kind}, declaration @${actual}`);
+      const missing: string[] = [];
+      const mismatched: string[] = [];
+      for (const [kind, names] of [
+        ["public", tagged.public],
+        ["experimental", tagged.experimental],
+      ] as const) {
+        for (const name of names) {
+          if (FOREIGN.has(name)) continue;
+          const actual = declared.get(name);
+          if (actual === undefined) {
+            missing.push(name);
+            // The tag kind is compared as well as its presence. Checking only
+            // that SOME tag reached the declaration let a symbol ship
+            // `@experimental` while the ledger promised `@public`, which is a
+            // worse failure than no tag at all: it advertises a guarantee
+            // nobody agreed to.
+          } else if (actual !== kind) {
+            mismatched.push(`${name}: barrel @${kind}, declaration @${actual}`);
+          }
         }
       }
-    }
 
-    expect(
-      missing.sort(),
-      "Tagged in index.ts but the tag does not reach dist/index.d.ts. The " +
-        "bundler keeps a doc comment attached to a DECLARATION and drops one " +
-        "attached to an export statement, so the tag has to live on the " +
-        `declaration: ${missing.join(", ")}`
-    ).toEqual([]);
-    expect(
-      mismatched.sort(),
-      `The published tag contradicts the ledger: ${mismatched.join("; ")}`
-    ).toEqual([]);
-  });
+      expect(
+        missing.sort(),
+        `Tagged in index.ts but the tag does not reach dist/${entry}. The ` +
+          "bundler keeps a doc comment attached to a DECLARATION and drops " +
+          "one attached to an export statement, so the tag has to live on " +
+          `the declaration: ${missing.join(", ")}`
+      ).toEqual([]);
+      expect(
+        mismatched.sort(),
+        `dist/${entry}: the published tag contradicts the ledger: ` +
+          mismatched.join("; ")
+      ).toEqual([]);
+    }
+  );
 
   it("gives a prop type the same tag as its component", () => {
     // STABILITY.md states this as a guarantee, and it is not a convention
@@ -390,7 +406,7 @@ describe("ui release tags reach the published types", () => {
     // the same stability metadata as one importing the root. A guard that reads
     // only `index.d.ts` reports success while those subpaths carry none.
     for (const entry of DIST_ENTRIES) {
-      const built = readFileSync(path.join(PKG_ROOT, "dist", entry), "utf8");
+      const built = readFileSync(path.join(builtDir, entry), "utf8");
       expect(
         /@(?:public|experimental)/.test(built),
         `dist/${entry} carries no release tag; its declarations need one on ` +
@@ -399,34 +415,8 @@ describe("ui release tags reach the published types", () => {
     }
   });
 
-  it("checks declarations that are newer than the source", () => {
-    // A global setup runs once per Vitest project, not once per rerun, so in
-    // watch mode an edited tag would otherwise be compared against the
-    // declarations built before the edit. Staleness is asserted here, where it
-    // is re-evaluated on every run, rather than assumed by the setup.
-    const newestSource = (dir: string): number => {
-      let newest = 0;
-      for (const entry of readdirSync(dir, { withFileTypes: true })) {
-        const full = path.join(dir, entry.name);
-        if (entry.isDirectory()) {
-          newest = Math.max(newest, newestSource(full));
-          continue;
-        }
-        if (!/\.(ts|tsx)$/.test(entry.name)) continue;
-        newest = Math.max(newest, statSync(full).mtimeMs);
-      }
-      return newest;
-    };
-    expect(
-      statSync(distTypes).mtimeMs,
-      "dist/index.d.ts predates the newest source file, so these assertions " +
-        "would be checking declarations that no longer describe the code. " +
-        "Rebuild: `pnpm --filter @nextlyhq/ui build`."
-    ).toBeGreaterThanOrEqual(newestSource(path.join(SRC)));
-  });
-
   it("is not passing vacuously", () => {
-    const built = readFileSync(distTypes, "utf8");
+    const built = readFileSync(path.join(builtDir, "index.d.ts"), "utf8");
     const declared = taggedPerDeclaration(built);
     expect(
       [...declared.values()].filter(t => t === "public").length
