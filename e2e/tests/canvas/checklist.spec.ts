@@ -14,40 +14,18 @@ import {
   NESTED_FIXTURE,
   seedPage,
 } from "./fixtures";
-import { createPocDriver, LIBRARY_ITEM } from "./poc-driver";
+import type { CanvasDriver } from "./driver";
+import { createPocDriver } from "./poc-driver";
 
 test.describe.configure({ timeout: 240_000 });
 test.use({ viewport: { width: 2560, height: 1400 } });
 
-async function startLibraryDrag(
-  page: import("@playwright/test").Page,
-  driver: import("./driver").CanvasDriver
-) {
-  const item = await page.locator(LIBRARY_ITEM).first().boundingBox();
-  const frame = await page.locator("iframe").boundingBox();
-  await driver.startDragAt({
-    x: item!.x + item!.width / 2,
-    y: item!.y + item!.height / 2,
-  });
-  await driver.moveBy(
-    frame!.x + frame!.width / 2 - (item!.x + item!.width / 2),
-    frame!.y + 40 - (item!.y + item!.height / 2)
-  );
-}
-
-/** The `data-nx-id` of the container that owns the currently active zone. */
-async function activeZoneOwner(
-  page: import("@playwright/test").Page
-): Promise<string | null> {
-  const frame = page.frames().find(f => f.url() === "about:blank")!;
-  return frame.evaluate(() => {
-    const zone = document.querySelector(
-      ".nx-pb-dropzone[data-active], .nx-pb-dropzone-empty[data-active]"
-    );
-    if (!zone) return null;
-    const owner = zone.parentElement?.closest("[data-nx-id]");
-    return owner?.getAttribute("data-nx-id") ?? null;
-  });
+/** Begin a drag from the insert panel and carry the pointer over the canvas. */
+async function startLibraryDrag(driver: CanvasDriver) {
+  const source = await driver.dragSourceCentre();
+  const target = await driver.canvasCentre();
+  await driver.startDragAt(source);
+  await driver.moveBy(target.x - source.x, target.y - source.y);
 }
 
 test("[acceptance] point 1: the innermost container owns the drop target", async ({
@@ -57,7 +35,7 @@ test("[acceptance] point 1: the innermost container owns the drop target", async
   const fixture = await seedPage(request, NESTED_FIXTURE);
   const driver = createPocDriver(page);
   await driver.mountTree(fixture);
-  await startLibraryDrag(page, driver);
+  await startLibraryDrag(driver);
 
   // Walk down through the nested container and record which container owns the
   // active zone at each step. Depth-priority means that while the pointer is
@@ -65,7 +43,7 @@ test("[acceptance] point 1: the innermost container owns the drop target", async
   const owners: string[] = [];
   for (let step = 0; step < 60; step++) {
     await driver.moveBy(0, 8);
-    const owner = await activeZoneOwner(page);
+    const owner = await driver.readActiveZoneOwner();
     if (owner) owners.push(owner);
   }
   await driver.cancel();
@@ -107,7 +85,7 @@ test.fixme(
       );
 
     const before = await read();
-    await startLibraryDrag(page, driver);
+    await startLibraryDrag(driver);
     for (let step = 0; step < 20; step++) await driver.moveBy(0, 8);
     const during = await read();
     await driver.cancel();
@@ -143,7 +121,7 @@ test("[acceptance] point 8: a 500-block tree stays responsive during a drag", as
   const fixture = await seedPage(request, LARGE_FIXTURE);
   const driver = createPocDriver(page);
   await driver.mountTree(fixture);
-  await startLibraryDrag(page, driver);
+  await startLibraryDrag(driver);
 
   // Wall-clock per move+read, not a frame rate: Playwright cannot observe
   // frames, and a fabricated fps number would be worse than an honest latency.
@@ -182,13 +160,10 @@ test("[informational] point 2: a click below the drag threshold does not drag", 
   await driver.mountTree(fixture);
 
   const before = await driver.readTreeShape();
-  const item = await page.locator(LIBRARY_ITEM).first().boundingBox();
-  await page.mouse.move(item!.x + item!.width / 2, item!.y + item!.height / 2);
+  const item = await driver.dragSourceCentre();
+  await page.mouse.move(item.x, item.y);
   await page.mouse.down();
-  await page.mouse.move(
-    item!.x + item!.width / 2 + 2,
-    item!.y + item!.height / 2
-  );
+  await page.mouse.move(item.x + 2, item.y);
   await page.mouse.up();
 
   const after = await driver.readTreeShape();
@@ -208,11 +183,7 @@ test("[informational] point 9: the library's Insert button adds a block", async 
   await driver.mountTree(fixture);
 
   const before = await driver.readTreeShape();
-  await page
-    .locator(LIBRARY_ITEM)
-    .first()
-    .getByRole("button", { name: "Insert" })
-    .click();
+  await driver.clickToInsert();
 
   await expect
     .poll(async () => (await driver.readTreeShape()).length, {
@@ -240,7 +211,7 @@ test.fixme(
     await driver.mountTree(fixture);
 
     const before = await driver.readTreeShape();
-    await startLibraryDrag(page, driver);
+    await startLibraryDrag(driver);
     for (let step = 0; step < 30; step++) await driver.moveBy(0, 8);
     await driver.cancel();
 

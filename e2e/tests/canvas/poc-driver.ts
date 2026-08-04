@@ -6,6 +6,7 @@
 import { expect, type Frame, type Page } from "@playwright/test";
 
 import type { CanvasDriver, CanvasFixture, Point, Rect } from "./driver";
+import { mapFrameRectToHost } from "./coordinate-mapping";
 import { gotoAdmin } from "../support/admin";
 
 /**
@@ -57,6 +58,66 @@ export function createPocDriver(page: Page): CanvasDriver {
           timeout: 30_000,
         })
         .toBe(fixture.blockIds.length);
+    },
+
+    async dragSourceCentre() {
+      const box = await page.locator(LIBRARY_ITEM).first().boundingBox();
+      if (!box) throw new Error(`no drag source matched ${LIBRARY_ITEM}`);
+      return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+    },
+
+    async canvasCentre() {
+      const box = await page.locator("iframe").boundingBox();
+      if (!box) throw new Error("canvas iframe has no box");
+      // Near the top rather than the middle: the drag then travels downward
+      // through the tree, which is what the sweep scenarios need.
+      return { x: box.x + box.width / 2, y: box.y + 40 };
+    },
+
+    async clickToInsert() {
+      // Scoped to a library item: the first "Insert" in the whole document is
+      // not one of these, and clicking it inserts nothing.
+      await page
+        .locator(LIBRARY_ITEM)
+        .first()
+        .getByRole("button", { name: "Insert" })
+        .click();
+    },
+
+    pointer() {
+      return { ...pointer };
+    },
+
+    async readBlockBoxes() {
+      return canvasFrame().evaluate(() =>
+        Array.from(document.querySelectorAll("[data-nx-id]")).map(el => {
+          const r = el.getBoundingClientRect();
+          return {
+            id: el.getAttribute("data-nx-id") ?? "",
+            top: Math.round(r.top),
+            height: Math.round(r.height),
+          };
+        })
+      );
+    },
+
+    async readZoneHeights() {
+      return canvasFrame().evaluate(
+        selector =>
+          Array.from(document.querySelectorAll(selector)).map(el =>
+            Math.round(el.getBoundingClientRect().height)
+          ),
+        DROP_ZONES
+      );
+    },
+
+    async readActiveZoneOwner() {
+      return canvasFrame().evaluate(active => {
+        const zone = document.querySelector(active);
+        if (!zone) return null;
+        const owner = zone.parentElement?.closest("[data-nx-id]");
+        return owner?.getAttribute("data-nx-id") ?? null;
+      }, ACTIVE_ZONE);
     },
 
     async startDragAt(point: Point) {
@@ -132,12 +193,23 @@ export function createPocDriver(page: Page): CanvasDriver {
 
       const frameOrigin = await page.locator("iframe").boundingBox();
       if (!frameOrigin) return null;
-      return {
-        x: inFrame.x + frameOrigin.x,
-        y: inFrame.y + frameOrigin.y,
-        width: inFrame.width,
-        height: inFrame.height,
-      };
+
+      // Read the live transform rather than assume 1. Without this the rect
+      // reported under a scaled canvas is wrong by the scale factor, and a
+      // geometry assertion against it would fail because the MEASUREMENT is
+      // wrong, not because the canvas is.
+      const scale = await page.evaluate(() => {
+        const frame = document.querySelector("iframe");
+        if (!(frame instanceof HTMLElement)) return 1;
+        const matrix = new DOMMatrixReadOnly(getComputedStyle(frame).transform);
+        return matrix.a || 1;
+      });
+
+      return mapFrameRectToHost(
+        inFrame,
+        { x: frameOrigin.x, y: frameOrigin.y },
+        scale
+      );
     },
 
     async readTreeShape() {

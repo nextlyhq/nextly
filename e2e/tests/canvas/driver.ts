@@ -21,9 +21,39 @@ export interface CanvasFixture {
   blockIds: string[];
 }
 
+/** A block's position and size inside the canvas, in canvas-local pixels. */
+export interface BlockBox {
+  id: string;
+  top: number;
+  height: number;
+}
+
 export interface CanvasDriver {
   /** Open the canvas on a seeded page and wait until it is interactive. */
   mountTree(fixture: CanvasFixture): Promise<void>;
+
+  /**
+   * Centre of a draggable source in the insert panel, in host coordinates.
+   *
+   * On the driver rather than in the suite because "where a drag starts" is the
+   * single most implementation-specific fact about a canvas: the PoC has a
+   * library list, v2 has a three-tier inserter. A suite that located it itself
+   * could not be retargeted by swapping the driver.
+   */
+  dragSourceCentre(): Promise<Point>;
+
+  /** A point over the canvas, near its top, in host coordinates. */
+  canvasCentre(): Promise<Point>;
+
+  /**
+   * Insert a block without dragging: the non-drag path WCAG 2.2 §2.5.7 requires
+   * for every drag gesture. On the driver because how it is offered is a canvas
+   * decision, while "it must exist" is a requirement of every canvas.
+   */
+  clickToInsert(): Promise<void>;
+
+  /** Where the pointer was last commanded to, in host coordinates. */
+  pointer(): Point;
 
   /** Press the pointer at a top-level viewport point and pass the drag threshold. */
   startDragAt(point: Point): Promise<void>;
@@ -60,6 +90,15 @@ export interface CanvasDriver {
    * reorder is visible in the ids and invisible in a list of types.
    */
   readTreeShape(): Promise<string[]>;
+
+  /** Every block's box in canvas-local pixels, document order, root first. */
+  readBlockBoxes(): Promise<BlockBox[]>;
+
+  /** Every drop zone's height in canvas-local pixels, document order. */
+  readZoneHeights(): Promise<number[]>;
+
+  /** `data-nx-id` of the container owning the active zone, or null. */
+  readActiveZoneOwner(): Promise<string | null>;
 
   /** Scroll the HOST document (not the canvas) during a drag. */
   scrollHost(dy: number): Promise<void>;

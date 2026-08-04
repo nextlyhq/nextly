@@ -4,11 +4,16 @@
  * 1-3 guard upstream issues that are already fixed (#1704, #1705, #1706).
  * 4 is the decision point (#2088, open). 5 covers keyboard insertion (#1991,
  * open), which matters because a full keyboard session is an exit criterion.
+ *
+ * Nothing here touches the canvas except through `CanvasDriver`. That is the
+ * whole point of the seam: swapping `createPocDriver` for a v2 driver must
+ * retarget this file without editing it.
  */
 import { expect, test } from "@playwright/test";
 
+import type { CanvasDriver } from "./driver";
 import { EXTREME_RATIO_FIXTURE, FLAT_LIST_FIXTURE, seedPage } from "./fixtures";
-import { createPocDriver, LIBRARY_ITEM } from "./poc-driver";
+import { createPocDriver } from "./poc-driver";
 import { findReversal } from "./oscillation";
 
 /**
@@ -28,30 +33,21 @@ test.describe.configure({ timeout: 180_000 });
  */
 test.use({ viewport: { width: 2560, height: 1400 } });
 
-/** Centre of the first library entry, in top-level viewport coordinates. */
-async function libraryItemCentre(page: import("@playwright/test").Page) {
-  const box = await page.locator(LIBRARY_ITEM).first().boundingBox();
-  expect(box, "library item must be visible to drag from").not.toBeNull();
-  return { x: box!.x + box!.width / 2, y: box!.y + box!.height / 2 };
-}
-
-/** Centre of the canvas iframe, a point guaranteed to be over the block list. */
-async function canvasCentre(page: import("@playwright/test").Page) {
-  const box = await page.locator("iframe").boundingBox();
-  expect(box, "canvas iframe must be visible").not.toBeNull();
-  return { x: box!.x + box!.width / 2, y: box!.y + 80 };
-}
-
 /**
- * Step the pointer down until a drop zone becomes active, and report where.
+ * How far the reported indicator may sit from the pointer before the mapping is
+ * considered wrong.
  *
- * Teleporting to a zone's centre does NOT activate it: the zones are 0px tall
- * at rest and only 6px while dragging, and dnd-kit resolves collisions from
- * pointer movement rather than from a single position. Stepping is also what a
- * real user produces.
+ * Generous on purpose: collision detection may legitimately choose a zone a
+ * little away from the pointer. It is still far tighter than every failure it
+ * guards. A stale-rect bug after a 200px scroll misreports by ~200px, and an
+ * unscaled 0.75 transform misreports by ~25% of the travel, which exceeds this
+ * within the first 240px of a sweep.
  */
+const INDICATOR_TOLERANCE_PX = 60;
+
+/** Step the pointer down until a drop zone becomes active, and report where. */
 async function dragUntilTarget(
-  driver: import("./driver").CanvasDriver,
+  driver: CanvasDriver,
   maxSteps = 90
 ): Promise<number> {
   for (let step = 0; step < maxSteps; step++) {
@@ -60,6 +56,37 @@ async function dragUntilTarget(
     if (active >= 0) return active;
   }
   return -1;
+}
+
+/** Begin a drag from the insert panel and carry the pointer over the canvas. */
+async function startPanelDrag(driver: CanvasDriver) {
+  const source = await driver.dragSourceCentre();
+  const target = await driver.canvasCentre();
+  await driver.startDragAt(source);
+  await driver.moveBy(target.x - source.x, target.y - source.y);
+}
+
+/**
+ * The active indicator must be where the pointer actually is.
+ *
+ * A non-negative ordinal alone proves only that SOME zone is active, which is
+ * exactly what a stale-rect or unscaled-transform implementation still
+ * produces. Comparing the indicator's live rect against the live pointer is
+ * what makes the #1705 and #1706 guards real.
+ */
+async function expectIndicatorAtPointer(driver: CanvasDriver, label: string) {
+  const rect = await driver.readIndicatorRect();
+  expect(rect, `${label}: an indicator must be visible`).not.toBeNull();
+  const pointer = driver.pointer();
+  const distance = Math.abs(pointer.y - (rect!.y + rect!.height / 2));
+  test.info().annotations.push({
+    type: `${label}-distance`,
+    description: `pointerY=${Math.round(pointer.y)} indicatorY=${Math.round(rect!.y + rect!.height / 2)} distance=${Math.round(distance)}`,
+  });
+  expect(
+    distance,
+    `${label}: the indicator sits ${Math.round(distance)}px from the pointer`
+  ).toBeLessThanOrEqual(INDICATOR_TOLERANCE_PX);
 }
 
 test("scenario 1: a library block drags across the iframe boundary", async ({
@@ -73,19 +100,17 @@ test("scenario 1: a library block drags across the iframe boundary", async ({
   const before = await driver.readTreeShape();
   expect(before).toEqual(fixture.blockIds);
 
-  const source = await libraryItemCentre(page);
-  const target = await canvasCentre(page);
-  await driver.startDragAt(source);
-  await driver.moveBy(target.x - source.x, target.y - source.y);
+  await startPanelDrag(driver);
 
-  // The pointer is over the canvas, in a different document. A drop target here
-  // is the whole cross-frame question: it means dnd-kit resolved a droppable
-  // registered inside the iframe from a pointer event in the host.
+  // A drop target here is the whole cross-frame question: it means dnd-kit
+  // resolved a droppable registered inside the iframe from a pointer event in
+  // the host document.
   const active = await dragUntilTarget(driver);
   test
     .info()
     .annotations.push({ type: "active-target", description: String(active) });
   expect(active).toBeGreaterThanOrEqual(0);
+  await expectIndicatorAtPointer(driver, "cross-frame");
 
   await driver.drop();
   await expect
@@ -101,12 +126,10 @@ test("scenario 2: droppable geometry survives a host scroll mid-drag", async ({
   const driver = createPocDriver(page);
   await driver.mountTree(fixture);
 
-  const source = await libraryItemCentre(page);
-  const target = await canvasCentre(page);
-  await driver.startDragAt(source);
-  await driver.moveBy(target.x - source.x, target.y - source.y);
+  await startPanelDrag(driver);
   const before = await dragUntilTarget(driver);
   expect(before).toBeGreaterThanOrEqual(0);
+  await expectIndicatorAtPointer(driver, "pre-scroll");
 
   await driver.scrollHost(200);
   await driver.moveBy(0, 1);
@@ -117,10 +140,12 @@ test("scenario 2: droppable geometry survives a host scroll mid-drag", async ({
     description: `before=${before} after=${after}`,
   });
 
-  // The pointer now sits over different content, so the target may legitimately
-  // change. Losing it entirely is the #1705 signature: stale rects still
-  // pointing at where the zones used to be.
+  // The target may legitimately change, since the pointer now sits over
+  // different content. What must NOT happen is the indicator pointing at where
+  // the zones used to be: that is the #1705 signature, and an ordinal check
+  // alone cannot see it.
   expect(after).toBeGreaterThanOrEqual(0);
+  await expectIndicatorAtPointer(driver, "post-scroll");
   await driver.cancel();
 });
 
@@ -133,15 +158,17 @@ test("scenario 3: droppable geometry survives a scaled canvas frame", async ({
   await driver.mountTree(fixture);
   await driver.setZoom(0.75);
 
-  const source = await libraryItemCentre(page);
-  const target = await canvasCentre(page);
-  await driver.startDragAt(source);
-  await driver.moveBy(target.x - source.x, target.y - source.y);
+  await startPanelDrag(driver);
   const active = await dragUntilTarget(driver);
   test
     .info()
     .annotations.push({ type: "scaled-target", description: String(active) });
   expect(active).toBeGreaterThanOrEqual(0);
+
+  // An implementation that ignores the frame transform still activates SOME
+  // zone; it activates the wrong one, further out the further the pointer has
+  // travelled. Only the geometry check catches that.
+  await expectIndicatorAtPointer(driver, "scaled");
   await driver.cancel();
 });
 
@@ -153,28 +180,32 @@ test("scenario 4: a steady drag over variable-height blocks never reverses", asy
   const driver = createPocDriver(page);
   await driver.mountTree(fixture);
 
-  // Record the geometry the claim rests on: the ratio under test, and the size
-  // of the targets dnd-kit is actually choosing between.
-  const geometry = await page
-    .frames()
-    .find(f => f.url() === "about:blank")!
-    .evaluate(() => ({
-      blocks: Array.from(document.querySelectorAll("[data-nx-id]")).map(el =>
-        Math.round(el.getBoundingClientRect().height)
-      ),
-      zonesAtRest: Array.from(document.querySelectorAll(".nx-pb-dropzone")).map(
-        el => Math.round(el.getBoundingClientRect().height)
-      ),
-    }));
+  // The #2088 conclusion rests entirely on this geometry, so it is asserted
+  // rather than merely recorded. If the seeded heights stop rendering, the
+  // scenario must fail loudly instead of passing without the size ratio it
+  // claims to have exercised.
+  const boxes = await driver.readBlockBoxes();
+  const siblings = boxes.slice(1);
+  const tall = siblings.filter(b => b.height >= 300);
+  const short = siblings.filter(b => b.height > 0 && b.height <= 40);
   test.info().annotations.push({
     type: "geometry",
-    description: JSON.stringify(geometry),
+    description: JSON.stringify({
+      heights: boxes.map(b => b.height),
+      zones: await driver.readZoneHeights(),
+    }),
   });
+  expect(tall.length, "the fixture must render tall blocks").toBeGreaterThan(1);
+  expect(short.length, "the fixture must render short blocks").toBeGreaterThan(
+    1
+  );
+  expect(
+    Math.min(...tall.map(b => b.height)) /
+      Math.max(...short.map(b => b.height)),
+    "the size ratio #2088 depends on must actually be present"
+  ).toBeGreaterThan(8);
 
-  const source = await libraryItemCentre(page);
-  const target = await canvasCentre(page);
-  await driver.startDragAt(source);
-  await driver.moveBy(target.x - source.x, target.y - source.y);
+  await startPanelDrag(driver);
 
   // One direction, small constant steps. Anything the target does other than
   // advance or hold is the defect #2088 describes.
@@ -190,6 +221,18 @@ test("scenario 4: a steady drag over variable-height blocks never reverses", asy
     description: JSON.stringify(sequence),
   });
 
+  // `findReversal` also returns null for a sequence that never found a target
+  // and for one stuck on a single target forever. Both would mean droppable
+  // detection broke on this fixture, so both must fail here rather than read as
+  // a clean run.
+  const observed = sequence.filter(value => value >= 0);
+  expect(observed.length, "the drag must find targets at all").toBeGreaterThan(
+    0
+  );
+  expect(
+    new Set(observed).size,
+    "the target must advance across the drag, not stall on one zone"
+  ).toBeGreaterThan(1);
   expect(findReversal(sequence)).toBeNull();
 });
 
@@ -201,20 +244,34 @@ test("scenario 4b: a 2px oscillation at a boundary never flips the indicator", a
   const driver = createPocDriver(page);
   await driver.mountTree(fixture);
 
-  const source = await libraryItemCentre(page);
-  const target = await canvasCentre(page);
-  await driver.startDragAt(source);
-  await driver.moveBy(target.x - source.x, target.y - source.y);
+  await startPanelDrag(driver);
 
-  // Walk down until the target changes: that step crossed a boundary, which is
-  // where the checklist says a 2px jitter must not flip anything.
-  let previous = await driver.readActiveTarget();
-  for (let step = 0; step < 80; step++) {
+  // Get onto a zone first, then walk until the target CHANGES. Both halves are
+  // required: jittering from a point with no active target measures dead space,
+  // and jittering from the middle of one zone's catchment is not a boundary at
+  // all. Either would report a clean run without testing the thing named in the
+  // title.
+  const first = await dragUntilTarget(driver);
+  expect(
+    first,
+    "the drag must reach a zone before seeking a boundary"
+  ).toBeGreaterThanOrEqual(0);
+
+  let crossed = -1;
+  let previous = first;
+  for (let step = 0; step < 120; step++) {
     await driver.moveBy(0, 4);
     const current = await driver.readActiveTarget();
-    if (current !== previous && current >= 0 && previous >= 0) break;
-    previous = current;
+    if (current >= 0 && current !== previous) {
+      crossed = current;
+      break;
+    }
+    if (current >= 0) previous = current;
   }
+  expect(
+    crossed,
+    "a boundary must actually be crossed, or this measures the middle of one zone"
+  ).toBeGreaterThanOrEqual(0);
 
   const observed: number[] = [];
   for (let step = 0; step < 20; step++) {
@@ -228,8 +285,12 @@ test("scenario 4b: a 2px oscillation at a boundary never flips the indicator", a
     description: JSON.stringify(observed),
   });
 
-  const distinct = new Set(observed.filter(v => v >= 0));
-  expect(distinct.size).toBeLessThanOrEqual(2);
+  // Exactly one. Allowing two admits [1,2,1,2,...], which IS the flip this
+  // scenario exists to reject.
+  const distinct = new Set(observed.filter(value => value >= 0));
+  expect(distinct.size, "the indicator must not flip under a 2px jitter").toBe(
+    1
+  );
 });
 
 /**
@@ -260,9 +321,6 @@ test.fixme(
       description: `before=${JSON.stringify(before)} after=${JSON.stringify(after)}`,
     });
 
-    // #1991 reports `position.current` lagging one frame under keyboard
-    // navigation, and "insert above vs below" is computed from it, so a lag shows
-    // up as a move that does not come back.
     expect(after).toEqual(before);
   }
 );
