@@ -24,6 +24,7 @@
 // route the apply to drizzle-kit.
 
 import { NextlyError } from "../../../../errors";
+import { isPreResolutionOp } from "../diff/types";
 import type { IndexSpec, Operation, TableSpec } from "../diff/types";
 
 import { quoteIdent, quoteIdentMysql } from "./identifiers";
@@ -70,19 +71,38 @@ function columnTail(col: {
   return s;
 }
 
-// Render one CREATE TABLE column expression. The synthetic `id` column is
-// the entity table's primary key on every dialect; `<type> PRIMARY KEY
-// NOT NULL` matches the wire form the wizard/DDL services emit
-// (`text PRIMARY KEY NOT NULL` on SQLite, `varchar(36) PRIMARY KEY NOT
-// NULL` on MySQL), keeping kit re-introspection diff-free afterwards.
+// Render one CREATE TABLE column expression. `<type> PRIMARY KEY NOT NULL`
+// matches the wire form the wizard/DDL services emit (`text ...` on SQLite,
+// `varchar(36) ...` on MySQL), keeping kit re-introspection diff-free
+// afterwards; a default on the key column is rendered rather than dropped.
+// Which column is the key is decided by the caller — see `primaryKeyOf`.
 function createTableColumn(
   col: { name: string; type: string; nullable: boolean; default?: string },
-  dialect: AdditiveDialect
+  dialect: AdditiveDialect,
+  isPrimaryKey: boolean
 ): string {
-  if (col.name === "id") {
-    return `${quote(col.name, dialect)} ${col.type} PRIMARY KEY NOT NULL`;
+  if (isPrimaryKey) {
+    const def = col.default !== undefined ? ` DEFAULT ${col.default}` : "";
+    return `${quote(col.name, dialect)} ${col.type} PRIMARY KEY NOT NULL${def}`;
   }
   return `${quote(col.name, dialect)} ${columnTail(col)}`;
+}
+
+// The name of the table's primary-key column, from the spec's `primaryKey`
+// flag — the column descriptor owns that decision, so reading it here keeps
+// a key named something other than `id` from silently losing its PRIMARY
+// KEY, and a user field named `id` from accidentally becoming one.
+//
+// Specs written before the flag existed leave it undefined throughout (the
+// same vintage as the absent-`indexes` sentinel handled below). Only for
+// those does the historical `id` convention still decide, so an older
+// snapshot cannot produce a table with no primary key at all.
+function primaryKeyOf(spec: TableSpec): string | null {
+  const declared = spec.columns.find(c => c.primaryKey === true);
+  if (declared) return declared.name;
+  const anyDeclared = spec.columns.some(c => c.primaryKey !== undefined);
+  if (anyDeclared) return null;
+  return spec.columns.some(c => c.name === "id") ? "id" : null;
 }
 
 // Emit Nextly's canonical secondary indexes for a managed table when the
@@ -118,12 +138,23 @@ export function emitAdditiveDdl(
   op: Operation,
   dialect: AdditiveDialect
 ): string[] {
+  // `executePreResolutionOps` runs every op in PRE_RESOLUTION_OP_TYPES
+  // before the emitter is reached, so emitting SQL for one here would
+  // apply it a second time. That is a no-op for the statements that carry
+  // IF EXISTS and fatal for the ones that cannot: MySQL's DROP INDEX has
+  // no such form and fails the whole apply with ER_CANT_DROP_FIELD_OR_KEY.
+  // Derived from the shared set rather than a copy of its members, so an
+  // op MOVED into pre-resolution later stops being emitted here on the
+  // same commit and the two cannot drift apart.
+  if (isPreResolutionOp(op)) return [];
+
   switch (op.type) {
     case "rename_table":
     case "rename_column":
     case "drop_column":
     case "drop_table":
-      // Already applied by executePreResolutionOps. Emit nothing.
+      // The set's members as of today. Unreachable behind the guard
+      // above; kept so the switch stays exhaustive over Operation.
       return [];
 
     case "add_column":
@@ -133,7 +164,10 @@ export function emitAdditiveDdl(
       ];
 
     case "add_table": {
-      const cols = op.table.columns.map(c => createTableColumn(c, dialect));
+      const pkName = primaryKeyOf(op.table);
+      const cols = op.table.columns.map(c =>
+        createTableColumn(c, dialect, c.name === pkName)
+      );
       const createTable = `CREATE TABLE ${quote(op.table.name, dialect)} (\n  ${cols.join(",\n  ")}\n)`;
       // Render the table's tracked indexes; fall back to the canonical
       // slug/created_at pair when the snapshot predates index tracking.

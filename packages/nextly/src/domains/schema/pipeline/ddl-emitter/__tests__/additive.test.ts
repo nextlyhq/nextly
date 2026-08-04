@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 
 import { NextlyError } from "../../../../../errors";
 
+import { PRE_RESOLUTION_OP_TYPES } from "../../diff/types";
 import type { Operation } from "../../diff/types";
 import { emitAdditiveDdl } from "../additive";
 
@@ -67,11 +68,89 @@ describe("emitAdditiveDdl — add_table", () => {
   });
 
   it("mysql: CREATE TABLE with PK on id, plain CREATE INDEX (no IF NOT EXISTS)", () => {
-    const stmts = emitAdditiveDdl(table, "mysql");
+    // MySQL's id is `varchar(36)`, not `text`: the column descriptor gives
+    // it that type because MySQL rejects a TEXT column in a key spec
+    // without a length (ER_BLOB_KEY_WITHOUT_LENGTH). Asserting the type
+    // production actually emits keeps this from passing on DDL the
+    // database would refuse.
+    const mysqlTable: Operation = {
+      ...table,
+      table: {
+        ...(table as Extract<Operation, { type: "add_table" }>).table,
+        columns: [
+          {
+            name: "id",
+            type: "varchar(36)",
+            nullable: false,
+            primaryKey: true,
+          },
+          { name: "slug", type: "varchar(255)", nullable: false },
+        ],
+      },
+    };
+    const stmts = emitAdditiveDdl(mysqlTable, "mysql");
     expect(stmts[0]).toContain("CREATE TABLE `dc_articles`");
-    expect(stmts[0]).toContain("`id` text PRIMARY KEY NOT NULL");
+    expect(stmts[0]).toContain("`id` varchar(36) PRIMARY KEY NOT NULL");
     expect(stmts[1]).toBe(
       "CREATE UNIQUE INDEX `idx_dc_articles_slug` ON `dc_articles` (`slug`)"
+    );
+  });
+
+  it("takes the primary key from the spec flag, not the column name", () => {
+    // A key named something other than `id` still gets PRIMARY KEY, and a
+    // non-key column named `id` does not become one.
+    const oddKey: Operation = {
+      type: "add_table",
+      table: {
+        name: "dc_odd",
+        columns: [
+          { name: "uid", type: "text", nullable: false, primaryKey: true },
+          { name: "id", type: "text", nullable: true },
+        ],
+      },
+    };
+    const [createTable] = emitAdditiveDdl(oddKey, "sqlite");
+    expect(createTable).toContain(`"uid" text PRIMARY KEY NOT NULL`);
+    expect(createTable).toContain(`"id" text`);
+    expect(createTable).not.toContain(`"id" text PRIMARY KEY`);
+  });
+
+  it("keeps a default declared on the key column", () => {
+    const keyed: Operation = {
+      type: "add_table",
+      table: {
+        name: "dc_keyed",
+        columns: [
+          {
+            name: "id",
+            type: "text",
+            nullable: false,
+            primaryKey: true,
+            default: "gen_random_uuid()",
+          },
+        ],
+      },
+    };
+    expect(emitAdditiveDdl(keyed, "sqlite")[0]).toContain(
+      `"id" text PRIMARY KEY NOT NULL DEFAULT gen_random_uuid()`
+    );
+  });
+
+  it("still keys a legacy spec (no primaryKey flags at all) on id", () => {
+    // Snapshots predating the flag leave it undefined throughout; the
+    // historical convention keeps them from emitting a table with no key.
+    const legacySpec: Operation = {
+      type: "add_table",
+      table: {
+        name: "dc_legacy",
+        columns: [
+          { name: "id", type: "text", nullable: false },
+          { name: "slug", type: "text", nullable: false },
+        ],
+      },
+    };
+    expect(emitAdditiveDdl(legacySpec, "sqlite")[0]).toContain(
+      `"id" text PRIMARY KEY NOT NULL`
     );
   });
 
@@ -161,5 +240,78 @@ describe("emitAdditiveDdl — indexes and contracts", () => {
       op: "change_column_type",
       dialect: "sqlite",
     });
+  });
+
+  // The executor runs these before the emitter is reached, so emitting SQL
+  // for one applies it twice. Asserted over the SET rather than over a list
+  // of op types copied from it: moving an op into pre-resolution (as the
+  // index-ordering work does for `drop_index`) then fails here on the same
+  // commit instead of surfacing as ER_CANT_DROP_FIELD_OR_KEY at runtime on
+  // MySQL, whose DROP INDEX has no IF EXISTS.
+  it("emits nothing for every op the pre-resolution executor owns", () => {
+    const samples: Record<Operation["type"], Operation> = {
+      rename_table: { type: "rename_table", fromName: "a", toName: "b" },
+      rename_column: {
+        type: "rename_column",
+        tableName: "dc_a",
+        fromName: "a",
+        toName: "b",
+        columnType: "text",
+      },
+      drop_column: {
+        type: "drop_column",
+        tableName: "dc_a",
+        columnName: "old",
+        columnType: "text",
+      },
+      drop_table: { type: "drop_table", tableName: "dc_a" },
+      add_column: {
+        type: "add_column",
+        tableName: "dc_a",
+        column: { name: "c", type: "text", nullable: true },
+      },
+      add_table: {
+        type: "add_table",
+        table: {
+          name: "dc_a",
+          columns: [{ name: "id", type: "text", nullable: false }],
+        },
+      },
+      add_index: {
+        type: "add_index",
+        tableName: "dc_a",
+        index: { name: "idx_dc_a_c", columns: ["c"], unique: false },
+      },
+      drop_index: {
+        type: "drop_index",
+        tableName: "dc_a",
+        index: { name: "idx_dc_a_c", columns: ["c"], unique: false },
+      },
+      change_column_type: {
+        type: "change_column_type",
+        tableName: "dc_a",
+        columnName: "c",
+        fromType: "text",
+        toType: "integer",
+      },
+      change_column_nullable: {
+        type: "change_column_nullable",
+        tableName: "dc_a",
+        columnName: "c",
+        toNullable: true,
+      },
+      change_column_default: {
+        type: "change_column_default",
+        tableName: "dc_a",
+        columnName: "c",
+        toDefault: "'x'",
+      },
+    };
+
+    for (const type of PRE_RESOLUTION_OP_TYPES) {
+      const op = samples[type];
+      expect(emitAdditiveDdl(op, "sqlite")).toEqual([]);
+      expect(emitAdditiveDdl(op, "mysql")).toEqual([]);
+    }
   });
 });
