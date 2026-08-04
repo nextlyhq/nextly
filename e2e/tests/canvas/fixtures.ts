@@ -79,6 +79,60 @@ export const EXTREME_RATIO_FIXTURE: SeedOptions = {
   ],
 };
 
+/** A container nested inside the root, for collision-priority-by-depth. */
+export const NESTED_FIXTURE: SeedOptions = {
+  title: "spike nested",
+  slug: "spike-nested",
+  content: {
+    version: DOCUMENT_VERSION,
+    kind: "page",
+    root: {
+      id: "nx-spike-root",
+      type: "core/container",
+      props: { as: "div" },
+      slots: {
+        [DEFAULT_SLOT]: [
+          spacer("nx-outer-0", "80px"),
+          {
+            id: "nx-inner",
+            type: "core/container",
+            props: { as: "div" },
+            slots: {
+              [DEFAULT_SLOT]: [
+                spacer("nx-inner-0", "120px"),
+                spacer("nx-inner-1", "120px"),
+              ],
+            },
+          },
+          spacer("nx-outer-1", "80px"),
+        ],
+      },
+    },
+  },
+  blockIds: [
+    "nx-spike-root",
+    "nx-outer-0",
+    "nx-inner",
+    "nx-inner-0",
+    "nx-inner-1",
+    "nx-outer-1",
+  ],
+};
+
+/** 500 siblings: the tree size the perf budget is stated against. */
+const LARGE_COUNT = 500;
+export const LARGE_FIXTURE: SeedOptions = {
+  title: "spike large tree",
+  slug: "spike-large-tree",
+  content: document(
+    Array.from({ length: LARGE_COUNT }, (_, i) => spacer(`nx-big-${i}`, "12px"))
+  ),
+  blockIds: [
+    "nx-spike-root",
+    ...Array.from({ length: LARGE_COUNT }, (_, i) => `nx-big-${i}`),
+  ],
+};
+
 /** Create a page whose builder document is exactly `content`, and return its id. */
 export async function seedPage(
   request: APIRequestContext,
