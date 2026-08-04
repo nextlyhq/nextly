@@ -4,13 +4,18 @@ import picomatch from "picomatch";
 /**
  * Where a stylesheet this package emits is allowed to fetch from. React-free.
  *
- * One module because there is one question. It was previously answered twice —
- * once for custom CSS and once for structured style values — and the two copies
- * immediately disagreed: the sanitizer normalised a URL the way the WHATWG URL
- * parser does, and the compiler used `trim()` and a scheme regexp, so a value
- * carrying a leading U+0001 was refused in one and emitted by the other. A
- * second implementation of a security check is a second thing to be wrong, and
- * it will be wrong in a way the first one already taught you about.
+ * One module, because "may this be fetched" is one question however many
+ * surfaces ask it — custom CSS, structured style values, block attributes and
+ * sanitized embed markup all reduce to it. Each of those judges a different
+ * thing and reaches its own verdict, but they must agree on what a URL IS and
+ * how it normalises, since that is where the subtleties are: a value carrying
+ * a leading U+0001 is one URL to the WHATWG parser and another to `trim()`
+ * plus a scheme test, and only one of those readings is the browser's.
+ *
+ * Keeping the definition here rather than per-caller is what makes those
+ * agree. A second implementation of a security check is a second thing to be
+ * wrong, and the surfaces that share this one cannot drift apart while the
+ * scan is a single function.
  *
  * @module core/url-policy
  */
@@ -116,7 +121,12 @@ export interface FetchableValues {
 export function fetchableValues(
   value: csstree.CssNode,
   depth = 0,
-  outerPosition: readonly string[] = []
+  outerPosition: readonly string[] = [],
+  // Every string counts, whatever position it sits in. True for a custom
+  // property, whose value is checked as though it could land anywhere: the
+  // declaration that consumes it holds only `var(--x)` and carries no literal
+  // of its own, so the string has to be judged where it is written or nowhere.
+  anyPositionFetches = false
 ): FetchableValues {
   const values: string[] = [];
   const raws: { text: string; position: string[] }[] = [];
@@ -136,7 +146,12 @@ export function fetchableValues(
       ];
       // No literal to read: the URL would arrive from a DOM attribute at use
       // time, so this is a request whose destination the scan cannot see.
-      if (attrFetchesFromDom(node, position)) attrInFetchPosition = true;
+      if (
+        node.type === "Function" &&
+        node.name.toLowerCase() === "attr" &&
+        (anyPositionFetches || attrFetchesFromDom(node, position))
+      )
+        attrInFetchPosition = true;
       if (node.type === "Url") {
         values.push(node.value);
         return;
@@ -146,6 +161,10 @@ export function fetchableValues(
         return;
       }
       if (node.type !== "String") return;
+      if (anyPositionFetches) {
+        values.push(node.value);
+        return;
+      }
       const enclosing = position[position.length - 1];
       // A bare string is text: `content: "https://example.com"` is a caption.
       if (enclosing === undefined) return;
@@ -171,7 +190,12 @@ export function fetchableValues(
     } catch {
       return { values, unreadable: "syntax" };
     }
-    const nested = fetchableValues(reparsed, depth + 1, raw.position);
+    const nested = fetchableValues(
+      reparsed,
+      depth + 1,
+      raw.position,
+      anyPositionFetches
+    );
     values.push(...nested.values);
     if (nested.unreadable !== undefined) {
       return { values, unreadable: nested.unreadable };

@@ -187,6 +187,53 @@ describe("sanitizeEmbedHtml", () => {
     expect(out).not.toContain("evil.example");
   });
 
+  it("gates an SVG resource href, which fetches without a click", () => {
+    // `href` is navigation in HTML and a RESOURCE reference in SVG: the browser
+    // resolves `<feImage href>` on its own whenever the filter is applied, and
+    // `filter: url(#p)` in the page's CSS decides whether it is. Both spellings,
+    // since SVG 1.1 content still uses the namespaced one.
+    for (const dirty of [
+      '<svg><filter id="p"><feImage href="https://evil.example/a"/></filter></svg>',
+      '<svg><filter id="p"><feImage xlink:href="https://evil.example/a"/></filter></svg>',
+      '<svg><image href="https://evil.example/a.png"/></svg>',
+      '<svg><use href="https://evil.example/s.svg#i"/></svg>',
+    ]) {
+      expect(sanitizeEmbedHtml(dirty), dirty).not.toContain("evil.example");
+    }
+  });
+
+  it("leaves an ordinary link alone, in HTML and in SVG", () => {
+    // A link is followed by a person, so where it points is the author's
+    // business and no request happens without an action. Gating it would be a
+    // restriction with nothing to show for it.
+    expect(
+      sanitizeEmbedHtml('<a href="https://example.com/x">go</a>')
+    ).toContain("https://example.com/x");
+    expect(
+      sanitizeEmbedHtml(
+        '<svg><a href="https://example.com/x"><text>go</text></a></svg>'
+      )
+    ).toContain("https://example.com/x");
+  });
+
+  it("refuses a URL smuggled through a custom property", () => {
+    // Declarations are checked one at a time, so `--u` reads as a bare string
+    // and the declaration consuming it holds only `var(--u)`. Neither sees a
+    // URL; the pair fetches one. A custom property is therefore judged as
+    // though its value could land in any position.
+    const dirty =
+      "<div style='--u:\"https://evil.example/a\";background-image:image-set(var(--u) 1x)'>x</div>";
+    expect(sanitizeEmbedHtml(dirty)).not.toContain("evil.example");
+  });
+
+  it("keeps a custom property that names an allowed origin", () => {
+    const out = sanitizeEmbedHtml(
+      "<div style='--u:\"https://player.example/a.png\";background-image:image-set(var(--u) 1x)'>x</div>",
+      [{ protocol: "https", hostname: "player.example" }]
+    );
+    expect(out).toContain("player.example");
+  });
+
   it("does not leave its hook registered for the next call", () => {
     // DOMPurify keeps hooks on a shared instance, so one left behind would
     // judge later fragments against whichever patterns this call was holding.

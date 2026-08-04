@@ -62,6 +62,23 @@ const FETCH_ATTRS = [
   "lowsrc",
 ] as const;
 
+/** The SVG namespace, where `href` names a resource rather than a destination. */
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+/**
+ * Whether this element's `href` is fetched rather than navigated to.
+ *
+ * In HTML `href` belongs to `<a>` and `<link>` and is followed by a person. In
+ * SVG it is how `<image>`, `<use>`, `<feImage>` and the gradient and pattern
+ * elements REFERENCE something, and the browser resolves it on its own — so an
+ * `<feImage href="https://…">` inside a filter fetches whenever the filter is
+ * applied, which CSS decides. SVG's own `<a>` is the one exception and keeps
+ * navigating.
+ */
+function hrefIsFetched(node: Element): boolean {
+  return node.namespaceURI === SVG_NS && node.localName.toLowerCase() !== "a";
+}
+
 /**
  * Every URL in a `srcset`, which holds a comma-separated candidate list.
  *
@@ -98,8 +115,16 @@ function styleIsAllowed(
     visit: "Declaration",
     enter(node: csstree.CssNode) {
       if (!allowed) return;
+      const declaration = node as csstree.Declaration;
       const { values, unreadable } = fetchableValues(
-        (node as csstree.Declaration).value
+        declaration.value,
+        0,
+        [],
+        // A custom property is judged as though its value could land anywhere.
+        // Declarations are checked one at a time, so `--u: "https://…"` reads
+        // as a bare string and the declaration consuming it holds only
+        // `var(--u)` — neither sees a URL, while the pair fetches one.
+        declaration.property.startsWith("--")
       );
       // Unreadable is not safe, the same as everywhere else this scan is used.
       if (unreadable !== undefined) allowed = false;
@@ -123,7 +148,13 @@ function enforceOrigins(
   node: Element,
   patterns: readonly RemotePatternInput[]
 ): void {
-  for (const attr of FETCH_ATTRS) {
+  // `href` and its legacy `xlink:href` spelling join the list only where they
+  // name a resource. Both spellings, because SVG 1.1 content uses the namespaced
+  // one and browsers still honour it.
+  const attrs = hrefIsFetched(node)
+    ? [...FETCH_ATTRS, "href", "xlink:href"]
+    : FETCH_ATTRS;
+  for (const attr of attrs) {
     const value = node.getAttribute(attr);
     if (value === null) continue;
     const urls = attr === "srcset" ? srcsetUrls(value) : [value];
