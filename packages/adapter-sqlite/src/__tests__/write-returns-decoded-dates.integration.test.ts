@@ -4,6 +4,7 @@
 // shape: without decoding, an insert answers a timestamp column with the
 // integer SQLite stores while every select answers a `Date`.
 
+import type { TableDefinition } from "@nextlyhq/adapter-drizzle/types";
 import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -11,11 +12,33 @@ import { createSqliteAdapter } from "../index";
 
 const TABLE = "int_sqlite_write_dates";
 
+/**
+ * The physical table, built through the adapter's own DDL rather than a
+ * hand-written statement, so the dialect decides how each column is spelled.
+ *
+ * SQLite stores a timestamp as an integer of unix seconds, which is what
+ * `integer({ mode: "timestamp" })` binds and decodes.
+ */
+const TABLE_DEFINITION: TableDefinition = {
+  name: TABLE,
+  columns: [
+    { name: "id", type: "text", primaryKey: true },
+    { name: "label", type: "text", nullable: false },
+    { name: "occurred_at", type: "integer" },
+  ],
+};
+
+/**
+ * The schema the adapter resolves the table through, in the shape a generated
+ * collection uses, so what this suite decodes is what a real row decodes.
+ *
+ * That this agrees with the physical column is the premise of every case below
+ * rather than an assumption: the first one reads the stored value back raw and
+ * fails if it is not the integer the decoder expects.
+ */
 const events = sqliteTable(TABLE, {
   id: text("id").primaryKey(),
   label: text("label").notNull(),
-  // The mode every generated timestamp column uses, so what this suite decodes
-  // is what a real collection row decodes.
   occurredAt: integer("occurred_at", { mode: "timestamp" }),
 });
 
@@ -27,9 +50,7 @@ describe("SQLite write paths return Drizzle-decoded dates", () => {
   beforeAll(async () => {
     adapter = createSqliteAdapter({ memory: true });
     await adapter.connect();
-    await adapter.executeQuery(
-      `CREATE TABLE ${TABLE} (id text PRIMARY KEY, label text NOT NULL, occurred_at integer)`
-    );
+    await adapter.createTable(TABLE_DEFINITION);
     adapter.setTableResolver({
       getTable: (name: string) => (name === TABLE ? events : null),
     });
@@ -37,6 +58,26 @@ describe("SQLite write paths return Drizzle-decoded dates", () => {
 
   afterAll(async () => {
     await adapter.disconnect();
+  });
+
+  it("stores the timestamp as the raw integer the decoder expects", async () => {
+    // The premise of every case below. If the physical column and the resolver
+    // schema ever disagree about how a timestamp is stored, the decode under
+    // test becomes a no-op and the assertions would pass having proved nothing.
+    await adapter.transaction(ctx =>
+      ctx.insert(
+        TABLE,
+        { id: "raw-1", label: "raw", occurred_at: OCCURRED_AT },
+        { returning: [] }
+      )
+    );
+
+    const [stored] = await adapter.executeQuery<{ occurred_at: unknown }>(
+      `SELECT occurred_at FROM ${TABLE} WHERE id = ?`,
+      ["raw-1"]
+    );
+
+    expect(typeof stored.occurred_at).toBe("number");
   });
 
   it("decodes a date on the transactional insert, matching a read of the row", async () => {

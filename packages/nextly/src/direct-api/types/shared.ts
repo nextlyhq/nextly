@@ -196,9 +196,16 @@ type BuiltInDateField = "createdAt" | "updatedAt";
  * Homomorphic on purpose: `?` and `readonly` are carried over, so an optional
  * `publishedAt?: string` becomes an optional `publishedAt?: Date` rather than a
  * required one.
+ *
+ * `null` and `undefined` survive the replacement. Only the field's non-nullish
+ * representation changes -- a column that can hold nothing still can, and a
+ * type that dropped that would tell a caller to skip the check that stops a
+ * read of `null`.
  */
 export type InProcessRow<TData, TDateField extends PropertyKey> = {
-  [K in keyof TData]: K extends TDateField ? Date : TData[K];
+  [K in keyof TData]: K extends TDateField
+    ? Date | Extract<TData[K], null | undefined>
+    : TData[K];
 };
 
 /**

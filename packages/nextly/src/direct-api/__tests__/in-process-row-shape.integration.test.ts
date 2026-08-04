@@ -108,7 +108,10 @@ describe.each(getConfiguredTestDialects())(
 
       // Absent, not the epoch: a decoder applied to a missing value would answer
       // 1970 and every caller reading it would believe the article was published.
-      expect(item.publishedAt ?? null).toBeNull();
+      // `null`, and asserted as `null` rather than through a nullish coalesce:
+      // the two are different claims about the row, and a check that accepts
+      // either would pass whichever the column started returning.
+      expect(item.publishedAt).toBeNull();
     });
   }
 );

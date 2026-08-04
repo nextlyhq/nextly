@@ -111,15 +111,26 @@ assertType<Exact<DataFromCollectionSlug<"posts">, Record<string, unknown>>>(
   true
 );
 
-// The date methods a caller reaches for actually resolve, and the string ones
-// they would have written against the wire type no longer compile.
+// The date methods a caller reaches for actually resolve. The string ones they
+// would have written against the wire type are excluded by the `Exact`
+// assertion above, which admits nothing but `Date`.
 declare const post: Post;
 const millis: number = post.createdAt.getTime();
 void millis;
 
-// @ts-expect-error — an in-process timestamp is a Date, not a string.
-post.createdAt.slice(0, 10);
-
 // `InProcessRow` maps nothing when handed no date fields, so a caller composing
 // it directly gets the input back rather than a widened record.
 assertType<Exact<InProcessRow<{ a: number }, never>, { a: number }>>(true);
+
+// A column that can hold nothing still can. Replacing the whole type with
+// `Date` would drop `null` and tell a caller to skip the check that stops a
+// read of it.
+assertType<Exact<InProcessRow<{ at: string | null }, "at">["at"], Date | null>>(
+  true
+);
+assertType<
+  Exact<
+    InProcessRow<{ at: string | null | undefined }, "at">["at"],
+    Date | null | undefined
+  >
+>(true);
