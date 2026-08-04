@@ -41,6 +41,42 @@ export type AuditEventKind =
   | "role-revoked"
   | "user-deleted";
 
+/**
+ * The only `logContext` keys an audit row may carry.
+ *
+ * A `NextlyError`'s `logContext` is an open channel written for operator triage,
+ * and the auth failures put an attempted email address and a user id in it. Both
+ * identify a person, and a failure event is recorded with NO actor precisely so
+ * it cannot say which account was reached — so nothing links such a row to
+ * anyone, and the deletion that erases a person's other rows cannot find it.
+ * Storing the identifier and then trying to erase it later is the wrong order:
+ * it never enters.
+ *
+ * Default-deny, mirroring how webhook payloads are projected. The keys kept are
+ * the ones that describe WHAT happened rather than TO WHOM.
+ */
+const AUDIT_METADATA_KEYS = ["reason", "originalCode", "legacyCode"] as const;
+
+/**
+ * Copy the allowlisted diagnostic keys out of an error's context.
+ *
+ * Callers pass the whole `logContext`; anything not listed is dropped rather
+ * than stored, so a new key added for logging cannot silently become a new
+ * field in the audit trail.
+ */
+export function projectAuditMetadata(
+  context: Record<string, unknown> | undefined
+): Record<string, unknown> {
+  const projected: Record<string, unknown> = {};
+  if (!context) return projected;
+  for (const key of AUDIT_METADATA_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(context, key)) {
+      projected[key] = context[key];
+    }
+  }
+  return projected;
+}
+
 export interface AuditEvent {
   kind: AuditEventKind;
   /** The user performing the action; null when unauthenticated (failed login, failed CSRF). */

@@ -21,6 +21,7 @@ import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { getDialectTables } from "../../../database/index";
+import { NextlyError } from "../../../errors";
 import { buildAuditLogWriter } from "../../audit/audit-log-writer";
 import { eraseActorPersonalData } from "../../audit/erase-actor-personal-data";
 import { getSQLiteDrizzleKit } from "../../../database/drizzle-kit-lazy";
@@ -126,7 +127,9 @@ describe("deleting a user erases them from the activity log without erasing the 
     // under test are the ones the auth handlers actually fill.
     auditWriter = buildAuditLogWriter((name: string) => {
       if (name === "adapter") return adapter;
-      throw new Error(`unexpected service request: ${name}`);
+      throw NextlyError.internal({
+        logContext: { service: name },
+      });
     });
   });
 

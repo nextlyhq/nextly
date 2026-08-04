@@ -1,4 +1,5 @@
 import { readOrGenerateRequestId } from "../../api/request-id";
+import { projectAuditMetadata } from "../../domains/audit/audit-log-writer";
 import type { AuditLogWriter } from "../../domains/audit/audit-log-writer";
 import { NextlyError } from "../../errors/nextly-error";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
@@ -203,7 +204,7 @@ export async function handleLogin(
       }),
       userAgent: request.headers.get("user-agent"),
       metadata: NextlyError.is(err)
-        ? { code: err.code, ...(err.logContext ?? {}) }
+        ? { code: err.code, ...projectAuditMetadata(err.logContext) }
         : { code: "INTERNAL_ERROR" },
     });
     if (NextlyError.is(err)) {

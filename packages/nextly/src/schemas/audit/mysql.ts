@@ -50,7 +50,11 @@ export const auditLog = mysqlTable(
     // never carried them, so a bare NULL cannot say whether a person was
     // removed or was never recorded — which is the evidence an erasure
     // request needs.
-    identityErasedAt: timestamp("identity_erased_at"),
+    // `datetime`, not `timestamp`, for the same reason the activity log's stamp
+    // is: a nullable MySQL TIMESTAMP is subject to the server's
+    // explicit_defaults_for_timestamp mode, which can rewrite the column and
+    // leave the live schema disagreeing with the desired one forever.
+    identityErasedAt: datetime("identity_erased_at"),
   },
   t => [
     index("audit_log_kind_idx").on(t.kind),

@@ -235,6 +235,20 @@ const migratesActivityLogActor = (stmt: string): boolean => {
   );
 };
 
+/**
+ * The auth log gains the same erasure marker the activity log has, and for the
+ * same reason: `ip_address` and `user_agent` are nullable for rows that never
+ * carried them, so a bare NULL cannot say whether a person was erased.
+ *
+ * Pinned to the table AND the column rather than allowing any ALTER on it, so a
+ * future unintended change to `audit_log` still fails as a phantom diff.
+ */
+const addsAuditLogErasureStamp = (stmt: string): boolean => {
+  const s = stmt.trim();
+  if (!/^ALTER TABLE [`"]?audit_log[`"]? /i.test(s)) return false;
+  return /\bADD (COLUMN )?[`"]?identity_erased_at[`"]?\b/i.test(s);
+};
+
 // Positive guard: the sim must actually create each new table (an empty first
 // pass would otherwise satisfy the additive-only check vacuously).
 const hasCreateTableFor = (stmts: string[], table: string): boolean =>
@@ -343,7 +357,8 @@ describe("existing-user upgrade sim (0.45 DDL → v1)", () => {
               addsVersionsColumn(s) ||
               addsRevalidateColumn(s) ||
               addsWebhooksColumn(s) ||
-              migratesActivityLogActor(s),
+              migratesActivityLogActor(s) ||
+              addsAuditLogErasureStamp(s),
             `phantom diff: ${s}`
           ).toBe(true);
         }
@@ -420,7 +435,8 @@ describe("existing-user upgrade sim (0.45 DDL → v1)", () => {
               addsVersionsColumn(s) ||
               addsRevalidateColumn(s) ||
               addsWebhooksColumn(s) ||
-              migratesActivityLogActor(s),
+              migratesActivityLogActor(s) ||
+              addsAuditLogErasureStamp(s),
             `unexpected reconcile statement shape: ${s}`
           ).toBe(true);
         }

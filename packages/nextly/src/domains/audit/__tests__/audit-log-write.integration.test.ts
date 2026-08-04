@@ -17,6 +17,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { getDialectTables } from "../../../database/index";
+import { projectAuditMetadata } from "../audit-log-writer";
 import { getNextlyLogger } from "../../../observability/logger";
 import { buildAuditLogWriter } from "../audit-log-writer";
 
@@ -150,5 +151,35 @@ describe("dialect resolution", () => {
 
     expect(usedTable).toBe(getDialectTables("postgresql").auditLog);
     expect(usedTable).not.toBe(getDialectTables("sqlite").auditLog);
+  });
+});
+
+/**
+ * A NextlyError's `logContext` is written for operator triage and the auth
+ * failures put an attempted email and a user id in it. A failure event is
+ * recorded with NO actor, precisely so it cannot reveal which account was
+ * reached — which also means nothing links the row to a person and the deletion
+ * that erases their other rows can never find it. So the identifier must not be
+ * stored at all rather than erased later.
+ */
+describe("projectAuditMetadata", () => {
+  it("drops identifiers the error context carried", () => {
+    const projected = projectAuditMetadata({
+      email: "victim@example.com",
+      userId: "u-123",
+      reason: "wrong-password",
+    });
+
+    expect(projected).toEqual({ reason: "wrong-password" });
+    expect(JSON.stringify(projected)).not.toContain("victim@example.com");
+    expect(JSON.stringify(projected)).not.toContain("u-123");
+  });
+
+  it("keeps nothing when the context is only identifiers", () => {
+    // Default-deny: a key nobody listed is dropped, so a field added for
+    // logging cannot silently become a new column of the audit trail.
+    expect(projectAuditMetadata({ email: "a@b.c", ipHint: "1.2.3.4" })).toEqual(
+      {}
+    );
   });
 });

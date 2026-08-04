@@ -42,3 +42,13 @@ Whether each table can be erased is now decided per table. A database can carry
 one and not the other, and answering for the pair would let a missing auth log
 suppress the activity erasure, leaving behind the names and emails the deletion
 exists to remove.
+
+Identifiers are also kept out of the auth log's `metadata` in the first place. A
+`NextlyError`'s `logContext` is written for operator triage, and a failed login
+puts the attempted email address there; the auth handlers copied that context
+into the stored event wholesale. A failure is recorded with no actor precisely
+so it cannot reveal which account was reached, so nothing links such a row to a
+person and the deletion that erases their other rows can never find it — the
+identifier has to not be stored rather than be erased later. Only an allowlisted
+set of diagnostic keys is now copied, default-deny, so a key added for logging
+cannot silently become a field of the audit trail.
