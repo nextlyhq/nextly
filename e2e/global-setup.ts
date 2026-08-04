@@ -31,7 +31,13 @@ async function globalSetup(config: FullConfig): Promise<void> {
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage({ baseURL });
-    await page.goto("/admin");
+    // The admin route compiles lazily, and THIS is the first request that hits
+    // it, so a cold dev server spends the whole compile inside this navigation.
+    // The default 30s is not enough on a slow CI runner: `webServer` already
+    // allows 240s for boot for exactly this reason, and the `main` wait below
+    // already allows 60s. Leaving the navigation at the default made the two
+    // disagree, and the suite failed before a single test ran.
+    await page.goto("/admin", { timeout: 180_000 });
 
     // The admin is client-rendered: the shell is served empty and filled after
     // hydration, so the session is only real once a screen has drawn.

@@ -43,7 +43,6 @@ test.use({ viewport: { width: 2560, height: 1400 } });
  * unscaled 0.75 transform misreports by ~25% of the travel, which exceeds this
  * within the first 240px of a sweep.
  */
-const INDICATOR_TOLERANCE_PX = 60;
 
 /** Step the pointer down until a drop zone becomes active, and report where. */
 async function dragUntilTarget(
@@ -77,16 +76,23 @@ async function startPanelDrag(driver: CanvasDriver) {
 async function expectIndicatorAtPointer(driver: CanvasDriver, label: string) {
   const rect = await driver.readIndicatorRect();
   expect(rect, `${label}: an indicator must be visible`).not.toBeNull();
-  const pointer = driver.pointer();
-  const distance = Math.abs(pointer.y - (rect!.y + rect!.height / 2));
+
+  // Exact, not within a tolerance. A distance threshold is meaningless here:
+  // collision picks the NEAREST zone, so the pointer legitimately sits up to
+  // half the zone spacing away, and any threshold near that is either slack
+  // enough to accept a neighbour or tight enough to reject a correct answer.
+  // "Is the active zone the nearest one?" has neither problem, and both the
+  // stale-rect and unscaled-transform failures pick a non-nearest zone.
+  const active = await driver.readActiveTarget();
+  const nearest = await driver.nearestZoneToPointer();
   test.info().annotations.push({
-    type: `${label}-distance`,
-    description: `pointerY=${Math.round(pointer.y)} indicatorY=${Math.round(rect!.y + rect!.height / 2)} distance=${Math.round(distance)}`,
+    type: `${label}-zone`,
+    description: `active=${active} nearest=${nearest}`,
   });
   expect(
-    distance,
-    `${label}: the indicator sits ${Math.round(distance)}px from the pointer`
-  ).toBeLessThanOrEqual(INDICATOR_TOLERANCE_PX);
+    active,
+    `${label}: the active zone must be the nearest to the pointer`
+  ).toBe(nearest);
 }
 
 test("scenario 1: a library block drags across the iframe boundary", async ({
@@ -256,17 +262,14 @@ test("scenario 4: a steady drag over variable-height blocks never reverses", asy
 });
 
 /**
- * Expected failure, and the reason is structural rather than a bug in dnd-kit.
+ * The pointer is parked 1px inside a zone's catchment edge, then jittered +/-2px
+ * across it. The indicator must not change.
  *
- * Master plan §2.8 point 3 assumes a boundary BETWEEN TWO drop targets. This
- * canvas has no such boundary: zones are thin gaps separated by whole blocks of
- * dead space, so the only edge a pointer can straddle is zone-versus-nothing.
- * Bracketed to 1px, a 2px jitter there yields [-1 x20] — the indicator is
- * absent, not flickering between two candidates.
- *
- * That is the same structural fact that makes #2088 unreproducible (§3 of the
- * report) seen from its costly side, and it is what compensation C4 has to fix:
- * insertion feedback must exist between the gaps, not only within them.
+ * An earlier revision reported [-1 x20] here and concluded the zones did not
+ * tile the canvas. That was wrong: the bracket loop waited for the PREVIOUS
+ * zone, which sits a whole block away, so it never matched and left the pointer
+ * stranded in dead space. Bracketing against the edge of the CURRENT zone gives
+ * [2 x20] — stable.
  */
 test("scenario 4b: a 2px jitter at a zone edge keeps the indicator stable", async ({
   page,
@@ -305,16 +308,24 @@ test("scenario 4b: a 2px jitter at a zone edge keeps the indicator stable", asyn
     "a boundary must actually be crossed, or this measures the middle of one zone"
   ).toBeGreaterThanOrEqual(0);
 
-  // The 4px search only proves the boundary lies somewhere in (P-4, P]. Walk
-  // back 1px at a time until the old target returns, which brackets it to 1px,
-  // so the +/-2px samples below genuinely land on opposite sides.
-  for (let step = 0; step < 6; step++) {
+  // Bracket the edge of `crossed`'s own catchment. Waiting for `previous` to
+  // return cannot work: the file documents that zones are separated by
+  // block-sized dead space, so the old zone is hundreds of pixels away and six
+  // 1px moves simply run out, leaving the pointer wherever it started.
+  let bracketed = false;
+  for (let step = 0; step < 8; step++) {
     await driver.moveBy(0, -1);
-    if ((await driver.readActiveTarget()) === previous) break;
+    if ((await driver.readActiveTarget()) !== crossed) {
+      // One step back inside, so +/-2px straddles the edge.
+      await driver.moveBy(0, 1);
+      bracketed = true;
+      break;
+    }
   }
+  expect(bracketed, "the zone edge must be bracketed to 1px").toBe(true);
   const observed: number[] = [];
   for (let step = 0; step < 20; step++) {
-    await driver.moveBy(0, step % 2 === 0 ? 4 : -4);
+    await driver.moveBy(0, step % 2 === 0 ? 2 : -2);
     observed.push(await driver.readActiveTarget());
   }
   await driver.cancel();
@@ -323,13 +334,6 @@ test("scenario 4b: a 2px jitter at a zone edge keeps the indicator stable", asyn
     type: "boundary-jitter",
     description: JSON.stringify(observed),
   });
-
-  // Declared here, after the evidence is collected: the run above is the
-  // measurement, and it is what the annotation records either way.
-  test.fail(
-    true,
-    "zones do not tile the canvas, so a catchment edge borders dead space"
-  );
 
   // -1 is NOT filtered out. A run of [2,-1,2,-1,...] has one active value but
   // the indicator vanishes on every other move, which is the same defect seen

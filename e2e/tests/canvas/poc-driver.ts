@@ -46,6 +46,15 @@ export function createPocDriver(page: Page): CanvasDriver {
     return frame;
   }
 
+  /** The frame's current transform scale; 1 when untransformed. */
+  async function frameScale(): Promise<number> {
+    return page.evaluate(() => {
+      const frame = document.querySelector("iframe");
+      if (!(frame instanceof HTMLElement)) return 1;
+      return new DOMMatrixReadOnly(getComputedStyle(frame).transform).a || 1;
+    });
+  }
+
   let pointer: Point = { x: 0, y: 0 };
 
   const driver: CanvasDriver = {
@@ -127,6 +136,34 @@ export function createPocDriver(page: Page): CanvasDriver {
           ),
         DROP_ZONES
       );
+    },
+
+    async nearestZoneToPointer() {
+      const rects = await canvasFrame().evaluate(
+        selector =>
+          Array.from(document.querySelectorAll(selector)).map(el => {
+            const r = el.getBoundingClientRect();
+            return { y: r.y, height: r.height };
+          }),
+        DROP_ZONES
+      );
+      if (rects.length === 0) return -1;
+
+      const origin = await driver.frameOrigin();
+      const scale = await frameScale();
+      const pointerY = pointer.y;
+
+      let best = -1;
+      let bestDistance = Number.POSITIVE_INFINITY;
+      rects.forEach((rect, index) => {
+        const centre = origin.y + (rect.y + rect.height / 2) * scale;
+        const distance = Math.abs(pointerY - centre);
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          best = index;
+        }
+      });
+      return best;
     },
 
     async readActiveZoneOwner() {
@@ -213,9 +250,18 @@ export function createPocDriver(page: Page): CanvasDriver {
 
     async readIndicatorRect(): Promise<Rect | null> {
       const inFrame = await canvasFrame().evaluate(active => {
-        const el = document.querySelector(active);
-        if (!el) return null;
-        const r = el.getBoundingClientRect();
+        // All of them, not the first: a collision-state regression that leaves
+        // several zones marked active would otherwise be invisible here, and
+        // every geometry assertion could pass while stale insertion indicators
+        // remained on screen elsewhere.
+        const all = document.querySelectorAll(active);
+        if (all.length === 0) return null;
+        if (all.length > 1) {
+          throw new Error(
+            `${all.length} drop zones are active at once; exactly one may be`
+          );
+        }
+        const r = all[0].getBoundingClientRect();
         return { x: r.x, y: r.y, width: r.width, height: r.height };
       }, ACTIVE_ZONE);
       if (!inFrame) return null;
@@ -227,12 +273,7 @@ export function createPocDriver(page: Page): CanvasDriver {
       // reported under a scaled canvas is wrong by the scale factor, and a
       // geometry assertion against it would fail because the MEASUREMENT is
       // wrong, not because the canvas is.
-      const scale = await page.evaluate(() => {
-        const frame = document.querySelector("iframe");
-        if (!(frame instanceof HTMLElement)) return 1;
-        const matrix = new DOMMatrixReadOnly(getComputedStyle(frame).transform);
-        return matrix.a || 1;
-      });
+      const scale = await frameScale();
 
       return mapFrameRectToHost(
         inFrame,

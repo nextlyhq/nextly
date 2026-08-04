@@ -110,6 +110,16 @@ export interface CanvasDriver {
   /** Every drop zone's height in canvas-local pixels, document order. */
   readZoneHeights(): Promise<number[]>;
 
+  /**
+   * Ordinal of the drop zone geometrically nearest the current pointer.
+   *
+   * The exact form of "the indicator is where the pointer is": comparing the
+   * ACTIVE ordinal against this one needs no tolerance, and both the stale-rect
+   * (#1705) and unscaled-transform (#1706) failures select a zone that is not
+   * the nearest, so it catches them without a magic number.
+   */
+  nearestZoneToPointer(): Promise<number>;
+
   /** `data-nx-id` of the container owning the active zone, or null. */
   readActiveZoneOwner(): Promise<string | null>;
 
