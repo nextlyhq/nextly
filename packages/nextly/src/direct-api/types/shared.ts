@@ -194,19 +194,35 @@ type BuiltInDateField = "createdAt" | "updatedAt";
  * driver decoded, so the two shapes differ in exactly those fields.
  *
  * Homomorphic on purpose: `?` and `readonly` are carried over, so an optional
- * `publishedAt?: string` becomes an optional `publishedAt?: Date` rather than a
- * required one.
- *
- * `null` and `undefined` survive the replacement. Only the field's non-nullish
- * representation changes -- a column that can hold nothing still can, and a
- * type that dropped that would tell a caller to skip the check that stops a
- * read of `null`.
+ * `publishedAt?: string` stays optional rather than becoming required.
  */
 export type InProcessRow<TData, TDateField extends PropertyKey> = {
-  [K in keyof TData]: K extends TDateField
-    ? Date | Extract<TData[K], null | undefined>
-    : TData[K];
+  [K in keyof TData]: K extends TDateField ? InProcessDate<TData[K]> : TData[K];
 };
+
+/**
+ * What a timestamp column hands back, given how the generated type spells the
+ * field it belongs to.
+ *
+ * A date that the schema requires is always a `Date`. An OPTIONAL one is
+ * `Date | null`, and the `null` is not decoration: codegen writes `?` exactly
+ * when a field is not required, a field that is not required has a nullable
+ * column, and a nullable timestamp column reads back as `null` -- the same
+ * answer on PostgreSQL, MySQL and SQLite, with the key present on the row.
+ *
+ * So `undefined` is the one value a full read never produces and `null` is the
+ * one it always produces for an unset date. `?` is still carried over by the
+ * mapping above, because a projected read can leave the key off entirely; what
+ * matters here is that `null` can no longer be narrowed away. A caller who
+ * checks `!== undefined` and then calls a `Date` method is the failure this
+ * exists to make impossible.
+ *
+ * A source type that already states its own `null` keeps it, so this stays
+ * correct if the generated interfaces start spelling nullability themselves.
+ */
+type InProcessDate<TValue> = [undefined] extends [TValue]
+  ? Date | null | Extract<TValue, undefined>
+  : Date | Extract<TValue, null>;
 
 /**
  * The `Date`-backed field names of a collection, as codegen recorded them.

@@ -169,8 +169,10 @@ describe("generated date-field contract", () => {
       datedCollection("posts", [{ name: "publishedAt", type: "date" }]),
     ]);
 
-    // The REST response is formatted text, so the generated interface is
-    // correct as it stands and must not follow the row type to `Date`.
+    // The REST response is formatted text, so a timestamp is spelled as a
+    // string there and must not follow the row type to `Date`. This pins the
+    // REPRESENTATION only: how the emission spells nullability is a separate
+    // question about every optional field, not about timestamps.
     expect(code).toContain("  createdAt: string;");
     expect(code).toContain("  publishedAt?: string;");
     expect(code).not.toContain("createdAt: Date");

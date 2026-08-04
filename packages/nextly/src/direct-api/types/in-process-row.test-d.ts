@@ -51,9 +51,16 @@ type Post = RowFromCollectionSlugFrom<AugmentedTypes, "posts">;
 assertType<Exact<Post["createdAt"], Date>>(true);
 assertType<Exact<Post["updatedAt"], Date>>(true);
 
-// Optionality survives the mapping: an optional date stays optional instead of
-// becoming a required `Date`, which would reject every document that has none.
-assertType<Exact<Post["publishedAt"], Date | undefined>>(true);
+// An optional date stays optional AND admits `null`. A read of an unset date
+// answers `null` on every dialect, so a type offering only `undefined` would
+// let a caller narrow with `!== undefined` and then call a `Date` method on
+// `null`.
+assertType<Exact<Post["publishedAt"], Date | null | undefined>>(true);
+
+// The narrowing that would otherwise reach a `Date` method on `null`: taking
+// `undefined` away leaves `Date | null`, not a bare `Date`, so the value still
+// has to be checked.
+assertType<Exact<Exclude<Post["publishedAt"], undefined>, Date | null>>(true);
 
 // A field that is not date-backed is untouched.
 assertType<Exact<Post["title"], string>>(true);
@@ -82,7 +89,7 @@ assertType<
 // A single's own date field is mapped too, not just its `updatedAt`.
 type Settings = RowFromSingleSlugFrom<AugmentedTypes, "settings">;
 assertType<Exact<Settings["updatedAt"], Date>>(true);
-assertType<Exact<Settings["launchedAt"], Date | undefined>>(true);
+assertType<Exact<Settings["launchedAt"], Date | null | undefined>>(true);
 
 // An unrecognised slug widens to the open record rather than erroring, matching
 // how the wire types behave.
@@ -122,9 +129,11 @@ void millis;
 // it directly gets the input back rather than a widened record.
 assertType<Exact<InProcessRow<{ a: number }, never>, { a: number }>>(true);
 
-// A column that can hold nothing still can. Replacing the whole type with
-// `Date` would drop `null` and tell a caller to skip the check that stops a
-// read of it.
+// A required date is a `Date` and nothing else: its column cannot be empty.
+assertType<Exact<InProcessRow<{ at: string }, "at">["at"], Date>>(true);
+
+// A source that states its own `null` keeps it, so this stays correct if the
+// generated interfaces start spelling nullability themselves.
 assertType<Exact<InProcessRow<{ at: string | null }, "at">["at"], Date | null>>(
   true
 );
