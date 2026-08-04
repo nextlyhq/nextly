@@ -1,0 +1,125 @@
+/**
+ * Resizable panel group
+ *
+ * Side-by-side or stacked regions whose sizes the user can drag, built on `react-resizable-panels`.
+ * An editor shell is exactly this: a rail, a canvas and an inspector, each of which someone will
+ * want wider than we chose for them.
+ *
+ * **Why a library rather than a drag handler**: the hard parts of a splitter are not the drag.
+ * They are the keyboard model (the APG window-splitter pattern — arrows resize, Home and End go
+ * to the extremes), collapse-and-restore, minimum sizes that survive a window resize, and nested
+ * groups. `react-resizable-panels` implements all of them, and is the library the wider React
+ * ecosystem settled on for this control.
+ *
+ * **Sizes are percentages, not pixels.** A layout stored in pixels is wrong on the next monitor;
+ * one stored in percentages survives a window resize. `defaultLayout` seeds it and
+ * `onLayoutChange` reports it, so persisting a shell layout is the caller's to store wherever it
+ * already stores preferences — this kit does not reach for browser storage on their behalf.
+ *
+ * **Design specifications**:
+ * - Handle: 1px visible line in `bg-border`, with a larger invisible hit area around it
+ * - Grip: optional 3x4 handle in `bg-border`, `rounded-xs`, for discoverability
+ * - Focus: `focus-visible` ring in the focus token, because a splitter is keyboard-operable
+ *
+ * **Accessibility**:
+ * - The handle is a `separator` with `aria-valuenow`/`aria-valuemin`/`aria-valuemax`, supplied by
+ *   the library, so a screen reader announces the split as a percentage
+ * - Arrow keys resize, Home/End collapse and expand, Enter toggles a collapsible panel
+ * - The hit area is larger than the visible line, so the target is reachable without precision
+ *   pointing (WCAG 2.5.8 Target Size)
+ *
+ * @example
+ * ```tsx
+ * <ResizablePanelGroup
+ *   orientation="horizontal"
+ *   defaultLayout={{ layers: "20%", canvas: "55%", inspector: "25%" }}
+ *   onLayoutChange={saveLayout}
+ * >
+ *   <ResizablePanel id="layers" minSize="15%" collapsible>
+ *     <LayersPanel />
+ *   </ResizablePanel>
+ *   <ResizableHandle withGrip />
+ *   <ResizablePanel id="canvas">
+ *     <Canvas />
+ *   </ResizablePanel>
+ *   <ResizableHandle withGrip />
+ *   <ResizablePanel id="inspector" minSize="20%">
+ *     <Inspector />
+ *   </ResizablePanel>
+ * </ResizablePanelGroup>
+ * ```
+ *
+ * @module
+ */
+
+"use client";
+
+import { GripVertical } from "lucide-react";
+import type * as React from "react";
+import * as ResizablePrimitive from "react-resizable-panels";
+
+import { cn } from "../lib/utils";
+
+/**
+ * A group of resizable panels, laid out horizontally or vertically.
+ *
+ * @experimental
+ */
+const ResizablePanelGroup = ({
+  className,
+  ...props
+}: React.ComponentProps<typeof ResizablePrimitive.Group>) => (
+  <ResizablePrimitive.Group
+    className={cn("h-full w-full", className)}
+    {...props}
+  />
+);
+
+/**
+ * One region of a panel group.
+ *
+ * @experimental
+ */
+const ResizablePanel = ResizablePrimitive.Panel;
+
+/**
+ * The draggable divider between two panels.
+ *
+ * The visible line is 1px; the element around it is wider and transparent, so the pointer target
+ * is comfortably larger than the line it appears to grab. `withGrip` adds a visible handle, which
+ * is worth it on a divider people are meant to discover rather than one they already expect.
+ *
+ * @experimental
+ */
+const ResizableHandle = ({
+  withGrip,
+  className,
+  children,
+  ...props
+}: React.ComponentProps<typeof ResizablePrimitive.Separator> & {
+  withGrip?: boolean;
+}) => (
+  <ResizablePrimitive.Separator
+    className={cn(
+      // The drawn line is 1px; the element around it is wider and transparent, so the pointer
+      // target is comfortably larger than what it appears to grab (WCAG 2.5.8).
+      "relative flex items-center justify-center bg-border",
+      "data-[orientation=horizontal]:w-px data-[orientation=vertical]:h-px",
+      "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
+      // Reachable without precision pointing, without drawing a heavier divider.
+      "after:absolute after:inset-0",
+      "data-[orientation=horizontal]:after:-inset-x-1 data-[orientation=vertical]:after:-inset-y-1",
+      className
+    )}
+    {...props}
+  >
+    {withGrip ? (
+      <div className="z-10 flex h-4 w-3 items-center justify-center rounded-xs border border-border bg-border">
+        <GripVertical className="h-2.5 w-2.5 text-muted-foreground" />
+      </div>
+    ) : null}
+    {children}
+  </ResizablePrimitive.Separator>
+);
+
+export { ResizableHandle, ResizablePanel, ResizablePanelGroup };
