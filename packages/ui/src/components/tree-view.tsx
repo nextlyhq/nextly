@@ -126,7 +126,10 @@ function flatten(
 ): TreeRow[] {
   const rows: TreeRow[] = [];
   nodes.forEach((node, index) => {
-    const hasChildren = node.children !== undefined && node.children.length > 0;
+    // Any declared children array marks a branch, empty or not. A folder that is empty, or
+    // whose contents have not loaded, is still something to expand — and the exported contract
+    // says so, so reading length here would quietly contradict it.
+    const hasChildren = node.children !== undefined;
     rows.push({
       node,
       level,
@@ -143,18 +146,26 @@ function flatten(
 }
 
 /**
- * State the caller may own or may not.
+ * State the caller may own, or may leave to the component.
  *
- * The controlled value wins when it is supplied, and the internal one is kept in step so that a
- * component switching from uncontrolled to controlled does not jump.
+ * Which of the two it is has to be decided once and kept: a prop that starts defined and later
+ * goes undefined releases control, and the internal state behind it is still at its initial
+ * value, so expansion or selection jumps back to the default. Mirroring the controlled value into
+ * the internal one on every render would fix the jump and cost a render loop for an array prop
+ * built inline, which is the normal way to pass one.
+ *
+ * So switching is unsupported, the way React treats a controlled input that loses its value.
+ * Being explicit about that beats a mechanism that works until the render it does not.
  */
 function useControllable<T>(
   controlled: T | undefined,
   fallback: T
-): [T, (next: T) => void, React.Dispatch<React.SetStateAction<T>>] {
+): [T, React.Dispatch<React.SetStateAction<T>>] {
   const [uncontrolled, setUncontrolled] = React.useState(fallback);
-  const value = controlled === undefined ? uncontrolled : controlled;
-  return [value, setUncontrolled, setUncontrolled];
+  return [
+    controlled === undefined ? uncontrolled : controlled,
+    setUncontrolled,
+  ];
 }
 
 /** @experimental */
@@ -197,6 +208,9 @@ const TreeView = React.forwardRef<HTMLDivElement, TreeViewProps>(
       defaultSelectedId,
       onSelectedChange,
       className,
+      "aria-label": ariaLabel,
+      "aria-labelledby": ariaLabelledBy,
+      "aria-describedby": ariaDescribedBy,
       ...props
     },
     forwardedRef
@@ -382,6 +396,21 @@ const TreeView = React.forwardRef<HTMLDivElement, TreeViewProps>(
       }
     };
 
+    // The roving tab stop has to be on a row that EXISTS and that keyboard navigation would
+    // accept. Neither is guaranteed by the active index: a selection outside the first window is
+    // not rendered at scrollTop 0, so every rendered row would compare false and the tree would
+    // have no tab stop at all — unreachable by Tab until something else scrolled it. And a
+    // disabled row is skipped by pointer and by every arrow key, so landing on it by Tab
+    // contradicts the rest of the control.
+    const virtualItems = virtualizer.getVirtualItems();
+    const usable = (index: number): boolean =>
+      rows[index]?.node.disabled !== true;
+    const tabStopIndex =
+      virtualItems.some(item => item.index === activeIndex) &&
+      usable(activeIndex)
+        ? activeIndex
+        : (virtualItems.find(item => usable(item.index))?.index ?? -1);
+
     return (
       <div
         ref={scrollRef}
@@ -391,15 +420,20 @@ const TreeView = React.forwardRef<HTMLDivElement, TreeViewProps>(
         <div
           ref={forwardedRef}
           role="tree"
-          aria-label={props["aria-label"]}
+          // The naming attributes go on the element that carries the role, not on the scroll
+          // container around it. Left outside, a caller who names the tree with
+          // `aria-labelledby` gets a tree with no accessible name at all — the label sits on a
+          // plain div and the role element is announced as an unlabelled tree.
+          aria-label={ariaLabel}
+          aria-labelledby={ariaLabelledBy}
+          aria-describedby={ariaDescribedBy}
           onKeyDown={onKeyDown}
           style={{ height: virtualizer.getTotalSize(), position: "relative" }}
         >
-          {virtualizer.getVirtualItems().map(item => {
+          {virtualItems.map(item => {
             const row = rows[item.index];
             if (row === undefined) return null;
             const isSelected = selected === row.node.id;
-            const isActive = item.index === activeIndex;
             return (
               <div
                 key={row.node.id}
@@ -415,7 +449,7 @@ const TreeView = React.forwardRef<HTMLDivElement, TreeViewProps>(
                 aria-disabled={row.node.disabled === true ? true : undefined}
                 // Roving tabindex: one row in the tab order, so Tab crosses the tree once rather
                 // than stopping at every node in it.
-                tabIndex={isActive ? 0 : -1}
+                tabIndex={item.index === tabStopIndex ? 0 : -1}
                 onFocus={() => setActiveId(row.node.id)}
                 onClick={() => {
                   if (row.node.disabled === true) return;

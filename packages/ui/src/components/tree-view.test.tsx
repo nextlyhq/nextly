@@ -143,6 +143,81 @@ describe("what a screen reader is told", () => {
   });
 });
 
+describe("naming the tree", () => {
+  it("puts aria-labelledby on the element that carries the role", () => {
+    // Left on the scroll container, the label names a plain div and the tree itself is announced
+    // with no accessible name — while the caller believes they supplied one.
+    render(
+      <>
+        <h2 id="layers-heading">Layers</h2>
+        <TreeView nodes={tree} aria-labelledby="layers-heading" />
+      </>
+    );
+
+    expect(screen.getByRole("tree", { name: "Layers" })).toBeDefined();
+  });
+});
+
+describe("a branch with nothing in it yet", () => {
+  it("treats a declared but empty children array as expandable", () => {
+    // An empty folder, or one whose contents have not loaded, is still something to open. The
+    // exported contract says an empty array marks a parent, so reading its length would quietly
+    // contradict the type.
+    render(
+      <TreeView
+        aria-label="Layers"
+        nodes={[{ id: "empty", label: "Empty", children: [] }]}
+      />
+    );
+
+    expect(
+      screen
+        .getByRole("treeitem", { name: "Empty" })
+        .getAttribute("aria-expanded")
+    ).toBe("false");
+  });
+});
+
+describe("where Tab lands", () => {
+  it("keeps a tab stop when the selected row is outside the rendered window", () => {
+    // The selection is real but its row does not exist yet at scrollTop 0. With the tab stop tied
+    // to it, every rendered row is tabIndex -1 and the tree cannot be reached by Tab at all.
+    const many: TreeNode[] = Array.from({ length: 500 }, (_unused, index) => ({
+      id: `n${index}`,
+      label: `Node ${index}`,
+    }));
+    render(
+      <TreeView nodes={many} aria-label="Layers" defaultSelectedId="n400" />
+    );
+
+    const tabbable = screen
+      .getAllByRole("treeitem")
+      .filter(item => item.getAttribute("tabindex") === "0");
+    expect(tabbable).toHaveLength(1);
+  });
+
+  it("does not put the tab stop on a disabled row", () => {
+    // Pointer and every arrow key skip a disabled row, so Tab landing on one contradicts the rest
+    // of the control.
+    render(
+      <TreeView
+        aria-label="Layers"
+        nodes={[
+          { id: "a", label: "A", disabled: true },
+          { id: "b", label: "B" },
+        ]}
+      />
+    );
+
+    expect(
+      screen.getByRole("treeitem", { name: "A" }).getAttribute("tabindex")
+    ).toBe("-1");
+    expect(
+      screen.getByRole("treeitem", { name: "B" }).getAttribute("tabindex")
+    ).toBe("0");
+  });
+});
+
 describe("moving through it with the keyboard", () => {
   it("expands a closed branch on Right, then descends into it", () => {
     renderTree({ defaultExpandedIds: ["page"] });
