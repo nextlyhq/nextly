@@ -1,6 +1,35 @@
 import type { PermissionSlug } from "./contributions";
 
 /**
+ * @public A value that survives being sent to the browser as JSON.
+ *
+ * Spelled out rather than widened to `unknown` so the compiler refuses a
+ * function or a `Date` at the point it is written, where the author can see
+ * what they meant, instead of at the point it silently arrives as `null`.
+ */
+export type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | readonly JsonValue[]
+  | { readonly [key: string]: JsonValue };
+
+/**
+ * @public A JSON object. Offered for plugin authors who want to state the
+ * shape of their own config precisely.
+ *
+ * Deliberately NOT the type of `clientConfig` itself. An `interface` has no
+ * implicit index signature in TypeScript, so an author's
+ * `interface MyConfig { … }` would not satisfy this however plainly JSON it
+ * is — the error would land on correct code and the fix would be "rewrite your
+ * interface as a type alias", which teaches nothing about serialization. The
+ * constraint is enforced where it can be enforced exactly, at the boundary the
+ * value actually crosses.
+ */
+export type JsonObject = { readonly [key: string]: JsonValue };
+
+/**
  * @public A reference to a plugin-provided admin React component,
  * resolved client-side through the string-path component registry.
  *
@@ -171,4 +200,48 @@ export interface PluginAdminContributions {
    * the plugin boundary.
    */
   entryFormToolbarSlot?: ComponentPath;
+  /**
+   * @experimental Configuration this plugin's own admin components need,
+   * delivered to the browser through `/api/admin-meta`.
+   *
+   * A plugin's factory runs where the host builds its config — on the server,
+   * at startup. Its admin components run in the browser, and nothing otherwise
+   * connects the two: a module-level variable is set in the wrong process, and
+   * the edit-view props are core's contract rather than the plugin's. Without
+   * this a plugin can ship behaviour it cannot configure, which is how the page
+   * builder's canvas came to enforce an empty allowlist while the rendered page
+   * enforced the host's.
+   *
+   * ## This is PUBLIC
+   *
+   * `/api/admin-meta` requires no authentication — the login screen reads its
+   * branding from it before anyone has signed in — so this is served to
+   * ANONYMOUS callers, not merely to every admin. It is the wrong place for
+   * API keys, tokens, internal hostnames, licence state, or anything whose
+   * value depends on who is asking. Put those behind a route that can check
+   * the caller.
+   *
+   * The test to apply: would you paste this into a public issue? If not, it
+   * does not belong here.
+   *
+   * ## It must be JSON
+   *
+   * Functions, class instances, `Date`s and `Map`s do not survive the trip, and
+   * a value that silently changes shape between the server and the client is
+   * worse than one that is rejected — so the serializer refuses anything that
+   * does not survive a round trip, naming the plugin, rather than emitting a
+   * mangled copy. That is the same reason `PluginMenuItem` takes no
+   * `visible(ctx)` callback.
+   *
+   * Typed as `object` on purpose, which is as loose as it can usefully be
+   * while still refusing a primitive. TypeScript cannot say
+   * "JSON-serializable" in a way an ordinary `interface` satisfies —
+   * an interface has no implicit index signature, so even
+   * `Record<string, unknown>` rejects one — and a type that rejects correct
+   * config teaches the author about index signatures instead of about
+   * serialization. The exact check belongs at the boundary the value crosses,
+   * where it can be exact. {@link JsonObject} is exported for authors who want
+   * to state their own shape precisely.
+   */
+  clientConfig?: object;
 }

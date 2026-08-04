@@ -83,14 +83,33 @@ describe("every block render call passes the allowlist", () => {
     return out;
   }
 
+  /**
+   * Quoted text removed before matching. `"useEditor must be used inside
+   * <EditorProvider>"` is prose in an error message, not a call site, and a
+   * scan that reads it reports the file that DEFINES the provider as one that
+   * misuses it — a false positive that would teach the next person to loosen
+   * the guard.
+   */
+  function withoutStrings(text: string): string {
+    return text
+      .replace(/`(?:[^`\\]|\\[\s\S])*`/g, "``")
+      .replace(/"(?:[^"\\\n]|\\.)*"/g, '""')
+      .replace(/'(?:[^'\\\n]|\\.)*'/g, "''");
+  }
+
   it.each([
     // The registry call every renderer makes, and the component that wraps it.
     ["def.render({", /\bdef\.render\(\{([\s\S]*?)\}\)/g],
     ["<RenderNode", /<RenderNode\b([\s\S]*?)\/>/g],
+    // The provider the canvas reads from. Wiring the renderers was not enough
+    // on its own: they read the allowlist out of this context, so a provider
+    // built without one hands every renderer an empty list however carefully
+    // each call site forwards it.
+    ["<EditorProvider", /<EditorProvider\b([\s\S]*?)>/g],
   ])("%s carries remotePatterns", (label, pattern) => {
     const offenders: string[] = [];
     for (const file of sourceFiles(SRC)) {
-      const text = readFileSync(file, "utf8");
+      const text = withoutStrings(readFileSync(file, "utf8"));
       for (const m of text.matchAll(pattern)) {
         if (m[1].includes("remotePatterns")) continue;
         const line = text.slice(0, m.index).split("\n").length;

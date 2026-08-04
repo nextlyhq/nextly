@@ -60,6 +60,9 @@ export const NEXTLY_ERROR_STATUS = {
   NEXTLY_SCHEMA_CROSS_PLUGIN_RELATION: 409,
   // Plugin platform (P2c) — framework remap (.rename()).
   NEXTLY_SCHEMA_RENAME_UNKNOWN_TARGET: 400,
+  // Plugin platform — a declared admin.clientConfig that cannot be delivered
+  // to the browser, refused at boot rather than serialized mangled.
+  NEXTLY_PLUGIN_CLIENT_CONFIG_INVALID: 500,
   // Plugin platform (P0) — boot-time plugin dependency/version resolution.
   PLUGIN_RESOLUTION_ERROR: 500,
   // Plugin platform (P4) — contributes.routes collection (D25).

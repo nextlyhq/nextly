@@ -157,6 +157,8 @@ export type {
  */
 export type {
   ComponentPath,
+  JsonObject,
+  JsonValue,
   PluginAdminContributions,
   PluginAdminPage,
   PluginAdminWidget,
