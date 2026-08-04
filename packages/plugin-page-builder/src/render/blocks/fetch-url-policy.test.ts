@@ -54,3 +54,53 @@ describe("fetched URLs use the origin-gated helper", () => {
     ).toEqual([]);
   });
 });
+
+/**
+ * Every place a block is rendered hands it the allowlist.
+ *
+ * A block reads `remotePatterns` from its render arguments, so a call site that
+ * omits it does not fail — the argument is optional and the block falls back to
+ * an empty list. That failure is silent and it is fail-OPEN in the editor's
+ * direction: the canvas drops images the published page will show, which reads
+ * as a rendering bug rather than as a missing argument. Three call sites had it
+ * missing for exactly that reason.
+ */
+describe("every block render call passes the allowlist", () => {
+  const SRC = join(here, "..", "..");
+
+  function sourceFiles(dir: string): string[] {
+    const out: string[] = [];
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        out.push(...sourceFiles(full));
+        continue;
+      }
+      if (!/\.tsx?$/.test(entry.name) || entry.name.includes(".test."))
+        continue;
+      out.push(full);
+    }
+    return out;
+  }
+
+  it.each([
+    // The registry call every renderer makes, and the component that wraps it.
+    ["def.render({", /\bdef\.render\(\{([\s\S]*?)\}\)/g],
+    ["<RenderNode", /<RenderNode\b([\s\S]*?)\/>/g],
+  ])("%s carries remotePatterns", (label, pattern) => {
+    const offenders: string[] = [];
+    for (const file of sourceFiles(SRC)) {
+      const text = readFileSync(file, "utf8");
+      for (const m of text.matchAll(pattern)) {
+        if (m[1].includes("remotePatterns")) continue;
+        const line = text.slice(0, m.index).split("\n").length;
+        offenders.push(`${file.slice(SRC.length + 1)}:${line}`);
+      }
+    }
+    expect(
+      offenders.sort(),
+      `These render a block without the allowlist, so it falls back to an ` +
+        `empty one and refuses hosts the page allows:\n${offenders.join("\n")}`
+    ).toEqual([]);
+  });
+});
