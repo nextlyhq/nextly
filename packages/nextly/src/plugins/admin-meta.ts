@@ -18,6 +18,7 @@ import type {
   PluginAdminWidget,
   PluginMenuItem,
 } from "./admin-contributions";
+import { clientConfigError } from "./client-config-error";
 import type { FieldSurface } from "./contributions";
 import { pluginCollectionSlugs } from "./plugin-admin-meta";
 import type {
@@ -149,6 +150,29 @@ export function pluginAdminSlug(name: string): string {
  * that throws, a `toJSON` that rewrites the value. Comparing the result to the
  * input catches all of them, including the ones nobody enumerated.
  */
+/**
+ * The top-level keys whose values do not survive JSON.
+ *
+ * Only for the error message: a plugin author faced with "your config is not
+ * JSON" has to bisect an object to find the offender, and the keys are what
+ * turn that into a one-line fix. The accept/reject decision stays with
+ * {@link jsonOnly}, which compares the whole value — a nested offender makes
+ * its top-level key the one worth naming.
+ */
+function unserializableKeys(value: Record<string, unknown>): string[] {
+  return Object.entries(value)
+    .filter(([, v]) => {
+      try {
+        const encoded = JSON.stringify(v);
+        if (encoded === undefined) return true;
+        return !sameShape(v, JSON.parse(encoded));
+      } catch {
+        return true;
+      }
+    })
+    .map(([key]) => key);
+}
+
 function jsonOnly(
   value: Record<string, unknown>
 ): Record<string, unknown> | undefined {
@@ -250,28 +274,37 @@ export function buildPluginAdminMeta(
     const fieldGroups = plugin.contributes?.fieldGroups?.map(c => c.slug) ?? [];
     if (fieldGroups.length > 0) meta.fieldGroups = fieldGroups;
 
+    // Serialized regardless of enabled state, on the same reasoning as
+    // `fieldTypes` below: a disabled plugin keeps its collections and their
+    // fields, so its field editors still MOUNT, and an editor configured by
+    // this reads `undefined` without it. For the page builder that turns a
+    // configured allowlist into an empty one and makes remote media vanish
+    // from entries that render perfectly well otherwise. Menus and pages are
+    // withheld because a disabled plugin does not render them at all; a
+    // component that still renders still needs its configuration.
+    //
+    // Rejected rather than repaired when it will not round-trip. A config that
+    // arrives with its `Date`s turned into strings and its functions turned
+    // into nothing is harder to diagnose than one that never arrives, because
+    // the shape the component reads still looks plausible.
+    const declaredConfig = plugin.contributes?.admin?.clientConfig;
+    if (declaredConfig !== undefined) {
+      const serializable = jsonOnly(declaredConfig);
+      if (serializable === undefined) {
+        throw clientConfigError(
+          plugin.name,
+          unserializableKeys(declaredConfig)
+        );
+      }
+      meta.clientConfig = serializable;
+    }
+
     // Behavioral admin UI only for enabled plugins.
     const admin = plugin.contributes?.admin;
     if (isEnabled && admin) {
       if (admin.menu && admin.menu.length > 0) meta.menu = admin.menu;
       if (admin.pages && admin.pages.length > 0) meta.pages = admin.pages;
       if (admin.settings) meta.settings = admin.settings;
-      // Rejected rather than repaired when it will not round-trip. A config
-      // that arrives with its `Date`s turned into strings and its functions
-      // turned into nothing is harder to diagnose than one that never arrives,
-      // because the shape the component reads still looks plausible.
-      if (admin.clientConfig !== undefined) {
-        const serializable = jsonOnly(admin.clientConfig);
-        if (serializable === undefined) {
-          throw new Error(
-            `Plugin "${plugin.name}" declares an admin.clientConfig that is ` +
-              "not JSON. It is serialized into /api/admin-meta, so it may " +
-              "hold only strings, numbers, booleans, null, arrays and plain " +
-              "objects — no functions, class instances, Dates or Maps."
-          );
-        }
-        meta.clientConfig = serializable;
-      }
       // Header customization. `header.slot` supersedes the
       // deprecated top-level `headerSlot`; keep `meta.headerSlot` mirrored for
       // back-compat.

@@ -127,6 +127,8 @@ export type {
 // The declarative `contributes.admin` contract types (the same ones exported
 // from the package root) for convenience when authoring admin components.
 export type {
+  JsonObject,
+  JsonValue,
   PluginAdminContributions,
   PluginAdminPage,
   PluginCollectionView,

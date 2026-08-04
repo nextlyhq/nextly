@@ -31,8 +31,11 @@ export interface PageBuilderOptions {
    * only on `PageRenderer` because the canvas runs in the browser, where a
    * component prop from the host's server config cannot reach it.
    *
-   * Set the same value on `PageRenderer.remotePatterns`; a shared constant in
-   * the host keeps the two honest.
+   * Set the SAME value on `PageRenderer.remotePatterns`. These are two
+   * assignments, not one: this configures the editor, and `PageRenderer` reads
+   * only its own prop. Setting one alone produces a mismatch in whichever
+   * direction you set it, so a shared constant in the host is what keeps them
+   * equal.
    *
    * Object patterns only, unlike `PageRenderer`, which also accepts a `URL`.
    * This value is serialized to the browser and a `URL` does not survive that:

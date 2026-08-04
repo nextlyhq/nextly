@@ -14,19 +14,35 @@ import type { RemotePattern } from "../core/url-policy";
 const PLUGIN_NAME = "@nextlyhq/plugin-page-builder";
 
 /**
- * Only entries that look like patterns survive.
+ * Only entries that are patterns in FULL survive.
  *
- * The config arrives as JSON that nothing has type-checked at the boundary, so
- * a malformed entry is dropped rather than handed to the matcher. Dropping is
- * the safe direction: a pattern that never arrives refuses a host, while one
- * with a missing `hostname` would be asked to match against `undefined`.
+ * The config arrives as JSON, and the TypeScript declaration constrains the
+ * host that wrote it rather than the bytes that arrive — a JavaScript host, a
+ * hand-edited config or an older plugin version all reach here unchecked. So
+ * every field is checked, not just the required one. A half-valid entry is
+ * worse than a missing one: `protocol: 1` reaches `.replace` and `pathname:
+ * null` reaches picomatch, and each throws inside the matcher, taking the
+ * editor down instead of refusing a host.
+ *
+ * Dropping is the safe direction. A pattern that never arrives refuses media;
+ * one that arrives malformed decides nothing and crashes.
  */
 function isPattern(value: unknown): value is RemotePattern {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    typeof (value as { hostname?: unknown }).hostname === "string"
-  );
+  if (typeof value !== "object" || value === null) return false;
+  const p = value as Record<string, unknown>;
+  if (typeof p.hostname !== "string" || p.hostname === "") return false;
+  // The union the matcher compares against; anything else would be silently
+  // unmatchable rather than an error, which is a worse failure than refusing.
+  if (
+    p.protocol !== undefined &&
+    p.protocol !== "http" &&
+    p.protocol !== "https"
+  )
+    return false;
+  for (const key of ["port", "pathname", "search"] as const) {
+    if (p[key] !== undefined && typeof p[key] !== "string") return false;
+  }
+  return true;
 }
 
 /**

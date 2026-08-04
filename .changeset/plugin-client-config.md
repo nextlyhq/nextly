@@ -33,5 +33,10 @@ survive the trip rather than delivering a mangled copy.
 
 The page builder uses it for `remotePatterns`. The editor canvas previously
 enforced an empty allowlist while the published page enforced the host's, so it
-hid images the live page shows. Declare them once with
-`pageBuilder({ remotePatterns })` and the canvas and the page agree.
+hid images the live page shows.
+
+Pass the SAME value to both `pageBuilder({ remotePatterns })` and
+`PageRenderer`. They are separate assignments: the plugin option configures the
+editor, and `PageRenderer` reads only its own prop. Setting just one is what
+produces a mismatch, in whichever direction you set it — a shared constant in
+the host is the way to keep them equal.

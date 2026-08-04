@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import type { PluginDefinition } from "./plugin-context";
 
+import { NextlyError } from "../errors/nextly-error";
+
 import { buildPluginAdminMeta } from "./admin-meta";
 
 const base = {
@@ -537,18 +539,29 @@ describe("buildPluginAdminMeta — clientConfig", () => {
     });
   });
 
-  it("withholds it from a disabled plugin, like the rest of the admin surface", () => {
+  it("keeps it for a disabled plugin, whose field editors still mount", () => {
+    // Unlike menus and pages, which a disabled plugin does not render at all.
+    // Its collections and their fields are retained, so its field editors DO
+    // render, and one configured by this would read `undefined`. For the page
+    // builder that is a configured allowlist becoming an empty one, which
+    // makes remote media vanish from entries that are otherwise fine.
     const meta = buildPluginAdminMeta(
       asPlugins([
         {
           ...base,
           enabled: false,
-          contributes: { admin: { clientConfig: { a: 1 } } },
+          contributes: {
+            admin: { clientConfig: { a: 1 }, menu: [{ label: "X", to: "/x" }] },
+          },
         },
       ]),
       undefined
     );
-    expect(meta[0]?.clientConfig).toBeUndefined();
+    expect(meta[0]?.enabled).toBe(false);
+    expect(meta[0]?.clientConfig).toEqual({ a: 1 });
+    // The behavioral surface is still withheld, so this is a deliberate
+    // distinction rather than the enabled gate having been dropped.
+    expect(meta[0]?.menu).toBeUndefined();
   });
 
   it("refuses config that will not survive the trip, naming the plugin", () => {
@@ -563,10 +576,23 @@ describe("buildPluginAdminMeta — clientConfig", () => {
       { big: 1n },
       { nested: { deep: [{ when: new Date() }] } },
     ]) {
-      expect(
-        () => buildPluginAdminMeta(withConfig(bad), undefined),
-        JSON.stringify(Object.keys(bad))
-      ).toThrow(/@acme\/p.*clientConfig/s);
+      // The public message stays generic; the plugin and the offending keys
+      // live in the log context, which is where a boot failure is read.
+      let thrown: unknown;
+      try {
+        buildPluginAdminMeta(withConfig(bad), undefined);
+      } catch (error) {
+        thrown = error;
+      }
+      const label = JSON.stringify(Object.keys(bad));
+      expect(NextlyError.is(thrown), label).toBe(true);
+      const err = thrown as NextlyError;
+      expect(String(err.code), label).toBe(
+        "NEXTLY_PLUGIN_CLIENT_CONFIG_INVALID"
+      );
+      expect(err.logContext?.plugin, label).toBe("@acme/p");
+      // Named so an author does not have to bisect the object to find it.
+      expect(err.logContext?.keys, label).toEqual(Object.keys(bad));
     }
   });
 
@@ -576,7 +602,7 @@ describe("buildPluginAdminMeta — clientConfig", () => {
     // shape change, not a harmless omission.
     expect(() =>
       buildPluginAdminMeta(withConfig({ a: 1, gone: undefined }), undefined)
-    ).toThrow(/clientConfig/);
+    ).toThrow(NextlyError);
   });
 
   it("accepts the JSON shapes a real config uses", () => {
@@ -596,7 +622,7 @@ describe("buildPluginAdminMeta — clientConfig", () => {
     const cyclic: Record<string, unknown> = { a: 1 };
     cyclic.self = cyclic;
     expect(() => buildPluginAdminMeta(withConfig(cyclic), undefined)).toThrow(
-      /clientConfig/
+      NextlyError
     );
   });
 });
