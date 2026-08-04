@@ -11,6 +11,7 @@ import {
   TooltipTrigger,
 } from "./tooltip";
 
+/** @public */
 export interface FormLabelWithTooltipProps
   extends React.ComponentPropsWithoutRef<typeof Label> {
   label: React.ReactNode;
@@ -20,6 +21,7 @@ export interface FormLabelWithTooltipProps
   tooltipClassName?: string;
 }
 
+/** @public */
 export const FormLabelWithTooltip = React.forwardRef<
   React.ElementRef<typeof Label>,
   FormLabelWithTooltipProps

@@ -31,6 +31,7 @@ import { cn } from "../lib/utils";
  * - Visual "checked" state achieved via  border border-border expansion (border-[5px])
  * - No inner indicator needed -  border border-border expansion provides clear visual feedback
  * - Hover state changes  border border-border color for better interactivity
+ * @public
  */
 const RadioGroup = forwardRef<
   ElementRef<typeof RadioGroupPrimitive.Root>,
@@ -48,6 +49,7 @@ const RadioGroup = forwardRef<
 
 RadioGroup.displayName = "RadioGroup";
 
+/** @public */
 const RadioGroupItem = forwardRef<
   ElementRef<typeof RadioGroupPrimitive.Item>,
   ComponentPropsWithoutRef<typeof RadioGroupPrimitive.Item>

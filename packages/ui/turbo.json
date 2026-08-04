@@ -3,6 +3,17 @@
   "extends": ["//"],
   "tasks": {
     "test": {
+      // The release-tag guard reads this package's OWN `dist/index.d.ts`: the
+      // tags it checks are written by the declaration bundler, so there is
+      // nothing to assert against until the package is built, and the root task
+      // depends on `^build`, which builds dependencies and not this package.
+      //
+      // This makes turbo do that one build, in order, and cache it. The
+      // package's `vitest.globalSetup.ts` covers the runs turbo never sees —
+      // `pnpm --filter @nextlyhq/ui test`, and the watch, UI and coverage
+      // entry points, none of which read this file — and it skips when the
+      // declarations are already fresh, so the two do not build twice.
+      "dependsOn": ["$TURBO_EXTENDS$", "build"],
       // The contrast alpha-utilities guard scans admin and plugin source, so
       // those trees are real inputs to this package's tests. $TURBO_EXTENDS$
       // inherits the root test inputs (so they stay in sync and nothing is
@@ -11,6 +22,8 @@
       // instead of hiding behind it. The root task supplies dependsOn / cache.
       "inputs": [
         "$TURBO_EXTENDS$",
+        "vitest.config.ts",
+        "src/__tests__/global-setup.ts",
         "$TURBO_ROOT$/packages/admin/src/**",
         "$TURBO_ROOT$/packages/plugin-form-builder/src/**",
         "$TURBO_ROOT$/packages/plugin-page-builder/src/**"

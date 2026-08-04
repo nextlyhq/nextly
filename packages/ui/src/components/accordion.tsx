@@ -106,6 +106,7 @@ import type {
  * ```
  *
  * @see https://www.radix-ui.com/primitives/docs/components/accordion
+ * @experimental
  */
 const Accordion = AccordionPrimitive.Root;
 
@@ -119,6 +120,7 @@ const Accordion = AccordionPrimitive.Root;
  * Accessibility:
  * - Each item requires a unique value prop for identification
  * - Disabled state can be set via disabled prop
+ * @experimental
  */
 const AccordionItem = forwardRef<AccordionItemRef, AccordionItemProps>(
   ({ className, ...props }, ref) => (
@@ -154,6 +156,7 @@ AccordionItem.displayName = "AccordionItem";
  * - The ChevronDown icon is included by default
  * - Icon rotates 180° when item is expanded ([data-state=open])
  * - Trigger includes AccordionPrimitive.Header wrapper for proper semantics
+ * @experimental
  */
 const AccordionTrigger = forwardRef<AccordionTriggerRef, AccordionTriggerProps>(
   ({ className, children, ...props }, ref) => (
@@ -194,6 +197,7 @@ AccordionTrigger.displayName = AccordionPrimitive.Trigger.displayName;
  * - data-state="open": animate-accordion-down (Tailwind built-in)
  * - data-state="closed": animate-accordion-up (Tailwind built-in)
  * - Height transitions smoothly from 0 to auto
+ * @experimental
  */
 const AccordionContent = forwardRef<AccordionContentRef, AccordionContentProps>(
   ({ className, children, ...props }, ref) => (
