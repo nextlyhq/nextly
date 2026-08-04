@@ -328,7 +328,13 @@ function textKindFor(
   // that already exists go through this function and never through them. Left to each creator, a
   // freshly created table and a repaired one disagreed about the same column, and on MySQL the
   // repaired one could not carry the index.
-  if (toSnakeCase(field.name) === "slug") {
+  //
+  // Not for a field group: only the entities that carry a slug identity column index it, and a
+  // field group's creator indexes its parent pointer and its own unique fields instead. Bounding
+  // it there would bound a column for a constraint that table does not have, and its creator
+  // strips a contributed type's `maxLength` before mapping — so a plugin field that happens to be
+  // named `slug` would be described bounded while it is created as TEXT.
+  if (builtBy !== "fieldGroup" && toSnakeCase(field.name) === "slug") {
     return declaredMaxLength(field, builtBy) !== undefined
       ? "shortText"
       : "text";

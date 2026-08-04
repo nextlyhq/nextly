@@ -345,3 +345,54 @@ describe("getColumnDescriptor — a contributed type inside a field group", () =
     );
   });
 });
+
+/**
+ * A field group's `slug` field is not the identity column, and is not treated as one.
+ *
+ * Collections and singles carry a slug identity column with a unique index, and MySQL cannot index
+ * an unbounded string — which is why that column is bounded for those builders whatever the field
+ * says. A field group indexes its parent pointer and its own unique fields instead, so the same
+ * rule there would bound a column for a constraint the table does not have. Its creator also
+ * strips a contributed type's `maxLength` before mapping, so a plugin field that happens to be
+ * named `slug` is created as TEXT.
+ */
+describe("getColumnDescriptor — a field named slug", () => {
+  afterEach(() => {
+    clearFieldTypes();
+  });
+
+  it.each(["collection", "codeFirst"] as ColumnOrigin[])(
+    "bounds the identity column on MySQL for %s",
+    builtBy => {
+      expect(
+        getColumnDescriptor(field({ name: "slug" }), "mysql", builtBy)
+          ?.dialectType
+      ).toMatch(/varchar\(\d+\)/i);
+    }
+  );
+
+  it("leaves a field group's own slug field unbounded", () => {
+    expect(
+      getColumnDescriptor(field({ name: "slug" }), "mysql", "fieldGroup")
+        ?.dialectType
+    ).toBe("text");
+  });
+
+  it("does not read a plugin's own maxLength off a field named slug", () => {
+    registerFieldType({
+      type: "acme-key",
+      storage: "text",
+      component: "@acme/key/admin#Key",
+    });
+
+    const pluginSlug = contributedField({
+      name: "slug",
+      type: "acme-key",
+      maxLength: 32,
+    });
+
+    expect(
+      getColumnDescriptor(pluginSlug, "mysql", "fieldGroup")?.dialectType
+    ).toBe("text");
+  });
+});

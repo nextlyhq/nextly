@@ -121,6 +121,29 @@ export function buildDefaultLocaleRestoreStatements(
   ];
 }
 
+/**
+ * The type to give a main-table column that is about to be filled FROM the companion.
+ *
+ * Wider than the shared renderer on purpose, and only here. This statement is followed immediately
+ * by a copy out of the companion column, so the target has to hold whatever that column can hold —
+ * and on a MySQL installation created before the renderer emitted TEXT, a `longText` companion
+ * column is physically LONGTEXT. Re-adding TEXT and copying into it truncates a default-locale
+ * value past 65 535 characters, silently on a non-strict server.
+ *
+ * These statements are written into a migration file with no database to introspect, so the target
+ * cannot be read from the live column; sizing it to the widest the source could be is what makes
+ * the restore safe without one. The cost is a main column wider than a freshly created one would
+ * be, which the next schema sync reports as an ordinary type change — visible and recoverable,
+ * unlike the truncation it replaces.
+ */
+function restoreTargetType(
+  column: Parameters<typeof ddlType>[0],
+  dialect: Parameters<typeof ddlType>[1]
+): string {
+  if (dialect === "mysql" && column.kind === "longText") return "LONGTEXT";
+  return ddlType(column, dialect);
+}
+
 export function buildLocalizationDownStatements(
   spec: CompanionMigrationSpec,
   options: LocalizationDownOptions = {}
@@ -151,7 +174,7 @@ export function buildLocalizationDownStatements(
   for (const c of onMain) {
     if (alreadyPresent.has(c.name)) continue;
     stmts.push(
-      `ALTER TABLE ${q(mainTable, dialect)} ADD COLUMN ${q(c.name, dialect)} ${ddlType(c, dialect)}`
+      `ALTER TABLE ${q(mainTable, dialect)} ADD COLUMN ${q(c.name, dialect)} ${restoreTargetType(c, dialect)}`
     );
   }
 

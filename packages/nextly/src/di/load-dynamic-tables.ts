@@ -81,17 +81,32 @@ export async function loadDynamicTables(
   // Asked under both registry spellings: the storage migration renames this
   // table, and comparing against the legacy name alone would add `status` to the
   // select the moment it has run.
-  const statusCol = isFieldGroupRegistry(sourceTable) ? "" : ", status";
+  const hasStatusColumn = !isFieldGroupRegistry(sourceTable);
 
-  // Tried in order, each step giving up exactly one optional column, so a database that predates
-  // any of them still registers its tables instead of the missing column disabling every dynamic
-  // table app-wide. Ownership goes first because it is the newest and the least costly to lose:
-  // without it a caller falls back to describing a column as the pipeline would.
-  const candidateSelects = [
-    `SELECT table_name, fields, slug${statusCol}, localized, source, locked FROM ${sourceTable}`,
-    `SELECT table_name, fields, slug${statusCol}, localized FROM ${sourceTable}`,
-    `SELECT table_name, fields, slug${statusCol} FROM ${sourceTable}`,
-  ];
+  // Every column this read wants, in the order it gives them up.
+  //
+  // A registry older than the code is missing the newest columns, and the read has to survive that:
+  // letting the error reach the outer catch would disable EVERY dynamic table app-wide over one
+  // absent column. Ownership is dropped first because it is the newest and the least costly to
+  // lose — without it a caller describes a column the way the pipeline would, which is the reading
+  // every code-first table already gets.
+  //
+  // Written as one projection with optional tiers rather than three hand-written statements, so the
+  // column list and the table name are stated once and the rungs cannot drift apart.
+  const required = ["table_name", "fields", "slug"];
+  const optionalTiers = [
+    hasStatusColumn ? ["status"] : [],
+    ["localized"],
+    ["source", "locked"],
+  ].filter(tier => tier.length > 0);
+
+  const candidateSelects = optionalTiers
+    .map((_, dropped) => optionalTiers.slice(0, optionalTiers.length - dropped))
+    .concat([[]])
+    .map(
+      tiers =>
+        `SELECT ${[...required, ...tiers.flat()].join(", ")} FROM ${sourceTable}`
+    );
 
   const readRows = async (): Promise<DynamicTableRow[]> => {
     let lastError: unknown;
