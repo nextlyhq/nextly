@@ -35,14 +35,15 @@ one — union these into it with `mergeCspDirectives` rather than sending a seco
 header. Policies intersect rather than extend, so an existing `img-src 'self'`
 refuses your CDN however many other policies allow it.
 
-Only patterns that translate EXACTLY produce a source: `https`, a literal or
-single-wildcard hostname, no explicit port, no query, and a path that is either
-absent or a `/prefix/**` glob. Anything else is refused and named by
-`unexpressibleHosts`, because CSP and `remotePatterns` read several of the same
-words differently — a CSP `http://` source also matches https, and an omitted
-port means "the default port" rather than "any port". The generated policy is
-therefore never broader than the one it backstops; where it cannot express a
-host, you add that source yourself.
+Only patterns that translate EXACTLY produce a source: `https`, a lowercase
+literal or single-wildcard hostname, an absent or empty port, no `search`, and a
+path that is absent, literal, or a `/prefix/**` glob. Anything else is refused
+and named by `unexpressibleHosts`, because CSP and `remotePatterns` read several
+of the same words differently — a CSP `http://` source also matches https, an
+omitted port means "the default port" rather than "any port", CSP compares hosts
+case-insensitively while the matcher does not, and CSP never matches a query at
+all. The generated policy is therefore never broader than the one it backstops;
+where it cannot express a host, you add that source yourself.
 
 No `script-src`: a nonce-based script policy forces dynamic rendering on every
 page and would defeat ISR. Scripts stay your application's business.

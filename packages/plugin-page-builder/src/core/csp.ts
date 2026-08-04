@@ -7,9 +7,18 @@
  * cross-origin `<base href>` that re-points every relative URL on the page —
  * because it constrains the fetch rather than the text that describes it.
  *
- * Generated from the same `remotePatterns` the parser uses, so the two cannot
- * disagree about which hosts are allowed. Declaring them twice is how they
- * would.
+ * Generated from the same `remotePatterns` the parser uses — but sharing an
+ * input is not sharing a meaning. The two grammars read several of the same
+ * words differently, so a faithful translation is not always available, and
+ * the ones that are not are refused rather than approximated. What holds is a
+ * one-directional invariant, and it is the whole contract of this module:
+ *
+ * > **The generated policy is never WIDER than the origin policy.**
+ *
+ * A source allowing more than the matcher does silently removes the
+ * protection; one allowing less is a visible broken image with a named cause.
+ * When only the second is on offer, take it — {@link unexpressibleHosts}
+ * reports what was refused so the host can write that source itself.
  *
  * ## Nextly builds this; the HOST sends it
  *
@@ -75,7 +84,10 @@ export interface CspOptions {
 }
 
 /**
- * A pattern as a CSP source expression, or `undefined` when it has none.
+ * A pattern as CSP source expressions, or `undefined` when it has none.
+ *
+ * Usually one source; a terminal `/**` needs two to cover the same set. An
+ * empty result is never returned — `undefined` is the only refusal.
  *
  * `undefined` is the answer whenever the translation would not be EXACT, and
  * the reasons are worth stating because each is a place the two systems use the
@@ -87,24 +99,39 @@ export interface CspOptions {
  *   pattern does. An omitted protocol means either scheme to the matcher and
  *   the document's own scheme to CSP, which is a mismatch in the other
  *   direction.
- * - `port` must be absent, meaning ANY port to the matcher, which CSP writes as
- *   `:*`. An explicit port is refused: the URL parser canonicalises a default
- *   port away before the matcher compares it, so `port: "443"` on https matches
- *   no request at all, and emitting it would allow an origin the pattern
- *   forbids.
- * - `hostname` must be literal, or one leading `*.` and literal after. The rest
- *   of picomatch has no CSP equivalent and no safe approximation: widening
- *   `cdn-*.co.uk` to `*.co.uk` allows every site under a public suffix.
- * - `pathname` must be absent or a `/prefix/**` glob, which CSP expresses as a
- *   path ending in `/`. `/img/*` bounds the match to one segment and CSP cannot
- *   say that.
- * - `search` must be absent. CSP does not match query strings, so a pattern
- *   restricting one would become a source that does not.
+ * - `port` distinguishes three cases, because to the matcher an ABSENT field
+ *   and an empty one mean different things. Absent is any port, which CSP
+ *   writes `:*`. Empty compares against the request's port after the URL
+ *   parser has canonicalised a default away, so it means the default port —
+ *   exactly what CSP means by omitting the port. Anything else is refused:
+ *   `port: "443"` on https matches no request at all, since the parser removed
+ *   the 443 before the comparison, and emitting it would allow an origin the
+ *   pattern forbids.
+ * - `hostname` must be literal, or one leading `*.` and literal after, and
+ *   must already be lowercase. The rest of picomatch has no CSP equivalent and
+ *   no safe approximation: widening `cdn-*.co.uk` to `*.co.uk` allows every
+ *   site under a public suffix. Case matters because the two disagree about
+ *   it — see {@link isExpressibleHost}.
+ * - `pathname` must be absent, a `/prefix/**` glob, or a literal path, and
+ *   must survive URL parsing and CSP's own path grammar unchanged — see
+ *   {@link cspPaths}.
+ * - `search` must be ABSENT, in any form. CSP does not match query strings at
+ *   all, so `search: "?v=1"` and `search: ""` alike become a source that
+ *   ignores the query the pattern was constraining. On the surfaces this
+ *   backstops the query IS the channel — `url(https://cdn/a.png?secret)` — so
+ *   this one is refused even though it costs a working config a source.
  */
-function sourceExpression(input: RemotePatternInput): string | undefined {
-  const pattern: RemotePattern | undefined =
-    input instanceof URL ? fromUrl(input) : input;
-  if (pattern === undefined) return undefined;
+function sourceExpressions(
+  input: RemotePatternInput
+): readonly string[] | undefined {
+  // A `URL` carries three constraints at once that CSP cannot state: the
+  // matcher reads `port === ""` (default port only), `pathname === "/"` (that
+  // one path, where a CSP path of `/` is a prefix matching everything) and
+  // `search === ""` (no query at all, which CSP never checks). Two of the
+  // three are inexpressible in the widening direction, so every `URL` is
+  // reported instead of translated.
+  if (input instanceof URL) return undefined;
+  const pattern: RemotePattern = input;
 
   // Exactly `https`. See the note above for why `http` and an omitted protocol
   // are both refused rather than approximated.
@@ -116,48 +143,80 @@ function sourceExpression(input: RemotePatternInput): string | undefined {
   const host = pattern.hostname;
   if (!isExpressibleHost(host)) return undefined;
 
-  // An explicit port cannot be expressed faithfully; an absent one means any
-  // port, which is `:*`.
-  if (pattern.port !== undefined && pattern.port !== "") return undefined;
-  if (pattern.search !== undefined && pattern.search !== "") return undefined;
+  const port = cspPort(pattern.port);
+  if (port === undefined) return undefined;
 
-  const path = cspPath(pattern.pathname);
-  if (path === undefined) return undefined;
+  if (pattern.search !== undefined) return undefined;
 
-  return `https://${host}:*${path}`;
-}
+  const paths = cspPaths(pattern.pathname);
+  if (paths === undefined) return undefined;
 
-/** A `URL` reduced to the pattern fields, or `undefined` when it cannot be. */
-function fromUrl(url: URL): RemotePattern | undefined {
-  if (url.protocol !== "https:") return undefined;
-  // A `URL` always carries a pathname, and `/` means "this path only" to the
-  // matcher — which is not what a bare origin usually intends and not something
-  // to guess about.
-  if (url.pathname !== "/" || url.search !== "") return undefined;
-  return {
-    protocol: "https",
-    hostname: url.hostname,
-    // An empty port on a `URL` means the default port, which the matcher
-    // compares against the request's canonicalised (empty) port. That is a
-    // faithful "any port" only because both sides are empty.
-    ...(url.port === "" ? {} : { port: url.port }),
-  };
+  return paths.map(path => `https://${host}${port}${path}`);
 }
 
 /**
- * A pattern pathname as a CSP path, or `undefined` when it cannot be expressed.
+ * A pattern port as a CSP port suffix, or `undefined` when it cannot be one.
+ *
+ * Absent and empty are both meaningful and they are not the same: the matcher
+ * skips the comparison entirely for an absent port and requires equality with
+ * the request's canonicalised port for an empty one.
+ */
+function cspPort(port: string | undefined): string | undefined {
+  if (port === undefined) return ":*";
+  if (port === "") return "";
+  return undefined;
+}
+
+/**
+ * A pattern pathname as CSP paths, or `undefined` when it cannot be expressed.
  *
  * CSP path matching is a prefix when the path ends in `/`, and exact otherwise.
- * That covers `/img/**` and a literal path; `/img/*` bounds the match to a
- * single segment, which CSP has no way to say.
+ * A terminal `/**` needs BOTH forms: picomatch matches `/img` itself as well as
+ * everything below it, while the CSP path `/img/` covers only the descendants —
+ * so the prefix is emitted alongside it as an exact source. `/img/*` bounds the
+ * match to a single segment, which CSP has no way to say at all.
+ *
+ * The characters are restricted to those that survive both sides untouched.
+ * CSP's `path-part` excludes `;` and `,` outright, and a `;` reaching the
+ * header would end the directive and start a new one — a literal pathname of
+ * `/x; script-src https:` turns a fetch policy into a script policy. Beyond
+ * those two, anything the URL parser would percent-encode (or that arrives
+ * already encoded) is refused as well: CSP decodes both sides before comparing
+ * paths and picomatch does not, so an encoded path is a third place the two
+ * disagree.
  */
-function cspPath(pathname: string | undefined): string | undefined {
-  if (pathname === undefined || pathname === "" || pathname === "**") return "";
+function cspPaths(pathname: string | undefined): readonly string[] | undefined {
+  if (pathname === undefined || pathname === "" || pathname === "**")
+    return [""];
   if (!pathname.startsWith("/")) return undefined;
-  const prefix = pathname.slice(0, -3);
-  if (pathname.endsWith("/**") && !prefix.includes("*")) return `${prefix}/`;
-  if (!pathname.includes("*")) return pathname;
-  return undefined;
+
+  if (pathname.endsWith("/**")) {
+    const prefix = pathname.slice(0, -3);
+    // `/**` is every path, which is what an omitted path already says.
+    if (prefix === "") return [""];
+    // A trailing slash before the glob would make the prefix source `/a/`,
+    // whose own trailing slash CSP reads as "everything below `/a`" — wider
+    // than the `//` the pattern actually requires.
+    if (prefix.includes("*") || prefix.endsWith("/")) return undefined;
+    if (!isExpressiblePath(prefix)) return undefined;
+    return [prefix, `${prefix}/`];
+  }
+
+  if (pathname.includes("*")) return undefined;
+  if (!isExpressiblePath(pathname)) return undefined;
+  return [pathname];
+}
+
+/**
+ * Whether a path is written only in characters both sides read identically.
+ *
+ * The unreserved set from RFC 3986 plus the separator. Everything else is
+ * either percent-encoded by the URL parser before picomatch sees it, excluded
+ * from CSP's `path-part` grammar, or a delimiter that would restructure the
+ * header.
+ */
+function isExpressiblePath(path: string): boolean {
+  return /^\/[A-Za-z0-9\-._~/]*$/.test(path);
 }
 
 /**
@@ -169,10 +228,16 @@ function cspPath(pathname: string | undefined): string | undefined {
  * ancestor of `cdn-*.co.uk` is `*.co.uk`, which allows every site under a public
  * suffix. Refusing is the direction that keeps the CSP a backstop; the host adds
  * an explicit source if it needs one, and {@link unexpressibleHosts} names them.
+ *
+ * Lowercase only, and that is a real restriction rather than a tidiness rule.
+ * CSP matches hosts case-insensitively while picomatch is case-sensitive
+ * against a hostname the URL parser has already lowercased — so `CDN.example`
+ * matches no request at all through the matcher, and a source emitted from it
+ * would allow every request to `cdn.example`.
  */
 function isExpressibleHost(host: string): boolean {
   const body = host.startsWith("*.") ? host.slice(2) : host;
-  return body !== "" && /^[A-Za-z0-9.-]+$/.test(body);
+  return /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.?$/.test(body);
 }
 
 /**
@@ -188,7 +253,7 @@ export function unexpressibleHosts(
   return [
     ...new Set(
       remotePatterns
-        .filter(p => sourceExpression(p) === undefined)
+        .filter(p => sourceExpressions(p) === undefined)
         .map(p => (p instanceof URL ? p.href : p.hostname))
     ),
   ];
@@ -208,9 +273,7 @@ export function cspDirectives(
 
   const hosts = [
     ...new Set(
-      remotePatterns
-        .map(sourceExpression)
-        .filter((source): source is string => source !== undefined)
+      remotePatterns.flatMap(pattern => sourceExpressions(pattern) ?? [])
     ),
   ];
 
@@ -258,7 +321,13 @@ export function cspHeaderValue(
  *
  * The operation that works is a union INTO the existing directive, which is
  * what this does. It is offered as a function because doing it by hand is the
- * mistake: the two policies look composable and are not.
+ * mistake: the two policies look composable and are not, and the union has a
+ * case that reads as a detail and is not one — a directive permitting NOTHING
+ * cannot be unioned with anything, in either direction, without changing what
+ * it permits. See {@link isNoSources} and the note at the union itself.
+ *
+ * What the host declared explicitly is left as they wrote it wherever the
+ * union cannot tighten it; this edits a policy for a document it does not own.
  */
 export function mergeCspDirectives(
   existing: Readonly<Record<string, readonly string[]>>,
@@ -293,14 +362,53 @@ export function mergeCspDirectives(
     // stops that inheritance, so it has to start from what was being inherited
     // — otherwise adding an image source removes every image source the host
     // was relying on `default-src` to provide.
-    const inherited =
-      merged[name] ??
-      (name === "frame-src" ? before.get("child-src") : undefined) ??
-      before.get("default-src") ??
-      [];
-    merged[name] = [...new Set([...inherited, ...sources])];
+    const inherited = before.has(name)
+      ? before.get(name)
+      : ((name === "frame-src" ? before.get("child-src") : undefined) ??
+        before.get("default-src"));
+
+    // `'none'` is only meaningful as a directive's ONLY source. CSP 3 special-
+    // cases it when the list holds exactly one item, so in any longer list it
+    // is an expression matching nothing and the REST of the list governs. That
+    // makes a union wrong in both directions, and silently so:
+    //
+    // - unioning sources into an inherited `'none'` ACTIVATES them, turning
+    //   `img-src 'none'` into `img-src 'none' https://cdn` — which allows the
+    //   CDN the host had blocked outright;
+    // - unioning `'none'` into anything is a no-op, so seeding the generated
+    //   `object-src 'none'` from `default-src 'self'` yields
+    //   `object-src 'self' 'none'` and objects keep loading.
+    //
+    // So `'none'` never takes part in a union. Whichever side holds it decides
+    // the directive alone.
+    if (inherited !== undefined && isNoSources(inherited)) {
+      merged[name] = [...inherited];
+      continue;
+    }
+    if (isNoSources(sources)) {
+      // A directive the host declared is theirs: this cannot tighten it by
+      // union, and overriding it outright would break embeds elsewhere in a
+      // document this package does not own. Where they left it unstated, the
+      // generated `'none'` stands on its own rather than inheriting.
+      if (!before.has(name)) merged[name] = [...sources];
+      continue;
+    }
+    merged[name] = [...new Set([...(inherited ?? []), ...sources])];
   }
   return merged;
+}
+
+/**
+ * Whether a source list permits nothing.
+ *
+ * `'none'` is matched case-insensitively, as CSP compares it. An EMPTY list
+ * counts too: a directive written with no sources at all is equivalent to one
+ * holding `'none'`, and {@link parseCspHeader} produces exactly that for a bare
+ * `img-src` clause.
+ */
+function isNoSources(sources: readonly string[]): boolean {
+  if (sources.length === 0) return true;
+  return sources.length === 1 && sources[0].toLowerCase() === "'none'";
 }
 
 /** Parse a policy header into directives, so it can be merged and re-rendered. */
