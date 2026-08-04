@@ -49,6 +49,11 @@ import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
+import {
+  readForeignKeyColumns,
+  readIndexNames,
+  tableHasRows,
+} from "../../domains/schema/pipeline/live-table-facts";
 import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanup/executor";
 import { previewDesiredSchema } from "../../domains/schema/pipeline/preview";
 import {
@@ -1261,12 +1266,16 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         const wasStatus = (existing as { status?: boolean }).status === true;
         const hasStatus =
           b.status !== undefined ? b.status === true : wasStatus;
-        const migrationSQL = schemaService.generateAlterTableMigration(
-          tableName,
-          normalizedOldFields,
-          normalizedNewFields,
-          { wasStatus, hasStatus }
-        );
+        // Generated where the table is known to exist, below. Whether a required column can be
+        // added without a value for the rows already there, and which columns are referenced by
+        // a foreign key, are read from the live table, and neither question has an answer for a
+        // table that was never created.
+        let migrationSQL = "";
+        // Whether any statement of this migration reached the database. Everything before that
+        // point — reading the live table, generating the SQL — either succeeds or leaves the
+        // schema exactly as it was, and a failure there must not be recorded as a migration
+        // that ran and save a field list the table never received.
+        let migrationBegan = false;
 
         migrationStatus = "pending";
 
@@ -1285,8 +1294,33 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
                 // i18n: fresh (re)create omits translatable columns when localized.
                 { isSingle: true, hasStatus, localized: isLocalized }
               );
+              // Same boundary as the ALTER branch below: once a statement is sent, a failure
+              // has left the table partly built rather than untouched.
+              migrationBegan = true;
               await executeMigrationStatements(adapter, createSQL);
             } else {
+              const db = adapter.getDrizzle();
+              const liveDialect = adapter.getCapabilities().dialect;
+              const [rows, foreignKeys, indexNames] = await Promise.all([
+                tableHasRows(db, liveDialect, tableName),
+                readForeignKeyColumns(db, liveDialect, tableName),
+                readIndexNames(db, liveDialect, tableName),
+              ]);
+              migrationSQL = schemaService.generateAlterTableMigration(
+                tableName,
+                normalizedOldFields,
+                normalizedNewFields,
+                {
+                  wasStatus,
+                  hasStatus,
+                  tableHasRows: rows,
+                  foreignKeysByColumn: foreignKeys,
+                  indexNames,
+                }
+              );
+              // Past this point a statement may have run, so a failure is a partly-applied
+              // migration rather than an edit that never started.
+              migrationBegan = true;
               await executeMigrationStatements(adapter, migrationSQL);
             }
 
@@ -1369,6 +1403,19 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             );
           }
         } catch (migrationError) {
+          // A refusal is not a failed migration. The generator rejects an edit it can never
+          // apply — a required column with no value for the rows already there, a referenced
+          // column SQLite cannot detach — before any statement runs, and the field list is
+          // still exactly what the caller sent. Recording "failed" and saving that list anyway
+          // would persist a schema the table does not have and report success for it, so the
+          // refusal is raised to the caller with the field it names.
+          //
+          // The same holds for anything else thrown before the first statement: a probe that
+          // cannot reach the database, or a catalog read the connection is not permitted, ends
+          // the save rather than reporting a migration that never began as one that failed.
+          if (migrationError instanceof NextlyError || !migrationBegan) {
+            throw migrationError;
+          }
           migrationStatus = "failed";
           const message =
             migrationError instanceof Error

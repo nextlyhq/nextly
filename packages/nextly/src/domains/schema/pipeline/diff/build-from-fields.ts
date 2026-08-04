@@ -35,6 +35,10 @@ import {
   getSystemColumnDescriptors,
   toSnakeCase,
 } from "../../services/field-column-descriptor";
+import {
+  columnTypeIsIndexable,
+  indexNameForColumn,
+} from "../../services/index-name";
 
 import { indexKey } from "./index-util";
 import type { ColumnSpec, IndexSpec, TableSpec } from "./types";
@@ -113,6 +117,15 @@ interface CollectionIndexContext<F> {
    * change would otherwise produce indexes naming columns that do not exist.
    */
   columnNameFor: (field: F) => string | null;
+  /**
+   * Whether an index on this column can exist at all, asked per column.
+   *
+   * Supplied rather than derived here because it depends on the dialect AND the column type,
+   * and because the statements that create indexes ask the same question: a desired schema that
+   * declares an index the generator deliberately never writes makes every diff propose creating
+   * it and every apply refuse it.
+   */
+  columnIsIndexable?: (field: F, column: string) => boolean;
 }
 
 /**
@@ -137,7 +150,7 @@ export function collectionIndexSpecs<F extends MinimalFieldDef>(
   const indexes: IndexSpec[] = [];
   if (context.hasSlugColumn) {
     indexes.push({
-      name: `idx_${tableName}_slug`,
+      name: indexNameForColumn(tableName, "slug"),
       columns: ["slug"],
       unique: true,
     });
@@ -149,14 +162,14 @@ export function collectionIndexSpecs<F extends MinimalFieldDef>(
     // every index the replacement table does not declare, and the restore
     // replays only what the snapshot carries.
     indexes.push({
-      name: `idx_${tableName}_created_by`,
+      name: indexNameForColumn(tableName, "created_by"),
       columns: ["created_by"],
       unique: false,
     });
   }
   if (context.hasCreatedAtColumn) {
     indexes.push({
-      name: `idx_${tableName}_created_at`,
+      name: indexNameForColumn(tableName, "created_at"),
       columns: ["created_at"],
       unique: false,
     });
@@ -176,13 +189,16 @@ export function collectionIndexSpecs<F extends MinimalFieldDef>(
       !Array.isArray(field.relationTo);
     if (field.unique === true) {
       indexes.push({
-        name: `uq_${tableName}_${col}`,
+        name: indexNameForColumn(tableName, col).replace(/^idx_/, "uq_"),
         columns: [col],
         unique: true,
       });
-    } else if (field.index === true || isSingleRelation) {
+    } else if (
+      (field.index === true || isSingleRelation) &&
+      (context.columnIsIndexable?.(field, col) ?? true)
+    ) {
       indexes.push({
-        name: `idx_${tableName}_${col}`,
+        name: indexNameForColumn(tableName, col),
         columns: [col],
         unique: false,
       });
@@ -276,6 +292,11 @@ export function buildDesiredTableFromFields(
     hasSlugColumn: columns.some(c => c.name === "slug"),
     hasCreatedAtColumn: columns.some(c => c.name === "created_at"),
     hasCreatedByColumn: columns.some(c => c.name === "created_by"),
+    columnIsIndexable: (_field, col) =>
+      columnTypeIsIndexable(
+        columns.find(c => c.name === col)?.type ?? "",
+        dialect
+      ),
     localizedNames,
     columnNameFor: field =>
       getColumnDescriptor(
@@ -536,6 +557,11 @@ export function buildDesiredTableFromComponentFields(
     // rebuild dropped them and nothing put them back — including the unique
     // ones, which is a constraint silently disappearing, not just an index.
     ...collectionIndexSpecs(tableName, fields, {
+      columnIsIndexable: (_field, col) =>
+        columnTypeIsIndexable(
+          columns.find(c => c.name === col)?.type ?? "",
+          dialect
+        ),
       // Components have no slug column; created_at is present when the
       // component carries timestamps.
       hasSlugColumn: false,
