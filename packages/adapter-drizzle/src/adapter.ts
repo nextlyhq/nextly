@@ -71,25 +71,54 @@ const DATE_DATA_TYPE = /(?:^|\s)date$/;
  * mistaken for rounding.
  */
 /**
- * Suffix for the alias a statement spells a timestamp's wall clock out under.
+ * Stem for the alias a statement spells a timestamp's wall clock out under.
  *
- * Distinctive because it shares a row with the table's own columns, and a
- * collision would overwrite one of them.
+ * Short on purpose. PostgreSQL truncates an identifier at 63 bytes, and a
+ * truncated alias is worse than a rejected one: the statement still succeeds,
+ * the lookup misses the name it asked for, and the row keeps both the driver's
+ * value and a stray property. A stem plus an index stays far inside the limit
+ * whatever the column is called.
  */
-const WALL_CLOCK_ALIAS_SUFFIX = "__nextly_wall_clock";
+const WALL_CLOCK_ALIAS_STEM = "__nx_wc";
+
+/**
+ * A timestamp as the database itself spells it, in a fixed field order.
+ *
+ * Matched rather than handed to `new Date`, so nothing depends on the host's
+ * parsing of a partial date. The fraction is optional and of any length, which
+ * covers PostgreSQL's milliseconds and MySQL's microseconds alike.
+ */
+const WALL_CLOCK_PATTERN =
+  /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?$/;
 
 /**
  * Read a database's own rendering of a timestamp as UTC.
  *
  * The statement wrote a UTC wall clock, so reading one back as UTC is what
- * makes a write agree with a later read. Anything unparseable answers nothing,
- * leaving the driver's value in place rather than replacing it with an
- * `Invalid Date`.
+ * makes a write agree with a later read. The rendering is one the statement
+ * asked for by name, so its shape does not depend on a session setting.
+ *
+ * Anything that does not match answers nothing, leaving the driver's value in
+ * place rather than replacing it with an `Invalid Date`.
  */
 function parseWallClockAsUtc(text: string): Date | undefined {
-  const normalized = text.trim().replace(" ", "T");
-  const parsed = new Date(`${normalized}Z`);
-  return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+  const match = WALL_CLOCK_PATTERN.exec(text.trim());
+  if (!match) return undefined;
+  const [, year, month, day, hour, minute, second, fraction = ""] = match;
+  // Milliseconds, whatever precision the dialect rendered: a shorter fraction
+  // is padded and a longer one truncated, which is what a `Date` can hold.
+  const millis = Number(`${fraction}000`.slice(0, 3));
+  return new Date(
+    Date.UTC(
+      Number(year),
+      Number(month) - 1,
+      Number(day),
+      Number(hour),
+      Number(minute),
+      Number(second),
+      millis
+    )
+  );
 }
 
 /** Whether a table property is a date column that can convert its own values. */
@@ -704,6 +733,28 @@ export abstract class DrizzleAdapter {
     const requested =
       returning === "*" ? undefined : new Set(returning.map(String));
 
+    // Every name the row can already carry, so an alias cannot land on one and
+    // overwrite or delete it. A column really called `__nx_wc0` is far-fetched,
+    // but one set makes it impossible rather than unlikely.
+    const taken = new Set<string>();
+    for (const [jsName, colDef] of Object.entries(
+      tableObj as Record<string, unknown>
+    )) {
+      taken.add(jsName);
+      const columnName = (colDef as { name?: unknown }).name;
+      if (typeof columnName === "string") taken.add(columnName);
+    }
+
+    let next = 0;
+    const freeAlias = (): string => {
+      let candidate = `${WALL_CLOCK_ALIAS_STEM}${next++}`;
+      while (taken.has(candidate)) {
+        candidate = `${WALL_CLOCK_ALIAS_STEM}${next++}`;
+      }
+      taken.add(candidate);
+      return candidate;
+    };
+
     const aliases: Array<{ sqlName: string; alias: string; jsName: string }> =
       [];
     for (const [jsName, colDef] of Object.entries(
@@ -715,11 +766,7 @@ export abstract class DrizzleAdapter {
       if (requested && !requested.has(sqlName) && !requested.has(jsName)) {
         continue;
       }
-      aliases.push({
-        sqlName,
-        alias: `${sqlName}${WALL_CLOCK_ALIAS_SUFFIX}`,
-        jsName,
-      });
+      aliases.push({ sqlName, alias: freeAlias(), jsName });
     }
     return aliases;
   }

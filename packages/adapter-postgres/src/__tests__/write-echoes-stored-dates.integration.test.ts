@@ -129,6 +129,73 @@ describe.skipIf(!TEST_DB_URL)("PostgreSQL write echoes the stored date", () => {
     }
   });
 
+  it("reads the same instant under a non-ISO DateStyle", async () => {
+    // `DateStyle` decides how PostgreSQL renders a timestamp as text, and
+    // `SQL, DMY` renders 04/08/2026 rather than 2026-08-04. The statement asks
+    // for a named format instead of the session's, so the rendering it parses
+    // cannot be changed out from under it by a connection setting.
+    await adapter.executeQuery("SET DateStyle = 'SQL, DMY'");
+    try {
+      const written = await adapter.transaction(ctx =>
+        ctx.insert<{ occurredAt: Date }>(
+          TABLE,
+          { id: "ds-1", label: "e", occurred_at: OCCURRED_AT },
+          { returning: "*" }
+        )
+      );
+
+      expect(written.occurredAt).toEqual(OCCURRED_AT);
+    } finally {
+      await adapter.executeQuery("SET DateStyle = 'ISO, MDY'");
+    }
+  });
+
+  it("aliases a long column name without exceeding the identifier limit", async () => {
+    // PostgreSQL truncates an identifier at 63 bytes, and a truncated alias is
+    // worse than a rejected one: the statement still succeeds while the lookup
+    // misses the name it asked for, so the row would keep the driver's value
+    // and a stray property.
+    const longTable = "int_pg_long_column";
+    const longColumn = `occurred_at_${"x".repeat(48)}`;
+    expect(longColumn.length).toBeGreaterThan(44);
+
+    await adapter.executeQuery(`DROP TABLE IF EXISTS ${longTable}`);
+    await adapter.createTable({
+      name: longTable,
+      columns: [
+        { name: "id", type: "text", primaryKey: true },
+        { name: longColumn, type: "timestamp" },
+      ],
+    });
+    const longTableObj = pgTable(longTable, {
+      id: text("id").primaryKey(),
+      occurredAt: timestamp(longColumn, { withTimezone: false }),
+    });
+    adapter.setTableResolver({
+      getTable: (name: string) =>
+        name === longTable ? longTableObj : name === TABLE ? events : null,
+    });
+
+    try {
+      const written = await adapter.transaction(ctx =>
+        ctx.insert<Record<string, unknown>>(
+          longTable,
+          { id: "long-1", [longColumn]: OCCURRED_AT },
+          { returning: "*" }
+        )
+      );
+
+      expect(written.occurredAt).toEqual(OCCURRED_AT);
+      // No helper property survives into the row the caller sees.
+      expect(Object.keys(written).sort()).toEqual(["id", "occurredAt"]);
+    } finally {
+      adapter.setTableResolver({
+        getTable: (name: string) => (name === TABLE ? events : null),
+      });
+      await adapter.executeQuery(`DROP TABLE IF EXISTS ${longTable}`);
+    }
+  });
+
   it("adds no column the caller did not ask to have returned", async () => {
     // A projection is a contract. A row answering with a timestamp the
     // statement never selected would be carrying a column out of thin air.

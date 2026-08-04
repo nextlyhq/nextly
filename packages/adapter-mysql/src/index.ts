@@ -855,7 +855,7 @@ export class MySqlAdapter extends DrizzleAdapter {
         const spelled = aliases
           .map(
             a =>
-              `CAST(${this.escapeIdentifier(a.sqlName)} AS CHAR) AS ${this.escapeIdentifier(a.alias)}`
+              `DATE_FORMAT(${this.escapeIdentifier(a.sqlName)}, '%Y-%m-%dT%H:%i:%s.%f') AS ${this.escapeIdentifier(a.alias)}`
           )
           .join(", ");
         const projected =
@@ -932,7 +932,7 @@ export class MySqlAdapter extends DrizzleAdapter {
           const bulkSpelled = bulkAliases
             .map(
               a =>
-                `CAST(${this.escapeIdentifier(a.sqlName)} AS CHAR) AS ${this.escapeIdentifier(a.alias)}`
+                `DATE_FORMAT(${this.escapeIdentifier(a.sqlName)}, '%Y-%m-%dT%H:%i:%s.%f') AS ${this.escapeIdentifier(a.alias)}`
             )
             .join(", ");
           const [rows] = await connection.query<RowDataPacket[]>(

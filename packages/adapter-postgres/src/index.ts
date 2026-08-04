@@ -1010,7 +1010,7 @@ export class PostgresAdapter extends DrizzleAdapter {
           const spelled = aliases
             .map(
               a =>
-                `${this.escapeIdentifier(a.sqlName)}::text AS ${this.escapeIdentifier(a.alias)}`
+                `to_char(${this.escapeIdentifier(a.sqlName)}, 'YYYY-MM-DD"T"HH24:MI:SS.MS') AS ${this.escapeIdentifier(a.alias)}`
             )
             .join(", ");
           sql += ` RETURNING ${returning}${spelled ? `, ${spelled}` : ""}`;
@@ -1061,7 +1061,7 @@ export class PostgresAdapter extends DrizzleAdapter {
           const spelled = aliases
             .map(
               a =>
-                `${this.escapeIdentifier(a.sqlName)}::text AS ${this.escapeIdentifier(a.alias)}`
+                `to_char(${this.escapeIdentifier(a.sqlName)}, 'YYYY-MM-DD"T"HH24:MI:SS.MS') AS ${this.escapeIdentifier(a.alias)}`
             )
             .join(", ");
           sql += ` RETURNING ${returning}${spelled ? `, ${spelled}` : ""}`;
