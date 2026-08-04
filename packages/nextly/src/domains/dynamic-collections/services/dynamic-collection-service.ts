@@ -22,6 +22,10 @@ import {
   companionHasStatusColumn,
   localizedColumnsOnMain,
 } from "../../i18n/runtime/companion-io";
+import {
+  readForeignKeyColumns,
+  tableHasRows,
+} from "../../schema/pipeline/live-table-facts";
 import { resolveBuilderVersions } from "../../versions/builder-versions";
 import { resolveBuilderWebhooks } from "../../webhooks/builder-webhooks";
 
@@ -150,6 +154,26 @@ export class DynamicCollectionService extends BaseService {
       this.adapter,
       this.logger
     );
+  }
+
+  /**
+   * What the live table is, for the parts of an ALTER the field list cannot decide: whether a
+   * required column can be added without a value for the rows already there, and which columns
+   * are referenced by a foreign key that has to come off before they can be dropped.
+   *
+   * Both are read together and once per save, so the two cannot be observed at different
+   * moments and a table is not queried twice for one edit.
+   */
+  private async readTableFacts(tableName: string): Promise<{
+    tableHasRows: boolean;
+    foreignKeysByColumn: ReadonlyMap<string, readonly string[]>;
+  }> {
+    const db = this.adapter.getDrizzle();
+    const [hasRows, foreignKeys] = await Promise.all([
+      tableHasRows(db, this.adapter.dialect, tableName),
+      readForeignKeyColumns(db, this.adapter.dialect, tableName),
+    ]);
+    return { tableHasRows: hasRows, foreignKeysByColumn: foreignKeys };
   }
 
   /**
@@ -611,6 +635,13 @@ export class DynamicCollectionService extends BaseService {
     let localMigrationSQL: string | null = null;
     let migrationFileName: string | null = null;
 
+    // Read by the branches that diff two different field lists, and shared between them. The
+    // status-only branches below diff a list against itself, so no column is added or dropped
+    // and there is nothing for these facts to decide.
+    let tableFacts: ReturnType<typeof this.readTableFacts> | null = null;
+    const liveTable = () =>
+      (tableFacts ??= this.readTableFacts(collection.tableName));
+
     // Why: the alter-table block runs when fields change, but a status-only
     // flip also needs a migration (ADD/DROP status column) so the data
     // table matches the new lifecycle setting. When only `status` toggled,
@@ -711,7 +742,7 @@ export class DynamicCollectionService extends BaseService {
           collection.tableName,
           oldShared,
           newShared,
-          { wasStatus, hasStatus }
+          { wasStatus, hasStatus, ...(await liveTable()) }
         );
         const {
           sql: companionSQL,
@@ -749,7 +780,7 @@ export class DynamicCollectionService extends BaseService {
           collection.tableName,
           oldUserFields,
           userDefinedFields,
-          { wasStatus, hasStatus }
+          { wasStatus, hasStatus, ...(await liveTable()) }
         );
       }
       migrationFileName = `${Date.now()}_update_${collectionName}.sql`;

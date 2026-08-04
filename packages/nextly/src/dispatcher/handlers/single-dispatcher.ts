@@ -49,6 +49,10 @@ import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
+import {
+  readForeignKeyColumns,
+  tableHasRows,
+} from "../../domains/schema/pipeline/live-table-facts";
 import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanup/executor";
 import { previewDesiredSchema } from "../../domains/schema/pipeline/preview";
 import {
@@ -1259,12 +1263,11 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         const wasStatus = (existing as { status?: boolean }).status === true;
         const hasStatus =
           b.status !== undefined ? b.status === true : wasStatus;
-        const migrationSQL = schemaService.generateAlterTableMigration(
-          tableName,
-          normalizedOldFields,
-          normalizedNewFields,
-          { wasStatus, hasStatus }
-        );
+        // Generated where the table is known to exist, below. Whether a required column can be
+        // added without a value for the rows already there, and which columns are referenced by
+        // a foreign key, are read from the live table, and neither question has an answer for a
+        // table that was never created.
+        let migrationSQL = "";
 
         migrationStatus = "pending";
 
@@ -1285,6 +1288,23 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
               );
               await executeMigrationStatements(adapter, createSQL);
             } else {
+              const db = adapter.getDrizzle();
+              const liveDialect = adapter.getCapabilities().dialect;
+              const [rows, foreignKeys] = await Promise.all([
+                tableHasRows(db, liveDialect, tableName),
+                readForeignKeyColumns(db, liveDialect, tableName),
+              ]);
+              migrationSQL = schemaService.generateAlterTableMigration(
+                tableName,
+                normalizedOldFields,
+                normalizedNewFields,
+                {
+                  wasStatus,
+                  hasStatus,
+                  tableHasRows: rows,
+                  foreignKeysByColumn: foreignKeys,
+                }
+              );
               await executeMigrationStatements(adapter, migrationSQL);
             }
 

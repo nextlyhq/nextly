@@ -22,6 +22,7 @@
 
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
+import { NextlyError } from "../../../errors/nextly-error";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { env } from "../../../shared/lib/env";
 import {
@@ -103,6 +104,55 @@ export class DynamicCollectionSchemaService {
   }
 
   /**
+   * Whether the field's column is unique.
+   *
+   * A one-to-one relationship is unique by its cardinality, not by anything the author ticks, so
+   * the flag alone does not decide it. Asked in one place because the answer has to be the same
+   * whether the column arrives with its table or is added to one that already exists: a table
+   * that gained its one-to-one by an edit was not enforcing the cardinality it declared.
+   */
+  private columnIsUnique(field: FieldDefinition): boolean {
+    return (
+      field.unique === true ||
+      (field.type === "relationship" &&
+        field.options?.relationType === "oneToOne")
+    );
+  }
+
+  /**
+   * Whether the field's column is indexed.
+   *
+   * A relationship is indexed whether or not the author asked: it is joined on every read that
+   * expands it, and PostgreSQL does not index a foreign key on its own. Everything else is
+   * indexed only on request. Asked in one place for the same reason as `columnIsUnique` — a
+   * column added to an existing table was reaching neither rule, so a relationship created with
+   * its table was indexed and the identical field added by an edit was not.
+   */
+  private columnIsIndexed(field: FieldDefinition): boolean {
+    if (!fieldProducesColumn(field)) return false;
+    if (field.type === "relationship") return true;
+    return field.index === true;
+  }
+
+  /**
+   * The literal that backfills existing rows when a required column is added, or null when the
+   * field's type states none.
+   *
+   * A relationship is the case with no answer: every id the generator could write references a
+   * row that does not exist, and `DEFAULT NULL` does not satisfy `NOT NULL` on any dialect.
+   */
+  private requiredColumnBackfill(field: FieldDefinition): string | null {
+    const literal =
+      field.default !== undefined
+        ? this.formatDefaultValue(field.default, field.type)
+        : this.getDefaultValueForType(field.type, field);
+    // `NULL` is the absence of an answer however it was arrived at. Read from the explicit
+    // default it is a contradiction with the required flag; derived from the type it is the
+    // relationship case. Neither satisfies NOT NULL, so both are reported the same way.
+    return literal === "NULL" ? null : literal;
+  }
+
+  /**
    * Generate SQL migration for creating a new collection table
    *
    * @param tableName - The name of the table to create
@@ -170,12 +220,7 @@ export class DynamicCollectionSchemaService {
           this.mapFieldTypeToSQL(f.type, f.length, f.options, f.validation);
         const nullable = f.required ? "NOT NULL" : "";
 
-        // one-to-one relationships should be unique
-        const unique =
-          f.unique ||
-          (f.type === "relationship" && f.options?.relationType === "oneToOne")
-            ? "UNIQUE"
-            : "";
+        const unique = this.columnIsUnique(f) ? "UNIQUE" : "";
 
         const defaultVal =
           f.default !== undefined && f.default !== null
@@ -343,41 +388,16 @@ ${allColumnDefs.join(",\n")}
     // Add indexes for fields that benefit from indexing
     const indexStatements: string[] = [];
 
-    // essential for JOIN performance, PostgreSQL does NOT automatically index foreign keys!
-    // Use mainFields so a localized relationship field (relocated to the companion) doesn't
-    // get an index on a column the main table no longer has.
+    // A relationship is indexed for JOIN performance whether or not it was asked for, and every
+    // other column only on request; `columnIsIndexed` holds both rules, and the ALTER path reads
+    // the same one so a column added later is indexed the way the same column created here is.
+    // Use mainFields so a localized field (relocated to the companion) doesn't get an index on a
+    // column the main table no longer has.
     mainFields.forEach(f => {
-      if (
-        f.type === "relationship" &&
-        f.options?.relationType !== "manyToMany"
-      ) {
+      if (this.columnIsIndexed(f)) {
         // Use the snake_case column name for both the index name and the
         // indexed column so this matches the actual physical column (created
         // snake_cased) and the migrate:create desired-state index naming.
-        const col = toSnakeCase(f.name);
-        const indexName = `idx_${tableName}_${col}`;
-        if (this.dialect === "mysql") {
-          indexStatements.push(
-            `CREATE INDEX ${this.quoteIdentifier(indexName)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier(col)});`
-          );
-        } else {
-          indexStatements.push(
-            `CREATE INDEX IF NOT EXISTS ${this.quoteIdentifier(indexName)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier(col)});`
-          );
-        }
-      }
-    });
-
-    // Add manual indexes requested by the user. Use mainFields so a localized field
-    // that also requested an index doesn't try to index a column relocated to the
-    // companion table (i18n). Component fields have no column to index, so skip them
-    // too (an index on a nonexistent column fails).
-    mainFields.forEach(f => {
-      if (
-        f.index &&
-        f.type !== "relationship" &&
-        f.type !== STORAGE_FORMAT.fieldType
-      ) {
         const col = toSnakeCase(f.name);
         const indexName = `idx_${tableName}_${col}`;
         if (this.dialect === "mysql") {
@@ -475,6 +495,25 @@ ${allColumnDefs.join(",\n")}
        * lifecycle is enabled or disabled. Pairs with `wasStatus`.
        */
       hasStatus?: boolean;
+      /**
+       * Whether the table already holds rows, read from the live table by `tableHasRows`.
+       *
+       * Only a required column whose type states no backfill consults it, and only to decide
+       * between emitting the column and refusing the edit. Undefined means the caller did not
+       * look, which is read as "may have rows": guessing empty produces a statement that
+       * PostgreSQL and MySQL reject and that SQLite accepts before rejecting every insert.
+       */
+      tableHasRows?: boolean;
+      /**
+       * Foreign-key constraint names by column, read from the live table by
+       * `readForeignKeyColumns`.
+       *
+       * Which columns carry one is not derivable from the fields: on SQLite the ALTER path
+       * cannot attach a foreign key, so a relationship added by an edit has none while the same
+       * field created with its table does. Undefined is read as "none known", which leaves the
+       * drop exactly as it behaved before anything was measured.
+       */
+      foreignKeysByColumn?: ReadonlyMap<string, readonly string[]>;
     }
   ): string {
     const statements: string[] = [`-- Update dynamic collection: ${tableName}`];
@@ -584,19 +623,39 @@ ${allColumnDefs.join(",\n")}
 
         const type = this.mapFieldTypeToSQL(field.type, field.length);
         const nullable = field.required ? "NOT NULL" : "";
-
-        // When adding a NOT NULL column to an existing table, we must provide a default
-        // value for existing rows. Use explicit defaultValue if provided, otherwise
-        // use a sensible default based on field type.
-        let defaultVal = "";
-        if (field.default !== undefined) {
-          defaultVal = `DEFAULT ${this.formatDefaultValue(field.default, field.type)}`;
-        } else if (field.required) {
-          // Required field without explicit default - provide sensible default for existing rows
-          defaultVal = `DEFAULT ${this.getDefaultValueForType(field.type, field)}`;
-        }
-
         const addColName = toSnakeCase(field.name);
+
+        // An existing row has no value for a column that did not exist a moment ago, so a
+        // required one has to say what those rows get. Most types state something usable; a
+        // relationship states nothing, because every id it could write references a row that
+        // is not there. Emitting `DEFAULT NULL` anyway is what produced three different
+        // failures: PostgreSQL reports the nulls it found, MySQL calls the default invalid,
+        // and SQLite writes the column and then refuses every insert that omits it.
+        //
+        // With no rows to backfill there is nothing to state, and a plain NOT NULL is
+        // accepted by all three. With rows, the value has to come from the author, so the
+        // edit is refused and names the order that works.
+        let defaultVal = "";
+        if (field.required || field.default !== undefined) {
+          const backfill = this.requiredColumnBackfill(field);
+          if (backfill !== null) {
+            defaultVal = `DEFAULT ${backfill}`;
+          } else if (field.required && options?.tableHasRows !== false) {
+            throw NextlyError.validation({
+              errors: [
+                {
+                  path: `fields.${field.name}`,
+                  code: "REQUIRED_COLUMN_NEEDS_BACKFILL",
+                  message:
+                    `"${field.name}" is required, but ${tableName} already has entries and ` +
+                    `a ${field.type} has no default value to give them. Add the field as ` +
+                    `optional, set a value on the existing entries, then mark it required.`,
+                },
+              ],
+              logContext: { tableName, field: field.name, type: field.type },
+            });
+          }
+        }
         statements.push(
           `ALTER TABLE ${this.quoteIdentifier(tableName)} ADD COLUMN ${this.quoteIdentifier(addColName)} ${type} ${nullable} ${defaultVal};`.trim()
         );
@@ -616,18 +675,32 @@ ${allColumnDefs.join(",\n")}
           }
 
           // Add unique constraint if needed
-          if (field.unique) {
+          if (this.columnIsUnique(field)) {
             statements.push(
               `ALTER TABLE ${this.quoteIdentifier(tableName)} ADD CONSTRAINT ${this.quoteIdentifier(`uq_${tableName}_${addColName}`)} UNIQUE (${this.quoteIdentifier(addColName)});`
             );
           }
         } else {
           // For SQLite with unique constraint, create a unique index instead
-          if (field.unique) {
+          if (this.columnIsUnique(field)) {
             statements.push(
               `CREATE UNIQUE INDEX IF NOT EXISTS ${this.quoteIdentifier(`uq_${tableName}_${addColName}`)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier(addColName)});`
             );
           }
+        }
+
+        // The index this column carries, for a column that did not exist before this save. The
+        // index loop below compares a field against its previous state to catch a toggle, and a
+        // field being added has no previous state to differ from, so neither the index requested
+        // at the same moment as the column nor the one a relationship always carries was created
+        // by either.
+        if (this.columnIsIndexed(field)) {
+          const indexName = `idx_${tableName}_${addColName}`;
+          statements.push(
+            this.dialect === "mysql"
+              ? `CREATE INDEX ${this.quoteIdentifier(indexName)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier(addColName)});`
+              : `CREATE INDEX IF NOT EXISTS ${this.quoteIdentifier(indexName)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier(addColName)});`
+          );
         }
       }
     }
@@ -639,7 +712,11 @@ ${allColumnDefs.join(",\n")}
       // CREATE INDEX against a name the table does not have, which fails the whole save.
       if (!fieldProducesColumn(field)) continue;
       const oldField = oldFieldMap.get(field.name);
-      if (oldField && oldField.index !== field.index) {
+      // A column the add loop just created already carries whatever index was requested with
+      // it. Reading the toggle for one of those emits a second CREATE INDEX for the same
+      // column under the same name.
+      if (!oldField || this.storageClassChanged(oldField, field)) continue;
+      if (oldField.index !== field.index) {
         const idxCol = toSnakeCase(field.name);
         const indexName = `idx_${tableName}_${idxCol}`;
         if (field.index) {
@@ -680,6 +757,40 @@ ${allColumnDefs.join(",\n")}
       const next = newFieldMap.get(field.name);
       if (!next || this.storageClassChanged(field, next)) {
         const dropCol = toSnakeCase(field.name);
+
+        // A column that something references cannot simply be removed, and the three dialects
+        // do not agree on what that costs. PostgreSQL drops the constraints that depend on the
+        // column along with it, so it needs nothing here. MySQL keeps them and refuses the drop
+        // until the constraint is named and removed first. SQLite cannot remove a constraint at
+        // all: the column stays until the whole table is rebuilt around it, so the edit is
+        // refused rather than sent to fail as a driver error the author cannot act on.
+        const foreignKeys = options?.foreignKeysByColumn?.get(dropCol);
+        if (foreignKeys !== undefined) {
+          if (this.dialect === "sqlite") {
+            throw NextlyError.validation({
+              errors: [
+                {
+                  path: `fields.${field.name}`,
+                  code: "FOREIGN_KEY_DROP_UNSUPPORTED",
+                  message:
+                    `"${field.name}" cannot be removed on SQLite: the link it holds to another ` +
+                    `collection is part of ${tableName}'s definition, and SQLite can only drop ` +
+                    `one by rebuilding the table. Remove the field on PostgreSQL or MySQL, or ` +
+                    `recreate the collection.`,
+                },
+              ],
+              logContext: { tableName, field: field.name, column: dropCol },
+            });
+          }
+          if (this.dialect === "mysql") {
+            for (const constraint of foreignKeys) {
+              statements.push(
+                `ALTER TABLE ${this.quoteIdentifier(tableName)} DROP FOREIGN KEY ${this.quoteIdentifier(constraint)};`
+              );
+            }
+          }
+        }
+
         // SQLite doesn't support IF EXISTS on DROP COLUMN
         if (this.dialect === "sqlite") {
           statements.push(
