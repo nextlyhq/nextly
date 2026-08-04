@@ -26,7 +26,11 @@ const SUB_TITLE_FIELD = { name: "subTitle", type: "text" as const };
  *  migration generator uses, so the fixture tracks any change to the field-to-column
  *  mapping instead of hand-copying its current output. */
 function subTitleColumn(): { name: string; ddl: string } {
-  const col = fieldToLocalizedColumnSpec(SUB_TITLE_FIELD, "sqlite");
+  const col = fieldToLocalizedColumnSpec(
+    SUB_TITLE_FIELD,
+    "sqlite",
+    "codeFirst"
+  );
   if (!col) {
     // A text field must map to a physical column; the fixture cannot be built without one.
     throw NextlyError.internal({
@@ -88,6 +92,7 @@ afterEach(() => sqlite.close());
 describe("buildCompanionTransitionStatements — enable", () => {
   it("seeds the companion default locale from main, then drops the translatable column", () => {
     const plan = buildCompanionTransitionStatements({
+      builtBy: "codeFirst" as const,
       slug: "hero",
       tableName: "single_hero",
       dialect: "sqlite",
@@ -125,6 +130,7 @@ describe("buildCompanionTransitionStatements — enable", () => {
     // The seed must not read it from main (there is nothing to copy), and the drop must not
     // target a column that is not there; the companion still gets the column.
     const plan = buildCompanionTransitionStatements({
+      builtBy: "codeFirst" as const,
       slug: "hero",
       tableName: "single_hero",
       dialect: "sqlite",
@@ -169,6 +175,7 @@ describe("buildCompanionTransitionStatements — enable", () => {
     // raw field name, or the value is stranded on main.
     const sub = subTitleColumn();
     const plan = buildCompanionTransitionStatements({
+      builtBy: "codeFirst" as const,
       slug: "hero",
       tableName: "single_hero",
       dialect: "sqlite",
@@ -199,6 +206,7 @@ describe("buildCompanionTransitionStatements — enable", () => {
     // name in the old set, but the main table never carried a `gallery` column, so the seed
     // and drop must skip it; only its companion column is created.
     const plan = buildCompanionTransitionStatements({
+      builtBy: "codeFirst" as const,
       slug: "hero",
       tableName: "single_hero",
       dialect: "sqlite",
@@ -226,6 +234,7 @@ describe("buildCompanionTransitionStatements — disable", () => {
   beforeEach(() => {
     // Bring the entity to the enabled state first, then add a non-default translation.
     const enable = buildCompanionTransitionStatements({
+      builtBy: "codeFirst" as const,
       slug: "hero",
       tableName: "single_hero",
       dialect: "sqlite",
@@ -247,6 +256,7 @@ describe("buildCompanionTransitionStatements — disable", () => {
 
   it("restores the default locale onto main, archives the rest, and drops the companion", () => {
     const plan = buildCompanionTransitionStatements({
+      builtBy: "codeFirst" as const,
       slug: "hero",
       tableName: "single_hero",
       dialect: "sqlite",
@@ -334,6 +344,7 @@ describe("buildCompanionTransitionStatements — disable with Draft/Published", 
   >;
 
   const withStatus = (over: StatusCase): CompanionTransitionArgs => ({
+    builtBy: "codeFirst",
     slug: "hero",
     tableName: "single_hero",
     dialect: "sqlite" as const,

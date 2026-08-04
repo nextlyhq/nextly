@@ -36,7 +36,7 @@ export const gallery = defineBlock({
     customCss: true,
     customAttributes: true,
   },
-  render: ({ props, className }) => {
+  render: ({ props, className, remotePatterns }) => {
     const items = Array.isArray(props.items) ? props.items : [];
     const cols = Math.min(Math.max(Number(props.columns) || 3, 1), 8);
     return (
@@ -50,7 +50,9 @@ export const gallery = defineBlock({
       >
         {items.map((raw, i) => {
           const it = (raw ?? {}) as Record<string, unknown>;
-          const url = mediaUrl(it.image);
+          // Gated on `remotePatterns`: each image here is a request the browser
+          // makes on its own, so an undeclared host is refused.
+          const url = mediaUrl(it.image, remotePatterns);
           if (!url) return null;
           const alt = str(it.alt) || mediaAlt(it.image);
           return (

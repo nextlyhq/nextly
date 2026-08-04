@@ -802,6 +802,8 @@ const COLLECTIONS_METHODS: Record<
               ? await companionHasStatusColumn(adapter, `${tableName}_locales`)
               : undefined;
           const plan = buildCompanionTransitionStatements({
+            // The companion mirrors the main table, and a collection's table comes from the Schema Builder's collection creator.
+            builtBy: "collection" as const,
             slug: p.collectionName,
             tableName,
             dialect,

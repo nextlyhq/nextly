@@ -1,7 +1,7 @@
 import { defineBlock } from "../../core/registry";
 
 import { renderInline } from "./markdown";
-import { mediaUrl, safeUrl, str } from "./util";
+import { cssMediaUrl, safeUrl, str } from "./util";
 
 /** Call-to-action card: heading + text + button, boxed. */
 export const ctaCard = defineBlock({
@@ -93,9 +93,10 @@ export const flipBox = defineBlock({
     customCss: true,
     customAttributes: true,
   },
-  render: ({ props, node, className }) => {
+  render: ({ props, node, className, remotePatterns }) => {
     const h = Number(props.height) || 260;
-    const front = mediaUrl(props.frontImage);
+    // Interpolated into a CSS `url("…")`, so CSS delimiters are refused too.
+    const front = cssMediaUrl(props.frontImage, remotePatterns);
     const id = node.id;
     const css = `
 .nx-flip-${id}{perspective:1000px}

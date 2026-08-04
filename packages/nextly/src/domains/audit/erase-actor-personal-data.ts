@@ -42,10 +42,16 @@ export interface ErasureCapableDb {
 
 /** The audit tables an erasure touches, as the dialect bundle exposes them. */
 export interface ErasableAuditTables {
-  activityLog: Table & {
+  activityLog?: Table & {
     userId: Column;
     userName: Column;
     userEmail: Column;
+    identityErasedAt: Column;
+  };
+  auditLog?: Table & {
+    actorUserId: Column;
+    ipAddress: Column;
+    userAgent: Column;
     identityErasedAt: Column;
   };
 }
@@ -56,50 +62,114 @@ export interface ErasableAuditTables {
  * Runs inside the caller's transaction so it commits with the account removal
  * and rolls back with it. A failure here therefore aborts the deletion, which
  * is deliberate: the invariant worth protecting is that an account is never
- * removed while the data identifying its owner stays behind. The cost is that
- * an installation whose `activity_log` table is missing cannot delete a user
- * until it is provisioned — that describes only the degraded SQLite bootstrap
- * fallback, which already omits half the core tables and is not a working
- * installation.
+ * removed while the data identifying its owner stays behind.
+ *
+ * Each table is erased only when the caller supplies it, and the caller decides
+ * that per table. A table a database does not have holds nothing to erase, so
+ * omitting it does not weaken the invariant — while answering for the pair
+ * would let one missing table suppress the other's erasure and leave behind
+ * exactly what the deletion exists to remove.
  *
  * @param db - The caller's open transaction.
  * @param tables - The dialect's table bundle.
  * @param userId - The account being removed.
  * @param erasedAt - When the erasure happened, recorded on every touched row.
+ * @param unstamped - Tables whose database predates the stamp column. Their
+ *   identifiers are still erased; only the record of WHEN is unavailable,
+ *   because the column to hold it does not exist yet.
  */
 export async function eraseActorPersonalData(
   db: ErasureCapableDb,
   tables: ErasableAuditTables,
   userId: string,
-  erasedAt: Date
+  erasedAt: Date,
+  unstamped?: ReadonlySet<keyof ErasableAuditTables>
 ): Promise<void> {
-  const { activityLog } = tables;
-  await db
-    .update(activityLog)
-    .set({
-      // NULL is the erased state. `identityErasedAt` is what distinguishes it
-      // from a row that simply never carried a name, and it records when the
-      // erasure happened, which is the evidence an erasure request needs. On
-      // this path that is also when the account was deleted, because it runs
-      // inside that transaction.
-      userName: null,
-      userEmail: null,
-      identityErasedAt: erasedAt,
-    })
-    .where(
-      and(
-        eq(activityLog.userId, userId),
-        // Rows already erased are left exactly as they are. This runs more than
-        // once per deletion — once inside the transaction and once after it
-        // commits, to catch an entry that landed in between — and without this
-        // the second pass would rewrite an actor's whole retained history, lock
-        // it again, and move every stamp forward to a later time than the
-        // erasure it actually records.
-        or(
-          isNotNull(activityLog.userName),
-          isNotNull(activityLog.userEmail),
-          isNull(activityLog.identityErasedAt)
+  const { activityLog, auditLog } = tables;
+  // Each surface is erased only when the caller supplied it. A database can
+  // carry one table and not the other, and the caller decides that per table so
+  // a missing one cannot suppress the erasure of the one that is present.
+  if (activityLog) {
+    await db
+      .update(activityLog)
+      .set({
+        // NULL is the erased state. `identityErasedAt` is what distinguishes it
+        // from a row that simply never carried a name, and it records when the
+        // erasure happened, which is the evidence an erasure request needs. On
+        // this path that is also when the account was deleted, because it runs
+        // inside that transaction.
+        userName: null,
+        userEmail: null,
+        identityErasedAt: erasedAt,
+      })
+      .where(
+        and(
+          eq(activityLog.userId, userId),
+          // Rows already erased are left exactly as they are. This runs more than
+          // once per deletion — once inside the transaction and once after it
+          // commits, to catch an entry that landed in between — and without this
+          // the second pass would rewrite an actor's whole retained history, lock
+          // it again, and move every stamp forward to a later time than the
+          // erasure it actually records.
+          or(
+            isNotNull(activityLog.userName),
+            isNotNull(activityLog.userEmail),
+            isNull(activityLog.identityErasedAt)
+          )
         )
-      )
-    );
+      );
+  }
+
+  // The auth log identifies a person by their REQUEST rather than their name:
+  // the address they connected from and the client they used. Those are erased
+  // for the same reason, while `kind`, the actor and target references, and the
+  // timestamp stay — that is the security fact, and it is what a retained trail
+  // is for.
+  //
+  // Keyed on the ACTOR only. `target_user_id` names who an action was performed
+  // ON, and the address on such a row belongs to whoever performed it, so
+  // erasing by target would scrub a different person's data and leave the
+  // subject's own untouched.
+  //
+  // Rows the deleted account produced WITHOUT attribution — a failed login, a
+  // rejected CSRF — are out of reach here by construction, because those are
+  // recorded with no actor precisely so a failure cannot reveal which account
+  // was reached. Nothing links them to a person, which is also what makes them
+  // unerasable on request: there is no query that could find them.
+  //
+  // They are therefore bounded by how long the table is kept rather than by
+  // deletion — `audit.retention.authMaxAgeMs`, 180 days by default. A window is
+  // a weaker guarantee than an erasure, which is the case for keeping as little
+  // as possible on them in the first place: the metadata projection is
+  // default-deny for exactly that reason.
+  if (auditLog) {
+    // A database that predates the stamp column still has to be erased. The
+    // stamp records WHEN an erasure happened; the erasure itself is the
+    // obligation, and skipping it because the evidence field is missing keeps
+    // the identifiers forever — this table carries no cascading key, so nothing
+    // else removes the row, and a later migration adds the column without being
+    // able to revisit deletions that already happened.
+    const stamped = !unstamped?.has("auditLog");
+    await db
+      .update(auditLog)
+      .set({
+        ipAddress: null,
+        userAgent: null,
+        ...(stamped ? { identityErasedAt: erasedAt } : {}),
+      })
+      .where(
+        and(
+          eq(auditLog.actorUserId, userId),
+          // The stamp cannot be referenced on a schema that lacks it, in the
+          // predicate any more than in the assignment.
+          stamped
+            ? or(
+                isNotNull(auditLog.ipAddress),
+                isNotNull(auditLog.userAgent),
+                isNull(auditLog.identityErasedAt)
+              )
+            : or(isNotNull(auditLog.ipAddress), isNotNull(auditLog.userAgent))
+        )
+      );
+  }
 }

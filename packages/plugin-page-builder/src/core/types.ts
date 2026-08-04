@@ -10,6 +10,7 @@ import type { ReactNode } from "react";
 
 import type { MotionConfig } from "./motion";
 import type { BlockSupports } from "./supports";
+import type { RemotePatternInput } from "./url-policy";
 
 // ---------------------------------------------------------------------------
 // Document + node model (spec §6)
@@ -204,6 +205,20 @@ export interface BlockRenderArgs<P = Record<string, unknown>> {
   slots: Record<string, ReactNode>;
   /** The scoped class the block MUST apply to its own root element (no wrapper div). */
   className: string;
+  /**
+   * The hosts this page may load media from, as `PageRenderer` was given them.
+   *
+   * A block that renders a media URL into an `src` or an inline background is
+   * making a request the style compiler never sees, so the same policy has to
+   * reach here. The renderer cannot inspect the element a block returns, so a
+   * block applies it: pass this to `mediaUrl` for an attribute, or
+   * `cssMediaUrl` for a value interpolated into a CSS `url("…")`. Both are
+   * exported from `@nextlyhq/plugin-page-builder`, so a block registered from
+   * outside this package can reach them.
+   *
+   * Absent means relative paths only, which is what an unconfigured page gets.
+   */
+  remotePatterns?: readonly RemotePatternInput[];
 }
 
 export interface BlockDefinition<P = Record<string, unknown>> {

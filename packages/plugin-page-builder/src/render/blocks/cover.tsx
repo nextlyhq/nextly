@@ -1,6 +1,7 @@
 import { defineBlock } from "../../core/registry";
+import { safeValue } from "../../core/style-compiler";
 
-import { mediaUrl, str } from "./util";
+import { cssMediaUrl, str } from "./util";
 
 /** A full-bleed hero: background image + color overlay, centered inner blocks. */
 export const cover = defineBlock({
@@ -31,9 +32,17 @@ export const cover = defineBlock({
     customCss: true,
     customAttributes: true,
   },
-  render: ({ props, slots, className }) => {
-    const url = mediaUrl(props.image);
-    const overlay = str(props.overlayColor, "#000000");
+  render: ({ props, slots, className, remotePatterns }) => {
+    // `cssMediaUrl`: this is interpolated into a CSS `url("…")`, so the
+    // delimiters that would end it are refused as well as the origin.
+    const url = cssMediaUrl(props.image, remotePatterns);
+    // The overlay is arbitrary author text assigned to `background`, which is
+    // fetch-capable: `url("https://…")` is a valid value there. It goes through
+    // the same value policy a structured style does, so an undeclared host is
+    // refused and anything that fails to parse falls back to the default.
+    const overlay =
+      safeValue(str(props.overlayColor, "#000000"), remotePatterns) ??
+      "#000000";
     const opacity = Number(props.overlayOpacity);
     return (
       <div

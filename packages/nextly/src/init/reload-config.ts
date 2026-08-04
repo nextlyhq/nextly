@@ -1009,6 +1009,8 @@ async function ensureLocalizedCompanionsForReload(
       const provisioned = await ensureCompanionTable(
         adapter,
         {
+          // The HMR path applies a config edit, so the table is the pipeline's.
+          builtBy: "codeFirst" as const,
           slug: entity.slug,
           tableName,
           fields: entity.fields ?? [],
@@ -1081,6 +1083,8 @@ async function ensureLocalizedCompanionsForReload(
       await reconcileCompanionColumns(
         adapter,
         {
+          // Same config-edit path as the companion creation above.
+          builtBy: "codeFirst" as const,
           slug: entity.slug,
           tableName: resolveTableName(entity),
           fields: entity.fields ?? [],
@@ -1297,8 +1301,13 @@ async function applyReload(opts?: {
    *
    * Not called on the paths that simply had nothing to do: there the new config
    * IS the live one, and its types and handlers belong in place.
+   *
+   * Named for what it does rather than for the decision that reaches it: it
+   * restores process-global state and returns, and it does not end the reload.
+   * Every caller still has to return or throw on its own, and a name promising
+   * otherwise reads like the abandonment is complete once it has run.
    */
-  const abandonReload = (): void => {
+  const undoOptimisticReloadWork = (): void => {
     for (const undo of reloadUndo) undo();
   };
   try {
@@ -1351,7 +1360,7 @@ async function applyReload(opts?: {
     // The registry was rebuilt from the config that just failed; put the
     // working set back so the retained config keeps the behavior it was
     // validated with.
-    abandonReload();
+    undoOptimisticReloadWork();
     // NextlyError wraps the underlying loader/bundler error in
     // `cause` (and surfaces a generic public message like "Failed to
     // load Nextly configuration."). Surface BOTH the public message
@@ -1384,7 +1393,7 @@ async function applyReload(opts?: {
   // The loader returned without a config: the swap already happened inside it,
   // and nothing below will run, so the new types must not outlive the attempt.
   if (!newConfig) {
-    abandonReload();
+    undoOptimisticReloadWork();
     return;
   }
 
@@ -1440,13 +1449,13 @@ async function applyReload(opts?: {
       | undefined;
   } catch {
     // DI not initialised yet (init-time race). Nothing to do.
-    abandonReload();
+    undoOptimisticReloadWork();
     return;
   }
   // Resolution can succeed and still hand back no adapter, which is the same
   // outcome as it throwing: nothing below runs, so the reload never lands.
   if (!adapter) {
-    abandonReload();
+    undoOptimisticReloadWork();
     return;
   }
 
@@ -1558,7 +1567,7 @@ async function applyReload(opts?: {
     logger?.warn(
       "[Nextly HMR] Every target was deferred; abandoning this reload."
     );
-    abandonReload();
+    undoOptimisticReloadWork();
     return;
   }
 
@@ -1635,7 +1644,7 @@ async function applyReload(opts?: {
       `[Nextly HMR] Could not introspect live schema: ${msg}. ` +
         `No code-first schema changes were applied this cycle.`
     );
-    abandonReload();
+    undoOptimisticReloadWork();
     return;
   }
 
@@ -1698,6 +1707,8 @@ async function applyReload(opts?: {
         // i18n: omit translatable columns from the main table's desired snapshot
         // so the HMR diff doesn't re-add them (they live in the companion). H2.
         {
+          // These branches apply a CONFIG edit, so the table is the pipeline's.
+          builtBy: "codeFirst" as const,
           hasStatus: target.status === true,
           localized: target.localized === true,
         }
@@ -1753,6 +1764,8 @@ async function applyReload(opts?: {
         target.fields,
         dialect,
         {
+          // These branches apply a CONFIG edit, so the table is the pipeline's.
+          builtBy: "codeFirst" as const,
           hasStatus: target.status === true,
           localized: target.localized === true,
         }
@@ -1805,7 +1818,7 @@ async function applyReload(opts?: {
         target.tableName,
         target.fields,
         dialect,
-        { localized: target.localized === true }
+        { builtBy: "codeFirst" as const, localized: target.localized === true }
       );
       const operations = diffSnapshots(live, { tables: [desiredTable] });
 
@@ -1868,7 +1881,7 @@ async function applyReload(opts?: {
           `content could not be copied back out of the translations table. Fix the error above ` +
           `and save again — the content is intact where it is.`
       );
-      abandonReload();
+      undoOptimisticReloadWork();
       return;
     }
 
@@ -1941,7 +1954,7 @@ async function applyReload(opts?: {
       });
       // The physical tables still match the PREVIOUS config, so the previous
       // field types are the ones that describe them.
-      abandonReload();
+      undoOptimisticReloadWork();
 
       // Publishes NOTHING, deliberately, and not per entity. This branch skips
       // `syncCodeFirstMetadataOnly` for EVERY entity, not just the deferred
@@ -2120,7 +2133,7 @@ async function applyReload(opts?: {
     // The schema and metadata never landed, so the previous config is still the
     // one describing the database, and the work applied ahead of the schema
     // pass has to come back with it.
-    abandonReload();
+    undoOptimisticReloadWork();
     return;
   }
 
@@ -2520,7 +2533,7 @@ async function applyReload(opts?: {
     // The DDL never landed, so the live tables still match the previous config
     // and the previous field types are the ones that describe them. Same
     // reasoning as the deferred-diff branch above.
-    abandonReload();
+    undoOptimisticReloadWork();
 
     // The DDL apply failed (needs-TTY confirmation, an executor error, ...), so
     // the field-tree syncs and the recording republish under `if (success)` were

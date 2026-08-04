@@ -377,7 +377,10 @@ describe("version capture on update (integration)", () => {
 
     const rows = await versions(current, "preferences");
     const v1 = rows[0];
-    const snapshot = v1.snapshot as { siteName?: string | null; tagline?: string };
+    const snapshot = v1.snapshot as {
+      siteName?: string | null;
+      tagline?: string;
+    };
     // The written non-default translation is captured...
     expect(snapshot.tagline).toBe("hallo");
     // ...and the untranslated `siteName` is recorded as the empty state it is at
@@ -575,6 +578,8 @@ describe("version capture on update (integration)", () => {
       dialect: current.adapter.dialect,
       defaultLocale: "en",
       collectionLocalized: true,
+      // Defined in config, so the pipeline built this table.
+      builtBy: "codeFirst",
     });
     if (!spec)
       throw new Error("expected a companion spec for a localized collection");

@@ -204,6 +204,7 @@ export class MediaService extends BaseService {
       return {
         success: false,
         statusCode: 500,
+        code: "INTERNAL_ERROR",
         message: "Failed to fetch media",
         data: null,
       };
@@ -227,6 +228,7 @@ export class MediaService extends BaseService {
         return {
           success: false,
           statusCode: 404,
+          code: "NOT_FOUND",
           message: "Media not found",
           data: null,
         };
@@ -243,6 +245,7 @@ export class MediaService extends BaseService {
       return {
         success: false,
         statusCode: 500,
+        code: "INTERNAL_ERROR",
         message: "Failed to retrieve media",
         data: null,
       };
@@ -272,6 +275,7 @@ export class MediaService extends BaseService {
         return {
           success: false,
           statusCode: 400,
+          code: "VALIDATION_ERROR",
           message: sizeValidation.error || "Invalid file size",
           data: null,
         };
@@ -288,6 +292,7 @@ export class MediaService extends BaseService {
           return {
             success: false,
             statusCode: 400,
+            code: "VALIDATION_ERROR",
             message: "Invalid image file",
             data: null,
           };
@@ -469,6 +474,7 @@ export class MediaService extends BaseService {
       return {
         success: false,
         statusCode: 500,
+        code: "INTERNAL_ERROR",
         message: "Failed to upload media",
         data: null,
       };
@@ -795,6 +801,7 @@ export class MediaService extends BaseService {
         return {
           success: false,
           statusCode: 404,
+          code: "NOT_FOUND",
           message: "Media not found",
           data: null,
         };
@@ -821,6 +828,7 @@ export class MediaService extends BaseService {
       return {
         success: false,
         statusCode: 500,
+        code: "INTERNAL_ERROR",
         message: "Failed to update media",
         data: null,
       };
@@ -840,6 +848,7 @@ export class MediaService extends BaseService {
         return {
           success: false,
           statusCode: 404,
+          code: "NOT_FOUND",
           message: "Media not found",
         };
       }
@@ -893,6 +902,7 @@ export class MediaService extends BaseService {
         return {
           success: false,
           statusCode: 404,
+          code: "NOT_FOUND",
           message: "Media not found",
         };
       }
@@ -955,6 +965,7 @@ export class MediaService extends BaseService {
       return {
         success: false,
         statusCode: 500,
+        code: "INTERNAL_ERROR",
         message: "Failed to delete media",
       };
     }
@@ -1032,6 +1043,7 @@ export class MediaService extends BaseService {
             success: false,
             error: error instanceof Error ? error.message : "Unknown error",
             statusCode: 500,
+            code: "INTERNAL_ERROR",
           };
         }
       });

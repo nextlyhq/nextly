@@ -2,7 +2,7 @@ import type { CSSProperties } from "react";
 
 import { defineBlock } from "../../core/registry";
 
-import { safeUrl } from "./util";
+import { mediaUrl, safeUrl } from "./util";
 
 interface MediaValue {
   mediaId?: string;
@@ -73,13 +73,19 @@ export const image = defineBlock<ImageProps>({
     customCss: true,
     customAttributes: true,
   },
-  render: ({ props, className }) => {
+  render: ({ props, className, remotePatterns }) => {
     // `media` may be the editor's media object, or — when bound to a Query Loop item's
     // field — a `{ url }` object or a plain URL string; normalize all three.
     const raw: unknown = props.media;
     const media: MediaValue =
       typeof raw === "string" ? { url: raw } : ((raw as MediaValue) ?? {});
-    const src = safeUrl(media.url ?? props.url);
+    // `mediaUrl` rather than `safeUrl`: this becomes an `<img src>`, which the
+    // browser fetches on its own, and the image is lazy — so whether the
+    // request happens depends on where the element renders, which CSS decides.
+    // That is the same conditional fetch a block background is, and it is
+    // gated the same way. `safeUrl` below is right for the LINK, because a
+    // navigation only happens when someone clicks it.
+    const src = mediaUrl(media.url ?? props.url, remotePatterns);
     if (!src) return null;
     const alt = media.alt ?? props.alt;
     const width = media.width ?? props.width;

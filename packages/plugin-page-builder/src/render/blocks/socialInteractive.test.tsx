@@ -2,15 +2,20 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { defaultBlockRegistry } from "../../core/registry";
+import type { RemotePattern } from "../../core/url-policy";
 import { makeNode } from "../../core/tree";
 import type { BlockNode } from "../../core/types";
 import { RenderNode } from "../RenderNode";
 
 import "./index";
 
-const html = (node: BlockNode) =>
+const html = (node: BlockNode, remotePatterns?: RemotePattern[]) =>
   renderToStaticMarkup(
-    <RenderNode node={node} registry={defaultBlockRegistry} />
+    <RenderNode
+      node={node}
+      registry={defaultBlockRegistry}
+      remotePatterns={remotePatterns}
+    />
   );
 
 describe("batch 4c/4d — social proof + interactive/utility", () => {
@@ -74,13 +79,25 @@ describe("batch 4c/4d — social proof + interactive/utility", () => {
     expect(out).toContain("Nav");
   });
 
-  it("map builds a validated google-maps embed from a query", () => {
-    const out = html(makeNode("core/map", { query: "Paris" }));
+  it("maps only from a declared host, built-in URL included", () => {
+    // The built-in maps URL is gated too. Its host is fixed but the query is
+    // not, so a page can carry several with different queries and let a
+    // secret-dependent selector decide which lazy iframes load — the query
+    // travels in the request, so a known host does not make it harmless.
+    const fromQuery = makeNode("core/map", { query: "Paris" });
+    expect(html(fromQuery)).toBe("");
+    const out = html(fromQuery, [
+      { protocol: "https", hostname: "www.google.com" },
+    ]);
     expect(out).toContain("google.com/maps?q=Paris");
     expect(out).toContain("output=embed");
-    const explicit = html(
-      makeNode("core/map", { src: "https://maps.example.com/x" })
-    );
-    expect(explicit).toContain('src="https://maps.example.com/x"');
+
+    const explicitNode = makeNode("core/map", {
+      src: "https://maps.example.com/x",
+    });
+    expect(html(explicitNode)).toBe("");
+    expect(
+      html(explicitNode, [{ protocol: "https", hostname: "maps.example.com" }])
+    ).toContain('src="https://maps.example.com/x"');
   });
 });

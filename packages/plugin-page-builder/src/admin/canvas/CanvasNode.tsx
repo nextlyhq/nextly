@@ -144,7 +144,7 @@ function buildSlots(node: BlockNode): Record<string, ReactNode> {
 
 /** Root renderer — the page container, not itself draggable. */
 export function CanvasNode({ node }: { node: BlockNode }): ReactNode {
-  const { state } = useEditor();
+  const { state, remotePatterns } = useEditor();
   const def = defaultBlockRegistry.get(node.type);
   const selected = state.selectedId === node.id;
   const className = classFor(node, selected);
@@ -164,6 +164,10 @@ export function CanvasNode({ node }: { node: BlockNode }): ReactNode {
     node,
     slots: buildSlots(node),
     className,
+    // The canvas renders the same blocks the published page does, so it has to
+    // hand them the same allowlist. Without it every block falls back to an
+    // empty one and the preview hides images the page will show.
+    remotePatterns,
   });
   if (!isValidElement(element)) {
     return (
@@ -192,7 +196,7 @@ function DraggableNode({
   /** When set (grid child), this element is also an "insert before" drop target. */
   dropBeforeIndex?: number;
 }): ReactNode {
-  const { state } = useEditor();
+  const { state, remotePatterns } = useEditor();
   const def = defaultBlockRegistry.get(node.type);
   const selected = state.selectedId === node.id;
 
@@ -252,6 +256,10 @@ function DraggableNode({
     node,
     slots: buildSlots(node),
     className,
+    // The canvas renders the same blocks the published page does, so it has to
+    // hand them the same allowlist. Without it every block falls back to an
+    // empty one and the preview hides images the page will show.
+    remotePatterns,
   });
   if (!isValidElement(element)) {
     return (

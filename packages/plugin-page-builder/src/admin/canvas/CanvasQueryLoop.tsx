@@ -15,10 +15,15 @@ import { DEFAULT_SLOT, type BlockNode } from "../../core/types";
 import { loopGridStyle } from "../../render/query/grid";
 import { RenderNode } from "../../render/RenderNode";
 import { getSampleEntries } from "../api/collectionsApi";
+import { useEditor } from "../store/EditorProvider";
 
 const PREVIEW_ROWS = 4;
 
 export function QueryLoopSamplePreview({ node }: { node: BlockNode }) {
+  // The sample rows render through the production `RenderNode`, so it needs the
+  // same allowlist the published page uses. Left off, the preview drops images
+  // the page will show and the sample stops representing the output.
+  const { remotePatterns } = useEditor();
   const collection =
     typeof node.props.collection === "string" ? node.props.collection : "";
   const sort =
@@ -68,6 +73,7 @@ export function QueryLoopSamplePreview({ node }: { node: BlockNode }) {
                   node={child}
                   registry={defaultBlockRegistry}
                   item={item}
+                  remotePatterns={remotePatterns}
                 />
               ))}
             </div>

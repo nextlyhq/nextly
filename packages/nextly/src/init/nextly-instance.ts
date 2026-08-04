@@ -33,8 +33,8 @@ import type {
   CreateRoleArgs,
   CreateUserArgs,
   CreateUserFieldArgs,
-  DataFromCollectionSlug,
-  DataFromSingleSlug,
+  RowFromCollectionSlug,
+  RowFromSingleSlug,
   DeleteArgs,
   DeleteEmailProviderArgs,
   DeleteEmailTemplateArgs,
@@ -143,7 +143,7 @@ export interface Nextly {
    */
   find: <TSlug extends CollectionSlug>(
     args: FindArgs<TSlug>
-  ) => Promise<ListResult<DataFromCollectionSlug<TSlug>>>;
+  ) => Promise<ListResult<RowFromCollectionSlug<TSlug>>>;
 
   /**
    * Find a single document by ID.
@@ -158,7 +158,7 @@ export interface Nextly {
    */
   findByID: <TSlug extends CollectionSlug>(
     args: FindByIDArgs<TSlug>
-  ) => Promise<DataFromCollectionSlug<TSlug> | null>;
+  ) => Promise<RowFromCollectionSlug<TSlug> | null>;
 
   /**
    * Create a new document.
@@ -173,7 +173,7 @@ export interface Nextly {
    */
   create: <TSlug extends CollectionSlug>(
     args: CreateArgs<TSlug>
-  ) => Promise<MutationResult<DataFromCollectionSlug<TSlug>>>;
+  ) => Promise<MutationResult<RowFromCollectionSlug<TSlug>>>;
 
   /**
    * Update a document by ID.
@@ -189,7 +189,7 @@ export interface Nextly {
    */
   update: <TSlug extends CollectionSlug>(
     args: UpdateArgs<TSlug>
-  ) => Promise<MutationResult<DataFromCollectionSlug<TSlug>>>;
+  ) => Promise<MutationResult<RowFromCollectionSlug<TSlug>>>;
 
   /**
    * Delete a document by ID or by where clause.
@@ -250,7 +250,7 @@ export interface Nextly {
    */
   duplicate: <TSlug extends CollectionSlug>(
     args: DuplicateArgs<TSlug>
-  ) => Promise<MutationResult<DataFromCollectionSlug<TSlug>>>;
+  ) => Promise<MutationResult<RowFromCollectionSlug<TSlug>>>;
 
   /**
    * Get a Single document.
@@ -264,7 +264,7 @@ export interface Nextly {
    */
   findSingle: <TSlug extends SingleSlug>(
     args: FindSingleArgs<TSlug>
-  ) => Promise<DataFromSingleSlug<TSlug>>;
+  ) => Promise<RowFromSingleSlug<TSlug>>;
 
   /**
    * Update a Single document.
@@ -288,7 +288,7 @@ export interface Nextly {
    */
   updateSingle: <TSlug extends SingleSlug>(
     args: UpdateSingleArgs<TSlug>
-  ) => Promise<MutationResult<DataFromSingleSlug<TSlug>>>;
+  ) => Promise<MutationResult<RowFromSingleSlug<TSlug>>>;
 
   /**
    * List all registered Single type definitions.

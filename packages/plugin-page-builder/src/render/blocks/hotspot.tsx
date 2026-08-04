@@ -34,8 +34,8 @@ export const hotspot = defineBlock({
     customCss: true,
     customAttributes: true,
   },
-  render: ({ props, className }) => {
-    const url = mediaUrl(props.image);
+  render: ({ props, className, remotePatterns }) => {
+    const url = mediaUrl(props.image, remotePatterns);
     const points = Array.isArray(props.points) ? props.points : [];
     return (
       <div

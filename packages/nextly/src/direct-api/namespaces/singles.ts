@@ -11,7 +11,7 @@ import { collectingWarnings } from "../../hooks/side-effect-warnings";
 import { transformRichTextFields } from "../../lib/field-transform";
 import type {
   MutationResult,
-  DataFromSingleSlug,
+  RowFromSingleSlug,
   FindSingleArgs,
   FindSinglesArgs,
   SingleListResult,
@@ -32,7 +32,7 @@ import {
 export async function findSingle<TSlug extends SingleSlug>(
   ctx: NextlyContext,
   args: FindSingleArgs<TSlug>
-): Promise<DataFromSingleSlug<TSlug>> {
+): Promise<RowFromSingleSlug<TSlug>> {
   const config = mergeConfig(ctx.defaultConfig, args);
 
   const result = await ctx.singleEntryService.get(args.slug, {
@@ -51,7 +51,7 @@ export async function findSingle<TSlug extends SingleSlug>(
     throw createErrorFromSingleResult(result);
   }
 
-  let data = result.data as DataFromSingleSlug<TSlug>;
+  let data = result.data as RowFromSingleSlug<TSlug>;
 
   if (
     config.richTextFormat &&
@@ -68,7 +68,7 @@ export async function findSingle<TSlug extends SingleSlug>(
         result.data,
         single.fields,
         config.richTextFormat
-      ) as DataFromSingleSlug<TSlug>;
+      ) as RowFromSingleSlug<TSlug>;
     }
   }
 
@@ -81,7 +81,7 @@ export async function findSingle<TSlug extends SingleSlug>(
 export async function updateSingle<TSlug extends SingleSlug>(
   ctx: NextlyContext,
   args: UpdateSingleArgs<TSlug>
-): Promise<MutationResult<DataFromSingleSlug<TSlug>>> {
+): Promise<MutationResult<RowFromSingleSlug<TSlug>>> {
   const config = mergeConfig(ctx.defaultConfig, args);
 
   const { result, warnings } = await collectingWarnings(() =>
@@ -100,7 +100,7 @@ export async function updateSingle<TSlug extends SingleSlug>(
 
   return {
     message: buildMutationMessage(args.slug, "updated"),
-    item: result.data as DataFromSingleSlug<TSlug>,
+    item: result.data as RowFromSingleSlug<TSlug>,
     ...(warnings ? { warnings } : {}),
   };
 }

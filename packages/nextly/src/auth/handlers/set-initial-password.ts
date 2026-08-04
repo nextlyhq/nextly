@@ -13,7 +13,9 @@
  * collapses to a generic invalid-credentials response.
  */
 import { readOrGenerateRequestId } from "../../api/request-id";
+import { auditFailureMetadata } from "../../domains/audit/audit-log-writer";
 import type { AuditLogWriter } from "../../domains/audit/audit-log-writer";
+import { auditReason } from "../../domains/audit/audit-reasons";
 import { NextlyError } from "../../errors/nextly-error";
 import type { AuthUser } from "../../types/auth";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
@@ -114,12 +116,12 @@ export async function handleSetInitialPassword(
       pending = await verifyPendingToken(pendingTokenInput, deps.secret);
     } catch {
       throw NextlyError.invalidCredentials({
-        logContext: { reason: "pending-token-invalid" },
+        logContext: { reason: auditReason("pending-token-invalid") },
       });
     }
     if (pending.challengeId !== MUST_CHANGE_PASSWORD_CHALLENGE) {
       throw NextlyError.invalidCredentials({
-        logContext: { reason: "pending-token-wrong-challenge" },
+        logContext: { reason: auditReason("pending-token-wrong-challenge") },
       });
     }
 
@@ -135,7 +137,7 @@ export async function handleSetInitialPassword(
         throw NextlyError.invalidCredentials({
           logContext: {
             userId: pending.userId,
-            reason: "not-in-must-change-state",
+            reason: auditReason("not-in-must-change-state"),
           },
         });
       }
@@ -145,7 +147,10 @@ export async function handleSetInitialPassword(
     const u = await deps.findUserById(pending.userId);
     if (!u || !u.isActive) {
       throw NextlyError.invalidCredentials({
-        logContext: { userId: pending.userId, reason: "user-missing" },
+        logContext: {
+          userId: pending.userId,
+          reason: auditReason("user-missing"),
+        },
       });
     }
     const user: AuthUser = {
@@ -178,9 +183,7 @@ export async function handleSetInitialPassword(
         trustedProxyIps: deps.trustedProxyIps,
       }),
       userAgent: request.headers.get("user-agent"),
-      metadata: NextlyError.is(err)
-        ? { code: err.code, ...(err.logContext ?? {}) }
-        : { code: "INTERNAL_ERROR" },
+      metadata: auditFailureMetadata(err, requestId),
     });
     if (NextlyError.is(err)) {
       return buildAuthErrorResponse(err, requestId);

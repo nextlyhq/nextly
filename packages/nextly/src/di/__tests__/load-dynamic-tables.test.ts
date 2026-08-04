@@ -45,7 +45,13 @@ describe("loadDynamicTables — empty-fields rows still register", () => {
     await loadDynamicTables(adapter, "dynamic_singles", register);
 
     expect(register).toHaveBeenCalledTimes(1);
-    expect(register).toHaveBeenCalledWith("single_banner", [], false, false);
+    expect(register).toHaveBeenCalledWith(
+      "single_banner",
+      [],
+      false,
+      false,
+      undefined
+    );
   });
 
   it("skips rows where the JSON parses to a non-array", async () => {
@@ -66,7 +72,13 @@ describe("loadDynamicTables — empty-fields rows still register", () => {
 
     // Only the array-shaped row registers.
     expect(register).toHaveBeenCalledTimes(1);
-    expect(register).toHaveBeenCalledWith("single_ok", [], false, false);
+    expect(register).toHaveBeenCalledWith(
+      "single_ok",
+      [],
+      false,
+      false,
+      undefined
+    );
   });
 
   it("forwards hasStatus=true when status=1 (sqlite)", async () => {
@@ -77,7 +89,13 @@ describe("loadDynamicTables — empty-fields rows still register", () => {
 
     await loadDynamicTables(adapter, "dynamic_singles", register);
 
-    expect(register).toHaveBeenCalledWith("single_a", [], true, false);
+    expect(register).toHaveBeenCalledWith(
+      "single_a",
+      [],
+      true,
+      false,
+      undefined
+    );
   });
 
   it("forwards hasStatus=true when status=true (postgres)", async () => {
@@ -88,7 +106,7 @@ describe("loadDynamicTables — empty-fields rows still register", () => {
 
     await loadDynamicTables(adapter, "dynamic_collections", register);
 
-    expect(register).toHaveBeenCalledWith("dc_a", [], true, false);
+    expect(register).toHaveBeenCalledWith("dc_a", [], true, false, undefined);
   });
 
   it("forwards hasStatus=false for legacy rows without a status field", async () => {
@@ -100,7 +118,7 @@ describe("loadDynamicTables — empty-fields rows still register", () => {
 
     await loadDynamicTables(adapter, "dynamic_collections", register);
 
-    expect(register).toHaveBeenCalledWith("dc_a", [], false, false);
+    expect(register).toHaveBeenCalledWith("dc_a", [], false, false, undefined);
   });
 
   it("forwards localized=true when localized=1 (sqlite)", async () => {
@@ -111,7 +129,13 @@ describe("loadDynamicTables — empty-fields rows still register", () => {
 
     await loadDynamicTables(adapter, "dynamic_collections", register);
 
-    expect(register).toHaveBeenCalledWith("dc_pages", [], false, true);
+    expect(register).toHaveBeenCalledWith(
+      "dc_pages",
+      [],
+      false,
+      true,
+      undefined
+    );
   });
 
   it("forwards localized=true when localized=true (postgres)", async () => {
@@ -128,7 +152,13 @@ describe("loadDynamicTables — empty-fields rows still register", () => {
 
     await loadDynamicTables(adapter, "dynamic_collections", register);
 
-    expect(register).toHaveBeenCalledWith("dc_pages", [], true, true);
+    expect(register).toHaveBeenCalledWith(
+      "dc_pages",
+      [],
+      true,
+      true,
+      undefined
+    );
   });
 
   it("forwards localized=false for legacy rows without a localized field", async () => {
@@ -139,7 +169,7 @@ describe("loadDynamicTables — empty-fields rows still register", () => {
 
     await loadDynamicTables(adapter, "dynamic_collections", register);
 
-    expect(register).toHaveBeenCalledWith("dc_a", [], false, false);
+    expect(register).toHaveBeenCalledWith("dc_a", [], false, false, undefined);
   });
 });
 
@@ -150,7 +180,7 @@ describe("loadDynamicTables — SELECT shape", () => {
     // Components have no Draft/Published status column, but they do carry the
     // i18n `localized` flag, so it must be part of the select.
     expect(calls[0]).toBe(
-      "SELECT table_name, fields, slug, localized FROM dynamic_components"
+      "SELECT table_name, fields, slug, localized, source, locked FROM dynamic_components"
     );
   });
 
@@ -158,13 +188,13 @@ describe("loadDynamicTables — SELECT shape", () => {
     const { adapter, calls } = makeAdapter([]);
     await loadDynamicTables(adapter, "dynamic_singles", vi.fn());
     expect(calls[0]).toBe(
-      "SELECT table_name, fields, slug, status, localized FROM dynamic_singles"
+      "SELECT table_name, fields, slug, status, localized, source, locked FROM dynamic_singles"
     );
 
     const second = makeAdapter([]);
     await loadDynamicTables(second.adapter, "dynamic_collections", vi.fn());
     expect(second.calls[0]).toBe(
-      "SELECT table_name, fields, slug, status, localized FROM dynamic_collections"
+      "SELECT table_name, fields, slug, status, localized, source, locked FROM dynamic_collections"
     );
   });
 });
@@ -204,6 +234,11 @@ describe("loadDynamicTables — fault tolerance", () => {
     const adapter = {
       executeQuery: vi.fn(async (sql: string) => {
         calls.push(sql);
+        // A pre-i18n database has neither the ownership columns nor `localized`, so both of
+        // the first two rungs fail and the third is the one that answers.
+        if (/,\s*source,\s*locked\s+FROM/.test(sql)) {
+          throw new Error('column "source" does not exist');
+        }
         if (/,\s*localized\s+FROM/.test(sql)) {
           throw new Error('column "localized" does not exist');
         }
@@ -218,11 +253,20 @@ describe("loadDynamicTables — fault tolerance", () => {
 
     // First (full) select threw; the fallback (no `localized`) succeeded and the
     // row still registered — with localized defaulting to false.
-    expect(calls[0]).toContain("localized");
-    expect(calls[1]).toBe(
+    expect(calls[0]).toContain("source");
+    expect(calls[1]).toContain("localized");
+    expect(calls[2]).toBe(
       "SELECT table_name, fields, slug, status FROM dynamic_collections"
     );
-    expect(register).toHaveBeenCalledWith("dc_pages", [], true, false);
+    // Ownership is `undefined` rather than false: the registry could not say, which is not the
+    // same as saying the Builder does not own it.
+    expect(register).toHaveBeenCalledWith(
+      "dc_pages",
+      [],
+      true,
+      false,
+      undefined
+    );
   });
 });
 
@@ -283,7 +327,8 @@ describe("loadDynamicTables — the field-group registry is resolved, not assume
       "fg_hero",
       [{ name: "heading", type: "text" }],
       false,
-      false
+      false,
+      undefined
     );
     expect(selected.join("\n")).toContain(MIGRATION_TARGET.registryTable);
   });
@@ -322,5 +367,54 @@ describe("loadDynamicTables — the field-group registry is resolved, not assume
 
     expect(register).toHaveBeenCalledTimes(1);
     expect(selected.join("\n")).toContain(STORAGE_FORMAT.registryTable);
+  });
+});
+
+/**
+ * These registries hold code-first and plugin rows beside Builder ones.
+ *
+ * A caller that goes on to emit DDL has to describe a column the way its creator built it, and the
+ * two creators size an unstated text field differently. Assumed rather than read, every code-first
+ * and plugin-owned table was described as the Builder's — so a companion created during an upgrade
+ * or a recovery got Builder widths for a table the pipeline had made.
+ */
+describe("loadDynamicTables — ownership comes from the row", () => {
+  const ownershipFor = async (
+    row: Record<string, unknown>
+  ): Promise<boolean | undefined> => {
+    const { adapter } = makeAdapter([
+      { table_name: "dc_pages", fields: "[]", slug: "pages", ...row },
+    ]);
+    // Typed to the callback's real signature so the ownership argument is reachable by index
+    // rather than asserted through a cast.
+    const register = vi.fn(
+      async (
+        _tableName: string,
+        _fields: unknown[],
+        _hasStatus: boolean,
+        _localized: boolean,
+        _builderOwned: boolean | undefined
+      ) => {}
+    );
+    await loadDynamicTables(adapter, "dynamic_collections", register);
+    return register.mock.calls[0]?.[4];
+  };
+
+  it("reports the Schema Builder as the owner of an unlocked UI row", async () => {
+    expect(await ownershipFor({ source: "ui", locked: false })).toBe(true);
+  });
+
+  it.each([
+    ["a locked row", { source: "ui", locked: true }],
+    ["a code-first row", { source: "code", locked: false }],
+    ["a plugin-owned row", { source: "plugin:acme-seo", locked: false }],
+  ])("does not report the Builder as the owner of %s", async (_label, row) => {
+    expect(await ownershipFor(row)).toBe(false);
+  });
+
+  // Distinct from `false` on purpose: a registry too old to carry these columns has said nothing
+  // about ownership, and the caller reads that as the pipeline's rather than as a Builder denial.
+  it("reports nothing when the registry carries no ownership columns", async () => {
+    expect(await ownershipFor({})).toBeUndefined();
   });
 });

@@ -1,6 +1,6 @@
 import { defineBlock } from "../../core/registry";
 
-import { safeUrl } from "./util";
+import { mediaUrl } from "./util";
 
 /**
  * Lottie animation. Renders the `<lottie-player>` web component pointing at a `.json`/`.lottie`
@@ -30,8 +30,10 @@ export const lottie = defineBlock({
     customCss: true,
     customAttributes: true,
   },
-  render: ({ props, className }) => {
-    const src = safeUrl(props.src);
+  render: ({ props, className, remotePatterns }) => {
+    // The player fetches this animation itself, so the host has to be one the
+    // site declared — requiring https alone says nothing about WHERE it goes.
+    const src = mediaUrl(props.src, remotePatterns);
     if (!src || !/^https:\/\//i.test(src)) return null;
     const height = Number(props.height) || 300;
     // Custom element; attributes are strings. React renders unknown elements as-is.

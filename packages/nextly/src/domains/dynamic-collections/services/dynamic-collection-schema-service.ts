@@ -22,6 +22,7 @@
 
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
+import { NextlyError } from "../../../errors/nextly-error";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { env } from "../../../shared/lib/env";
 import {
@@ -37,6 +38,10 @@ import {
   renderSystemColumnSql,
   toSnakeCase,
 } from "../../schema/services/field-column-descriptor";
+import {
+  columnTypeIsIndexable,
+  indexNameForColumn,
+} from "../../schema/services/index-name";
 import { quoteJsonSqlDefault } from "../../schema/utils/sql-literal";
 
 import { DynamicCollectionValidationService } from "./dynamic-collection-validation-service";
@@ -84,7 +89,15 @@ export class DynamicCollectionSchemaService {
    */
   private canonicalSlugType(field: FieldDefinition): string | null {
     if (toSnakeCase(field.name) !== "slug") return null;
-    return getColumnDescriptor(field, this.dialect)?.dialectType ?? null;
+    // Asked as the builder this service IS. The descriptor bounds a slug column for every builder,
+    // because the index needs a column MySQL can index and that is a property of the column rather
+    // than of whoever created the table — so naming the real builder here is both honest and safe.
+    // The rule lives there and not here so the paths that ADD a slug column to an existing table
+    // reach it too; encoded only at this creator, a repaired table disagreed with a fresh one.
+    return (
+      getColumnDescriptor(field, this.dialect, "collection")?.dialectType ??
+      null
+    );
   }
 
   /**
@@ -100,6 +113,168 @@ export class DynamicCollectionSchemaService {
     next: FieldDefinition
   ): boolean {
     return usesJunctionTable(previous) !== usesJunctionTable(next);
+  }
+
+  /**
+   * Whether the field's column is unique.
+   *
+   * A one-to-one relationship is unique by its cardinality, not by anything the author ticks, so
+   * the flag alone does not decide it. Asked in one place because the answer has to be the same
+   * whether the column arrives with its table or is added to one that already exists: a table
+   * that gained its one-to-one by an edit was not enforcing the cardinality it declared.
+   */
+  private columnIsUnique(field: FieldDefinition): boolean {
+    return (
+      field.unique === true ||
+      (field.type === "relationship" &&
+        field.options?.relationType === "oneToOne")
+    );
+  }
+
+  /**
+   * Whether the field's column is indexed.
+   *
+   * A relationship is indexed whether or not the author asked: it is joined on every read that
+   * expands it, and PostgreSQL does not index a foreign key on its own. Everything else is
+   * indexed only on request. Asked in one place for the same reason as `columnIsUnique` — a
+   * column added to an existing table was reaching neither rule, so a relationship created with
+   * its table was indexed and the identical field added by an edit was not.
+   */
+  private columnIsIndexed(field: FieldDefinition): boolean {
+    if (!fieldProducesColumn(field)) return false;
+    if (field.type === "relationship") return true;
+    return field.index === true;
+  }
+
+  /**
+   * What happens to this row when the row it points at is deleted.
+   *
+   * A required relationship cannot be nulled out: the column forbids it. MySQL says so when the
+   * constraint is created — "Column cannot be NOT NULL: needed in a foreign key constraint SET
+   * NULL" — and PostgreSQL accepts the pair and fails later, at the delete, which is worse. So a
+   * required relationship restricts the delete instead, and an optional one nulls the reference.
+   * That is the same rule Prisma applies, for the same reason: the action has to be one the
+   * column can actually perform.
+   */
+  private relationOnDelete(field: FieldDefinition): string {
+    const declared = field.options?.onDelete;
+    if (declared === undefined) return field.required ? "restrict" : "set null";
+
+    // Declared, and still impossible: nulling a reference the column forbids cannot be done by
+    // any database. MySQL refuses the constraint outright; PostgreSQL accepts it and fails
+    // later, when a referenced row is deleted, which is worse because it ships. Refused rather
+    // than quietly rewritten — the author asked for a specific behaviour on delete, and
+    // substituting a different one silently is not an answer to that.
+    //
+    // Prisma treats the same pair as a schema error for the same reason.
+    if (declared === "set null" && field.required) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: `fields.${field.name}`,
+            code: "REQUIRED_RELATION_CANNOT_SET_NULL",
+            message:
+              `"${field.name}" is required, so it cannot be emptied when the ${field.type} ` +
+              `it points at is deleted. Choose "restrict" to prevent that deletion, ` +
+              `"cascade" to delete this entry with it, or make the field optional.`,
+          },
+        ],
+        logContext: { field: field.name, onDelete: declared },
+      });
+    }
+    return declared;
+  }
+
+  /**
+   * Every name this generator may have given one column's index, current first.
+   *
+   * Bounding long names changed what they are called, and an index already in a database still
+   * carries the name it was created under. Looking only for the current one leaves the old index
+   * in place while the field records that it was removed — the table then keeps enforcing
+   * something the schema no longer says. The dialects even disagree on the legacy name: SQLite
+   * stored it whole, PostgreSQL truncated it to 63 characters, and MySQL could not create it at
+   * all, so an over-long name never existed there to find.
+   *
+   * Which of these the table actually has is decided by the live index list, never guessed.
+   */
+
+  /**
+   * Every name this generator may have given one column's index, current first.
+   *
+   * Bounding long names changed what they are called, and an index already in a database still
+   * answers to the name it was created under. Looking only for the current one leaves the old
+   * index in place while the field records that it was removed. The dialects even disagree on
+   * the legacy name: SQLite stored it whole, PostgreSQL truncated it to 63 characters, and
+   * MySQL could not create an over-long one at all, so none exists there to find.
+   *
+   * Which of these the table actually has is decided by the live index list, never guessed.
+   */
+  private indexNameCandidates(tableName: string, column: string): string[] {
+    const full = `idx_${tableName}_${column}`;
+    const candidates = [indexNameForColumn(tableName, column), full];
+    if (this.dialect === "postgresql") candidates.push(full.slice(0, 63));
+    return [...new Set(candidates)];
+  }
+
+  /**
+   * `CREATE INDEX` for one column, in the spelling the dialect accepts.
+   *
+   * MySQL cannot index a `BLOB`/`TEXT` column without a key length and rejects the statement
+   * outright, so a text-backed column is indexed by prefix. 191 characters is the longest prefix
+   * that fits the 767-byte index limit under utf8mb4 on every InnoDB row format, including the
+   * compact ones where a longer prefix is refused. PostgreSQL and SQLite index the whole value.
+   */
+  private createIndexSql(
+    tableName: string,
+    column: string,
+    columnType: string
+  ): string | null {
+    const name = this.quoteIdentifier(indexNameForColumn(tableName, column));
+    const table = this.quoteIdentifier(tableName);
+    const quoted = this.quoteIdentifier(column);
+    // Asked through the shared rule, which the desired schema reads too: an index only one of
+    // them believes in is proposed by every diff and refused by every apply.
+    if (!columnTypeIsIndexable(columnType, this.dialect)) return null;
+    if (this.dialect === "mysql") {
+      const target = /\b(text|blob)\b/i.test(columnType)
+        ? `${quoted}(191)`
+        : quoted;
+      return `CREATE INDEX ${name} ON ${table}(${target});`;
+    }
+    return `CREATE INDEX IF NOT EXISTS ${name} ON ${table}(${quoted});`;
+  }
+
+  /**
+   * `DROP INDEX` for one column's index, in the spelling the dialect accepts.
+   *
+   * Emitted before the column it names: SQLite refuses `DROP COLUMN` while any index still
+   * references the column, reporting it as a missing column inside the index rather than as the
+   * removal it refused.
+   */
+  private dropIndexSql(tableName: string, indexName: string): string {
+    const name = this.quoteIdentifier(indexName);
+    if (this.dialect === "mysql") {
+      return `DROP INDEX ${name} ON ${this.quoteIdentifier(tableName)};`;
+    }
+    return `DROP INDEX IF EXISTS ${name};`;
+  }
+
+  /**
+   * The literal that backfills existing rows when a required column is added, or null when the
+   * field's type states none.
+   *
+   * A relationship is the case with no answer: every id the generator could write references a
+   * row that does not exist, and `DEFAULT NULL` does not satisfy `NOT NULL` on any dialect.
+   */
+  private requiredColumnBackfill(field: FieldDefinition): string | null {
+    const literal =
+      field.default !== undefined
+        ? this.formatDefaultValue(field.default, field.type)
+        : this.getDefaultValueForType(field.type, field);
+    // `NULL` is the absence of an answer however it was arrived at. Read from the explicit
+    // default it is a contradiction with the required flag; derived from the type it is the
+    // relationship case. Neither satisfies NOT NULL, so both are reported the same way.
+    return literal === "NULL" ? null : literal;
   }
 
   /**
@@ -170,12 +345,7 @@ export class DynamicCollectionSchemaService {
           this.mapFieldTypeToSQL(f.type, f.length, f.options, f.validation);
         const nullable = f.required ? "NOT NULL" : "";
 
-        // one-to-one relationships should be unique
-        const unique =
-          f.unique ||
-          (f.type === "relationship" && f.options?.relationType === "oneToOne")
-            ? "UNIQUE"
-            : "";
+        const unique = this.columnIsUnique(f) ? "UNIQUE" : "";
 
         const defaultVal =
           f.default !== undefined && f.default !== null
@@ -239,9 +409,7 @@ export class DynamicCollectionSchemaService {
             relationType === "manyToOne" ||
             relationType === "oneToMany"
           ) {
-            const onDelete = this.mapOnDeleteAction(
-              f.options.onDelete || "set null"
-            );
+            const onDelete = this.mapOnDeleteAction(this.relationOnDelete(f));
             const onUpdate = this.mapOnUpdateAction(
               f.options.onUpdate || "no action"
             );
@@ -343,52 +511,23 @@ ${allColumnDefs.join(",\n")}
     // Add indexes for fields that benefit from indexing
     const indexStatements: string[] = [];
 
-    // essential for JOIN performance, PostgreSQL does NOT automatically index foreign keys!
-    // Use mainFields so a localized relationship field (relocated to the companion) doesn't
-    // get an index on a column the main table no longer has.
+    // A relationship is indexed for JOIN performance whether or not it was asked for, and every
+    // other column only on request; `columnIsIndexed` holds both rules, and the ALTER path reads
+    // the same one so a column added later is indexed the way the same column created here is.
+    // Use mainFields so a localized field (relocated to the companion) doesn't get an index on a
+    // column the main table no longer has.
     mainFields.forEach(f => {
-      if (
-        f.type === "relationship" &&
-        f.options?.relationType !== "manyToMany"
-      ) {
+      if (this.columnIsIndexed(f)) {
         // Use the snake_case column name for both the index name and the
         // indexed column so this matches the actual physical column (created
         // snake_cased) and the migrate:create desired-state index naming.
         const col = toSnakeCase(f.name);
-        const indexName = `idx_${tableName}_${col}`;
-        if (this.dialect === "mysql") {
-          indexStatements.push(
-            `CREATE INDEX ${this.quoteIdentifier(indexName)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier(col)});`
-          );
-        } else {
-          indexStatements.push(
-            `CREATE INDEX IF NOT EXISTS ${this.quoteIdentifier(indexName)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier(col)});`
-          );
-        }
-      }
-    });
-
-    // Add manual indexes requested by the user. Use mainFields so a localized field
-    // that also requested an index doesn't try to index a column relocated to the
-    // companion table (i18n). Component fields have no column to index, so skip them
-    // too (an index on a nonexistent column fails).
-    mainFields.forEach(f => {
-      if (
-        f.index &&
-        f.type !== "relationship" &&
-        f.type !== STORAGE_FORMAT.fieldType
-      ) {
-        const col = toSnakeCase(f.name);
-        const indexName = `idx_${tableName}_${col}`;
-        if (this.dialect === "mysql") {
-          indexStatements.push(
-            `CREATE INDEX ${this.quoteIdentifier(indexName)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier(col)});`
-          );
-        } else {
-          indexStatements.push(
-            `CREATE INDEX IF NOT EXISTS ${this.quoteIdentifier(indexName)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier(col)});`
-          );
-        }
+        const indexSql = this.createIndexSql(
+          tableName,
+          col,
+          this.mapFieldTypeToSQL(f.type, f.length, f.options, f.validation)
+        );
+        if (indexSql) indexStatements.push(indexSql);
       }
     });
 
@@ -398,11 +537,11 @@ ${allColumnDefs.join(",\n")}
     // Note: MySQL 5.7 doesn't support IF NOT EXISTS for CREATE INDEX
     let createdAtIndex = "";
     if (this.dialect === "sqlite") {
-      createdAtIndex = `CREATE INDEX IF NOT EXISTS ${this.quoteIdentifier(`idx_${tableName}_created_at`)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier("created_at")});`;
+      createdAtIndex = `CREATE INDEX IF NOT EXISTS ${this.quoteIdentifier(indexNameForColumn(tableName, "created_at"))} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier("created_at")});`;
     } else if (this.dialect === "mysql") {
-      createdAtIndex = `CREATE INDEX ${this.quoteIdentifier(`idx_${tableName}_created_at`)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier("created_at")} DESC);`;
+      createdAtIndex = `CREATE INDEX ${this.quoteIdentifier(indexNameForColumn(tableName, "created_at"))} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier("created_at")} DESC);`;
     } else {
-      createdAtIndex = `CREATE INDEX IF NOT EXISTS ${this.quoteIdentifier(`idx_${tableName}_created_at`)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier("created_at")} DESC);`;
+      createdAtIndex = `CREATE INDEX IF NOT EXISTS ${this.quoteIdentifier(indexNameForColumn(tableName, "created_at"))} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier("created_at")} DESC);`;
     }
     indexStatements.push(createdAtIndex);
 
@@ -413,7 +552,7 @@ ${allColumnDefs.join(",\n")}
     // mirroring the column gate above. Plain (non-unique) index; users cannot
     // request one on this reserved field, so it is injected here.
     if (!isSingleTable) {
-      const ownerIndexName = `idx_${tableName}_created_by`;
+      const ownerIndexName = indexNameForColumn(tableName, "created_by");
       const ownerIndex =
         this.dialect === "mysql"
           ? `CREATE INDEX ${this.quoteIdentifier(ownerIndexName)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier("created_by")});`
@@ -424,11 +563,11 @@ ${allColumnDefs.join(",\n")}
     // Add unique index for slug column (automatically available for all collections and singles)
     let slugIndex = "";
     if (this.dialect === "sqlite") {
-      slugIndex = `CREATE UNIQUE INDEX IF NOT EXISTS ${this.quoteIdentifier(`idx_${tableName}_slug`)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier("slug")});`;
+      slugIndex = `CREATE UNIQUE INDEX IF NOT EXISTS ${this.quoteIdentifier(indexNameForColumn(tableName, "slug"))} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier("slug")});`;
     } else if (this.dialect === "mysql") {
-      slugIndex = `CREATE UNIQUE INDEX ${this.quoteIdentifier(`idx_${tableName}_slug`)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier("slug")});`;
+      slugIndex = `CREATE UNIQUE INDEX ${this.quoteIdentifier(indexNameForColumn(tableName, "slug"))} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier("slug")});`;
     } else {
-      slugIndex = `CREATE UNIQUE INDEX IF NOT EXISTS ${this.quoteIdentifier(`idx_${tableName}_slug`)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier("slug")});`;
+      slugIndex = `CREATE UNIQUE INDEX IF NOT EXISTS ${this.quoteIdentifier(indexNameForColumn(tableName, "slug"))} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier("slug")});`;
     }
     indexStatements.push(slugIndex);
 
@@ -475,6 +614,36 @@ ${allColumnDefs.join(",\n")}
        * lifecycle is enabled or disabled. Pairs with `wasStatus`.
        */
       hasStatus?: boolean;
+      /**
+       * Whether the table already holds rows, read from the live table by `tableHasRows`.
+       *
+       * Only a required column whose type states no backfill consults it, and only to decide
+       * between emitting the column and refusing the edit. Undefined means the caller did not
+       * look, which is read as "may have rows": guessing empty produces a statement that
+       * PostgreSQL and MySQL reject and that SQLite accepts before rejecting every insert.
+       */
+      tableHasRows?: boolean;
+      /**
+       * Foreign-key constraint names by column, read from the live table by
+       * `readForeignKeyColumns`.
+       *
+       * Which columns carry one is not derivable from the fields: on SQLite the ALTER path
+       * cannot attach a foreign key, so a relationship added by an edit has none while the same
+       * field created with its table does. Undefined is read as "none known", which leaves the
+       * drop exactly as it behaved before anything was measured.
+       */
+      foreignKeysByColumn?: ReadonlyMap<string, readonly string[]>;
+      /**
+       * The index names the table carries, read from the live table by `readIndexNames`.
+       *
+       * Consulted before dropping one. Which columns are indexed is not derivable from the
+       * fields: an index is created by whichever path added the column, and those paths have
+       * not always agreed, so an identical field can be indexed on one table and not on
+       * another. MySQL has no `DROP INDEX IF EXISTS`, so dropping an absent index aborts the
+       * migration before the statements after it. Undefined means the caller did not look, and
+       * the drop is then emitted only where the dialect can guard it itself.
+       */
+      indexNames?: ReadonlySet<string>;
     }
   ): string {
     const statements: string[] = [`-- Update dynamic collection: ${tableName}`];
@@ -584,19 +753,39 @@ ${allColumnDefs.join(",\n")}
 
         const type = this.mapFieldTypeToSQL(field.type, field.length);
         const nullable = field.required ? "NOT NULL" : "";
-
-        // When adding a NOT NULL column to an existing table, we must provide a default
-        // value for existing rows. Use explicit defaultValue if provided, otherwise
-        // use a sensible default based on field type.
-        let defaultVal = "";
-        if (field.default !== undefined) {
-          defaultVal = `DEFAULT ${this.formatDefaultValue(field.default, field.type)}`;
-        } else if (field.required) {
-          // Required field without explicit default - provide sensible default for existing rows
-          defaultVal = `DEFAULT ${this.getDefaultValueForType(field.type, field)}`;
-        }
-
         const addColName = toSnakeCase(field.name);
+
+        // An existing row has no value for a column that did not exist a moment ago, so a
+        // required one has to say what those rows get. Most types state something usable; a
+        // relationship states nothing, because every id it could write references a row that
+        // is not there. Emitting `DEFAULT NULL` anyway is what produced three different
+        // failures: PostgreSQL reports the nulls it found, MySQL calls the default invalid,
+        // and SQLite writes the column and then refuses every insert that omits it.
+        //
+        // With no rows to backfill there is nothing to state, and a plain NOT NULL is
+        // accepted by all three. With rows, the value has to come from the author, so the
+        // edit is refused and names the order that works.
+        let defaultVal = "";
+        if (field.required || field.default !== undefined) {
+          const backfill = this.requiredColumnBackfill(field);
+          if (backfill !== null) {
+            defaultVal = `DEFAULT ${backfill}`;
+          } else if (field.required && options?.tableHasRows !== false) {
+            throw NextlyError.validation({
+              errors: [
+                {
+                  path: `fields.${field.name}`,
+                  code: "REQUIRED_COLUMN_NEEDS_BACKFILL",
+                  message:
+                    `"${field.name}" is required, but ${tableName} already has entries and ` +
+                    `a ${field.type} has no default value to give them. Add the field as ` +
+                    `optional, set a value on the existing entries, then mark it required.`,
+                },
+              ],
+              logContext: { tableName, field: field.name, type: field.type },
+            });
+          }
+        }
         statements.push(
           `ALTER TABLE ${this.quoteIdentifier(tableName)} ADD COLUMN ${this.quoteIdentifier(addColName)} ${type} ${nullable} ${defaultVal};`.trim()
         );
@@ -608,26 +797,42 @@ ${allColumnDefs.join(",\n")}
           // Add foreign key for non-manyToMany relations
           if (field.type === "relationship" && field.options?.target) {
             const targetTable = `dc_${field.options.target}`;
-            const onDelete = field.options.onDelete || "set null";
+            const onDelete = this.relationOnDelete(field);
             const onUpdate = field.options.onUpdate || "no action";
             statements.push(
               `ALTER TABLE ${this.quoteIdentifier(tableName)} ADD CONSTRAINT ${this.quoteIdentifier(`fk_${tableName}_${addColName}`)} FOREIGN KEY (${this.quoteIdentifier(addColName)}) REFERENCES ${this.quoteIdentifier(targetTable)}(${this.quoteIdentifier("id")}) ON DELETE ${this.mapOnDeleteAction(onDelete)} ON UPDATE ${this.mapOnUpdateAction(onUpdate)};`
             );
           }
 
-          // Add unique constraint if needed
+          // The flag only, not `columnIsUnique`. A one-to-one's uniqueness is spelled three
+          // different ways today: the table CREATE writes it inline, where the dialect names the
+          // index itself; the desired schema the diff compares against declares a NON-unique
+          // index for the same field; and a named constraint here would be a third. Emitting one
+          // makes the next diff propose dropping it, so the cardinality is enforced by agreeing
+          // on one spelling, not by adding another.
           if (field.unique) {
             statements.push(
               `ALTER TABLE ${this.quoteIdentifier(tableName)} ADD CONSTRAINT ${this.quoteIdentifier(`uq_${tableName}_${addColName}`)} UNIQUE (${this.quoteIdentifier(addColName)});`
             );
           }
         } else {
-          // For SQLite with unique constraint, create a unique index instead
+          // For SQLite with unique constraint, create a unique index instead. The flag only,
+          // for the reason above.
           if (field.unique) {
             statements.push(
               `CREATE UNIQUE INDEX IF NOT EXISTS ${this.quoteIdentifier(`uq_${tableName}_${addColName}`)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier(addColName)});`
             );
           }
+        }
+
+        // The index this column carries, for a column that did not exist before this save. The
+        // index loop below compares a field against its previous state to catch a toggle, and a
+        // field being added has no previous state to differ from, so neither the index requested
+        // at the same moment as the column nor the one a relationship always carries was created
+        // by either.
+        if (this.columnIsIndexed(field)) {
+          const addIndexSql = this.createIndexSql(tableName, addColName, type);
+          if (addIndexSql) statements.push(addIndexSql);
         }
       }
     }
@@ -639,29 +844,39 @@ ${allColumnDefs.join(",\n")}
       // CREATE INDEX against a name the table does not have, which fails the whole save.
       if (!fieldProducesColumn(field)) continue;
       const oldField = oldFieldMap.get(field.name);
-      if (oldField && oldField.index !== field.index) {
+      // A column the add loop just created already carries whatever index was requested with
+      // it. Reading the toggle for one of those emits a second CREATE INDEX for the same
+      // column under the same name.
+      if (!oldField || this.storageClassChanged(oldField, field)) continue;
+      if (oldField.index !== field.index) {
         const idxCol = toSnakeCase(field.name);
-        const indexName = `idx_${tableName}_${idxCol}`;
         if (field.index) {
-          // Add index
-          if (this.dialect === "mysql") {
-            statements.push(
-              `CREATE INDEX ${this.quoteIdentifier(indexName)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier(idxCol)});`
-            );
-          } else {
-            statements.push(
-              `CREATE INDEX IF NOT EXISTS ${this.quoteIdentifier(indexName)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier(idxCol)});`
-            );
-          }
+          const toggleIndexSql = this.createIndexSql(
+            tableName,
+            idxCol,
+            this.mapFieldTypeToSQL(field.type, field.length)
+          );
+          if (toggleIndexSql) statements.push(toggleIndexSql);
         } else {
-          // Drop index
-          if (this.dialect === "mysql") {
+          // Same guard as the removal path: turning an index off that the table never carried
+          // aborts on MySQL, which cannot express `DROP INDEX IF EXISTS`.
+          // And whichever name the table carries it under, for the same reason as the removal
+          // path: bounding long names changed what they are called, and an index already in a
+          // database still answers to the name it was created under.
+          const known = options?.indexNames !== undefined;
+          const present = this.indexNameCandidates(tableName, idxCol).find(
+            name => options?.indexNames?.has(name) === true
+          );
+          if (known) {
+            if (present !== undefined) {
+              statements.push(this.dropIndexSql(tableName, present));
+            }
+          } else if (this.dialect !== "mysql") {
             statements.push(
-              `DROP INDEX ${this.quoteIdentifier(indexName)} ON ${this.quoteIdentifier(tableName)};`
-            );
-          } else {
-            statements.push(
-              `DROP INDEX IF EXISTS ${this.quoteIdentifier(indexName)} ON ${this.quoteIdentifier(tableName)};`
+              this.dropIndexSql(
+                tableName,
+                indexNameForColumn(tableName, idxCol)
+              )
             );
           }
         }
@@ -680,6 +895,67 @@ ${allColumnDefs.join(",\n")}
       const next = newFieldMap.get(field.name);
       if (!next || this.storageClassChanged(field, next)) {
         const dropCol = toSnakeCase(field.name);
+
+        // A column that something references cannot simply be removed, and the three dialects
+        // do not agree on what that costs. PostgreSQL drops the constraints that depend on the
+        // column along with it, so it needs nothing here. MySQL keeps them and refuses the drop
+        // until the constraint is named and removed first. SQLite cannot remove a constraint at
+        // all: the column stays until the whole table is rebuilt around it, so the edit is
+        // refused rather than sent to fail as a driver error the author cannot act on.
+        // Everything attached to the column comes off before the column does. SQLite refuses
+        // `DROP COLUMN` while an index still names it, and reports that as a missing column
+        // inside the index rather than as the removal it refused. PostgreSQL and MySQL drop the
+        // index with the column, so removing it first is redundant there and never wrong.
+        //
+        const foreignKeys = options?.foreignKeysByColumn?.get(dropCol);
+        if (foreignKeys !== undefined) {
+          if (this.dialect === "sqlite") {
+            throw NextlyError.validation({
+              errors: [
+                {
+                  path: `fields.${field.name}`,
+                  code: "FOREIGN_KEY_DROP_UNSUPPORTED",
+                  message:
+                    `"${field.name}" cannot be removed on SQLite: the link it holds to another ` +
+                    `collection is part of ${tableName}'s definition, and SQLite can only drop ` +
+                    `one by rebuilding the table. Remove the field on PostgreSQL or MySQL, or ` +
+                    `recreate the collection.`,
+                },
+              ],
+              logContext: { tableName, field: field.name, column: dropCol },
+            });
+          }
+          if (this.dialect === "mysql") {
+            for (const constraint of foreignKeys) {
+              statements.push(
+                `ALTER TABLE ${this.quoteIdentifier(tableName)} DROP FOREIGN KEY ${this.quoteIdentifier(constraint)};`
+              );
+            }
+          }
+        }
+
+        // After the constraint, before the column. MySQL enforces a foreign key THROUGH an
+        // index and refuses to drop the one supporting it ("Cannot drop index: needed in a
+        // foreign key constraint"), so the constraint has to go first; SQLite refuses to drop a
+        // column an index still names, so the index has to go before that.
+        //
+        // Asked of the live table, not of the field: an index is created by whichever path
+        // added the column, so a field that looks indexed may have none. MySQL cannot guard the
+        // drop itself, so without the answer it is not attempted there.
+        const indexIsKnown = options?.indexNames !== undefined;
+        const present = this.indexNameCandidates(tableName, dropCol).find(
+          name => options?.indexNames?.has(name) === true
+        );
+        if (indexIsKnown) {
+          if (present !== undefined) {
+            statements.push(this.dropIndexSql(tableName, present));
+          }
+        } else if (this.dialect !== "mysql") {
+          statements.push(
+            this.dropIndexSql(tableName, indexNameForColumn(tableName, dropCol))
+          );
+        }
+
         // SQLite doesn't support IF EXISTS on DROP COLUMN
         if (this.dialect === "sqlite") {
           statements.push(
@@ -854,6 +1130,61 @@ ${allColumnDefs.join(",\n")}
   /**
    * Generate DROP TABLE migration SQL
    */
+  /**
+   * The indexes and foreign keys a table WILL carry once its creation migration has run.
+   *
+   * A collection saved but not yet deployed has a registry record and no table. Reading the
+   * absent table reports no attachments, and an edit made in that window then emits a bare
+   * `DROP COLUMN` — which is correct against nothing and wrong against what the deployment
+   * actually produces, because the create artefact runs first and installs the index and the
+   * constraint the drop then trips over.
+   *
+   * Answered by the class that emits the CREATE, so what is predicted here and what is written
+   * there cannot describe different tables.
+   */
+  plannedAttachments(
+    tableName: string,
+    fields: FieldDefinition[]
+  ): {
+    indexNames: Set<string>;
+    foreignKeysByColumn: Map<string, string[]>;
+  } {
+    const indexNames = new Set<string>();
+    const foreignKeysByColumn = new Map<string, string[]>();
+    // The system indexes every generated table carries, named as `generateMigrationSQL` names
+    // them, so a system column removed by an edit is not treated as unindexed.
+    for (const column of ["slug", "created_at", "created_by"]) {
+      indexNames.add(indexNameForColumn(tableName, column));
+    }
+    for (const field of fields) {
+      if (!fieldProducesColumn(field)) continue;
+      const column = toSnakeCase(field.name);
+      // Asked through the statement builder, not through `columnIsIndexed` alone. Wanting an
+      // index and being able to have one are different questions: MySQL cannot index a JSON
+      // column, so the create emits nothing for one. Predicting it anyway makes a later edit
+      // drop an index that was never installed, which on MySQL aborts the whole migration.
+      if (
+        this.columnIsIndexed(field) &&
+        this.createIndexSql(
+          tableName,
+          column,
+          this.mapFieldTypeToSQL(
+            field.type,
+            field.length,
+            field.options,
+            field.validation
+          )
+        ) !== null
+      ) {
+        indexNames.add(indexNameForColumn(tableName, column));
+      }
+      if (field.type === "relationship" && field.options?.target) {
+        foreignKeysByColumn.set(column, [`fk_${tableName}_${column}`]);
+      }
+    }
+    return { indexNames, foreignKeysByColumn };
+  }
+
   generateDropTableMigration(
     collectionName: string,
     tableName: string
