@@ -37,9 +37,9 @@ import { compileStyleValues, DEFAULT_TOKEN_PREFIX } from "./declarations";
 import type { Declaration } from "./declarations";
 import type { NamedClass } from "./named-class";
 import {
+  isUsableNamedClass,
   namedClassName,
   orderedNamedClasses,
-  NAMED_CLASS_SLUG_RE,
 } from "./named-class";
 import {
   blockTypeClassName,
@@ -105,6 +105,20 @@ export interface StyleCompileContext {
    * limits when the caller has no opinion.
    */
   limits?: DocumentLimits;
+}
+
+/** A library entry's id, for a record that may not have one. */
+function readClassId(value: unknown): unknown {
+  return value === null || typeof value !== "object"
+    ? value
+    : (value as { id?: unknown }).id;
+}
+
+/** A library entry's slug, for a record that may not have one. */
+function readClassSlug(value: unknown): unknown {
+  return value === null || typeof value !== "object"
+    ? value
+    : (value as { slug?: unknown }).slug;
 }
 
 /** A compiled page stylesheet. */
@@ -879,26 +893,43 @@ export function compilePageCss(
   // The named classes, in library order — the tier between a block's defaults and a node's own
   // values. At one specificity the cascade is source order, so being emitted here IS what makes
   // a class beat the block default and lose to a local value.
+  const emittedSlugs = new Set<string>();
   for (const cls of orderedNamedClasses(ctx.namedClasses ?? [])) {
     // A slug reaches a selector, and this compiler reads persisted data whether or not a caller
     // validated it. Held to the grammar rather than escaped into something safe: a name that is
     // not a slug is not a class this engine can style, and rewriting it quietly would emit a
-    // class no renderer puts on an element.
-    if (typeof cls.slug !== "string" || !NAMED_CLASS_SLUG_RE.test(cls.slug)) {
+    // class no renderer puts on an element. Entries that are not records at all are refused by
+    // the same check, so a `null` in the library costs a warning rather than the whole compile.
+    if (!isUsableNamedClass(cls)) {
       pushBoundedWarning(warningAllowance, warnings, {
-        path: pointer("/classes", String(cls.id)),
+        path: pointer("/classes", describeValue(readClassId(cls))),
         code: "invalid-class-name",
         severity: "warning",
-        message: `"${describeValue(cls.slug)}" is not a class name, so its styles were not written.`,
+        message: `A named class could not be written: ${describeValue(readClassSlug(cls))} is not a class name.`,
         suggestion: 'Use a lowercase slug such as "card-featured".',
       });
       continue;
     }
+    // Two classes cannot share one name. Emitted anyway, both would land on the single
+    // `.nx-c-<slug>` selector, so a node applying either would silently receive the other's
+    // declarations too — and the later one in library order would win on a class the node never
+    // referenced. The first keeps the name, since library order is the author's own.
+    if (emittedSlugs.has(cls.slug)) {
+      pushBoundedWarning(warningAllowance, warnings, {
+        path: pointer("/classes", cls.id),
+        code: "duplicate-class-name",
+        severity: "warning",
+        message: `More than one class is named "${describeValue(cls.slug)}", so only the first was written.`,
+        suggestion: "Give every class a distinct name.",
+      });
+      continue;
+    }
+    emittedSlugs.add(cls.slug);
     rules.push(
       ...envelopeRules(
         cls.styles,
         `${pageRoot} .${escapeIdentifier(namedClassName(cls.slug))}`,
-        pointer("/classes", String(cls.id)),
+        pointer("/classes", cls.id),
         contexts,
         tokenPrefix,
         warnings,

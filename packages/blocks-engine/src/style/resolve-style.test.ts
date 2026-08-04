@@ -120,12 +120,37 @@ describe("which breakpoint the value comes from", () => {
     expect(found?.source).toEqual({ tier: "local" });
   });
 
-  it("prefers a CLASS at the narrow breakpoint over the node's own wider value", () => {
-    // The narrower breakpoint is the more specific answer whoever wrote it, and the compiler
-    // emits it later for that reason. Resolving the other way would contradict the stylesheet.
+  it("prefers the node's WIDER value over a class's narrow one, because the tier wins", () => {
+    // The intuitive answer is that the narrower breakpoint is more specific and should win
+    // whoever wrote it. The stylesheet says otherwise: a whole tier is emitted before the whole
+    // of the next, so the node's rule comes after the class's and both match at tablet. Reading
+    // it the intuitive way would report a value the browser never shows.
     const found = resolveStyle("color", "base", "tablet", {
       classes: [namedClass("card", 0, at("tablet", { color: "blue" }))],
       node: at("desktop", { color: "red" }),
+      breakpointChain: ["desktop"],
+    });
+
+    expect(found?.value).toBe("red");
+    expect(found?.source).toEqual({
+      tier: "inheritedBreakpoint",
+      from: "desktop",
+      source: { tier: "local" },
+    });
+  });
+
+  it("prefers the narrower breakpoint WITHIN one tier, which is the desktop-first model", () => {
+    const found = resolveStyle("color", "base", "tablet", {
+      classes: [
+        {
+          id: "card",
+          slug: "card",
+          orderIndex: 0,
+          styles: {
+            base: { desktop: { color: "red" }, tablet: { color: "blue" } },
+          } as never,
+        },
+      ],
       breakpointChain: ["desktop"],
     });
 
@@ -154,8 +179,8 @@ describe("a class library that is incomplete or unordered", () => {
       ["card", namedClass("card", 0, at("desktop", { color: "blue" }))],
     ]);
 
-    // Configuration that has not loaded cannot make a document invalid — the rule PR-S2 settled
-    // for unknown tokens. The node keeps the classes that do resolve.
+    // Configuration that has not loaded cannot make a document invalid, for the same reason an
+    // unresolved token name is a warning. The node keeps the classes that do resolve.
     const resolved = resolveNodeClasses(["ghost", "card"], library);
 
     expect(resolved.map(c => c.id)).toEqual(["card"]);

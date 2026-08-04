@@ -17,6 +17,7 @@
 import type { NodeStyles, StyleValue } from "../document";
 
 import type { NamedClass } from "./named-class";
+import { isUsableNamedClass } from "./named-class";
 
 /** Which tier a resolved value came from, and which member of that tier. */
 export type StyleSource =
@@ -72,6 +73,9 @@ function tiers(
     ordered.push({ styles: input.blockBase, source: { tier: "blockDefault" } });
   }
   for (const cls of input.classes ?? []) {
+    // The compiler writes nothing for a class it cannot name, so applying one here would report
+    // a value and a source the browser never receives.
+    if (!isUsableNamedClass(cls)) continue;
     ordered.push({
       styles: cls.styles,
       source: { tier: "class", id: cls.id, slug: cls.slug },
@@ -101,11 +105,17 @@ function valueAt(
 /**
  * What a property resolves to, and where it came from.
  *
- * Answered by walking the tiers from lowest to highest and keeping the last one that states
- * anything, which is what "source order decides" means when every rule sits at the same
- * specificity. The breakpoint chain is walked from the asked-for breakpoint outward, so a value
- * is reported at the breakpoint that actually carries it and marked as inherited when that is not
- * the one asked about.
+ * Walked tier-outermost, breakpoint-innermost, because that is the order the stylesheet is
+ * written in and at one specificity the order IS the cascade. A whole tier precedes the whole of
+ * the next, so a value from a higher tier beats one from a lower tier at ANY width: a node's own
+ * desktop value beats a class's tablet value, even while viewing at tablet, because the node's
+ * rule is emitted after the class's and both match.
+ *
+ * Reading it the other way round — narrowest breakpoint first, whoever wrote it — is the
+ * intuitive answer and the wrong one. It would report a class value the browser never shows.
+ *
+ * Within one tier the narrower breakpoint wins, which is the desktop-first model: the chain is
+ * walked from its widest end so the closest match is the last kept.
  *
  * `undefined` means nothing states this property anywhere. A control showing a placeholder is
  * telling the truth in that case; showing an empty box for a value that exists is not.
@@ -116,27 +126,29 @@ export function resolveStyle(
   breakpoint: string,
   input: StyleResolutionInput
 ): ResolvedStyle | undefined {
-  const ordered = tiers(input);
   const chain = [breakpoint, ...(input.breakpointChain ?? [])];
+  let resolved: ResolvedStyle | undefined;
 
-  for (const [depth, bp] of chain.entries()) {
-    let found: ResolvedStyle | undefined;
-    // Last writer wins WITHIN a breakpoint, before falling outward. A class stating a value at
-    // tablet must not lose to the node's own base value: the narrower breakpoint is the more
-    // specific answer, whoever wrote it, and the compiler emits it later for that reason.
-    for (const tier of ordered) {
-      const value = valueAt(tier.styles, state, bp, property);
-      if (value !== undefined) found = { value, source: tier.source };
+  for (const tier of tiers(input)) {
+    // Widest to narrowest, so the last value kept is the closest match this tier states.
+    for (let i = chain.length - 1; i >= 0; i--) {
+      const value = valueAt(tier.styles, state, chain[i], property);
+      if (value === undefined) continue;
+      resolved =
+        i === 0
+          ? { value, source: tier.source }
+          : {
+              value,
+              // Named so a control can say which breakpoint the value comes from, with the
+              // writer kept inside so it can also say who set it there.
+              source: {
+                tier: "inheritedBreakpoint",
+                from: chain[i],
+                source: tier.source,
+              },
+            };
     }
-    if (found === undefined) continue;
-    if (depth === 0) return found;
-    // Named so a control can say which breakpoint the value is coming from, and the inner source
-    // is kept so it can also say who wrote it there.
-    return {
-      value: found.value,
-      source: { tier: "inheritedBreakpoint", from: bp, source: found.source },
-    };
   }
 
-  return undefined;
+  return resolved;
 }

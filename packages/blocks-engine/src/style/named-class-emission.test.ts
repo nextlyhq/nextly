@@ -149,3 +149,54 @@ describe("the resolver's answer matches what the compiler emitted", () => {
     expect(resolved?.source).toEqual({ tier: "class", id: "c1", slug: "card" });
   });
 });
+
+describe("tier order beats breakpoint order, in both halves", () => {
+  it("emits the whole class tier before the whole node tier, across breakpoints", () => {
+    // The case the agreement suite was missing: a class at a NARROW breakpoint and a node at a
+    // WIDER one. Both match at the narrow width, and the node's rule is written later, so the
+    // node wins — even though its breakpoint is the wider of the two.
+    const cardAtTablet: NamedClass = {
+      id: "c1",
+      slug: "card",
+      orderIndex: 0,
+      styles: { base: { tablet: { color: "blue" } } } as never,
+    };
+    const { css } = compile(
+      doc({ classes: ["c1"], styles: styles({ color: "red" }) }),
+      [cardAtTablet]
+    );
+
+    expect(css.indexOf(".nx-c-card")).toBeLessThan(
+      css.lastIndexOf("color: red")
+    );
+
+    const resolved = resolveStyle("color", "base", "tablet", {
+      classes: [cardAtTablet],
+      node: styles({ color: "red" }),
+      breakpointChain: [BP],
+    });
+
+    // The resolver has to say what the stylesheet does, not what feels more specific.
+    expect(resolved?.value).toBe("red");
+  });
+
+  it("writes only the first of two classes sharing a name, and says why", () => {
+    const { css, warnings } = compile(doc({}), [
+      card,
+      { ...feature, slug: "card" },
+    ]);
+
+    // Emitted, both would land on one selector, so a node applying either would receive the
+    // other's declarations and the later entry could override a class it never referenced.
+    expect(css).toContain("color: blue");
+    expect(css).not.toContain("color: green");
+    expect(warnings.map(w => w.code)).toContain("duplicate-class-name");
+  });
+
+  it("survives a library entry that is not a record at all", () => {
+    const { css, warnings } = compile(doc({}), [null as never, card]);
+
+    expect(css).toContain(".nx-c-card");
+    expect(warnings.map(w => w.code)).toContain("invalid-class-name");
+  });
+});

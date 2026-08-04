@@ -201,3 +201,20 @@ export type {
   MigrationSource,
   PropsMigrationResult,
 } from "./migration";
+
+// Named classes and where a style value came from.
+export type { NamedClass } from "./style/named-class";
+export {
+  isUsableNamedClass,
+  namedClassName,
+  orderedNamedClasses,
+  resolveNodeClasses,
+  NAMED_CLASS_PREFIX,
+  NAMED_CLASS_SLUG_RE,
+} from "./style/named-class";
+export type {
+  ResolvedStyle,
+  StyleResolutionInput,
+  StyleSource,
+} from "./style/resolve-style";
+export { resolveStyle } from "./style/resolve-style";
