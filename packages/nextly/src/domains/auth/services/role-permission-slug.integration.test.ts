@@ -164,6 +164,35 @@ describe("addPermissionToRole, creating the permission", () => {
     );
   });
 
+  it("still grants the role when the repair collides", async () => {
+    // `slug` is unique, and a swapped pair produces exactly this: the stale
+    // row wants `export-reports`, which the other row already holds. The
+    // repair is opportunistic; the grant is what was asked for.
+    current = await bootWithCoreTables();
+    await seedRole(current, "role-collide", "collide");
+    await current.adapter.executeQuery(
+      `INSERT INTO permissions (id, name, slug, action, resource, created_at, updated_at) VALUES ('perm-stale', 'Export Reports', 'reports-export', 'export', 'reports', 0, 0)`
+    );
+    await current.adapter.executeQuery(
+      `INSERT INTO permissions (id, name, slug, action, resource, created_at, updated_at) VALUES ('perm-owner', 'Reports Export', 'export-reports', 'reports', 'export', 0, 0)`
+    );
+
+    await serviceFor(current).addPermissionToRole("role-collide", {
+      action: "export",
+      resource: "reports",
+    });
+
+    // The grant landed …
+    const links = (await current.adapter.executeQuery(
+      `SELECT permission_id FROM role_permissions WHERE role_id = 'role-collide'`
+    )) as unknown as Array<{ permission_id: string }>;
+    expect(links.map(l => String(l.permission_id))).toEqual(["perm-stale"]);
+    // … and the slug that could not be repaired is left as it was.
+    expect((await readPermission(current, "export", "reports"))?.slug).toBe(
+      "reports-export"
+    );
+  });
+
   it("prefers an explicit slug over the composed one", async () => {
     current = await bootWithCoreTables();
     await seedRole(current, "role-legacy", "legacy");

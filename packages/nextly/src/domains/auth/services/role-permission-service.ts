@@ -187,10 +187,19 @@ export class RolePermissionService extends BaseService {
     const canonical = permissionSlug(perm.action, perm.resource);
     if (canonical === reversed) return;
 
-    await (this.db as RBACDatabaseInstance)
-      .update(this.tables.permissions)
-      .set({ slug: canonical })
-      .where(eq(this.tables.permissions.id, permissionId));
+    try {
+      await (this.db as RBACDatabaseInstance)
+        .update(this.tables.permissions)
+        .set({ slug: canonical })
+        .where(eq(this.tables.permissions.id, permissionId));
+    } catch {
+      // `slug` is unique, so another row may already answer to the canonical
+      // name — a swapped pair of `(action, resource)` produces exactly that.
+      // The repair is opportunistic and the GRANT is what was asked for, so a
+      // collision leaves the stale slug and the assignment goes ahead. Failing
+      // here would turn a tidy-up into a refusal to do the requested work, and
+      // the boot-time pass makes the same choice for the same reason.
+    }
   }
 
   /**
