@@ -137,6 +137,28 @@ function relativeExtends(fromDir: string, spec: string): string {
  * A specifier carrying a subpath (`@scope/pkg/base.json`) names the file
  * directly and needs no such treatment, which is the form this repository uses.
  */
+/**
+ * The nearest `package.json` at or above a directory.
+ *
+ * Read from the filesystem rather than through the module resolver, because
+ * this exists precisely for packages whose `exports` map refuses
+ * `./package.json` — the resolver is the thing that cannot see it.
+ */
+function nearestManifest(from: string): string | undefined {
+  let dir = from;
+  for (;;) {
+    const candidate = join(dir, "package.json");
+    try {
+      statSync(candidate);
+      return candidate;
+    } catch {
+      const parent = dirname(dir);
+      if (parent === dir) return undefined;
+      dir = parent;
+    }
+  }
+}
+
 function bareExtends(
   req: NodeRequire,
   spec: string,
@@ -161,7 +183,20 @@ function bareExtends(
   // file, and if that file predates `dist` nothing else would notice.
   if (manifest !== undefined) consulted.push(manifest);
 
-  if (!isPackageName) return req.resolve(spec);
+  // Recorded even when the manifest is UNREACHABLE. A package can export its
+  // config while encapsulating `./package.json`, and that same `exports` map is
+  // what chose the config — so discarding it would leave the file doing the
+  // choosing untracked. The manifest is recovered from the resolved config's
+  // own directory instead of through the resolver that refuses it.
+  const track = (target: string): string => {
+    if (manifest === undefined) {
+      const owner = nearestManifest(dirname(target));
+      if (owner !== undefined) consulted.push(owner);
+    }
+    return target;
+  };
+
+  if (!isPackageName) return track(req.resolve(spec));
 
   // The three forms a package can name its config, in TypeScript's order. Each
   // is attempted independently, because an `exports` map may expose one and
@@ -188,7 +223,7 @@ function bareExtends(
   ]) {
     try {
       const target = attempt();
-      if (target !== undefined) return target;
+      if (target !== undefined) return track(target);
     } catch {
       // Try the next form.
     }
