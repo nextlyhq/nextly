@@ -165,7 +165,11 @@ function reportWithheldDetail(err: NextlyError, requestId?: string): void {
   // undefined would throw on `.message` — inside this try, discarding the whole
   // report including the context and message that were perfectly readable.
   const cause = read(() => err.cause);
-  const causeMessage = cause instanceof Error ? cause.message : undefined;
+  // `.message` is a read of application-supplied state too — an Error subclass
+  // can back it with an accessor, so passing `instanceof Error` says nothing
+  // about whether reading it is safe.
+  const causeMessage =
+    cause instanceof Error ? read(() => cause.message) : undefined;
   try {
     getNextlyLogger().warn({
       kind: "auth-failed",

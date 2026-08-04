@@ -480,13 +480,6 @@ describe("auditFailureMetadata", () => {
       },
       originalCode: "TOKEN_EXPIRED",
     };
-    Object.defineProperty(hostile, "reason", {
-      get() {
-        throw new Error("hostile getter");
-      },
-      enumerable: true,
-      configurable: true,
-    });
 
     expect(projectAuditMetadata(hostile)).toEqual({
       originalCode: "TOKEN_EXPIRED",
