@@ -37,10 +37,18 @@ const statusScale = (base: string): Record<number, string> => ({
   950: `color-mix(in srgb, var(${base}), black 85%)`,
 });
 
+/** @experimental */
 const uiPreset = {
   theme: {
     extend: {
       colors: {
+        // The modal scrim. Mapped here as well as in the v4 `@theme` block,
+        // because this preset is the documented Tailwind v3 path and reads
+        // none of that: without these two, `bg-overlay` generates no rule at
+        // all and every backdrop is transparent rather than merely unthemed.
+        overlay: "var(--nx-overlay)",
+        "overlay-soft": "var(--nx-overlay-soft)",
+        "overlay-strong": "var(--nx-overlay-strong)",
         border: "var(--nx-border)",
         input: "var(--nx-input)",
         ring: "var(--nx-ring)",

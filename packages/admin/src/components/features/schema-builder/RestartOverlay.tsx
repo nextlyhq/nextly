@@ -9,12 +9,15 @@ export function RestartOverlay() {
 
   if (!isRestarting) return null;
 
-  // The scrim and its contents stay literal black/white on purpose: this covers
-  // the whole app while the server is down, so it is its own dark surface rather
-  // than a themed one, and the dots and text are read against that scrim.
+  // This covers the whole app while the server is down, so it is its own dark
+  // surface rather than a themed one. `--nx-overlay-strong` rather than the
+  // modal scrim: the message is read ON this surface, and the see-through
+  // variant tops out below AA over a white page even for pure white text. The
+  // dots and text stay literal white, read against the scrim rather than
+  // against the palette underneath it.
   return (
     <div
-      className="fixed inset-0 z-[9998] flex items-center justify-center bg-black/75 backdrop-blur-sm"
+      className="fixed inset-0 z-[9998] flex items-center justify-center bg-overlay-strong backdrop-blur-sm"
       role="status"
       aria-label="Server is restarting"
     >

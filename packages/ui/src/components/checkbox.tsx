@@ -5,6 +5,7 @@ import { forwardRef } from "react";
 
 import { cn } from "../lib/utils";
 
+/** @public */
 const Checkbox = forwardRef<
   ElementRef<typeof CheckboxPrimitive.Root>,
   ComponentPropsWithoutRef<typeof CheckboxPrimitive.Root> & {

@@ -3,6 +3,7 @@ import { forwardRef } from "react";
 
 import { cn } from "../lib/utils";
 
+/** @public */
 const Textarea = forwardRef<
   HTMLTextAreaElement,
   TextareaHTMLAttributes<HTMLTextAreaElement>

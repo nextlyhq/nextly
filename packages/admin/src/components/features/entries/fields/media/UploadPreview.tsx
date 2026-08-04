@@ -283,13 +283,15 @@ export function UploadPreview({
           </div>
         )}
 
-        {/* External link indicator on hover (for files with URL). Literal
-            black/white: this wash and its icon sit on the thumbnail image, so
-            they are keyed to the media rather than to the admin palette. */}
+        {/* External link indicator on hover (for files with URL). The wash is
+            `--nx-overlay-soft`, the lighter scrim meant for sitting over
+            content: the thumbnail beneath still has to read through it. Its
+            icon stays literal white, keyed to the media rather than the
+            palette. */}
         {file.url && (
           <div
             className={cn(
-              "absolute inset-0 bg-black/40 flex items-center justify-center",
+              "absolute inset-0 bg-overlay-soft flex items-center justify-center",
               "opacity-0 group-hover:opacity-100 transition-opacity",
               "pointer-events-none"
             )}

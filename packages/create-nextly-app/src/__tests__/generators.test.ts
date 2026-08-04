@@ -332,10 +332,20 @@ describe("generateEnv", () => {
       envExample: "file:./nextly.db",
     });
 
-    // Both files, since a contributor working from .env.example should get the
-    // same experience as the person who ran the scaffold.
-    for (const [, content] of mockWriteFile.mock.calls) {
-      const text = content as string;
+    // The two targets by NAME, not just two payloads: asserting only the
+    // contents passes if one file is written twice and the other skipped, which
+    // is the failure this is meant to catch.
+    const written = new Map(
+      mockWriteFile.mock.calls.map(([p, content]) => [
+        String(p).endsWith(".env.example") ? ".env.example" : ".env",
+        content as string,
+      ])
+    );
+    expect([...written.keys()].sort()).toEqual([".env", ".env.example"]);
+
+    // A contributor working from .env.example should get the same experience as
+    // the person who ran the scaffold.
+    for (const text of written.values()) {
       // Present and explained, so the setting is discoverable...
       expect(text).toContain("NEXTLY_DEV_DIAGNOSTICS");
       // ...and COMMENTED, so it is not enabled by a file that ships with the
@@ -413,6 +423,100 @@ describe("generateEnv", () => {
     expect(mockAppendFile).not.toHaveBeenCalled();
     // Should still update .env.example
     expect(mockWriteFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not mistake a similarly-named variable for the setting", async () => {
+    // A substring test treats `NEXTLY_DEV_DIAGNOSTICS_BACKUP` as the setting
+    // and skips the note, so a project that happens to use such a name never
+    // learns the real one exists.
+    mockPathExists.mockImplementation((async (path: unknown) =>
+      String(path).endsWith(".env")) as never);
+    mockReadFile.mockResolvedValue(
+      "DATABASE_URL=existing\nNEXTLY_DEV_DIAGNOSTICS_BACKUP=1\n" as never
+    );
+
+    const result = await generateEnv("/test/project", {
+      type: "sqlite",
+      adapter: "@nextlyhq/adapter-sqlite",
+      databaseDriver: "better-sqlite3",
+      connectionUrl: "file:./nextly.db",
+      envExample: "file:./nextly.db",
+    });
+
+    expect(result).toEqual({ created: false, updated: true });
+    expect(mockAppendFile).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["export form", "export NEXTLY_DEV_DIAGNOSTICS=1"],
+    ["commented export", "# export NEXTLY_DEV_DIAGNOSTICS=1"],
+    ["indented", "  NEXTLY_DEV_DIAGNOSTICS=1"],
+    ["spaced around =", "NEXTLY_DEV_DIAGNOSTICS = 1"],
+  ])("recognises the setting written as %s", async (_label, line) => {
+    // dotenv accepts `export KEY=value` so the same file can be sourced by a
+    // shell. A project written that way would otherwise be told the setting is
+    // absent and handed a duplicate block below the one it already has.
+    mockPathExists.mockImplementation((async (path: unknown) =>
+      String(path).endsWith(".env")) as never);
+    mockReadFile.mockResolvedValue(`DATABASE_URL=existing\n${line}\n` as never);
+
+    const result = await generateEnv("/test/project", {
+      type: "sqlite",
+      adapter: "@nextlyhq/adapter-sqlite",
+      databaseDriver: "better-sqlite3",
+      connectionUrl: "file:./nextly.db",
+      envExample: "file:./nextly.db",
+    });
+
+    expect(result).toEqual({ created: false, updated: false });
+    expect(mockAppendFile).not.toHaveBeenCalled();
+  });
+
+  it("scans a blank-line-heavy .env without backtracking", async () => {
+    // The whitespace classes are confined to the current line. With `\s` under
+    // the `m` flag they cross newlines, so each retry chews through the blank
+    // lines an .env is full of — quadratic on a file that does not contain the
+    // key at all, which is the common case.
+    mockPathExists.mockImplementation((async (path: unknown) =>
+      String(path).endsWith(".env")) as never);
+    mockReadFile.mockResolvedValue(
+      ("DATABASE_URL=existing\n" + "   \n".repeat(20000)) as never
+    );
+
+    const started = performance.now();
+    const result = await generateEnv("/test/project", {
+      type: "sqlite",
+      adapter: "@nextlyhq/adapter-sqlite",
+      databaseDriver: "better-sqlite3",
+      connectionUrl: "file:./nextly.db",
+      envExample: "file:./nextly.db",
+    });
+
+    // Generous by design: this fails on catastrophic backtracking, not on a
+    // slow machine. The pathological form takes orders of magnitude longer.
+    expect(performance.now() - started).toBeLessThan(2000);
+    expect(result).toEqual({ created: false, updated: true });
+  });
+
+  it("leaves an already-commented setting alone", async () => {
+    // The commented form IS the note, so appending a second copy below it would
+    // be noise rather than help.
+    mockPathExists.mockImplementation((async (path: unknown) =>
+      String(path).endsWith(".env")) as never);
+    mockReadFile.mockResolvedValue(
+      "DATABASE_URL=existing\n# NEXTLY_DEV_DIAGNOSTICS=1\n" as never
+    );
+
+    const result = await generateEnv("/test/project", {
+      type: "sqlite",
+      adapter: "@nextlyhq/adapter-sqlite",
+      databaseDriver: "better-sqlite3",
+      connectionUrl: "file:./nextly.db",
+      envExample: "file:./nextly.db",
+    });
+
+    expect(result).toEqual({ created: false, updated: false });
+    expect(mockAppendFile).not.toHaveBeenCalled();
   });
 
   it("adds the diagnostics note to an already-configured .env", async () => {
