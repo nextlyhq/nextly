@@ -243,32 +243,6 @@ export function createPocDriver(page: Page): CanvasDriver {
       await page.mouse.up();
     },
 
-    async moveToZone(ordinal: number) {
-      const inFrame = await canvasFrame().evaluate(
-        ([selector, index]) => {
-          const zones = Array.from(
-            document.querySelectorAll(selector as string)
-          );
-          const el = zones[index];
-          if (!el) return null;
-          const r = el.getBoundingClientRect();
-          return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
-        },
-        [DROP_ZONES, ordinal] as const
-      );
-      if (!inFrame) return false;
-
-      const origin = await page.locator("iframe").boundingBox();
-      if (!origin) return false;
-
-      // The one mapping: frame-local point + frame origin in the host. No zoom
-      // term, because nothing here scales the frame; scenario 3 is what proves
-      // whether a scale factor belongs in this function.
-      pointer = { x: origin.x + inFrame.x, y: origin.y + inFrame.y };
-      await page.mouse.move(pointer.x, pointer.y);
-      return true;
-    },
-
     async keyboardInsert(direction: "up" | "down") {
       // A full keyboard drag, not a bare arrow key: focus a block, lift it,
       // move, drop. Sending only the arrow would keep scenario 5 failing for

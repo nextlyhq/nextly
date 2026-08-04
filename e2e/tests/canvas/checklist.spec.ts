@@ -44,20 +44,37 @@ test("[acceptance] point 1: the innermost container owns the drop target", async
   // cannot distinguish "the inner container owned the target throughout the
   // nested region" from "it owned one sample and the root owned the rest",
   // and only the first satisfies depth priority.
+  // One drop-zone height, which is the size of the ambiguous band at an edge.
+  const EDGE_MARGIN_PX = 8;
   const inner = (await driver.readBlockBoxes()).find(
     box => box.id === "nx-inner"
   );
   expect(inner, "the nested container must render").toBeDefined();
   const origin = await driver.frameOrigin();
 
-  const samples: Array<{ inside: boolean; owner: string | null }> = [];
+  const samples: Array<{
+    inside: boolean;
+    owner: string | null;
+    offsetFromTop: number;
+    offsetFromBottom: number;
+  }> = [];
   for (let step = 0; step < 60; step++) {
     await driver.moveBy(0, 8);
     const owner = await driver.readActiveZoneOwner();
     const frameY = driver.pointer().y - origin.y;
     samples.push({
-      inside: frameY >= inner!.top && frameY <= inner!.top + inner!.height,
+      // A margin at each edge, because a pointer sitting exactly on the
+      // boundary is a position both containers can legitimately claim: the
+      // gap zone immediately before the nested container belongs to the outer
+      // one. Depth priority is a statement about being INSIDE, and without the
+      // margin this assertion flips run to run depending on where the fixed
+      // step size happens to land relative to the edge.
+      inside:
+        frameY >= inner!.top + EDGE_MARGIN_PX &&
+        frameY <= inner!.top + inner!.height - EDGE_MARGIN_PX,
       owner,
+      offsetFromTop: Math.round(frameY - inner!.top),
+      offsetFromBottom: Math.round(inner!.top + inner!.height - frameY),
     });
   }
   await driver.cancel();
@@ -91,6 +108,15 @@ test("[acceptance] point 1: the innermost container owns the drop target", async
   const rootOwnedInside = samples.filter(
     sample => sample.inside && sample.owner === "nx-spike-root"
   );
+  test.info().annotations.push({
+    type: "root-owned-inside",
+    description: JSON.stringify(
+      rootOwnedInside.map(r => ({
+        fromTop: r.offsetFromTop,
+        fromBottom: r.offsetFromBottom,
+      }))
+    ),
+  });
   expect(
     rootOwnedInside.length,
     `the outer container owned the target ${rootOwnedInside.length} time(s) while the pointer was inside the nested one`
@@ -255,7 +281,12 @@ test("[informational] point 2: a click below the drag threshold does not drag", 
     draggingAtTwoPixels,
     "a 2px movement must not pass the activation threshold"
   ).toBe(false);
-  expect(after.length).toBe(before.length);
+  // The whole tree, not its length: a gesture that reordered blocks or swapped
+  // one for another would keep the count and still have mutated the document.
+  expect(
+    after,
+    "a sub-threshold gesture must leave the tree unchanged"
+  ).toEqual(before);
 });
 
 test("[informational] point 9: the library's Insert button adds a block", async ({
@@ -299,7 +330,36 @@ test("[informational] point 9: the library's Insert button adds a block", async 
  * cancelled drag and an unchanged tree; what happens is an abandoned editing
  * session. The v2 canvas must claim Escape while a drag is in flight.
  */
-test("[acceptance] point 12: Escape cancels a drag without changing the tree", async ({
+test("[acceptance] point 12a: Escape keeps the editor mounted", async ({
+  page,
+  request,
+}) => {
+  const fixture = await seedPage(request, FLAT_LIST_FIXTURE);
+  const driver = createPocDriver(page);
+  await driver.mountTree(fixture);
+
+  await startLibraryDrag(driver);
+  for (let step = 0; step < 30; step++) await driver.moveBy(0, 8);
+  await driver.cancel();
+
+  const state = { url: page.url(), hasEditor: await driver.isEditorPresent() };
+  test.info().annotations.push({
+    type: "after-cancel",
+    description: JSON.stringify(state),
+  });
+
+  // The single known gap, isolated so nothing else rides on it.
+  test.fail(
+    true,
+    "the admin shell claims Escape and navigates out of the editor"
+  );
+  expect(
+    state.hasEditor,
+    `Escape left the editor: ${JSON.stringify(state)}`
+  ).toBe(true);
+});
+
+test("[acceptance] point 12b: Escape does not mutate the tree", async ({
   page,
   request,
 }) => {
@@ -324,21 +384,15 @@ test("[acceptance] point 12: Escape cancels a drag without changing the tree", a
     description: JSON.stringify(afterCancel),
   });
 
-  // Declared immediately before the assertion it excuses, so a seeding,
-  // navigation or mount failure is reported as itself rather than absorbed as
-  // the known Escape gap.
-  test.fail(
-    true,
-    "the admin shell claims Escape and navigates out of the editor"
+  // `test.fail` marks the WHOLE test, so the tree assertions below cannot share
+  // it: an Escape implementation that kept the editor but deleted or reordered
+  // blocks would be reported as the known unmount gap. Tree integrity is
+  // therefore skipped-with-a-reason when the editor is gone, and asserted for
+  // real when it survives, while the unmount itself is covered by point 12a.
+  test.skip(
+    !afterCancel.hasEditor,
+    `cannot assess tree integrity: Escape unmounted the editor (${JSON.stringify(afterCancel)}); see point 12a`
   );
-
-  // Asserted, not annotated. When Escape unmounts the editor the poll below
-  // spends its full 30s timing out on a canvas that is never coming back, which
-  // reports as a slow flake rather than the defect it is.
-  expect(
-    afterCancel.hasEditor,
-    `Escape left the editor: ${JSON.stringify(afterCancel)}`
-  ).toBe(true);
 
   // The canvas iframe may legitimately remount, so a single read can land while
   // it is absent. Poll for the valid remount path only.

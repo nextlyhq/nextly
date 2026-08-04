@@ -93,16 +93,6 @@ export interface CanvasDriver {
   drop(): Promise<void>;
   cancel(): Promise<void>;
 
-  /**
-   * Move the pointer onto a drop zone by its ordinal, mid-drag.
-   *
-   * Zones are 0px tall at rest and 6px while dragging, so they cannot be aimed
-   * at before the drag starts and cannot be hit by guessing a point. This is
-   * the host-point-to-canvas-point mapping in its smallest useful form.
-   * Returns false when the ordinal does not exist.
-   */
-  moveToZone(ordinal: number): Promise<boolean>;
-
   /** Move the pending insertion point with the keyboard. */
   keyboardInsert(direction: "up" | "down"): Promise<void>;
 
