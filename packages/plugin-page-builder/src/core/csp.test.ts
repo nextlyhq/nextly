@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { cspDirectives, cspHeaderValue } from "./csp";
+import {
+  cspDirectives,
+  cspHeaderValue,
+  mergeCspDirectives,
+  parseCspHeader,
+  serializeCspDirectives,
+  unexpressibleHosts,
+} from "./csp";
 
 describe("cspDirectives", () => {
   it("allows this origin even with no patterns", () => {
@@ -43,28 +50,77 @@ describe("cspDirectives", () => {
     expect(d["img-src"]).not.toContain("https://cdn.example");
   });
 
-  it("widens a glob to the nearest host CSP can express", () => {
-    // CSP host sources take one leading `*.` and nothing else, while patterns
-    // are picomatch globs. Widening keeps the page working; dropping the host
-    // would make the policy refuse media the site is configured to show, and a
-    // policy that breaks the page is a policy someone removes.
-    for (const [hostname, expected] of [
-      ["**.example.com", "*.example.com"],
-      ["cdn-*.example.com", "*.example.com"],
-      ["*.example.com", "*.example.com"],
-    ] as const) {
+  it("keeps a hostname CSP can express exactly", () => {
+    // A literal host, or one leading `*.` — the whole of the CSP host-source
+    // grammar, and both mean in CSP what they mean in the origin policy.
+    for (const hostname of ["cdn.example", "*.example.com"]) {
       expect(cspDirectives([{ hostname }])["img-src"], hostname).toContain(
-        expected
+        hostname
       );
     }
   });
 
-  it("drops a pattern with no expressible host rather than allowing everything", () => {
-    // `*` matches every host. Widening THAT is not a restriction worth writing,
-    // so it is left out and the origin policy remains the only thing allowing
-    // it — a narrower CSP than the parser, never a wider one.
-    const d = cspDirectives([{ hostname: "*" }, { hostname: "" }]);
-    expect(d["img-src"]).toEqual(["'self'", "data:"]);
+  it("refuses a glob rather than widening it to a public suffix", () => {
+    // The nearest expressible ancestor of `cdn-*.co.uk` is `*.co.uk`, which
+    // allows every site under a public suffix — a CSP wider than the policy it
+    // backstops, which is the one direction these must never differ in.
+    // Identifying a public suffix needs a list this package has no business
+    // shipping, so anything outside the CSP grammar is refused.
+    for (const hostname of [
+      "cdn-*.com",
+      "cdn-*.co.uk",
+      "**.example.com",
+      "*",
+      "",
+    ]) {
+      expect(cspDirectives([{ hostname }])["img-src"], hostname).toEqual([
+        "'self'",
+        "data:",
+      ]);
+    }
+  });
+
+  it("names the hosts it could not express", () => {
+    // Refusing silently would leave the CSP blocking media the page is
+    // configured to show, with nothing to point the host at.
+    expect(
+      unexpressibleHosts([
+        { hostname: "cdn-*.com" },
+        { hostname: "cdn.example" },
+      ])
+    ).toEqual(["cdn-*.com"]);
+  });
+
+  it("refuses a URL whose scheme the origin policy would reject", () => {
+    // Dropping the scheme would emit a bare host, so the CSP would permit what
+    // the parser refuses.
+    expect(cspDirectives([new URL("ftp://cdn.example/a")])["img-src"]).toEqual([
+      "'self'",
+      "data:",
+    ]);
+  });
+
+  it("refuses a port that is not a number", () => {
+    // A port reaches the header as text. `443; script-src *` would close the
+    // source and open a directive of the caller's choosing.
+    for (const port of [
+      "8443 https://evil.example",
+      "443; script-src *",
+      "x",
+    ]) {
+      expect(
+        cspDirectives([{ hostname: "cdn.example", port }])["img-src"],
+        port
+      ).toEqual(["'self'", "data:"]);
+    }
+  });
+
+  it("gives each directive its own array", () => {
+    // Sharing one meant appending a frame origin silently widened `font-src`,
+    // which is the edit someone makes while merging into an existing policy.
+    const d = cspDirectives([{ hostname: "cdn.example" }]);
+    d["frame-src"].push("https://player.example");
+    expect(d["font-src"]).not.toContain("https://player.example");
   });
 
   it("allows data: images by default and blob: never by default", () => {
@@ -113,5 +169,34 @@ describe("cspHeaderValue", () => {
     // Semicolon-separated, no trailing separator.
     expect(value.split("; ")).toHaveLength(4);
     expect(value.endsWith(";")).toBe(false);
+  });
+});
+
+describe("merging into an existing policy", () => {
+  it("unions sources into the directive that already exists", () => {
+    // Policies INTERSECT: an existing `img-src 'self'` refuses a CDN however
+    // many other policies allow it. Nextly's own default headers send exactly
+    // that, so sending this alongside would leave the feature not working.
+    const existing = parseCspHeader("default-src 'self'; img-src 'self' data:");
+    const merged = mergeCspDirectives(
+      existing,
+      cspDirectives([{ protocol: "https", hostname: "cdn.example" }])
+    );
+    expect(merged["img-src"]).toContain("https://cdn.example");
+    expect(merged["img-src"]).toContain("'self'");
+    // Directives the host had and this does not touch are preserved.
+    expect(merged["default-src"]).toEqual(["'self'"]);
+  });
+
+  it("does not duplicate a source both policies name", () => {
+    const merged = mergeCspDirectives(parseCspHeader("img-src 'self'"), {
+      "img-src": ["'self'", "https://cdn.example"],
+    });
+    expect(merged["img-src"].filter(s => s === "'self'")).toHaveLength(1);
+  });
+
+  it("round-trips through parse and serialize", () => {
+    const value = "img-src 'self' data:; frame-src 'self'";
+    expect(serializeCspDirectives(parseCspHeader(value))).toBe(value);
   });
 });

@@ -30,11 +30,14 @@ parser refuses what it can read. A CSP refuses the REQUEST, which covers the
 places a parser cannot reach — a block registered outside the package, and a
 cross-origin `<base href>` that re-points every relative URL on the page.
 
-`cspDirectives(remotePatterns)` and `cspHeaderValue(remotePatterns)` build
-`img-src`, `media-src`, `frame-src` and `font-src` from the same allowlist the
-parser uses, so the hosts are declared once. Your app sends the header from its
-own middleware or `next.config`, MERGED with any policy it already sends —
-policies intersect, so replacing one drops whatever else it protected.
+`cspDirectives(remotePatterns)` builds `img-src`, `media-src`, `frame-src` and
+`font-src` from the same allowlist the parser uses, so the hosts are declared
+once. Your app sends the header from its own middleware or `next.config`.
+
+If the response already carries a policy — Nextly's own security headers send
+one — UNION these sources into its directives with `mergeCspDirectives` rather
+than sending a second header. Policies intersect rather than extend, so an
+existing `img-src 'self'` refuses your CDN however many other policies allow it.
 
 No `script-src`: a nonce-based script policy forces dynamic rendering on every
 page and would defeat ISR. Scripts stay your application's business.
