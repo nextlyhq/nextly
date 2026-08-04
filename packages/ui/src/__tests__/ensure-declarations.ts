@@ -29,11 +29,22 @@ import { fileURLToPath } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url));
 const pkgRoot = join(here, "..", "..");
 
-/** Every declaration a published entry point resolves to. */
+/**
+ * Every declaration a published entry point resolves to.
+ *
+ * Both module systems, because `package.json` gives each entry point an
+ * `import.types` AND a `require.types` condition. Listing only the ESM `.d.ts`
+ * left the files served to CommonJS consumers unbuilt, unchecked for freshness
+ * and unchecked for release tags — so `dist/index.d.cts` could be missing or
+ * untagged while every assertion here stayed green.
+ */
 export const DECLARATION_ENTRIES = [
   "index.d.ts",
   "utils.d.ts",
   "tailwind-preset.d.ts",
+  "index.d.cts",
+  "utils.d.cts",
+  "tailwind-preset.d.cts",
 ];
 
 function newestSourceMtime(dir: string): number {

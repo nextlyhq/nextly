@@ -28,7 +28,7 @@
  * @design-spec
  * - Border-radius: `rounded-lg`, the container step of the `--radius` scale
  * - Max-width: 512px (default)
- * - Backdrop: black/80 with blur effect
+ * - Backdrop: the `--nx-overlay` scrim with blur effect
  * - Padding: 24px (p-6)
  * - Shadow: xl for prominence
  *

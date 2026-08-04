@@ -21,6 +21,7 @@ import {
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import ts from "typescript";
 import { beforeAll, describe, expect, it } from "vitest";
 
 const SRC = path.dirname(fileURLToPath(import.meta.url));
@@ -433,5 +434,82 @@ describe("ui release tags reach the published types", () => {
     expect(
       [...declared.values()].filter(t => t === "experimental").length
     ).toBeGreaterThan(50);
+  });
+});
+
+describe("ui release tags do not shadow the documentation", () => {
+  /**
+   * A release tag written as its own doc block SILENTLY DELETES the
+   * description. TypeScript associates only the LAST leading doc block with a
+   * declaration, so `/** description *\/` followed by `/** @experimental *\/`
+   * yields a symbol whose tag is right and whose documentation is empty --
+   * editor hovers and API tooling lose exactly what the tag was added
+   * alongside. The tag belongs INSIDE the existing block.
+   *
+   * Parsed rather than pattern-matched: an intervening `//` comment separates
+   * the two blocks on some declarations, and a regex written against the
+   * adjacent case walks straight past those.
+   */
+  function shadowed(file: string): string[] {
+    const text = readFileSync(file, "utf8");
+    const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+    const found: string[] = [];
+    for (const stmt of sf.statements) {
+      const blocks = (
+        ts.getLeadingCommentRanges(text, stmt.getFullStart()) ?? []
+      )
+        .filter(r => text.slice(r.pos, r.pos + 3) === "/**")
+        .map(r => text.slice(r.pos, r.end));
+      if (blocks.length < 2) continue;
+
+      // Only the last block reaches the symbol, so the defect is a last block
+      // that is nothing BUT tags while an earlier one carries prose. A module
+      // header sitting above the first statement also produces two blocks, and
+      // is not this: there the last block is the real documentation.
+      const prose = (b: string) =>
+        b
+          .replace(/^\/\*\*|\*\/$/g, "")
+          .replace(/^\s*\*\s?/gm, "")
+          .replace(/@\w+/g, "")
+          .trim();
+      if (prose(blocks[blocks.length - 1]!) !== "") continue;
+      if (!blocks.slice(0, -1).some(b => prose(b) !== "")) continue;
+
+      const line = sf.getLineAndCharacterOfPosition(stmt.getStart(sf)).line + 1;
+      found.push(`${path.relative(SRC, file)}:${line}`);
+    }
+    return found;
+  }
+
+  function sourceFiles(dir: string): string[] {
+    const out: string[] = [];
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (!/^(__tests__|__snapshots__)$/.test(entry.name))
+          out.push(...sourceFiles(full));
+        continue;
+      }
+      if (/\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name))
+        out.push(full);
+    }
+    return out;
+  }
+
+  it("keeps every tag inside the block that documents the symbol", () => {
+    const offenders = sourceFiles(SRC).flatMap(shadowed);
+    expect(
+      offenders,
+      "these declarations carry a release tag in a doc block of its own, so " +
+        "their description never reaches the symbol. Move the tag into the " +
+        "existing block as a trailing `@experimental` / `@public` line."
+    ).toEqual([]);
+  });
+
+  it("is not passing vacuously", () => {
+    // The detector must actually fire, or an empty result above would mean
+    // "nothing was parsed" just as readily as "nothing is wrong".
+    const probe = path.join(SRC, "__tests__", "shadowed-tag-probe.fixture.ts");
+    expect(shadowed(probe)).toHaveLength(1);
   });
 });

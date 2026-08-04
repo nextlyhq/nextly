@@ -60,11 +60,12 @@ import { cn } from "../lib/utils";
  * Progress variants using CVA
  *
  * Defines color variants for different progress states.
+ *
+ * @experimental
  */
 // Square corners: the capsule track clips the trailing edge already, so a radius
 // here would only round the leading edge, tapering low percentages into a sliver
 // narrower than the value they represent.
-/** @experimental */
 export const progressVariants = cva("h-full rounded-none transition-all", {
   variants: {
     variant: {

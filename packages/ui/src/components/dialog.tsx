@@ -44,7 +44,7 @@ import { usePortalContainer } from "../providers/portal-provider";
  * @design-spec
  * - Border-radius: `rounded-lg`, the container step of the `--radius` scale
  * - Max-width: 512px (default), responsive sizes available
- * - Backdrop: black/80 with blur effect
+ * - Backdrop: the `--nx-overlay` scrim with blur effect
  * - Padding: 24px (p-6)
  * - Shadow: xl for prominence (elevation level 4)
  * - Transition: 150ms per design system
@@ -78,7 +78,8 @@ export type DialogOverlayProps = ComponentPropsWithoutRef<
 
 /**
  * DialogOverlay - The backdrop overlay behind the dialog content.
- * Renders with black/80 opacity and blur effect per design spec.
+ * Renders the `--nx-overlay` scrim with a blur effect. The opacity is the
+ * token's, not a literal: it differs by mode and a host can retheme it.
  * @experimental
  */
 const DialogOverlay = forwardRef<

@@ -40,8 +40,7 @@ export { FormLabelWithTooltip } from "./components/form-label-with-tooltip";
 /** @public */
 export type { FormLabelWithTooltipProps } from "./components/form-label-with-tooltip";
 
-/** Release tags are per clause below. */
-// Components — Display
+// Components — Display. Release tags are per clause below.
 /** @public */
 export { Badge } from "./components/badge";
 
@@ -112,9 +111,8 @@ export {
   CollapsibleContent,
 } from "./components/collapsible";
 
-/** Release tags are per clause below. */
+// Components — Radix Primitives. Release tags are per clause below.
 /** @experimental */
-// Components — Radix Primitives
 export {
   Accordion,
   AccordionItem,
@@ -167,8 +165,7 @@ export {
   PopoverAnchor,
 } from "./components/popover";
 
-/** @public Dialog. Exercised by page-builder. */
-// Components — Dialog
+// Components — Dialog. Exercised by page-builder.
 /** @public */
 export {
   Dialog,
@@ -226,8 +223,7 @@ export type {
   AlertDialogCancelProps,
 } from "./components/alert-dialog";
 
-/** @public Dropdown menu. Exercised by page-builder. */
-// Components — DropdownMenu
+// Components — DropdownMenu. Exercised by page-builder.
 /** @public */
 export {
   DropdownMenu,
@@ -267,8 +263,7 @@ export type {
   DropdownMenuShortcutProps,
 } from "./types/dropdown-menu";
 
-/** @public Select. Exercised by both first-party plugins. */
-// Components — Select
+// Components — Select. Exercised by both first-party plugins.
 /** @public */
 export {
   Select,
@@ -290,8 +285,7 @@ export {
 /** @public */
 export type { SelectTriggerProps } from "./components/select";
 
-/** @public Sheet. Exercised by page-builder. */
-// Components — Sheet
+// Components — Sheet. Exercised by page-builder.
 /** @public */
 export {
   Sheet,

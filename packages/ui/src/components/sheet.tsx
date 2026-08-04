@@ -21,7 +21,7 @@ import { usePortalContainer } from "../providers/portal-provider";
  *
  * - **Width**: 320px (sm), 400px (default), 512px (lg), 672px (xl), 100% (full)
  * - **Animation**: Slide-in from side (150ms duration)
- * - **Backdrop**: Semi-transparent overlay (50% opacity with backdrop blur)
+ * - **Backdrop**: the `--nx-overlay` scrim, with backdrop blur
  * - **z-index**: 50 (both overlay and content - content renders on top via DOM order)
  * - **Border-radius**: 0 (full-screen edges)
  *
@@ -80,7 +80,7 @@ const SheetPortal = DialogPrimitive.Portal;
  *
  * Semi-transparent backdrop that appears behind the sheet.
  *
- * - **Background**: Black with 50% opacity + backdrop blur
+ * - **Background**: the `--nx-overlay` scrim + backdrop blur
  * - **Animation**: Fade in/out (150ms)
  * - **z-index**: 50
  * @experimental
