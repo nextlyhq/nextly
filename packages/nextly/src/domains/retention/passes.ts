@@ -58,24 +58,32 @@ export function buildRetentionPasses(
     });
   }
 
-  // A policy whose every window is `false` is an operator saying "keep it all",
-  // so the pass is not registered at all rather than registered and made a
-  // no-op: an unregistered pass never takes the gate, never reads, and never
-  // appears in a log as having run.
-  // Read through the published value so a hot reload takes effect without a
-  // restart; the policy built in at construction is the fallback.
+  // Registered whenever a policy exists at all. Whether it has anything to
+  // prune is a question for each RUN rather than for construction: a runner
+  // built at boot outlives every hot reload, so a policy captured here would
+  // keep pruning on windows the developer has already changed — including to
+  // `false`, where the stale ones go on deleting what they have just asked to
+  // keep. An entirely-`false` policy makes the pass a no-op at run time, which
+  // costs one gate claim per interval and nothing else.
   const audit = activeAuditRetention(input.auditPolicy);
-  if (
-    audit &&
-    (audit.activityMaxAgeMs !== false || audit.authMaxAgeMs !== false)
-  ) {
+  if (audit) {
     passes.push({
       key: AUDIT_RETENTION_GATE_KEY,
+      // The one field read at construction. It decides how often a pass is
+      // OFFERED, not what it deletes, so a stale value costs a differently
+      // timed pass rather than a wrong outcome.
       intervalMs: audit.intervalMs,
       run: async maxBatches => {
+        const policy = activeAuditRetention(input.auditPolicy);
+        if (
+          !policy ||
+          (policy.activityMaxAgeMs === false && policy.authMaxAgeMs === false)
+        ) {
+          return;
+        }
         await pruneAuditDataSafely(
           { adapter: input.adapter, now: input.now, logger: input.logger },
-          audit,
+          policy,
           maxBatches
         );
       },

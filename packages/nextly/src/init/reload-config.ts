@@ -1396,12 +1396,6 @@ async function applyReload(opts?: {
   // — it is safe to apply immediately, before the schema diff is synced.
   setWebhookAuditEnabled(newConfig.webhookAuditEnabled ?? false);
 
-  // Republish the retention windows for the same reason. The runners captured
-  // theirs when they were built, so without this a saved change keeps pruning
-  // on the previous windows — including a change to `false`, where the stale
-  // ones go on deleting rows the operator has just asked to keep.
-  setAuditRetention(newConfig.auditRetention);
-
   // Worked out here and applied only where the reload lands, by `commitReload`.
   // A hook edit changes no table, so the reload it triggers often finds no diff
   // and returns early -- which is why the commit has to sit on the no-change
@@ -1412,6 +1406,12 @@ async function applyReload(opts?: {
     if (committed) return;
     committed = true;
     commitConfigHooks();
+    // Published here rather than when the file is read. A reload that is later
+    // refused still parsed a valid config, and publishing early would leave a
+    // policy the process explicitly rejected in force — deleting on windows
+    // nothing accepted. The runners read the published value at run time, so
+    // committing it here is what makes a saved change take effect.
+    setAuditRetention(newConfig?.auditRetention);
   };
 
   // databaseAdapter doubles as our DI-readiness probe. We don't need any

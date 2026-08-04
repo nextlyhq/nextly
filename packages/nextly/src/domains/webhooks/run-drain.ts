@@ -13,7 +13,10 @@
 import { deliverDueDeliveries, type DeliverDeps } from "./deliver";
 import { fanOutDueEvents, type FanOutDeps } from "./fan-out";
 import { pruneAuditDataSafely } from "../audit/prune";
-import type { ResolvedAuditRetentionConfig } from "../audit/retention-config";
+import {
+  activeAuditRetention,
+  type ResolvedAuditRetentionConfig,
+} from "../audit/retention-config";
 import { pruneWebhookDataSafely, type PruneDeps } from "./prune";
 import type { ResolvedWebhookRetentionConfig } from "./retention-config";
 import {
@@ -169,6 +172,15 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
     const deadlineSpent = (): boolean =>
       deadline !== undefined && now() >= deadline;
 
+    // Read live for the same reason the request-path pass does: this dependency
+    // is a singleton built at boot, so a captured policy would outlive every
+    // reload that changed it.
+    const auditPolicy = activeAuditRetention(deps.retention?.auditPolicy);
+    const auditPrunes =
+      auditPolicy !== undefined &&
+      (auditPolicy.activityMaxAgeMs !== false ||
+        auditPolicy.authMaxAgeMs !== false);
+
     const webhookPolicy = retention.policy;
     if (webhookPolicy && !deadlineSpent()) {
       const due = await claimRetentionPass(
@@ -191,7 +203,14 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
         // skipped every time. Splitting what is left needs no tuned reserve:
         // each pass gets a share that shrinks with the work already done.
         const pruned = await pruneWebhookDataSafely(
-          { ...retention.prune, deadline: halfOfRemaining(deadline, now) },
+          {
+            ...retention.prune,
+            // Halved only when a second pass will actually follow. Reserving
+            // for a sweep that will not run leaves the unclaimable half unused
+            // until the next interval, so a ledger needing more than half a
+            // budget per interval would grow while time sat idle.
+            deadline: auditPrunes ? halfOfRemaining(deadline, now) : deadline,
+          },
           webhookPolicy
         );
         result.pruned.events = pruned.events.webhook + pruned.events.audit;
@@ -206,18 +225,17 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
     // capped passes can retire. Nothing waits on the drain, which is what makes
     // it the right place to spend it. Gated on its own key, so a webhook pass
     // taken this round does not consume the audit trails' turn.
-    const auditPolicy = deps.retention?.auditPolicy;
     // Skipped once the delivery deadline is spent. The wall-clock bound is a
     // promise this function makes to a serverless cron route, and a full-budget
     // pass is up to forty statements — enough to carry the invocation past the
     // platform's limit and have it killed, losing the drain's own work with it.
     // The gate is not claimed in that case either, so the pass is deferred to
     // the next invocation rather than consumed by one that could not run it.
-    if (auditPolicy && !deadlineSpent()) {
+    if (auditPrunes && !deadlineSpent()) {
       const auditDue = await claimRetentionPass(
         retention.gate,
         AUDIT_RETENTION_DRAIN_GATE_KEY,
-        auditPolicy.intervalMs
+        auditPolicy!.intervalMs
       );
       // Re-checked after the claim, not only before it: the claim is two
       // statements against the database and can itself spend what remained. A
@@ -232,7 +250,7 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
       } else if (auditDue) {
         const trails = await pruneAuditDataSafely(
           { ...retention.prune, deadline },
-          auditPolicy
+          auditPolicy!
         );
         result.pruned.activity = trails.activity;
         result.pruned.auth = trails.auth;

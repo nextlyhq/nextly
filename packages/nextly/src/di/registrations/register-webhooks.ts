@@ -12,7 +12,6 @@
  * expired.
  */
 
-import type { ResolvedAuditRetentionConfig } from "../../domains/audit/retention-config";
 import { MetaRetentionGate } from "../../domains/retention/gate";
 import { buildRetentionRunner } from "../../domains/retention/passes";
 import { WebhookFastDrainScheduler } from "../../domains/webhooks/after-drain";
@@ -42,16 +41,6 @@ import type { RegistrationContext } from "./types";
  * reloading on every drain pass.
  */
 const ENDPOINT_REGISTRY_TTL_MS = 30_000;
-
-/** Whether an audit policy leaves anything to prune. */
-function auditPrunes(
-  policy: ResolvedAuditRetentionConfig | undefined
-): policy is ResolvedAuditRetentionConfig {
-  return (
-    policy !== undefined &&
-    (policy.activityMaxAgeMs !== false || policy.authMaxAgeMs !== false)
-  );
-}
 
 export function registerWebhookServices(ctx: RegistrationContext): void {
   const { adapter, logger } = ctx;
@@ -145,12 +134,14 @@ export function registerWebhookServices(ctx: RegistrationContext): void {
       // is an unrelated decision: every remaining audit trigger is a request
       // path capped at a batch, so the configured budget became unreachable and
       // a busy trail could grow indefinitely.
-      ctx.config.webhookRetention || auditPrunes(ctx.config.auditRetention)
+      ctx.config.webhookRetention || ctx.config.auditRetention
         ? {
             policy: ctx.config.webhookRetention ?? undefined,
-            auditPolicy: auditPrunes(ctx.config.auditRetention)
-              ? ctx.config.auditRetention
-              : undefined,
+            // Carried whenever a policy exists rather than only when it prunes
+            // today: whether it prunes is decided when the pass runs, so a hot
+            // reload that widens an entirely-`false` policy reaches this
+            // dependency instead of needing a restart.
+            auditPolicy: ctx.config.auditRetention,
             prune: { adapter, logger },
             gate: new MetaRetentionGate(adapter),
           }
