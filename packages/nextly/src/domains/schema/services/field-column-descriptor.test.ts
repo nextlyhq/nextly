@@ -40,7 +40,7 @@ describe("getColumnDescriptor — plugin field types", () => {
     });
     const d = getColumnDescriptor(
       field("page-builder"),
-      "postgres",
+      "postgresql",
       "codeFirst"
     );
     expect(d?.kind).toBe("json");
@@ -50,7 +50,7 @@ describe("getColumnDescriptor — plugin field types", () => {
     clearFieldTypes();
     const d = getColumnDescriptor(
       field("page-builder"),
-      "postgres",
+      "postgresql",
       "codeFirst"
     );
     expect(d?.kind).toBe("text");
@@ -69,7 +69,8 @@ describe("getColumnDescriptor: number storage", () => {
   it("keeps the builder's options.format='float' mapping to double", () => {
     const d = getColumnDescriptor(
       numberField({ options: { format: "float" } }),
-      "postgresql"
+      "postgresql",
+      "codeFirst"
     );
     expect(d?.kind).toBe("double");
   });
@@ -96,7 +97,8 @@ describe("getColumnDescriptor: number storage", () => {
   it("honors author-set precision and scale", () => {
     const d = getColumnDescriptor(
       numberField({ dbType: "decimal", precision: 12, scale: 4 }),
-      "mysql"
+      "mysql",
+      "codeFirst"
     );
     expect(d?.dialectType).toBe("decimal(12,4)");
     expect(d?.precision).toBe(12);

@@ -1,3 +1,4 @@
+import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -48,8 +49,9 @@ describe("a json-backed contributed type's column", () => {
   it("agrees with the canonical descriptor", () => {
     for (const dialect of DIALECTS) {
       const descriptor = getColumnDescriptor(
-        { name: "content", type: "doc" },
-        dialect
+        { name: "content", type: "doc" } as unknown as FieldDefinition,
+        dialect,
+        "codeFirst"
       );
       expect(descriptor?.kind, dialect).toBe("json");
       // The DDL emits the dialect's own JSON token for the same field.

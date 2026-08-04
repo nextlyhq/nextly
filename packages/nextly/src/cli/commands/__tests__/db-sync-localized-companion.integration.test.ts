@@ -406,6 +406,8 @@ describe("db:sync creates localized companion tables in-process (integration)", 
         tableName: "dc_dbsync_noloc",
         fields: [{ name: "title", type: "text", localized: true }],
         dialect: "sqlite",
+        // Defined in config, so the pipeline built this table.
+        builtBy: "codeFirst",
       },
       error => reported.push(error)
     );

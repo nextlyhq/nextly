@@ -84,10 +84,14 @@ export class DynamicCollectionSchemaService {
    */
   private canonicalSlugType(field: FieldDefinition): string | null {
     if (toSnakeCase(field.name) !== "slug") return null;
-    // This service builds collections and singles, so it asks the descriptor as that builder.
+    // Asked as the builder whose reading of an unstated width is BOUNDED, which is the whole
+    // reason this function exists: the index above needs a column MySQL can index, and the
+    // unbounded reading renders `text`, which it cannot index without a prefix length. This is a
+    // constraint of the column rather than a claim about who created the table, so it does not
+    // vary with the entity — asking as the creating service instead made every MySQL create fail
+    // on its own CREATE INDEX and leave the table absent.
     return (
-      getColumnDescriptor(field, this.dialect, "collection")?.dialectType ??
-      null
+      getColumnDescriptor(field, this.dialect, "codeFirst")?.dialectType ?? null
     );
   }
 
