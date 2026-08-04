@@ -42,6 +42,15 @@ export interface PluginWidgetMeta {
 /** Plugin metadata returned by the `/admin-meta` API. */
 export interface PluginMetadata {
   name: string;
+  /**
+   * The plugin's own configuration for its admin components, as declared in
+   * `contributes.admin.clientConfig` and serialized through `/api/admin-meta`.
+   *
+   * World-readable: every authenticated admin user receives it, so it never
+   * holds secrets. Read it with `usePluginClientConfig` rather than searching
+   * this array by hand.
+   */
+  clientConfig?: Record<string, unknown>;
   version?: string;
   description?: string;
   /** Author shown in the plugins list; mirrors package.json by convention. */

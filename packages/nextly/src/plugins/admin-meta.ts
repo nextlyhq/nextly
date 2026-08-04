@@ -65,6 +65,11 @@ export interface PluginAdminMeta {
   /** Slugs of contributed field groups, for the detail page's contributions view. */
   fieldGroups?: string[];
   /**
+   * The plugin's own configuration for its admin components. World-readable and
+   * JSON-only; see `PluginAdminContributions.clientConfig`.
+   */
+  clientConfig?: Record<string, unknown>;
+  /**
    * Declared custom permissions (identity + display fields only) — present
    * only for enabled plugins, like the rest of the behavioral surface.
    */
@@ -135,6 +140,62 @@ export function pluginAdminSlug(name: string): string {
 }
 
 /**
+ * The value if it survives a JSON round trip unchanged, otherwise `undefined`.
+ *
+ * Round-tripped rather than type-walked, because the question is exactly "will
+ * the client see what the plugin wrote". A structural check would have to keep
+ * its own list of things JSON drops, and that list is the thing that goes out
+ * of date — `Date`, `Map`, `Set`, `BigInt`, `undefined` in an array, a getter
+ * that throws, a `toJSON` that rewrites the value. Comparing the result to the
+ * input catches all of them, including the ones nobody enumerated.
+ */
+function jsonOnly(
+  value: Record<string, unknown>
+): Record<string, unknown> | undefined {
+  let decoded: Record<string, unknown>;
+  try {
+    const encoded = JSON.stringify(value);
+    // `undefined` when the top-level value itself is not encodable.
+    if (encoded === undefined) return undefined;
+    decoded = JSON.parse(encoded) as Record<string, unknown>;
+  } catch {
+    // A cycle, a BigInt, or a getter that throws.
+    return undefined;
+  }
+  return sameShape(value, decoded) ? decoded : undefined;
+}
+
+/**
+ * Whether a value came back from JSON as the same thing it went in as.
+ *
+ * Compared against the DECODED value rather than against a second encoding of
+ * it. Re-encoding proves only that JSON is stable, which it always is: a `Date`
+ * encodes to a string and that string re-encodes identically, so the check
+ * passes while the client reads a `string` where the plugin wrote a `Date`.
+ * Comparing the two sides catches that, and catches the other silent
+ * conversions with it — a `Map` that arrives as `{}`, a key whose value was
+ * `undefined` or a function and is simply gone, an `undefined` in an array that
+ * arrives as `null`.
+ */
+function sameShape(before: unknown, after: unknown): boolean {
+  if (before === after) return true;
+  if (typeof before !== typeof after) return false;
+  if (before === null || after === null) return false;
+  if (typeof before !== "object") return false;
+  if (Array.isArray(before) !== Array.isArray(after)) return false;
+  // A `Map` and a `Set` both encode to `{}`, so the shapes match while the
+  // prototypes do not. This is what separates a plain object from a class
+  // instance that merely looks like one.
+  if (Object.getPrototypeOf(before) !== Object.getPrototypeOf(after))
+    return false;
+  const a = before as Record<string, unknown>;
+  const b = after as Record<string, unknown>;
+  const keys = Object.keys(a);
+  if (keys.length !== Object.keys(b).length) return false;
+  return keys.every(key => sameShape(a[key], b[key]));
+}
+
+/**
  * Build the `plugins[]` admin-meta array from the registered plugins, applying
  * host `pluginOverrides` (placement/order/after/appearance) and folding each
  * enabled plugin's `contributes.admin` menu/pages/settings.
@@ -195,6 +256,22 @@ export function buildPluginAdminMeta(
       if (admin.menu && admin.menu.length > 0) meta.menu = admin.menu;
       if (admin.pages && admin.pages.length > 0) meta.pages = admin.pages;
       if (admin.settings) meta.settings = admin.settings;
+      // Rejected rather than repaired when it will not round-trip. A config
+      // that arrives with its `Date`s turned into strings and its functions
+      // turned into nothing is harder to diagnose than one that never arrives,
+      // because the shape the component reads still looks plausible.
+      if (admin.clientConfig !== undefined) {
+        const serializable = jsonOnly(admin.clientConfig);
+        if (serializable === undefined) {
+          throw new Error(
+            `Plugin "${plugin.name}" declares an admin.clientConfig that is ` +
+              "not JSON. It is serialized into /api/admin-meta, so it may " +
+              "hold only strings, numbers, booleans, null, arrays and plain " +
+              "objects — no functions, class instances, Dates or Maps."
+          );
+        }
+        meta.clientConfig = serializable;
+      }
       // Header customization. `header.slot` supersedes the
       // deprecated top-level `headerSlot`; keep `meta.headerSlot` mirrored for
       // back-compat.

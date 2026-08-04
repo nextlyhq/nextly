@@ -517,3 +517,86 @@ describe("buildPluginAdminMeta", () => {
     expect(meta[0].fieldGroups).toEqual(["form-block"]);
   });
 });
+
+describe("buildPluginAdminMeta — clientConfig", () => {
+  const withConfig = (clientConfig: Record<string, unknown>) =>
+    asPlugins([{ ...base, contributes: { admin: { clientConfig } } }]);
+
+  it("delivers a plugin's own config to the client", () => {
+    // A plugin's factory runs on the server when the host builds its config;
+    // its admin components run in the browser. This is the only thing that
+    // crosses between them.
+    const meta = buildPluginAdminMeta(
+      withConfig({
+        remotePatterns: [{ protocol: "https", hostname: "a.example" }],
+      }),
+      undefined
+    );
+    expect(meta[0]?.clientConfig).toEqual({
+      remotePatterns: [{ protocol: "https", hostname: "a.example" }],
+    });
+  });
+
+  it("withholds it from a disabled plugin, like the rest of the admin surface", () => {
+    const meta = buildPluginAdminMeta(
+      asPlugins([
+        {
+          ...base,
+          enabled: false,
+          contributes: { admin: { clientConfig: { a: 1 } } },
+        },
+      ]),
+      undefined
+    );
+    expect(meta[0]?.clientConfig).toBeUndefined();
+  });
+
+  it("refuses config that will not survive the trip, naming the plugin", () => {
+    // Rejected rather than repaired. A config whose Dates arrive as strings and
+    // whose functions arrive as nothing still looks plausible to the component
+    // reading it, which is harder to diagnose than a config that never arrives.
+    for (const bad of [
+      { when: new Date() },
+      { fn: () => 1 },
+      { m: new Map() },
+      { s: new Set([1]) },
+      { big: 1n },
+      { nested: { deep: [{ when: new Date() }] } },
+    ]) {
+      expect(
+        () => buildPluginAdminMeta(withConfig(bad), undefined),
+        JSON.stringify(Object.keys(bad))
+      ).toThrow(/@acme\/p.*clientConfig/s);
+    }
+  });
+
+  it("refuses a key whose value simply disappears", () => {
+    // `undefined` and a function are both dropped by JSON, so the object the
+    // client receives is missing a key the plugin wrote. That is a silent
+    // shape change, not a harmless omission.
+    expect(() =>
+      buildPluginAdminMeta(withConfig({ a: 1, gone: undefined }), undefined)
+    ).toThrow(/clientConfig/);
+  });
+
+  it("accepts the JSON shapes a real config uses", () => {
+    const config = {
+      s: "x",
+      n: 1,
+      b: true,
+      nul: null,
+      arr: [1, "two", { three: 3 }],
+      nested: { deep: { deeper: [true] } },
+    };
+    const meta = buildPluginAdminMeta(withConfig(config), undefined);
+    expect(meta[0]?.clientConfig).toEqual(config);
+  });
+
+  it("survives a cycle by refusing rather than by hanging", () => {
+    const cyclic: Record<string, unknown> = { a: 1 };
+    cyclic.self = cyclic;
+    expect(() => buildPluginAdminMeta(withConfig(cyclic), undefined)).toThrow(
+      /clientConfig/
+    );
+  });
+});

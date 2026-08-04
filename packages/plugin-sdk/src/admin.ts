@@ -105,6 +105,7 @@ export {
   FieldOptionsEditor,
   withOptionIds,
   usePluginFieldTypeEntries,
+  usePluginClientConfig,
   ConditionRow,
   operatorsForType,
   operatorTakesValue,
