@@ -1,5 +1,453 @@
 # nextly
 
+## 0.0.2-alpha.52
+
+### Patch Changes
+
+- [#532](https://github.com/nextlyhq/nextly/pull/532) [`4902ef4`](https://github.com/nextlyhq/nextly/commit/4902ef42388fc4317d5b8e98ed6729184608c58d) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Give a column added by an edit the constraints and indexes creating the table would have attached: a one-to-one is unique, a relationship is indexed, and a requested index exists. Adding a required relationship to a collection that already has entries is now refused with the steps that work instead of emitting invalid SQL, and removing a relationship drops its foreign key first on MySQL and is refused on SQLite, which cannot drop one without rebuilding the table.
+
+- [#526](https://github.com/nextlyhq/nextly/pull/526) [`8bdf575`](https://github.com/nextlyhq/nextly/commit/8bdf575b5837387973ffc226f1820f79abb7b2f4) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Erase a deleted account's request identifiers from the auth log.
+
+  Deleting a user already removed their name and email from the activity log while
+  keeping the record itself. The auth log identifies a person a second way — by the
+  address they connected from and the client they used — and those survived
+  untouched. They are now erased on the same deletion, stamped with when, while the
+  event kind, the actor and target references and the timestamp stay: that is the
+  security fact a retained trail exists for.
+
+  Erasure is keyed on the actor. A row naming someone as the TARGET carries the
+  address of whoever acted on them, so erasing by target would scrub a different
+  person's data and leave the subject's own in place. Events recorded without an
+  actor — a failed login, a rejected CSRF — are out of reach by design, since they
+  are written unattributed precisely so a failure cannot reveal which account was
+  reached; nothing links them to a person, so no deletion can find them. This
+  table is pruned on `audit.retention.authMaxAgeMs` — 180 days by default — so a
+  window is what bounds them. A window is a weaker guarantee than an erasure,
+  which is why the metadata projection below is default-deny: what never enters is
+  the only thing certain not to persist.
+
+  Whether each table can be erased is now decided per table. A database can carry
+  one and not the other, and answering for the pair would let a missing auth log
+  suppress the activity erasure, leaving behind the names and emails the deletion
+  exists to remove.
+
+  Identifiers are also kept out of the auth log's `metadata` in the first place. A
+  `NextlyError`'s `logContext` is written for operator triage, and a failed login
+  puts the attempted email address there; the auth handlers copied that context
+  into the stored event wholesale. A failure is recorded with no actor precisely
+  so it cannot reveal which account was reached, so nothing links such a row to a
+  person and the deletion that erases their other rows can never find it — the
+  identifier has to not be stored rather than be erased later. Only an allowlisted
+  set of diagnostic keys is now copied, default-deny, so a key added for logging
+  cannot silently become a field of the audit trail.
+
+  Naming a key is not enough on its own, because none of the values are ours to
+  begin with. An `AuthStrategy` is application code and chooses its own failure
+  reason; an error's `code` accepts any string, and the two diagnostic codes are
+  copied straight from it. Each retained value is now checked against a vocabulary
+  this package controls — a reason it produces, or a code the canonical table
+  defines — and anything else is dropped. The value still reaches the operator log;
+  what it no longer does is enter a trail nothing can associate with a subject.
+
+  The reasons are named in one place that the handlers emitting them now compile
+  against, so a new reason is a type error until it is listed rather than being
+  discarded without a diagnostic. Three that the initial-password exchange already
+  emitted were being discarded that way, leaving `pending-token-wrong-challenge`, a
+  stale must-change state, and a missing user indistinguishable from each other in
+  the trail. All three are recorded again.
+
+  **Upgrading: rows written before this change are not covered.** The handlers
+  previously stored the whole error context, so existing unattributed
+  `login-failed` rows can already hold an attempted email address or a user id.
+  Deletion is keyed on the actor and those rows have none, so nothing reaches them
+  — the projection applies only to failures recorded from now on.
+
+  Accounts deleted BEFORE this change are not covered either, for the opposite
+  reason: their attributed rows still hold the address and client they connected
+  from, and the erasure added here runs during a deletion — it can never run for
+  an account that is already gone. `actor_user_id` carries no foreign key, so
+  those rows survive as orphans pointing at nothing.
+
+  Scrub both once, before or after upgrading:
+
+  ```sql
+  -- Rows recorded without an actor: the context the handlers used to store
+  -- wholesale, which may name an attempted address.
+  UPDATE audit_log SET metadata = NULL
+  WHERE actor_user_id IS NULL AND metadata IS NOT NULL;
+
+  -- Rows attributed to accounts that no longer exist: their request identifiers,
+  -- which the deletion that removed them never erased.
+  UPDATE audit_log SET ip_address = NULL, user_agent = NULL
+  WHERE actor_user_id IS NOT NULL
+    AND actor_user_id NOT IN (SELECT id FROM users);
+  ```
+
+  The first discards the diagnostic codes on those rows along with the
+  identifiers. The second leaves `actor_user_id` in place — the trail should still
+  say that the same someone did these things, only not who they were. The event,
+  its outcome and its timestamp are columns, and neither statement touches them:
+  that is the security fact the trail exists for.
+
+  **Upgrading, PostgreSQL and MySQL: one required action.** If you hardened
+  `audit_log` by revoking UPDATE — the posture this package previously documented —
+  grant it back for the three columns an erasure touches, or deleting a user will
+  fail and roll back:
+
+  ```sql
+  GRANT UPDATE (ip_address, user_agent, identity_erased_at) ON audit_log TO app_role;
+  GRANT DELETE ON audit_log TO app_role;
+  ```
+
+  Two duties need those grants. Erasing the address and client a deleted account
+  connected from is an UPDATE, and it runs inside the deletion's transaction, so a
+  blanket revoke blocks account deletion outright. Pruning rows past their window
+  is a DELETE, and a role without it fails every pass silently — retention must
+  never fail the request that offered it — so the table grows unbounded while the
+  setting reads as enforced. Revoke DELETE only together with
+  `audit: { retention: { authMaxAgeMs: false } }`, so the configuration says what
+  the privileges actually do. Every other column stays immutable. Deployments that
+  never restricted these grants, and all SQLite deployments, need no action.
+
+  ***
+
+  Prune the activity and auth trails on a schedule.
+
+  **This deletes data the first time it runs.** Set the windows before you deploy
+  if you need longer ones.
+
+  Neither trail has ever actually been pruned. `activity_log` has claimed a 90-day
+  policy in its own schema comment since it was introduced, but the cleanup that
+  comment named was never called from anywhere — and could not have worked if it
+  had been, because it referenced a column that does not resolve and its failure
+  would have been swallowed. Installs are therefore carrying every row ever
+  written, while the schema said otherwise. `audit_log` never promised anything
+  and grew unbounded too.
+
+  Both are pruned now, and the first pass removes everything already past its
+  window:
+  - `activity_log` — content activity, who changed what — **90 days**
+  - `audit_log` — sign-ins, password changes, role grants — **180 days**
+
+  90 for content activity is what the comparable self-hosted CMSes default to, and
+  180 for auth events is what GitHub and Atlassian Cloud retain: security
+  questions are asked later than editorial ones, because a compromise is usually
+  noticed well after the sign-in that caused it.
+
+  To keep more, configure it **before** upgrading:
+
+  ```ts
+  export default defineConfig({
+    audit: {
+      retention: {
+        activityMaxAgeMs: 365 * 24 * 60 * 60 * 1000,
+        authMaxAgeMs: false, // keep auth history forever
+      },
+    },
+  });
+  ```
+
+  Each window is independent, so bounding the high-volume feed while keeping
+  security history indefinitely is one setting rather than a compromise.
+  `audit: { retention: false }` keeps everything, as today.
+
+  Passes run opportunistically off content writes, at most one per interval,
+  batched, and never fail the write that offered them. Batching matters on the
+  first run in particular: an install that has never pruned faces every row it has
+  ever written, and an unbounded `DELETE` there would take a long lock on the
+  largest table at the worst possible moment.
+
+  Scheduling is now shared rather than duplicated. The gate, interval and
+  never-throw wrapper that webhook retention already used are a general mechanism,
+  so audit retention registers a pass with it instead of introducing a second one.
+  Each pass is gated on its own key: a single shared marker would let whichever
+  pass ran first consume the interval for the others, and the busier domain would
+  starve the rest indefinitely.
+
+- [#539](https://github.com/nextlyhq/nextly/pull/539) [`49d44ae`](https://github.com/nextlyhq/nextly/commit/49d44ae78d13ae0fa52f241fcfbdbf5fd19485a1) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - feat(blocks-react): add the React renderer package boundary
+
+  Adds `@nextlyhq/blocks-react`, the React/RSC renderer for Nextly block
+  documents. This change lands the package and its layering guarantees; the
+  renderer itself follows.
+
+  The root entry imports no `next/*`, no admin code and no CMS runtime, so a
+  document can be rendered from a plain React app, a test or a script. Everything
+  Next-coupled lives at the `@nextlyhq/blocks-react/next` subpath, so importing
+  the renderer never pulls Next into a consumer's module graph. Both rules are
+  enforced by an allowlist-based import test rather than by convention.
+
+  `PageContext` and `BlocksDataProvider` are also introduced: the seam through
+  which data, media URLs and entry paths reach a block, so blocks never reach for
+  a database directly.
+
+- [#536](https://github.com/nextlyhq/nextly/pull/536) [`d53bc9f`](https://github.com/nextlyhq/nextly/commit/d53bc9ffd2b9d28a2b5f33ee5f6f3199f74fecfb) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A text column keeps the width the builder that created it gave it.
+
+  A text field that states no width does not have one right answer. Three builders create tables and
+  they read a width from different keys and read silence differently: the Schema Builder's collection
+  creator bounds on a short variant, its field-group creator bounds on a declared `maxLength` and
+  never looks at a variant, and code-first tables were built with a bounded default. Which rule
+  applies is a fact about the entity, not about the field.
+
+  Describing a column without that fact meant guessing, and each place that guessed got it wrong for
+  at least one builder. On MySQL a field group's short text field was described as unbounded when it
+  had been created bounded, so a schema preview reported a type change on a column nobody had
+  touched, and applying it would have rewritten the column. The same guess reached the localization
+  companion tables, Single identity seeding, and the path that adds a column to a table that already
+  exists.
+
+  The builder is now named wherever a column shape becomes DDL, so the width follows the table rather
+  than being re-derived from the field. Paths that only look a table up to run a query are unaffected:
+  a declared width is enforced by the database, not by the ORM.
+
+- [#514](https://github.com/nextlyhq/nextly/pull/514) [`bffeac4`](https://github.com/nextlyhq/nextly/commit/bffeac4b3e7b8dbf834a8c76bd2b45f65728a9cb) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Custom CSS in the page builder can no longer load anything from another origin.
+  A `url()` carrying a scheme or a host is refused, and the editor says which
+  declaration went and why, with a remedy that works whichever storage adapter the
+  media library uses.
+
+  This closes a way of reading data off the page. A selector that matches only on
+  a prefix, paired with a URL that fires a request when it matches, spells a value
+  out one character at a time — `input[value^="a"] { background: url(...) }`,
+  repeated. Custom CSS is the only surface where an author writes both halves, so that is
+  where the ban is absolute.
+
+  Banning it in custom CSS alone would not have closed the channel, because the
+  two halves need not be written in the same place. A block's background image is
+  compiled into the same stylesheet, so a remote image there plus a custom
+  selector that suppresses it conditionally still leaks by the request's ABSENCE,
+  with no URL in the custom CSS to refuse.
+
+  So a block's images are restricted the same way, and a site declares the hosts
+  it loads from. A relative path such as `/media/a.png` needs nothing; anything
+  carrying a host needs an entry, INCLUDING an absolute URL on your own domain,
+  exactly as `next/image` already requires:
+
+  ```ts
+  <PageRenderer
+    document={doc}
+    remotePatterns={[
+      { protocol: "https", hostname: "cdn.example.com", pathname: "/img/**" },
+    ]}
+  />
+  ```
+
+  The policy covers every value a block emits, not the properties someone
+  remembered can fetch: `filter: url(…)` is a request too, and so is
+  `filter: var(--missing, url(…))`, whose URL lives in a fallback the parser
+  leaves as raw text. A protocol-relative `//host/a.png` is refused rather than
+  resolved against a guess, since the document's protocol is not knowable when the
+  stylesheet is compiled.
+
+  BREAKING, and wider than images: every resource a block loads on its own is now
+  refused until its host is declared. On upgrade, add the hosts below to
+  `remotePatterns` or the content stops rendering.
+
+  | block                                         | what stops            | host to declare                         |
+  | --------------------------------------------- | --------------------- | --------------------------------------- |
+  | `core/image`                                  | the image             | wherever your media is served from      |
+  | `core/cover`, `core/slides`, flip cards       | the background        | same                                    |
+  | `core/gallery`, the carousels, `core/hotspot` | the images            | same                                    |
+  | `core/video`                                  | the source and poster | your media host                         |
+  | `core/lottie`                                 | the animation         | the animation's CDN                     |
+  | `core/embed` (URL mode)                       | the iframe            | e.g. `www.youtube.com`                  |
+  | `core/map`                                    | the iframe            | `www.google.com`, or your own tile host |
+
+  This includes absolute URLs pointing at your own site: nothing in the compiler
+  knows what your host is, so `https://your-site.com/a.png` needs an entry while
+  `/a.png` needs none — the same line `next/image` draws. If your media library
+  stores absolute URLs, which the cloud storage adapters do, declare your own host.
+
+  A custom block registered from outside this package applies the policy itself:
+  its `render` receives `remotePatterns`, and `mediaUrl` / `cssMediaUrl` are
+  exported for it. The renderer cannot inspect the element a block returns, so a
+  block that writes a URL into an `src` or an inline background without asking
+  reaches whatever host it names. The shape is Next.js's `images.remotePatterns`, so an entry can
+  be copied straight across from `next.config`, and the posture matches
+  `next/image` — nothing off-origin unless you said so. Matching uses picomatch
+  with the same options `next/image` uses, rather than an approximation of it, so
+  `hostname` and `pathname` globs mean exactly what they already mean in your
+  `next.config`. `search` is honoured too.
+
+  Everything the sanitizer removes is now reported rather than dropped silently,
+  including at-rules it does not support. A rule that disappears with nothing on
+  screen to explain it reads as a bug in the builder, and the author's own source
+  still contains the line that did not survive.
+
+  CSS the sanitizer cannot read through — a rule nested deeper than it follows, or
+  a fragment it cannot parse — is still removed, but it is now reported as
+  unchecked rather than as a remote URL. It previously named the whole rule as the
+  offending address, which sent authors looking for a host their stylesheet never
+  mentioned. The depth it follows also rose well past real CSS: the old limit
+  refused valid stylesheets at five levels of nesting, which ordinary compiled CSS
+  reaches.
+
+  BREAKING, for anyone calling the sanitizer directly: `sanitizeCustomCss` and
+  `sanitizeBlockCss` return `{ css, warnings }` rather than a string. They are
+  re-exported from the package root, so this is a visible change even though the
+  page builder itself is the only expected caller. Read `.css` where you read the
+  result before.
+
+  Also on that surface: `CssWarning["code"]` gains `"unchecked"`, which a switch
+  over the union has to handle, and CSS that fails to parse outright now reports
+  `"unchecked"` where it reported `"unsafe-value"`. `MAX_RULE_NESTING` and
+  `MAX_VALUE_NESTING` are exported alongside them.
+
+- [#528](https://github.com/nextlyhq/nextly/pull/528) [`938898d`](https://github.com/nextlyhq/nextly/commit/938898d1daf26e1bad8a84f3e46eec55570f4e41) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - `create-nextly-app` recognises the development-diagnostics setting however an existing `.env`
+  spells it, and no longer mistakes a different variable for it.
+
+  A substring test treated `NEXTLY_DEV_DIAGNOSTICS_BACKUP=1` as the setting already being present,
+  so such a project was skipped and never told the real one exists. The check now matches an
+  assignment at the start of a line, including the commented form and the `export KEY=value` form
+  dotenv accepts so a file can also be sourced by a shell.
+
+  The whitespace in that match is confined to the current line. Allowing it to cross newlines made
+  the scan backtrack across the blank lines an `.env` is full of, which is quadratic on the common
+  case of a file that does not contain the key at all.
+
+- [#537](https://github.com/nextlyhq/nextly/pull/537) [`a281098`](https://github.com/nextlyhq/nextly/commit/a281098de1cd45a7a089af7a5e8f04a1673e6c4f) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The Direct API types a row the way the process sees it: a timestamp is the Date the driver decoded, not the formatted string a REST response carries. Codegen records which fields a collection or single stores in a timestamp column, and the wire types are unchanged.
+
+  A write returned an undecoded row on the raw-SQL paths, so a created row carried epoch numbers on SQLite where a fetched one carried Dates. Every raw-SQL row now decodes the way a read does.
+
+  The media services name the error code they mean rather than leaving the boundary to infer one from a status, so a folder-name clash keeps saying "already exists" instead of "reload".
+
+- [#529](https://github.com/nextlyhq/nextly/pull/529) [`17be415`](https://github.com/nextlyhq/nextly/commit/17be4155dcf03bd917cc547293dd5b6ee806256e) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - `SubmissionDocument.status` now includes `"spam"`, and gains `spamReason`.
+
+  The stored field has always offered `spam`, the admin has a Spam tab and filters its other views
+  with `not_equals: "spam"`, the notification hook skips it, and marking something "Not spam" moves
+  it back to `new`. Only the TypeScript type disagreed, so it described a shape the database cannot
+  produce — narrowing on `status` could not see the case that actually reaches the UI.
+
+  The conversions from a stored row to this plugin's document types now live in one module rather
+  than at six call sites. They are still unchecked assertions, which the module says plainly:
+  the services layer answers with a loose row and TypeScript has no overlap to verify. Nothing about
+  runtime behaviour changes; the unchecked step is now in one place a reviewer can find.
+
+- [#521](https://github.com/nextlyhq/nextly/pull/521) [`d58130a`](https://github.com/nextlyhq/nextly/commit/d58130a0679313f5819de7e71242e3afde130a01) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Keep the Schema Builder's DDL generator, the column descriptor and the write path agreeing on which
+  fields are junction-backed. A field carrying `relationType: "manyToMany"` was treated as
+  junction-backed by the descriptor whatever its type, while the generator emitted a junction table
+  only for a `relationship`. An `upload` declared many-to-many therefore got a parent column that the
+  runtime schema and the schema diff did not know about, so the diff proposed dropping it on every
+  apply.
+
+  Junction storage is a `relationship` feature, because that is the only shape the read and write
+  paths implement, so an `upload` carrying that option keeps its own column and is unaffected: a
+  single target is a foreign key, `hasMany` or an array of targets a JSON array of ids. A
+  `relationship` many-to-many is unchanged — no parent column, one junction table.
+
+- [#519](https://github.com/nextlyhq/nextly/pull/519) [`3a1b43b`](https://github.com/nextlyhq/nextly/commit/3a1b43b754392c33c58452c945a8eaa537463f04) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - **One table now decides what an HTTP status means when a failure names no error code.**
+
+  Three tables used to, and they disagreed. The same code-less 401 reached a Direct API caller as
+  `AUTH_REQUIRED` and a REST caller as `INTERNAL_ERROR`; a code-less 429 lost its rate-limit
+  identity entirely, and with it the `Retry-After` a client needs to back off correctly. The media
+  service kept a third table that read 409 as `DUPLICATE` and 422 as `BUSINESS_RULE_VIOLATION`.
+
+  A code-less failure now resolves through one shared table for 400, 401, 403, 404, 409, 413, 415,
+  422, 429, 502 and 503, and anything unrecognised stays an internal error. The producer's own
+  status is preserved rather than rounded to the code's canonical one.
+
+  **The table is a fallback, not a translation.** A status is coarser than a code: 409 covers both
+  "that name is taken" and "someone else edited this", which need opposite advice. A service that
+  knows which one it means sets `code` and is believed. `MediaResponse`, `DeleteMediaResponse`,
+  `FolderContentsResponse` and the folder bulk-delete result can carry a code for exactly this
+  reason, and creating a folder whose name is taken now says so through `DUPLICATE` rather than
+  relying on a boundary to guess.
+
+  **A code-less failure never puts its own message on the wire.** Those envelopes come from legacy
+  converters that may store a raw exception's text, so the caller gets the generic sentence for the
+  derived code and the detail stays in the operator log. A failure that names a code keeps its own
+  message, which the producer authored to be read.
+
+  Behaviour changes worth checking if you read error bodies directly: a code-less 401 answers
+  `AUTH_REQUIRED` instead of `INTERNAL_ERROR`; a code-less 429 answers `RATE_LIMITED`; a code-less
+  422 answers `INVALID_INPUT`; and through the Direct API a code-less failure's message is now the
+  generic sentence rather than the service's raw text.
+
+- [#538](https://github.com/nextlyhq/nextly/pull/538) [`4f009ae`](https://github.com/nextlyhq/nextly/commit/4f009ae2b05799234c4d07442ea61c4f1799dff7) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A plugin can now hand its own configuration to its own admin components.
+
+  A plugin's factory runs on the server, where the host builds its config; its
+  admin components run in the browser. Nothing carried a value between the two, so
+  a plugin could ship behaviour it had no way to configure. `contributes.admin.clientConfig`
+  travels with the rest of the admin metadata, and `usePluginClientConfig` reads it
+  back. It is PUBLIC — `/api/admin-meta` needs no authentication, so it reaches
+  anonymous callers and must hold nothing secret — and the serializer refuses
+  anything that will not survive the trip rather than delivering a mangled copy.
+
+  The page builder uses it for `remotePatterns`. The editor canvas previously
+  enforced an empty allowlist while the published page enforced the host's, so it
+  hid images the live page shows.
+
+  Pass the SAME value to both `pageBuilder({ remotePatterns })` and
+  `PageRenderer`. They are separate assignments: the plugin option configures the
+  editor, and `PageRenderer` reads only its own prop. Setting just one is what
+  produces a mismatch, in whichever direction you set it — a shared constant in
+  the host is the way to keep them equal.
+
+- [#523](https://github.com/nextlyhq/nextly/pull/523) [`f835ca9`](https://github.com/nextlyhq/nextly/commit/f835ca9680c7bd12d5e512092ae23958eb49292f) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - New apps document the development error-diagnostics opt-in.
+
+  An error response is deliberately generic — a code, a public message and a request id — and
+  withholds the log context and the underlying cause so a response cannot disclose driver output,
+  table names or internal paths. That is right for a deployed app and unhelpful while building,
+  where the withheld part is exactly what you need.
+
+  `NEXTLY_DEV_DIAGNOSTICS=1` adds a `_devDiagnostics` field carrying that detail. It existed
+  already, and nothing mentioned it, so an author hitting an error had no reason to suspect a flag
+  would have named the cause. `create-nextly-app` now writes it into `.env` and `.env.example`
+  **commented out, with an explanation**, and `docs/configuration/environment.mdx` describes it with
+  a worked example.
+
+  It is documented rather than enabled: the flag is the second of two independent signals, and the
+  second exists because `NODE_ENV` is a runtime value a deployment can carry by mistake. A default
+  shipped in `.env` would be true in exactly that case — the one it guards against.
+
+  Installing into an existing project that already has a configured `.env` adds the note too, keyed
+  on its own absence rather than on `DATABASE_URL`.
+
+- [#541](https://github.com/nextlyhq/nextly/pull/541) [`72c894b`](https://github.com/nextlyhq/nextly/commit/72c894b89f68667af2e2b16e79a1795bdbca10fa) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A timestamp is stored the same way whatever the server timezone is. The raw-SQL write paths bound a JS Date directly, so the driver serialized it with the local offset and a column declared without a time zone kept the local wall clock, while every read interpreted that wall clock as UTC. A row written and read back on a server five hours ahead of UTC came back five hours late. Values are now encoded through the column the same way a Drizzle query encodes them, on PostgreSQL and MySQL; SQLite was unaffected, storing unix seconds, which carry no zone.
+
+  Rows written before this on a server that was not on UTC keep the wall clock they were given, so a table can hold both conventions until those rows are corrected. Deployments running UTC, which includes every default container image, are unaffected either way.
+
+- [#543](https://github.com/nextlyhq/nextly/pull/543) [`9ccff93`](https://github.com/nextlyhq/nextly/commit/9ccff938431db8afba3f67bf5f5107ee8448388c) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Add two editor-shell primitives to the UI kit: a right-click context menu, and resizable panel regions whose split can be dragged or moved from the keyboard. Both are experimental until a first-party plugin uses them.
+
+- [#525](https://github.com/nextlyhq/nextly/pull/525) [`6c77f8f`](https://github.com/nextlyhq/nextly/commit/6c77f8f196acd65848dd4348a277ebec6b07f710) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - `@nextlyhq/ui`'s release tags now reach the published types. Every export in the
+  barrel carried `@public` or `@experimental`, and none of it survived the build:
+  the declaration bundler flattens each re-export into one `export { … }` clause
+  and drops the doc comment attached to the export statement, so an editor
+  hovering `badgeVariants` was told nothing about its stability. The tags live on
+  the declarations now, where the bundler keeps them, and 229 of them reach
+  `dist/index.d.ts` where there were none.
+
+  `toast` and `ToasterProps` are re-exported from `sonner`, so their declarations
+  are not ours to annotate; they stay tagged in the barrel only. `cn` and
+  `uiPreset`, which ship from their own subpaths, carry `@experimental` now as
+  `STABILITY.md` already classified them.
+
+  Twenty prop types were also promoted to `@public`, which is a widening rather
+  than a change of intent: `STABILITY.md` already guaranteed that a prop type
+  carries the same stability as its component, and every one of these belonged to
+  a public component while advertising `@experimental` — so the published type
+  withdrew what the component promised, and a plugin could not wrap `Tabs` or
+  `Dialog` without depending on something labelled unstable. The rule is now
+  enforced by a test rather than written down.
+
+  Modal scrims are a theme token. Six components wrote the backdrop inline as
+  `bg-black/80`, identical in light and dark and at four different strengths, so
+  it could be neither themed nor white-labelled and was invisible to every token
+  check the package has. `--nx-overlay` (with `--nx-overlay-soft` for a scrim over
+  content rather than the page, and `--nx-overlay-strong` for one that carries
+  text directly — a full-screen state screen, an image lightbox and its caption,
+  where the muted detail line rather than the heading decides the strength: over
+  a white page `text-white/60` is 2.81:1 on the see-through scrim and 5.66:1 on
+  the strong one) is defined for both modes and used everywhere,
+  with `bg-overlay` / `bg-overlay-soft` utilities in the v4 theme AND in
+  `@nextlyhq/ui/tailwind-preset`, so the documented Tailwind v3 path generates
+  them too. Dialogs, sheets and the command palette now share one backdrop
+  strength rather than three.
+
+- Updated dependencies [[`4902ef4`](https://github.com/nextlyhq/nextly/commit/4902ef42388fc4317d5b8e98ed6729184608c58d), [`8bdf575`](https://github.com/nextlyhq/nextly/commit/8bdf575b5837387973ffc226f1820f79abb7b2f4), [`49d44ae`](https://github.com/nextlyhq/nextly/commit/49d44ae78d13ae0fa52f241fcfbdbf5fd19485a1), [`d53bc9f`](https://github.com/nextlyhq/nextly/commit/d53bc9ffd2b9d28a2b5f33ee5f6f3199f74fecfb), [`bffeac4`](https://github.com/nextlyhq/nextly/commit/bffeac4b3e7b8dbf834a8c76bd2b45f65728a9cb), [`938898d`](https://github.com/nextlyhq/nextly/commit/938898d1daf26e1bad8a84f3e46eec55570f4e41), [`a281098`](https://github.com/nextlyhq/nextly/commit/a281098de1cd45a7a089af7a5e8f04a1673e6c4f), [`17be415`](https://github.com/nextlyhq/nextly/commit/17be4155dcf03bd917cc547293dd5b6ee806256e), [`d58130a`](https://github.com/nextlyhq/nextly/commit/d58130a0679313f5819de7e71242e3afde130a01), [`3a1b43b`](https://github.com/nextlyhq/nextly/commit/3a1b43b754392c33c58452c945a8eaa537463f04), [`4f009ae`](https://github.com/nextlyhq/nextly/commit/4f009ae2b05799234c4d07442ea61c4f1799dff7), [`f835ca9`](https://github.com/nextlyhq/nextly/commit/f835ca9680c7bd12d5e512092ae23958eb49292f), [`72c894b`](https://github.com/nextlyhq/nextly/commit/72c894b89f68667af2e2b16e79a1795bdbca10fa), [`9ccff93`](https://github.com/nextlyhq/nextly/commit/9ccff938431db8afba3f67bf5f5107ee8448388c), [`6c77f8f`](https://github.com/nextlyhq/nextly/commit/6c77f8f196acd65848dd4348a277ebec6b07f710)]:
+  - @nextlyhq/adapter-drizzle@0.0.2-alpha.52
+  - @nextlyhq/adapter-postgres@0.0.2-alpha.52
+  - @nextlyhq/adapter-mysql@0.0.2-alpha.52
+  - @nextlyhq/adapter-sqlite@0.0.2-alpha.52
+
 ## 0.0.2-alpha.51
 
 ### Patch Changes
