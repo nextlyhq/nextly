@@ -465,6 +465,10 @@ export const nextlyTables: TableDefinition[] = [
         nullable: false,
         default: { sql: "CURRENT_TIMESTAMP" },
       },
+      {
+        name: "identity_erased_at",
+        type: "timestamp",
+      },
     ],
     indexes: [
       { name: "audit_log_kind_idx", columns: ["kind"] },

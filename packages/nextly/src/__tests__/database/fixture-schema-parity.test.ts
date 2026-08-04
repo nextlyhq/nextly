@@ -1,0 +1,92 @@
+/**
+ * The test fixture schema must not drift from the tables it claims to mirror.
+ *
+ * `_fixture-schema/unified.ts` is a hand-written description of core tables
+ * that `setup.ts`'s CREATE TABLE shortcut emits directly. Hand-written copies
+ * of a schema drift, and this one drifts silently: a database built from it
+ * simply lacks the column, and code that decides what a database supports by
+ * looking for one reads the fixture as an older schema and takes a different
+ * path than production would.
+ *
+ * The fixture is deliberately a SUBSET — it declares the tables that shortcut
+ * needs, not every core table — so completeness is not asserted here. What is
+ * asserted is that a table it does declare matches the real one, which is the
+ * condition under which a test built on it observes production behaviour.
+ */
+import { describe, expect, it } from "vitest";
+
+import { getCoreSchema } from "../../schemas/index";
+import { nextlyTables } from "./_fixture-schema/unified";
+
+/**
+ * Tables whose fixture definition predates this check and describes an older
+ * schema. `dynamic_collections` is the clearest case: it still declares
+ * `name`, `label`, `icon` and `schema_definition`, none of which the real table
+ * has had for a long time.
+ *
+ * They are exempted rather than rewritten because the fixture emits CREATE
+ * TABLE for a single helper test, so correcting them is schema archaeology with
+ * no consumer asking for it, and it does not belong in a change about the audit
+ * log. The list may only ever SHRINK: a table not named here is checked, so
+ * nothing new can join it without deleting a line from this file.
+ */
+const PREDATES_THIS_CHECK = new Set([
+  "users",
+  "permissions",
+  "media",
+  "dynamic_collections",
+]);
+
+/** Column names per core table, as the pipeline actually compiles them. */
+function productionColumns(): Map<string, Set<string>> {
+  const byTable = new Map<string, Set<string>>();
+  // PostgreSQL is the reference dialect: column NAMES are dialect-independent,
+  // and the fixture describes types abstractly and translates them at emit.
+  for (const table of getCoreSchema("postgresql").tables) {
+    byTable.set(table.name, new Set(table.columns.map(column => column.name)));
+  }
+  return byTable;
+}
+
+describe("fixture schema parity", () => {
+  it("declares every column the real table has", () => {
+    const production = productionColumns();
+    const drift: string[] = [];
+
+    for (const fixture of nextlyTables) {
+      if (PREDATES_THIS_CHECK.has(fixture.name)) continue;
+      const real = production.get(fixture.name);
+      // A fixture-only table is not drift: the fixture carries a couple of
+      // scratch tables that exist for its own tests and no production table.
+      if (!real) continue;
+
+      const declared = new Set(fixture.columns.map(column => column.name));
+      const missing = [...real].filter(name => !declared.has(name));
+      if (missing.length > 0) {
+        drift.push(`${fixture.name} is missing ${missing.join(", ")}`);
+      }
+    }
+
+    expect(drift).toEqual([]);
+  });
+
+  it("declares no column the real table dropped", () => {
+    const production = productionColumns();
+    const stale: string[] = [];
+
+    for (const fixture of nextlyTables) {
+      if (PREDATES_THIS_CHECK.has(fixture.name)) continue;
+      const real = production.get(fixture.name);
+      if (!real) continue;
+
+      const extra = fixture.columns
+        .map(column => column.name)
+        .filter(name => !real.has(name));
+      if (extra.length > 0) {
+        stale.push(`${fixture.name} still declares ${extra.join(", ")}`);
+      }
+    }
+
+    expect(stale).toEqual([]);
+  });
+});
