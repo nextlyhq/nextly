@@ -1,0 +1,22 @@
+{
+  "//": [
+    "Packages whose npm Trusted Publisher entry has been confirmed by a maintainer.",
+    "",
+    "A newly bootstrapped package exists on npm carrying only a 0.0.0 placeholder.",
+    "That proves its NAME is claimed; it does not prove the release workflow can",
+    "publish to it, because attaching a Trusted Publisher is a separate manual step",
+    "and npm answers a publish attempt without one with a 404 that looks identical",
+    "to the package not existing. A multi-package publish is not atomic, so the",
+    "train discovers this by stranding one package after the others are already",
+    "live.",
+    "",
+    "Add a package here in the same PR that adds the package, AFTER configuring its",
+    "Trusted Publisher at npmjs.com (repository nextlyhq/nextly, workflow",
+    "release.yml, environment Production). Preflight refuses to start a release",
+    "while any placeholder-only package is missing from this list.",
+    "",
+    "Once a package has published a real version the entry stops doing anything and",
+    "preflight will say so; remove it then."
+  ],
+  "packages": []
+}
