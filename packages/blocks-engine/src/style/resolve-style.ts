@@ -22,13 +22,16 @@
 
 import type { NodeStyles, StyleValue } from "../document";
 import { isPlainRecord } from "../plain-record";
-import type { TokenLookup } from "../validation";
 
 import { BREAKPOINT_AXES } from "./breakpoint-axes";
-import { propertyInheritsToDescendants } from "./catalog";
+import {
+  propertiesAlsoMatching,
+  propertyInheritsToDescendants,
+  propertyPseudoClassCount,
+} from "./catalog";
+import { compileStyleValues } from "./declarations";
 import type { NamedClass } from "./named-class";
 import { isUsableNamedClass } from "./named-class";
-import { validateStyleValues } from "./validate-style-value";
 
 /** Which tier a resolved value came from, and which member of that tier. */
 export type StyleSource =
@@ -115,14 +118,6 @@ export interface StyleResolutionInput {
    * `BREAKPOINT_AXES`.
    */
   containerChain?: readonly string[];
-  /**
-   * The site's design tokens, if the caller has them.
-   *
-   * Only used to judge whether the compiler would accept a token reference. Without it a token of
-   * the wrong kind for its property cannot be detected, so resolution is fractionally more
-   * permissive than the stylesheet — never less.
-   */
-  tokens?: TokenLookup;
 }
 
 /**
@@ -216,27 +211,40 @@ function valueAt(
 /**
  * Whether the compiler would write this value, rather than merely whether it is present.
  *
- * `compileStyleValues` drops a declaration validation rejects, so the browser goes on showing the
- * tier below. Treating every defined value as a winner would report the rejected one — a control
- * showing a colour that is not on the page, over a page whose real colour came from somewhere the
- * control does not name.
+ * Asks the compiler itself. An earlier version asked `validateStyleValues` instead, which is a
+ * paraphrase and was wrong in both directions worth caring about: a token name the compiler
+ * refuses in its own emission path — `{ $token: "bad name" }` — passes validation cleanly and
+ * produces no declaration, so resolution reported an invalid local token while the browser showed
+ * the tier below it.
  *
- * Asked per stated value, so the cost is one check per tier that mentions the property, not one
+ * There is no version of that guard that stays correct, because it is a second copy of a decision
+ * that lives somewhere else. Running the real one costs a compile of a single-entry map and
+ * cannot drift.
+ *
+ * Asked per stated value, so the cost is one call per tier that mentions the property, not one
  * per property in the document.
  */
-function compilerWritesValue(
-  property: string,
-  value: StyleValue,
-  tokens: TokenLookup | undefined
-): boolean {
-  return !validateStyleValues(
-    { [property]: value },
-    "",
-    "strict",
-    undefined,
-    false,
-    tokens
-  ).some(issue => issue.severity === "error");
+function compilerWritesValue(property: string, value: StyleValue): boolean {
+  return compileStyleValues({ [property]: value }, "").declarations.length > 0;
+}
+
+/**
+ * How strongly a rule from this tier, for this property, competes.
+ *
+ * Counted in class-selectors, which is what decides between two rules that both match. Every rule
+ * is anchored at the doubled page root; a tier other than the page's own settings adds its own
+ * class to that, and a property attaching to `a:hover` rather than `a` adds one more.
+ *
+ * This is why `linkColorHover` cannot be resolved on its own. Page settings' hover rule and a
+ * class's plain link rule both come to three, so the later one wins, and the later one is the
+ * class — meaning a hovered link shows the class's colour while the hover property is what the
+ * author set. Measured from the emitted stylesheet, not reasoned about.
+ */
+function selectorWeight(source: StyleSource, property: string): number {
+  let innermost = source;
+  while (innermost.tier === "inheritedBreakpoint") innermost = innermost.source;
+  const anchor = innermost.tier === "pageSettings" ? 2 : 3;
+  return anchor + propertyPseudoClassCount(property);
 }
 
 /**
@@ -266,21 +274,22 @@ function fold(
   current: Accumulated | undefined,
   value: StyleValue,
   source: StyleSource
-): Accumulated {
+): Accumulated | undefined {
   if (isPlainRecord(value)) {
     // A record with no fields states no declarations, so it neither wins nor clears what is
-    // already there.
+    // already there — and where nothing is there it must not invent an empty one. Read out, that
+    // would show a control as carrying a value the browser has no declaration for.
     const keys = Object.keys(value);
-    if (keys.length === 0)
-      return current ?? { kind: "fields", fields: new Map() };
+    if (keys.length === 0) return current;
     const fields =
       current?.kind === "fields"
         ? current.fields
         : new Map<string, Accumulated>();
     for (const key of keys) {
-      fields.set(key, fold(fields.get(key), value[key], source));
+      const folded = fold(fields.get(key), value[key], source);
+      if (folded !== undefined) fields.set(key, folded);
     }
-    return { kind: "fields", fields };
+    return fields.size === 0 ? current : { kind: "fields", fields };
   }
   return { kind: "whole", value, source };
 }
@@ -353,25 +362,39 @@ export function resolveStyle(
   // Within one tier the compiler writes base first and the state after, so the state wins there;
   // across tiers the later tier wins whichever state it used.
   const states = state === "base" ? ["base"] : ["base", state];
+  // Least specific first, so a rule that outranks another is read after it and the `>=` below
+  // keeps the right one. For everything but the link colours this is a list of one.
+  const properties = [...propertiesAlsoMatching(property), property];
   let accumulated: Accumulated | undefined;
+  let strongest = 0;
 
   for (const tier of tiers(input, property)) {
     for (const candidateState of states) {
       for (const id of live) {
-        const value = valueAt(tier.styles, candidateState, id, property);
-        if (value === undefined) continue;
-        if (!compilerWritesValue(property, value, input.tokens)) continue;
-        const source: StyleSource =
-          id === breakpoint
-            ? tier.source
-            : {
-                // Named so a control can say which breakpoint the value comes from, with the
-                // writer kept inside so it can also say who set it there.
-                tier: "inheritedBreakpoint",
-                from: id,
-                source: tier.source,
-              };
-        accumulated = fold(accumulated, value, source);
+        for (const candidate of properties) {
+          const value = valueAt(tier.styles, candidateState, id, candidate);
+          if (value === undefined) continue;
+          if (!compilerWritesValue(candidate, value)) continue;
+          const source: StyleSource =
+            id === breakpoint
+              ? tier.source
+              : {
+                  // Named so a control can say which breakpoint the value comes from, with the
+                  // writer kept inside so it can also say who set it there.
+                  tier: "inheritedBreakpoint",
+                  from: id,
+                  source: tier.source,
+                };
+          const weight = selectorWeight(source, candidate);
+          // A weaker rule cannot displace a stronger one however late it is written, which is
+          // the one place source order alone is not the whole cascade.
+          if (weight < strongest) continue;
+          if (weight > strongest) {
+            strongest = weight;
+            accumulated = undefined;
+          }
+          accumulated = fold(accumulated, value, source);
+        }
       }
     }
   }

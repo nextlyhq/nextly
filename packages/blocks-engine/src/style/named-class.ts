@@ -17,6 +17,7 @@
 // and it is the documented way one class overrides another.
 
 import type { NodeStyles } from "../document";
+import { isPlainRecord } from "../plain-record";
 
 /** The prefix every named class carries in the emitted CSS. */
 export const NAMED_CLASS_PREFIX = "nx-c-";
@@ -64,16 +65,17 @@ export interface NamedClass {
  * one failure a provenance indicator must not have.
  */
 export function isUsableNamedClass(value: unknown): value is NamedClass {
-  if (value === null || typeof value !== "object") return false;
+  if (!isPlainRecord(value)) return false;
   const candidate = value as Partial<NamedClass>;
   return (
     typeof candidate.id === "string" &&
     typeof candidate.slug === "string" &&
     NAMED_CLASS_SLUG_RE.test(candidate.slug) &&
-    // A class with no styles record has nothing to contribute and, read as one, indexes into
-    // `undefined` the moment anything asks it for a value.
-    candidate.styles !== null &&
-    typeof candidate.styles === "object"
+    // Held to the same plain-record test the compiler applies to the envelope itself, not merely
+    // to "is an object". An array passes the looser test and then produces no declarations, so
+    // the class reserved its slug and wrote nothing — and a later, valid class wanting that name
+    // was dropped as a duplicate, taking the styling of every node referencing it.
+    isPlainRecord(candidate.styles)
   );
 }
 
@@ -92,12 +94,20 @@ export function isUsableNamedClass(value: unknown): value is NamedClass {
 export function usableNamedClasses(
   classes: readonly NamedClass[]
 ): NamedClass[] {
-  const taken = new Set<string>();
+  const takenSlugs = new Set<string>();
+  const takenIds = new Set<string>();
   const usable: NamedClass[] = [];
   for (const cls of orderedNamedClasses(classes)) {
     if (!isUsableNamedClass(cls)) continue;
-    if (taken.has(cls.slug)) continue;
-    taken.add(cls.slug);
+    if (takenSlugs.has(cls.slug)) continue;
+    // An id claimed twice is as unusable as a name claimed twice, and quieter about it. A
+    // document references a class by id, so two entries sharing one make that reference
+    // ambiguous: whichever is looked up last is the only one reachable, while both were written.
+    // Dropping the later keeps one id to one class everywhere — emission, application, and
+    // resolution all read this list.
+    if (takenIds.has(cls.id)) continue;
+    takenSlugs.add(cls.slug);
+    takenIds.add(cls.id);
     usable.push(cls);
   }
   return usable;

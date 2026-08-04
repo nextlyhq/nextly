@@ -262,6 +262,38 @@ describe("values the compiler would refuse", () => {
     ).toBeUndefined();
   });
 
+  it("skips a token name the compiler refuses in its own emission path", () => {
+    // Validation passes this and the compiler writes nothing for it, so the two disagree unless
+    // resolution asks the compiler rather than a paraphrase of it.
+    const found = resolveStyle("color", "base", "desktop", {
+      classes: [namedClass("card", 0, at("desktop", { color: "blue" }))],
+      node: at("desktop", { color: { $token: "bad name" } }),
+    });
+
+    expect(found?.value).toBe("blue");
+    expect(found?.source).toEqual({ tier: "class", id: "card", slug: "card" });
+  });
+
+  it("reports nothing for an empty composite, which states no declaration", () => {
+    expect(
+      resolveStyle("padding", "base", "desktop", {
+        node: at("desktop", { padding: {} }),
+      })
+    ).toBeUndefined();
+  });
+
+  it("reports nothing for an empty field inside a composite that does state something", () => {
+    // `border: { width: {}, style: "solid" }` compiles to exactly one declaration, so the whole
+    // value is written and only `width` states nothing. Recorded as a field, it would show a
+    // width control as set over a page with no border-width declaration at all.
+    const found = resolveStyle("border", "base", "desktop", {
+      node: at("desktop", { border: { width: {}, style: "solid" } }),
+    });
+
+    expect(found?.value).toEqual({ style: "solid" });
+    expect(found?.parts?.width).toBeUndefined();
+  });
+
   it("reports nothing for a key the catalog does not define", () => {
     expect(
       resolveStyle("nonsense", "base", "desktop", {

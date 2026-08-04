@@ -199,6 +199,8 @@ export const ISSUE_CODES = {
     "The site's named class library is not a list of classes.",
   "duplicate-class-name":
     "More than one named class in the site library carries the same name.",
+  "duplicate-class-id":
+    "More than one named class in the site library carries the same id, which is what documents reference.",
   "invalid-style-value":
     "A style value does not match the shape its property declares.",
   "token-not-allowed":

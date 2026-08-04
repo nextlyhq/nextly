@@ -935,9 +935,15 @@ export function compilePageCss(
     });
   }
   const usableClasses = usableNamedClasses(library);
-  const usableIds = new Set(usableClasses.map(cls => cls.id));
+  // The entries themselves, not their ids. Two entries can carry ONE id, and only one of them is
+  // written: asking "was this id written" answers yes for the one that was dropped, and it goes
+  // unreported — the exact case this reporting exists to explain.
+  const written = new Set<unknown>(usableClasses);
+  // The ids the written classes claimed, so an entry dropped for sharing one can be told that
+  // rather than being told its name collided.
+  const usedIds = new Set(usableClasses.map(cls => cls.id));
   for (const cls of orderedNamedClasses(library)) {
-    if (usableIds.has((cls as { id?: unknown } | null)?.id as string)) continue;
+    if (written.has(cls)) continue;
     // Reported once per entry the library could not use, naming which of the three reasons it
     // was. A usable record whose name is free is not reachable here, so the remaining case after
     // the two structural ones is a name another class already took.
@@ -948,6 +954,7 @@ export function compilePageCss(
     // presence of a valid slug alone would do — tells the author to rename a class whose name was
     // never the problem, and renaming it fixes nothing.
     const slug = readClassSlug(cls);
+    const id = readClassId(cls);
     const named =
       typeof slug !== "string" || !NAMED_CLASS_SLUG_RE.test(slug)
         ? {
@@ -961,11 +968,20 @@ export function compilePageCss(
               message: `The class named "${describeValue(slug)}" is missing its id or its styles, so it was not written.`,
               suggestion: "Give every class a string id and a styles record.",
             }
-          : {
-              code: "duplicate-class-name" as const,
-              message: `More than one class is named "${describeValue(slug)}", so only the first was written.`,
-              suggestion: "Give every class a distinct name.",
-            };
+          : // A usable record that survived neither claim lost one of them. The id is checked
+            // first because it is the one a document references: told only that the NAME
+            // collided, an author renames a class and the reference still reaches the other one.
+            typeof id === "string" && usedIds.has(id)
+            ? {
+                code: "duplicate-class-id" as const,
+                message: `More than one class carries the id ${describeValue(id)}, so only the first was written.`,
+                suggestion: "Give every class a distinct id.",
+              }
+            : {
+                code: "duplicate-class-name" as const,
+                message: `More than one class is named "${describeValue(slug)}", so only the first was written.`,
+                suggestion: "Give every class a distinct name.",
+              };
     pushBoundedWarning(warningAllowance, warnings, {
       path: pointer("/classes", describeValue(readClassId(cls))),
       severity: "warning",
@@ -1042,19 +1058,43 @@ export function compilePageCss(
   // dropped must not be put on an element, where it would match a rule some other class owns.
   const byId = new Map(usableClasses.map(cls => [cls.id, cls]));
   const attributeClasses = new Map<string, string>();
-  for (const { node } of nodes) {
+  const reportedMissingClasses = new Set<string>();
+  for (const { node, path } of nodes) {
     const own = classes.get(node.id);
     if (own === undefined) continue;
     const names = [own];
     const applied = Array.isArray(node.classes) ? node.classes : [];
-    // Library order, not the order the node lists them in, so the value is stable for a caching
-    // renderer and reads the way the stylesheet does.
-    for (const cls of orderedNamedClasses(
-      [...new Set(applied)]
-        .map(id => byId.get(id))
-        .filter((cls): cls is NamedClass => cls !== undefined)
-    )) {
-      names.push(namedClassName(cls.slug));
+    for (const id of new Set(applied)) {
+      if (typeof id === "string" && byId.has(id)) continue;
+      // A reference that reached nothing. Silently dropping it leaves an author with a class on
+      // the node, no class on the element, and nothing connecting the two — the same account
+      // every other unwritten value in this compile gets. Once per id, because a second report
+      // would name the same missing class and the same fix.
+      const key = describeValue(id);
+      if (reportedMissingClasses.has(key)) continue;
+      reportedMissingClasses.add(key);
+      pushBoundedWarning(warningAllowance, warnings, {
+        path: pointer(path, "classes"),
+        code: "unknown-class",
+        severity: "warning",
+        message: `This node lists the class ${key}, which the site library does not define, so it was not applied.`,
+        suggestion: "Remove the reference, or add the class to the library.",
+      });
+    }
+    // Two nodes sharing an id share one entry in this map, so a named class recorded here would
+    // either be lost by whichever node is written second or applied to both. Refused for the
+    // same reason their rules are: a class the author put on one node must not silently restyle
+    // another node that never referenced it.
+    if (!duplicateIds.has(node.id)) {
+      // Library order, not the order the node lists them in, so the value is stable for a caching
+      // renderer and reads the way the stylesheet does.
+      for (const cls of orderedNamedClasses(
+        [...new Set(applied)]
+          .map(id => byId.get(id))
+          .filter((cls): cls is NamedClass => cls !== undefined)
+      )) {
+        names.push(namedClassName(cls.slug));
+      }
     }
     attributeClasses.set(node.id, names.join(" "));
   }

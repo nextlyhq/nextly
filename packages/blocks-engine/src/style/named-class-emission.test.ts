@@ -259,6 +259,149 @@ describe("the classes a renderer is told to apply", () => {
   });
 });
 
+describe("a class that reserves a name it cannot use", () => {
+  it("does not let an array envelope hold a slug a real class needs", () => {
+    // `[]` is an object, so a looser guard accepted it. It then produced no declarations, and the
+    // valid class wanting that name was dropped as a duplicate — costing the styling of every
+    // node referencing it, on account of an entry that styled nothing.
+    const { css } = compile(doc({ classes: ["c2"] }), [
+      { id: "c1", slug: "card", orderIndex: 0, styles: [] as never },
+      {
+        id: "c2",
+        slug: "card",
+        orderIndex: 1,
+        styles: styles({ color: "blue" }),
+      },
+    ]);
+
+    expect(css).toContain("color: blue");
+  });
+});
+
+describe("two classes claiming one id", () => {
+  it("writes and applies the same one, and says the id is what collided", () => {
+    // A document references a class by id, so two entries sharing one make the reference
+    // ambiguous. Told only that the NAME collided, an author renames a class and the reference
+    // still reaches the other one.
+    const { css, classes, warnings } = compile(doc({ classes: ["c1"] }), [
+      {
+        id: "c1",
+        slug: "card",
+        orderIndex: 0,
+        styles: styles({ color: "blue" }),
+      },
+      {
+        id: "c1",
+        slug: "feature",
+        orderIndex: 1,
+        styles: styles({ color: "green" }),
+      },
+    ]);
+
+    expect(css).toContain(".nx-c-card");
+    expect(css).not.toContain(".nx-c-feature");
+    expect(classes.get("n1")?.split(" ")).toContain("nx-c-card");
+    expect(warnings.map(w => w.code)).toContain("duplicate-class-id");
+  });
+});
+
+describe("a node referencing a class that was never written", () => {
+  it("says so rather than dropping the reference in silence", () => {
+    const { classes, warnings } = compile(doc({ classes: ["ghost"] }), [card]);
+
+    expect(classes.get("n1")).toBe(classes.get("n1")?.split(" ")[0]);
+    expect(warnings.map(w => w.code)).toContain("unknown-class");
+  });
+});
+
+describe("two nodes sharing one id", () => {
+  it("puts no named class on either, as their own rules are already refused", () => {
+    // One map entry cannot tell them apart, so a class recorded here is either lost by the node
+    // written second or applied to both — restyling a node that never referenced it.
+    const { classes } = compilePageCss(
+      {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: "same",
+            type: "core/box",
+            version: 1,
+            props: {},
+            classes: ["c1"],
+          },
+          {
+            id: "same",
+            type: "core/box",
+            version: 1,
+            props: {},
+            classes: ["c1"],
+          },
+        ],
+      } as never,
+      {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        namedClasses: [card],
+        blockBases: {},
+      } as never
+    );
+
+    expect(classes.get("same")).not.toContain("nx-c-card");
+  });
+});
+
+describe("link colour, where two properties reach one element", () => {
+  it("resolves a hovered link the way the stylesheet actually cascades it", () => {
+    // Measured, not reasoned: page settings' hover rule and a class's plain link rule both come
+    // to three class-selectors, so the later one wins — and the later one is the class. Asking
+    // only about `linkColorHover` reports the page's red over a link the browser paints blue.
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      settings: { styles: { base: { [BP]: { linkColorHover: "red" } } } },
+      nodes: [
+        { id: "n1", type: "core/box", version: 1, props: {}, classes: ["c1"] },
+      ],
+    };
+    const linkCard: NamedClass = {
+      id: "c1",
+      slug: "card",
+      orderIndex: 0,
+      styles: styles({ linkColor: "blue" }),
+    };
+    const { css } = compilePageCss(
+      document as never,
+      {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        namedClasses: [linkCard],
+        blockBases: {},
+      } as never
+    );
+
+    // The stylesheet is the authority. Both rules match a hovered link; the class's is written
+    // after, and neither outranks the other.
+    expect(css.indexOf("a:hover")).toBeLessThan(css.indexOf(".nx-c-card a"));
+
+    const resolved = resolveStyle("linkColorHover", "base", BP, {
+      pageSettings: document.settings.styles as never,
+      classes: [linkCard],
+    });
+
+    expect(resolved?.value).toBe("blue");
+    expect(resolved?.source).toEqual({ tier: "class", id: "c1", slug: "card" });
+  });
+
+  it("still prefers a hover rule that does outrank the plain one", () => {
+    // Within one tier the hover selector carries an extra pseudo-class, so it wins there however
+    // the two are ordered in storage.
+    const resolved = resolveStyle("linkColorHover", "base", BP, {
+      node: styles({ linkColor: "blue", linkColorHover: "red" }),
+    });
+
+    expect(resolved?.value).toBe("red");
+  });
+});
+
 describe("a class library that is not a library", () => {
   it("survives a stored library that is not a list at all", () => {
     // One site-settings record, read by every page compile. A spread over `{}` throws, which

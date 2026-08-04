@@ -26,6 +26,7 @@ import type {
   TokenKind,
   UrlLeaf,
 } from "./catalog-types";
+import { shapeLeaves } from "./catalog-types";
 
 // --- Leaf constructors ------------------------------------------------------
 // Terse to author, explicit once built: every leaf carries the literal CSS
@@ -920,6 +921,63 @@ const CATALOG_BY_PROPERTY: ReadonlyMap<string, StyleProperty> = new Map(
 /** The catalog row for a storage key, or `undefined` if it is not a style property. */
 export function getStyleProperty(property: string): StyleProperty | undefined {
   return CATALOG_BY_PROPERTY.get(property);
+}
+
+/** The descendant selector a property's declarations attach to, if any. */
+function descendantOf(entry: StyleProperty | undefined): string | undefined {
+  if (entry === undefined) return undefined;
+  for (const leaf of shapeLeaves(entry.shape)) {
+    if ("descendant" in leaf && typeof leaf.descendant === "string") {
+      return leaf.descendant;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * How many pseudo-classes a property's selector carries, which is what it adds to specificity.
+ *
+ * `linkColorHover` attaches to `a:hover` and `linkColor` to `a`, so the first outranks the second
+ * by one class-worth wherever both are written on the same element. Counted rather than assumed,
+ * because it is the difference that decides which of two matching rules the browser uses.
+ */
+export function propertyPseudoClassCount(property: string): number {
+  const descendant = descendantOf(CATALOG_BY_PROPERTY.get(property));
+  if (descendant === undefined) return 0;
+  return descendant.split(":").length - 1;
+}
+
+/**
+ * The properties whose declarations also land on what this property's declarations land on.
+ *
+ * `linkColor` writes `… a` and `linkColorHover` writes `… a:hover`, so a hovered link matches
+ * BOTH, and asking only about the hover property reports a value a later `linkColor` rule
+ * overrides. Same shape as a state joining the base rules rather than replacing them, one level
+ * out: two properties, one element.
+ *
+ * Derived from the catalog rather than listed, so a property added with a `a:focus` selector is
+ * related to `linkColor` without anything here being edited. Returned least specific first, which
+ * is the order they have to be read in.
+ */
+export function propertiesAlsoMatching(property: string): readonly string[] {
+  const entry = CATALOG_BY_PROPERTY.get(property);
+  const descendant = descendantOf(entry);
+  if (entry === undefined || descendant === undefined) return [];
+  const cssProperty = shapeLeaves(entry.shape)[0]?.cssProperty;
+  const related: string[] = [];
+  for (const other of STYLE_CATALOG) {
+    if (other.property === property) continue;
+    const otherDescendant = descendantOf(other);
+    if (otherDescendant === undefined) continue;
+    if (shapeLeaves(other.shape)[0]?.cssProperty !== cssProperty) continue;
+    // Less specific and matching the same elements: the same selector, with this property's
+    // pseudo-classes stripped off.
+    if (descendant.startsWith(`${otherDescendant}:`))
+      related.push(other.property);
+  }
+  return related.sort(
+    (a, b) => propertyPseudoClassCount(a) - propertyPseudoClassCount(b)
+  );
 }
 
 /**
