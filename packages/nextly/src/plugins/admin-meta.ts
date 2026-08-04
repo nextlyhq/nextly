@@ -66,7 +66,8 @@ export interface PluginAdminMeta {
   /** Slugs of contributed field groups, for the detail page's contributions view. */
   fieldGroups?: string[];
   /**
-   * The plugin's own configuration for its admin components. World-readable and
+   * The plugin's own configuration for its admin components. Served to
+   * anonymous callers, because this endpoint needs no authentication, and
    * JSON-only; see `PluginAdminContributions.clientConfig`.
    */
   clientConfig?: Record<string, unknown>;
@@ -160,22 +161,43 @@ export function pluginAdminSlug(name: string): string {
  * its top-level key the one worth naming.
  */
 function unserializableKeys(value: Record<string, unknown>): string[] {
-  return Object.entries(value)
-    .filter(([, v]) => {
-      try {
-        const encoded = JSON.stringify(v);
-        if (encoded === undefined) return true;
-        return !sameShape(v, JSON.parse(encoded));
-      } catch {
-        return true;
-      }
-    })
-    .map(([key]) => key);
+  // Enumeration itself can throw: reading an entry evaluates a getter, and a
+  // getter that throws would escape from the DIAGNOSTIC path — turning a
+  // reportable configuration error into a raw exception from the one function
+  // whose job is to describe it.
+  let keys: string[];
+  try {
+    keys = Object.keys(value);
+  } catch {
+    return [];
+  }
+  return keys.filter(key => {
+    try {
+      const encoded = JSON.stringify(value[key]);
+      if (encoded === undefined) return true;
+      return !sameShape(value[key], JSON.parse(encoded));
+    } catch {
+      return true;
+    }
+  });
 }
 
 function jsonOnly(
   value: Record<string, unknown>
 ): Record<string, unknown> | undefined {
+  // The declared type promises a record and the runtime may not deliver one: a
+  // JavaScript host can pass `null`, an array or a primitive, all of which
+  // round-trip perfectly and would publish a `clientConfig` that every reader
+  // — the type, the hook, the destructuring in a component — assumes is an
+  // object.
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value) ||
+    Object.getPrototypeOf(value) !== Object.prototype
+  ) {
+    return undefined;
+  }
   let decoded: Record<string, unknown>;
   try {
     const encoded = JSON.stringify(value);
@@ -202,7 +224,10 @@ function jsonOnly(
  * arrives as `null`.
  */
 function sameShape(before: unknown, after: unknown): boolean {
-  if (before === after) return true;
+  // `Object.is` rather than `===`, so `-0` is not accepted as unchanged after
+  // JSON turns it into `0`. The browser can tell them apart (`1 / value`), so
+  // that is a mangled copy like any other.
+  if (Object.is(before, after)) return true;
   if (typeof before !== typeof after) return false;
   if (before === null || after === null) return false;
   if (typeof before !== "object") return false;

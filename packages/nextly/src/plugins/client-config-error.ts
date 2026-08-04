@@ -18,8 +18,9 @@ export function clientConfigError(
   offendingKeys: string[]
 ): NextlyError {
   return new NextlyError({
+    // No `statusCode` here: the code is registered in `NEXTLY_ERROR_STATUS`, so
+    // it resolves from that one table rather than being restated per factory.
     code: "NEXTLY_PLUGIN_CLIENT_CONFIG_INVALID",
-    statusCode: 500,
     publicMessage: "Plugin configuration is invalid.",
     logMessage:
       `Plugin "${pluginName}" declares an admin.clientConfig that is not JSON` +

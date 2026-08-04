@@ -28,8 +28,9 @@ A plugin's factory runs on the server, where the host builds its config; its
 admin components run in the browser. Nothing carried a value between the two, so
 a plugin could ship behaviour it had no way to configure. `contributes.admin.clientConfig`
 travels with the rest of the admin metadata, and `usePluginClientConfig` reads it
-back. It is world-readable, and the serializer refuses anything that will not
-survive the trip rather than delivering a mangled copy.
+back. It is PUBLIC — `/api/admin-meta` needs no authentication, so it reaches
+anonymous callers and must hold nothing secret — and the serializer refuses
+anything that will not survive the trip rather than delivering a mangled copy.
 
 The page builder uses it for `remotePatterns`. The editor canvas previously
 enforced an empty allowlist while the published page enforced the host's, so it

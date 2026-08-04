@@ -212,13 +212,17 @@ export interface PluginAdminContributions {
    * builder's canvas came to enforce an empty allowlist while the rendered page
    * enforced the host's.
    *
-   * ## This is world-readable
+   * ## This is PUBLIC
    *
-   * It is serialized into a response every authenticated admin user receives,
-   * so it is the wrong place for API keys, tokens, internal hostnames, or
-   * anything whose value depends on WHO is asking. Put those behind a route
-   * that can check the caller. A useful test: if you would not print it in the
-   * browser console for any admin user, it does not belong here.
+   * `/api/admin-meta` requires no authentication — the login screen reads its
+   * branding from it before anyone has signed in — so this is served to
+   * ANONYMOUS callers, not merely to every admin. It is the wrong place for
+   * API keys, tokens, internal hostnames, licence state, or anything whose
+   * value depends on who is asking. Put those behind a route that can check
+   * the caller.
+   *
+   * The test to apply: would you paste this into a public issue? If not, it
+   * does not belong here.
    *
    * ## It must be JSON
    *

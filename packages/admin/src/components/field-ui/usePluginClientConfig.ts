@@ -16,8 +16,9 @@ import { useBranding } from "@admin/context/providers/BrandingProvider";
  * built on, so a plugin asks for its own entry rather than indexing into a
  * shared array by position.
  *
- * The value is world-readable — it reaches every authenticated admin user —
- * and is JSON, which the serializer enforces rather than assumes. Returned as
+ * The value is public — `/api/admin-meta` needs no authentication, so it
+ * reaches anonymous callers — and is JSON, which the serializer enforces
+ * rather than assumes. Returned as
  * `unknown` values so a caller narrows what it actually needs instead of
  * trusting a shape nothing checked at the boundary.
  */

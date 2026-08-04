@@ -46,9 +46,9 @@ export interface PluginMetadata {
    * The plugin's own configuration for its admin components, as declared in
    * `contributes.admin.clientConfig` and serialized through `/api/admin-meta`.
    *
-   * World-readable: every authenticated admin user receives it, so it never
-   * holds secrets. Read it with `usePluginClientConfig` rather than searching
-   * this array by hand.
+   * Public: `/api/admin-meta` needs no authentication, so this reaches
+   * anonymous callers and never holds secrets. Read it with
+   * `usePluginClientConfig` rather than searching this array by hand.
    */
   clientConfig?: Record<string, unknown>;
   version?: string;

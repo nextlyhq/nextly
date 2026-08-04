@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { PluginDefinition } from "./plugin-context";
 
+import { NEXTLY_ERROR_STATUS } from "../errors/error-codes";
 import { NextlyError } from "../errors/nextly-error";
 
 import { buildPluginAdminMeta } from "./admin-meta";
@@ -623,6 +624,67 @@ describe("buildPluginAdminMeta — clientConfig", () => {
     cyclic.self = cyclic;
     expect(() => buildPluginAdminMeta(withConfig(cyclic), undefined)).toThrow(
       NextlyError
+    );
+  });
+});
+
+describe("buildPluginAdminMeta — clientConfig runtime shapes", () => {
+  const withConfig = (clientConfig: unknown) =>
+    asPlugins([
+      { ...base, contributes: { admin: { clientConfig } } },
+    ]) as PluginDefinition[];
+
+  it("refuses a top level that is not a plain object", () => {
+    // The declared type promises a record; a JavaScript host need not deliver
+    // one. Each of these round-trips perfectly, so only a shape check catches
+    // it — and every reader downstream assumes an object it can destructure.
+    for (const bad of [null, [1, 2], "a string", 42, true]) {
+      expect(
+        () => buildPluginAdminMeta(withConfig(bad), undefined),
+        JSON.stringify(bad)
+      ).toThrow(NextlyError);
+    }
+  });
+
+  it("refuses negative zero, which JSON turns into zero", () => {
+    // Observable in the browser as `1 / value`, so it is a mangled copy like
+    // any other rather than a rounding detail.
+    expect(() =>
+      buildPluginAdminMeta(withConfig({ n: -0 }), undefined)
+    ).toThrow(NextlyError);
+  });
+
+  it("reports a throwing getter instead of letting it escape", () => {
+    // The diagnostic path reads each value to name the offending key, so a
+    // getter that throws would replace the reportable error with a raw one
+    // from the very function whose job is to describe the problem.
+    const config = {
+      ok: 1,
+      get boom(): never {
+        throw new Error("getter");
+      },
+    };
+    let thrown: unknown;
+    try {
+      buildPluginAdminMeta(withConfig(config), undefined);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(NextlyError.is(thrown)).toBe(true);
+    expect(String((thrown as NextlyError).code)).toBe(
+      "NEXTLY_PLUGIN_CLIENT_CONFIG_INVALID"
+    );
+  });
+
+  it("resolves its status from the canonical table, not an inline literal", () => {
+    let thrown: unknown;
+    try {
+      buildPluginAdminMeta(withConfig({ when: new Date() }), undefined);
+    } catch (error) {
+      thrown = error;
+    }
+    expect((thrown as NextlyError).statusCode).toBe(
+      NEXTLY_ERROR_STATUS.NEXTLY_PLUGIN_CLIENT_CONFIG_INVALID
     );
   });
 });
