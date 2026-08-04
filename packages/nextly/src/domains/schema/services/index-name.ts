@@ -35,3 +35,23 @@ export function indexNameForColumn(tableName: string, column: string): string {
 
 /** PostgreSQL truncates at this length; MySQL refuses one character beyond it. */
 export const MAX_INDEX_NAME_LENGTH = 63;
+
+/**
+ * Whether the dialect can index a column of this type at all.
+ *
+ * MySQL cannot index a JSON column: it answers that indexing is supported "only via generated
+ * columns on a specified JSON path". PostgreSQL and SQLite index the value, so the same field
+ * means the same thing everywhere it can.
+ *
+ * Asked by BOTH the statements that create indexes and the desired schema the diff compares a
+ * table against. When only the statements knew, the desired schema went on declaring an index the
+ * generator deliberately never wrote, and every reconcile emitted a `CREATE INDEX` on a JSON
+ * column that MySQL rejects — the same failure, once per attempt, indefinitely.
+ */
+export function columnTypeIsIndexable(
+  columnType: string,
+  dialect: string
+): boolean {
+  if (dialect !== "mysql") return true;
+  return !/\bjson\b/i.test(columnType);
+}

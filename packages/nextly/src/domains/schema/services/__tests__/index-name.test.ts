@@ -8,7 +8,11 @@ import { describe, expect, it } from "vitest";
 
 import { DynamicCollectionSchemaService } from "../../../dynamic-collections/services/dynamic-collection-schema-service";
 import { collectionIndexSpecs } from "../../pipeline/diff/build-from-fields";
-import { indexNameForColumn, MAX_INDEX_NAME_LENGTH } from "../index-name";
+import {
+  columnTypeIsIndexable,
+  indexNameForColumn,
+  MAX_INDEX_NAME_LENGTH,
+} from "../index-name";
 
 const LONG_TABLE = `dc_${"a".repeat(50)}`;
 const LONG_COLUMN = "b".repeat(50);
@@ -70,5 +74,48 @@ describe("the emitted DDL and the desired schema agree", () => {
     for (const name of declared) {
       expect(emitted).toContain(name);
     }
+  });
+});
+
+describe("columnTypeIsIndexable", () => {
+  it("refuses a mysql json column, which mysql cannot index", () => {
+    expect(columnTypeIsIndexable("json", "mysql")).toBe(false);
+  });
+
+  it("allows the same column where the dialect can index it", () => {
+    expect(columnTypeIsIndexable("jsonb", "postgresql")).toBe(true);
+    expect(columnTypeIsIndexable("text", "sqlite")).toBe(true);
+  });
+
+  it("allows every other mysql type", () => {
+    expect(columnTypeIsIndexable("varchar(36)", "mysql")).toBe(true);
+    expect(columnTypeIsIndexable("text", "mysql")).toBe(true);
+  });
+});
+
+describe("the DDL and the desired schema agree on WHICH indexes exist", () => {
+  it("neither declares nor writes an index for a mysql json column", () => {
+    const fields = [
+      { name: "payload", type: "json", required: false, index: true },
+    ];
+
+    const emitted = new DynamicCollectionSchemaService(
+      undefined,
+      "mysql"
+    ).generateMigrationSQL("dc_probe", fields as never);
+
+    const declared = collectionIndexSpecs("dc_probe", fields as never, {
+      hasSlugColumn: false,
+      hasCreatedAtColumn: false,
+      hasCreatedByColumn: false,
+      localizedNames: new Set<string>(),
+      columnNameFor: field => field.name,
+      columnIsIndexable: () => columnTypeIsIndexable("json", "mysql"),
+    }).map(spec => spec.name);
+
+    // Declaring it while the generator skips it makes every reconcile emit a CREATE INDEX that
+    // MySQL rejects — the same failure, once per attempt, forever.
+    expect(emitted).not.toContain("idx_dc_probe_payload");
+    expect(declared).not.toContain("idx_dc_probe_payload");
   });
 });

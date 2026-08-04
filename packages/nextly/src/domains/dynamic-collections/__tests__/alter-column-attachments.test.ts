@@ -972,3 +972,74 @@ describe("removing a column that a foreign key references", () => {
     }
   );
 });
+
+describe("a delete action the column cannot perform", () => {
+  const requiredSetNull = field({
+    name: "author",
+    type: "relationship",
+    required: true,
+    options: {
+      target: "authors",
+      relationType: "manyToOne",
+      onDelete: "set null",
+    },
+  });
+
+  it.each(DIALECTS)(
+    "refuses an explicit set-null on a required relationship (%s)",
+    dialect => {
+      // MySQL rejects the constraint outright; PostgreSQL accepts it and fails later, when a
+      // referenced row is deleted. Refused rather than rewritten: the author asked for a
+      // specific behaviour, and silently substituting another is not an answer to that.
+      const reported = refusalMessages(() =>
+        service(dialect).generateMigrationSQL("dc_probe", [requiredSetNull])
+      );
+
+      expect(reported).toHaveLength(1);
+      expect(reported[0]).toContain("fields.author");
+      expect(reported[0]).toContain("REQUIRED_RELATION_CANNOT_SET_NULL");
+      expect(reported[0]).toMatch(/restrict|optional/);
+    }
+  );
+
+  it.each(DIALECTS)(
+    "allows set-null on an OPTIONAL relationship, which the column can perform (%s)",
+    dialect => {
+      const sql = unquote(
+        service(dialect).generateMigrationSQL("dc_probe", [
+          field({
+            name: "editor",
+            type: "relationship",
+            options: {
+              target: "authors",
+              relationType: "manyToOne",
+              onDelete: "set null",
+            },
+          }),
+        ])
+      );
+      expect(sql).toMatch(/SET NULL/i);
+    }
+  );
+
+  it.each(DIALECTS)(
+    "allows an explicit cascade on a required relationship (%s)",
+    dialect => {
+      const sql = unquote(
+        service(dialect).generateMigrationSQL("dc_probe", [
+          field({
+            name: "author",
+            type: "relationship",
+            required: true,
+            options: {
+              target: "authors",
+              relationType: "manyToOne",
+              onDelete: "cascade",
+            },
+          }),
+        ])
+      );
+      expect(sql).toMatch(/ON DELETE CASCADE/i);
+    }
+  );
+});

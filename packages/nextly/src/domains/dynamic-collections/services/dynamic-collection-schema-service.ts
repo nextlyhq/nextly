@@ -38,7 +38,10 @@ import {
   renderSystemColumnSql,
   toSnakeCase,
 } from "../../schema/services/field-column-descriptor";
-import { indexNameForColumn } from "../../schema/services/index-name";
+import {
+  columnTypeIsIndexable,
+  indexNameForColumn,
+} from "../../schema/services/index-name";
 import { quoteJsonSqlDefault } from "../../schema/utils/sql-literal";
 
 import { DynamicCollectionValidationService } from "./dynamic-collection-validation-service";
@@ -147,8 +150,31 @@ export class DynamicCollectionSchemaService {
    */
   private relationOnDelete(field: FieldDefinition): string {
     const declared = field.options?.onDelete;
-    if (declared) return declared;
-    return field.required ? "restrict" : "set null";
+    if (declared === undefined) return field.required ? "restrict" : "set null";
+
+    // Declared, and still impossible: nulling a reference the column forbids cannot be done by
+    // any database. MySQL refuses the constraint outright; PostgreSQL accepts it and fails
+    // later, when a referenced row is deleted, which is worse because it ships. Refused rather
+    // than quietly rewritten — the author asked for a specific behaviour on delete, and
+    // substituting a different one silently is not an answer to that.
+    //
+    // Prisma treats the same pair as a schema error for the same reason.
+    if (declared === "set null" && field.required) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: `fields.${field.name}`,
+            code: "REQUIRED_RELATION_CANNOT_SET_NULL",
+            message:
+              `"${field.name}" is required, so it cannot be emptied when the ${field.type} ` +
+              `it points at is deleted. Choose "restrict" to prevent that deletion, ` +
+              `"cascade" to delete this entry with it, or make the field optional.`,
+          },
+        ],
+        logContext: { field: field.name, onDelete: declared },
+      });
+    }
+    return declared;
   }
 
   /**
@@ -198,12 +224,10 @@ export class DynamicCollectionSchemaService {
     const name = this.quoteIdentifier(indexNameForColumn(tableName, column));
     const table = this.quoteIdentifier(tableName);
     const quoted = this.quoteIdentifier(column);
+    // Asked through the shared rule, which the desired schema reads too: an index only one of
+    // them believes in is proposed by every diff and refused by every apply.
+    if (!columnTypeIsIndexable(columnType, this.dialect)) return null;
     if (this.dialect === "mysql") {
-      // A JSON column cannot be indexed at all: MySQL answers "supports indexing only via
-      // generated columns on a specified JSON path". Emitting the statement fails the migration
-      // after the ADD COLUMN before it may already have committed, so no index is emitted here.
-      // The other dialects index the value, so the field means the same thing everywhere it can.
-      if (/\bjson\b/i.test(columnType)) return null;
       const target = /\b(text|blob)\b/i.test(columnType)
         ? `${quoted}(191)`
         : quoted;
