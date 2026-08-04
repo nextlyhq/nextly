@@ -43,6 +43,18 @@ describe("resolveAuditRetentionConfig", () => {
     }
   });
 
+  it("keeps a long window that a date can still represent", () => {
+    // The bound is representability, not taste. Substituting the default for a
+    // valid window would be worse than honouring it: the default is SHORTER, so
+    // a configuration asking to keep decades would have them deleted on the
+    // first pass.
+    const century = 101 * 365 * 24 * 60 * 60 * 1000;
+    expect(
+      resolveAuditRetentionConfig({ activityMaxAgeMs: century })
+        .activityMaxAgeMs
+    ).toBe(century);
+  });
+
   it("keeps `false`, which is how keeping forever is expressed", () => {
     const resolved = resolveAuditRetentionConfig({
       activityMaxAgeMs: false,

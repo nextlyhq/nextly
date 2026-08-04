@@ -69,16 +69,22 @@ export interface ResolvedAuditRetentionConfig {
 }
 
 /**
- * The longest window whose cutoff is still a representable date.
+ * The largest offset whose resulting date is still representable.
  *
- * A window is subtracted from now to form the cutoff, and JavaScript's Date
- * range is ±8.64e15 ms from the epoch. `Number.MAX_SAFE_INTEGER` is finite, so
- * it survives a finiteness check and then yields an Invalid Date the driver
- * rejects — a pass that fails on every run and is swallowed, leaving the trail
- * unpruned while its configuration reads as accepted. A century is far beyond
- * any real retention and comfortably inside the range.
+ * A window is subtracted from now to form a cutoff, and an interval likewise,
+ * so both are bounded by what `Date` can hold: ±8.64e15 ms from the epoch.
+ * `Number.MAX_SAFE_INTEGER` is finite, so it survives a finiteness check and
+ * then yields an Invalid Date the driver rejects — a pass that fails on every
+ * run and is swallowed, leaving the trail unpruned while its configuration
+ * reads as accepted.
+ *
+ * This is the representability limit itself rather than a shorter policy cap.
+ * A cap set by taste would silently replace a long but perfectly valid window
+ * with the default, and the default is SHORTER — so a configuration asking to
+ * keep decades would delete them on the first pass. Rejecting a value must
+ * never be more destructive than honouring it.
  */
-const MAX_REPRESENTABLE_WINDOW_MS = 100 * 365 * DAY_MS;
+const MAX_REPRESENTABLE_OFFSET_MS = 8.64e15;
 
 function maxAge(value: MaxAge | undefined, fallback: number): MaxAge {
   if (value === false) return false;
@@ -90,7 +96,7 @@ function maxAge(value: MaxAge | undefined, fallback: number): MaxAge {
   const window = value as number;
   return Number.isFinite(window) &&
     window > 0 &&
-    window <= MAX_REPRESENTABLE_WINDOW_MS
+    window <= MAX_REPRESENTABLE_OFFSET_MS
     ? window
     : fallback;
 }
@@ -100,7 +106,7 @@ function positive(value: number | undefined, fallback: number): number {
   // from now to decide whether a pass is due, so a value that leaves the Date
   // range makes that comparison unanswerable and no pass ever runs again.
   const ms = value as number;
-  return Number.isFinite(ms) && ms > 0 && ms <= MAX_REPRESENTABLE_WINDOW_MS
+  return Number.isFinite(ms) && ms > 0 && ms <= MAX_REPRESENTABLE_OFFSET_MS
     ? ms
     : fallback;
 }
