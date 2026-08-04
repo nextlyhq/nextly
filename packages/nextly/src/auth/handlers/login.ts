@@ -1,6 +1,7 @@
 import { readOrGenerateRequestId } from "../../api/request-id";
-import { projectAuditMetadata } from "../../domains/audit/audit-log-writer";
+import { auditFailureMetadata } from "../../domains/audit/audit-log-writer";
 import type { AuditLogWriter } from "../../domains/audit/audit-log-writer";
+import { auditReason } from "../../domains/audit/audit-reasons";
 import { NextlyError } from "../../errors/nextly-error";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
 import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
@@ -118,8 +119,8 @@ export async function handleLogin(
         logContext: {
           reason:
             outcome.type === "fail"
-              ? (outcome.reason ?? "strategy-fail")
-              : "no-strategy-matched",
+              ? (outcome.reason ?? auditReason("strategy-fail"))
+              : auditReason("no-strategy-matched"),
         },
       });
     }
@@ -203,9 +204,7 @@ export async function handleLogin(
         trustedProxyIps: deps.trustedProxyIps,
       }),
       userAgent: request.headers.get("user-agent"),
-      metadata: NextlyError.is(err)
-        ? { code: err.code, ...projectAuditMetadata(err.logContext) }
-        : { code: "INTERNAL_ERROR" },
+      metadata: auditFailureMetadata(err),
     });
     if (NextlyError.is(err)) {
       return buildAuthErrorResponse(err, requestId);

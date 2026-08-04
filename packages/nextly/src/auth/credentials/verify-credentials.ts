@@ -1,3 +1,4 @@
+import { auditReason } from "../../domains/audit/audit-reasons";
 import { NextlyError } from "../../errors/nextly-error";
 import { verifyPassword } from "../password/index";
 
@@ -93,7 +94,7 @@ export async function verifyCredentials(
     throw NextlyError.invalidCredentials({
       logContext: {
         email: input.email,
-        reason: !user ? "user-not-found" : "password-mismatch",
+        reason: auditReason(!user ? "user-not-found" : "password-mismatch"),
       },
     });
   }
@@ -105,19 +106,19 @@ export async function verifyCredentials(
     throw NextlyError.invalidCredentials({
       logContext: {
         userId: user.id,
-        reason: "locked",
+        reason: auditReason("locked"),
         lockedUntil: user.lockedUntil,
       },
     });
   }
   if (deps.requireEmailVerification && !user.emailVerified) {
     throw NextlyError.invalidCredentials({
-      logContext: { userId: user.id, reason: "unverified" },
+      logContext: { userId: user.id, reason: auditReason("unverified") },
     });
   }
   if (!user.isActive) {
     throw NextlyError.invalidCredentials({
-      logContext: { userId: user.id, reason: "inactive" },
+      logContext: { userId: user.id, reason: auditReason("inactive") },
     });
   }
 

@@ -33,7 +33,11 @@ import { randomUUID } from "crypto";
 import { getColumns } from "drizzle-orm";
 
 import { getDialectTables } from "../../database/index";
+import { NEXTLY_ERROR_STATUS } from "../../errors/error-codes";
+import { NextlyError } from "../../errors/nextly-error";
 import { getNextlyLogger } from "../../observability/logger";
+
+import { isAuditReason } from "./audit-reasons";
 
 export type AuditEventKind =
   | "csrf-failed"
@@ -61,31 +65,30 @@ export type AuditEventKind =
 const AUDIT_METADATA_KEYS = ["reason", "originalCode", "legacyCode"] as const;
 
 /**
- * The `reason` values this package itself produces.
+ * Whether a retained value is one this package controls.
  *
- * Allowlisting the KEY is not enough for this one. An `AuthStrategy` is supplied
- * by the application, its failure result carries a free-text `reason`, and the
- * login handler copies that into the error context — so a strategy that put an
- * email or an external account name there would have it stored on a row that
- * has no actor and therefore can never be erased for that person.
+ * Allowlisting the KEY is not enough for any of them. `reason` is chosen by an
+ * application-supplied `AuthStrategy`; `originalCode` and `legacyCode` are
+ * copied from an error's own `code`, and that is `NextlyErrorCodeLike` — any
+ * string, so a plugin's error names whatever it likes. Either way the value
+ * would land on a row with no actor, which no later deletion can find.
  *
- * A value outside this set is dropped rather than stored. The reason still
+ * A value outside its vocabulary is dropped rather than stored. It still
  * reaches the logger through `logContext`; what it does not do is enter a
- * retained trail nothing can later associate with a subject.
+ * retained trail nothing can associate with a subject.
  */
-const CORE_AUDIT_REASONS = new Set([
-  "user-not-found",
-  "password-mismatch",
-  "unverified",
-  "inactive",
-  "locked",
-  "strategy-fail",
-  "no-strategy-matched",
-  "pending-token-invalid",
-  "challenge-failed-final",
-  "challenge-attempts-exhausted",
-  "challenge-user-missing",
-]);
+function isRetainableValue(
+  key: (typeof AUDIT_METADATA_KEYS)[number],
+  value: unknown
+): boolean {
+  if (key === "reason") return isAuditReason(value);
+  return isCanonicalErrorCode(value);
+}
+
+/** Whether a value names a code the canonical status table defines. */
+function isCanonicalErrorCode(value: unknown): boolean {
+  return typeof value === "string" && value in NEXTLY_ERROR_STATUS;
+}
 
 /**
  * Copy the allowlisted diagnostic keys out of an error's context.
@@ -102,13 +105,30 @@ export function projectAuditMetadata(
   for (const key of AUDIT_METADATA_KEYS) {
     if (!Object.prototype.hasOwnProperty.call(context, key)) continue;
     const value = context[key];
-    // `reason` is the one allowlisted key whose VALUE is not ours: an
-    // application-supplied strategy chooses it. Keep only what this package
-    // produces, so free text cannot ride in under an approved name.
-    if (key === "reason" && !CORE_AUDIT_REASONS.has(String(value))) continue;
+    if (!isRetainableValue(key, value)) continue;
     projected[key] = value;
   }
   return projected;
+}
+
+/**
+ * Build the metadata of a recorded failure from the error that caused it.
+ *
+ * The three handlers that record one — login, challenge resolution, initial
+ * password — assembled this themselves and so could disagree; the code in
+ * particular was stored unchecked while the context beside it was projected.
+ * Deciding it once means a value cannot reach the row by a route that forgot
+ * to ask.
+ *
+ * A code the canonical table does not define is reported as an internal
+ * failure, which is the status `NextlyError` already resolves such a code to.
+ */
+export function auditFailureMetadata(err: unknown): Record<string, unknown> {
+  if (!NextlyError.is(err)) return { code: "INTERNAL_ERROR" };
+  return {
+    code: isCanonicalErrorCode(err.code) ? err.code : "INTERNAL_ERROR",
+    ...projectAuditMetadata(err.logContext),
+  };
 }
 
 export interface AuditEvent {

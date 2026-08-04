@@ -17,7 +17,12 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { getDialectTables } from "../../../database/index";
-import { projectAuditMetadata } from "../audit-log-writer";
+import {
+  auditFailureMetadata,
+  projectAuditMetadata,
+} from "../audit-log-writer";
+import { AUDIT_REASONS } from "../audit-reasons";
+import { NextlyError } from "../../../errors/nextly-error";
 import { getNextlyLogger } from "../../../observability/logger";
 import { buildAuditLogWriter } from "../audit-log-writer";
 
@@ -196,5 +201,100 @@ describe("projectAuditMetadata", () => {
     expect(projectAuditMetadata({ email: "a@b.c", ipHint: "1.2.3.4" })).toEqual(
       {}
     );
+  });
+
+  it("drops a diagnostic code outside the canonical table", () => {
+    // `originalCode` and `legacyCode` are copied from an error's own `code`,
+    // and that code is `NextlyErrorCodeLike` — any string. An application hook
+    // can therefore name a person in it, and the row it lands on has no actor.
+    expect(projectAuditMetadata({ originalCode: "ada@example.com" })).toEqual(
+      {}
+    );
+    expect(projectAuditMetadata({ legacyCode: "acct-8891-ada" })).toEqual({});
+  });
+
+  it("keeps a diagnostic code the canonical table defines", () => {
+    expect(
+      projectAuditMetadata({
+        originalCode: "TOKEN_EXPIRED",
+        legacyCode: "NOT_FOUND",
+      })
+    ).toEqual({ originalCode: "TOKEN_EXPIRED", legacyCode: "NOT_FOUND" });
+  });
+
+  it("keeps every reason the audited handlers can reach", () => {
+    // Stated here independently of the vocabulary the projection consults: a
+    // list checked against itself stays true when an entry is deleted from
+    // both. Each of these is emitted on a path whose failure is recorded, so
+    // dropping one leaves the operator the same INVALID_CREDENTIALS for
+    // materially different failures.
+    const reachable = [
+      // auth/credentials/verify-credentials.ts
+      "user-not-found",
+      "password-mismatch",
+      "unverified",
+      "inactive",
+      "locked",
+      // domains/auth/services/auth-service.ts
+      "no-password-hash",
+      "current-password-mismatch",
+      // auth/handlers/login.ts
+      "strategy-fail",
+      "no-strategy-matched",
+      // auth/handlers/challenge-resolve.ts
+      "pending-token-invalid",
+      "challenge-attempts-exhausted",
+      "challenge-failed-final",
+      "challenge-user-missing",
+      // auth/handlers/set-initial-password.ts
+      "pending-token-wrong-challenge",
+      "not-in-must-change-state",
+      "user-missing",
+    ];
+
+    for (const reason of reachable) {
+      expect(projectAuditMetadata({ reason })).toEqual({ reason });
+    }
+    // Nothing is admitted to the trail that no audited handler emits.
+    expect([...AUDIT_REASONS].sort()).toEqual([...reachable].sort());
+  });
+});
+
+/**
+ * Everything a failure row stores is decided here, so the three handlers that
+ * record one cannot drift apart — and so no value reaches the row without
+ * having been checked against a vocabulary this package controls.
+ */
+describe("auditFailureMetadata", () => {
+  it("replaces an error code the canonical table does not define", () => {
+    // A plugin builds its own NextlyError, and `code` accepts any string.
+    // Storing it verbatim would put whatever it says on an unattributed row.
+    expect(
+      auditFailureMetadata(
+        new NextlyError({
+          code: "ada@example.com",
+          publicMessage: "Invalid email or password.",
+        })
+      )
+    ).toEqual({ code: "INTERNAL_ERROR" });
+  });
+
+  it("keeps a canonical error code and its projected context", () => {
+    expect(
+      auditFailureMetadata(
+        NextlyError.invalidCredentials({
+          logContext: { reason: "password-mismatch", userId: "u-1" },
+        })
+      )
+    ).toEqual({
+      code: "AUTH_INVALID_CREDENTIALS",
+      reason: "password-mismatch",
+    });
+  });
+
+  it("reports a non-NextlyError as an internal failure", () => {
+    expect(auditFailureMetadata(new TypeError("boom"))).toEqual({
+      code: "INTERNAL_ERROR",
+    });
   });
 });

@@ -361,6 +361,34 @@ describe("login handler: respondAction shape", () => {
     }
   );
 
+  it("stores no identifier a failing plugin hook put on its error", async () => {
+    // The projection is asserted directly elsewhere; this pins that the handler
+    // routes through it. A plugin names its own error code and writes its own
+    // log context, and the row this produces has no actor — so anything
+    // identifying that reaches it can never be erased for its subject.
+    const { write } = await loginWithRejectingAfterLogin(
+      new NextlyError({
+        code: "ada@example.com",
+        publicMessage: "Login failed.",
+        logContext: {
+          email: "ada@example.com",
+          userId: "u-77",
+          reason: "no account for ada@example.com",
+          originalCode: "acct-8891-ada",
+        },
+      })
+    );
+
+    const recorded = write.mock.calls
+      .map(([event]: [{ kind: string; metadata?: unknown }]) => event)
+      .find(event => event.kind === "login-failed");
+
+    expect(recorded?.metadata).toEqual({ code: "INTERNAL_ERROR" });
+    expect(JSON.stringify(recorded)).not.toContain("ada@example.com");
+    expect(JSON.stringify(recorded)).not.toContain("u-77");
+    expect(JSON.stringify(recorded)).not.toContain("acct-8891-ada");
+  });
+
   it("returns password_change_required with a pending token (no session) for a must-change account", async () => {
     const passwordHash = await hashPassword("Pass1234!");
     const fakeUser = {

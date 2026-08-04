@@ -1,6 +1,7 @@
 import { readOrGenerateRequestId } from "../../api/request-id";
-import { projectAuditMetadata } from "../../domains/audit/audit-log-writer";
+import { auditFailureMetadata } from "../../domains/audit/audit-log-writer";
 import type { AuditLogWriter } from "../../domains/audit/audit-log-writer";
+import { auditReason } from "../../domains/audit/audit-reasons";
 import { NextlyError } from "../../errors/nextly-error";
 import type { AuthUser } from "../../types/auth";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
@@ -85,13 +86,13 @@ export async function handleChallengeResolve(
       pending = await verifyPendingToken(pendingTokenInput, deps.secret);
     } catch {
       throw NextlyError.invalidCredentials({
-        logContext: { reason: "pending-token-invalid" },
+        logContext: { reason: auditReason("pending-token-invalid") },
       });
     }
 
     if (pending.attempts >= deps.maxChallengeAttempts) {
       throw NextlyError.invalidCredentials({
-        logContext: { reason: "challenge-attempts-exhausted" },
+        logContext: { reason: auditReason("challenge-attempts-exhausted") },
       });
     }
 
@@ -107,7 +108,7 @@ export async function handleChallengeResolve(
       if (nextAttempts >= deps.maxChallengeAttempts) {
         // Out of attempts — fail for good (generic 401).
         throw NextlyError.invalidCredentials({
-          logContext: { reason: "challenge-failed-final" },
+          logContext: { reason: auditReason("challenge-failed-final") },
         });
       }
       // Re-issue a fresh pending token carrying the incremented counter.
@@ -141,7 +142,7 @@ export async function handleChallengeResolve(
     const u = await deps.findUserById(pending.userId);
     if (!u || !u.isActive) {
       throw NextlyError.invalidCredentials({
-        logContext: { reason: "challenge-user-missing" },
+        logContext: { reason: auditReason("challenge-user-missing") },
       });
     }
 
@@ -185,9 +186,7 @@ export async function handleChallengeResolve(
         trustedProxyIps: deps.trustedProxyIps,
       }),
       userAgent: request.headers.get("user-agent"),
-      metadata: NextlyError.is(err)
-        ? { code: err.code, ...projectAuditMetadata(err.logContext) }
-        : { code: "INTERNAL_ERROR" },
+      metadata: auditFailureMetadata(err),
     });
     if (NextlyError.is(err)) {
       return buildAuthErrorResponse(err, requestId);

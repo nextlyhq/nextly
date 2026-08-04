@@ -53,6 +53,21 @@ identifier has to not be stored rather than be erased later. Only an allowlisted
 set of diagnostic keys is now copied, default-deny, so a key added for logging
 cannot silently become a field of the audit trail.
 
+Naming a key is not enough on its own, because none of the values are ours to
+begin with. An `AuthStrategy` is application code and chooses its own failure
+reason; an error's `code` accepts any string, and the two diagnostic codes are
+copied straight from it. Each retained value is now checked against a vocabulary
+this package controls — a reason it produces, or a code the canonical table
+defines — and anything else is dropped. The value still reaches the operator log;
+what it no longer does is enter a trail nothing can associate with a subject.
+
+The reasons are named in one place that the handlers emitting them now compile
+against, so a new reason is a type error until it is listed rather than being
+discarded without a diagnostic. Three that the initial-password exchange already
+emitted were being discarded that way, leaving `pending-token-wrong-challenge`, a
+stale must-change state, and a missing user indistinguishable from each other in
+the trail. All three are recorded again.
+
 **Upgrading, PostgreSQL and MySQL: one required action.** If you hardened
 `audit_log` by revoking UPDATE — the posture this package previously documented —
 grant it back for the three columns an erasure touches, or deleting a user will
