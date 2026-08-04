@@ -17,7 +17,6 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import {
   DECLARATION_ENTRIES,
   ensureDeclarations,
-  newestDeclarationInputMtime,
 } from "./__tests__/ensure-declarations";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -267,9 +266,19 @@ describe("ui release tags reach the published types", () => {
   // here — where it is re-evaluated every run — means the assertions below
   // always describe the current source rather than merely detecting that they
   // do not.
+  // The ONLY place the declarations are built. A global setup ran once per
+  // project and this hook ran per suite, so both together built twice per run
+  // for no gain; this one covers the watch case a global setup cannot, because
+  // it is re-evaluated on every rerun.
+  //
+  // A generous timeout because it BUILDS. The build is unconditional rather
+  // than guarded by a staleness computation — see `ensure-declarations` for why
+  // that computation was removed — and two tsup invocations do not fit in
+  // Vitest's ten-second hook default. Allowing the time the operation takes is
+  // the honest fix, not making the operation guess less carefully.
   beforeAll(() => {
     ensureDeclarations();
-  });
+  }, 120_000);
 
   /** Symbols re-exported from a dependency, whose declarations are not ours. */
   const FOREIGN = new Set(["toast", "ToasterProps"]);
@@ -406,27 +415,6 @@ describe("ui release tags reach the published types", () => {
           "the declaration itself, not on an export statement."
       ).toBe(true);
     }
-  });
-
-  it("checks declarations that are newer than everything they are built from", () => {
-    // A global setup runs once per Vitest project, not once per rerun, so in
-    // watch mode an edited tag would otherwise be compared against the
-    // declarations built before the edit. Staleness is asserted here, where it
-    // is re-evaluated on every run, rather than assumed by the setup.
-    //
-    // The same freshness definition the rebuild uses, imported rather than
-    // repeated: a second copy here would drift from it, and this is the copy
-    // that would keep quietly passing. It counts the tsup and tsconfig inputs
-    // too, since those decide what the bundler emits without any file under
-    // `src` changing.
-    expect(
-      statSync(distTypes).mtimeMs,
-      "dist/index.d.ts predates one of its build inputs (a source file, a " +
-        "tsup config, any tsconfig in the extends chain, package.json or the " +
-        "workspace pnpm-lock.yaml), so these assertions would be checking " +
-        "declarations that no longer describe the code. " +
-        "Rebuild: `pnpm --filter @nextlyhq/ui build`."
-    ).toBeGreaterThanOrEqual(newestDeclarationInputMtime());
   });
 
   it("is not passing vacuously", () => {
