@@ -105,11 +105,20 @@ export {
   FieldOptionsEditor,
   withOptionIds,
   usePluginFieldTypeEntries,
-  usePluginClientConfig,
   ConditionRow,
   operatorsForType,
   operatorTakesValue,
 } from "@nextlyhq/admin";
+
+/**
+ * @experimental Reads the `clientConfig` this plugin declared in
+ * `contributes.admin.clientConfig`, which is how a plugin's server-side
+ * configuration reaches its browser components.
+ *
+ * Delivered through `/api/admin-meta`, which requires no authentication — so
+ * the value reaches anonymous callers and must hold nothing secret.
+ */
+export { usePluginClientConfig } from "@nextlyhq/admin";
 export type {
   FieldTypePickerProps,
   FieldDefaultValueInputProps,
