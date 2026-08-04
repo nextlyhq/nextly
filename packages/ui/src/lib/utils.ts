@@ -13,6 +13,7 @@ import { twMerge } from "tailwind-merge";
  * cn('text-muted-foreground', condition && 'text-foreground')
  * ```
  */
+/** @experimental */
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }

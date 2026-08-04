@@ -12,7 +12,7 @@
  * with `"use client"` and pulls in the whole component tree, which does not
  * belong in a Node test process.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -274,7 +274,16 @@ describe("ui release tags reach the published types", () => {
     return byName;
   }
 
+  /** Every published entry point, as `package.json` exports names them. */
+  const DIST_ENTRIES = ["index.d.ts", "utils.d.ts", "tailwind-preset.d.ts"];
+
   it("has built declarations to check", () => {
+    for (const entry of DIST_ENTRIES) {
+      expect(
+        existsSync(path.join(PKG_ROOT, "dist", entry)),
+        `dist/${entry} is missing; run \`pnpm --filter @nextlyhq/ui build\`.`
+      ).toBe(true);
+    }
     expect(
       existsSync(distTypes),
       `${distTypes} is missing. This guard reads the built declarations, so ` +
@@ -358,6 +367,47 @@ describe("ui release tags reach the published types", () => {
       "STABILITY.md: prop types carry the same guarantee as the component they " +
         `belong to.\n${mismatched.join("\n")}`
     ).toEqual([]);
+  });
+
+  it("tags every published entry point, not only the barrel", () => {
+    // `cn` and `uiPreset` ship from their own subpaths and STABILITY.md
+    // classifies them, so a consumer importing `@nextlyhq/ui/utils` should see
+    // the same stability metadata as one importing the root. A guard that reads
+    // only `index.d.ts` reports success while those subpaths carry none.
+    for (const entry of DIST_ENTRIES) {
+      const built = readFileSync(path.join(PKG_ROOT, "dist", entry), "utf8");
+      expect(
+        /@(?:public|experimental)/.test(built),
+        `dist/${entry} carries no release tag; its declarations need one on ` +
+          "the declaration itself, not on an export statement."
+      ).toBe(true);
+    }
+  });
+
+  it("checks declarations that are newer than the source", () => {
+    // A global setup runs once per Vitest project, not once per rerun, so in
+    // watch mode an edited tag would otherwise be compared against the
+    // declarations built before the edit. Staleness is asserted here, where it
+    // is re-evaluated on every run, rather than assumed by the setup.
+    const newestSource = (dir: string): number => {
+      let newest = 0;
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          newest = Math.max(newest, newestSource(full));
+          continue;
+        }
+        if (!/\.(ts|tsx)$/.test(entry.name)) continue;
+        newest = Math.max(newest, statSync(full).mtimeMs);
+      }
+      return newest;
+    };
+    expect(
+      statSync(distTypes).mtimeMs,
+      "dist/index.d.ts predates the newest source file, so these assertions " +
+        "would be checking declarations that no longer describe the code. " +
+        "Rebuild: `pnpm --filter @nextlyhq/ui build`."
+    ).toBeGreaterThanOrEqual(newestSource(path.join(SRC)));
   });
 
   it("is not passing vacuously", () => {

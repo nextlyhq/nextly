@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import preset from "../../tailwind-preset";
+import { compositeOver, contrastRatio, type Rgb } from "../contrast/color";
 import { parseThemeTokens } from "../contrast/parse-theme";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -25,7 +26,11 @@ const repo = resolve(here, "../../../../..");
 const css = readFileSync(resolve(here, "../theme.css"), "utf8");
 const { light, dark } = parseThemeTokens(css);
 
-const OVERLAY_TOKENS = ["--nx-overlay", "--nx-overlay-soft"];
+const OVERLAY_TOKENS = [
+  "--nx-overlay",
+  "--nx-overlay-soft",
+  "--nx-overlay-strong",
+];
 
 /** Every `.tsx` under a package's `src`, minus tests. */
 function sources(pkg: string): string[] {
@@ -73,6 +78,30 @@ describe("overlay scrim token", () => {
       | undefined;
     expect(colors?.["overlay"]).toBe("var(--nx-overlay)");
     expect(colors?.["overlay-soft"]).toBe("var(--nx-overlay-soft)");
+  });
+
+  it("keeps text on the read-on scrim above AA", () => {
+    // `--nx-overlay` sits UNDER a modal, which brings its own surface for text.
+    // `--nx-overlay-strong` is the one a full-screen state screen writes its
+    // message directly onto, so it is the one that has to carry contrast. The
+    // worst case is light mode: the scrim composites over a white page and so
+    // lands lighter than the same idea does in dark.
+    const WHITE: Rgb = { r: 1, g: 1, b: 1, alpha: 1 };
+    const alphaOf = (token: string): number => {
+      const value = light.get(token) ?? "";
+      const match = /\/\s*([0-9.]+)\s*\)/.exec(value);
+      expect(match, `${token} should carry an alpha: ${value}`).not.toBeNull();
+      return Number(match?.[1]);
+    };
+
+    const scrim = compositeOver(
+      { r: 0, g: 0, b: 0, alpha: alphaOf("--nx-overlay-strong") },
+      WHITE
+    );
+    // The muted detail line the restart overlay renders, which is the smallest
+    // text any scrim in the admin carries.
+    const muted = compositeOver({ ...WHITE, alpha: 0.6 }, scrim);
+    expect(contrastRatio(muted, scrim)).toBeGreaterThanOrEqual(4.5);
   });
 
   it("is the only way a scrim is written", () => {

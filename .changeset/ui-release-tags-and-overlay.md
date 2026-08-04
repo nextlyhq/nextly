@@ -31,7 +31,9 @@ the declarations now, where the bundler keeps them, and 229 of them reach
 `dist/index.d.ts` where there were none.
 
 `toast` and `ToasterProps` are re-exported from `sonner`, so their declarations
-are not ours to annotate; they stay tagged in the barrel only.
+are not ours to annotate; they stay tagged in the barrel only. `cn` and
+`uiPreset`, which ship from their own subpaths, carry `@experimental` now as
+`STABILITY.md` already classified them.
 
 Twenty prop types were also promoted to `@public`, which is a widening rather
 than a change of intent: `STABILITY.md` already guaranteed that a prop type
@@ -44,8 +46,11 @@ enforced by a test rather than written down.
 Modal scrims are a theme token. Six components wrote the backdrop inline as
 `bg-black/80`, identical in light and dark and at four different strengths, so
 it could be neither themed nor white-labelled and was invisible to every token
-check the package has. `--nx-overlay` (and `--nx-overlay-soft`, for a scrim over
-content rather than the page) is defined for both modes and used everywhere,
+check the package has. `--nx-overlay` (with `--nx-overlay-soft` for a scrim over
+content rather than the page, and `--nx-overlay-strong` for one a full-screen
+state screen writes its message directly onto — a see-through scrim tops out
+below AA over a white page even for pure white text) is defined for both modes
+and used everywhere,
 with `bg-overlay` / `bg-overlay-soft` utilities in the v4 theme AND in
 `@nextlyhq/ui/tailwind-preset`, so the documented Tailwind v3 path generates
 them too. Dialogs, sheets and the command palette now share one backdrop
