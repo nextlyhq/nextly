@@ -421,9 +421,10 @@ export class UserMutationService extends BaseService {
    * missing tables but never alters an existing one. The identifying columns
    * exist there; only the column recording WHEN an erasure happened does not.
    *
-   * Neither answer fails the deletion. Refusing to delete an account on those
-   * installations would be a worse regression than the defect this erasure
-   * fixes, so it is reported and said out loud. What the caller does with
+   * Neither answer fails the deletion. An account holder's right to have their
+   * account removed does not depend on the state of a table they never saw, so
+   * a shape that cannot be fully erased is reported and said out loud rather
+   * than made a reason to refuse. What the caller does with
    * `"unstamped"` depends on the table: an un-erased `activity_log` row is
    * carried away by its cascading key, while an `audit_log` row has no key and
    * would keep its identifiers indefinitely, so that one is scrubbed without
