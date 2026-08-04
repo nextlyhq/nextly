@@ -39,7 +39,11 @@ export const embed = defineBlock({
   render: ({ props, className, remotePatterns }) => {
     const height = Number(props.height) || 320;
     if (props.mode === "html") {
-      const clean = sanitizeEmbedHtml(str(props.html));
+      // The same allowlist the URL mode below is held to. A sanitized fragment
+      // can still name any host, and its `<iframe loading="lazy">` and `<img>`
+      // fire only when something renders them, so the raw-HTML branch is the
+      // same conditional channel rather than a milder one.
+      const clean = sanitizeEmbedHtml(str(props.html), remotePatterns);
       if (!clean) return null;
       return (
         <div

@@ -131,4 +131,70 @@ describe("sanitizeEmbedHtml", () => {
     expect(out).not.toContain("<script");
     expect(out).toContain("<iframe");
   });
+
+  it("holds every fetching attribute to the origin allowlist", () => {
+    // Scheme safety is not the whole question. A sanitized fragment can still
+    // name any host, and each of these fetches WITHOUT a user action — the
+    // lazy iframe only when something renders it, which CSS in the same page
+    // decides. That is the conditional request the origin policy exists to
+    // stop, so the raw-HTML branch cannot be the one place it is not applied.
+    for (const dirty of [
+      '<iframe loading="lazy" src="https://evil.example/a"></iframe>',
+      '<img src="https://evil.example/a.png">',
+      '<img srcset="https://evil.example/a.png 1x, /ok.png 2x">',
+      '<video poster="https://evil.example/p.jpg"></video>',
+      '<div style="background:url(https://evil.example/a.png)">x</div>',
+    ]) {
+      expect(sanitizeEmbedHtml(dirty), dirty).not.toContain("evil.example");
+    }
+  });
+
+  it("keeps a declared host, so the restriction is not just a removed feature", () => {
+    const patterns = [
+      { protocol: "https" as const, hostname: "player.example" },
+    ];
+    const out = sanitizeEmbedHtml(
+      '<iframe loading="lazy" src="https://player.example/v/1"></iframe>',
+      patterns
+    );
+    expect(out).toContain("https://player.example/v/1");
+
+    // An undeclared host is still refused with the same patterns in hand, so
+    // the allowlist is being consulted rather than merely being non-empty.
+    expect(
+      sanitizeEmbedHtml(
+        '<iframe src="https://evil.example/a"></iframe>',
+        patterns
+      )
+    ).not.toContain("evil.example");
+  });
+
+  it("keeps same-origin references, which need no pattern", () => {
+    const out = sanitizeEmbedHtml(
+      '<img src="/media/a.png"><div style="background:url(/media/b.png)">x</div>'
+    );
+    expect(out).toContain("/media/a.png");
+    expect(out).toContain("/media/b.png");
+  });
+
+  it("removes the attribute rather than the element around it", () => {
+    // The author's surrounding markup is theirs; only the request is refused.
+    const out = sanitizeEmbedHtml(
+      '<figure><img src="https://evil.example/a.png"><figcaption>Caption</figcaption></figure>'
+    );
+    expect(out).toContain("<figure>");
+    expect(out).toContain("Caption");
+    expect(out).not.toContain("evil.example");
+  });
+
+  it("does not leave its hook registered for the next call", () => {
+    // DOMPurify keeps hooks on a shared instance, so one left behind would
+    // judge later fragments against whichever patterns this call was holding.
+    sanitizeEmbedHtml('<img src="https://player.example/a.png">', [
+      { protocol: "https", hostname: "player.example" },
+    ]);
+    expect(
+      sanitizeEmbedHtml('<img src="https://player.example/a.png">')
+    ).not.toContain("player.example");
+  });
 });

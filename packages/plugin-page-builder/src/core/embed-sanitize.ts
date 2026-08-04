@@ -11,8 +11,24 @@
  * an obvious, author-controlled risk — but the `srcdoc` attribute (which can host
  * its own script context) is forbidden, and script/style/object and inline event
  * handlers are stripped.
+ *
+ * Scheme safety is only half the question, and it is the only half DOMPurify
+ * answers. A sanitized fragment may still name any HOST it likes, and the
+ * requests it makes are the same conditional channel the origin policy closes
+ * everywhere else: an `<iframe loading="lazy">` or an `<img>` fires only when
+ * something renders it, and custom CSS in the same page decides whether it
+ * does. So every attribute the browser fetches from is held to the same
+ * `remotePatterns` allowlist as the rest of the builder, through the hook
+ * DOMPurify provides for exactly this.
  */
+import * as csstree from "css-tree";
 import DOMPurify from "isomorphic-dompurify";
+
+import {
+  fetchableValues,
+  isFetchableUrl,
+  type RemotePatternInput,
+} from "./url-policy";
 
 const CONFIG = {
   ADD_TAGS: ["iframe"],
@@ -29,7 +45,112 @@ const CONFIG = {
   FORBID_ATTR: ["srcdoc"],
 };
 
-export function sanitizeEmbedHtml(html: string): string {
+/**
+ * Attributes the browser resolves into a request on its own.
+ *
+ * `href` is deliberately absent: a link is followed by a person, so where it
+ * points is the author's business and the navigation carries no information
+ * back without an action. These fetch without one, which is what makes them a
+ * channel rather than a preference.
+ */
+const FETCH_ATTRS = [
+  "src",
+  "srcset",
+  "poster",
+  "background",
+  "data",
+  "lowsrc",
+] as const;
+
+/**
+ * Every URL in a `srcset`, which holds a comma-separated candidate list.
+ *
+ * Each candidate is a URL optionally followed by a descriptor, so the URL is
+ * the text up to the first space. A candidate that yields none makes the whole
+ * attribute unreadable rather than empty, and unreadable is refused.
+ */
+function srcsetUrls(value: string): string[] | undefined {
+  const urls: string[] = [];
+  for (const candidate of value.split(",")) {
+    const url = candidate.trim().split(/\s+/)[0];
+    if (!url) return undefined;
+    urls.push(url);
+  }
+  return urls.length > 0 ? urls : undefined;
+}
+
+/** Whether an inline `style` attribute fetches only from allowed origins. */
+function styleIsAllowed(
+  value: string,
+  patterns: readonly RemotePatternInput[]
+): boolean {
+  let declarations: csstree.CssNode;
+  try {
+    // A style attribute is a declaration list rather than a single value, so it
+    // is parsed as one. That puts each declaration's value within reach of the
+    // shared scan instead of growing a second URL reader here.
+    declarations = csstree.parse(value, { context: "declarationList" });
+  } catch {
+    return false;
+  }
+  let allowed = true;
+  csstree.walk(declarations, {
+    visit: "Declaration",
+    enter(node: csstree.CssNode) {
+      if (!allowed) return;
+      const { values, unreadable } = fetchableValues(
+        (node as csstree.Declaration).value
+      );
+      // Unreadable is not safe, the same as everywhere else this scan is used.
+      if (unreadable !== undefined) allowed = false;
+      else if (values.some(url => !isFetchableUrl(url, patterns)))
+        allowed = false;
+    },
+  });
+  return allowed;
+}
+
+/**
+ * Strip the fetch-bearing attributes a sanitized fragment may not use.
+ *
+ * The ATTRIBUTE is removed rather than the element: an `<iframe>` or `<img>`
+ * left without a source renders as nothing, which makes the omission visible,
+ * while removing the node would take surrounding markup the author wrote around
+ * it. Nothing is rewritten to a "safe" value either — guessing what the author
+ * meant is not something a security control should invent.
+ */
+function enforceOrigins(
+  node: Element,
+  patterns: readonly RemotePatternInput[]
+): void {
+  for (const attr of FETCH_ATTRS) {
+    const value = node.getAttribute(attr);
+    if (value === null) continue;
+    const urls = attr === "srcset" ? srcsetUrls(value) : [value];
+    if (urls !== undefined && urls.every(url => isFetchableUrl(url, patterns)))
+      continue;
+    node.removeAttribute(attr);
+  }
+  const style = node.getAttribute("style");
+  if (style !== null && !styleIsAllowed(style, patterns))
+    node.removeAttribute("style");
+}
+
+export function sanitizeEmbedHtml(
+  html: string,
+  remotePatterns: readonly RemotePatternInput[] = []
+): string {
   if (!html) return "";
-  return DOMPurify.sanitize(html, CONFIG);
+  const hook = (node: Element): void => {
+    enforceOrigins(node, remotePatterns);
+  };
+  // Registered and removed around ONE synchronous call. DOMPurify keeps hooks
+  // on a shared instance, so one left behind would apply to every later
+  // sanitize with whichever patterns this call happened to be holding.
+  DOMPurify.addHook("afterSanitizeAttributes", hook);
+  try {
+    return DOMPurify.sanitize(html, CONFIG);
+  } finally {
+    DOMPurify.removeHook("afterSanitizeAttributes");
+  }
 }
