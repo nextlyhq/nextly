@@ -69,22 +69,22 @@ export interface ResolvedAuditRetentionConfig {
 }
 
 /**
- * The largest offset whose resulting date is still representable.
+ * The largest offset whose resulting date every supported database can store.
  *
  * A window is subtracted from now to form a cutoff, and an interval likewise,
- * so both are bounded by what `Date` can hold: ±8.64e15 ms from the epoch.
- * `Number.MAX_SAFE_INTEGER` is finite, so it survives a finiteness check and
- * then yields an Invalid Date the driver rejects — a pass that fails on every
- * run and is swallowed, leaving the trail unpruned while its configuration
- * reads as accepted.
+ * so both are bounded by what the column receiving them can hold. `Date` is the
+ * looser limit at ±8.64e15 ms; MySQL `DATETIME` starts at 1000-01-01 and
+ * rejects anything earlier under strict mode, which is the narrower one and so
+ * the one that binds. An offset past it fails on every run and is swallowed,
+ * leaving the trail unpruned while its configuration reads as accepted — the
+ * same silent no-op as `Number.MAX_SAFE_INTEGER`, arrived at through a stricter
+ * door.
  *
- * This is the representability limit itself rather than a shorter policy cap.
- * A cap set by taste would silently replace a long but perfectly valid window
- * with the default, and the default is SHORTER — so a configuration asking to
- * keep decades would delete them on the first pass. Rejecting a value must
- * never be more destructive than honouring it.
+ * A thousand years is the conservative form of that limit: any clock later than
+ * the year 2000 minus this offset lands after 1000-01-01, so it holds without
+ * consulting the current time.
  */
-const MAX_REPRESENTABLE_OFFSET_MS = 8.64e15;
+const MAX_STORABLE_OFFSET_MS = 1000 * 365 * DAY_MS;
 
 function maxAge(value: MaxAge | undefined, fallback: number): MaxAge {
   if (value === false) return false;
@@ -94,11 +94,13 @@ function maxAge(value: MaxAge | undefined, fallback: number): MaxAge {
   // pass swallows as a failure — retention that looks configured and silently
   // never runs. `false` is how "keep forever" is expressed.
   const window = value as number;
-  return Number.isFinite(window) &&
-    window > 0 &&
-    window <= MAX_REPRESENTABLE_OFFSET_MS
-    ? window
-    : fallback;
+  if (!Number.isFinite(window) || window <= 0) return fallback;
+  // Beyond what a cutoff can express, the request is to keep essentially
+  // everything — so it is honoured as `false` rather than replaced by the
+  // default. The default is SHORTER, and substituting it would delete what the
+  // configuration asked to retain: rejecting a value must never be more
+  // destructive than honouring it.
+  return window <= MAX_STORABLE_OFFSET_MS ? window : false;
 }
 
 function positive(value: number | undefined, fallback: number): number {
@@ -106,7 +108,7 @@ function positive(value: number | undefined, fallback: number): number {
   // from now to decide whether a pass is due, so a value that leaves the Date
   // range makes that comparison unanswerable and no pass ever runs again.
   const ms = value as number;
-  return Number.isFinite(ms) && ms > 0 && ms <= MAX_REPRESENTABLE_OFFSET_MS
+  return Number.isFinite(ms) && ms > 0 && ms <= MAX_STORABLE_OFFSET_MS
     ? ms
     : fallback;
 }

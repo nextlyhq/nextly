@@ -115,12 +115,17 @@ export function registerWebhookServices(ctx: RegistrationContext): void {
   // Retention deps the drain route runs after delivery. Content writes already
   // offer a retention pass (register-collections.ts), but an install driven only
   // by the cron drain never writes on that path, so the drain must be able to
-  // prune too. The gate is DB-backed, so this instance and the content-write
-  // runner's coordinate through the same persisted claim — the interval holds
-  // whichever fires first, and the other's pass is a no-op. `undefined` when the
-  // operator switched retention off (or no app config was supplied).
+  // prune too.
+  //
   // Resolved by the audit writer, which is the only trigger an installation
-  // taking authentication traffic and no content writes ever reaches.
+  // taking authentication traffic and no content writes ever reaches. It shares
+  // the request-path gate with the content-write runners — the interval holds
+  // whichever fires first and the others' passes are no-ops — while the drain
+  // claims a separate marker, so a capped request pass cannot consume the
+  // full-budget turn.
+  //
+  // Present whenever EITHER policy has something to prune, so an install with
+  // webhook retention off and audit retention on still gets one.
   container.registerSingleton("retentionRunner", () =>
     buildRetentionRunner({
       adapter,

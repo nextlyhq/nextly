@@ -158,7 +158,12 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
         WEBHOOK_RETENTION_GATE_KEY,
         webhookPolicy.intervalMs
       );
-      if (due) {
+      // Re-checked after the claim, not only before it: the claim is two
+      // statements against the database and can itself spend what remained. A
+      // pass that prunes nothing has still written the marker, which holds the
+      // next attempt off for a full interval — so what matters is whether time
+      // is left NOW, after paying for the turn.
+      if (due && !deadlineSpent()) {
         // Bounded by the same deadline as everything else this call does.
         // Unbounded, a backlogged sweep could spend the whole allowance and
         // leave none for the pass after it — which is the only full-budget
@@ -192,7 +197,12 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
         AUDIT_RETENTION_DRAIN_GATE_KEY,
         auditPolicy.intervalMs
       );
-      if (auditDue) {
+      // Re-checked after the claim, not only before it: the claim is two
+      // statements against the database and can itself spend what remained. A
+      // pass that prunes nothing has still written the marker, which holds the
+      // next attempt off for a full interval — so what matters is whether time
+      // is left NOW, after paying for the turn.
+      if (auditDue && !deadlineSpent()) {
         const trails = await pruneAuditDataSafely(
           { ...retention.prune, deadline },
           auditPolicy

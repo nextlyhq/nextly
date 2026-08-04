@@ -19,19 +19,25 @@ import {
 } from "../retention-config";
 
 describe("resolveAuditRetentionConfig", () => {
+  it("keeps everything when a window outruns what a cutoff can express", () => {
+    // Not the default, which is SHORTER — substituting it would delete what the
+    // configuration asked to retain. A window past the range is a request to
+    // keep essentially everything, and `false` is how that is expressed.
+    const millennia = 2000 * 365 * 24 * 60 * 60 * 1000;
+    const resolved = resolveAuditRetentionConfig({
+      activityMaxAgeMs: millennia,
+      authMaxAgeMs: millennia,
+    });
+    expect(resolved.activityMaxAgeMs).toBe(false);
+    expect(resolved.authMaxAgeMs).toBe(false);
+  });
+
   it("falls back when a window is not a finite positive number", () => {
     // MAX_SAFE_INTEGER is the one that survives a finiteness check: subtracted
     // from now it leaves the Date range, so the cutoff is an Invalid Date the
     // driver rejects — a pass that fails every run and is swallowed, leaving
     // the trail unpruned while the configuration reads as accepted.
-    for (const bad of [
-      Infinity,
-      -Infinity,
-      NaN,
-      0,
-      -1,
-      Number.MAX_SAFE_INTEGER,
-    ]) {
+    for (const bad of [Infinity, -Infinity, NaN, 0, -1]) {
       const resolved = resolveAuditRetentionConfig({
         activityMaxAgeMs: bad,
         authMaxAgeMs: bad,
@@ -41,6 +47,13 @@ describe("resolveAuditRetentionConfig", () => {
       expect(resolved.authMaxAgeMs).toBe(DEFAULT_AUTH_MAX_AGE_MS);
       expect(resolved.intervalMs).toBe(DEFAULT_AUDIT_RETENTION_INTERVAL_MS);
     }
+
+    // An interval has no "keep forever" reading, so an unusable one falls back
+    // to the default: it prunes more often, never more than the windows allow.
+    expect(
+      resolveAuditRetentionConfig({ intervalMs: Number.MAX_SAFE_INTEGER })
+        .intervalMs
+    ).toBe(DEFAULT_AUDIT_RETENTION_INTERVAL_MS);
   });
 
   it("keeps a long window that a date can still represent", () => {
