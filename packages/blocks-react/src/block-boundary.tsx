@@ -79,8 +79,16 @@ const RESERVED_ATTRIBUTE_NAMES = new Set([
  * returned untouched rather than guessed at.
  */
 function withNodeAttributes(output: ReactNode, node: BlockNode): ReactNode {
-  const cssId = node.cssId;
-  const attributes = node.attributes;
+  const cssId = typeof node.cssId === "string" ? node.cssId : undefined;
+  // A stored envelope is whatever the database returned: `attributes: null`
+  // reaches `Object.keys` and throws here, after the render try/catch and after
+  // normalization, so one bad persisted field would cost the page.
+  const attributes =
+    typeof node.attributes === "object" &&
+    node.attributes !== null &&
+    !Array.isArray(node.attributes)
+      ? node.attributes
+      : undefined;
   const hasAttributes =
     attributes !== undefined && Object.keys(attributes).length > 0;
   if (cssId === undefined && !hasAttributes) return output;
@@ -90,6 +98,10 @@ function withNodeAttributes(output: ReactNode, node: BlockNode): ReactNode {
   if (attributes) {
     for (const [name, value] of Object.entries(attributes)) {
       if (RESERVED_ATTRIBUTE_NAMES.has(name)) continue;
+      // The field is typed as strings and sanitized at write time, but a stored
+      // document can hold anything; a non-string would be handed to React as a
+      // prop value it never expected.
+      if (typeof value !== "string") continue;
       extra[name] = value;
     }
   }
@@ -111,7 +123,12 @@ function withNodeAttributes(output: ReactNode, node: BlockNode): ReactNode {
 function checkedOutput(
   value: unknown,
   node: BlockNode,
-  fallback: ReactNode
+  fallback: ReactNode,
+  // The node's root-level fields belong to the block's OWN root element. This
+  // function is re-entered for each awaited child, and applying them again
+  // there would put the node's id and attributes on a nested element while the
+  // block's root, being a list, received none of them.
+  isBlockRoot: boolean
 ): ReactNode {
   const result = normalizeRenderable(value, {
     // A promise the block returned inside a list is awaited under the same
@@ -121,7 +138,12 @@ function checkedOutput(
     // hold back the siblings beside it.
     wrapOwnedThenable: (pending, index) => (
       <Suspense key={`nx-async-${index}`} fallback={fallback}>
-        <AsyncBlockOutput pending={pending} node={node} fallback={fallback} />
+        <AsyncBlockOutput
+          pending={pending}
+          node={node}
+          fallback={fallback}
+          isBlockRoot={false}
+        />
       </Suspense>
     ),
   });
@@ -140,7 +162,9 @@ function checkedOutput(
   // Only promises inside borrowed JSX children reach here unwrapped, since
   // nothing can be substituted into an element that already exists. React
   // suspends on them, so they still need a boundary above.
-  const withAttributes = withNodeAttributes(result.node, node);
+  const withAttributes = isBlockRoot
+    ? withNodeAttributes(result.node, node)
+    : result.node;
   if (!result.hasUnwrappedThenable) return withAttributes;
   return <Suspense fallback={fallback}>{withAttributes}</Suspense>;
 }
@@ -159,13 +183,15 @@ async function AsyncBlockOutput({
   pending,
   node,
   fallback,
+  isBlockRoot,
 }: {
   pending: PromiseLike<unknown>;
   node: BlockNode;
   fallback: ReactNode;
+  isBlockRoot: boolean;
 }): Promise<ReactNode> {
   try {
-    return checkedOutput(await pending, node, fallback);
+    return checkedOutput(await pending, node, fallback, isBlockRoot);
   } catch (error) {
     return (
       <BlockPlaceholder
@@ -284,11 +310,16 @@ export function BlockBoundary({
   // not-a-promise and falls into the checked path, where it becomes this
   // block's placeholder. A predicate that could raise would do so out here,
   // past the try block above, and take the page with it.
-  if (!isThenable(output)) return checkedOutput(output, node, fallback);
+  if (!isThenable(output)) return checkedOutput(output, node, fallback, true);
 
   return (
     <Suspense fallback={fallback}>
-      <AsyncBlockOutput pending={output} node={node} fallback={fallback} />
+      <AsyncBlockOutput
+        pending={output}
+        node={node}
+        fallback={fallback}
+        isBlockRoot
+      />
     </Suspense>
   );
 }
@@ -309,8 +340,13 @@ export function BlockBoundary({
  */
 function isUnconditional(node: BlockNode): boolean {
   const groups = node.visibility?.conditions;
-  if (!Array.isArray(groups)) return true;
-  return !groups.some(group => Array.isArray(group) && group.length > 0);
+  if (groups === undefined || groups === null) return true;
+  // Only an EMPTY list means ungated. A malformed value — a flat list of
+  // predicates from an older writer, an object, a string — is still an author
+  // saying this node is restricted, and a shape this renderer does not
+  // recognise is the last thing to resolve in favour of showing it.
+  if (Array.isArray(groups)) return groups.length === 0;
+  return false;
 }
 
 export interface BlockListProps {

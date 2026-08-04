@@ -157,21 +157,36 @@ function isIterable(value: object): value is Iterable<unknown> {
   return typeof (value as Iterable<unknown>)[Symbol.iterator] === "function";
 }
 
+/** What reading a borrowed iterable would cost. */
+type IterableKind = "single-use" | "re-readable" | "unopenable";
+
 /**
- * Whether reading an iterable would use it up.
+ * Whether an iterable can be read without using it up.
  *
- * A generator is its own iterator, so iterating it once leaves nothing behind;
- * a `Set` hands out a fresh iterator each time and can be read repeatedly. That
- * decides whether a borrowed value may be inspected at all, and asking for the
- * iterator to find out is itself free — it is exactly what returns `this` for a
- * generator and a new object for a collection.
+ * Decided by asking for the iterator TWICE and comparing. A collection hands
+ * out a fresh iterator each time, so reading it costs nothing; a generator
+ * returns itself, so reading it is the only read anyone gets.
+ *
+ * Comparing the two answers rather than checking whether the iterator is its
+ * own iterator, which looks equivalent and is not: a `Set`'s iterator is also
+ * its own iterator, so that test calls every collection single-use and quietly
+ * stops inspecting all of them. Asking twice separates the cases and costs
+ * nothing — requesting an iterator does not advance a generator.
+ *
+ * It also catches a wrapper that DELEGATES to a shared generator, whose
+ * iterator is neither itself nor fresh; walking one would drain the generator
+ * and leave React nothing to render, with no error to say so.
  */
-function isSingleUse(value: Iterable<unknown>): boolean {
+function classifyIterable(value: Iterable<unknown>): IterableKind {
   try {
-    return (value[Symbol.iterator]() as unknown) === (value as unknown);
+    const first = value[Symbol.iterator]();
+    const second = value[Symbol.iterator]();
+    return first === second ? "single-use" : "re-readable";
   } catch {
-    // An iterator that cannot even be requested is not one to read.
-    return true;
+    // Distinct from single-use: an iterable that cannot even be opened here
+    // will not open for React either, and accepting it unchecked means the
+    // throw lands inside React's render instead of becoming a placeholder.
+    return "unopenable";
   }
 }
 
@@ -275,10 +290,14 @@ export function normalizeRenderable(
 
     if (!isIterable(current)) return describeValue(current);
 
+    const kind = classifyIterable(current);
+    if (kind === "unopenable") {
+      return "an iterable whose iterator could not be obtained";
+    }
     // Reading a single-use iterable would leave React nothing to render, so it
     // is the one thing accepted unchecked. A re-readable collection has no such
     // cost and is walked.
-    if (isSingleUse(current)) return null;
+    if (kind === "single-use") return null;
     for (const item of current) {
       const reason = inspect(item);
       if (reason !== null) return reason;

@@ -1,4 +1,9 @@
-import type { BlockDocument, BlockNode } from "@nextlyhq/blocks-engine";
+import {
+  DEFAULT_LIMITS,
+  type BlockDocument,
+  type BlockNode,
+  type DocumentLimits,
+} from "@nextlyhq/blocks-engine";
 
 /**
  * Repairs a stored document's SHAPE before anything walks it.
@@ -24,17 +29,37 @@ import type { BlockDocument, BlockNode } from "@nextlyhq/blocks-engine";
  * Returns the ORIGINAL document when nothing needed repair, so the common case
  * allocates nothing.
  */
-export function sanitizeDocument(document: BlockDocument): BlockDocument {
+export function sanitizeDocument(
+  document: BlockDocument,
+  limits: DocumentLimits = DEFAULT_LIMITS
+): BlockDocument {
   let changed = false;
+  let remaining = limits.maxNodes;
 
-  const sanitizeNodes = (nodes: unknown): BlockNode[] => {
+  const sanitizeNodes = (nodes: unknown, depth: number): BlockNode[] => {
     if (!Array.isArray(nodes)) {
+      changed = true;
+      return [];
+    }
+
+    // Bounded rather than trusted. This walk runs inside `PageRenderer` before
+    // any block boundary exists, so a document nested deeper than the format
+    // allows would exhaust the call stack and fail the whole request while
+    // trying to repair it. The engine holds every other document walk to these
+    // same caps.
+    if (depth > limits.maxDepth) {
       changed = true;
       return [];
     }
 
     const result: BlockNode[] = [];
     for (const node of nodes) {
+      if (remaining <= 0) {
+        changed = true;
+        break;
+      }
+      remaining -= 1;
+
       // A non-object in the forest has no id, type or version to render, and
       // reading through it would fail at the first property access.
       if (typeof node !== "object" || node === null || Array.isArray(node)) {
@@ -43,6 +68,19 @@ export function sanitizeDocument(document: BlockDocument): BlockDocument {
       }
 
       const candidate = node as BlockNode;
+
+      // Identity has to be text. A node whose `type` is an object reaches the
+      // unknown-block placeholder, which puts that value in the DOM as a data
+      // attribute and as text — so a hand-edited document would throw inside
+      // React rather than be contained.
+      if (
+        typeof candidate.id !== "string" ||
+        typeof candidate.type !== "string" ||
+        typeof candidate.version !== "number"
+      ) {
+        changed = true;
+        continue;
+      }
       const slots = candidate.slots;
       if (slots === undefined) {
         result.push(candidate);
@@ -60,7 +98,7 @@ export function sanitizeDocument(document: BlockDocument): BlockDocument {
       let slotsChanged = false;
       const nextSlots: Record<string, BlockNode[]> = {};
       for (const [name, children] of Object.entries(slots)) {
-        const sanitized = sanitizeNodes(children);
+        const sanitized = sanitizeNodes(children, depth + 1);
         if (sanitized !== children) slotsChanged = true;
         nextSlots[name] = sanitized;
       }
@@ -73,6 +111,6 @@ export function sanitizeDocument(document: BlockDocument): BlockDocument {
     return changed ? result : (nodes as BlockNode[]);
   };
 
-  const nodes = sanitizeNodes(document.nodes);
+  const nodes = sanitizeNodes(document.nodes, 1);
   return changed ? { ...document, nodes } : document;
 }

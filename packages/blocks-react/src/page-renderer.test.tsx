@@ -914,6 +914,219 @@ describe("PageRenderer", () => {
     });
   });
 
+  describe("hostile stored documents", () => {
+    it("does not put the node's fields on an awaited child", async () => {
+      // The node's root-level fields belong to the block's own root element.
+      // Output validation is re-entered for each awaited child, so applying
+      // them again there would decorate a nested element while the block's own
+      // root — a list — received none of them.
+      const listWithPromise = defineBlock({
+        name: "test/async-list",
+        version: 1,
+        description: "Returns a list containing a promise child.",
+        example: { props: {} },
+        render: () => [
+          <span key="s">sync child</span>,
+          Promise.resolve(<em key="a">async child</em>),
+        ],
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/async-list", {
+              cssId: "the-node",
+              attributes: { "data-node": "yes" },
+            })
+          )}
+          blocks={createBlockResolver([listWithPromise as AnyBlockDefinition])}
+        />
+      );
+
+      expect(html).toContain("async child");
+      // Neither field may land on the child element.
+      expect(html).not.toContain('<em id="the-node"');
+      expect(html).not.toContain('data-node="yes"');
+    });
+
+    it("survives an attributes envelope that is not a record", async () => {
+      // `Object.keys(null)` throws, and it would throw after the render
+      // try/catch and after normalization.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", {
+              props: { value: "still here" },
+              attributes: null as unknown as Record<string, string>,
+            })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual([]);
+      expect(html).toContain("still here");
+    });
+
+    it("drops a node whose identity fields are not text", async () => {
+      // The unknown-block placeholder writes the type into the DOM, so an
+      // object there would throw inside React instead of being contained.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={{
+            formatVersion: DOCUMENT_FORMAT_VERSION,
+            kind: "page",
+            nodes: [
+              {
+                id: "a",
+                type: {},
+                version: 1,
+                props: {},
+              } as unknown as BlockNode,
+              node("b", "test/text", { props: { value: "survivor" } }),
+            ],
+          }}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual([]);
+      expect(html).toContain("survivor");
+    });
+
+    it("renders a document nested deeper than the format allows", async () => {
+      // The repair walk runs before any block boundary exists, so an over-deep
+      // chain would exhaust the call stack and fail the whole request.
+      const box = defineBlock({
+        name: "test/deep-box",
+        version: 1,
+        description: "Nests one slot.",
+        example: { props: {} },
+        slots: { children: {} },
+        render: ({ className, renderSlot }) => (
+          <div className={className}>{renderSlot("children")}</div>
+        ),
+      });
+
+      let deepest: BlockNode = node("leaf", "test/text", {
+        props: { value: "too deep" },
+      });
+      for (let level = 0; level < 200; level++) {
+        deepest = node(`box-${level}`, "test/deep-box", {
+          slots: { children: [deepest] },
+        });
+      }
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(deepest)}
+          blocks={createBlockResolver([
+            box as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+        />
+      );
+
+      // Truncated rather than thrown: the page renders what fits.
+      expect(html).toContain("nx-pb-page");
+      expect(html).not.toContain("too deep");
+    });
+
+    it("withholds a node whose conditions are malformed", async () => {
+      // A flat list of predicates instead of OR-of-AND groups is still an
+      // author saying this node is restricted.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", {
+              props: { value: "gated somehow" },
+              visibility: {
+                conditions: [
+                  { field: "tier", op: "eq", value: "vip" },
+                ] as unknown as [][],
+              },
+            }),
+            node("b", "test/text", { props: { value: "everyone" } })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+        />
+      );
+
+      expect(html).not.toContain("gated somehow");
+      expect(html).toContain("everyone");
+    });
+
+    it("refuses a borrowed iterable whose iterator cannot be obtained", async () => {
+      const hostile = defineBlock({
+        name: "test/unopenable",
+        version: 1,
+        description: "Puts an unopenable iterable inside its JSX.",
+        example: { props: {} },
+        render: ({ className }) => (
+          <div className={className}>
+            {
+              {
+                [Symbol.iterator]() {
+                  throw new Error("cannot open");
+                },
+              } as unknown as ReactElement
+            }
+          </div>
+        ),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/unopenable"),
+            node("b", "test/text", { props: { value: "survivor" } })
+          )}
+          blocks={createBlockResolver([
+            hostile as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual(["invalid-output"]);
+      expect(html).toContain("survivor");
+    });
+
+    it("does not drain an iterable that delegates to a generator", async () => {
+      // The wrapper's iterator is neither itself nor fresh, so a test based on
+      // identity alone would walk it and leave React nothing to render.
+      const delegating = defineBlock({
+        name: "test/delegating",
+        version: 1,
+        description: "Puts a delegating iterable inside its JSX.",
+        example: { props: {} },
+        render: ({ className }) => {
+          const source = (function* () {
+            yield <span key="a">first</span>;
+            yield <span key="b">second</span>;
+          })();
+          const wrapper = { [Symbol.iterator]: () => source };
+          return (
+            <div className={className}>
+              {wrapper as unknown as ReactElement}
+            </div>
+          );
+        },
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(node("a", "test/delegating"))}
+          blocks={createBlockResolver([delegating as AnyBlockDefinition])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual([]);
+      expect(html).toContain("first");
+      expect(html).toContain("second");
+    });
+  });
+
   describe("visibility", () => {
     it("omits a node gated behind conditions nothing can evaluate", async () => {
       // The format says conditionally hidden nodes are OMITTED from server
