@@ -397,9 +397,13 @@ test("scenario 5: a keyboard move actually moves a block", async ({
   await driver.mountTree(fixture);
 
   const before = await driver.readTreeShape();
-  test.fail(true, "this canvas has no keyboard move path at all");
   await driver.keyboardInsert("down");
   const moved = await driver.readTreeShape();
+
+  // Declared after the gesture and both reads: a driver or focus regression
+  // throwing here is a different failure from "keyboard moves are unbuilt", and
+  // marking it expected would hide it.
+  test.fail(true, "this canvas has no keyboard move path at all");
 
   test.info().annotations.push({
     type: "keyboard-shape",

@@ -274,7 +274,26 @@ export function createPocDriver(page: Page): CanvasDriver {
             `${all.length} drop zones are active at once; exactly one may be`
           );
         }
-        const r = all[0].getBoundingClientRect();
+        const el = all[0];
+        const style = getComputedStyle(el);
+        // `data-active` alone is not evidence the user can SEE an indicator: a
+        // CSS regression that hides it, makes it transparent, or collapses it
+        // to nothing still leaves the attribute set and still returns a rect.
+        if (
+          style.display === "none" ||
+          style.visibility === "hidden" ||
+          Number(style.opacity) === 0
+        ) {
+          throw new Error(
+            `the active drop zone is not visible (display=${style.display}, visibility=${style.visibility}, opacity=${style.opacity})`
+          );
+        }
+        const r = el.getBoundingClientRect();
+        if (r.width <= 0 || r.height <= 0) {
+          throw new Error(
+            `the active drop zone has no size (${r.width}x${r.height})`
+          );
+        }
         return { x: r.x, y: r.y, width: r.width, height: r.height };
       }, ACTIVE_ZONE);
       if (!inFrame) return null;

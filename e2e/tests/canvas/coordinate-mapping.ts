@@ -1,9 +1,10 @@
 import type { Point, Rect } from "./driver";
 
 /**
- * The single host-point-to-canvas-point mapping the master plan requires
- * (§2.8 point 5). Kept as a pure function so it can be tested against ground
- * truth rather than inferred from whether an overlay looks right.
+ * Convert a point inside the canvas frame to the host document's coordinates.
+ *
+ * Kept as a pure function so it can be tested against browser-reported
+ * geometry rather than inferred from whether an overlay happens to look right.
  *
  * A frame-local point is scaled by whatever transform the frame carries and
  * then offset by the frame's own position in the host. The scale term is not

@@ -1,10 +1,10 @@
 /**
- * The zero-fluctuation checklist (master plan §2.8) beyond the five scenarios.
+ * Canvas acceptance checks beyond the five drag scenarios.
  *
- * Every test is tagged. `[acceptance]` states a requirement the v2 canvas must
- * meet and re-runs unchanged against driver #2. `[informational]` records what
- * this canvas does today in an area v2 deliberately replaces, so a later
- * difference reads as a decision rather than a regression.
+ * Every test is tagged. `[acceptance]` states a requirement any canvas must
+ * meet, and runs unchanged against any `CanvasDriver`. `[informational]`
+ * records what the current canvas does in an area a replacement is expected to
+ * change, so a later difference reads as a decision rather than a regression.
  */
 import { expect, test } from "@playwright/test";
 
