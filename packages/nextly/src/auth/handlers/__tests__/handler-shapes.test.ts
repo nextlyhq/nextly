@@ -39,6 +39,7 @@ import { handleRegister } from "../register";
 import { handleAcceptInvite } from "../accept-invite";
 import { handleResetPassword } from "../reset-password";
 import { NextlyError } from "../../../errors/nextly-error";
+import { getNextlyLogger } from "../../../observability/logger";
 import { handleSession } from "../session";
 import { handleSetup, handleSetupStatus } from "../setup";
 import { handleResendVerification, handleVerifyEmail } from "../verify-email";
@@ -360,6 +361,35 @@ describe("login handler: respondAction shape", () => {
       );
     }
   );
+
+  it("reports the withheld detail to the operator log", async () => {
+    // The trail keeps only core-controlled values, so anything an error carried
+    // reaches the operator here or nowhere. Asserting the projection alone
+    // would leave that half of the contract unproven — and it WAS unproven: the
+    // detail was described as reaching the log by a comment, and nothing wrote
+    // it.
+    const logged: Record<string, unknown>[] = [];
+    const logger = getNextlyLogger();
+    const originalWarn = logger.warn.bind(logger);
+    logger.warn = (payload: unknown) => {
+      logged.push(payload as Record<string, unknown>);
+      return undefined as never;
+    };
+
+    try {
+      await loginWithRejectingAfterLogin(
+        NextlyError.internal({
+          logContext: { strategyReason: "no SAML assertion for ada" },
+        })
+      );
+    } finally {
+      logger.warn = originalWarn;
+    }
+
+    const entry = logged.find(e => e.kind === "login-failed");
+    expect(entry).toBeDefined();
+    expect(entry?.strategyReason).toBe("no SAML assertion for ada");
+  });
 
   it("stores no identifier a failing plugin hook put on its error", async () => {
     // The projection is asserted directly elsewhere; this pins that the handler

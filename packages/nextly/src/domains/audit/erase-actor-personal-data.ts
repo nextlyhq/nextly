@@ -72,12 +72,16 @@ export interface ErasableAuditTables {
  * @param tables - The dialect's table bundle.
  * @param userId - The account being removed.
  * @param erasedAt - When the erasure happened, recorded on every touched row.
+ * @param unstamped - Tables whose database predates the stamp column. Their
+ *   identifiers are still erased; only the record of WHEN is unavailable,
+ *   because the column to hold it does not exist yet.
  */
 export async function eraseActorPersonalData(
   db: ErasureCapableDb,
   tables: ErasableAuditTables,
   userId: string,
-  erasedAt: Date
+  erasedAt: Date,
+  unstamped?: ReadonlySet<keyof ErasableAuditTables>
 ): Promise<void> {
   const { activityLog, auditLog } = tables;
   // Each surface is erased only when the caller supplied it. A database can
@@ -131,21 +135,32 @@ export async function eraseActorPersonalData(
   // was reached. Nothing links them to a person, which is also why they are not
   // erasable on request; retention is what bounds them.
   if (auditLog) {
+    // A database that predates the stamp column still has to be erased. The
+    // stamp records WHEN an erasure happened; the erasure itself is the
+    // obligation, and skipping it because the evidence field is missing keeps
+    // the identifiers forever — this table carries no cascading key, so nothing
+    // else removes the row, and a later migration adds the column without being
+    // able to revisit deletions that already happened.
+    const stamped = !unstamped?.has("auditLog");
     await db
       .update(auditLog)
       .set({
         ipAddress: null,
         userAgent: null,
-        identityErasedAt: erasedAt,
+        ...(stamped ? { identityErasedAt: erasedAt } : {}),
       })
       .where(
         and(
           eq(auditLog.actorUserId, userId),
-          or(
-            isNotNull(auditLog.ipAddress),
-            isNotNull(auditLog.userAgent),
-            isNull(auditLog.identityErasedAt)
-          )
+          // The stamp cannot be referenced on a schema that lacks it, in the
+          // predicate any more than in the assignment.
+          stamped
+            ? or(
+                isNotNull(auditLog.ipAddress),
+                isNotNull(auditLog.userAgent),
+                isNull(auditLog.identityErasedAt)
+              )
+            : or(isNotNull(auditLog.ipAddress), isNotNull(auditLog.userAgent))
         )
       );
   }

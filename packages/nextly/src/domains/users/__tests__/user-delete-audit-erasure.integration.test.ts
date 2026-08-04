@@ -209,6 +209,51 @@ describe("deleting a user erases them from the activity log without erasing the 
     }
   });
 
+  it("still scrubs the auth log on a database that predates the stamp", async () => {
+    // The stamp records WHEN an erasure happened; the erasure is the
+    // obligation. Skipping it because the evidence column is missing keeps the
+    // address and client forever — this table carries no cascading key, so
+    // nothing else removes the row, and a later migration adds the column
+    // without being able to revisit deletions that already happened.
+    const actor = await users.createLocalUser({
+      email: "legacy-auth-shape@test.local",
+      name: "Legacy Shape",
+      password: "TestPassword123!",
+      isActive: true,
+    });
+    await auditWriter.write({
+      kind: "password-changed",
+      actorUserId: String(actor.id),
+      ipAddress: "198.51.100.9",
+      userAgent: "Mozilla/5.0 (legacy)",
+    });
+
+    // Put the table back on its pre-erasure shape.
+    await adapter.executeQuery(
+      "ALTER TABLE audit_log DROP COLUMN identity_erased_at"
+    );
+
+    try {
+      await users.deleteUser(actor.id);
+    } finally {
+      // Restored before reading back: the schema the reader builds its SELECT
+      // from carries the column, so the row cannot be read while the database
+      // is missing it. The erasure under test has already happened by here.
+      await adapter.executeQuery(
+        "ALTER TABLE audit_log ADD COLUMN identity_erased_at TEXT"
+      );
+    }
+
+    const rows = await auditRowsFor(actor.id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].ip_address).toBeNull();
+    expect(rows[0].user_agent).toBeNull();
+    // The stamp is the one thing a schema with nowhere to put it cannot record.
+    expect(rows[0].identity_erased_at).toBeNull();
+    // The security fact survives, which is what the trail is for.
+    expect(rows[0].kind).toBe("password-changed");
+  });
+
   it("scrubs the request identifiers a deleted actor left in the auth log", async () => {
     // The auth log carries the two fields that identify a person by their
     // request rather than by their name: the address they connected from and

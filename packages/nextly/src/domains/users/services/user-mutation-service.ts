@@ -66,6 +66,16 @@ import type { UserExtSchemaService } from "./user-ext-schema-service";
 // ============================================================
 
 /** The column whose presence means this database can erase an identity. */
+/**
+ * What a database can record about an erasure.
+ *
+ * `false` means the table is absent, so there is nothing to erase.
+ * `"unstamped"` means the table is there on its pre-erasure shape: the
+ * identifying columns exist and are scrubbed, but the column that records when
+ * does not, so that evidence is unavailable until the schema is upgraded.
+ */
+type ErasureShape = "stamped" | "unstamped" | false;
+
 const ERASURE_STAMP_COLUMN = "identity_erased_at";
 
 /**
@@ -421,14 +431,14 @@ export class UserMutationService extends BaseService {
   private async supportsErasure(
     table: string,
     whatIsLost: string
-  ): Promise<boolean> {
-    if (this.erasableTables.has(table)) return true;
+  ): Promise<ErasureShape> {
+    if (this.erasableTables.has(table)) return "stamped";
 
     let tableExists: boolean;
     try {
       tableExists = await this.adapter.tableExists(table);
     } catch {
-      return true;
+      return "stamped";
     }
     if (!tableExists) return false;
 
@@ -446,14 +456,15 @@ export class UserMutationService extends BaseService {
     if (!columns.some(c => c.name === ERASURE_STAMP_COLUMN)) {
       this.logger.warn(
         `${table} predates identity erasure (no ${ERASURE_STAMP_COLUMN} ` +
-          `column); deleting a user will not scrub ${whatIsLost} from it. ` +
-          "Run `nextly migrate` to apply the core schema change."
+          `column); deleting a user cannot record WHEN ${whatIsLost} was ` +
+          "scrubbed from it. Run `nextly migrate` to apply the core schema " +
+          "change."
       );
-      return false;
+      return "unstamped";
     }
 
     this.erasableTables.add(table);
-    return true;
+    return "stamped";
   }
 
   /**
@@ -1347,16 +1358,31 @@ export class UserMutationService extends BaseService {
     // suppress the activity erasure, leaving behind exactly the names and
     // emails the deletion exists to remove.
     const auditTables = this.tables;
+    const activityShape = await this.supportsErasure(
+      "activity_log",
+      "their name and email"
+    );
+    const authShape = await this.supportsErasure(
+      "audit_log",
+      "the address and client they connected from"
+    );
+    // The two answer a legacy shape differently, because what happens to an
+    // un-erased row differs. A legacy `activity_log` still cascades from the
+    // account, so its rows go with the deletion and there is nothing left to
+    // scrub. `audit_log.actor_user_id` carries no key at all — deliberately, so
+    // the trail outlives the account — so an un-erased row keeps the address
+    // and client indefinitely, and no later migration can revisit a deletion
+    // that has already happened. It is erased either way; only the record of
+    // when is lost on a schema with nowhere to put it.
     const erasableAuditTables = {
-      ...((await this.supportsErasure(
-        "activity_log",
-        "their name and email"
-      )) && { activityLog: auditTables.activityLog }),
-      ...((await this.supportsErasure(
-        "audit_log",
-        "the address and client they connected from"
-      )) && { auditLog: auditTables.auditLog }),
+      ...(activityShape === "stamped" && {
+        activityLog: auditTables.activityLog,
+      }),
+      ...(authShape !== false && { auditLog: auditTables.auditLog }),
     };
+    const unstampedAuditTables = new Set<"activityLog" | "auditLog">(
+      authShape === "unstamped" ? ["auditLog"] : []
+    );
 
     // Delete user and related data in a single Drizzle transaction so that
     // partial deletes can't leave orphaned rows. The tx alias is a structural
@@ -1433,7 +1459,8 @@ export class UserMutationService extends BaseService {
             txDb,
             erasableAuditTables,
             String(userId),
-            new Date()
+            new Date(),
+            unstampedAuditTables
           );
         }
 
@@ -1484,7 +1511,8 @@ export class UserMutationService extends BaseService {
           this.db as Parameters<typeof eraseActorPersonalData>[0],
           erasableAuditTables,
           String(userId),
-          new Date()
+          new Date(),
+          unstampedAuditTables
         );
       }
     } catch (err) {
