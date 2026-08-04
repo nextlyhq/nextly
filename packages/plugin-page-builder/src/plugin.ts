@@ -56,14 +56,21 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) =>
     version: PLUGIN_VERSION,
     // The floor states the version carrying the APIs this plugin needs, not the
     // one it was first published against. Two of them: `blocks()` builds its
-    // field with `pluginField`, which core first exports in alpha.49 — against
-    // an earlier core that import resolves to `undefined` and every `blocks()`
-    // call throws while the config is evaluated. And `contributes.admin.
-    // clientConfig` is the transport `remotePatterns` reaches the editor
-    // through, added in alpha.52; an older core validates the plugin happily
-    // and simply does not serialize the field, so the canvas would keep the
-    // empty allowlist this exists to fix, with nothing to say why.
-    nextly: ">=0.0.2-alpha.52",
+    // field with `pluginField`, and the editor reads its allowlist through
+    // `usePluginClientConfig`, which the SDK re-exports from the admin package.
+    // Against a core older than either, the import resolves to nothing and the
+    // failure is a crash while the config is evaluated or the field mounts.
+    //
+    // Written from this package's OWN version rather than a literal, because
+    // every published package here versions in lockstep: a plugin at version X
+    // and a core at version X are always released together, so requiring a core
+    // at least as new as this build is exactly the compatibility this needs. A
+    // literal cannot say that. The APIs above land in the same release as the
+    // plugin build that first calls them, and that version does not exist while
+    // the change is being written — naming the next one guesses at a release
+    // that has not happened, and leaves the source tree, where core carries the
+    // CURRENT version, unable to satisfy its own plugin.
+    nextly: `>=${PLUGIN_VERSION}`,
     // Identity metadata for the admin plugins page, mirroring package.json.
     author: "Nextly",
     homepage: "https://nextlyhq.com",
