@@ -24,6 +24,7 @@ import {
   apiKeyWriteAllowed,
   type AuthenticatedScope,
 } from "../../../auth/authenticated-scope";
+import { isFieldGroupField } from "../../../collections/fields/guards";
 import type { FieldConfig } from "../../../collections/fields/types";
 import { getDialectTables } from "../../../database";
 import { container } from "../../../di/container";
@@ -826,6 +827,29 @@ export class SingleQueryService extends BaseService {
       // can be evaluated for the rows this pulls in.
       true
     );
+
+    // A strict pass is the authorization view, and its whole contract is that a
+    // rule is judged on complete data or not at all. Field-group values live in
+    // their own tables, so without the service that loads them the rule reads
+    // the fields as empty — the same "absence looks like permission" failure the
+    // depth floor and the relationship completeness check exist to prevent, and
+    // it would silently admit callers a rule inspecting those values refuses.
+    // Only a Single that actually declares field-group fields is affected; the
+    // service is always wired in the DI graph, so this guards the seam rather
+    // than a reachable configuration.
+    if (!this.fieldGroupDataService && strict) {
+      const declaresFieldGroups = singleMeta.fields.some(field =>
+        isFieldGroupField(field)
+      );
+      if (declaresFieldGroups) {
+        throw NextlyError.internal({
+          logContext: {
+            single: slug,
+            reason: "field-group-data-service-unavailable-during-authorization",
+          },
+        });
+      }
+    }
 
     if (this.fieldGroupDataService) {
       try {
