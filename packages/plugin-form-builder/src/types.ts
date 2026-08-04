@@ -148,9 +148,19 @@ export interface SubmissionDocument {
   id: string;
   form: string | FormDocument;
   data: Record<string, unknown>;
-  status: "new" | "read" | "archived";
+  /**
+   * Where the submission sits in review.
+   *
+   * `spam` is one of them, not a separate flag: the stored field offers it, the
+   * admin has a Spam tab and filters the other views with `not_equals: "spam"`,
+   * the notification hook skips it, and marking something "Not spam" moves it
+   * back to `new`. `spamReason` records WHICH check flagged it.
+   */
+  status: "new" | "read" | "archived" | "spam";
   ipAddress?: string;
   userAgent?: string;
+  /** Which spam check flagged this, when one did. */
+  spamReason?: string | null;
   submittedAt: Date;
   createdAt: Date;
   updatedAt: Date;

@@ -10,6 +10,7 @@
 
 import type { PluginContext } from "nextly";
 
+import { asFormDocument, asSubmissionDocument } from "../document-shapes";
 import type {
   FormDocument,
   SubmissionDocument,
@@ -336,12 +337,11 @@ export async function submitForm(
 
     return {
       success: true,
-      // The created ROW, not the envelope around it. The service's loose
-      // `CollectionEntry` and this declared document do not overlap enough for
-      // a checked assertion, so the conversion goes through `unknown` and
-      // TypeScript verifies nothing here — which is why the integration test
-      // reads `submission.id` off the result rather than only `success`.
-      submission: submission.item as unknown as SubmissionDocument,
+      // The created ROW, not the envelope around it. Through the shared
+      // conversion, which is where the unchecked step lives and says so; the
+      // integration test reads `submission.id` off the result because nothing
+      // at compile time will.
+      submission: asSubmissionDocument(submission.item),
       redirect,
     };
   } catch (error) {
@@ -387,7 +387,7 @@ export async function fetchFormBySlug(
     );
 
     const form = result.data?.[0];
-    return form ? (form as unknown as FormDocument) : null;
+    return form ? asFormDocument(form) : null;
   } catch {
     return null;
   }
