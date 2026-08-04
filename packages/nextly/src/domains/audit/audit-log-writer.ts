@@ -10,12 +10,11 @@
  *     structured warning via `getNextlyLogger()` and the request
  *     continues.
  *   - **Append-only by application convention.** This writer never offers an
- *     update path, but the application does hold two privileges an operator
- *     hardening the table must allow for: a column-scoped UPDATE that erases a
- *     deleted account's identifiers, and DELETE, which retention needs to prune
- *     rows past their window. Revoking either does not make the table stricter
- *     so much as break the mechanism that depends on it — silently, in the case
- *     of retention. See the dialect schema definitions for the exact grants.
+ *     update path, so an operator hardening the table can revoke UPDATE. DELETE
+ *     is different: retention prunes rows past their window, and revoking it
+ *     does not make the table stricter so much as stop the mechanism that
+ *     bounds it — silently, since a pass must never fail the request that
+ *     offered it. See the dialect schema definitions for the exact grants.
  *   - **Metadata is opaque JSON.** The `metadata` field stays generic
  *     so we can extend coverage without a migration each time. Callers
  *     pass dialect-portable JSON-serialisable values only.

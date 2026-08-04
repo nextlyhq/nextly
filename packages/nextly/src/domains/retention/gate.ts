@@ -38,7 +38,25 @@ import type { WhereClause } from "@nextlyhq/adapter-drizzle/types";
  * starved indefinitely by a busier neighbour and never prune at all.
  */
 export const WEBHOOK_RETENTION_GATE_KEY = "webhooks.retention.lastPassAt";
+
+/**
+ * The audit trails are gated twice, because two triggers with different jobs
+ * offer them.
+ *
+ * A request path offers a capped pass so a save or a sign-in is not held up. The
+ * drain offers a full-budget one, and nothing waits on the drain. Sharing a
+ * marker let the capped trigger consume the interval first — a write landing
+ * just after the marker came due took the turn, and a scheduled drain arriving
+ * moments later found nothing to claim. Under continuous writes that repeats
+ * every interval, so the configured budget is never spent and the trails fall
+ * behind on a setting that reads as enforced.
+ *
+ * Separate markers mean the two can both run in an interval. That is harmless:
+ * a pass deletes rows older than a cutoff, so a second one finds less to do
+ * rather than doing it twice.
+ */
 export const AUDIT_RETENTION_GATE_KEY = "audit.retention.lastPassAt";
+export const AUDIT_RETENTION_DRAIN_GATE_KEY = "audit.retention.lastDrainPassAt";
 
 /**
  * The atomic claim primitive. Implemented against `nextly_meta` in

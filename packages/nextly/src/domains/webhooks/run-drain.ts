@@ -19,7 +19,7 @@ import type { ResolvedWebhookRetentionConfig } from "./retention-config";
 import {
   claimRetentionPass,
   type RetentionGateStore,
-  AUDIT_RETENTION_GATE_KEY,
+  AUDIT_RETENTION_DRAIN_GATE_KEY,
   WEBHOOK_RETENTION_GATE_KEY,
 } from "../../domains/retention/gate";
 
@@ -176,7 +176,7 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
     if (auditPolicy && !deadlineSpent) {
       const auditDue = await claimRetentionPass(
         retention.gate,
-        AUDIT_RETENTION_GATE_KEY,
+        AUDIT_RETENTION_DRAIN_GATE_KEY,
         auditPolicy.intervalMs
       );
       if (auditDue) {

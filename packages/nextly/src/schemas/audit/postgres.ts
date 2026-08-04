@@ -23,19 +23,15 @@ import {
   varchar,
 } from "drizzle-orm/pg-core";
 
-// Append-only by application convention, with two exceptions the application
-// itself performs and an operator hardening this table has to allow for.
+// Append-only by application convention: nothing updates a row once written,
+// so an operator hardening this table can revoke UPDATE.
 //
-// UPDATE: keep it on `ip_address`, `user_agent` and `identity_erased_at`. That
-// is what erases a deleted account's identifiers, and it runs inside the
-// deletion's transaction, so a blanket revoke stops account deletion outright.
-//
-// DELETE: required for retention. `audit.retention.authMaxAgeMs` prunes rows
-// past their window, and a role without DELETE fails every pass — silently,
-// since retention must never fail the request that offered it, so the table
-// grows unbounded while the setting reads as enforced. Revoke it only together
-// with `audit: { retention: { authMaxAgeMs: false } }`, so the configuration
-// says what the privileges actually do.
+// DELETE is different — retention needs it. `audit.retention.authMaxAgeMs`
+// prunes rows past their window, and a role without DELETE fails every pass
+// silently, since retention must never fail the request that offered it, so
+// the table grows unbounded while the setting reads as enforced. Revoke it
+// only together with `audit: { retention: { authMaxAgeMs: false } }`, so the
+// configuration says what the privileges actually do.
 export const auditLog = pgTable(
   "audit_log",
   {

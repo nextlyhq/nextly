@@ -68,6 +68,18 @@ export interface ResolvedAuditRetentionConfig {
   maxBatchesPerRun: number;
 }
 
+/**
+ * The longest window whose cutoff is still a representable date.
+ *
+ * A window is subtracted from now to form the cutoff, and JavaScript's Date
+ * range is ±8.64e15 ms from the epoch. `Number.MAX_SAFE_INTEGER` is finite, so
+ * it survives a finiteness check and then yields an Invalid Date the driver
+ * rejects — a pass that fails on every run and is swallowed, leaving the trail
+ * unpruned while its configuration reads as accepted. A century is far beyond
+ * any real retention and comfortably inside the range.
+ */
+const MAX_REPRESENTABLE_WINDOW_MS = 100 * 365 * DAY_MS;
+
 function maxAge(value: MaxAge | undefined, fallback: number): MaxAge {
   if (value === false) return false;
   // A non-positive window would delete rows the moment they are written, and a
@@ -75,14 +87,21 @@ function maxAge(value: MaxAge | undefined, fallback: number): MaxAge {
   // passes a naive check and then produces an Invalid Date cutoff, which the
   // pass swallows as a failure — retention that looks configured and silently
   // never runs. `false` is how "keep forever" is expressed.
-  return Number.isFinite(value) && (value as number) > 0
-    ? (value as number)
+  const window = value as number;
+  return Number.isFinite(window) &&
+    window > 0 &&
+    window <= MAX_REPRESENTABLE_WINDOW_MS
+    ? window
     : fallback;
 }
 
 function positive(value: number | undefined, fallback: number): number {
-  return Number.isFinite(value) && (value as number) > 0
-    ? (value as number)
+  // Bounded for the same reason a window is: the gate subtracts the interval
+  // from now to decide whether a pass is due, so a value that leaves the Date
+  // range makes that comparison unanswerable and no pass ever runs again.
+  const ms = value as number;
+  return Number.isFinite(ms) && ms > 0 && ms <= MAX_REPRESENTABLE_WINDOW_MS
+    ? ms
     : fallback;
 }
 

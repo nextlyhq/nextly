@@ -20,7 +20,18 @@ import {
 
 describe("resolveAuditRetentionConfig", () => {
   it("falls back when a window is not a finite positive number", () => {
-    for (const bad of [Infinity, -Infinity, NaN, 0, -1]) {
+    // MAX_SAFE_INTEGER is the one that survives a finiteness check: subtracted
+    // from now it leaves the Date range, so the cutoff is an Invalid Date the
+    // driver rejects — a pass that fails every run and is swallowed, leaving
+    // the trail unpruned while the configuration reads as accepted.
+    for (const bad of [
+      Infinity,
+      -Infinity,
+      NaN,
+      0,
+      -1,
+      Number.MAX_SAFE_INTEGER,
+    ]) {
       const resolved = resolveAuditRetentionConfig({
         activityMaxAgeMs: bad,
         authMaxAgeMs: bad,
