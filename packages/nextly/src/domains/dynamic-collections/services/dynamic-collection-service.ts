@@ -24,6 +24,7 @@ import {
 } from "../../i18n/runtime/companion-io";
 import {
   readForeignKeyColumns,
+  readIndexNames,
   tableHasRows,
 } from "../../schema/pipeline/live-table-facts";
 import { resolveBuilderVersions } from "../../versions/builder-versions";
@@ -167,13 +168,19 @@ export class DynamicCollectionService extends BaseService {
   private async readTableFacts(tableName: string): Promise<{
     tableHasRows: boolean;
     foreignKeysByColumn: ReadonlyMap<string, readonly string[]>;
+    indexNames: ReadonlySet<string>;
   }> {
     const db = this.adapter.getDrizzle();
-    const [hasRows, foreignKeys] = await Promise.all([
+    const [hasRows, foreignKeys, indexes] = await Promise.all([
       tableHasRows(db, this.adapter.dialect, tableName),
       readForeignKeyColumns(db, this.adapter.dialect, tableName),
+      readIndexNames(db, this.adapter.dialect, tableName),
     ]);
-    return { tableHasRows: hasRows, foreignKeysByColumn: foreignKeys };
+    return {
+      tableHasRows: hasRows,
+      foreignKeysByColumn: foreignKeys,
+      indexNames: indexes,
+    };
   }
 
   /**

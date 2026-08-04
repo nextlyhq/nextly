@@ -88,6 +88,49 @@ export async function tableHasRows(
 }
 
 /**
+ * The names of the indexes the table currently carries.
+ *
+ * Whether a column is indexed is not derivable from its field: an index is created by the path
+ * that added the column, and the paths have not always agreed on which columns get one, so a
+ * table can carry a relationship column with no index beside an identical one that has it.
+ * MySQL has no `DROP INDEX IF EXISTS`, so dropping one that is not there aborts the migration
+ * before the statements that follow it.
+ */
+export async function readIndexNames(
+  db: unknown,
+  dialect: SupportedDialect,
+  tableName: string
+): Promise<Set<string>> {
+  const names = new Set<string>();
+
+  if (dialect === "postgresql") {
+    const result = (await (db as PgMysqlExecute).execute(
+      sql`SELECT indexname FROM pg_indexes
+          WHERE schemaname = 'public' AND tablename = ${tableName}`
+    )) as { rows: { indexname: string }[] };
+    for (const row of result.rows) names.add(row.indexname);
+    return names;
+  }
+
+  if (dialect === "mysql") {
+    const rows = mysqlRows<{ INDEX_NAME: string }>(
+      await (db as PgMysqlExecute).execute(
+        sql`SELECT DISTINCT INDEX_NAME FROM information_schema.STATISTICS
+            WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${tableName}`
+      )
+    );
+    for (const row of rows) names.add(row.INDEX_NAME);
+    return names;
+  }
+
+  const rows = (await (db as SqliteAll).all(
+    sql`PRAGMA index_list(${sql.identifier(tableName)})`
+  )) as { name: string }[];
+  for (const row of rows) names.add(row.name);
+  return names;
+}
+
+/**
  * The foreign-key constraints the table carries, keyed by the column they are attached to.
  *
  * Presence of a key is the fact every caller needs; the names matter only to MySQL, which is

@@ -378,6 +378,7 @@ describe("an index the dialect can actually accept", () => {
       const sql = unquote(
         service(dialect).generateAlterTableMigration(TABLE, [before], [after], {
           tableHasRows: true,
+          indexNames: new Set(["idx_dc_probe_rank"]),
         })
       );
       expect(sql).toContain("DROP INDEX");
@@ -391,6 +392,41 @@ describe("an index the dialect can actually accept", () => {
     }
   );
 
+  it("does not drop an index the live table does not carry", () => {
+    const indexed = field({
+      name: "author",
+      type: "relationship",
+      options: { target: "authors", relationType: "manyToOne" },
+    });
+    // A relationship column added before this path indexed them has no index. MySQL cannot
+    // express `DROP INDEX IF EXISTS`, so dropping one that is absent aborts the migration
+    // before the statements after it, and the field metadata is then saved for DDL that never
+    // ran. Which columns are indexed is not derivable from the field, so it is read.
+    const sql = unquote(
+      service("mysql").generateAlterTableMigration(TABLE, [indexed], [], {
+        foreignKeysByColumn: new Map(),
+        indexNames: new Set<string>(),
+      })
+    );
+    expect(sql).not.toContain("DROP INDEX");
+    expect(sql).toContain("DROP COLUMN");
+  });
+
+  it("drops an index the live table does carry", () => {
+    const indexed = field({
+      name: "author",
+      type: "relationship",
+      options: { target: "authors", relationType: "manyToOne" },
+    });
+    const sql = unquote(
+      service("mysql").generateAlterTableMigration(TABLE, [indexed], [], {
+        foreignKeysByColumn: new Map(),
+        indexNames: new Set(["idx_dc_probe_author"]),
+      })
+    );
+    expect(sql).toContain("DROP INDEX idx_dc_probe_author ON dc_probe;");
+  });
+
   it("removes the index before the column it names, which is what sqlite requires", () => {
     const indexed = field({
       name: "author",
@@ -400,6 +436,7 @@ describe("an index the dialect can actually accept", () => {
     const sql = unquote(
       service("sqlite").generateAlterTableMigration(TABLE, [indexed], [], {
         foreignKeysByColumn: new Map(),
+        indexNames: new Set(["idx_dc_probe_author"]),
       })
     );
     // SQLite refuses DROP COLUMN while an index still references the column, and reports it as

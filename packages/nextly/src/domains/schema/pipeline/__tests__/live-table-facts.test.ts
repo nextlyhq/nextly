@@ -7,7 +7,11 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
-import { readForeignKeyColumns, tableHasRows } from "../live-table-facts";
+import {
+  readForeignKeyColumns,
+  readIndexNames,
+  tableHasRows,
+} from "../live-table-facts";
 
 /** One row of `PRAGMA foreign_key_list("dc_posts")`, verbatim from SQLite 3.51. */
 const SQLITE_FK_ROW = {
@@ -62,6 +66,55 @@ describe("tableHasRows", () => {
     expect(query).toContain("LIMIT 1");
     expect(query).not.toContain("count");
   });
+});
+
+describe("readIndexNames", () => {
+  it("reads postgres index names", async () => {
+    const execute = vi.fn().mockResolvedValue({
+      rows: [{ indexname: "dc_posts_pkey" }, { indexname: "idx_dc_posts_a" }],
+    });
+
+    const found = await readIndexNames({ execute }, "postgresql", "dc_posts");
+
+    expect([...found].sort()).toEqual(["dc_posts_pkey", "idx_dc_posts_a"]);
+  });
+
+  it("reads mysql index names through the tuple wrapper, deduplicated", async () => {
+    // One row per indexed COLUMN, so a composite index appears more than once.
+    const execute = vi
+      .fn()
+      .mockResolvedValue([[{ INDEX_NAME: "idx_dc_posts_a" }], []]);
+
+    const found = await readIndexNames({ execute }, "mysql", "dc_posts");
+
+    expect([...found]).toEqual(["idx_dc_posts_a"]);
+  });
+
+  it("reads sqlite's PRAGMA index_list rows", async () => {
+    const all = vi
+      .fn()
+      .mockResolvedValue([
+        { seq: 0, name: "idx_dc_posts_a", unique: 0, origin: "c", partial: 0 },
+      ]);
+
+    const found = await readIndexNames({ all }, "sqlite", "dc_posts");
+
+    expect(found.has("idx_dc_posts_a")).toBe(true);
+  });
+
+  it.each(["postgresql", "mysql", "sqlite"] as const)(
+    "reports an empty set for a table with no index (%s)",
+    async dialect => {
+      const db = {
+        execute: vi
+          .fn()
+          .mockResolvedValue(dialect === "mysql" ? [[], []] : { rows: [] }),
+        all: vi.fn().mockResolvedValue([]),
+      };
+
+      expect((await readIndexNames(db, dialect, "dc_plain")).size).toBe(0);
+    }
+  );
 });
 
 describe("readForeignKeyColumns", () => {

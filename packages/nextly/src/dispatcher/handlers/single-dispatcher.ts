@@ -51,6 +51,7 @@ import { RealClassifier } from "../../domains/schema/pipeline/classifier/classif
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
 import {
   readForeignKeyColumns,
+  readIndexNames,
   tableHasRows,
 } from "../../domains/schema/pipeline/live-table-facts";
 import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanup/executor";
@@ -1268,6 +1269,11 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // a foreign key, are read from the live table, and neither question has an answer for a
         // table that was never created.
         let migrationSQL = "";
+        // Whether any statement of this migration reached the database. Everything before that
+        // point — reading the live table, generating the SQL — either succeeds or leaves the
+        // schema exactly as it was, and a failure there must not be recorded as a migration
+        // that ran and save a field list the table never received.
+        let migrationBegan = false;
 
         migrationStatus = "pending";
 
@@ -1290,9 +1296,10 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             } else {
               const db = adapter.getDrizzle();
               const liveDialect = adapter.getCapabilities().dialect;
-              const [rows, foreignKeys] = await Promise.all([
+              const [rows, foreignKeys, indexNames] = await Promise.all([
                 tableHasRows(db, liveDialect, tableName),
                 readForeignKeyColumns(db, liveDialect, tableName),
+                readIndexNames(db, liveDialect, tableName),
               ]);
               migrationSQL = schemaService.generateAlterTableMigration(
                 tableName,
@@ -1303,8 +1310,12 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
                   hasStatus,
                   tableHasRows: rows,
                   foreignKeysByColumn: foreignKeys,
+                  indexNames,
                 }
               );
+              // Past this point a statement may have run, so a failure is a partly-applied
+              // migration rather than an edit that never started.
+              migrationBegan = true;
               await executeMigrationStatements(adapter, migrationSQL);
             }
 
@@ -1393,7 +1404,13 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           // still exactly what the caller sent. Recording "failed" and saving that list anyway
           // would persist a schema the table does not have and report success for it, so the
           // refusal is raised to the caller with the field it names.
-          if (migrationError instanceof NextlyError) throw migrationError;
+          //
+          // The same holds for anything else thrown before the first statement: a probe that
+          // cannot reach the database, or a catalog read the connection is not permitted, ends
+          // the save rather than reporting a migration that never began as one that failed.
+          if (migrationError instanceof NextlyError || !migrationBegan) {
+            throw migrationError;
+          }
           migrationStatus = "failed";
           const message =
             migrationError instanceof Error

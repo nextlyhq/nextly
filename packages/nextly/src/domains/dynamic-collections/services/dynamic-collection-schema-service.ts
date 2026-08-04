@@ -551,6 +551,17 @@ ${allColumnDefs.join(",\n")}
        * drop exactly as it behaved before anything was measured.
        */
       foreignKeysByColumn?: ReadonlyMap<string, readonly string[]>;
+      /**
+       * The index names the table carries, read from the live table by `readIndexNames`.
+       *
+       * Consulted before dropping one. Which columns are indexed is not derivable from the
+       * fields: an index is created by whichever path added the column, and those paths have
+       * not always agreed, so an identical field can be indexed on one table and not on
+       * another. MySQL has no `DROP INDEX IF EXISTS`, so dropping an absent index aborts the
+       * migration before the statements after it. Undefined means the caller did not look, and
+       * the drop is then emitted only where the dialect can guard it itself.
+       */
+      indexNames?: ReadonlySet<string>;
     }
   ): string {
     const statements: string[] = [`-- Update dynamic collection: ${tableName}`];
@@ -756,15 +767,24 @@ ${allColumnDefs.join(",\n")}
       if (!oldField || this.storageClassChanged(oldField, field)) continue;
       if (oldField.index !== field.index) {
         const idxCol = toSnakeCase(field.name);
-        statements.push(
-          field.index
-            ? this.createIndexSql(
-                tableName,
-                idxCol,
-                this.mapFieldTypeToSQL(field.type, field.length)
-              )
-            : this.dropIndexSql(tableName, idxCol)
-        );
+        if (field.index) {
+          statements.push(
+            this.createIndexSql(
+              tableName,
+              idxCol,
+              this.mapFieldTypeToSQL(field.type, field.length)
+            )
+          );
+        } else {
+          // Same guard as the removal path: turning an index off that the table never carried
+          // aborts on MySQL, which cannot express `DROP INDEX IF EXISTS`.
+          const known = options?.indexNames !== undefined;
+          const exists =
+            options?.indexNames?.has(`idx_${tableName}_${idxCol}`) === true;
+          if (known ? exists : this.dialect !== "mysql") {
+            statements.push(this.dropIndexSql(tableName, idxCol));
+          }
+        }
       }
     }
 
@@ -791,7 +811,14 @@ ${allColumnDefs.join(",\n")}
         // `DROP COLUMN` while an index still names it, and reports that as a missing column
         // inside the index rather than as the removal it refused. PostgreSQL and MySQL drop the
         // index with the column, so removing it first is redundant there and never wrong.
-        if (this.columnIsIndexed(field)) {
+        //
+        // Asked of the live table, not of the field: an index is created by whichever path
+        // added the column, so a field that looks indexed may have none. MySQL cannot guard the
+        // drop itself, so without the answer it is not attempted there.
+        const indexName = `idx_${tableName}_${dropCol}`;
+        const indexIsKnown = options?.indexNames !== undefined;
+        const indexExists = options?.indexNames?.has(indexName) === true;
+        if (indexIsKnown ? indexExists : this.dialect !== "mysql") {
           statements.push(this.dropIndexSql(tableName, dropCol));
         }
 
