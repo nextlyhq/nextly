@@ -80,22 +80,48 @@ function sourceFiles(dir: string = SRC_DIR): string[] {
  * `import type` and `export type` are excluded because they erase at build and
  * cost a consumer nothing. Inline `import { type X }` still counts: the
  * statement itself is a runtime import even when one binding is a type.
+ *
+ * DYNAMIC imports count too. `await import("next/headers")` puts Next in the
+ * module graph exactly as a static import does, and a guard that reads only
+ * static syntax is bypassed by the one line most likely to be written when
+ * someone wants to "just reach for it here" — which is precisely the moment
+ * the boundary needs enforcing. `require()` is scanned for the same reason,
+ * even though this package is ESM-only, because a lazy CommonJS resolve is the
+ * documented workaround used elsewhere in this repo.
  */
 function runtimeImports(file: string): string[] {
   const source = readFileSync(file, "utf8");
   const specifiers: string[] = [];
 
   // `from "..."` in an import/export statement, and bare `import "..."`.
-  const pattern =
+  const staticPattern =
     /(?:^|\n)\s*(?:import|export)\s+(type\s+)?([^;'"]*?)\s*from\s*["']([^"']+)["']|(?:^|\n)\s*import\s+["']([^"']+)["']/g;
 
   let match: RegExpExecArray | null;
-  while ((match = pattern.exec(source)) !== null) {
+  while ((match = staticPattern.exec(source)) !== null) {
     const isTypeOnly = Boolean(match[1]);
     const specifier = match[3] ?? match[4];
     if (!specifier || isTypeOnly) continue;
     specifiers.push(specifier);
   }
+
+  // `import("...")` and `require("...")`, with any whitespace. A preceding
+  // `.` is excluded so a method named `import` on some object is not counted.
+  const dynamicPattern =
+    /(?<![.\w])(?:import|require)\s*\(\s*["']([^"']+)["']\s*\)/g;
+  while ((match = dynamicPattern.exec(source)) !== null) {
+    const specifier = match[1];
+    if (specifier) specifiers.push(specifier);
+  }
+
+  // A dynamic import whose specifier is not a literal cannot be checked here.
+  // Fail loudly rather than pass silently: the point of this guard is that a
+  // route into the module graph cannot be opened without a deliberate act.
+  const computed = /(?<![.\w])(?:import|require)\s*\(\s*[^"')\s]/g;
+  if (computed.test(source)) {
+    specifiers.push("<computed-dynamic-import>");
+  }
+
   return specifiers;
 }
 

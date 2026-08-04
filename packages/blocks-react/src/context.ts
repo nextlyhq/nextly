@@ -44,6 +44,21 @@ export interface BlocksDataProvider {
 }
 
 /**
+ * A resolved media item.
+ *
+ * An object rather than a URL string because an image block needs alt text and
+ * intrinsic dimensions to render without layout shift, and those travel with
+ * the URL or they get looked up separately and inconsistently. This mirrors the
+ * shape the existing renderer already settled on.
+ */
+export interface ResolvedMedia {
+  url: string;
+  alt?: string;
+  width?: number;
+  height?: number;
+}
+
+/**
  * A provider that answers nothing.
  *
  * The default, so that rendering a document containing a dynamic block without
@@ -78,10 +93,23 @@ export interface PageContext {
   isWorkingDraft?: boolean;
   /** Data access for dynamic blocks. */
   data: BlocksDataProvider;
-  /** Resolve a media id to a URL, or `null` when it cannot be resolved. */
-  resolveMediaUrl(id: string): string | null;
-  /** Resolve an entry reference to a path, or `null` when it has none. */
-  resolveEntryPath(collection: string, id: string): string | null;
+  /**
+   * Resolve a media id, or `null` when it cannot be resolved.
+   *
+   * Async because a real host cannot answer synchronously: a CMS-backed
+   * context reads the media record from its database, and a storage adapter
+   * that issues signed URLs performs network work to produce one. A
+   * synchronous signature would force every such host to pre-resolve every
+   * media id on every render, or to lie.
+   */
+  resolveMedia(id: string): Promise<ResolvedMedia | null>;
+  /**
+   * Resolve an entry reference to a path, or `null` when it has none.
+   *
+   * Async for the same reason: the path depends on the referenced entry's slug
+   * and status, which is a read.
+   */
+  resolveEntryPath(collection: string, id: string): Promise<string | null>;
 }
 
 /** A context with nothing wired up: the standalone default. */
@@ -91,8 +119,8 @@ export function createStandaloneContext(
   return {
     entry: null,
     data: emptyDataProvider,
-    resolveMediaUrl: () => null,
-    resolveEntryPath: () => null,
+    resolveMedia: () => Promise.resolve(null),
+    resolveEntryPath: () => Promise.resolve(null),
     ...overrides,
   };
 }

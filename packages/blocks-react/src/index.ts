@@ -17,5 +17,6 @@ export type {
   BlocksQuery,
   BlocksResult,
   PageContext,
+  ResolvedMedia,
 } from "./context";
 export { createStandaloneContext, emptyDataProvider } from "./context";
