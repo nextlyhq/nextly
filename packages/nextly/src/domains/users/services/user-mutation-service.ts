@@ -326,15 +326,14 @@ export class UserMutationService extends BaseService {
   private userExtDisabled = false;
 
   /**
-   * Whether this database has an `activity_log` to erase from, probed once.
+   * Audit tables already confirmed to carry the erasure stamp, by table name.
    *
-   * Cached only for `true`. A missing table is the state an operator fixes by
-   * provisioning it, and re-probing until then costs one catalogue lookup per
-   * deletion — cheap on a rare operation, and far better than caching a "no"
-   * that would keep skipping the erasure for the life of the process after the
-   * table appeared.
+   * Only a confirmed stamp is cached. A table that is absent, or present on its
+   * pre-erasure shape, is the state an operator fixes by upgrading, so those
+   * are re-probed on each deletion: that costs one catalogue lookup on a rare
+   * operation, where caching them would keep answering with a shape the
+   * database has since left for the life of the process.
    */
-  /** Tables already confirmed to carry the erasure stamp, by table name. */
   private readonly erasableTables = new Set<string>();
 
   /** Cached merged Zod schemas (lazy, rebuilt when merged fields are available) */
