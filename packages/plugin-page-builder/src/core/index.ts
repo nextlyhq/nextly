@@ -15,3 +15,7 @@ export * from "./motion";
 export * from "./tokens";
 export * from "./templates";
 export * from "./embed-sanitize";
+
+// CSP fetch directives generated from the origin policy, for the HOST to
+// send. Nothing here emits a policy; see `core/csp`.
+export * from "./csp";
