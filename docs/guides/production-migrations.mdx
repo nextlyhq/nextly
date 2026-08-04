@@ -19,6 +19,7 @@ This page covers the common deploy patterns. Pick whichever fits your stack.
 
 | Command | Purpose |
 |---|---|
+| `nextly migrate:baseline` | Run **once**, when a project developed with `db:sync` starts using migrations. Records the schema the database already has as the starting point. See [Graduating from `db:sync`](#graduating-from-dbsync-to-migrations). |
 | `nextly migrate:create [name]` | After you edit `nextly.config.ts`, generate a `.sql` file capturing the change. Commit it to git. |
 | `nextly migrate:check` | CI gate. Verifies migration file integrity and config drift. Does NOT connect to a database. |
 | `nextly migrate` | Applies pending `.sql` files to the target database. Run from CI or your laptop. |
@@ -34,11 +35,68 @@ Global flags inherited from the root `nextly` command: `--config <path>` (custom
 ### Per-command flags
 
 - `nextly migrate` -- `--dry-run` (preview without executing), `--step <n>` (apply only N pending migrations), `--force-unlock` (clear a stale migrate lock left by a crashed run, then migrate).
+- `nextly migrate:baseline` -- `--name <name>` (the migration's name; defaults to `baseline`), `--force-unlock`.
 - `nextly migrate:create` -- `[name]` positional or `--name <name>` flag, `--blank` (empty file for custom SQL), `--non-interactive`, `--accept-renames`.
 - `nextly migrate:status` -- `--json` (machine-readable output for CI scripting).
 - `nextly migrate:resolve` -- exactly one of `--applied <file>`, `--rolled-back <file>`, `--failed-cleanup <file>`; `--skip-verify` (with `--applied`, skip the live-vs-snapshot check).
 - `nextly migrate:fresh` -- `-f, --force` (skip confirmation), `--seed` (run seeders after migrations).
 - `nextly migrate:down` -- `--step <n>` (roll back the last N migrations), `--allow-data-loss` (required when the DOWN drops a table or column), `--yes` (required in production), `--dry-run` (show targets + DOWN SQL without executing), `--force-unlock`.
+
+---
+
+## Graduating from `db:sync` to migrations
+
+`nextly db:sync` is the development loop: it pushes your config straight at the
+database, with no migration files in between. Production wants the opposite —
+reviewable files applied in a known order. Moving from one to the other takes
+one command.
+
+The problem it solves is that your database already has tables and your
+migration history has nothing in it. Without a starting point, the first
+`nextly migrate:create` compares your config to an empty schema and writes
+`CREATE TABLE` for every table that already exists. That file cannot be applied
+to the database it came from.
+
+Run this once, from a machine that can reach the database you developed against:
+
+```bash
+nextly migrate:baseline
+```
+
+It records the schema the database already has as the point the history begins,
+writing two files:
+
+- `migrations/<timestamp>_baseline.sql` — the statements that would build that
+  schema from nothing. It is **not** run against your database; it is recorded
+  as already applied. It exists so a new environment, a CI job, or
+  `nextly migrate:fresh` can build the same schema from the history alone.
+- `migrations/meta/<timestamp>_baseline.snapshot.json` — the starting point
+  every later `migrate:create` measures its diff from.
+
+Commit both. From then on the normal loop applies: edit `nextly.config.ts`, run
+`nextly migrate:create`, and get a file containing only what changed.
+
+```bash
+# One time, on the existing database
+nextly migrate:baseline
+
+# From now on, the ordinary loop
+nextly migrate:create add_subtitle
+nextly migrate
+```
+
+Two things it deliberately refuses:
+
+- **A project that already has a migration history.** Baselining again would
+  give it two starting points, and every later diff would depend on which one
+  was read. It reports the snapshot it found and writes nothing.
+- **An empty database.** There is nothing to adopt; your first migration is an
+  ordinary `nextly migrate:create`.
+
+If you reach this the other way round — you ran `nextly migrate` on a
+`db:sync` project and it refused with schema drift where every difference reads
+`+ table '...' present in DB` — that is this same situation, and the error
+points here.
 
 ---
 

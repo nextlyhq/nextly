@@ -27,6 +27,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import type { Command } from "commander";
 
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
@@ -44,7 +45,7 @@ import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/intro
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
 import { isSnapshotComparableTable } from "../../domains/schema/pipeline/managed-tables";
 import { generateSQL } from "../../domains/schema/pipeline/sql-templates/index";
-import { describeError } from "../../errors/index";
+import { describeError, NextlyError } from "../../errors/index";
 import { createContext, type CommandContext } from "../program";
 import {
   createAdapter,
@@ -77,49 +78,57 @@ async function safeListTables(adapter: CLIDatabaseAdapter): Promise<string[]> {
   }
 }
 
-export async function runMigrateBaseline(
-  options: BaselineOptions,
-  context: CommandContext
-): Promise<void> {
-  const { logger } = context;
-  logger.header("Migrate Baseline");
+/**
+ * Everything `migrate:baseline` needs once the environment has been resolved.
+ *
+ * Shaped like `MigrateCoreDeps` for the same reason: the command's work is
+ * driving a database and a directory, and neither of those needs the CLI's
+ * environment parsing to be exercised.
+ */
+export interface BaselineCoreDeps {
+  adapter: CLIDatabaseAdapter;
+  db: unknown;
+  dialect: SupportedDialect;
+  /** Absolute path to the `migrations/` directory. */
+  migrationsDir: string;
+  logger: CommandContext["logger"];
+  /** Migration name; slug-cased here. */
+  name?: string;
+  /** Override the clock so a test can predict the filename. */
+  now?: Date;
+}
 
-  const dbValidation = validateDatabaseEnv();
-  if (!dbValidation.valid || !dbValidation.dialect) {
-    for (const err of dbValidation.errors ?? []) logger.error(err);
-    process.exit(1);
-  }
-  const dialect = dbValidation.dialect;
+export type BaselineCoreResult =
+  | { kind: "already-baselined"; snapshotName: string }
+  | { kind: "empty-database" }
+  | {
+      kind: "baselined";
+      sqlPath: string;
+      snapshotPath: string;
+      /** How many tables the recorded starting point describes. */
+      tableCount: number;
+    };
 
-  const configResult = await loadConfig({
-    configPath: options.config,
-    cwd: options.cwd,
-    debug: options.verbose,
-  });
-  const cwd = options.cwd ?? process.cwd();
-  const migrationsDir = resolve(cwd, configResult.config.db.migrationsDir);
+/**
+ * Adopt the live database, without exiting the process.
+ *
+ * Shared by the CLI wrapper below and by tests driving the real
+ * `db:sync` → baseline → `migrate:create` → `migrate` sequence.
+ */
+export async function baselineCore(
+  deps: BaselineCoreDeps
+): Promise<BaselineCoreResult> {
+  const { adapter, db, dialect, migrationsDir, logger } = deps;
   const metaDir = resolve(migrationsDir, "meta");
+  const repo = new SchemaEventsRepository(db, dialect);
 
-  const adapter: CLIDatabaseAdapter = await createAdapter({
+  // The same lock every other migrate command takes: adopting writes a file
+  // AND a journal row, and a concurrent `migrate` deciding what to apply must
+  // not see one without the other.
+  const result = await withMigrateLock<BaselineCoreResult>(
+    db,
     dialect,
-    databaseUrl: dbValidation.databaseUrl,
-    logger: options.verbose ? logger : undefined,
-  });
-
-  try {
-    const db = (adapter as unknown as DrizzleAdapter).getDrizzle();
-    const repo = new SchemaEventsRepository(db, dialect);
-
-    await maybeForceUnlock(
-      { forceUnlock: options.forceUnlock === true },
-      db,
-      dialect
-    );
-
-    // The same lock every other migrate command takes: adopting writes a file
-    // AND a journal row, and a concurrent `migrate` deciding what to apply must
-    // not see one without the other.
-    await withMigrateLock(db, dialect, async () => {
+    async () => {
       const latest = await loadLatestSnapshot(metaDir);
 
       // Only tables the migration history is responsible for. A companion is
@@ -131,31 +140,17 @@ export async function runMigrateBaseline(
       );
       const live = await introspectLiveSnapshot(db, dialect, tableNames);
 
-      const plan = planBaseline({
-        live,
-        latestSnapshotName: latest?.filename,
-      });
+      const plan = planBaseline({ live, latestSnapshotName: latest?.filename });
 
       if (plan.kind === "already-baselined") {
-        logger.info(
-          `This project already has a migration history (${plan.snapshotName}).`
-        );
-        logger.info(
-          "Baselining again would give it a second starting point. Nothing was written."
-        );
-        return;
+        return { kind: "already-baselined", snapshotName: plan.snapshotName };
       }
-
       if (plan.kind === "empty-database") {
-        logger.info("No managed tables found, so there is nothing to adopt.");
-        logger.info(
-          "Create your first migration instead:  pnpm nextly migrate:create --name init"
-        );
-        return;
+        return { kind: "empty-database" };
       }
 
-      const name = slugify(options.name ?? DEFAULT_BASELINE_NAME);
-      const now = new Date();
+      const name = slugify(deps.name ?? DEFAULT_BASELINE_NAME);
+      const now = deps.now ?? new Date();
       const baseName = `${formatTimestamp(now)}_${name}`;
 
       // The body is what would build this schema from nothing. It is never run
@@ -200,20 +195,107 @@ export async function runMigrateBaseline(
         uniqueFilename: `${baseName}.sql`,
       });
 
-      logger.newline();
-      logger.success(`Adopted ${plan.snapshot.tables.length} existing tables.`);
-      logger.info(`  Migration: ${sqlPath}`);
-      logger.info(`  Snapshot:  ${snapshotPath}`);
-      logger.newline();
-      logger.info(
-        "Recorded as applied — it will not run against this database."
-      );
-      logger.info(
-        "Commit both files: they are how another environment builds this schema."
-      );
-      logger.newline();
-      logger.info("Next:  pnpm nextly migrate:create --name <your_change>");
+      logger.debug(`Baseline recorded as applied: ${baseName}.sql`);
+
+      return {
+        kind: "baselined",
+        sqlPath,
+        snapshotPath,
+        tableCount: plan.snapshot.tables.length,
+      };
+    }
+  );
+
+  // `withMigrateLock` resolves without running its body only in "wait" mode,
+  // where another process is expected to have done the work. Adoption is never
+  // that: nobody else is going to baseline this database, so an empty result
+  // here would mean reporting success for a history that was never started.
+  if (result === undefined) {
+    throw new NextlyError({
+      code: "NEXTLY_BASELINE_LOCK_NOT_HELD",
+      publicMessage:
+        "The migrate lock was released without adopting the database. " +
+        "Nothing was written; retry once no other schema operation is running.",
     });
+  }
+  return result;
+}
+
+export async function runMigrateBaseline(
+  options: BaselineOptions,
+  context: CommandContext
+): Promise<void> {
+  const { logger } = context;
+  logger.header("Migrate Baseline");
+
+  const dbValidation = validateDatabaseEnv();
+  if (!dbValidation.valid || !dbValidation.dialect) {
+    for (const err of dbValidation.errors ?? []) logger.error(err);
+    process.exit(1);
+  }
+  const dialect = dbValidation.dialect;
+
+  const configResult = await loadConfig({
+    configPath: options.config,
+    cwd: options.cwd,
+    debug: options.verbose,
+  });
+  const cwd = options.cwd ?? process.cwd();
+  const migrationsDir = resolve(cwd, configResult.config.db.migrationsDir);
+
+  const adapter: CLIDatabaseAdapter = await createAdapter({
+    dialect,
+    databaseUrl: dbValidation.databaseUrl,
+    logger: options.verbose ? logger : undefined,
+  });
+
+  try {
+    const db = (adapter as unknown as DrizzleAdapter).getDrizzle();
+
+    await maybeForceUnlock(
+      { forceUnlock: options.forceUnlock === true },
+      db,
+      dialect
+    );
+
+    const result = await baselineCore({
+      adapter,
+      db,
+      dialect,
+      migrationsDir,
+      logger,
+      name: options.name,
+    });
+
+    if (result.kind === "already-baselined") {
+      logger.info(
+        `This project already has a migration history (${result.snapshotName}).`
+      );
+      logger.info(
+        "Baselining again would give it a second starting point. Nothing was written."
+      );
+      return;
+    }
+
+    if (result.kind === "empty-database") {
+      logger.info("No managed tables found, so there is nothing to adopt.");
+      logger.info(
+        "Create your first migration instead:  pnpm nextly migrate:create --name init"
+      );
+      return;
+    }
+
+    logger.newline();
+    logger.success(`Adopted ${result.tableCount} existing tables.`);
+    logger.info(`  Migration: ${result.sqlPath}`);
+    logger.info(`  Snapshot:  ${result.snapshotPath}`);
+    logger.newline();
+    logger.info("Recorded as applied — it will not run against this database.");
+    logger.info(
+      "Commit both files: they are how another environment builds this schema."
+    );
+    logger.newline();
+    logger.info("Next:  pnpm nextly migrate:create --name <your_change>");
   } finally {
     await adapter.disconnect();
   }
