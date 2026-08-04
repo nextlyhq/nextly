@@ -103,6 +103,67 @@ describe("addPermissionToRole, creating the permission", () => {
     expect(created?.name).toBe("Delete Api Keys");
   });
 
+  it("repairs a row an older version wrote backwards", async () => {
+    // Identity is `(action, resource)`, so create-if-missing never reaches a
+    // row that already exists — an upgraded install would keep the unreachable
+    // slug the bug wrote, and the fix would only ever help new databases.
+    current = await bootWithCoreTables();
+    await seedRole(current, "role-legacy-slug", "legacy");
+    await current.adapter.executeQuery(
+      `INSERT INTO permissions (id, name, slug, action, resource, created_at, updated_at) VALUES ('perm-legacy', 'Export Reports', 'reports-export', 'export', 'reports', 0, 0)`
+    );
+
+    await serviceFor(current).addPermissionToRole("role-legacy-slug", {
+      action: "export",
+      resource: "reports",
+    });
+
+    expect((await readPermission(current, "export", "reports"))?.slug).toBe(
+      "export-reports"
+    );
+  });
+
+  it("leaves a deliberately custom slug alone", async () => {
+    // Only the exactly-reversed form is repaired. A slug its declarer chose —
+    // here one that does not follow the convention at all — is not this bug's
+    // doing, and renaming it would break whoever declared it.
+    current = await bootWithCoreTables();
+    await seedRole(current, "role-custom", "custom");
+    await current.adapter.executeQuery(
+      `INSERT INTO permissions (id, name, slug, action, resource, created_at, updated_at) VALUES ('perm-custom', 'Manage Api Keys', 'manage-api-keys', 'update', 'api-keys', 0, 0)`
+    );
+
+    await serviceFor(current).addPermissionToRole("role-custom", {
+      action: "update",
+      resource: "api-keys",
+    });
+
+    expect((await readPermission(current, "update", "api-keys"))?.slug).toBe(
+      "manage-api-keys"
+    );
+  });
+
+  it("does not repair a row when the caller states a slug", async () => {
+    // Repair is something this method does only while composing the slug
+    // itself. A caller that states one owns it, and second-guessing that would
+    // rename a row out from under whoever declared it.
+    current = await bootWithCoreTables();
+    await seedRole(current, "role-stated", "stated");
+    await current.adapter.executeQuery(
+      `INSERT INTO permissions (id, name, slug, action, resource, created_at, updated_at) VALUES ('perm-stated', 'Export Logs', 'logs-export', 'export', 'logs', 0, 0)`
+    );
+
+    await serviceFor(current).addPermissionToRole("role-stated", {
+      action: "export",
+      resource: "logs",
+      slug: "logs-export",
+    });
+
+    expect((await readPermission(current, "export", "logs"))?.slug).toBe(
+      "logs-export"
+    );
+  });
+
   it("prefers an explicit slug over the composed one", async () => {
     current = await bootWithCoreTables();
     await seedRole(current, "role-legacy", "legacy");

@@ -83,11 +83,13 @@ export class RolePermissionService extends BaseService {
       where: { action: perm.action, resource: perm.resource },
       columns: {
         id: true,
+        slug: true,
       },
     });
 
     if (existing) {
       permissionId = String(existing.id);
+      await this.healReversedSlug(permissionId, String(existing.slug), perm);
 
       const id = randomUUID();
       const rolePermissionData: RolePermissionInsertData = {
@@ -152,6 +154,43 @@ export class RolePermissionService extends BaseService {
     }
 
     void invalidatePermissionCache({ roleId });
+  }
+
+  /**
+   * Bring a row written by the reversed composition back onto the convention.
+   *
+   * An install upgraded from a version that composed `resource-action` still
+   * holds those rows, and creating-if-missing never reaches them: identity is
+   * `(action, resource)`, so the lookup finds the row and the corrected
+   * composition is simply not used. The permission stays one that no
+   * authorization check can resolve — which is the original bug, surviving the
+   * fix.
+   *
+   * Renaming is safe here for the reason `ensurePermission` gives for doing the
+   * same thing: a slug is a label rather than a key, grants reference the row
+   * by id, so bringing a stale one into line renames without revoking.
+   *
+   * Deliberately narrow. It repairs ONLY a slug that is exactly the reversed
+   * composition, and only where the caller supplied none of its own — so a
+   * deliberately custom slug (`manage-api-keys` on action `update`, say) is
+   * left alone rather than renamed to something its declarer never chose.
+   */
+  private async healReversedSlug(
+    permissionId: string,
+    currentSlug: string,
+    perm: { action: string; resource: string; slug?: string }
+  ): Promise<void> {
+    if (perm.slug !== undefined) return;
+    const reversed = permissionSlug(perm.resource, perm.action);
+    if (currentSlug !== reversed) return;
+
+    const canonical = permissionSlug(perm.action, perm.resource);
+    if (canonical === reversed) return;
+
+    await (this.db as RBACDatabaseInstance)
+      .update(this.tables.permissions)
+      .set({ slug: canonical })
+      .where(eq(this.tables.permissions.id, permissionId));
   }
 
   /**
