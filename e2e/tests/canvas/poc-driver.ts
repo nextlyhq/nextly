@@ -8,7 +8,28 @@ import { expect, type Frame, type Page } from "@playwright/test";
 import { gotoAdmin } from "../support/admin";
 
 import { mapFrameRectToHost } from "./coordinate-mapping";
-import type { CanvasDriver, CanvasFixture, Point, Rect } from "./driver";
+import type {
+  ActiveTargetReader,
+  CanvasDriver,
+  CanvasFixture,
+  Point,
+  Rect,
+} from "./driver";
+
+/**
+ * What the in-page recorder stores per sample.
+ *
+ * Wider than the transition the driver returns: the recorder also carries the
+ * two counts the single-shot readers use to reject an ambiguous canvas, so the
+ * same invariants can be enforced after the fact rather than only at the
+ * moment of a read.
+ */
+interface RecordedTransition {
+  at: number;
+  index: number;
+  activeCount: number;
+  outOfModelCount: number;
+}
 
 /**
  * Both drop-zone shapes. `nx-pb-dropzone-empty` does NOT carry
@@ -141,25 +162,33 @@ export function createPocDriver(page: Page): CanvasDriver {
     },
 
     async readBlockBoxes() {
+      // Raw rects, not rounded. The zero-layout-shift check compares two
+      // snapshots for exact equality, so rounding makes any movement under half
+      // a pixel disappear and lets a real shift read as no shift at all.
+      // Fractional geometry is ordinary in a grid or a percentage-width column,
+      // which is exactly where a drag is most likely to disturb the layout.
       return canvasFrame().evaluate(() =>
         Array.from(document.querySelectorAll("[data-nx-id]")).map(el => {
           const r = el.getBoundingClientRect();
           return {
             id: el.getAttribute("data-nx-id") ?? "",
-            top: Math.round(r.top),
-            left: Math.round(r.left),
-            width: Math.round(r.width),
-            height: Math.round(r.height),
+            top: r.top,
+            left: r.left,
+            width: r.width,
+            height: r.height,
           };
         })
       );
     },
 
     async readZoneHeights() {
+      // Unrounded for the same reason: a zone that grows from 0 to a fraction
+      // of a pixel is still a zone that grew, and rounding reports it as
+      // collapsed.
       return canvasFrame().evaluate(
         selector =>
-          Array.from(document.querySelectorAll(selector)).map(el =>
-            Math.round(el.getBoundingClientRect().height)
+          Array.from(document.querySelectorAll(selector)).map(
+            el => el.getBoundingClientRect().height
           ),
         DROP_ZONES
       );
@@ -285,6 +314,97 @@ export function createPocDriver(page: Page): CanvasDriver {
         },
         [DROP_ZONES, ACTIVE_ZONE, BLOCK_LEVEL_TARGET] as const
       );
+    },
+
+    async recordActiveTargetTransitions(): Promise<ActiveTargetReader> {
+      const frame = canvasFrame();
+      await frame.evaluate(
+        ([all, active, blockLevel]) => {
+          const scope = window as unknown as {
+            __nxTargetLog?: RecordedTransition[];
+            __nxTargetObserver?: MutationObserver;
+          };
+          // A previous recording left running would keep appending to its own
+          // log and fire on this one's mutations too.
+          scope.__nxTargetObserver?.disconnect();
+
+          const sample = (): RecordedTransition => {
+            const zones = Array.from(document.querySelectorAll(all));
+            const activeIndexes = zones
+              .map((el, index) => (el.matches(active) ? index : -1))
+              .filter(index => index >= 0);
+            return {
+              at: 0,
+              index: activeIndexes[0] ?? -1,
+              activeCount: activeIndexes.length,
+              outOfModelCount: document.querySelectorAll(blockLevel).length,
+            };
+          };
+
+          const started = performance.now();
+          const log: RecordedTransition[] = [sample()];
+          scope.__nxTargetLog = log;
+
+          const observer = new MutationObserver(() => {
+            const next = sample();
+            const previous = log[log.length - 1];
+            // Only CHANGES are recorded. Every attribute write in the canvas
+            // fires this callback, and a log with one entry per mutation would
+            // report motion that the drop target never had.
+            if (
+              previous &&
+              previous.index === next.index &&
+              previous.activeCount === next.activeCount &&
+              previous.outOfModelCount === next.outOfModelCount
+            ) {
+              return;
+            }
+            log.push({ ...next, at: performance.now() - started });
+          });
+          // `childList` as well as the attribute: a zone that is added or
+          // removed mid-drag renumbers every ordinal after it, and that is a
+          // change of target even though no attribute on a surviving element
+          // was touched.
+          observer.observe(document.body, {
+            attributes: true,
+            attributeFilter: ["data-active", "class"],
+            childList: true,
+            subtree: true,
+          });
+          scope.__nxTargetObserver = observer;
+        },
+        [DROP_ZONES, ACTIVE_ZONE, BLOCK_LEVEL_TARGET] as const
+      );
+
+      return async () => {
+        const log = await frame.evaluate(() => {
+          const scope = window as unknown as {
+            __nxTargetLog?: RecordedTransition[];
+            __nxTargetObserver?: MutationObserver;
+          };
+          scope.__nxTargetObserver?.disconnect();
+          return scope.__nxTargetLog ?? [];
+        });
+
+        // The same two invariants the single-shot readers enforce, applied to
+        // every recorded sample. Checking only the final state would let a
+        // canvas that briefly lit two zones, or that showed a block-level
+        // target this driver cannot number, record a clean log.
+        for (const entry of log) {
+          if (entry.outOfModelCount > 0) {
+            throw new Error(
+              `${entry.outOfModelCount} block-level drop target(s) were active at ${entry.at}ms; this driver models gap zones only`
+            );
+          }
+          if (entry.activeCount > 1) {
+            throw new Error(
+              `${entry.activeCount} drop zones were active at once at ${entry.at}ms; exactly one may be`
+            );
+          }
+        }
+
+        return log.map(({ at, index }) => ({ at, index }));
+      };
     },
 
     async readIndicatorRect(): Promise<Rect | null> {

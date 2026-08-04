@@ -376,16 +376,24 @@ test("[acceptance] point 12b: Escape does not mutate the tree", async ({
   const before = await readStoredBlockIds(request, fixture.entryId);
   expect(before, "the seeded document must have blocks").not.toEqual([]);
 
+  // The canvas as well, because the two can disagree. The editor feeds document
+  // edits into form state and the entry is written only on an explicit save, so
+  // a cancellation that deletes or reorders a node leaves the stored row intact
+  // while the user is looking at a corrupted tree. Reading only the store would
+  // call that clean.
+  const beforeCanvas = await driver.readTreeShape();
+  expect(beforeCanvas, "the canvas must render the seeded blocks").not.toEqual(
+    []
+  );
+
   await startLibraryDrag(driver);
   for (let step = 0; step < 30; step++) await driver.moveBy(0, 8);
   await driver.cancel();
 
+  const hasEditor = await driver.isEditorPresent();
   test.info().annotations.push({
     type: "after-cancel",
-    description: JSON.stringify({
-      url: page.url(),
-      hasEditor: await driver.isEditorPresent(),
-    }),
+    description: JSON.stringify({ url: page.url(), hasEditor }),
   });
 
   // No marker and no skip: cancelling must never change what is stored,
@@ -394,4 +402,20 @@ test("[acceptance] point 12b: Escape does not mutate the tree", async ({
   expect(after, "cancelling a drag must not change the stored tree").toEqual(
     before
   );
+
+  // The live tree is only readable while the editor is mounted, which is why
+  // the stored read above is unconditional rather than replaced. Escape
+  // currently navigates out, so this branch does not execute today; the
+  // annotation records that so a green result is not mistaken for one that
+  // exercised it.
+  test.info().annotations.push({
+    type: "canvas-compared",
+    description: String(hasEditor),
+  });
+  if (hasEditor) {
+    expect(
+      await driver.readTreeShape(),
+      "cancelling a drag must not change the tree on screen"
+    ).toEqual(beforeCanvas);
+  }
 });

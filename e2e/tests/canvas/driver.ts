@@ -21,7 +21,32 @@ export interface CanvasFixture {
   blockIds: string[];
 }
 
-/** A block's position and size inside the canvas, in canvas-local pixels. */
+/** One observed change of the active drop target. */
+export interface ActiveTargetTransition {
+  /** Milliseconds since recording started. */
+  at: number;
+  /**
+   * Ordinal of the target that became active, or -1 when none did — the same
+   * numbering {@link CanvasDriver.readActiveTarget} returns.
+   */
+  index: number;
+}
+
+/**
+ * Stops a recording and returns what it saw, oldest first.
+ *
+ * The first entry is the state when recording began, so a log of length one
+ * means nothing changed.
+ */
+export type ActiveTargetReader = () => Promise<ActiveTargetTransition[]>;
+
+/**
+ * A block's position and size inside the canvas, in canvas-local pixels.
+ *
+ * Unrounded. A caller comparing two snapshots for equality is asking whether
+ * anything moved, and rounding answers a different question — whether anything
+ * moved by at least half a pixel.
+ */
 export interface BlockBox {
   id: string;
   top: number;
@@ -102,6 +127,21 @@ export interface CanvasDriver {
    * not present in the DOM.
    */
   readActiveTarget(): Promise<number>;
+
+  /**
+   * Start recording every change of the active drop target inside the page,
+   * and return the reader that stops recording and hands back the log.
+   *
+   * Sampling with {@link CanvasDriver.readActiveTarget} cannot answer a
+   * question about hysteresis. Each sample is a round trip out of the browser,
+   * so the pointer rests wherever it was left for as long as that trip takes;
+   * a canvas whose hysteresis is a dwell timer rather than a distance margin is
+   * then entitled to commit to the new target before the next move arrives, and
+   * the probe reports a flip that the gesture never provoked. Observing from
+   * inside the page separates what is measured from what is driven, and it also
+   * catches transitions that fall between two samples.
+   */
+  recordActiveTargetTransitions(): Promise<ActiveTargetReader>;
   /** Bounding box of the visible insertion indicator, in top-level coordinates. */
   readIndicatorRect(): Promise<Rect | null>;
   /**

@@ -370,28 +370,58 @@ test("scenario 4b: a 2px jitter at a zone edge keeps the indicator stable", asyn
   // and P, both on the same side, which an implementation that switches the
   // instant the pointer crosses would still pass.
   await driver.moveBy(0, -2);
-  const observed: number[] = [];
+
+  // Recorded from inside the page, not sampled from the test. The requirement
+  // permits hysteresis expressed as a dwell of more than 100ms as an
+  // alternative to a distance margin, and a `readActiveTarget()` between two
+  // moves is a cross-frame round trip that holds the pointer still for the
+  // length of that trip. On a loaded runner that alone can outlast the dwell,
+  // so a canvas that implements the timer correctly would still be seen to
+  // switch on every sample and would stay classified as the known gap below.
+  // Recording separates the observation from the gesture; the moves then run
+  // back to back and the dwell is only as long as a mouse event takes.
+  const readTransitions = await driver.recordActiveTargetTransitions();
+  const moveDurations: number[] = [];
   for (let step = 0; step < 20; step++) {
-    observed.push(await driver.readActiveTarget());
+    const startedAt = Date.now();
     await driver.moveBy(0, step % 2 === 0 ? 4 : -4);
+    moveDurations.push(Date.now() - startedAt);
   }
+  const observed = await readTransitions();
   await driver.cancel();
 
   test.info().annotations.push({
     type: "boundary-jitter",
     description: JSON.stringify(observed),
   });
+  test.info().annotations.push({
+    type: "jitter-move-durations-ms",
+    description: JSON.stringify(moveDurations),
+  });
+
+  // Whether the probe was valid at all, asserted rather than assumed. If a move
+  // took longer than the dwell the requirement allows, the pointer rested at an
+  // endpoint long enough for a compliant timer to commit, and any flip observed
+  // afterwards says nothing about hysteresis. That is a broken measurement, not
+  // a canvas defect, so it fails outright instead of being absorbed by the
+  // marker below.
+  const DWELL_ALLOWANCE_MS = 100;
+  const slowest = Math.max(...moveDurations);
+  expect(
+    slowest,
+    `the jitter must outpace the dwell a canvas may use as hysteresis, but the slowest move took ${slowest}ms: ${JSON.stringify(moveDurations)}`
+  ).toBeLessThan(DWELL_ALLOWANCE_MS);
 
   // NEVER finding a target is a different defect from missing hysteresis:
-  // it means detection is broken on this fixture, and an all -1 run would
-  // otherwise satisfy the distinct-count assertion below and be reported as
-  // the known gap. Rejected before the marker.
+  // it means detection is broken on this fixture, and a log that only ever saw
+  // -1 would otherwise satisfy the single-state assertion below and be reported
+  // as the known gap. Rejected before the marker.
   //
   // A run that ALTERNATES between a zone and nothing is not that: it is the
   // indicator changing on a 2px move, which is precisely the missing
   // hysteresis, and it belongs under the marker with the zone-to-zone flip.
   expect(
-    observed.some(value => value >= 0),
+    observed.some(entry => entry.index >= 0),
     `the drag must find a target at all: ${JSON.stringify(observed)}`
   ).toBe(true);
 
@@ -400,18 +430,18 @@ test("scenario 4b: a 2px jitter at a zone edge keeps the indicator stable", asyn
     "no target-switch hysteresis: the indicator flips on every 2px move"
   );
 
-  // -1 is NOT filtered out. A run of [2,-1,2,-1,...] has one active value but
-  // the indicator vanishes on every other move, which is the same defect seen
-  // from the other side. Counting the inactive state makes that fail.
-  const distinct = new Set(observed);
+  // The log's first entry is the state when recording began, so anything after
+  // it is a change the jitter caused. -1 is NOT excluded: an indicator that
+  // vanishes and returns is the same defect seen from the other side, and it
+  // shows up here as two transitions rather than none.
   expect(
-    distinct.size,
+    observed.slice(1),
     `the indicator must neither flip nor disappear: ${JSON.stringify(observed)}`
-  ).toBe(1);
-  // [-1,-1,...] also has one distinct value: the indicator was simply gone the
-  // whole time.
+  ).toEqual([]);
+  // A log of exactly one entry that was already -1 means nothing changed
+  // because nothing was ever shown.
   expect(
-    [...distinct][0],
+    observed[0]?.index,
     `the indicator must stay visible: ${JSON.stringify(observed)}`
   ).toBeGreaterThanOrEqual(0);
 });
