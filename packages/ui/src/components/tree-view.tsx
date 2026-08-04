@@ -120,28 +120,51 @@ function textOf(node: TreeNode): string {
  */
 function flatten(
   nodes: readonly TreeNode[],
-  expanded: ReadonlySet<string>,
-  level = 0,
-  parentId?: string
+  expanded: ReadonlySet<string>
 ): TreeRow[] {
   const rows: TreeRow[] = [];
-  nodes.forEach((node, index) => {
+  // An explicit stack rather than recursion, so depth costs heap instead of call frames. A
+  // document that is one long expanded chain would otherwise overflow the JavaScript stack before
+  // the virtualizer ever got to window it — this control failing on the one shape virtualization
+  // does not already help with.
+  const pending: {
+    list: readonly TreeNode[];
+    index: number;
+    level: number;
+    parentId?: string;
+  }[] = [{ list: nodes, index: 0, level: 0 }];
+
+  while (pending.length > 0) {
+    const frame = pending[pending.length - 1];
+    if (frame === undefined || frame.index >= frame.list.length) {
+      pending.pop();
+      continue;
+    }
+    const node = frame.list[frame.index];
+    const posInSet = frame.index;
+    frame.index += 1;
+    if (node === undefined) continue;
     // Any declared children array marks a branch, empty or not. A folder that is empty, or
     // whose contents have not loaded, is still something to expand — and the exported contract
     // says so, so reading length here would quietly contradict it.
     const hasChildren = node.children !== undefined;
     rows.push({
       node,
-      level,
-      setSize: nodes.length,
-      posInSet: index,
-      parentId,
+      level: frame.level,
+      setSize: frame.list.length,
+      posInSet,
+      parentId: frame.parentId,
       hasChildren,
     });
     if (hasChildren && expanded.has(node.id)) {
-      rows.push(...flatten(node.children ?? [], expanded, level + 1, node.id));
+      pending.push({
+        list: node.children ?? [],
+        index: 0,
+        level: frame.level + 1,
+        parentId: node.id,
+      });
     }
-  });
+  }
   return rows;
 }
 
@@ -216,6 +239,19 @@ const TreeView = React.forwardRef<HTMLDivElement, TreeViewProps>(
     forwardedRef
   ) => {
     const scrollRef = React.useRef<HTMLDivElement | null>(null);
+    // The forwarded ref goes to the SCROLL container, not to the element carrying the role. That
+    // is the one a caller measures or calls `scrollTo` on; the inner element is a sized spacer
+    // and scrolling it does nothing.
+    const attachScroll = React.useCallback(
+      (node: HTMLDivElement | null) => {
+        scrollRef.current = node;
+        if (typeof forwardedRef === "function") forwardedRef(node);
+        else if (forwardedRef !== null && forwardedRef !== undefined) {
+          forwardedRef.current = node;
+        }
+      },
+      [forwardedRef]
+    );
     const [expandedState, setExpandedState] = useControllable(
       expandedIds === undefined ? undefined : [...expandedIds],
       [...(defaultExpandedIds ?? [])]
@@ -323,7 +359,22 @@ const TreeView = React.forwardRef<HTMLDivElement, TreeViewProps>(
           if (row.hasChildren && !expanded.has(row.node.id)) {
             setExpansion(row.node.id, true);
           } else if (row.hasChildren) {
-            focusRow(step(index, 1));
+            // Bounded to this row's own children. `step` searches the whole flattened tree, so an
+            // expanded branch that is empty — or holds only disabled rows — would send focus to
+            // whatever came next in the document instead of staying put.
+            for (
+              let child = index + 1;
+              child < rows.length && (rows[child]?.level ?? 0) > row.level;
+              child += 1
+            ) {
+              if (
+                rows[child]?.parentId === row.node.id &&
+                rows[child]?.node.disabled !== true
+              ) {
+                focusRow(child);
+                break;
+              }
+            }
           }
           return;
         case "ArrowLeft":
@@ -331,10 +382,21 @@ const TreeView = React.forwardRef<HTMLDivElement, TreeViewProps>(
           if (row.hasChildren && expanded.has(row.node.id)) {
             setExpansion(row.node.id, false);
           } else if (row.parentId !== undefined) {
-            const parent = rows.findIndex(
-              candidate => candidate.node.id === row.parentId
-            );
-            if (parent >= 0) focusRow(parent);
+            // Climb past a disabled ancestor. A disabled branch can still be expanded and hold
+            // enabled children, and every other keyboard move refuses to land on one — so
+            // stopping here would be the single way to focus a row the rest of the control skips.
+            let ancestor: string | undefined = row.parentId;
+            while (ancestor !== undefined) {
+              const at: number = rows.findIndex(
+                candidate => candidate.node.id === ancestor
+              );
+              if (at < 0) break;
+              if (rows[at]?.node.disabled !== true) {
+                focusRow(at);
+                break;
+              }
+              ancestor = rows[at]?.parentId;
+            }
           }
           return;
         case "Home":
@@ -413,12 +475,11 @@ const TreeView = React.forwardRef<HTMLDivElement, TreeViewProps>(
 
     return (
       <div
-        ref={scrollRef}
+        ref={attachScroll}
         className={cn("overflow-auto", className)}
         {...props}
       >
         <div
-          ref={forwardedRef}
           role="tree"
           // The naming attributes go on the element that carries the role, not on the scroll
           // container around it. Left outside, a caller who names the tree with

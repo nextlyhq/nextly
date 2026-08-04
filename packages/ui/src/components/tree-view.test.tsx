@@ -16,6 +16,7 @@ import {
   render,
   screen,
 } from "@testing-library/react";
+import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { TreeNode } from "./tree-view";
@@ -291,6 +292,97 @@ describe("moving through it with the keyboard", () => {
     fireEvent.keyDown(tree, { key: "ArrowDown" });
 
     expect(document.activeElement?.textContent).toContain("C");
+  });
+});
+
+describe("arrow keys stay inside the hierarchy", () => {
+  it("does not leave the branch when an expanded one has nothing to enter", () => {
+    // An empty array marks a branch, so Right on an already-open empty one has nowhere to go. A
+    // move that searched the whole flattened tree would jump to whatever came next in the
+    // document instead of doing nothing.
+    render(
+      <TreeView
+        aria-label="Layers"
+        nodes={[
+          { id: "empty", label: "Empty", children: [] },
+          { id: "footer", label: "Footer" },
+        ]}
+        defaultExpandedIds={["empty"]}
+      />
+    );
+    const tree = screen.getByRole("tree");
+
+    focusRow("Empty");
+    fireEvent.keyDown(tree, { key: "ArrowRight" });
+
+    expect(document.activeElement?.textContent).toContain("Empty");
+  });
+
+  it("climbs past a disabled parent rather than landing on it", () => {
+    // A disabled branch can still be expanded and hold enabled children. Every other keyboard
+    // move refuses to land on a disabled row, so stopping here would be the one way to focus one.
+    render(
+      <TreeView
+        aria-label="Layers"
+        nodes={[
+          {
+            id: "outer",
+            label: "Outer",
+            children: [
+              {
+                id: "locked",
+                label: "Locked",
+                disabled: true,
+                children: [{ id: "leaf", label: "Leaf" }],
+              },
+            ],
+          },
+        ]}
+        defaultExpandedIds={["outer", "locked"]}
+      />
+    );
+    const tree = screen.getByRole("tree");
+
+    focusRow("Leaf");
+    fireEvent.keyDown(tree, { key: "ArrowLeft" });
+
+    expect(document.activeElement?.textContent).toContain("Outer");
+  });
+});
+
+describe("what the forwarded ref points at", () => {
+  it("gives the caller the element that actually scrolls", () => {
+    // The inner element is a sized spacer; calling `scrollTo` on it does nothing. A caller
+    // bringing a row into view through the ref needs the scroll container.
+    const ref = React.createRef<HTMLDivElement>();
+    render(<TreeView ref={ref} nodes={tree} aria-label="Layers" />);
+
+    expect(ref.current?.getAttribute("role")).toBeNull();
+    expect(ref.current?.className).toContain("overflow-auto");
+  });
+});
+
+describe("a hierarchy that is deep rather than broad", () => {
+  it("flattens a long expanded chain without exhausting the stack", () => {
+    // Virtualization does not help here: the rows have to be enumerated before any can be
+    // windowed, so a recursive walk overflows before the virtualizer is ever consulted.
+    let deepest: TreeNode = { id: "leaf", label: "Leaf" };
+    const expanded: string[] = ["leaf"];
+    for (let level = 0; level < 20000; level += 1) {
+      const id = `level-${level}`;
+      deepest = { id, label: id, children: [deepest] };
+      expanded.push(id);
+    }
+
+    expect(() =>
+      render(
+        <TreeView
+          aria-label="Layers"
+          nodes={[deepest]}
+          defaultExpandedIds={expanded}
+        />
+      )
+    ).not.toThrow();
   });
 });
 
