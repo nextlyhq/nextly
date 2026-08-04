@@ -101,10 +101,19 @@ async function pruneTable(
 }
 
 /**
- * Run one retention pass over both audit tables.
+ * Run one retention pass over both audit trails.
  *
- * The two share a batch budget so a single pass stays bounded overall, and
- * activity is pruned first because it is the table that grows.
+ * Each trail gets its OWN budget rather than a shared one. Sharing starves the
+ * smaller trail permanently: the write paths offer a two-batch pass, activity
+ * ages far faster than auth, and an install retiring a batch-worth of activity
+ * per interval would consume the whole allowance before the auth trail was
+ * reached — every time, so `audit_log` would never be pruned at all while
+ * appearing to be configured. The first pass after an upgrade makes this worse,
+ * since the activity backlog is the entire history.
+ *
+ * A pass is therefore bounded per trail rather than overall, which is the
+ * bound that matters: what must stay small is the work any single write waits
+ * on, and each trail's own cap already ensures that.
  */
 export async function pruneAuditData(
   deps: AuditPruneDeps,
@@ -112,9 +121,7 @@ export async function pruneAuditData(
   maxBatches?: number
 ): Promise<AuditPruneResult> {
   const now = (deps.now ?? (() => new Date()))();
-  const budget = {
-    batchesLeft: maxBatches ?? policy.maxBatchesPerRun,
-  };
+  const perTrail = maxBatches ?? policy.maxBatchesPerRun;
   const result: AuditPruneResult = { activity: 0, auth: 0 };
 
   if (policy.activityMaxAgeMs !== false) {
@@ -122,7 +129,7 @@ export async function pruneAuditData(
       deps,
       ACTIVITY_TABLE,
       new Date(now.getTime() - policy.activityMaxAgeMs),
-      budget
+      { batchesLeft: perTrail }
     );
   }
 
@@ -131,7 +138,7 @@ export async function pruneAuditData(
       deps,
       AUTH_TABLE,
       new Date(now.getTime() - policy.authMaxAgeMs),
-      budget
+      { batchesLeft: perTrail }
     );
   }
 

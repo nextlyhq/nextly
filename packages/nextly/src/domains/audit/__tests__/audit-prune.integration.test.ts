@@ -143,4 +143,26 @@ describe("pruneAuditData (integration)", () => {
     expect(result.activity).toBe(0);
     expect((await idsIn(current, "activity_log")).length).toBe(3);
   });
+
+  it("prunes the auth trail even when activity fills its whole budget", async () => {
+    // A shared budget starved this permanently: writes offer a two-batch pass,
+    // activity ages far faster than auth, and an install retiring a batch-worth
+    // of activity per interval would consume the allowance before auth was
+    // reached — every time, so the auth trail would never be pruned while
+    // appearing configured.
+    current = await createTestNextly({ collections: [] });
+    for (let i = 0; i < 3; i += 1) {
+      await seed(current, "activity_log", `activity-${i}`, 120);
+    }
+    await seed(current, "audit_log", "auth-old", 400);
+
+    const result = await pruneAuditData(
+      { adapter: current.adapter },
+      resolveAuditRetentionConfig(),
+      1
+    );
+
+    expect(result.auth).toBe(1);
+    expect(await idsIn(current, "audit_log")).toEqual([]);
+  });
 });

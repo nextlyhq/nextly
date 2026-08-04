@@ -291,6 +291,13 @@ export interface NextlyServiceConfig {
    * retention off; absent when this container was built without app config.
    */
   webhookRetention?: ResolvedWebhookRetentionConfig | null;
+  /**
+   * Resolved audit-trail retention windows.
+   *
+   * Always a policy once the sanitizer has run, since the windows have
+   * defaults; `undefined` means it was never carried through initialization, in
+   * which case no audit pass is registered and neither trail is pruned.
+   */
   auditRetention?: ResolvedAuditRetentionConfig;
 
   /**

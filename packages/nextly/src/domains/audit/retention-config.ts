@@ -70,13 +70,26 @@ export interface ResolvedAuditRetentionConfig {
 
 function maxAge(value: MaxAge | undefined, fallback: number): MaxAge {
   if (value === false) return false;
-  // A non-positive window would delete rows the moment they are written, which
-  // is never what someone configuring retention meant; read it as unset.
-  return typeof value === "number" && value > 0 ? value : fallback;
+  // A non-positive window would delete rows the moment they are written, and a
+  // non-finite one is worse than either: `Infinity` is a positive number, so it
+  // passes a naive check and then produces an Invalid Date cutoff, which the
+  // pass swallows as a failure — retention that looks configured and silently
+  // never runs. `false` is how "keep forever" is expressed.
+  return Number.isFinite(value) && (value as number) > 0
+    ? (value as number)
+    : fallback;
 }
 
 function positive(value: number | undefined, fallback: number): number {
-  return typeof value === "number" && value > 0 ? value : fallback;
+  return Number.isFinite(value) && (value as number) > 0
+    ? (value as number)
+    : fallback;
+}
+
+/** A batch count, which must be a whole number of batches. */
+function wholePositive(value: number | undefined, fallback: number): number {
+  const resolved = positive(value, fallback);
+  return Math.floor(resolved) || fallback;
 }
 
 /**
@@ -110,7 +123,7 @@ export function resolveAuditRetentionConfig(
       input?.intervalMs,
       DEFAULT_AUDIT_RETENTION_INTERVAL_MS
     ),
-    maxBatchesPerRun: positive(
+    maxBatchesPerRun: wholePositive(
       input?.maxBatchesPerRun,
       DEFAULT_AUDIT_MAX_BATCHES_PER_RUN
     ),
