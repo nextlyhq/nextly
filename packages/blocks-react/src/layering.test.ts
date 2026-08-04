@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Dirent } from "node:fs";
@@ -125,9 +125,47 @@ function runtimeImports(file: string): string[] {
   return specifiers;
 }
 
-/** Relative specifiers are internal and never gated. */
+/** Relative specifiers are internal: not gated, but they ARE followed (below). */
 function isInternal(specifier: string): boolean {
   return specifier.startsWith(".") || specifier.startsWith("#");
+}
+
+/** Resolve a relative specifier to a file on disk, or null if it is not one. */
+function resolveRelative(fromFile: string, specifier: string): string | null {
+  if (!specifier.startsWith(".")) return null;
+  const base = join(dirname(fromFile), specifier);
+  for (const candidate of [
+    `${base}.ts`,
+    `${base}.tsx`,
+    join(base, "index.ts"),
+    join(base, "index.tsx"),
+  ]) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+/**
+ * Every file reachable from an entry by following relative imports.
+ *
+ * The root's promise is about its MODULE GRAPH, not about one file: if
+ * `index.ts` re-exports `./next`, importing the package root loads the
+ * Next-coupled entry transitively and the promise is broken even though no
+ * file named `next/*` directly. Checking files in isolation cannot see that.
+ */
+function reachableFrom(entry: string): Set<string> {
+  const seen = new Set<string>();
+  const queue = [entry];
+  while (queue.length > 0) {
+    const file = queue.pop();
+    if (!file || seen.has(file)) continue;
+    seen.add(file);
+    for (const specifier of runtimeImports(file)) {
+      const resolved = resolveRelative(file, specifier);
+      if (resolved && !seen.has(resolved)) queue.push(resolved);
+    }
+  }
+  return seen;
 }
 
 /** `node:fs` and friends: allowed nowhere in shipped code. */
@@ -164,6 +202,30 @@ describe("the package's layering contract", () => {
     }
 
     expect(violations, violations.join("\n")).toEqual([]);
+  });
+
+  it("keeps the next entry out of the root's module graph", () => {
+    // The guarantee is about what importing the package ROOT pulls in, so it
+    // is checked over the graph reachable from `index.ts` rather than file by
+    // file. A re-export of `./next` from the root would satisfy every
+    // per-file check while breaking the promise outright.
+    const rootGraph = reachableFrom(join(SRC_DIR, "index.ts"));
+    const nextEntry = join(SRC_DIR, "next.ts");
+
+    expect(
+      rootGraph.has(nextEntry),
+      "index.ts must not reach next.ts through any chain of relative imports"
+    ).toBe(false);
+
+    const leaks: string[] = [];
+    for (const file of rootGraph) {
+      for (const specifier of runtimeImports(file)) {
+        if (specifier === "next" || specifier.startsWith("next/")) {
+          leaks.push(`${relative(SRC_DIR, file)}: ${specifier}`);
+        }
+      }
+    }
+    expect(leaks, leaks.join("\n")).toEqual([]);
   });
 
   it("keeps next/* out of every file except the next entry", () => {

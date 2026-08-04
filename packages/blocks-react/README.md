@@ -35,7 +35,10 @@ import { createStandaloneContext } from "@nextlyhq/blocks-react";
 
 const ctx = createStandaloneContext({
   data: { find: async () => ({ items: myPosts }) },
-  resolveMediaUrl: id => `/uploads/${id}`,
+  // Async, and a media object rather than a URL: an image block needs alt text
+  // and intrinsic dimensions to render without layout shift.
+  resolveMedia: async id => ({ url: `/uploads/${id}`, alt: "" }),
+  resolveEntryPath: async (collection, id) => `/${collection}/${id}`,
 });
 ```
 
