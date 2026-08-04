@@ -1013,6 +1013,16 @@ export class PushSchemaPipeline {
           // the differ's created set — nothing to pair, no resolver call —
           // and the kit then handles only the column-level remainder (it
           // re-introspects and sees these tables live AND declared).
+          //
+          // On SQLite these CREATEs are not rolled back when the kit pass
+          // then fails: the pipeline runs SQLite outside `db.transaction()`
+          // by design, so `tx === db` here. That is the intended outcome
+          // rather than a gap — the retry's diff re-introspects, no longer
+          // plans `add_table` for them, and the table it finds is the one
+          // this emitter built, which carries the tracked indexes the kit's
+          // own CREATE would have omitted. The journal records the failed
+          // apply without these statements in `statements_executed`, which
+          // counts only a successful pass.
           if (dialect !== "postgresql") {
             const addTableOps = resolvedOps.filter(
               op => op.type === "add_table"
@@ -1069,10 +1079,20 @@ export class PushSchemaPipeline {
           // so the kit's drops of tracked indexes are stripped here —
           // otherwise a kit-path apply would shed the canonical indexes
           // of every managed table it did not rebuild.
-          emittedStatements = stripKitDropsOfDeclaredIndexes(
+          const stripped = stripKitDropsOfDeclaredIndexes(
             pushResult.sqlStatements,
             desiredSnapshot
           );
+          emittedStatements = stripped.kept;
+          if (stripped.strippedCount > 0) {
+            // Once per apply, not per statement: enough to see the guard
+            // acted without turning a routine emission into log noise.
+            console.debug(
+              `[Nextly schema] Kept ${stripped.strippedCount} tracked index(es) ` +
+                `drizzle-kit emitted a DROP INDEX for (they are declared in the ` +
+                `desired schema; only a drop_index operation removes one).`
+            );
+          }
         }
         // Safety net, v1 semantics (observed on all three dialects,
         // 2026-07): drizzle-kit now INCLUDES destructive statements in

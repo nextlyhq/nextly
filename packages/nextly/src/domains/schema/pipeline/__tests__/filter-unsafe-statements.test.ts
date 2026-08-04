@@ -101,7 +101,10 @@ describe("stripKitDropsOfDeclaredIndexes", () => {
       ],
       desired
     );
-    expect(out).toEqual(['ALTER TABLE "dc_posts" ADD COLUMN "views" integer']);
+    expect(out.kept).toEqual([
+      'ALTER TABLE "dc_posts" ADD COLUMN "views" integer',
+    ]);
+    expect(out.strippedCount).toBe(2);
   });
 
   it("keeps DROP INDEX for indexes the snapshot does not declare", () => {
@@ -109,7 +112,8 @@ describe("stripKitDropsOfDeclaredIndexes", () => {
       ['DROP INDEX "custom_manual_index"'],
       desired
     );
-    expect(out).toEqual(['DROP INDEX "custom_manual_index"']);
+    expect(out.kept).toEqual(['DROP INDEX "custom_manual_index"']);
+    expect(out.strippedCount).toBe(0);
   });
 
   it("passes everything through when the snapshot tracks no indexes", () => {
@@ -117,6 +121,31 @@ describe("stripKitDropsOfDeclaredIndexes", () => {
     const out = stripKitDropsOfDeclaredIndexes(stmts, {
       tables: [{ name: "dc_posts" }],
     });
-    expect(out).toEqual(stmts);
+    expect(out.kept).toEqual(stmts);
+    expect(out.strippedCount).toBe(0);
+  });
+
+  it("matches MySQL's ON <table> form against the declaring table only", () => {
+    // MySQL scopes index names per table, so a same-named index on a table
+    // that does not declare it must survive.
+    const out = stripKitDropsOfDeclaredIndexes(
+      [
+        "DROP INDEX `idx_dc_posts_slug` ON `dc_posts`",
+        "DROP INDEX `idx_dc_posts_slug` ON `dc_other`",
+      ],
+      desired
+    );
+    expect(out.kept).toEqual(["DROP INDEX `idx_dc_posts_slug` ON `dc_other`"]);
+    expect(out.strippedCount).toBe(1);
+  });
+
+  it("pinned-fail-safe: an unparseable drop is KEPT, never silently stripped", () => {
+    // An identifier holding characters outside [A-Za-z0-9_] does not match
+    // the pattern. Keeping it hands the statement to the drop-guard rather
+    // than removing it here; nobody should "fix" this into a fail-open.
+    const exotic = 'DROP INDEX "idx-dc.posts slug"';
+    const out = stripKitDropsOfDeclaredIndexes([exotic], desired);
+    expect(out.kept).toEqual([exotic]);
+    expect(out.strippedCount).toBe(0);
   });
 });

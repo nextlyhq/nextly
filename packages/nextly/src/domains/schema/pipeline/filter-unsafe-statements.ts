@@ -204,28 +204,63 @@ export function filterUnsafeStatements(
  * nothing putting them back (the restore step replays only rebuilt tables
  * and standalone add_index ops). An index the snapshot tracks can only be
  * dropped by Nextly's own diff (a drop_index op), never by the kit.
- * Silent, like the companion-table drop block: the kit emits these on every
- * apply, so a warning would be noise.
+ *
+ * Applied on every dialect. PostgreSQL scopes the kit's introspection with
+ * `tablesFilter`, which narrows but does not remove the emission: the kit
+ * has been observed there dropping a managed table's `<table>_pkey` after a
+ * metadata-only field-type change (see the routing docblock in
+ * `ddl-emitter/index.ts`). Since the guard only ever removes a drop of an
+ * index the desired snapshot itself declares, covering PG costs nothing and
+ * closes that case on the kit route too.
+ *
+ * Returns the stripped count so the caller can report it once per apply
+ * rather than per statement: this decides, per apply, that a destructive
+ * statement from the kit is wrong, and that decision should be observable.
  */
 export function stripKitDropsOfDeclaredIndexes(
   statements: string[],
   desired: NextlySnapshotLike
-): string[] {
-  const declared = new Set<string>();
+): { kept: string[]; strippedCount: number } {
+  // Two keys per declared index: the bare name, and the name qualified by
+  // its table. MySQL scopes index names per table and spells the table in
+  // the statement (`DROP INDEX x ON t`), so its drops are matched on the
+  // qualified key and a same-named index on another table is left alone.
+  // SQLite (global index namespace) and PostgreSQL (schema-scoped) name no
+  // table in the statement, so those match on the bare name — which is
+  // unambiguous exactly because the name is unique in that scope.
+  const declaredNames = new Set<string>();
+  const declaredQualified = new Set<string>();
   for (const table of desired.tables) {
     for (const index of table.indexes ?? []) {
-      declared.add(index.name.toLowerCase());
+      declaredNames.add(index.name.toLowerCase());
+      declaredQualified.add(
+        `${table.name.toLowerCase()}.${index.name.toLowerCase()}`
+      );
     }
   }
-  if (declared.size === 0) return statements;
+  if (declaredNames.size === 0) {
+    return { kept: statements, strippedCount: 0 };
+  }
 
-  return statements.filter(stmt => {
+  let strippedCount = 0;
+  const kept = statements.filter(stmt => {
+    // A quoted identifier holding anything outside [A-Za-z0-9_] does not
+    // match, and a non-match KEEPS the statement — the fail-safe direction:
+    // an unrecognised drop is left for the drop-guard to judge rather than
+    // silently removed here. `pinned-fail-safe` in the tests locks that in.
     const m = stmt.match(
-      /^DROP\s+INDEX\s+(?:IF\s+EXISTS\s+)?(?:["`]?\w+["`]?\.)?["`]?(\w+)["`]?/i
+      /^DROP\s+INDEX\s+(?:IF\s+EXISTS\s+)?(?:["`]?\w+["`]?\.)?["`]?(\w+)["`]?(?:\s+ON\s+(?:["`]?\w+["`]?\.)?["`]?(\w+)["`]?)?/i
     );
     if (!m) return true;
-    return !declared.has((m[1] ?? "").toLowerCase());
+    const name = (m[1] ?? "").toLowerCase();
+    const onTable = m[2]?.toLowerCase();
+    const isDeclared = onTable
+      ? declaredQualified.has(`${onTable}.${name}`)
+      : declaredNames.has(name);
+    if (isDeclared) strippedCount++;
+    return !isDeclared;
   });
+  return { kept, strippedCount };
 }
 
 /** The snapshot slice {@link stripKitDropsOfDeclaredIndexes} reads. */
