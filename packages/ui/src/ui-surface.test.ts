@@ -422,8 +422,9 @@ describe("ui release tags reach the published types", () => {
     expect(
       statSync(distTypes).mtimeMs,
       "dist/index.d.ts predates one of its build inputs (a source file, a " +
-        "tsup config, tsconfig.json or package.json), so these assertions " +
-        "would be checking declarations that no longer describe the code. " +
+        "tsup config, any tsconfig in the extends chain, package.json or the " +
+        "workspace pnpm-lock.yaml), so these assertions would be checking " +
+        "declarations that no longer describe the code. " +
         "Rebuild: `pnpm --filter @nextlyhq/ui build`."
     ).toBeGreaterThanOrEqual(newestDeclarationInputMtime());
   });

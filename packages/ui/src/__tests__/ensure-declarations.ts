@@ -94,6 +94,23 @@ function workspaceLockfile(): string | undefined {
 }
 
 /**
+ * A relative `extends` target, trying the literal path then the `.json` form.
+ *
+ * `extends: "./base-bundler"` is valid and names `base-bundler.json`;
+ * `path.resolve` alone yields a path that does not exist, which would read as
+ * an unfollowable chain and force a rebuild on every run.
+ */
+function relativeExtends(fromDir: string, spec: string): string {
+  const literal = resolve(fromDir, spec);
+  try {
+    statSync(literal);
+    return literal;
+  } catch {
+    return `${literal}.json`;
+  }
+}
+
+/**
  * Every tsconfig in the `extends` chain, the package's own included.
  *
  * The local file is four lines of overrides; the options that actually decide
@@ -131,8 +148,11 @@ function tsconfigChain(entry: string): string[] | undefined {
       try {
         // A relative specifier resolves against the file that names it; a bare
         // one is a package export, which is how the shared configs are reached.
+        // TypeScript appends `.json` when the relative form has no extension,
+        // so `"./base-bundler"` is a valid config this must follow rather than
+        // a path that happens not to exist.
         target = spec.startsWith(".")
-          ? resolve(dirname(file), spec)
+          ? relativeExtends(dirname(file), spec)
           : req.resolve(spec);
       } catch {
         return false;
@@ -149,17 +169,6 @@ function tsconfigChain(entry: string): string[] | undefined {
 }
 
 /**
- * The newest of the declaration build's inputs outside `src`.
- *
- * A MISSING input reads as infinitely new rather than as zero. Every entry
- * here is required to produce the declarations, so one that is absent means
- * `dist` was built by a configuration that no longer exists — the strongest
- * possible reason to distrust it, and treating it as "nothing changed" left
- * the guard asserting happily against artifacts nothing could reproduce.
- * Forcing the rebuild surfaces it as the bundler's own error about the config
- * it cannot find, which says more than any check here could.
- */
-/**
  * Every file the declarations are built FROM, outside `src`.
  *
  * Exported so the watch triggers are generated from this list rather than
@@ -172,15 +181,31 @@ export function declarationBuildInputs(): string[] | undefined {
   // file is: the declarations came from a configuration this cannot account for.
   if (chain === undefined) return undefined;
   const lockfile = workspaceLockfile();
+  // Absent is UNKNOWN, not absent-and-fine. A workspace always has a lockfile,
+  // so failing to find one means this cannot say which compiler produced
+  // `dist` — the same position a missing config leaves it in, and treated the
+  // same way rather than by quietly dropping the input.
+  if (lockfile === undefined) return undefined;
   return [
     ...BUILD_INPUTS.map(name => join(pkgRoot, name)),
     // The local tsconfig appears in both; `seen` in the walk and `Math.max`
     // below make the duplicate harmless.
     ...chain,
-    ...(lockfile !== undefined ? [lockfile] : []),
+    lockfile,
   ];
 }
 
+/**
+ * The newest of the declaration build's inputs outside `src`.
+ *
+ * A MISSING input reads as infinitely new rather than as zero. Every entry
+ * here is required to produce the declarations, so one that is absent means
+ * `dist` was built by a configuration that no longer exists — the strongest
+ * possible reason to distrust it, and treating it as "nothing changed" left
+ * the guard asserting happily against artifacts nothing could reproduce.
+ * Forcing the rebuild surfaces it as the bundler's own error about the config
+ * it cannot find, which says more than any check here could.
+ */
 function newestBuildInputMtime(): number {
   const files = declarationBuildInputs();
   if (files === undefined) return Number.POSITIVE_INFINITY;
@@ -236,9 +261,27 @@ export function newestDeclarationInputMtime(): number {
   );
 }
 
+/** Each declaration's current mtime, or `undefined` where it does not exist. */
+function declarationMtimes(): Map<string, number | undefined> {
+  return new Map(
+    DECLARATION_ENTRIES.map(entry => {
+      try {
+        return [entry, statSync(join(pkgRoot, "dist", entry)).mtimeMs];
+      } catch {
+        return [entry, undefined];
+      }
+    })
+  );
+}
+
 export function ensureDeclarations(): void {
-  const inputs = newestDeclarationInputMtime();
-  if (oldestDeclarationMtime() > inputs) return;
+  if (oldestDeclarationMtime() > newestDeclarationInputMtime()) return;
+  // Read BEFORE the build, and compared against afterwards. Comparing the
+  // output to the input timestamp instead would collapse two different
+  // questions into one: an unknown input reads as `Infinity` to force this
+  // rebuild, and every file is older than `Infinity`, so a perfectly good
+  // build would then be reported as having produced nothing.
+  const before = declarationMtimes();
   execFileSync("npx", ["tsup"], { cwd: pkgRoot, stdio: "inherit" });
   execFileSync("npx", ["tsup", "--config", "tsup.server-safe.config.ts"], {
     cwd: pkgRoot,
@@ -247,15 +290,15 @@ export function ensureDeclarations(): void {
 
   // Running the bundler is not the same as producing the files. Both configs
   // set `clean: false`, so an entry point dropped from one of them leaves its
-  // previous declaration in `dist`, older than the config that no longer emits
-  // it and looking exactly like a file that was simply not touched this run.
-  // Asserting the OUTCOME rather than the action is what tells those apart.
+  // previous declaration in `dist`, looking exactly like a file that was
+  // simply not touched this run. Asking whether each file CHANGED answers that
+  // directly, and does not depend on clock granularity the way comparing
+  // against a wall-clock reading taken here would.
+  const after = declarationMtimes();
   const stale = DECLARATION_ENTRIES.filter(entry => {
-    try {
-      return statSync(join(pkgRoot, "dist", entry)).mtimeMs <= inputs;
-    } catch {
-      return true;
-    }
+    const now = after.get(entry);
+    if (now === undefined) return true;
+    return now === before.get(entry);
   });
   if (stale.length > 0) {
     throw new Error(
