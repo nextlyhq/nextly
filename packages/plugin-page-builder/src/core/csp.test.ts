@@ -49,22 +49,16 @@ describe("cspDirectives — what translates exactly", () => {
     expect(d["img-src"]).not.toContain("https://cdn.example:*");
   });
 
-  it("expresses a terminal /** as both the prefix and everything below it", () => {
-    // picomatch matches `/img` itself against `/img/**`, while a CSP path of
-    // `/img/` covers only the descendants. One source alone would block a
-    // resource the shared allowlist permits.
-    const d = cspDirectives([
-      { protocol: "https", hostname: "cdn.example", pathname: "/img/**" },
-    ]);
-    expect(d["img-src"]).toContain("https://cdn.example:*/img");
-    expect(d["img-src"]).toContain("https://cdn.example:*/img/");
-  });
-
-  it("expresses a literal pathname as an exact source", () => {
-    const d = cspDirectives([
-      { protocol: "https", hostname: "cdn.example", pathname: "/logo.png" },
-    ]);
-    expect(d["img-src"]).toContain("https://cdn.example:*/logo.png");
+  it("treats an unconstrained path glob as no path at all", () => {
+    // `**` and `/**` match every path, which is exactly what a source with no
+    // path-part already says, so these still translate.
+    for (const pathname of ["**", "/**"])
+      expect(
+        cspDirectives([
+          { protocol: "https", hostname: "cdn.example", pathname },
+        ])["img-src"],
+        pathname
+      ).toContain("https://cdn.example:*");
   });
 
   it("carries a host into every fetch directive", () => {
@@ -139,35 +133,24 @@ describe("cspDirectives — what is refused rather than approximated", () => {
     );
   });
 
-  it("refuses an explicitly empty pathname", () => {
-    // Only an ABSENT pathname is the any-path case. The matcher's `?? "**"`
-    // default does not fire for an empty string, which reaches picomatch as an
-    // empty glob — `makeRe` throws on it, so the pattern admits no request at
-    // all while a host-wide source would allow every path on the host.
-    expect(
-      refused({ protocol: "https", hostname: "cdn.example", pathname: "" })
-    ).toEqual(SELF_ONLY);
-  });
-
-  it("refuses a literal pathname ending in a slash", () => {
-    // The grammars invert here: picomatch reads `/tenant/` as that exact path,
-    // CSP reads a trailing slash as a prefix. Emitting it as written would
-    // allow `/tenant/private.png`, which the allowlist refuses.
-    for (const pathname of ["/tenant/", "/"])
+  it("refuses every path CONSTRAINT, which CSP cannot hold", () => {
+    // CSP checks a source's path only when `redirect count` is 0, so an
+    // allowed URL that redirects elsewhere on the same host keeps passing;
+    // and it percent-decodes both sides before comparing, so `/logo.png` also
+    // admits `/logo%2Epng`, which the matcher rejects. Both widen, and neither
+    // can be written around — so a path-scoped pattern gets no source at all.
+    for (const pathname of [
+      "/img/**", // a prefix a redirect would escape
+      "/logo.png", // an exact path with an encoded alias
+      "/img/*", // one segment, which CSP cannot bound
+      "/tenant/", // exact to the matcher, a prefix to CSP
+      "/",
+      "", // not the any-path case: picomatch throws on an empty glob
+    ])
       expect(
         refused({ protocol: "https", hostname: "cdn.example", pathname }),
         pathname
       ).toEqual(SELF_ONLY);
-  });
-
-  it("refuses a single-segment path glob, which CSP cannot bound", () => {
-    expect(
-      refused({
-        protocol: "https",
-        hostname: "cdn.example",
-        pathname: "/img/*",
-      })
-    ).toEqual(SELF_ONLY);
   });
 
   it("refuses a search constraint in either form", () => {
@@ -192,31 +175,20 @@ describe("cspDirectives — what is refused rather than approximated", () => {
     );
   });
 
-  it("refuses a pathname carrying a CSP delimiter", () => {
-    // A semicolon reaching the header ends the fetch directive and starts a
-    // new one, so a pathname could append `script-src https:` to a policy
-    // that deliberately declares no script policy at all.
-    const d = cspDirectives([
+  it("emits no path at all, so no path can restructure the header", () => {
+    // A semicolon in a source ends the directive and starts a new one, so a
+    // pathname of `/x; script-src https:` would have appended a script policy
+    // to a header that deliberately declares none. Refusing every path
+    // constraint closes that structurally rather than by escaping.
+    const value = cspHeaderValue([
       {
         protocol: "https",
         hostname: "cdn.example",
         pathname: "/x; script-src https:",
       },
     ]);
-    expect(d["img-src"]).toEqual(SELF_ONLY);
-    expect(cspHeaderValue([{ hostname: "h", protocol: "https" }])).not.toMatch(
-      /script-src/
-    );
-  });
-
-  it("refuses a pathname the two sides would read differently", () => {
-    // Percent-encoded or encodable characters: CSP decodes both sides before
-    // comparing paths and picomatch does not, so these agree nowhere.
-    for (const pathname of ["/a b", "/a%20b", "/img,x", "/café"])
-      expect(
-        refused({ protocol: "https", hostname: "cdn.example", pathname }),
-        pathname
-      ).toEqual(SELF_ONLY);
+    expect(value).not.toMatch(/script-src/);
+    expect(value).not.toMatch(/cdn\.example/);
   });
 
   it("refuses every URL pattern, which carries constraints CSP cannot state", () => {
@@ -393,6 +365,51 @@ describe("merging into an existing policy", () => {
       cspDirectives()
     );
     expect(merged["base-uri"]).toEqual(["'self'"]);
+  });
+
+  it("leaves an explicit base-uri exactly as the host wrote it", () => {
+    // `base-uri` carries no pattern-derived source, so the generated `'self'`
+    // is a default rather than an addition. A host writing
+    // `base-uri https://cdn.example` had deliberately excluded a same-origin
+    // `<base href>`; unioning `'self'` in would hand back the very injection
+    // the directive exists to stop.
+    const merged = mergeCspDirectives(
+      parseCspHeader("base-uri https://cdn.example"),
+      cspDirectives()
+    );
+    expect(merged["base-uri"]).toEqual(["https://cdn.example"]);
+  });
+
+  it("carries the style hosts into style-src-elem when the host splits it", () => {
+    // `style-src-elem` governs a stylesheet IN PLACE OF `style-src`, so a
+    // policy that declares both would take the generated hosts into the one
+    // that is not consulted and keep blocking the stylesheet.
+    const merged = mergeCspDirectives(
+      parseCspHeader("style-src 'self'; style-src-elem 'self'"),
+      cspDirectives([{ protocol: "https", hostname: "cdn.example" }])
+    );
+    expect(merged["style-src-elem"]).toContain("https://cdn.example:*");
+    expect(merged["style-src"]).toContain("https://cdn.example:*");
+  });
+
+  it("does not invent a style-src-elem the host never declared", () => {
+    // Writing one would split a policy the host kept whole, and `style-src`
+    // already governs where there is no more specific directive.
+    const merged = mergeCspDirectives(
+      parseCspHeader("style-src 'self'"),
+      cspDirectives([{ protocol: "https", hostname: "cdn.example" }])
+    );
+    expect(Object.keys(merged)).not.toContain("style-src-elem");
+  });
+
+  it("does not reopen a style-src-elem the host closed", () => {
+    // Declared as permitting nothing. A union would drop the `'none'` to a
+    // non-single position, where CSP ignores it and the CDN would load.
+    const merged = mergeCspDirectives(
+      parseCspHeader("style-src 'self'; style-src-elem 'none'"),
+      cspDirectives([{ protocol: "https", hostname: "cdn.example" }])
+    );
+    expect(merged["style-src-elem"]).toEqual(["'none'"]);
   });
 
   it("keeps the host's own object-src rather than overriding it", () => {

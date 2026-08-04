@@ -115,10 +115,7 @@ export interface CspOptions {
 }
 
 /**
- * A pattern as CSP source expressions, or `undefined` when it has none.
- *
- * Usually one source; a terminal `/**` needs two to cover the same set. An
- * empty result is never returned — `undefined` is the only refusal.
+ * A pattern as a CSP source expression, or `undefined` when it has none.
  *
  * `undefined` is the answer whenever the translation would not be EXACT, and
  * the reasons are worth stating because each is a place the two systems use the
@@ -143,18 +140,16 @@ export interface CspOptions {
  *   no safe approximation: widening `cdn-*.co.uk` to `*.co.uk` allows every
  *   site under a public suffix. Case matters because the two disagree about
  *   it — see {@link isExpressibleHost}.
- * - `pathname` must be absent, a `/prefix/**` glob, or a literal path, and
- *   must survive URL parsing and CSP's own path grammar unchanged — see
- *   {@link cspPaths}.
+ * - `pathname` must not CONSTRAIN the path at all — see
+ *   {@link pathIsUnconstrained}. CSP cannot hold a path constraint, so a
+ *   pattern carrying one is reported rather than translated.
  * - `search` must be ABSENT, in any form. CSP does not match query strings at
  *   all, so `search: "?v=1"` and `search: ""` alike become a source that
  *   ignores the query the pattern was constraining. On the surfaces this
  *   backstops the query IS the channel — `url(https://cdn/a.png?secret)` — so
  *   this one is refused even though it costs a working config a source.
  */
-function sourceExpressions(
-  input: RemotePatternInput
-): readonly string[] | undefined {
+function sourceExpression(input: RemotePatternInput): string | undefined {
   // A `URL` carries three constraints at once that CSP cannot state: the
   // matcher reads `port === ""` (default port only), `pathname === "/"` (that
   // one path, where a CSP path of `/` is a prefix matching everything) and
@@ -179,10 +174,9 @@ function sourceExpressions(
 
   if (pattern.search !== undefined) return undefined;
 
-  const paths = cspPaths(pattern.pathname);
-  if (paths === undefined) return undefined;
+  if (!pathIsUnconstrained(pattern.pathname)) return undefined;
 
-  return paths.map(path => `https://${host}${port}${path}`);
+  return `https://${host}${port}`;
 }
 
 /**
@@ -199,66 +193,33 @@ function cspPort(port: string | undefined): string | undefined {
 }
 
 /**
- * A pattern pathname as CSP paths, or `undefined` when it cannot be expressed.
+ * Whether a pattern leaves the path unrestricted.
  *
- * CSP path matching is a prefix when the path ends in `/`, and exact otherwise.
- * A terminal `/**` needs BOTH forms: picomatch matches `/img` itself as well as
- * everything below it, while the CSP path `/img/` covers only the descendants —
- * so the prefix is emitted alongside it as an exact source. `/img/*` bounds the
- * match to a single segment, which CSP has no way to say at all.
+ * A path CONSTRAINT is the one field this refuses outright rather than trying
+ * to express, because CSP's path matching differs from the matcher's in two
+ * ways that both widen it, and neither can be worked around by writing the
+ * path more carefully.
  *
- * The characters are restricted to those that survive both sides untouched.
- * CSP's `path-part` excludes `;` and `,` outright, and a `;` reaching the
- * header would end the directive and start a new one — a literal pathname of
- * `/x; script-src https:` turns a fetch policy into a script policy. Beyond
- * those two, anything the URL parser would percent-encode (or that arrives
- * already encoded) is refused as well: CSP decodes both sides before comparing
- * paths and picomatch does not, so an encoded path is a third place the two
- * disagree.
+ * A redirect drops it. CSP 3 checks a source's path only "if `expression`
+ * contains a non-empty `path-part`, and `redirect count` is 0" — so a resource
+ * under an allowed prefix that redirects anywhere else on the same host is
+ * still allowed, while the pattern's prefix was the whole point.
+ *
+ * Percent-encoding aliases it. CSP compares each path segment after
+ * "percent-decoding" BOTH sides, while the matcher hands picomatch the URL
+ * parser's already-encoded pathname — so a CSP path of `/logo.png` also admits
+ * `/logo%2Epng`, which the matcher rejects.
+ *
+ * So the choice for a path-scoped pattern is a source wider than the pattern
+ * or no source at all, and this module takes the second: the host is named by
+ * {@link unexpressibleHosts} and can write the source itself, having been told
+ * what CSP will and will not enforce about it.
+ *
+ * `**` and `/**` are not constraints — they match every path, which is what a
+ * source with no path-part already says — so those still translate.
  */
-function cspPaths(pathname: string | undefined): readonly string[] | undefined {
-  // Only an ABSENT pathname means any path. The matcher reaches its `** `
-  // default through `pattern.pathname ?? "**"`, which an empty string does not
-  // trigger — it arrives at picomatch as an empty glob, where `makeRe` throws
-  // rather than matching anything. Reading it as "omitted" would emit a
-  // host-wide source for a pattern that admits no request at all.
-  if (pathname === undefined || pathname === "**") return [""];
-  if (!pathname.startsWith("/")) return undefined;
-
-  if (pathname.endsWith("/**")) {
-    const prefix = pathname.slice(0, -3);
-    // `/**` is every path, which is what an omitted path already says.
-    if (prefix === "") return [""];
-    // A trailing slash before the glob would make the prefix source `/a/`,
-    // whose own trailing slash CSP reads as "everything below `/a`" — wider
-    // than the `//` the pattern actually requires.
-    if (prefix.includes("*") || prefix.endsWith("/")) return undefined;
-    if (!isExpressiblePath(prefix)) return undefined;
-    return [prefix, `${prefix}/`];
-  }
-
-  if (pathname.includes("*")) return undefined;
-  // A literal ending in `/` is where the two grammars invert. picomatch reads
-  // `/tenant/` as that exact path; CSP reads a trailing slash as a PREFIX, so
-  // the same text would allow `/tenant/private.png`. `/` is the extreme case,
-  // an exact path to the matcher and the whole origin to CSP. The prefix form
-  // is emitted only from the terminal `/**` branch above, where it is what the
-  // pattern means.
-  if (pathname.endsWith("/")) return undefined;
-  if (!isExpressiblePath(pathname)) return undefined;
-  return [pathname];
-}
-
-/**
- * Whether a path is written only in characters both sides read identically.
- *
- * The unreserved set from RFC 3986 plus the separator. Everything else is
- * either percent-encoded by the URL parser before picomatch sees it, excluded
- * from CSP's `path-part` grammar, or a delimiter that would restructure the
- * header.
- */
-function isExpressiblePath(path: string): boolean {
-  return /^\/[A-Za-z0-9\-._~/]*$/.test(path);
+function pathIsUnconstrained(pathname: string | undefined): boolean {
+  return pathname === undefined || pathname === "**" || pathname === "/**";
 }
 
 /**
@@ -295,7 +256,7 @@ export function unexpressibleHosts(
   return [
     ...new Set(
       remotePatterns
-        .filter(p => sourceExpressions(p) === undefined)
+        .filter(p => sourceExpression(p) === undefined)
         .map(p => (p instanceof URL ? p.href : p.hostname))
     ),
   ];
@@ -326,7 +287,9 @@ export function cspDirectives(
 
   const hosts = [
     ...new Set(
-      remotePatterns.flatMap(pattern => sourceExpressions(pattern) ?? [])
+      remotePatterns
+        .map(sourceExpression)
+        .filter((source): source is string => source !== undefined)
     ),
   ];
 
@@ -441,17 +404,53 @@ export function mergeCspDirectives(
       merged[name] = [...inherited];
       continue;
     }
-    if (isNoSources(sources)) {
-      // A directive the host declared is theirs: this cannot tighten it by
-      // union, and overriding it outright would break embeds elsewhere in a
-      // document this package does not own. Where they left it unstated, the
-      // generated `'none'` stands on its own rather than inheriting.
+    // A directive carrying no pattern-derived source is a DEFAULT, not an
+    // addition: `object-src 'none'` and `base-uri 'self'` say what this package
+    // would like where the host has said nothing. Unioning one into an explicit
+    // declaration widens it — a host with `base-uri https://cdn.example` had
+    // deliberately excluded a same-origin `<base href>`, and adding `'self'`
+    // hands back exactly the injection the directive exists to stop. Where the
+    // host declared it, theirs stands untouched.
+    if (!isPatternDirective(name)) {
       if (!before.has(name)) merged[name] = [...sources];
       continue;
     }
     merged[name] = [...new Set([...(inherited ?? []), ...sources])];
   }
+
+  // `style-src-elem` governs a `<link rel="stylesheet">` IN PLACE OF
+  // `style-src`, which only applies where the more specific directive is
+  // absent. A host that splits the two would take the generated hosts into
+  // `style-src` and keep blocking the stylesheet, so the same sources go
+  // wherever the decision is actually made. Only when the host already
+  // declares it: writing one otherwise would split a policy they kept whole.
+  const styleSources = add.get("style-src");
+  const styleElem = before.get("style-src-elem");
+  if (
+    styleSources !== undefined &&
+    // Undeclared, so `style-src` already governs and there is nothing to
+    // mirror into.
+    styleElem !== undefined &&
+    // Declared as permitting nothing, which a union would silently reopen.
+    !isNoSources(styleElem)
+  ) {
+    merged["style-src-elem"] = [...new Set([...styleElem, ...styleSources])];
+  }
   return merged;
+}
+
+/**
+ * Whether a generated directive carries sources translated from the patterns.
+ *
+ * The fetch directives do; `object-src` and the document directives are fixed
+ * defaults this package supplies, and the distinction decides whether merging
+ * may add to what the host already wrote.
+ */
+function isPatternDirective(name: string): boolean {
+  return (
+    (CSP_FETCH_DIRECTIVES as readonly string[]).includes(name) &&
+    name !== "object-src"
+  );
 }
 
 /**
