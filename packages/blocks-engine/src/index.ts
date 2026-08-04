@@ -115,6 +115,7 @@ export type { RegisterOptions, SupportDefinition } from "./registry";
 export {
   STYLE_CATALOG,
   getStyleProperty,
+  propertyInheritsToDescendants,
   stylePropertiesInGroup,
   styleFlagsInGroup,
 } from "./style/catalog";
@@ -218,3 +219,5 @@ export type {
   StyleSource,
 } from "./style/resolve-style";
 export { resolveStyle } from "./style/resolve-style";
+export type { BreakpointAxis } from "./style/breakpoint-axes";
+export { BREAKPOINT_AXES } from "./style/breakpoint-axes";

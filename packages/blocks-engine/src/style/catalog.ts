@@ -552,6 +552,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
     group: "typography",
     shape: cssValue("font-family", ["fontFamily"]),
     summary: "Typeface stack. Token-first: reference a typography token.",
+    inherits: true,
   },
   {
     property: "fontSize",
@@ -561,6 +562,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
       allowPercentage: true,
     }),
     summary: "Text size.",
+    inherits: true,
   },
   {
     property: "fontWeight",
@@ -576,6 +578,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
       ],
     },
     summary: "Text weight, as a keyword or a numeric weight.",
+    inherits: true,
   },
   {
     property: "lineHeight",
@@ -595,6 +598,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
       ],
     },
     summary: "Line box height, unitless (preferred) or as a length.",
+    inherits: true,
   },
   {
     property: "letterSpacing",
@@ -604,6 +608,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
       allowNegative: true,
     }),
     summary: "Space between characters.",
+    inherits: true,
   },
   {
     property: "wordSpacing",
@@ -614,6 +619,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
       allowPercentage: true,
     }),
     summary: "Space between words.",
+    inherits: true,
   },
   {
     property: "textAlign",
@@ -631,6 +637,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
       "justify",
     ]),
     summary: "Inline alignment. Logical: start flips with writing direction.",
+    inherits: true,
   },
   {
     property: "textTransform",
@@ -650,6 +657,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
       ]),
     ]),
     summary: "Letter-case transformation.",
+    inherits: true,
   },
   {
     property: "fontStyle",
@@ -665,6 +673,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
       ],
     },
     summary: "Upright or slanted text, with an optional oblique angle.",
+    inherits: true,
   },
   {
     property: "textDecoration",
@@ -677,6 +686,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
     group: "typography",
     shape: cssValue("text-shadow", ["shadow"]),
     summary: "Shadow cast by the text.",
+    inherits: true,
   },
 
   // --- color
@@ -686,6 +696,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
     flag: "text",
     shape: color("color"),
     summary: "Text color.",
+    inherits: true,
   },
   {
     property: "linkColor",
@@ -693,6 +704,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
     flag: "link",
     shape: color("color", "a"),
     summary: "Color of links inside the element.",
+    inherits: true,
   },
   {
     property: "linkColorHover",
@@ -700,6 +712,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
     flag: "link",
     shape: color("color", "a:hover"),
     summary: "Color of hovered links inside the element.",
+    inherits: true,
   },
 
   // --- background
@@ -907,6 +920,17 @@ const CATALOG_BY_PROPERTY: ReadonlyMap<string, StyleProperty> = new Map(
 /** The catalog row for a storage key, or `undefined` if it is not a style property. */
 export function getStyleProperty(property: string): StyleProperty | undefined {
   return CATALOG_BY_PROPERTY.get(property);
+}
+
+/**
+ * Whether a value set on an ancestor visibly reaches a descendant that states nothing.
+ *
+ * Asked by provenance, so a control can report the page's own typography as the origin of the
+ * text it is looking at, and can decline to report it for a property that never travels. An
+ * unknown key answers false: nothing is written for it, so nothing reaches anywhere.
+ */
+export function propertyInheritsToDescendants(property: string): boolean {
+  return CATALOG_BY_PROPERTY.get(property)?.inherits === true;
 }
 
 /** Every catalog row in one group, in catalog order. */

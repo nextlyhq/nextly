@@ -32,11 +32,13 @@ import type { DocumentLimits } from "../limits";
 import { isPlainRecord } from "../plain-record";
 import type { ValidationIssue } from "../validation";
 
+import { BREAKPOINT_AXES } from "./breakpoint-axes";
 import { escapeIdentifier } from "./css-value";
 import { compileStyleValues, DEFAULT_TOKEN_PREFIX } from "./declarations";
 import type { Declaration } from "./declarations";
 import type { NamedClass } from "./named-class";
 import {
+  isUsableNamedClass,
   namedClassName,
   orderedNamedClasses,
   usableNamedClasses,
@@ -278,33 +280,39 @@ function breakpointContexts(set: BreakpointSet): BreakpointContext[] {
           : MAX_BREAKPOINTS_PER_AXIS
       );
   };
-  for (const def of axisDefs("viewport")) {
-    if (def.id === BASE_BREAKPOINT) continue;
-    contexts.push({
-      id: def.id,
-      axis: "viewport",
-      maxWidth: def.maxWidth,
-      ...(def.maxWidth === undefined
-        ? {}
-        : { atRule: `@media (max-width: ${def.maxWidth}px)` }),
-    });
-  }
-  for (const def of axisDefs("container")) {
-    if (def.id === BASE_BREAKPOINT) continue;
-    contexts.push({
-      id: def.id,
-      maxWidth: def.maxWidth,
-      // A container axis always emits a container query, the widest one
-      // included. Left unconditional, the container's own base values would
-      // apply to a node with no query-container ancestor at all, and would
-      // outrank every viewport rule while doing it. `min-width: 0` matches
-      // inside any container and nowhere else, which is exactly the scope.
-      atRule:
-        def.maxWidth === undefined
-          ? `@container (min-width: 0)`
-          : `@container (max-width: ${def.maxWidth}px)`,
-      axis: "container",
-    });
+  // Driven by the shared axis order rather than by two loops written in a
+  // chosen sequence here. Which axis is emitted last decides which one wins at
+  // equal specificity, and provenance has to reproduce that exactly, so the
+  // order is stated once where both can read it.
+  for (const axis of BREAKPOINT_AXES) {
+    for (const def of axisDefs(axis)) {
+      if (def.id === BASE_BREAKPOINT) continue;
+      contexts.push(
+        axis === "viewport"
+          ? {
+              id: def.id,
+              axis,
+              maxWidth: def.maxWidth,
+              ...(def.maxWidth === undefined
+                ? {}
+                : { atRule: `@media (max-width: ${def.maxWidth}px)` }),
+            }
+          : {
+              id: def.id,
+              axis,
+              maxWidth: def.maxWidth,
+              // A container axis always emits a container query, the widest one
+              // included. Left unconditional, the container's own base values would
+              // apply to a node with no query-container ancestor at all, and would
+              // outrank every viewport rule while doing it. `min-width: 0` matches
+              // inside any container and nowhere else, which is exactly the scope.
+              atRule:
+                def.maxWidth === undefined
+                  ? `@container (min-width: 0)`
+                  : `@container (max-width: ${def.maxWidth}px)`,
+            }
+      );
+    }
   }
   return contexts;
 }
@@ -909,20 +917,34 @@ export function compilePageCss(
   const usableIds = new Set(usableClasses.map(cls => cls.id));
   for (const cls of orderedNamedClasses(ctx.namedClasses ?? [])) {
     if (usableIds.has((cls as { id?: unknown } | null)?.id as string)) continue;
-    // Reported once per entry the library could not use, naming which of the two reasons it was.
+    // Reported once per entry the library could not use, naming which of the three reasons it
+    // was. A usable record whose name is free is not reachable here, so the remaining case after
+    // the two structural ones is a name another class already took.
+    //
+    // Read in this order because the reasons are not alternatives: an entry can be malformed AND
+    // collide, and a name that cannot be written is the one an author can act on without first
+    // being told the wrong thing. Collapsing the middle case into the collision — which the
+    // presence of a valid slug alone would do — tells the author to rename a class whose name was
+    // never the problem, and renaming it fixes nothing.
     const slug = readClassSlug(cls);
     const named =
-      typeof slug === "string" && NAMED_CLASS_SLUG_RE.test(slug)
+      typeof slug !== "string" || !NAMED_CLASS_SLUG_RE.test(slug)
         ? {
-            code: "duplicate-class-name" as const,
-            message: `More than one class is named "${describeValue(slug)}", so only the first was written.`,
-            suggestion: "Give every class a distinct name.",
-          }
-        : {
             code: "invalid-class-name" as const,
             message: `A named class could not be written: ${describeValue(slug)} is not a class name.`,
             suggestion: 'Use a lowercase slug such as "card-featured".',
-          };
+          }
+        : !isUsableNamedClass(cls)
+          ? {
+              code: "invalid-class" as const,
+              message: `The class named "${describeValue(slug)}" is missing its id or its styles, so it was not written.`,
+              suggestion: "Give every class a string id and a styles record.",
+            }
+          : {
+              code: "duplicate-class-name" as const,
+              message: `More than one class is named "${describeValue(slug)}", so only the first was written.`,
+              suggestion: "Give every class a distinct name.",
+            };
     pushBoundedWarning(warningAllowance, warnings, {
       path: pointer("/classes", describeValue(readClassId(cls))),
       severity: "warning",

@@ -174,7 +174,7 @@ describe("tier order beats breakpoint order, in both halves", () => {
     const resolved = resolveStyle("color", "base", "tablet", {
       classes: [cardAtTablet],
       node: styles({ color: "red" }),
-      breakpointChain: [BP],
+      viewportChain: [BP, "tablet"],
     });
 
     // The resolver has to say what the stylesheet does, not what feels more specific.
@@ -199,6 +199,29 @@ describe("tier order beats breakpoint order, in both halves", () => {
 
     expect(css).toContain(".nx-c-card");
     expect(warnings.map(w => w.code)).toContain("invalid-class-name");
+  });
+
+  it("tells an author with a malformed class that its name is not the problem", () => {
+    // A perfectly good name on an entry missing its styles record. Reported as a name collision,
+    // the advice is to rename it — which fixes nothing, and there is no other class to collide
+    // with, so the author is sent looking for one that does not exist.
+    const { warnings } = compile(doc({}), [
+      { id: "c9", slug: "lonely", orderIndex: 0 } as never,
+    ]);
+
+    const codes = warnings.map(w => w.code);
+    expect(codes).toContain("invalid-class");
+    expect(codes).not.toContain("duplicate-class-name");
+    expect(warnings.find(w => w.code === "invalid-class")?.message).toContain(
+      "missing its id or its styles"
+    );
+  });
+
+  it("still calls a genuine name collision a collision", () => {
+    const { warnings } = compile(doc({}), [card, { ...feature, slug: "card" }]);
+
+    expect(warnings.map(w => w.code)).toContain("duplicate-class-name");
+    expect(warnings.map(w => w.code)).not.toContain("invalid-class");
   });
 });
 

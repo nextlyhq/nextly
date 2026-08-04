@@ -22,7 +22,13 @@ const namedClass = (
 ): NamedClass => ({ id, slug: id, orderIndex, styles });
 
 describe("which tier wins", () => {
-  const blockBase = at("desktop", { color: "black", padding: "0" });
+  // Catalog-valid values throughout, because resolution now reports only what the compiler would
+  // write: a fixture the catalog rejects would resolve to nothing and pass or fail for a reason
+  // that has nothing to do with tiers.
+  const blockBase = at("desktop", {
+    color: "black",
+    padding: { blockStart: "8px" },
+  });
   const card = namedClass("card", 0, at("desktop", { color: "blue" }));
   const feature = namedClass("feature", 1, at("desktop", { color: "green" }));
 
@@ -80,7 +86,7 @@ describe("which tier wins", () => {
       node: at("desktop", { color: "red" }),
     });
 
-    expect(found?.value).toBe("0");
+    expect(found?.value).toEqual({ blockStart: "8px" });
     expect(found?.source).toEqual({ tier: "blockDefault" });
   });
 
@@ -95,7 +101,7 @@ describe("which breakpoint the value comes from", () => {
   it("marks a value inherited from a wider breakpoint, and names it", () => {
     const found = resolveStyle("color", "base", "tablet", {
       node: at("desktop", { color: "red" }),
-      breakpointChain: ["desktop"],
+      viewportChain: ["desktop", "tablet"],
     });
 
     // A control showing an empty field here would be lying about a page that plainly has a
@@ -113,7 +119,7 @@ describe("which breakpoint the value comes from", () => {
       node: {
         base: { desktop: { color: "red" }, tablet: { color: "blue" } },
       } as unknown as NodeStyles,
-      breakpointChain: ["desktop"],
+      viewportChain: ["desktop", "tablet"],
     });
 
     expect(found?.value).toBe("blue");
@@ -128,7 +134,7 @@ describe("which breakpoint the value comes from", () => {
     const found = resolveStyle("color", "base", "tablet", {
       classes: [namedClass("card", 0, at("tablet", { color: "blue" }))],
       node: at("desktop", { color: "red" }),
-      breakpointChain: ["desktop"],
+      viewportChain: ["desktop", "tablet"],
     });
 
     expect(found?.value).toBe("red");
@@ -151,7 +157,7 @@ describe("which breakpoint the value comes from", () => {
           } as never,
         },
       ],
-      breakpointChain: ["desktop"],
+      viewportChain: ["desktop", "tablet"],
     });
 
     expect(found?.value).toBe("blue");
@@ -170,6 +176,131 @@ describe("which breakpoint the value comes from", () => {
     expect(
       resolveStyle("color", "base", "desktop", { node: styles })?.value
     ).toBe("black");
+  });
+});
+
+describe("both responsive axes at once", () => {
+  it("reports a live viewport rule while a container breakpoint is being edited", () => {
+    // A viewport width and a container width match at the same moment, and the stylesheet holds
+    // rules for both. Modelled as one chain outward from the breakpoint being edited, the tablet
+    // rule is simply not in it, so a node that is plainly blue on screen reports black.
+    const found = resolveStyle("color", "base", "card", {
+      node: {
+        base: { base: { color: "black" }, tablet: { color: "blue" } },
+      } as unknown as NodeStyles,
+      viewportChain: ["base", "tablet"],
+      containerChain: ["card"],
+    });
+
+    expect(found?.value).toBe("blue");
+    expect(found?.source).toEqual({
+      tier: "inheritedBreakpoint",
+      from: "tablet",
+      source: { tier: "local" },
+    });
+  });
+
+  it("lets the container axis beat the viewport axis, because it is written last", () => {
+    const found = resolveStyle("color", "base", "card", {
+      node: {
+        base: { tablet: { color: "blue" }, card: { color: "green" } },
+      } as unknown as NodeStyles,
+      viewportChain: ["base", "tablet"],
+      containerChain: ["card"],
+    });
+
+    expect(found?.value).toBe("green");
+    expect(found?.source).toEqual({ tier: "local" });
+  });
+
+  it("keeps an id claimed by the viewport axis at its viewport position", () => {
+    // The compiler claims breakpoint ids across both axes and drops the later definition, so an
+    // id defined twice is a viewport context only. Resolving it as a container rule would put it
+    // after every viewport rule and let it win a contest the stylesheet gives to the other value.
+    const found = resolveStyle("color", "base", "wide", {
+      node: {
+        base: { dup: { color: "blue" }, wide: { color: "green" } },
+      } as unknown as NodeStyles,
+      viewportChain: ["dup", "wide"],
+      containerChain: ["dup"],
+    });
+
+    expect(found?.value).toBe("green");
+  });
+
+  it("treats the edited breakpoint as the only live one when neither chain is given", () => {
+    const found = resolveStyle("color", "base", "tablet", {
+      node: {
+        base: { desktop: { color: "red" }, tablet: { color: "blue" } },
+      } as unknown as NodeStyles,
+    });
+
+    expect(found?.value).toBe("blue");
+    expect(found?.source).toEqual({ tier: "local" });
+  });
+});
+
+describe("values the compiler would refuse", () => {
+  it("skips an invalid higher-tier value and reports the tier the browser actually shows", () => {
+    // `compileStyleValues` drops a declaration validation rejects, so the class's blue is what
+    // lands on the page. Reporting the local value would name a colour that is not on screen and
+    // attribute the visible one to nothing.
+    const found = resolveStyle("color", "base", "desktop", {
+      classes: [namedClass("card", 0, at("desktop", { color: "blue" }))],
+      node: at("desktop", { color: "not a color" }),
+    });
+
+    expect(found?.value).toBe("blue");
+    expect(found?.source).toEqual({ tier: "class", id: "card", slug: "card" });
+  });
+
+  it("reports nothing when the only value stated is one the compiler refuses", () => {
+    expect(
+      resolveStyle("color", "base", "desktop", {
+        node: at("desktop", { color: "not a color" }),
+      })
+    ).toBeUndefined();
+  });
+
+  it("reports nothing for a key the catalog does not define", () => {
+    expect(
+      resolveStyle("nonsense", "base", "desktop", {
+        node: at("desktop", { nonsense: "x" }),
+      })
+    ).toBeUndefined();
+  });
+});
+
+describe("page settings as an origin", () => {
+  const pageSettings = at("desktop", {
+    color: "rebeccapurple",
+    padding: { blockStart: "8px" },
+  });
+
+  it("names the page for a property that reaches a node from the root", () => {
+    const found = resolveStyle("color", "base", "desktop", { pageSettings });
+
+    expect(found?.value).toBe("rebeccapurple");
+    expect(found?.source).toEqual({ tier: "pageSettings" });
+  });
+
+  it("loses to a declaration on the node itself", () => {
+    // An inherited value loses to any declaration on the element, whatever the source order, so
+    // page settings sit below even the block default.
+    const found = resolveStyle("color", "base", "desktop", {
+      pageSettings,
+      blockBase: at("desktop", { color: "black" }),
+    });
+
+    expect(found?.source).toEqual({ tier: "blockDefault" });
+  });
+
+  it("says nothing about a property that never leaves the page root", () => {
+    // Padding on the page root is the page's padding. Offering it as this node's would name an
+    // origin the browser does not use.
+    expect(
+      resolveStyle("padding", "base", "desktop", { pageSettings })
+    ).toBeUndefined();
   });
 });
 
