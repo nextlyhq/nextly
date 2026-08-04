@@ -187,6 +187,7 @@ export {
   defaultSiteTokens,
   emitFontFaces,
   emitTokenBlocks,
+  isTokenName,
   resolveTokenPrefix,
   validateFontFace,
 } from "./style/site-tokens";
@@ -198,6 +199,18 @@ export type {
   SiteTokenSet,
   TokenMode,
 } from "./style/site-tokens";
+// Interop and judgement, both pure: the format other design-token tools read,
+// and the contrast a person needs while a colour picker is open.
+export { NEXTLY_EXTENSION, dtcgToTokens, tokensToDtcg } from "./style/dtcg";
+export type { DtcgNode } from "./style/dtcg";
+export {
+  checkContrast,
+  compositeOver,
+  contrastRatio,
+  parseColor,
+  relativeLuminance,
+} from "./style/contrast";
+export type { ContrastLevel, ContrastResult, Rgb } from "./style/contrast";
 export type {
   CompiledPageCss,
   StyleCompileContext,

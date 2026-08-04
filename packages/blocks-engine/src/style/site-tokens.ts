@@ -61,6 +61,16 @@ export interface SiteToken {
   values: { light: string; dark?: string };
   /** Author-facing note, carried through DTCG import/export. */
   description?: string;
+  /**
+   * Vendor data from other tools, carried untouched.
+   *
+   * The DTCG format requires it: "Tools that process design token files MUST
+   * preserve any extension data they do not themselves understand." A token
+   * that came from Figma or Style Dictionary and goes back to it has to arrive
+   * with whatever those tools wrote about it, so importing has somewhere to
+   * put data this system has no opinion on.
+   */
+  extensions?: Readonly<Record<string, unknown>>;
 }
 
 /** Everything a site defines for its pages to read. */

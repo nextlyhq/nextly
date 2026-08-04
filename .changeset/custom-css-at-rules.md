@@ -60,3 +60,26 @@ read, so a remote URL is a validation error naming the remedy — upload the fil
 and point `src` at a path on this site. A face that fails validation emits
 nothing rather than half a rule, since a family whose file never loads renders
 as the browser default rather than as the next family listed.
+
+Site tokens import and export in the Design Tokens Community Group format, the
+one Figma, Style Dictionary and Tokens Studio read.
+
+A dot-path name is a PATH there, not a name — the format reserves the period —
+so `color.primary` exports as the token `primary` inside the group `color`, and
+importing flattens it back. Most DTCG values are objects now: a dimension is
+`{"value": 16, "unit": "px"}` and only `px` or `rem` are allowed, and a colour
+is components with an optional hex fallback rather than a hex string.
+
+That means a token holding `clamp()`, `1.5em` or a `var()` reference has no
+conformant DTCG value at all. Each export therefore carries both the native
+value and the exact CSS under Nextly's own `$extensions` key, and import prefers
+that key — so a file that leaves Nextly and comes back is unchanged, while a
+file from Figma still imports correctly. A token that cannot be represented is
+reported rather than exported under a shape that would misdescribe it, and
+another tool's extension data is carried through untouched in both directions,
+as the format requires.
+
+`checkContrast(foreground, background)` reports the WCAG 2 ratio and the level
+it meets, compositing translucent colours against what sits behind them first.
+It returns nothing for a colour it cannot read, rather than a figure somebody
+would act on.

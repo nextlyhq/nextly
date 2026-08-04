@@ -1,0 +1,239 @@
+/**
+ * The door tokens leave and arrive through.
+ *
+ * The property that matters is the round trip: what this system exports, it
+ * must read back unchanged. Everything else is about being a good citizen of a
+ * format other tools also write.
+ */
+import { describe, expect, it } from "vitest";
+
+import { NEXTLY_EXTENSION, dtcgToTokens, tokensToDtcg } from "./dtcg";
+import type { SiteToken } from "./site-tokens";
+
+const tokens = (list: SiteToken[]) => ({ tokens: list });
+
+describe("export", () => {
+  it("nests a dot path into groups, because DTCG forbids a dot in a name", () => {
+    // "the following characters MUST NOT be used anywhere in a token or group
+    // name: `{`, `}`, `.`" — so `color.primary` is the token `primary` inside
+    // the group `color`, not a name with a dot in it.
+    const { document } = tokensToDtcg(
+      tokens([
+        { name: "color.primary", kind: "color", values: { light: "#2563eb" } },
+      ])
+    );
+    const group = document.color as Record<string, unknown>;
+    expect(Object.keys(document)).toEqual(["color"]);
+    expect(group.primary).toBeDefined();
+  });
+
+  it("writes a dimension as an object, which is what the format now requires", () => {
+    const { document } = tokensToDtcg(
+      tokens([
+        { name: "space.4", kind: "dimension", values: { light: "16px" } },
+      ])
+    );
+    const group = document.space as Record<string, Record<string, unknown>>;
+    expect(group["4"]?.$value).toEqual({ value: 16, unit: "px" });
+    expect(group["4"]?.$type).toBe("dimension");
+  });
+
+  it("writes a colour as components with a hex fallback", () => {
+    const { document } = tokensToDtcg(
+      tokens([{ name: "brand", kind: "color", values: { light: "#2563eb" } }])
+    );
+    const token = document.brand as Record<string, unknown>;
+    const value = token.$value as Record<string, unknown>;
+    expect(value.colorSpace).toBe("srgb");
+    expect(value.hex).toBe("#2563eb");
+    expect((value.components as number[]).length).toBe(3);
+  });
+
+  it("reports a value the format cannot express instead of inventing one", () => {
+    // A dimension may only be `px` or `rem`, so a `clamp()` has no conformant
+    // shape at all. Emitting it under a type that does not fit would be a lie
+    // about what the token holds.
+    const { document, issues } = tokensToDtcg(
+      tokens([
+        {
+          name: "content.width",
+          kind: "dimension",
+          values: { light: "clamp(20rem, 80vw, 72rem)" },
+        },
+      ])
+    );
+    expect(document).toEqual({});
+    expect(issues[0]?.message).toContain("cannot express");
+    // And it says the value is not lost, because the author still has it here.
+    expect(issues[0]?.message).toContain("still here in Nextly");
+  });
+
+  it("carries another tool's extension data through untouched", () => {
+    // "Tools that process design token files MUST preserve any extension data
+    // they do not themselves understand."
+    const { document } = tokensToDtcg(
+      tokens([
+        {
+          name: "brand",
+          kind: "color",
+          values: { light: "#000000" },
+          extensions: { "com.figma.thing": { id: 7 } },
+        },
+      ])
+    );
+    const token = document.brand as Record<string, Record<string, unknown>>;
+    expect(token.$extensions?.["com.figma.thing"]).toEqual({ id: 7 });
+  });
+});
+
+describe("import", () => {
+  it("flattens groups back into dot paths", () => {
+    const { tokens: read } = dtcgToTokens({
+      color: {
+        primary: {
+          $type: "color",
+          $value: { colorSpace: "srgb", components: [0, 0, 0], hex: "#000000" },
+        },
+      },
+    });
+    expect(read[0]?.name).toBe("color.primary");
+  });
+
+  it("inherits a type down through groups that do not restate it", () => {
+    // "the token's type is inherited from the CLOSEST parent group with a
+    // `$type`" — so it travels past intermediate groups rather than stopping
+    // at the immediate parent. A test that put the type one level up would
+    // pass without the chain ever being walked.
+    const { tokens: read } = dtcgToTokens({
+      space: {
+        $type: "dimension",
+        inset: { small: { $value: { value: 16, unit: "px" } } },
+      },
+    });
+    expect(read[0]?.name).toBe("space.inset.small");
+    expect(read[0]?.kind).toBe("dimension");
+    expect(read[0]?.values.light).toBe("16px");
+  });
+
+  it("takes the closest type when an inner group overrides an outer one", () => {
+    const { tokens: read } = dtcgToTokens({
+      outer: {
+        $type: "dimension",
+        inner: {
+          $type: "duration",
+          fast: { $value: { value: 150, unit: "ms" } },
+        },
+      },
+    });
+    expect(read[0]?.kind).toBe("duration");
+    expect(read[0]?.values.light).toBe("150ms");
+  });
+
+  it("prefers a supplied hex over recomputing it from components", () => {
+    // The format says `hex` is the fallback representation; taking it keeps a
+    // colour byte-identical rather than round-tripping it through arithmetic.
+    const { tokens: read } = dtcgToTokens({
+      brand: {
+        $type: "color",
+        $value: {
+          colorSpace: "srgb",
+          components: [0.1, 0.2, 0.3],
+          hex: "#1a334d",
+        },
+      },
+    });
+    expect(read[0]?.values.light).toBe("#1a334d");
+  });
+
+  it("reads a colour with no hex from its components", () => {
+    const { tokens: read } = dtcgToTokens({
+      brand: {
+        $type: "color",
+        $value: { colorSpace: "srgb", components: [1, 0, 0] },
+      },
+    });
+    expect(read[0]?.values.light).toBe("rgb(255 0 0)");
+  });
+
+  it("skips a type it has no kind for, and says so", () => {
+    const { tokens: read, issues } = dtcgToTokens({
+      curve: { $type: "cubicBezier", $value: [0, 0, 1, 1] },
+    });
+    expect(read).toEqual([]);
+    expect(issues[0]?.message).toContain("cubicBezier");
+  });
+
+  it("keeps another tool's extensions but not its own", () => {
+    const { tokens: read } = dtcgToTokens({
+      brand: {
+        $type: "color",
+        $value: { colorSpace: "srgb", components: [0, 0, 0], hex: "#000000" },
+        $extensions: {
+          "com.figma.thing": { id: 7 },
+          [NEXTLY_EXTENSION]: { css: { light: "#000" }, kind: "color" },
+        },
+      },
+    });
+    expect(read[0]?.extensions).toEqual({ "com.figma.thing": { id: 7 } });
+    // Its own key is consumed rather than carried, or every round trip would
+    // nest one copy inside the next.
+    expect(read[0]?.extensions?.[NEXTLY_EXTENSION]).toBeUndefined();
+  });
+
+  it("refuses a document that is not one", () => {
+    expect(dtcgToTokens("nope").issues).toHaveLength(1);
+    expect(dtcgToTokens(null).tokens).toEqual([]);
+  });
+});
+
+describe("the round trip", () => {
+  it("reads back exactly what it wrote", () => {
+    const original: SiteToken[] = [
+      {
+        name: "color.primary",
+        kind: "color",
+        values: { light: "#2563eb", dark: "#60a5fa" },
+      },
+      { name: "space.4", kind: "dimension", values: { light: "1rem" } },
+      { name: "font.body", kind: "fontFamily", values: { light: "system-ui" } },
+      { name: "font.heavy", kind: "fontWeight", values: { light: "700" } },
+      { name: "motion.fast", kind: "duration", values: { light: "150ms" } },
+      {
+        name: "scale.ratio",
+        kind: "number",
+        values: { light: "1.5" },
+        description: "Type scale.",
+      },
+    ];
+    const { document, issues } = tokensToDtcg(tokens(original));
+    expect(issues).toEqual([]);
+    const { tokens: read } = dtcgToTokens(document);
+    expect(read).toEqual(original);
+  });
+
+  it("survives the exact values DTCG could not have expressed", () => {
+    // The point of carrying the CSS in the extension: `#2563eb` exports as
+    // components and comes back as the string that was written, not as an
+    // arithmetically equivalent `rgb()`.
+    const original: SiteToken[] = [
+      {
+        name: "brand",
+        kind: "color",
+        values: { light: "rgb(37 99 235 / 0.5)" },
+      },
+    ];
+    const { document } = tokensToDtcg(tokens(original));
+    expect(dtcgToTokens(document).tokens).toEqual(original);
+  });
+
+  it("does not accumulate its own extension over repeated trips", () => {
+    const original: SiteToken[] = [
+      { name: "brand", kind: "color", values: { light: "#000000" } },
+    ];
+    let carried = original;
+    for (let pass = 0; pass < 3; pass++) {
+      carried = dtcgToTokens(tokensToDtcg(tokens(carried)).document).tokens;
+    }
+    expect(carried).toEqual(original);
+  });
+});
