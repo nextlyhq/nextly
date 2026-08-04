@@ -23,6 +23,7 @@ describe("resolveAuditRetentionConfig", () => {
     // Not the default, which is SHORTER — substituting it would delete what the
     // configuration asked to retain. A window past the range is a request to
     // keep essentially everything, and `false` is how that is expressed.
+    // Past the 1970 floor of the narrowest column a cutoff is compared against.
     const millennia = 2000 * 365 * 24 * 60 * 60 * 1000;
     const resolved = resolveAuditRetentionConfig({
       activityMaxAgeMs: millennia,
@@ -56,12 +57,12 @@ describe("resolveAuditRetentionConfig", () => {
     ).toBe(DEFAULT_AUDIT_RETENTION_INTERVAL_MS);
   });
 
-  it("keeps a long window that a date can still represent", () => {
+  it("keeps a long window every column can still store", () => {
     // The bound is representability, not taste. Substituting the default for a
     // valid window would be worse than honouring it: the default is SHORTER, so
     // a configuration asking to keep decades would have them deleted on the
     // first pass.
-    const century = 101 * 365 * 24 * 60 * 60 * 1000;
+    const century = 40 * 365 * 24 * 60 * 60 * 1000;
     expect(
       resolveAuditRetentionConfig({ activityMaxAgeMs: century })
         .activityMaxAgeMs

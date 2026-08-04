@@ -69,22 +69,22 @@ export interface ResolvedAuditRetentionConfig {
 }
 
 /**
- * The largest offset whose resulting date every supported database can store.
+ * The largest offset whose resulting date every supported column can store.
  *
  * A window is subtracted from now to form a cutoff, and an interval likewise,
- * so both are bounded by what the column receiving them can hold. `Date` is the
- * looser limit at ±8.64e15 ms; MySQL `DATETIME` starts at 1000-01-01 and
- * rejects anything earlier under strict mode, which is the narrower one and so
- * the one that binds. An offset past it fails on every run and is swallowed,
- * leaving the trail unpruned while its configuration reads as accepted — the
- * same silent no-op as `Number.MAX_SAFE_INTEGER`, arrived at through a stricter
- * door.
+ * so both are bounded by the narrowest column that receives one. That is not
+ * `Date` (±8.64e15 ms) and not MySQL `DATETIME` (from year 1000): it is MySQL
+ * `TIMESTAMP`, which `activity_log.created_at` uses and which **starts at
+ * 1970**. A cutoff before then is rejected under strict mode, so the pass fails
+ * on every run and is swallowed — the trail unpruned while its configuration
+ * reads as accepted.
  *
- * A thousand years is the conservative form of that limit: any clock later than
- * the year 2000 minus this offset lands after 1000-01-01, so it holds without
- * consulting the current time.
+ * Fifty years is the conservative form: any clock later than 2020 minus this
+ * offset lands after 1970, so it holds without consulting the current time. It
+ * is also past the point of meaning — a window longer than the epoch itself can
+ * select nothing, because no row can be older than the time it measures from.
  */
-const MAX_STORABLE_OFFSET_MS = 1000 * 365 * DAY_MS;
+const MAX_STORABLE_OFFSET_MS = 50 * 365 * DAY_MS;
 
 function maxAge(value: MaxAge | undefined, fallback: number): MaxAge {
   if (value === false) return false;

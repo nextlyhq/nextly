@@ -181,6 +181,22 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
       (auditPolicy.activityMaxAgeMs !== false ||
         auditPolicy.authMaxAgeMs !== false);
 
+    // The audit turn is claimed BEFORE the webhook sweep runs, so the sweep's
+    // budget can be decided from whether a second pass will actually follow.
+    // Halving for a pass that is not due leaves the other half unusable until
+    // the next interval — the gate is claimed by then — so a ledger needing
+    // more than half a budget would grow while time sat idle. Claiming is two
+    // statements; running is where the time goes, and that still happens below
+    // in the original order.
+    const auditTurn =
+      auditPrunes && !deadlineSpent()
+        ? await claimRetentionPass(
+            retention.gate,
+            AUDIT_RETENTION_DRAIN_GATE_KEY,
+            auditPolicy!.intervalMs
+          )
+        : false;
+
     const webhookPolicy = retention.policy;
     if (webhookPolicy && !deadlineSpent()) {
       const due = await claimRetentionPass(
@@ -209,7 +225,7 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
             // for a sweep that will not run leaves the unclaimable half unused
             // until the next interval, so a ledger needing more than half a
             // budget per interval would grow while time sat idle.
-            deadline: auditPrunes ? halfOfRemaining(deadline, now) : deadline,
+            deadline: auditTurn ? halfOfRemaining(deadline, now) : deadline,
           },
           webhookPolicy
         );
@@ -231,12 +247,8 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
     // platform's limit and have it killed, losing the drain's own work with it.
     // The gate is not claimed in that case either, so the pass is deferred to
     // the next invocation rather than consumed by one that could not run it.
-    if (auditPrunes && !deadlineSpent()) {
-      const auditDue = await claimRetentionPass(
-        retention.gate,
-        AUDIT_RETENTION_DRAIN_GATE_KEY,
-        auditPolicy!.intervalMs
-      );
+    if (auditTurn) {
+      const auditDue = true;
       // Re-checked after the claim, not only before it: the claim is two
       // statements against the database and can itself spend what remained. A
       // pass that prunes nothing has still written the marker, which holds the

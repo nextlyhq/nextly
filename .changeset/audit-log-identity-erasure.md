@@ -112,10 +112,71 @@ fail and roll back:
 
 ```sql
 GRANT UPDATE (ip_address, user_agent, identity_erased_at) ON audit_log TO app_role;
+GRANT DELETE ON audit_log TO app_role;
 ```
 
-Erasing the address and client a deleted account connected from is an UPDATE, and
-it runs inside the deletion's transaction, so a blanket revoke now blocks account
-deletion outright. DELETE stays revoked and every other column stays immutable.
-Deployments that never restricted these grants, and all SQLite deployments, need
-no action.
+Two duties need those grants. Erasing the address and client a deleted account
+connected from is an UPDATE, and it runs inside the deletion's transaction, so a
+blanket revoke blocks account deletion outright. Pruning rows past their window
+is a DELETE, and a role without it fails every pass silently — retention must
+never fail the request that offered it — so the table grows unbounded while the
+setting reads as enforced. Revoke DELETE only together with
+`audit: { retention: { authMaxAgeMs: false } }`, so the configuration says what
+the privileges actually do. Every other column stays immutable. Deployments that
+never restricted these grants, and all SQLite deployments, need no action.
+
+---
+
+Prune the activity and auth trails on a schedule.
+
+**This deletes data the first time it runs.** Set the windows before you deploy
+if you need longer ones.
+
+Neither trail has ever actually been pruned. `activity_log` has claimed a 90-day
+policy in its own schema comment since it was introduced, but the cleanup that
+comment named was never called from anywhere — and could not have worked if it
+had been, because it referenced a column that does not resolve and its failure
+would have been swallowed. Installs are therefore carrying every row ever
+written, while the schema said otherwise. `audit_log` never promised anything
+and grew unbounded too.
+
+Both are pruned now, and the first pass removes everything already past its
+window:
+
+- `activity_log` — content activity, who changed what — **90 days**
+- `audit_log` — sign-ins, password changes, role grants — **180 days**
+
+90 for content activity is what the comparable self-hosted CMSes default to, and
+180 for auth events is what GitHub and Atlassian Cloud retain: security
+questions are asked later than editorial ones, because a compromise is usually
+noticed well after the sign-in that caused it.
+
+To keep more, configure it **before** upgrading:
+
+```ts
+export default defineConfig({
+  audit: {
+    retention: {
+      activityMaxAgeMs: 365 * 24 * 60 * 60 * 1000,
+      authMaxAgeMs: false, // keep auth history forever
+    },
+  },
+});
+```
+
+Each window is independent, so bounding the high-volume feed while keeping
+security history indefinitely is one setting rather than a compromise.
+`audit: { retention: false }` keeps everything, as today.
+
+Passes run opportunistically off content writes, at most one per interval,
+batched, and never fail the write that offered them. Batching matters on the
+first run in particular: an install that has never pruned faces every row it has
+ever written, and an unbounded `DELETE` there would take a long lock on the
+largest table at the worst possible moment.
+
+Scheduling is now shared rather than duplicated. The gate, interval and
+never-throw wrapper that webhook retention already used are a general mechanism,
+so audit retention registers a pass with it instead of introducing a second one.
+Each pass is gated on its own key: a single shared marker would let whichever
+pass ran first consume the interval for the others, and the busier domain would
+starve the rest indefinitely.
