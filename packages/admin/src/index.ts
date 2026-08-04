@@ -160,6 +160,8 @@ export {
   FieldOptionsEditor,
   withOptionIds,
   usePluginFieldTypeEntries,
+  // Reads a plugin's own PUBLIC config from admin metadata; see
+  // `usePluginClientConfig`.
   usePluginClientConfig,
   ConditionRow,
   operatorsForType,

@@ -54,12 +54,16 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) =>
   definePlugin({
     name: "@nextlyhq/plugin-page-builder",
     version: PLUGIN_VERSION,
-    // `blocks()` builds its field with `pluginField`, which core first exports
-    // in alpha.49. Against an earlier core that import resolves to `undefined`
-    // and every `blocks()` call throws while the config is evaluated, so the
-    // floor states the version carrying the API rather than the one this plugin
-    // was first published against.
-    nextly: ">=0.0.2-alpha.49",
+    // The floor states the version carrying the APIs this plugin needs, not the
+    // one it was first published against. Two of them: `blocks()` builds its
+    // field with `pluginField`, which core first exports in alpha.49 — against
+    // an earlier core that import resolves to `undefined` and every `blocks()`
+    // call throws while the config is evaluated. And `contributes.admin.
+    // clientConfig` is the transport `remotePatterns` reaches the editor
+    // through, added in alpha.52; an older core validates the plugin happily
+    // and simply does not serialize the field, so the canvas would keep the
+    // empty allowlist this exists to fix, with nothing to say why.
+    nextly: ">=0.0.2-alpha.52",
     // Identity metadata for the admin plugins page, mirroring package.json.
     author: "Nextly",
     homepage: "https://nextlyhq.com",
