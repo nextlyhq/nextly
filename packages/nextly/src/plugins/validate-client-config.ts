@@ -22,7 +22,7 @@ import type { PluginDefinition } from "./plugin-context";
  * {@link jsonOnly}, which compares the whole value — a nested offender makes
  * its top-level key the one worth naming.
  */
-function unserializableKeys(value: Record<string, unknown>): string[] {
+function unserializableKeys(value: object): string[] {
   // Enumeration itself can throw: reading an entry evaluates a getter, and a
   // getter that throws would escape from the DIAGNOSTIC path — turning a
   // reportable configuration error into a raw exception from the one function
@@ -35,18 +35,19 @@ function unserializableKeys(value: Record<string, unknown>): string[] {
   }
   return keys.filter(key => {
     try {
-      const encoded = JSON.stringify(value[key]);
+      // `Reflect.get` rather than an index assertion: the declared type is
+      // `object`, and reading a property is exactly what this needs to do.
+      const property: unknown = Reflect.get(value, key);
+      const encoded = JSON.stringify(property);
       if (encoded === undefined) return true;
-      return !sameShape(value[key], JSON.parse(encoded));
+      return !sameShape(property, JSON.parse(encoded));
     } catch {
       return true;
     }
   });
 }
 
-function jsonOnly(
-  value: Record<string, unknown>
-): Record<string, unknown> | undefined {
+function jsonOnly(value: object): Record<string, unknown> | undefined {
   // The declared type promises a record and the runtime may not deliver one: a
   // JavaScript host can pass `null`, an array or a primitive, all of which
   // round-trip perfectly and would publish a `clientConfig` that every reader
@@ -120,7 +121,14 @@ function sameShape(before: unknown, after: unknown): boolean {
   // symbol property on is still refused.
   const carried = keys.length + (Array.isArray(a) ? 1 : 0);
   if (Reflect.ownKeys(a).length !== carried) return false;
-  if (keys.length !== Object.keys(b).length) return false;
+  // The key SETS, not their sizes. A sparse array with an extra enumerable
+  // property has the same COUNT on both sides — JSON drops the property and
+  // materialises the hole as `null` — so counting alone reads a rearranged
+  // array as unchanged.
+  const decodedKeys = Object.keys(b);
+  if (keys.length !== decodedKeys.length) return false;
+  const inDecoded = new Set(decodedKeys);
+  if (!keys.every(key => inDecoded.has(key))) return false;
   return keys.every(key => sameShape(a[key], b[key]));
 }
 
@@ -135,6 +143,9 @@ export function validatedClientConfig(
 ): Record<string, unknown> | undefined {
   const declared = plugin.contributes?.admin?.clientConfig;
   if (declared === undefined) return undefined;
+  // Declared as `object` so an author's ordinary interface is accepted at the
+  // call site; the runtime check below is what decides, and it refuses
+  // anything that is not a plain JSON object.
   const serializable = jsonOnly(declared);
   if (serializable === undefined) {
     throw clientConfigError(plugin.name, unserializableKeys(declared));

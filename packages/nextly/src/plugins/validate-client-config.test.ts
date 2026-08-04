@@ -134,3 +134,18 @@ describe("a hostile Proxy is still a configuration error", () => {
     expect(() => assertClientConfigs([plugin(hostile)])).toThrow(NextlyError);
   });
 });
+
+describe("a sparse array with an extra property", () => {
+  it("is refused, even though both sides have the same key count", () => {
+    // JSON drops `extra` and materialises the hole as `null`, so the counts
+    // match while the keys do not — index `1` appears on the decoded side and
+    // `extra` disappears. Counting alone reads that as unchanged.
+    const sparse: unknown[] = [];
+    sparse[0] = 1;
+    sparse[2] = 3;
+    (sparse as unknown as Record<string, unknown>).extra = undefined;
+    expect(() => assertClientConfigs([plugin({ list: sparse })])).toThrow(
+      NextlyError
+    );
+  });
+});

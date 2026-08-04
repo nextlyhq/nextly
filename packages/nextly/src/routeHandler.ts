@@ -170,7 +170,9 @@ async function applyGlobalDateFormatting(
     // clearest case — it is promised to arrive exactly as declared, and
     // rewriting `"2026-08-04T12:34Z"` into a normalised, timezone-shifted form
     // breaks that promise for a value this pass cannot know the meaning of.
-    if (url.pathname.endsWith("/admin-meta")) {
+    // Both spellings: a host with Next's `trailingSlash` enabled requests
+    // `/api/admin-meta/`, which `handleGet` still dispatches from `params[0]`.
+    if (/\/admin-meta\/?$/.test(url.pathname)) {
       return response;
     }
   }

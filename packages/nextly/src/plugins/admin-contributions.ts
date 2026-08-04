@@ -233,11 +233,15 @@ export interface PluginAdminContributions {
    * mangled copy. That is the same reason `PluginMenuItem` takes no
    * `visible(ctx)` callback.
    *
-   * Typed loosely on purpose. TypeScript cannot say "JSON-serializable" in a
-   * way an ordinary `interface` satisfies, so a strict type here would reject
-   * correct config and teach the author about index signatures instead of
-   * about serialization. {@link JsonObject} is exported for authors who want
+   * Typed as `object` on purpose, which is as loose as it can usefully be
+   * while still refusing a primitive. TypeScript cannot say
+   * "JSON-serializable" in a way an ordinary `interface` satisfies —
+   * an interface has no implicit index signature, so even
+   * `Record<string, unknown>` rejects one — and a type that rejects correct
+   * config teaches the author about index signatures instead of about
+   * serialization. The exact check belongs at the boundary the value crosses,
+   * where it can be exact. {@link JsonObject} is exported for authors who want
    * to state their own shape precisely.
    */
-  clientConfig?: Record<string, unknown>;
+  clientConfig?: object;
 }
