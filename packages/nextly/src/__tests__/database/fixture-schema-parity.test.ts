@@ -24,11 +24,10 @@ import { nextlyTables } from "./_fixture-schema/unified";
  * `name`, `label`, `icon` and `schema_definition`, none of which the real table
  * has had for a long time.
  *
- * They are exempted rather than rewritten because the fixture emits CREATE
- * TABLE for a single helper test, so correcting them is schema archaeology with
- * no consumer asking for it, and it does not belong in a change about the audit
- * log. The list may only ever SHRINK: a table not named here is checked, so
- * nothing new can join it without deleting a line from this file.
+ * They are exempted rather than corrected because the fixture emits CREATE TABLE
+ * for one helper test that asserts a table is selectable, so no consumer reads
+ * the columns these tables declare. The list may only ever SHRINK: a table not
+ * named here is checked, so nothing can join it without deleting a line here.
  */
 const PREDATES_THIS_CHECK = new Set([
   "users",

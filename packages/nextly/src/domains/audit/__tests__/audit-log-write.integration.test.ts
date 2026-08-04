@@ -195,6 +195,17 @@ describe("projectAuditMetadata", () => {
     });
   });
 
+  it("drops a strategy's own text while keeping that it failed", () => {
+    // A strategy failing is a fact this package states; the words the strategy
+    // chose are its own, and travel under a key the trail does not retain.
+    expect(
+      projectAuditMetadata({
+        reason: "strategy-fail",
+        strategyReason: "no SAML assertion for ada@example.com",
+      })
+    ).toEqual({ reason: "strategy-fail" });
+  });
+
   it("keeps nothing when the context is only identifiers", () => {
     // Default-deny: a key nobody listed is dropped, so a field added for
     // logging cannot silently become a new column of the audit trail.
@@ -290,6 +301,24 @@ describe("auditFailureMetadata", () => {
       code: "AUTH_INVALID_CREDENTIALS",
       reason: "password-mismatch",
     });
+  });
+
+  it("replaces a code that only the prototype chain would supply", () => {
+    // `in` accepts these; they are not entries in the canonical table, and the
+    // value is chosen by whoever threw the error.
+    for (const code of [
+      "constructor",
+      "toString",
+      "__proto__",
+      "hasOwnProperty",
+    ]) {
+      expect(
+        auditFailureMetadata(
+          new NextlyError({ code, publicMessage: "Invalid email or password." })
+        )
+      ).toEqual({ code: "INTERNAL_ERROR" });
+    }
+    expect(projectAuditMetadata({ originalCode: "constructor" })).toEqual({});
   });
 
   it("reports a non-NextlyError as an internal failure", () => {

@@ -117,10 +117,18 @@ export async function handleLogin(
       // (same wire shape + stall + audit as the legacy missing-credentials leg).
       throw NextlyError.invalidCredentials({
         logContext: {
+          // The reason a strategy explicitly failed is ours to state, so the
+          // recorded event keeps that fact. A strategy is application code and
+          // its own text is free-form, so it travels under a separate key that
+          // reaches the operator log and stops there rather than displacing
+          // the one value the audit trail is allowed to retain.
           reason:
             outcome.type === "fail"
-              ? (outcome.reason ?? auditReason("strategy-fail"))
+              ? auditReason("strategy-fail")
               : auditReason("no-strategy-matched"),
+          ...(outcome.type === "fail" && outcome.reason !== undefined
+            ? { strategyReason: outcome.reason }
+            : {}),
         },
       });
     }

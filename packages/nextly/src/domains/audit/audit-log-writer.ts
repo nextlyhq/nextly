@@ -85,9 +85,18 @@ function isRetainableValue(
   return isCanonicalErrorCode(value);
 }
 
-/** Whether a value names a code the canonical status table defines. */
+/**
+ * Whether a value names a code the canonical status table defines.
+ *
+ * Own properties only. `in` walks the prototype chain, so `constructor`,
+ * `toString` and `__proto__` would pass a membership test they are not members
+ * of — and the value being tested is chosen by whoever threw the error.
+ */
 function isCanonicalErrorCode(value: unknown): boolean {
-  return typeof value === "string" && value in NEXTLY_ERROR_STATUS;
+  return (
+    typeof value === "string" &&
+    Object.prototype.hasOwnProperty.call(NEXTLY_ERROR_STATUS, value)
+  );
 }
 
 /**

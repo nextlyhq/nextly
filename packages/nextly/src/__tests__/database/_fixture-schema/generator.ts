@@ -64,6 +64,7 @@ const TYPE_MAPPINGS: Record<SupportedDialect, Record<string, string>> = {
     boolean: "BOOLEAN",
     timestamp: "TIMESTAMP",
     timestamptz: "TIMESTAMPTZ",
+    datetime: "TIMESTAMP",
     date: "DATE",
     time: "TIME",
     jsonb: "JSONB",
@@ -86,6 +87,10 @@ const TYPE_MAPPINGS: Record<SupportedDialect, Record<string, string>> = {
     boolean: "TINYINT(1)",
     timestamp: "TIMESTAMP",
     timestamptz: "TIMESTAMP", // MySQL doesn't have separate timestamptz
+    // A nullable TIMESTAMP can be rewritten to NOT NULL DEFAULT
+    // CURRENT_TIMESTAMP when explicit_defaults_for_timestamp is off, which
+    // would make a never-stamped row read as stamped. DATETIME cannot be.
+    datetime: "DATETIME",
     date: "DATE",
     time: "TIME",
     jsonb: "JSON", // MySQL has JSON but not JSONB
@@ -108,6 +113,7 @@ const TYPE_MAPPINGS: Record<SupportedDialect, Record<string, string>> = {
     boolean: "INTEGER", // SQLite uses 0/1 for boolean
     timestamp: "TEXT", // SQLite stores timestamps as TEXT (ISO8601)
     timestamptz: "TEXT",
+    datetime: "TEXT",
     date: "TEXT",
     time: "TEXT",
     jsonb: "TEXT", // SQLite stores JSON as TEXT
