@@ -18,6 +18,11 @@ import type {
 } from "@nextlyhq/adapter-drizzle/types";
 
 import type { RequestActor } from "../../auth/request-actor";
+import type {
+  ActivityLogAction,
+  ActivityWriteDb,
+} from "../../services/dashboard/activity-log-service";
+import { recordMutationActivity } from "../audit/record-activity";
 
 import { buildEnvelope } from "./envelope";
 import {
@@ -138,10 +143,53 @@ function prepareMutationEnvelope(args: RecordMutationEventArgs): {
   };
 }
 
+/**
+ * The activity action one event type stands for, or undefined when it stands
+ * for none.
+ *
+ * Only the three primary entry events map. The lifecycle events
+ * (`entry.published` and its siblings) and a collection's curated event
+ * accompany one of them for the SAME write, so mapping those too would file one
+ * change as several. Singles are absent deliberately: the trail's scope column
+ * is read as a collection slug by everything that renders it, and a single's
+ * slug there would resolve to a collection that does not exist.
+ */
+const ACTIVITY_ACTIONS: Partial<Record<WebhookEventType, ActivityLogAction>> = {
+  "entry.created": "create",
+  "entry.updated": "update",
+  "entry.deleted": "delete",
+};
+
+/**
+ * Record the mutation's activity entry, ahead of the outbox gates.
+ *
+ * Deliberately BEFORE them: the outbox is delivery infrastructure and an
+ * install with no endpoints records nothing there, while the trail answers who
+ * changed what and has to hold whether or not anyone subscribed. Gating the two
+ * together would make an install's audit history a side effect of whether it
+ * happened to use webhooks.
+ */
+async function recordActivity(
+  db: () => ActivityWriteDb,
+  args: RecordMutationEventArgs
+): Promise<void> {
+  const action = ACTIVITY_ACTIONS[args.type];
+  if (!action || args.resource.kind !== "entry") return;
+  await recordMutationActivity(db, {
+    action,
+    collection: args.resource.collection,
+    ...(args.resource.id !== undefined ? { entryId: args.resource.id } : {}),
+    data: args.data,
+    previous: args.previous ?? null,
+    actor: args.actor ?? null,
+  });
+}
+
 export async function recordMutationEvent(
   tx: TransactionContext,
   args: RecordMutationEventArgs
 ): Promise<boolean> {
+  await recordActivity(() => tx.getDrizzle(), args);
   const prepared = prepareMutationEnvelope(args);
   if (!prepared) return false;
   await recordEvent(tx, prepared);
@@ -160,6 +208,11 @@ export async function recordMutationEventInTx(
   dialect: SupportedDialect,
   args: RecordMutationEventArgs
 ): Promise<boolean> {
+  // Widened, not converted: the value IS a dialect-specific Drizzle
+  // transaction, whose generic builder types do not structurally match the
+  // minimal read/write surface the activity write is written against. The
+  // service casts its own handle for the same reason.
+  await recordActivity(() => tx as unknown as ActivityWriteDb, args);
   const prepared = prepareMutationEnvelope(args);
   if (!prepared) return false;
   await recordEventInTx(tx, dialect, prepared);

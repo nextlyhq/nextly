@@ -134,7 +134,7 @@ function stripSensitive(
  * considered changed, so a changed-field filter still matches a create that
  * sets the field.
  */
-function computeChangedFields(
+export function computeChangedFields(
   previous: Record<string, unknown> | null,
   next: Record<string, unknown>
 ): string[] {

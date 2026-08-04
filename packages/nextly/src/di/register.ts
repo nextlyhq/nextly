@@ -83,7 +83,6 @@ import type { WebhookEndpointService } from "../domains/webhooks/services/webhoo
 import { publishStoredWebhookRecordingPolicies } from "../domains/webhooks/stored-recording-policy";
 import { getEventBus } from "../events/event-bus";
 import type { FieldGroupConfig } from "../field-groups/config/types";
-import { registerActivityLogHooks } from "../hooks/activity-log-hooks";
 import type { HookRegistry } from "../hooks/hook-registry";
 import {
   getActiveHookRegistry,
@@ -921,9 +920,6 @@ export async function registerServices(
     resolvedLogger.info?.(
       `Input sanitization hook registered (enabled: ${transformedConfig.security?.sanitization?.enabled !== false})`
     );
-
-    registerActivityLogHooks(hookRegistry);
-    resolvedLogger.info?.("Activity log hooks registered");
 
     // Registered after plugins initialize, because a hook may reach the Direct
     // API through `req.nextly` and that binding does not exist until service
