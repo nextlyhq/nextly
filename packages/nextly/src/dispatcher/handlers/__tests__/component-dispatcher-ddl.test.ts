@@ -20,6 +20,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../../helpers/di", () => ({
   getComponentRegistryFromDI: vi.fn(),
   getAdapterFromDI: vi.fn(),
+  // Reached by the companion reconciliation a localized create runs. Omitted, calling it throws and
+  // the handler catches that as a companion-provisioning failure — so the assertions below would
+  // describe a FAILED migration while passing.
+  getConfigFromDI: vi.fn(() => undefined),
 }));
 
 const executed: string[] = [];
@@ -33,7 +37,11 @@ function makeAdapter(dialect: "postgresql" | "mysql" | "sqlite") {
   return {
     dialect,
     getCapabilities: () => ({ dialect }),
-    tableExists: vi.fn().mockResolvedValue(true),
+    // Answers the way a fresh create finds the database: the main table is there once its CREATE
+    // has run, and the companion is NOT — so the companion path CREATEs it rather than altering
+    // one that does not exist. A blanket `true` here made the companion look pre-existing, which
+    // is not a state a create ever starts from.
+    tableExists: vi.fn(async (name: string) => !name.includes("_locales")),
     executeQuery: vi.fn(async (sql: string) => {
       executed.push(sql);
       return [];
@@ -120,8 +128,8 @@ describe("createComponent — what the request forwards into the DDL", () => {
    * companion holding nothing — and every generator snapshot still passes, because they are called
    * with `localized` spelled out.
    */
-  it("omits translatable columns from the main table when localized", async () => {
-    const sql = await ddlFor({
+  it("moves translatable columns to the companion, not the main table", async () => {
+    await ddlFor({
       ...base,
       localized: true,
       fields: [
@@ -130,9 +138,29 @@ describe("createComponent — what the request forwards into the DDL", () => {
       ],
     });
 
-    expect(sql).not.toContain("heading");
+    // Scoped to the statement that creates each table. Asserting over ALL the SQL cannot express
+    // this: the companion's own CREATE legitimately names the translatable column, so a bare
+    // "the SQL does not mention heading" is either wrong or passes only because the companion
+    // never ran — which is what happened before `getConfigFromDI` was mocked.
+    const mainCreate = executed.find(
+      s =>
+        s.includes("CREATE TABLE") &&
+        s.includes("comp_hero") &&
+        !s.includes("_locales")
+    );
+    const companionCreate = executed.find(
+      s => s.includes("CREATE TABLE") && s.includes("comp_hero_locales")
+    );
+
+    expect(mainCreate, "the main table is created").toBeDefined();
+    expect(companionCreate, "the companion is created").toBeDefined();
+
+    expect(mainCreate).not.toContain("heading");
     // The non-translatable field stays on the main table.
-    expect(sql).toContain("weight");
+    expect(mainCreate).toContain("weight");
+    // And the translatable one is on the companion — the half that proves it MOVED rather than
+    // simply being dropped.
+    expect(companionCreate).toContain("heading");
   });
 
   /**

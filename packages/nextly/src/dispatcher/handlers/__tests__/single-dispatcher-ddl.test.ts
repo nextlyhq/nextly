@@ -21,6 +21,10 @@ vi.mock("../../helpers/di", () => ({
   getSingleEntryServiceFromDI: vi.fn(),
   getComponentRegistryFromDI: vi.fn().mockReturnValue(undefined),
   getAdapterFromDI: vi.fn(),
+  // Reached by the companion reconciliation a localized create runs. Omitted, calling it throws and
+  // the handler catches that as a companion-provisioning failure — so the assertions below would
+  // describe a FAILED migration while passing.
+  getConfigFromDI: vi.fn(() => undefined),
 }));
 
 const executed: string[] = [];
@@ -37,7 +41,11 @@ function makeAdapter(dialect: "postgresql" | "mysql" | "sqlite") {
   return {
     dialect,
     getCapabilities: () => ({ dialect }),
-    tableExists: vi.fn().mockResolvedValue(true),
+    // Answers the way a fresh create finds the database: the main table is there once its CREATE
+    // has run, and the companion is NOT — so the companion path CREATEs it rather than altering
+    // one that does not exist. A blanket `true` here made the companion look pre-existing, which
+    // is not a state a create ever starts from.
+    tableExists: vi.fn(async (name: string) => !name.includes("_locales")),
     executeQuery: vi.fn(async (sql: string) => {
       executed.push(sql);
       return [];
@@ -158,11 +166,29 @@ describe("createSingle — what the request forwards into the DDL", () => {
       ],
     };
 
-    const sql = await ddlFor(localized);
+    await ddlFor(localized);
 
-    expect(sql).not.toContain("body");
+    // Scoped to the statement that creates each table. The companion's own CREATE legitimately
+    // names the translatable column, so asserting over all the SQL either contradicts that or
+    // passes only because the companion never ran.
+    const mainCreate = executed.find(
+      s =>
+        s.includes("CREATE TABLE") &&
+        s.includes("single_page") &&
+        !s.includes("_locales")
+    );
+    const companionCreate = executed.find(
+      s => s.includes("CREATE TABLE") && s.includes("single_page_locales")
+    );
+
+    expect(mainCreate, "the main table is created").toBeDefined();
+    expect(companionCreate, "the companion is created").toBeDefined();
+
+    expect(mainCreate).not.toContain("body");
     // The non-translatable field stays on the main table.
-    expect(sql).toContain("views");
+    expect(mainCreate).toContain("views");
+    // And the translatable one is on the companion — proving it MOVED rather than was dropped.
+    expect(companionCreate).toContain("body");
   });
 
   /**
