@@ -91,10 +91,22 @@ function sourceFiles(dir: string = SRC_DIR): string[] {
  */
 function runtimeImports(file: string): string[] {
   const raw = readFileSync(file, "utf8");
-  // Block comments become a single space so a comment sitting between tokens
-  // cannot hide a call from the matchers below, while token boundaries the
-  // patterns rely on are preserved.
-  const source = raw.replace(/\/\*[\s\S]*?\*\//g, " ");
+  // Comments become a single space so one sitting between tokens cannot hide a
+  // call from the matchers below, while the token boundaries the patterns rely
+  // on are preserved. Both forms are legal between `import` and its
+  // parenthesis, so both must go:
+  //
+  //   import /* annotation */ ("next/headers")
+  //   import // annotation
+  //   ("next/headers")
+  //
+  // String literals are left intact deliberately. A `//` inside a specifier is
+  // part of a URL, not a comment, and stripping it would corrupt the very
+  // value being checked; the cost is that a `//` inside a string could mask a
+  // later call on the same line, which no import statement produces.
+  const source = raw
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .replace(/(^|[^:"'`\\])\/\/[^\n]*/g, "$1 ");
   const specifiers: string[] = [];
 
   // `from "..."` in an import/export statement, and bare `import "..."`.
