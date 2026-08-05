@@ -10,6 +10,7 @@ const PG_COLS = {
       udt_name: "int4",
       is_nullable: "NO",
       column_default: null,
+      is_primary_key: true,
     },
     {
       table_name: "dc_posts",
@@ -17,6 +18,7 @@ const PG_COLS = {
       udt_name: "text",
       is_nullable: "YES",
       column_default: null,
+      is_primary_key: false,
     },
     {
       table_name: "dc_posts",
@@ -24,6 +26,7 @@ const PG_COLS = {
       udt_name: "varchar",
       is_nullable: "NO",
       column_default: "'draft'::character varying",
+      is_primary_key: false,
     },
   ],
 };
@@ -52,7 +55,13 @@ describe("introspectLiveSnapshot - postgresql", () => {
 
     expect(execute).toHaveBeenCalledTimes(2);
     expect(snapshot.tables[0].columns).toEqual([
-      { name: "id", type: "int4", nullable: false, default: undefined },
+      {
+        name: "id",
+        type: "int4",
+        nullable: false,
+        default: undefined,
+        primaryKey: true,
+      },
       { name: "title", type: "text", nullable: true, default: undefined },
       {
         name: "status",
@@ -99,6 +108,7 @@ describe("introspectLiveSnapshot - mysql", () => {
             COLUMN_TYPE: "int(11)",
             IS_NULLABLE: "NO",
             COLUMN_DEFAULT: null,
+            COLUMN_KEY: "PRI",
           },
         ],
         [],
@@ -124,6 +134,7 @@ describe("introspectLiveSnapshot - mysql", () => {
       type: "int(11)",
       nullable: false,
       default: undefined,
+      primaryKey: true,
     });
     expect(snapshot.tables[0].indexes).toEqual([
       { name: "idx_dc_posts_views", columns: ["views"], unique: false },
@@ -138,8 +149,22 @@ describe("introspectLiveSnapshot - sqlite", () => {
       .fn()
       // table_info(dc_posts)
       .mockReturnValueOnce([
-        { cid: 0, name: "id", type: "INTEGER", notnull: 1, dflt_value: null, pk: 1 },
-        { cid: 1, name: "slug", type: "TEXT", notnull: 0, dflt_value: null, pk: 0 },
+        {
+          cid: 0,
+          name: "id",
+          type: "INTEGER",
+          notnull: 1,
+          dflt_value: null,
+          pk: 1,
+        },
+        {
+          cid: 1,
+          name: "slug",
+          type: "TEXT",
+          notnull: 0,
+          dflt_value: null,
+          pk: 0,
+        },
       ])
       // index_list(dc_posts): one real unique index + one autoindex (filtered)
       .mockReturnValueOnce([
@@ -153,7 +178,13 @@ describe("introspectLiveSnapshot - sqlite", () => {
     const snapshot = await introspectLiveSnapshot(db, "sqlite", ["dc_posts"]);
 
     expect(snapshot.tables[0].columns).toEqual([
-      { name: "id", type: "integer", nullable: false, default: undefined },
+      {
+        name: "id",
+        type: "integer",
+        nullable: false,
+        default: undefined,
+        primaryKey: true,
+      },
       { name: "slug", type: "text", nullable: true, default: undefined },
     ]);
     expect(snapshot.tables[0].indexes).toEqual([

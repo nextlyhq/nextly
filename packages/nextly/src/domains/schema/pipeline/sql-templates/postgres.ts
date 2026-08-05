@@ -21,14 +21,13 @@ import type {
   RenameTableOp,
 } from "../diff/types";
 
+import { columnDefinition, createTableBody } from "./create-table-body";
 import { quoteIdent } from "./identifier-quoting";
 
 const q = (n: string) => quoteIdent(n, "postgresql");
 
 function columnDef(c: ColumnSpec): string {
-  const nullable = c.nullable ? "" : " NOT NULL";
-  const def = c.default !== undefined ? ` DEFAULT ${c.default}` : "";
-  return `${q(c.name)} ${c.type}${nullable}${def}`;
+  return columnDefinition(c, q);
 }
 
 export function generatePgSQL(op: Operation): string {
@@ -79,7 +78,7 @@ function generateDropIndex(op: DropIndexOp): string {
 }
 
 function generateAddTable(op: AddTableOp): string {
-  const cols = op.table.columns.map(c => `  ${columnDef(c)}`).join(",\n");
+  const cols = createTableBody(op.table, q);
   const createTable = `CREATE TABLE ${q(op.table.name)} (\n${cols}\n)`;
   // Render the table's tracked indexes as separate statements after CREATE
   // TABLE. When `indexes` is undefined (pre-C1 sentinel) none are emitted.

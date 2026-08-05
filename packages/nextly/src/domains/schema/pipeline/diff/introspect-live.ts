@@ -77,6 +77,7 @@ interface PgRow {
   is_nullable: "YES" | "NO";
   column_default: string | null;
   owned_sequence_default: boolean;
+  is_primary_key: boolean;
 }
 
 interface MysqlRow {
@@ -85,6 +86,7 @@ interface MysqlRow {
   COLUMN_TYPE: string;
   IS_NULLABLE: "YES" | "NO";
   COLUMN_DEFAULT: string | null;
+  COLUMN_KEY: string;
 }
 
 interface MysqlIndexRow {
@@ -154,9 +156,27 @@ export async function introspectLiveSnapshot(
     // that is not exactly a `nextval()` call yields NULL from the substring
     // and so falls to false, which is the safe direction: a default the diff
     // does not recognise is reported, never swallowed.
+    // `is_primary_key` comes from `pg_index.indisprimary` rather than
+    // `information_schema.table_constraints`, so it needs no second round trip
+    // and reports the same key the index query deliberately excludes. A live
+    // snapshot without it renders a key-less `CREATE TABLE` in any statement
+    // generated from it, which is how an adopted database rebuilt elsewhere
+    // ended up with no primary keys at all.
     const result = (await dbTyped.execute(
       sql`SELECT c.table_name, c.column_name, c.udt_name, c.is_nullable,
                  c.column_default,
+                 EXISTS (
+                   SELECT 1
+                   FROM pg_index i
+                   JOIN pg_class t ON t.oid = i.indrelid
+                   JOIN pg_namespace n ON n.oid = t.relnamespace
+                   JOIN pg_attribute a
+                     ON a.attrelid = t.oid AND a.attnum = ANY(i.indkey)
+                   WHERE i.indisprimary
+                     AND n.nspname = c.table_schema
+                     AND t.relname = c.table_name
+                     AND a.attname = c.column_name
+                 ) AS is_primary_key,
                  COALESCE(
                    substring(
                      c.column_default from '^nextval[(]''(.+)''::regclass[)]$'
@@ -217,7 +237,8 @@ export async function introspectLiveSnapshot(
     // mysql2's execute returns a [rows, fieldPackets] tuple; drizzle-orm/mysql2
     // sometimes wraps it. Handle both shapes defensively.
     const result = (await dbTyped.execute(
-      sql`SELECT TABLE_NAME, COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT
+      sql`SELECT TABLE_NAME, COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT,
+                 COLUMN_KEY
           FROM information_schema.columns
           WHERE TABLE_SCHEMA = DATABASE()
             AND TABLE_NAME IN (${tableNamesIn})
@@ -311,6 +332,10 @@ export async function introspectLiveSnapshot(
           // database. Whether requiring such a column is safe is decided from
           // the data, in resolve-safe-nullability.ts.
           nullable: r.notnull === 0,
+          // `pk` is 0 for an ordinary column and the 1-based position within
+          // the key otherwise, so any non-zero value means this column is part
+          // of it. PRAGMA has always returned this; nothing read it.
+          ...(r.pk > 0 ? { primaryKey: true as const } : {}),
           // dflt_value can be string, number, null, or undefined.
           // Coerce primitives to string; treat anything non-primitive as
           // missing (defensive - SQLite never returns object defaults).
@@ -350,6 +375,10 @@ function buildSnapshotFromPgRows(rows: PgRow[]): NextlySchemaSnapshot {
     // Recorded only when true, so a snapshot carries the marker rather than a
     // false on every column that has no sequence at all.
     if (r.owned_sequence_default === true) column.ownedSequenceDefault = true;
+    // Same convention for the key: present when it is one, absent otherwise,
+    // so a snapshot taken before this reads the same as one where the column
+    // is genuinely not part of the key.
+    if (r.is_primary_key === true) column.primaryKey = true;
     cols.push(column);
   }
   return {
@@ -367,12 +396,16 @@ function buildSnapshotFromMysqlRows(rows: MysqlRow[]): NextlySchemaSnapshot {
       cols = [];
       byTable.set(r.TABLE_NAME, cols);
     }
-    cols.push({
+    const column: ColumnSpec = {
       name: r.COLUMN_NAME,
       type: r.COLUMN_TYPE,
       nullable: r.IS_NULLABLE === "YES",
       default: r.COLUMN_DEFAULT ?? undefined,
-    });
+    };
+    // `COLUMN_KEY` is "PRI" for every column of the PRIMARY key, and "UNI" or
+    // "MUL" for other index positions, so only the first is the key itself.
+    if (r.COLUMN_KEY === "PRI") column.primaryKey = true;
+    cols.push(column);
   }
   return {
     tables: [...byTable.entries()].map(
