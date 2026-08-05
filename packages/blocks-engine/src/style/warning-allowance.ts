@@ -38,6 +38,15 @@ export interface WarningAllowance {
    * unexplained because the compiler was busy repeating itself.
    */
   prefixReported: boolean;
+  /**
+   * Whether this run has already carried a style-issue truncation marker.
+   *
+   * The marker is exempt from the allowance on purpose — charged to the bound it describes it is
+   * the first thing dropped, leaving a truncated list looking complete. Exempt AND repeatable is
+   * the other failure: every map that hit its own style budget adds one, so a large class library
+   * answers with thousands of identical markers.
+   */
+  styleIssuesAnnounced: boolean;
 }
 
 /** A fresh allowance for one compile. */
@@ -47,6 +56,7 @@ export function newWarningAllowance(): WarningAllowance {
     pathBytes: MAX_COMPILE_WARNING_PATH_BYTES,
     announced: false,
     prefixReported: false,
+    styleIssuesAnnounced: false,
   };
 }
 
@@ -66,6 +76,15 @@ export function pushBoundedWarning(
   warnings: ValidationIssue[],
   issue: ValidationIssue
 ): void {
+  // Charged BEFORE it is admitted. Charging afterwards makes the byte allowance a running total
+  // rather than a bound: the first warning is always admitted whole, so a single pointer larger
+  // than the whole allowance is returned in full and only then drives the count negative. A
+  // pointer carries its key whole, on purpose, and what keeps that bounded is the document byte
+  // cap — which does not reach a class library or a block-type default, both of them settings
+  // read on every page render. One corrupt key of any size therefore reached the answer intact.
+  if (issue.path.length > allowance.pathBytes) {
+    allowance.pathBytes = 0;
+  }
   if (allowanceSpent(allowance)) {
     if (allowance.announced) return;
     allowance.announced = true;

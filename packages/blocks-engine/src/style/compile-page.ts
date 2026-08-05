@@ -25,16 +25,33 @@ import type {
   NodeStyles,
   StyleState,
 } from "../document";
-import { MAX_BREAKPOINTS_PER_AXIS, STYLE_STATES } from "../document";
+import {
+  MAX_BREAKPOINTS_PER_AXIS,
+  MAX_CLASSES_PER_NODE,
+  MAX_NAMED_CLASSES,
+  STYLE_STATES,
+} from "../document";
 import { describeValue, pointer } from "../issue-text";
 import { DEFAULT_LIMITS } from "../limits";
 import type { DocumentLimits } from "../limits";
 import { isPlainRecord } from "../plain-record";
 import type { ValidationIssue } from "../validation";
 
+import { BREAKPOINT_AXES } from "./breakpoint-axes";
+import type { BreakpointAxis } from "./breakpoint-axes";
 import { escapeIdentifier } from "./css-value";
 import { compileStyleValues, DEFAULT_TOKEN_PREFIX } from "./declarations";
 import type { Declaration } from "./declarations";
+import type { NamedClass } from "./named-class";
+import {
+  isUsableNamedClass,
+  namedClassName,
+  orderedNamedClasses,
+  orderedNamedClassPositions,
+  usableNamedClasses,
+  MAX_NAMED_CLASS_NAME_LENGTH,
+  NAMED_CLASS_SLUG_RE,
+} from "./named-class";
 import {
   blockTypeClassName,
   nodeClassNames,
@@ -61,6 +78,23 @@ export interface StyleCompileContext {
    * improving a block's default look reaches pages that already exist.
    */
   blockBases?: Readonly<Record<string, NodeStyles>>;
+  /**
+   * The site's named classes, in any order.
+   *
+   * Emitted between the block-type defaults and each node's own values, which is where a class
+   * sits in the cascade: it overrides what a block looks like by default and is overridden by
+   * anything the author set on one node. Precedence BETWEEN classes is their library order,
+   * carried on the class itself rather than taken from the order a node lists them in, so two
+   * nodes with the same classes cannot resolve differently.
+   *
+   * "In any order" holds up to `MAX_NAMED_CLASSES`. A library longer than that is read as its
+   * stored PREFIX, before `orderIndex` is consulted, so which entries survive the cap depends on
+   * how they were stored. Ordering first would mean reading the whole array to decide what to
+   * drop, which is the read the cap exists to bound — and a library past it is already data no
+   * site authored. Callers holding more than the cap should store them in the order they want
+   * read.
+   */
+  namedClasses?: readonly NamedClass[];
   /**
    * The custom-property prefix site tokens are emitted under. Configurable
    * because a site's tokens live in the same namespace as everything else on
@@ -91,6 +125,20 @@ export interface StyleCompileContext {
   limits?: DocumentLimits;
 }
 
+/** A library entry's id, for a record that may not have one. */
+function readClassId(value: unknown): unknown {
+  return value === null || typeof value !== "object"
+    ? value
+    : (value as { id?: unknown }).id;
+}
+
+/** A library entry's slug, for a record that may not have one. */
+function readClassSlug(value: unknown): unknown {
+  return value === null || typeof value !== "object"
+    ? value
+    : (value as { slug?: unknown }).slug;
+}
+
 /** A compiled page stylesheet. */
 export interface CompiledPageCss {
   css: string;
@@ -101,11 +149,15 @@ export interface CompiledPageCss {
    */
   warnings: ValidationIssue[];
   /**
-   * The class assigned to each node id.
+   * The classes to put on each node id, space-separated: its own, then every
+   * named class it applies that the stylesheet actually wrote.
    *
    * Returned rather than recomputed by the renderer because two ids can hash
    * alike: only a pass over the whole document sees that, and a renderer that
    * derived the class per node in isolation would give both nodes the same one.
+   * The named classes are here for a second reason — a `.nx-c-*` rule reaches
+   * an element only if the element carries the token, so a renderer applying
+   * this value is what makes that tier do anything at all.
    */
   classes: Map<string, string>;
 }
@@ -140,7 +192,7 @@ interface BreakpointContext {
   id: string;
   atRule?: string;
   /** Which axis this belongs to; visibility bands are computed per axis. */
-  axis?: "viewport" | "container";
+  axis?: BreakpointAxis;
   /** The upper bound, for narrowing a hiding rule that a narrower id undoes. */
   maxWidth?: number;
 }
@@ -192,7 +244,7 @@ function breakpointContexts(set: BreakpointSet): BreakpointContext[] {
   // can never match: kept, its id would count as known, and the styles and
   // hiding stored under it would go missing with nothing reported at all.
   const rawSet: unknown = set;
-  const axisDefs = (axis: "viewport" | "container"): BreakpointDef[] => {
+  const axisDefs = (axis: BreakpointAxis): BreakpointDef[] => {
     const defs = isPlainRecord(rawSet) ? rawSet[axis] : undefined;
     if (!Array.isArray(defs)) return [];
     const usable = defs.filter((def: unknown): def is BreakpointDef => {
@@ -247,33 +299,39 @@ function breakpointContexts(set: BreakpointSet): BreakpointContext[] {
           : MAX_BREAKPOINTS_PER_AXIS
       );
   };
-  for (const def of axisDefs("viewport")) {
-    if (def.id === BASE_BREAKPOINT) continue;
-    contexts.push({
-      id: def.id,
-      axis: "viewport",
-      maxWidth: def.maxWidth,
-      ...(def.maxWidth === undefined
-        ? {}
-        : { atRule: `@media (max-width: ${def.maxWidth}px)` }),
-    });
-  }
-  for (const def of axisDefs("container")) {
-    if (def.id === BASE_BREAKPOINT) continue;
-    contexts.push({
-      id: def.id,
-      maxWidth: def.maxWidth,
-      // A container axis always emits a container query, the widest one
-      // included. Left unconditional, the container's own base values would
-      // apply to a node with no query-container ancestor at all, and would
-      // outrank every viewport rule while doing it. `min-width: 0` matches
-      // inside any container and nowhere else, which is exactly the scope.
-      atRule:
-        def.maxWidth === undefined
-          ? `@container (min-width: 0)`
-          : `@container (max-width: ${def.maxWidth}px)`,
-      axis: "container",
-    });
+  // Driven by the shared axis order rather than by two loops written in a
+  // chosen sequence here. Which axis is emitted last decides which one wins at
+  // equal specificity, so that order is stated once, as data, rather than being
+  // implied by the shape of the code that walks it.
+  for (const axis of BREAKPOINT_AXES) {
+    for (const def of axisDefs(axis)) {
+      if (def.id === BASE_BREAKPOINT) continue;
+      contexts.push(
+        axis === "viewport"
+          ? {
+              id: def.id,
+              axis,
+              maxWidth: def.maxWidth,
+              ...(def.maxWidth === undefined
+                ? {}
+                : { atRule: `@media (max-width: ${def.maxWidth}px)` }),
+            }
+          : {
+              id: def.id,
+              axis,
+              maxWidth: def.maxWidth,
+              // A container axis always emits a container query, the widest one
+              // included. Left unconditional, the container's own base values would
+              // apply to a node with no query-container ancestor at all, and would
+              // outrank every viewport rule while doing it. `min-width: 0` matches
+              // inside any container and nowhere else, which is exactly the scope.
+              atRule:
+                def.maxWidth === undefined
+                  ? `@container (min-width: 0)`
+                  : `@container (max-width: ${def.maxWidth}px)`,
+            }
+      );
+    }
   }
   return contexts;
 }
@@ -340,6 +398,33 @@ function scopeSelector(
  * values without a word, and this result promises that anything missing from
  * the stylesheet is explained.
  */
+/**
+ * The keys of a stored record, bounded before they are sorted.
+ *
+ * Enumeration stops where reporting stops. Slicing before the sort rather than checking the
+ * allowance inside the loop keeps neither the array nor the sort scaling with what was stored,
+ * which matters because a named class is site settings read on every page compile and its map of
+ * breakpoint ids is whatever was persisted.
+ *
+ * Which keys survive the slice does not matter: they feed diagnostics that are capped a few
+ * entries later anyway.
+ */
+function boundedKeys(record: Record<string, unknown>): string[] {
+  // Read with an early break rather than through `Object.keys`, which materialises every key
+  // before anything can slice it — so a corrupt settings record still allocated an array its own
+  // size on every compile, ahead of the cap that was supposed to bound it.
+  const keys: string[] = [];
+  for (const key in record) {
+    if (!Object.hasOwn(record, key)) continue;
+    keys.push(key);
+    if (keys.length >= MAX_SCANNED_KEYS) break;
+  }
+  return keys.sort();
+}
+
+/** How many keys of one stored record are read before the walk gives up. */
+const MAX_SCANNED_KEYS = 256;
+
 function unknownBreakpointWarnings(
   styles: NodeStyles,
   basePath: string,
@@ -347,12 +432,13 @@ function unknownBreakpointWarnings(
   warnings: ValidationIssue[],
   allowance: WarningAllowance
 ): void {
+  if (allowanceSpent(allowance)) return;
   const known = new Set(contexts.map(context => context.id));
   const knownStates = new Set<string>(STYLE_STATES);
   // Iterating only the states this engine knows means an unrecognised one is
   // never compiled AND never mentioned. The envelope's own keys are read here
   // so a stored `pressed` is accounted for rather than disappearing.
-  for (const state of Object.keys(styles).sort()) {
+  for (const state of boundedKeys(styles)) {
     if (!knownStates.has(state)) {
       pushBoundedWarning(allowance, warnings, {
         path: pointer(basePath, state),
@@ -363,9 +449,10 @@ function unknownBreakpointWarnings(
       });
       continue;
     }
+    if (allowanceSpent(allowance)) return;
     const byBreakpoint = styles[state as StyleState];
     if (!isPlainRecord(byBreakpoint)) continue;
-    for (const id of Object.keys(byBreakpoint).sort()) {
+    for (const id of boundedKeys(byBreakpoint)) {
       // Enumeration stops where reporting stops. The allowance bounds what is
       // RETURNED, and a state map with a very large number of stale ids costs a
       // full sort and a full scan before that bound is ever consulted — work
@@ -466,6 +553,9 @@ function envelopeRules(
         budget,
         warningAllowance
       );
+      // Appended as they come. `compileStyleValues` holds this same allowance and charges
+      // everything it returns against it exactly once, so charging again here would spend it
+      // twice and leave later omissions unexplained while it still had room.
       warnings.push(...compiled.warnings);
       // A property that styles something inside the block goes into its own
       // rule. Keeping the exception in the catalog rather than in a branch here
@@ -753,12 +843,14 @@ function documentNodes(
  * Compile a document's styles.
  *
  * The tiers, in the order they are emitted and therefore in the order they
- * override one another: page settings, block-type defaults, then each node's
- * own values. Two tiers named in the cascade are deliberately absent here.
- * Design tokens and named classes are defined by data this signature does not
- * take yet, and user custom CSS has to be sanitized before it can be written at
- * all, so writing it before that exists would be the one hole nothing else in
- * this design leaves open.
+ * override one another: page settings, block-type defaults, the site's named
+ * classes in library order, then each node's own values. A whole tier precedes
+ * the whole of the next, so a node's value beats a class's at any breakpoint.
+ *
+ * Two tiers named in the cascade are still absent. Design tokens are defined by
+ * data this signature does not take yet, and user custom CSS has to be sanitized
+ * before it can be written at all, so writing it before that exists would be the
+ * one hole nothing else in this design leaves open.
  */
 export function compilePageCss(
   doc: BlockDocument,
@@ -860,6 +952,156 @@ export function compilePageCss(
     );
   }
 
+  // The named classes, in library order — the tier between a block's defaults and a node's own
+  // values. At one specificity the cascade is source order, so being emitted here IS what makes
+  // a class beat the block default and lose to a local value.
+  //
+  // `usableNamedClasses` decides which of them are written, and the class list handed back for
+  // each node is built from that same call, so a class dropped here is dropped from both.
+  //
+  // Charged against an allowance of their own, one per class. A site's class library is one
+  // document's configuration and every document's problem, so neither wider budget will do:
+  // sharing the NODE budget lets a malformed library entry spend it before any node is reached,
+  // and sharing one budget across the whole tier lets a single unreferenced entry spend it before
+  // any later class is read. Either way one bad entry strips styling from a page that never
+  // referenced it.
+  // The library is one site-settings record read by every page compile, and it arrives whether or
+  // not anything validated it. A non-array — `{}` from a corrupt row — reaches a spread inside
+  // `orderedNamedClasses` and throws, which would take down rendering for every page on the site
+  // rather than costing the styling of the classes nobody can read.
+  const storedLibrary: unknown = ctx.namedClasses;
+  // Bounded BEFORE anything copies, sorts or scans it. The library is site-level persisted data
+  // read on every page render, and a corrupt settings row holding a very large array would be
+  // allocated and sorted in full each time — the document walk is capped and the warnings are
+  // capped, so this was the one unbounded read left on the path.
+  const wholeLibrary: readonly NamedClass[] = Array.isArray(storedLibrary)
+    ? (storedLibrary as readonly NamedClass[])
+    : [];
+  const library =
+    wholeLibrary.length > MAX_NAMED_CLASSES
+      ? wholeLibrary.slice(0, MAX_NAMED_CLASSES)
+      : wholeLibrary;
+  if (library.length < wholeLibrary.length) {
+    pushBoundedWarning(warningAllowance, warnings, {
+      path: "/classes",
+      code: "invalid-class-library",
+      severity: "warning",
+      message: `The site's class library holds ${wholeLibrary.length} classes; only the first ${MAX_NAMED_CLASSES} were read.`,
+      suggestion: "Remove the classes the site no longer uses.",
+    });
+  }
+  if (storedLibrary !== undefined && !Array.isArray(storedLibrary)) {
+    pushBoundedWarning(warningAllowance, warnings, {
+      path: "/classes",
+      code: "invalid-class-library",
+      severity: "warning",
+      message: `The site's class library is ${describeValue(storedLibrary)} rather than a list, so no named class was written.`,
+      suggestion: "Store the class library as an array of classes.",
+    });
+  }
+  const usableClasses = usableNamedClasses(library);
+  // The entries themselves, not their ids. Two entries can carry ONE id, and only one of them is
+  // written: asking "was this id written" answers yes for the one that was dropped, and it goes
+  // unreported — the exact case this reporting exists to explain.
+  const written = new Set<unknown>(usableClasses);
+  // The ids the written classes claimed, so an entry dropped for sharing one can be told that
+  // rather than being told its name collided.
+  const usedIds = new Set(usableClasses.map(cls => cls.id));
+  // Where each entry sits in the stored array, so a warning can point at the entry rather than at
+  // a name derived from it. A pointer built from the id does not resolve — the id may be missing,
+  // may not be a string, and is exactly what is unreliable about a malformed entry — so an editor
+  // could not highlight the class it is describing.
+  //
+  // Walked as POSITIONS rather than entries, because the entries reported on here are the ones
+  // the library could not use and those can be primitives: `[null, null]` is two entries needing
+  // two separate repairs, and a lookup keyed by the entry answers with the first position for
+  // both, sending an editor to a class it has already fixed.
+  const orderedPositions = orderedNamedClassPositions(library);
+  // Keyed by entry for the emission walk below, which sees only records that `usableNamedClasses`
+  // has already proven distinct — so no two of its keys can be the same value.
+  const libraryIndex = new Map<unknown, number>();
+  for (const position of orderedPositions) {
+    const cls = library[position];
+    if (!libraryIndex.has(cls)) libraryIndex.set(cls, position);
+  }
+  for (const position of orderedPositions) {
+    const cls = library[position];
+    if (written.has(cls)) continue;
+    // Reported once per entry the library could not use, naming which of the three reasons it
+    // was. A usable record whose name is free is not reachable here, so the remaining case after
+    // the two structural ones is a name another class already took.
+    //
+    // Read in this order because the reasons are not alternatives: an entry can be malformed AND
+    // collide, and a name that cannot be written is the one an author can act on without first
+    // being told the wrong thing. Collapsing the middle case into the collision — which the
+    // presence of a valid slug alone would do — tells the author to rename a class whose name was
+    // never the problem, and renaming it fixes nothing.
+    const slug = readClassSlug(cls);
+    const id = readClassId(cls);
+    const named =
+      typeof slug !== "string" ||
+      // Length before the pattern, and read as a NAME problem. An oversized slug is refused by
+      // `isUsableNamedClass`, so falling through to the structural branch told an author their id
+      // or styles were missing when the name was the whole of it — and ran the pattern over the
+      // corrupt string first to get there.
+      slug.length > MAX_NAMED_CLASS_NAME_LENGTH ||
+      !NAMED_CLASS_SLUG_RE.test(slug)
+        ? {
+            code: "invalid-class-name" as const,
+            message: `A named class could not be written: ${describeValue(slug)} is not a class name.`,
+            suggestion: 'Use a lowercase slug such as "card-featured".',
+          }
+        : !isUsableNamedClass(cls)
+          ? {
+              code: "invalid-class" as const,
+              message: `The class named "${describeValue(slug)}" is missing its id or its styles, so it was not written.`,
+              suggestion: "Give every class a string id and a styles record.",
+            }
+          : // A usable record that survived neither claim lost one of them. The id is checked
+            // first because it is the one a document references: told only that the NAME
+            // collided, an author renames a class and the reference still reaches the other one.
+            typeof id === "string" && usedIds.has(id)
+            ? {
+                code: "duplicate-class-id" as const,
+                message: `More than one class carries the id ${describeValue(id)}, so only the first was written.`,
+                suggestion: "Give every class a distinct id.",
+              }
+            : {
+                code: "duplicate-class-name" as const,
+                message: `More than one class is named "${describeValue(slug)}", so only the first was written.`,
+                suggestion: "Give every class a distinct name.",
+              };
+    pushBoundedWarning(warningAllowance, warnings, {
+      path: pointer("/classes", String(position)),
+      severity: "warning",
+      ...named,
+    });
+  }
+  for (const cls of usableClasses) {
+    rules.push(
+      ...envelopeRules(
+        cls.styles,
+        `${pageRoot} .${escapeIdentifier(namedClassName(cls.slug))}`,
+        // The envelope is stored under `styles`, so the pointer names it. Without that a warning
+        // reads `/classes/0/base/base/bogus`, which resolves to nothing an editor can open.
+        pointer(
+          pointer("/classes", String(libraryIndex.get(cls) ?? 0)),
+          "styles"
+        ),
+        contexts,
+        tokenPrefix,
+        warnings,
+        // One WRITE budget per class, not one for the tier. Shared, a single unreferenced entry
+        // with enough invalid properties spends it and every later class is refused unread — so a node
+        // referencing a perfectly good class receives its token and no declarations, styled by a
+        // library entry it never mentions. The tier's total output stays bounded by the warning
+        // allowance, which is shared and is what actually caps the reporting.
+        newStyleIssueBudget(),
+        warningAllowance
+      )
+    );
+  }
+
   // Each node's own values, in document order so the stylesheet reads the way
   // the page does.
   const reportedDuplicates = new Set<string>();
@@ -906,5 +1148,155 @@ export function compilePageCss(
     );
   }
 
-  return { css: serializeRules(rules), warnings, classes };
+  // The classes a renderer puts on each node, which is not the same as the class this compiler
+  // styles it by. A `.nx-c-*` rule reaches an element only if the element carries that token, so
+  // returning the node class alone would emit the whole named-class tier and leave every rule in
+  // it inert — styles written, referenced, and applying to nothing.
+  //
+  // Narrowed through `usableClasses` for the same reason resolution is: a class the stylesheet
+  // dropped must not be put on an element, where it would match a rule some other class owns.
+  const byId = new Map(usableClasses.map(cls => [cls.id, cls]));
+
+  /**
+   * Whether a stored reference could name a class at all.
+   *
+   * Length first, and before the value is hashed. A Set or a Map reads a string key in full to
+   * hash it, so an unvalidated node holding a megabyte-long id would pay that on every render —
+   * once to dedupe, once to look it up, once to apply it — for a value no class can carry, since
+   * `isUsableNamedClass` caps an id at the same bound.
+   */
+  const couldNameAClass = (id: unknown): id is string =>
+    typeof id === "string" && id.length <= MAX_NAMED_CLASS_NAME_LENGTH;
+  const attributeClasses = new Map<string, string>();
+  const reportedMissingClasses = new Map<string, Set<string>>();
+  for (const { node, path } of nodes) {
+    const own = classes.get(node.id);
+    if (own === undefined) continue;
+    const names = [own];
+    // A stored `classes` that is not a list — `"c1"` rather than `["c1"]` — references nothing
+    // this compiler can apply. Normalized away in silence it leaves an author with classes in the
+    // document, none on the element, and no account of either.
+    if (node.classes !== undefined && !Array.isArray(node.classes)) {
+      pushBoundedWarning(warningAllowance, warnings, {
+        path: pointer(path, "classes"),
+        code: "invalid-classes",
+        severity: "warning",
+        message: `The classes on this node are ${describeValue(node.classes)} rather than a list, so none were applied.`,
+        suggestion: "Store node classes as an array of class ids.",
+      });
+    }
+    const stored: readonly unknown[] = Array.isArray(node.classes)
+      ? node.classes
+      : [];
+    // Deduped once, bounded as it is read, and reused by both walks below. Each of them built its
+    // own set straight from the stored array, so a node holding a very large `classes` list was
+    // copied twice per render before either the warning allowance or the library lookup could cap
+    // anything — and a document is unvalidated data, so that list is whatever was persisted.
+    //
+    // The bound counts entries READ rather than distinct ids kept: a list of a million copies of
+    // one id allocates nothing either way, but only a read bound stops it being scanned.
+    // Each entry keeps the position it was stored at, so a warning about one of them resolves to
+    // the reference rather than to the whole array. Deduping by id alone loses that, and an
+    // editor following the pointer can then neither highlight nor remove what it names.
+    const applied: Array<{ id: unknown; index: number }> = [];
+    const seenIds = new Set<unknown>();
+    const readLimit = Math.min(stored.length, MAX_CLASSES_PER_NODE);
+    for (let index = 0; index < readLimit; index += 1) {
+      const id = stored[index];
+      // A string too long to name a class is not deduped, because deduping is what reads it in
+      // full. It is still kept, so it is still accounted for — reported once at each position it
+      // was stored at, which the per-node entry cap already bounds.
+      const tooLongToName =
+        typeof id === "string" && id.length > MAX_NAMED_CLASS_NAME_LENGTH;
+      if (!tooLongToName) {
+        if (seenIds.has(id)) continue;
+        seenIds.add(id);
+      }
+      applied.push({ id, index });
+    }
+    if (stored.length > MAX_CLASSES_PER_NODE) {
+      pushBoundedWarning(warningAllowance, warnings, {
+        path: pointer(path, "classes"),
+        code: "too-many-classes",
+        severity: "warning",
+        message: `This node lists ${stored.length} classes; only the first ${MAX_CLASSES_PER_NODE} were applied.`,
+        suggestion:
+          "Remove the references the node no longer needs, or combine them into one class.",
+      });
+    }
+    for (const { id, index } of applied) {
+      if (couldNameAClass(id) && byId.has(id)) continue;
+      const entryPath = pointer(pointer(path, "classes"), index);
+      // A value that is not a string is not a class id the library could ever define, so telling
+      // an author to add it there sends them to fix something that cannot be fixed that way. The
+      // same shape validation calls malformed, called malformed here too.
+      if (!couldNameAClass(id)) {
+        pushBoundedWarning(warningAllowance, warnings, {
+          path: entryPath,
+          code: "invalid-classes",
+          severity: "warning",
+          message: `This node lists ${describeValue(id)} as a class, which is not a class id, so it was not applied.`,
+          suggestion: "Store node classes as an array of class-id strings.",
+        });
+        continue;
+      }
+      // A reference that reached nothing. Silently dropping it leaves an author with a class on
+      // the node, no class on the element, and nothing connecting the two — the same account
+      // every other unwritten value in this compile gets. Once per id, because a second report
+      // would name the same missing class and the same fix.
+      // A set per stored node, because the pointer above names one reference and a reference is
+      // per node. Deduped across the document, the first node to list a missing class takes the
+      // only report, and an author who follows that pointer and repairs it hears nothing about
+      // the others. Nested rather than keyed on a joined string, so no separator has to be a
+      // character an id cannot contain.
+      //
+      // Keyed by the node's PATH, not its id. A forgiving compile reads a document whose ids may
+      // repeat, and two nodes sharing one would then share a set — collapsing exactly the reports
+      // this split apart. A path is the position in the document, so it is one per stored node
+      // however corrupt the ids are.
+      //
+      // On the RAW id, because `describeValue` truncates and would collapse two distinct
+      // references into one report. The message still uses the described form: an unvalidated
+      // document can carry an enormous id, and the allowance charges paths rather than message
+      // text, so interpolating the raw one returns a diagnostic its size.
+      const reportedHere =
+        reportedMissingClasses.get(path) ?? new Set<string>();
+      reportedMissingClasses.set(path, reportedHere);
+      if (reportedHere.has(id)) continue;
+      reportedHere.add(id);
+      pushBoundedWarning(warningAllowance, warnings, {
+        path: entryPath,
+        code: "unknown-class",
+        severity: "warning",
+        message: `This node lists the class ${describeValue(id)}, which the site library does not define, so it was not applied.`,
+        suggestion: "Remove the reference, or add the class to the library.",
+      });
+    }
+    // Two nodes sharing an id share one entry in this map, so a named class recorded here would
+    // either be lost by whichever node is written second or applied to both. Refused for the
+    // same reason their rules are: a class the author put on one node must not silently restyle
+    // another node that never referenced it.
+    if (!duplicateIds.has(node.id)) {
+      // Library order, not the order the node lists them in, so the value is stable for a caching
+      // renderer and reads the way the stylesheet does.
+      for (const cls of orderedNamedClasses(
+        applied
+          // A stored reference that is not a string names nothing the library can hold, and was
+          // already reported above as malformed.
+          .map(entry =>
+            couldNameAClass(entry.id) ? byId.get(entry.id) : undefined
+          )
+          .filter((cls): cls is NamedClass => cls !== undefined)
+      )) {
+        names.push(namedClassName(cls.slug));
+      }
+    }
+    attributeClasses.set(node.id, names.join(" "));
+  }
+
+  return {
+    css: serializeRules(rules),
+    warnings,
+    classes: attributeClasses,
+  };
 }

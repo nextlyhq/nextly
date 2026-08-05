@@ -259,3 +259,15 @@ export type {
   MigrationSource,
   PropsMigrationResult,
 } from "./migration";
+
+// Named classes: reusable style presets a node applies by id.
+export type { NamedClass } from "./style/named-class";
+export {
+  isUsableNamedClass,
+  namedClassName,
+  orderedNamedClasses,
+  NAMED_CLASS_PREFIX,
+  NAMED_CLASS_SLUG_RE,
+} from "./style/named-class";
+export type { BreakpointAxis } from "./style/breakpoint-axes";
+export { BREAKPOINT_AXES } from "./style/breakpoint-axes";

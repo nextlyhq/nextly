@@ -20,7 +20,7 @@ import { describeValue, pointer } from "../issue-text";
 import { isPlainRecord } from "../plain-record";
 import type { ValidationIssue } from "../validation";
 
-import { getStyleProperty } from "./catalog";
+import { CATALOG_IN_EMISSION_ORDER } from "./catalog";
 import { isStyleLeaf } from "./catalog-types";
 import type { StyleLeaf, StyleShape, UrlLeaf } from "./catalog-types";
 import {
@@ -364,6 +364,36 @@ function refusedAt(path: string, refused: readonly string[]): boolean {
  * costs nothing and buys the guarantee that the same styles always produce the
  * same bytes.
  */
+/**
+ * Validation's errors, charged to the allowance exactly once.
+ *
+ * Returned uncharged they were bounded only by the per-map style budget, so a large class library
+ * multiplied them; charged again by the caller they paid twice, and later omissions lost their
+ * explanations while the allowance still had room. So the charging happens here, where the
+ * allowance is already in hand, and callers append what they are given.
+ *
+ * The truncation notice is exempt: charged to the allowance it describes, it is the first thing
+ * dropped once that allowance is spent, leaving a truncated list looking complete.
+ */
+function chargeIssues(
+  issues: readonly ValidationIssue[],
+  allowance: WarningAllowance
+): ValidationIssue[] {
+  const reported: ValidationIssue[] = [];
+  for (const issue of issues) {
+    if (issue.severity !== "error") continue;
+    if (issue.code === "style-issues-truncated") {
+      if (!allowance.styleIssuesAnnounced) {
+        allowance.styleIssuesAnnounced = true;
+        reported.push(issue);
+      }
+      continue;
+    }
+    pushBoundedWarning(allowance, reported, issue);
+  }
+  return reported;
+}
+
 export function compileStyleValues(
   values: Readonly<Record<string, unknown>>,
   basePath: string,
@@ -394,6 +424,9 @@ export function compileStyleValues(
   // those, and reading a missing site allowance would bound nothing.
   const budget =
     normalizeStyleIssueBudget(suppliedBudget) ?? newStyleIssueBudget();
+  // Resolved before the refusal branch below, which reports through it. A direct caller gets a
+  // fresh one, so the diagnostics are bounded however this is reached.
+  const allowance = suppliedAllowance ?? newWarningAllowance();
   const spentBefore = structuralAllowanceSpent(budget);
   const issues = validateStyleValues(values, basePath, "strict", budget);
   const stopped =
@@ -411,10 +444,24 @@ export function compileStyleValues(
         issues.length === 0
           ? []
           : [
-              ...issues,
-              warning(
-                basePath,
-                "These styles were not written, because checking stopped before they could be read."
+              // Charged like everything else this returns. This is the branch a map full of
+              // invalid properties takes, so leaving it uncharged is exactly where a large class
+              // library multiplied its diagnostics.
+              ...chargeIssues(issues, allowance),
+              // Charged like the rest. Left out of the allowance it is one message per refused
+              // map, and the branch this is in is the one every map takes once the style budget
+              // is spent — so a large library answers with a message per class.
+              ...chargeIssues(
+                [
+                  {
+                    ...warning(
+                      basePath,
+                      "These styles were not written, because checking stopped before they could be read."
+                    ),
+                    severity: "error" as const,
+                  },
+                ],
+                allowance
               ),
             ],
     };
@@ -424,9 +471,6 @@ export function compileStyleValues(
     .map(issue => issue.path);
 
   const safe = safeTokenPrefix(tokenPrefix);
-  // A direct caller gets a fresh one, so this is bounded however it is reached
-  // rather than only when the page compiler happens to pass its own.
-  const allowance = suppliedAllowance ?? newWarningAllowance();
   const walk: Walk = {
     placed: [],
     warnings: [],
@@ -443,16 +487,17 @@ export function compileStyleValues(
       warning(basePath, safe.warning)
     );
   }
-  const properties = Object.keys(values)
-    .filter(key => Object.hasOwn(values, key))
-    .sort();
-  for (const property of properties) {
-    const entry = getStyleProperty(property);
-    if (entry === undefined) continue;
+  // Walked over the catalog rather than over the stored map's keys. Both emit the same
+  // declarations in the same order — a key the catalog does not define writes nothing, and this
+  // loop skipped those anyway — but materializing and sorting the stored keys first made the work
+  // proportional to whatever was persisted. A named class is site settings: outside the document
+  // byte cap, read on every page render, so one corrupt entry paid that cost every time.
+  for (const entry of CATALOG_IN_EMISSION_ORDER) {
+    if (!Object.hasOwn(values, entry.property)) continue;
     shapeDeclarations(
       entry.shape,
-      values[property],
-      pointer(basePath, property),
+      values[entry.property],
+      pointer(basePath, entry.property),
       walk
     );
   }
@@ -463,14 +508,17 @@ export function compileStyleValues(
     const { path: _path, ...declaration } = placed;
     declarations.push(declaration);
   }
+  // Validation's errors are reported as the reason something is missing from
+  // the stylesheet. They keep their own paths and codes, so a caller that
+  // already validated sees the same issue twice rather than two accounts of it.
+  //
+  // Charged HERE, alongside the compiler's own objections, so everything this returns has been
+  // through the allowance exactly once. Returned uncharged they were bounded only by the style
+  // budget, which is per map — so a large class library multiplied them; charged again by the
+  // caller, the compiler's objections paid twice and later omissions lost their explanations
+  // while the allowance still had room.
   return {
     declarations,
-    // Validation's errors are reported as the reason something is missing from
-    // the stylesheet. They keep their own paths and codes, so a caller that
-    // already validated sees the same issue twice rather than two accounts of it.
-    warnings: [
-      ...issues.filter(issue => issue.severity === "error"),
-      ...walk.warnings,
-    ],
+    warnings: [...chargeIssues(issues, walk.allowance), ...walk.warnings],
   };
 }

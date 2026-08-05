@@ -14,6 +14,7 @@ import {
   COMPONENT_INSTANCE_TYPE,
   DOCUMENT_FORMAT_VERSION,
   DOCUMENT_KINDS,
+  MAX_CLASSES_PER_NODE,
   STYLE_STATES,
 } from "./document";
 import { describeValue, pointer } from "./issue-text";
@@ -21,6 +22,7 @@ import { DEFAULT_LIMITS, LIMIT_WARNING_RATIO } from "./limits";
 import type { DocumentLimits } from "./limits";
 import { isPlainRecord } from "./plain-record";
 import type { TokenKind } from "./style/catalog-types";
+import { MAX_NAMED_CLASS_NAME_LENGTH } from "./style/named-class";
 import {
   canResolveName,
   chargeIssueBudget,
@@ -169,6 +171,8 @@ export const ISSUE_CODES = {
   "invalid-props": "A node props field is not an object.",
   "invalid-slots": "A node slots field or one of its slot arrays is malformed.",
   "invalid-classes": "A node classes field is not an array of strings.",
+  "too-many-classes":
+    "A node lists more classes than the compiler will apply to it.",
   "invalid-attributes": "A node attributes field is not a string map.",
   "invalid-css-id": "A node cssId is not a string.",
   "unknown-node-type": "A node type is not registered.",
@@ -191,6 +195,16 @@ export const ISSUE_CODES = {
   "token-kind-mismatch":
     "A design token is not the kind of value its property accepts.",
   "unknown-class": "A node lists a class id the site does not define.",
+  "invalid-class-name":
+    "A named class in the site library has a name that cannot be written to CSS.",
+  "invalid-class":
+    "A named class in the site library is missing the id or the styles record it needs to be written.",
+  "invalid-class-library":
+    "The site's named class library is not a list of classes.",
+  "duplicate-class-name":
+    "More than one named class in the site library carries the same name.",
+  "duplicate-class-id":
+    "More than one named class in the site library carries the same id, which is what documents reference.",
   "invalid-style-value":
     "A style value does not match the shape its property declares.",
   "token-not-allowed":
@@ -814,6 +828,37 @@ function validateClasses(
       message: "A node classes field must be an array of class-id strings.",
     });
     return;
+  }
+  // The compiler applies a bounded prefix of this list, so a longer one is a document that
+  // validates and then renders differently from what it says. Reported here, where a save or a
+  // publish can still refuse it, rather than being discovered as styling that silently did
+  // nothing — the account this engine exists to give.
+  //
+  // An error only where a gate is being applied. A stored document already holding a longer list
+  // has to stay readable, and downgrading it to a warning there says the same thing without
+  // making the document unopenable.
+  if (node.classes.length > MAX_CLASSES_PER_NODE) {
+    issues.push({
+      path: pointer(path, "classes"),
+      code: "too-many-classes",
+      severity: ctx.mode === "strict" ? "error" : "warning",
+      message: `This node lists ${node.classes.length} classes; only the first ${MAX_CLASSES_PER_NODE} are applied.`,
+    });
+  }
+  // A reference longer than a class id may be names nothing the library can hold, whatever a
+  // caller's lookup answers: `isUsableNamedClass` refuses an entry carrying one, so the compiler
+  // drops the reference. Reported here for the same reason the count above is — a document that
+  // passes a strict publish and then renders without its class styling is the one outcome these
+  // two halves must not produce between them.
+  for (let index = 0; index < node.classes.length; index += 1) {
+    const id = node.classes[index];
+    if (id.length <= MAX_NAMED_CLASS_NAME_LENGTH) continue;
+    issues.push({
+      path: pointer(pointer(path, "classes"), index),
+      code: "invalid-classes",
+      severity: ctx.mode === "strict" ? "error" : "warning",
+      message: `This class id is ${id.length} characters; a class id may be at most ${MAX_NAMED_CLASS_NAME_LENGTH}, so it was not applied.`,
+    });
   }
   const lookup = ctx.classes;
   if (lookup === undefined) return;
