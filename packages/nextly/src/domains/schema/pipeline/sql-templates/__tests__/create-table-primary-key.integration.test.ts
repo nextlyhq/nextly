@@ -160,48 +160,107 @@ describe("generated CREATE TABLE declares its primary key", () => {
       // MySQL reports a string default WITHOUT quotes, unlike PostgreSQL and
       // SQLite. Recorded verbatim it renders `DEFAULT draft`, which the server
       // reads as an identifier — so the schema a live snapshot describes could
-      // not be rebuilt anywhere. Asserting on the snapshot text alone would
-      // pin a spelling; rebuilding the table from it is what proves the point.
+      // not be rebuilt anywhere.
+      //
+      // The source table is built by the generator rather than by hand, which
+      // makes this a closed loop: spec -> DDL -> live -> spec. A hand-written
+      // fixture could drift from the generator this is meant to protect, and
+      // would also let the assertion agree with a shape nothing produces.
       const conn = await mysql.createConnection(MYSQL_URL);
       pools.push(() => conn.end());
       const db = drizzleMysql({ client: conn });
       const source = "dc_mysql_defaults";
       const rebuilt = "dc_mysql_defaults_rebuilt";
 
+      const spec: TableSpec = {
+        name: source,
+        columns: [
+          {
+            name: "id",
+            type: "varchar(36)",
+            nullable: false,
+            primaryKey: true,
+          },
+          {
+            name: "status",
+            type: "varchar(20)",
+            nullable: false,
+            default: "'draft'",
+          },
+          { name: "quantity", type: "int", nullable: true, default: "5" },
+          // An embedded quote and a backslash: MySQL treats the backslash as
+          // an escape introducer, so a default re-emitted with only the quote
+          // handled would come back as a different string.
+          {
+            name: "note",
+            type: "varchar(40)",
+            nullable: true,
+            default: "'it''s a\\\\nb'",
+          },
+          {
+            name: "made_at",
+            type: "datetime",
+            nullable: true,
+            default: "CURRENT_TIMESTAMP",
+          },
+        ],
+        indexes: [],
+      };
+
       await conn.query(`DROP TABLE IF EXISTS \`${source}\``);
       await conn.query(`DROP TABLE IF EXISTS \`${rebuilt}\``);
-      await conn.query(
-        `CREATE TABLE \`${source}\` (
-           id varchar(36) PRIMARY KEY NOT NULL,
-           status varchar(20) NOT NULL DEFAULT 'draft',
-           quantity int DEFAULT 5,
-           note varchar(40) DEFAULT 'it''s here',
-           made_at datetime DEFAULT CURRENT_TIMESTAMP
-         )`
-      );
+      for (const stmt of statements(spec, "mysql")) await conn.query(stmt);
 
       const live = await introspectLiveSnapshot(db, "mysql", [source]);
-      const spec = live.tables[0];
-      expect(spec).toBeDefined();
-      // A literal is quoted, a number is not, and an expression is untouched.
-      const byName = (n: string) => spec!.columns.find(c => c.name === n);
-      expect(byName("status")?.default).toBe("'draft'");
-      expect(byName("quantity")?.default).toBe("5");
-      expect(byName("note")?.default).toBe("'it''s here'");
-      expect(byName("made_at")?.default).toBe("CURRENT_TIMESTAMP");
+      const observed = live.tables[0];
+      expect(observed).toBeDefined();
+      // What the generator was given comes back unchanged, which is the
+      // property a snapshot needs to be rebuildable at all.
+      expect(observed!.columns.map(c => [c.name, c.default])).toEqual(
+        spec.columns.map(c => [c.name, c.default])
+      );
+      expect(observed!.columns.find(c => c.name === "id")?.primaryKey).toBe(
+        true
+      );
 
-      // And the whole thing rebuilds. This is the assertion that fails when a
-      // default is recorded in a form the server cannot read back.
-      for (const stmt of statements({ ...spec!, name: rebuilt }, "mysql")) {
+      // And it rebuilds from its own live snapshot.
+      for (const stmt of statements({ ...observed!, name: rebuilt }, "mysql")) {
         await conn.query(stmt);
       }
       const after = await introspectLiveSnapshot(db, "mysql", [rebuilt]);
       expect(after.tables[0]?.columns.map(c => c.default)).toEqual(
-        spec!.columns.map(c => c.default)
+        observed!.columns.map(c => c.default)
       );
 
       await conn.query(`DROP TABLE IF EXISTS \`${source}\``);
       await conn.query(`DROP TABLE IF EXISTS \`${rebuilt}\``);
+    }
+  );
+
+  it.skipIf(!MYSQL_URL)(
+    "mysql does not call a unique index the primary key",
+    async () => {
+      // `COLUMN_KEY` does not mean what its name suggests. A table with no
+      // primary key but a NOT NULL UNIQUE index reports `PRI` for that column,
+      // because InnoDB promotes such an index to the clustered key. Reading it
+      // would mark `slug` as the primary key, hiding a table that has none and
+      // rebuilding it elsewhere with the wrong one.
+      const conn = await mysql.createConnection(MYSQL_URL);
+      pools.push(() => conn.end());
+      const db = drizzleMysql({ client: conn });
+      const name = "dc_mysql_promoted";
+
+      await conn.query(`DROP TABLE IF EXISTS \`${name}\``);
+      await conn.query(
+        `CREATE TABLE \`${name}\` (slug varchar(40) NOT NULL UNIQUE, other varchar(10)) ENGINE=InnoDB`
+      );
+
+      const live = await introspectLiveSnapshot(db, "mysql", [name]);
+      expect(
+        live.tables[0]?.columns.filter(c => c.primaryKey === true)
+      ).toEqual([]);
+
+      await conn.query(`DROP TABLE IF EXISTS \`${name}\``);
     }
   );
 

@@ -86,9 +86,13 @@ interface MysqlRow {
   COLUMN_TYPE: string;
   IS_NULLABLE: "YES" | "NO";
   COLUMN_DEFAULT: string | null;
-  COLUMN_KEY: string;
   DATA_TYPE: string;
   EXTRA: string;
+}
+
+interface MysqlPrimaryKeyRow {
+  TABLE_NAME: string;
+  COLUMN_NAME: string;
 }
 
 interface MysqlIndexRow {
@@ -240,7 +244,7 @@ export async function introspectLiveSnapshot(
     // sometimes wraps it. Handle both shapes defensively.
     const result = (await dbTyped.execute(
       sql`SELECT TABLE_NAME, COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT,
-                 COLUMN_KEY, DATA_TYPE, EXTRA
+                 DATA_TYPE, EXTRA
           FROM information_schema.columns
           WHERE TABLE_SCHEMA = DATABASE()
             AND TABLE_NAME IN (${tableNamesIn})
@@ -252,7 +256,32 @@ export async function introspectLiveSnapshot(
       Array.isArray((result as unknown[])[0])
         ? (result as [MysqlRow[], unknown])[0]
         : (result as MysqlRow[]);
-    const snapshot = buildSnapshotFromMysqlRows(rows);
+    // The key comes from the PRIMARY index rather than `COLUMN_KEY`, which
+    // does not mean what its name suggests: a table with no primary key but a
+    // NOT NULL UNIQUE index reports `PRI` for that column, because InnoDB
+    // promotes such an index to the clustered key. Trusting it would mark
+    // something like `slug` as the primary key, hiding a table that genuinely
+    // has none and rebuilding it elsewhere with the wrong key. Verified
+    // against MySQL 8: `STATISTICS` shows only the `slug` index, no `PRIMARY`,
+    // while `COLUMN_KEY` still says `PRI`.
+    const pkRaw = (await dbTyped.execute(
+      sql`SELECT TABLE_NAME, COLUMN_NAME
+          FROM information_schema.STATISTICS
+          WHERE TABLE_SCHEMA = DATABASE()
+            AND TABLE_NAME IN (${tableNamesIn})
+            AND INDEX_NAME = 'PRIMARY'`
+    )) as MysqlPrimaryKeyRow[] | [MysqlPrimaryKeyRow[], unknown];
+    const pkRows: MysqlPrimaryKeyRow[] =
+      Array.isArray(pkRaw) &&
+      pkRaw.length > 0 &&
+      Array.isArray((pkRaw as unknown[])[0])
+        ? (pkRaw as [MysqlPrimaryKeyRow[], unknown])[0]
+        : (pkRaw as MysqlPrimaryKeyRow[]);
+    const primaryKeyColumns = new Set(
+      pkRows.map(r => `${r.TABLE_NAME}.${r.COLUMN_NAME}`)
+    );
+
+    const snapshot = buildSnapshotFromMysqlRows(rows, primaryKeyColumns);
     // Index query: information_schema.STATISTICS. Exclude PRIMARY.
     const idxRaw = (await dbTyped.execute(
       sql`SELECT TABLE_NAME, INDEX_NAME, NON_UNIQUE, COLUMN_NAME, SEQ_IN_INDEX
@@ -430,11 +459,18 @@ function mysqlDefaultExpression(row: MysqlRow): string | undefined {
   if (MYSQL_NUMERIC_TYPES.has((row.DATA_TYPE ?? "").toLowerCase())) {
     return value;
   }
-  // A literal, with any embedded quote doubled the way SQL spells it.
-  return `'${value.replace(/'/g, "''")}'`;
+  // A literal. Both the backslash and the quote have to be escaped, and the
+  // backslash first: under MySQL's default sql_mode a backslash introduces an
+  // escape sequence, so a default of `a\nb` re-emitted with only the quote
+  // handled would store a newline instead of the two characters it had.
+  const escaped = value.replace(/\\/g, "\\\\").replace(/'/g, "''");
+  return `'${escaped}'`;
 }
 
-function buildSnapshotFromMysqlRows(rows: MysqlRow[]): NextlySchemaSnapshot {
+function buildSnapshotFromMysqlRows(
+  rows: MysqlRow[],
+  primaryKeyColumns: ReadonlySet<string>
+): NextlySchemaSnapshot {
   const byTable = new Map<string, ColumnSpec[]>();
   for (const r of rows) {
     let cols = byTable.get(r.TABLE_NAME);
@@ -448,9 +484,9 @@ function buildSnapshotFromMysqlRows(rows: MysqlRow[]): NextlySchemaSnapshot {
       nullable: r.IS_NULLABLE === "YES",
       default: mysqlDefaultExpression(r),
     };
-    // `COLUMN_KEY` is "PRI" for every column of the PRIMARY key, and "UNI" or
-    // "MUL" for other index positions, so only the first is the key itself.
-    if (r.COLUMN_KEY === "PRI") column.primaryKey = true;
+    if (primaryKeyColumns.has(`${r.TABLE_NAME}.${r.COLUMN_NAME}`)) {
+      column.primaryKey = true;
+    }
     cols.push(column);
   }
   return {
