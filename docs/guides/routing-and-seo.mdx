@@ -148,14 +148,21 @@ be scoped to a document:
 ```ts
 const route = createContentRoute({
   collections: ["pages"],
-  draft: async ({ collection, slug }) => {
+  draft: async ({ collection }) => {
     const scope = await readPreviewScope(previewConfig);
     if (scope === null || scope.collection !== collection) return false;
-    return slug === (await slugOf(scope.collection, scope.entryId));
+    // Name the entry, do not just answer yes: slugs are not unique.
+    return { entryId: scope.entryId };
   },
   render: page => <Page {...page} />,
 });
 ```
+
+Return `{ entryId }` rather than `true` whenever a token is backing the
+decision. A slug need not be unique — the resolver supports duplicates and
+settles them by sorting on `id` — so a bare `true` grants whichever row the
+route happens to resolve, which may not be the one the token named. With an
+`entryId` the route discards the draft when the path resolved elsewhere.
 
 **Use that argument.** Next's draft mode is a single boolean for the whole host:
 `draftMode().isEnabled` tells you a visitor opened _a_ valid preview link, never

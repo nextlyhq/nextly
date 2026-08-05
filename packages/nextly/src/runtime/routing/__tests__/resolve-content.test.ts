@@ -192,13 +192,13 @@ describe("resolveContent (working-draft layer)", () => {
     });
   });
 
-  it("does not re-read a row that is not published", async () => {
-    // Only a published row can have pending edits beside it; an unpublished row
-    // already IS the draft. Skipping the second read there is also what keeps
-    // an enforced preview working, since a by-id read without trust filters to
-    // published and would answer 404 for exactly these rows.
+  it("does not decide whether to overlay from the row's own status", async () => {
+    // An `afterRead` hook may reshape or drop `status` before it is read here,
+    // so gating the overlay on it made preview depend on a field the collection
+    // is free to redefine. The overlay is attempted for every row instead.
     const { reader, byIdCalls } = stubReader({
-      items: [{ id: "1", title: "never published", status: "draft" }],
+      items: [{ id: "1", title: "live" }],
+      overlay: { id: "1", title: "pending", _isWorkingDraft: true },
     });
 
     const result = await resolveContent("posts", "a", {
@@ -207,25 +207,27 @@ describe("resolveContent (working-draft layer)", () => {
       overrideAccess: true,
     });
 
-    expect(byIdCalls).toHaveLength(0);
+    expect(byIdCalls).toHaveLength(1);
     expect(result).toEqual({
       id: "1",
-      title: "never published",
-      status: "draft",
+      title: "pending",
+      _isWorkingDraft: true,
     });
   });
 
-  it("treats a deleted row as a miss and a broken read as an error", async () => {
-    // The by-id read THROWS `NOT_FOUND` rather than answering null, so a row
-    // deleted between the two reads has to be caught — the slug lookup finding
-    // nothing would simply have rendered the not-found page.
+  it("falls back to the live row when there is no overlay to be had", async () => {
+    // The overlay is an enhancement, so anything that means "no draft" leaves
+    // the live row standing: a row deleted between the two reads, or an
+    // enforced by-id read filtering it to published, both answer 404.
     //
-    // Caught by STATUS rather than with `disableErrors`, which returns null for
-    // every unsuccessful result: a database blip would become a permanently
-    // cached 404, the exact failure the rethrow exists to prevent. Both halves
-    // are asserted, because only the second separates the two.
+    // Caught around the OVERLAY read alone, and by status rather than with
+    // `disableErrors`. A handler over the whole read would turn a 404 from a
+    // mistyped collection into a silent content miss, and `disableErrors`
+    // returns null for every unsuccessful result — a database blip would become
+    // a permanently-cached 404. Both halves are asserted, because only the
+    // second separates the two.
     const gone = stubReader({
-      items: [{ id: "1", status: "published" }],
+      items: [{ id: "1", title: "live", status: "published" }],
       overlayError: NextlyError.notFound(),
     });
     expect(
@@ -234,7 +236,7 @@ describe("resolveContent (working-draft layer)", () => {
         draft: true,
         overrideAccess: true,
       })
-    ).toBeNull();
+    ).toEqual({ id: "1", title: "live", status: "published" });
 
     const broken = NextlyError.internal();
     const blip = stubReader({
@@ -248,6 +250,22 @@ describe("resolveContent (working-draft layer)", () => {
         overrideAccess: true,
       })
     ).rejects.toBe(broken);
+  });
+
+  it("still surfaces a 404 that came from the slug lookup", async () => {
+    // The overlay's handler must not reach this read. A mistyped collection —
+    // or schema or hook code beneath it — answers 404, and swallowing that
+    // would render an ordinary content miss with nothing to say why.
+    const notFound = NextlyError.notFound();
+    const { reader } = stubReader({ error: notFound });
+
+    await expect(
+      resolveContent("posts", "a", {
+        nextly: reader,
+        draft: true,
+        overrideAccess: true,
+      })
+    ).rejects.toBe(notFound);
   });
 
   it("still lets an explicit lifecycle scope win", async () => {
@@ -287,11 +305,11 @@ describe("resolveContent (working-draft layer)", () => {
     expect(byIdCalls[0].user).toEqual({ id: "u1", role: "editor" });
   });
 
-  it("resolves to nothing when the row disappears between the two reads", async () => {
-    // Falling back to the copy already in hand would render a page that no
-    // longer exists.
+  it("keeps the live row when the overlay read finds no draft", async () => {
+    // The overlay adds pending edits; its absence is the ordinary case, not a
+    // failure. Returning nothing here would 404 a page that resolved fine.
     const { reader } = stubReader({
-      items: [{ id: "1", status: "published" }],
+      items: [{ id: "1", title: "live", status: "published" }],
       overlay: null,
     });
     expect(
@@ -300,7 +318,7 @@ describe("resolveContent (working-draft layer)", () => {
         draft: true,
         overrideAccess: true,
       })
-    ).toBeNull();
+    ).toEqual({ id: "1", title: "live", status: "published" });
   });
 
   it("returns the row unchanged when its id is not addressable", async () => {

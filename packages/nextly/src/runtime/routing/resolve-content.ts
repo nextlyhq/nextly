@@ -132,6 +132,31 @@ export interface ResolveContentOptions {
  * if (!post) notFound();
  * ```
  */
+/**
+ * Runs the working-draft overlay read, answering `null` when there is no draft
+ * to be had rather than failing the page.
+ *
+ * Scoped to THIS read on purpose. A 404 here means the row went away between
+ * the slug lookup and this call, or that an enforced by-id read filtered it to
+ * published — both simply mean "no overlay", and the live row already in hand
+ * is the honest answer. Wrapping the slug lookup in the same handler would be
+ * much worse: a 404 from a mistyped collection, or from schema or hook code
+ * beneath it, would render as an ordinary content miss with nothing to say why.
+ *
+ * Every other failure still propagates, so a database blip stays a retryable
+ * error rather than becoming a permanently-cached 404.
+ */
+async function readOverlay(
+  read: () => Promise<ContentEntry | null>
+): Promise<ContentEntry | null> {
+  try {
+    return await read();
+  } catch (error) {
+    if (NextlyError.is(error) && error.statusCode === 404) return null;
+    throw error;
+  }
+}
+
 export async function resolveContent(
   collection: string,
   slug: string,
@@ -193,17 +218,6 @@ export async function resolveContent(
       const found = result.items[0] ?? null;
       if (found === null || !draft) return found;
 
-      // Only a PUBLISHED row can have pending edits beside it. The split keeps
-      // the live row published and stores the edit separately, so a row that is
-      // not published already IS the draft and there is nothing to overlay.
-      //
-      // Skipping the second read there is also what keeps an enforced preview
-      // working: a by-id read without `overrideAccess` filters to published, so
-      // it would answer 404 for exactly the rows that reached here unpublished.
-      // A status-less collection takes the same path, correctly — drafts
-      // require the status lifecycle, so it can never have one.
-      if (found.status !== "published") return found;
-
       // The overlay lives on the by-id read, not the list read, so a slug
       // lookup cannot surface it directly. Re-reading the resolved row by id is
       // what turns "the live row whose slug matches" into "what an editor is
@@ -216,22 +230,27 @@ export async function resolveContent(
       // when the new slug is what matters.
       const id = found.id;
       if (typeof id !== "string" && typeof id !== "number") return found;
-      const overlaid = await nextly.findByID({
-        collection,
-        id: String(id),
-        draft: true,
-        depth,
-        overrideAccess,
-        user,
-        ...(options.richTextFormat
-          ? { richTextFormat: options.richTextFormat }
-          : {}),
-        ...(locale ? { locale } : {}),
-      });
-      // A row deleted between the two reads resolves to nothing rather than
-      // falling back to the copy already in hand, which would render a page
-      // that no longer exists.
-      return overlaid ?? null;
+      // The overlay is an ENHANCEMENT, never a requirement. Deciding whether to
+      // attempt it from the row's own `status` was wrong twice over: an
+      // `afterRead` hook may reshape or drop that field before it is read here,
+      // and an unpublished row would be skipped even where it could be served.
+      // So it is always attempted, and anything answering "no draft" falls back
+      // to the live row already in hand.
+      const overlaid = await readOverlay(() =>
+        nextly.findByID({
+          collection,
+          id: String(id),
+          draft: true,
+          depth,
+          overrideAccess,
+          user,
+          ...(options.richTextFormat
+            ? { richTextFormat: options.richTextFormat }
+            : {}),
+          ...(locale ? { locale } : {}),
+        })
+      );
+      return overlaid ?? found;
     } catch (error) {
       // An access denial (403) means the read policy hides this entry from the
       // caller — treat it as absent (→ notFound), never as a transient error.
@@ -239,18 +258,6 @@ export async function resolveContent(
       // `NextlyError.is` matches across bundled package copies where a plain
       // `instanceof` would miss a differently-realmed error class.
       if (NextlyError.is(error) && error.statusCode === 403) {
-        return null;
-      }
-      // A row deleted between the slug lookup and the overlay read is a content
-      // miss too: the by-id read THROWS `NOT_FOUND`, and letting that escape
-      // would answer 500 where the slug lookup finding nothing would simply
-      // have rendered the not-found page.
-      //
-      // Narrowed to that one status rather than handled with `disableErrors`,
-      // which returns null for EVERY unsuccessful result — a database blip
-      // would become a permanently-cached 404, the exact failure the rethrow
-      // below exists to prevent.
-      if (NextlyError.is(error) && error.statusCode === 404) {
         return null;
       }
       throw error;
