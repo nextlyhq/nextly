@@ -73,6 +73,7 @@ as a Tailwind v3 preset from `@nextlyhq/ui/tailwind-preset`.
 **Toggles:** `Checkbox`, `RadioGroup`, `Switch`, `Collapsible`
 **Layout and disclosure:** `Accordion`, `Avatar`, `Tabs`, `Tooltip`, `Popover`
 **Resizable regions:** `ResizablePanelGroup`, `ResizablePanel`, `ResizableHandle`
+**Hierarchies:** `TreeView` (virtualized, keyboard-operable)
 **Overlays:** `Dialog`, `AlertDialog`, `Sheet`
 **Menus and command palette:** `DropdownMenu`, `ContextMenu`, `Select`, `Command`
 **Feedback:** `Spinner`, `Toaster` (with `toast()` helper)
