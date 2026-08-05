@@ -61,9 +61,46 @@ export async function executePreResolutionOps(
   for (const op of ordered) {
     const sqlString = sqlForOp(op, dialect);
     await runRaw(txOrDb, sqlString, dialect);
+
+    // A rename moves the column; it does not change what the column IS. When the two sides differ,
+    // the rename alone leaves the old type in place under the new name, so the schema the runtime
+    // reads through and the column it actually reads disagree from that moment on. The conversion
+    // is issued here, immediately after the rename and against the new name, because this is the
+    // only point that knows both the rename happened and which dialect has to carry it out.
+    const conversion = conversionAfterRename(op, dialect);
+    if (conversion) await runRaw(txOrDb, conversion, dialect);
   }
 
   return ordered.length;
+}
+
+/**
+ * The statement that finishes a rename whose type changed, or null when there is nothing to finish.
+ *
+ * Returns null for SQLite on purpose rather than by omission: it has no ALTER that changes a
+ * column's type, and it needs none here, because it stores JSON as text and so the two sides of the
+ * one convertible change name the same storage. Asking for a conversion there would raise
+ * `SqliteUnsupportedOperationError` for a column that is already correct.
+ */
+function conversionAfterRename(
+  op: Operation,
+  dialect: SupportedDialect
+): string | null {
+  if (op.type !== "rename_column") return null;
+  if (dialect === "sqlite") return null;
+  if (!op.fromType || !op.toType) return null;
+  if (op.fromType === op.toType) return null;
+
+  return generateSQL(
+    {
+      type: "change_column_type",
+      tableName: op.tableName,
+      columnName: op.toColumn,
+      fromType: op.fromType,
+      toType: op.toType,
+    },
+    dialect
+  );
 }
 
 // Returns ops sorted into the execution-safe order described above.

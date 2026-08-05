@@ -311,21 +311,38 @@ describe("RegexRenameDetector - a column left under a legacy spelling", () => {
       }
     }
 
-    // Recorded rather than asserted loosely: `repeater` and `group` were never in the builder's
-    // type map, so their legacy column is `text` where the descriptor asks for JSON, and the
-    // resolution offered is not the data-preserving one.
+    // `repeater` and `group` were never in the builder's type map, so their legacy column is `text`
+    // where the descriptor asks for JSON. That is a change of family and still keeps every value:
+    // a structured value held in a text column is already its own JSON serialization, so the
+    // database can reinterpret it where it lies. All five therefore offer the resolution that moves
+    // the data, and none offers the one that recreates the column empty.
     expect(outcomes).toEqual({
       "postgresql.text": "rename",
       "postgresql.date": "rename",
       "postgresql.number": "rename",
-      "postgresql.repeater": "drop_and_add",
-      "postgresql.group": "drop_and_add",
+      "postgresql.repeater": "rename",
+      "postgresql.group": "rename",
       "mysql.text": "rename",
       "mysql.date": "rename",
       "mysql.number": "rename",
-      "mysql.repeater": "drop_and_add",
-      "mysql.group": "drop_and_add",
+      "mysql.repeater": "rename",
+      "mysql.group": "rename",
     });
+  });
+
+  // The rename is only half the recovery: it moves the column, it does not change what the column
+  // is. Stated here because the detector's answer above is what makes the pair reach the executor
+  // at all, and a reader who stops at "rename" would reasonably assume the type followed.
+  it("does not treat an unrelated family change as recoverable", () => {
+    const candidates = detector.detect(
+      [
+        drop("dc_posts", "_count", "text"),
+        add("dc_posts", "count", "integer"),
+      ] as Operation[],
+      "postgresql"
+    );
+
+    expect(candidates[0]?.defaultSuggestion).toBe("drop_and_add");
   });
 });
 
