@@ -23,6 +23,7 @@
  *
  * @module cli/commands/migrate-baseline
  */
+import { createHash } from "node:crypto";
 import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
@@ -259,6 +260,11 @@ export async function baselineCore(
         eventType: "file_apply",
         source: "cli-migrate",
         filename: `${baseName}.sql`,
+        // `migrate:status` compares this against the file's checksum and reads
+        // a missing value as the empty string, so a row recorded without it
+        // reports the file as edited since it was applied — on a project that
+        // has just generated it and touched nothing.
+        sha256: createHash("sha256").update(sqlContent).digest("hex"),
       });
       await repo.markApplied(eventId, {
         statementsExecuted: 0,

@@ -7,6 +7,8 @@
  * @module domains/schema/migrate/drift-error
  * @since v0.0.3-alpha (Plan C2)
  */
+import { dirname, join } from "node:path";
+
 import { NextlyError } from "../../../errors";
 
 /** One drift line: `+` present-in-DB, `-` expected-but-absent, `?` unknown. */
@@ -41,11 +43,16 @@ export interface MigrationDriftArgs {
  * Derived from the `.sql` path rather than passed in, so the two can never
  * name different migrations. `snapshot-io` writes them as
  * `<dir>/<name>.sql` and `<dir>/meta/<name>.snapshot.json`.
+ *
+ * Split with `node:path` rather than on `/`: `migrate` resolves this to an
+ * absolute path, which on Windows is separated by backslashes. Splitting on
+ * the forward slash alone would find no directory there and name a `meta/`
+ * beside the working directory instead of beside the migration, leaving the
+ * real snapshot in place — and `migrate:baseline` still refusing the project.
  */
 function snapshotPathFor(file: string, migration: string): string {
-  const dir = file.slice(0, Math.max(0, file.lastIndexOf("/")));
-  const metaDir = dir === "" ? "meta" : `${dir}/meta`;
-  return `${metaDir}/${migration}.snapshot.json`;
+  const dir = dirname(file);
+  return join(dir, "meta", `${migration}.snapshot.json`);
 }
 
 export function migrationDriftError(args: MigrationDriftArgs): NextlyError {

@@ -6,6 +6,8 @@
  * right. Baselining twice would give a history two starting points, and
  * baselining nothing would record an origin that describes no schema.
  */
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import type { NextlySchemaSnapshot } from "../../pipeline/diff/types";
@@ -189,7 +191,11 @@ describe("the drift error an unadopted database produces", () => {
       "migrations/20260805120000_add_localization.sql"
     );
     expect(error.publicMessage).toContain(
-      "migrations/meta/20260805120000_add_localization.snapshot.json"
+      join(
+        "migrations",
+        "meta",
+        "20260805120000_add_localization.snapshot.json"
+      )
     );
     const removeAt = error.publicMessage.indexOf("rm ");
     const baselineAt = error.publicMessage.indexOf("migrate:baseline");

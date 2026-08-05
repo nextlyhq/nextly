@@ -116,10 +116,23 @@ export async function migrateDownCore(
   }
 
   // Load each target's DOWN SQL.
-  const planned: { filename: string; downSql: string }[] = [];
+  //
+  // `reversible` asks whether the section holds any STATEMENT, not whether it
+  // holds any text. A generated migration with nothing to reverse still emits
+  // a `-- DOWN` header and an explanatory comment, so a length check reads it
+  // as reversible, executes nothing, and records the file rolled back — after
+  // which `migrate` treats it as pending and re-applies its `CREATE TABLE`s
+  // against the tables that are still there. A baseline is the case where
+  // that always happens, because it never has a down section.
+  const planned: { filename: string; downSql: string; reversible: boolean }[] =
+    [];
   for (const filename of targets) {
     const downSql = (await deps.readDownSql(filename)).trim();
-    planned.push({ filename, downSql });
+    planned.push({
+      filename,
+      downSql,
+      reversible: splitSqlStatements(downSql).length > 0,
+    });
   }
 
   // Dry-run is a non-destructive preview: it must never throw or execute, so
@@ -130,9 +143,9 @@ export async function migrateDownCore(
     deps.logger.info(`Would roll back ${planned.length} migration(s):`);
     for (const p of planned) {
       deps.logger.info(`  • ${p.filename}`);
-      if (p.downSql.length === 0) {
+      if (!p.reversible) {
         deps.logger.info(
-          "    (no -- DOWN section — irreversible; a real run would be refused)"
+          "    (no down SQL — irreversible; a real run would be refused)"
         );
         continue;
       }
@@ -148,7 +161,7 @@ export async function migrateDownCore(
 
   // Guards — evaluated up front, before executing anything.
   for (const p of planned) {
-    if (p.downSql.length === 0) {
+    if (!p.reversible) {
       throw new Error(
         `${p.filename} has no down SQL — it is irreversible. Hand-write a -- DOWN section or use 'nextly migrate:fresh'.`
       );
