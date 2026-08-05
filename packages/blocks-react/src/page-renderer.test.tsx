@@ -4120,7 +4120,10 @@ describe("PageRenderer", () => {
         <PageRenderer
           document={ahead}
           blocks={createBlockResolver([text as AnyBlockDefinition])}
-          styleContext={{ limits: DEFAULT_LIMITS }}
+          styleContext={{
+            breakpoints: { viewport: [], container: [] },
+            limits: DEFAULT_LIMITS,
+          }}
         />
       );
 
