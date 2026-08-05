@@ -1233,12 +1233,49 @@ describe("PageRenderer", () => {
       expect(html).not.toContain("<span>second</span>");
     });
 
-    it("gives a repeated dom id to the first node that claims it", async () => {
-      // Two nodes can carry different node ids and the same `cssId`, and
-      // rendering both puts two `id` attributes in one page — which is what
-      // makes an anchor, a label's `for` and an `#id` selector ambiguous.
-      // Engine validation rejects the shape; the forgiving render path must not
-      // quietly reintroduce it.
+    it("keeps a healthy node's anchor when another node with that id fails", async () => {
+      // The reason DOM ids are not settled before rendering. A block that
+      // throws is replaced by a placeholder emitting no id at all, so reserving
+      // ids in advance meant the failing node had already taken `hero` and the
+      // healthy one was stripped in exchange for nothing.
+      const boom = defineBlock({
+        name: "test/boom",
+        version: 1,
+        description: "Throws.",
+        example: { props: {} },
+        defaultProps: {},
+        render: () => {
+          throw new Error("nope");
+        },
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/boom", { cssId: "hero" }),
+            node("b", "test/text", {
+              props: { value: "healthy" },
+              cssId: "hero",
+            })
+          )}
+          blocks={createBlockResolver([
+            boom as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual(["render-error"]);
+      expect(html.match(/id="hero"/g)).toHaveLength(1);
+      expect(html).toContain("healthy");
+    });
+
+    it("lets a stored duplicate reach the page rather than repairing it", async () => {
+      // The cost of the above, stated rather than discovered. `duplicate-dom-id`
+      // is a write-time validation error, so this shape can only arrive from a
+      // row edited outside the product — and a browser resolves a duplicated id
+      // to the first match rather than failing, which is a smaller cost than
+      // silently unsticking an anchor on a page where nothing is wrong.
       const html = await renderToHtml(
         <PageRenderer
           document={doc(
@@ -1249,82 +1286,9 @@ describe("PageRenderer", () => {
         />
       );
 
-      // The id is dropped, not the content: the later node's body is fine.
+      expect(html.match(/id="dup"/g)).toHaveLength(2);
       expect(html).toContain("first");
       expect(html).toContain("second");
-      expect(html.match(/id="dup"/g)).toHaveLength(1);
-    });
-
-    it("drops a repeated dom id from a node that also has slots", async () => {
-      // The repaired copy is the one that has to reach the tree. Rebuilding a
-      // node's slots from the ORIGINAL would put the id back on exactly the
-      // nodes that can nest.
-      const box = defineBlock({
-        name: "test/dup-box",
-        version: 1,
-        description: "Renders one slot.",
-        example: { props: {} },
-        slots: { children: {} },
-        render: ({ className, renderSlot }) => (
-          <div className={className}>{renderSlot("children")}</div>
-        ),
-      });
-
-      const html = await renderToHtml(
-        <PageRenderer
-          document={doc(
-            node("a", "test/text", { props: { value: "first" }, cssId: "dup" }),
-            node("b", "test/dup-box", {
-              cssId: "dup",
-              slots: {
-                children: [
-                  node("c", "test/text", { props: { value: "nested" } }),
-                ],
-              },
-            })
-          )}
-          blocks={createBlockResolver([
-            box as AnyBlockDefinition,
-            text as AnyBlockDefinition,
-          ])}
-        />
-      );
-
-      expect(html.match(/id="dup"/g)).toHaveLength(1);
-      expect(html).toContain("first");
-      expect(html).toContain("nested");
-    });
-
-    it("counts an attribute id as the same address as a cssId", async () => {
-      // `id` is on the attribute allowlist, so the bag is a second way to write
-      // the same address. Reserving only `cssId` left the two able to collide
-      // with each other while each looked unique on its own.
-      const html = await renderToHtml(
-        <PageRenderer
-          document={doc(
-            node("a", "test/text", {
-              props: { value: "first" },
-              cssId: "hero",
-            }),
-            node("b", "test/text", {
-              props: { value: "second" },
-              attributes: { id: "hero" },
-            }),
-            node("c", "test/text", {
-              props: { value: "third" },
-              // Case variants of the NAME are the same attribute, since the
-              // render path lowercases before writing.
-              attributes: { ID: "hero" },
-            })
-          )}
-          blocks={createBlockResolver([text as AnyBlockDefinition])}
-        />
-      );
-
-      expect(html.match(/id="hero"/g)).toHaveLength(1);
-      for (const body of ["first", "second", "third"]) {
-        expect(html).toContain(body);
-      }
     });
 
     it("does not reserve a dom id for a node that renders a placeholder", async () => {
@@ -3889,32 +3853,24 @@ describe("PageRenderer", () => {
       }
     });
 
-    it("reserves the id the attribute bag will actually render", async () => {
+    it("renders the last string case-variant of an attribute id", async () => {
       // The render path lowercases each attribute name into one bag, so the
-      // LAST string case-variant is what reaches the DOM. Reserving the first
-      // would hold an id the page never uses while letting the one it does use
-      // collide with a later node.
+      // LAST string case-variant is what reaches the DOM. Worth pinning on its
+      // own: it decides which id an anchor resolves against.
       const html = await renderToHtml(
         <PageRenderer
           document={doc(
             node("a", "test/text", {
               props: { value: "first" },
               attributes: { id: "old", ID: "hero" },
-            }),
-            node("b", "test/text", {
-              props: { value: "second" },
-              cssId: "hero",
             })
           )}
           blocks={createBlockResolver([text as AnyBlockDefinition])}
         />
       );
 
-      // `hero` is claimed by the first node's rendered attribute, so the second
-      // renders without it. Exactly one `id="hero"` reaches the page.
-      expect(html.match(/id="hero"/g)).toHaveLength(1);
+      expect(html).toContain('id="hero"');
       expect(html).not.toContain('id="old"');
-      expect(html).toContain("second");
     });
 
     it("does not let a version-ahead node reserve a DOM id", async () => {
