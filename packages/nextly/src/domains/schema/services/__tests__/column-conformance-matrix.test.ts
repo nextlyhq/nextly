@@ -8,17 +8,19 @@
 // The descriptor is the one the product READS through: the runtime table selects the columns it
 // names, and the diff decides what to alter by comparing against it. So whenever a generator
 // disagrees with the descriptor, the table a user gets is not the table the rest of the system
-// believes it has. That has failed in five separate ways already, each found by a reviewer or by
-// accident rather than by a test.
+// believes it has, and the failure surfaces far from its cause: a write rejected by a column whose
+// type nobody declared, a diff that proposes the same change on every run, or a select against a
+// column the table does not have.
 //
-// This matrix is the test. It renders every field type through both generators on every dialect,
-// asks the descriptor for the same column, and fails on any disagreement that is not written down
-// in ACCEPTED below with a reason.
+// This matrix renders every field type through both generators on every dialect, asks the
+// descriptor for the same column, and fails on any disagreement that is not written down in
+// ACCEPTED below with a reason.
 //
 // ## Why the accepted list, rather than fixing them here
 //
-// Thirty-four columns disagree today. Most resolve by moving the generator to the descriptor, and
-// at least one must move the DESCRIPTOR to the generator instead: on MySQL a select renders as
+// Fifty-two disagreements are recorded today. Most resolve by moving the generator to the
+// descriptor, and at least one must move the DESCRIPTOR to the generator instead: on MySQL a select
+// renders as
 // `text` in the generator and `varchar(255)` in the descriptor, and taking the descriptor's answer
 // would silently cap existing content at 255 characters. The same two field types resolve the
 // OTHER way on PostgreSQL, where the generator is the one that bounds. Deciding those one at a time
@@ -116,6 +118,14 @@ const CASES: Record<DynamicFieldType, FieldCase[]> = {
       label: "decimal",
       field: { type: "number", dbType: "decimal", precision: 10, scale: 2 },
     },
+    // A hasMany number holds an array, which the write path stringifies, so the descriptor stores
+    // it as JSON and ignores `dbType` entirely. A shape that changes the physical column, and one
+    // no scalar case can stand in for.
+    { label: "hasMany", field: { type: "number", hasMany: true } },
+    {
+      label: "hasMany decimal",
+      field: { type: "number", hasMany: true, dbType: "decimal" },
+    },
   ],
   checkbox: [{ label: "plain", field: { type: "checkbox" } }],
   date: [{ label: "plain", field: { type: "date" } }],
@@ -126,6 +136,9 @@ const CASES: Record<DynamicFieldType, FieldCase[]> = {
   upload: [
     { label: "optional", field: { type: "upload" } },
     { label: "required", field: { type: "upload", required: true } },
+    // Many references are held as a JSON array of ids rather than one FK column. An upload is
+    // never junction-backed, so this always reaches a column and always has an answer.
+    { label: "hasMany", field: { type: "upload", hasMany: true } },
   ],
   relationship: [
     {
@@ -137,6 +150,26 @@ const CASES: Record<DynamicFieldType, FieldCase[]> = {
       field: {
         type: "relationship",
         required: true,
+        options: { target: "posts" },
+      },
+    },
+    // Two ways to reference many rows, and they are not interchangeable: hasMany may be
+    // junction-backed, in which case there is no column on this row at all, while a `relationTo`
+    // array names several targets and holds their ids together. Both change the storage the
+    // descriptor picks, so neither can be inferred from the single-target cases.
+    {
+      label: "hasMany",
+      field: {
+        type: "relationship",
+        hasMany: true,
+        options: { target: "posts" },
+      },
+    },
+    {
+      label: "polymorphic",
+      field: {
+        type: "relationship",
+        relationTo: ["posts", "pages"],
         options: { target: "posts" },
       },
     },
@@ -161,39 +194,45 @@ const CASES: Record<DynamicFieldType, FieldCase[]> = {
  * `reason` states what the two sides each produce and which direction the resolution has to go,
  * because "accepted" without that is indistinguishable from "unnoticed".
  */
+/**
+ * `aspect` is what makes the ratchet exact.
+ *
+ * A column can disagree in two ways at once — a required upload on MySQL differs in both its type
+ * and its nullability — and those two are resolved by different changes. Recorded only by column,
+ * fixing one of them would leave the other's entry in place with the column still observed, so the
+ * list would keep claiming a defect that is gone and no longer force its own removal. Recorded by
+ * aspect, each half has to be retired when it is actually resolved.
+ */
+type DivergenceAspect = "type" | "width" | "nullability" | "absence";
+
 interface AcceptedDivergence {
   builder: string;
   dialect: SupportedDialect;
   type: DynamicFieldType;
   variation: string;
+  aspect: DivergenceAspect;
   reason: string;
 }
 
-/** The column a row is about, in one string, so observed and accepted rows can be matched. */
+/**
+ * One disagreement, named down to the aspect, so observed and accepted rows match exactly.
+ *
+ * The aspect is part of the identity rather than a note on it. Two entries about one column are two
+ * separate claims, and each has to be retired on its own.
+ */
 function key(o: {
   builder: string;
   dialect: string;
   type: string;
   variation: string;
+  aspect: DivergenceAspect;
 }): string {
-  return `${o.builder}/${o.dialect}/${o.type}/${o.variation}`;
+  return `${o.builder}/${o.dialect}/${o.type}/${o.variation}/${o.aspect}`;
 }
 
-/**
- * Accepted entries, gathered by the column they describe.
- *
- * Reasons MERGE rather than replace, because a column can diverge in more than one way at once and
- * the families below are grouped by the KIND of divergence: a required upload on MySQL differs in
- * both its type and its nullability, and it belongs in both families without either one being able
- * to claim the whole column.
- */
-function byColumn(entries: AcceptedDivergence[]): Map<string, string[]> {
-  const merged = new Map<string, string[]>();
-  for (const entry of entries) {
-    const existing = merged.get(key(entry));
-    if (existing) existing.push(entry.reason);
-    else merged.set(key(entry), [entry.reason]);
-  }
+function byAspect(entries: AcceptedDivergence[]): Map<string, string> {
+  const merged = new Map<string, string>();
+  for (const entry of entries) merged.set(key(entry), entry.reason);
   return merged;
 }
 
@@ -201,6 +240,7 @@ function byColumn(entries: AcceptedDivergence[]): Map<string, string[]> {
 function everywhere(
   types: DynamicFieldType[],
   variations: string[],
+  aspect: DivergenceAspect,
   reason: string,
   scope: { builders?: string[]; dialects?: SupportedDialect[] } = {}
 ): AcceptedDivergence[] {
@@ -214,6 +254,7 @@ function everywhere(
           dialect,
           type,
           variation,
+          aspect,
           reason,
         }))
       )
@@ -223,7 +264,7 @@ function everywhere(
 
 const FK_TYPES: DynamicFieldType[] = ["upload", "relationship"];
 
-const ACCEPTED = byColumn([
+const ACCEPTED = byAspect([
   // --- 🔴 A field type one generator has never heard of ---------------------
   // The field-group generator has no case for `chips` and emits NOTHING: the column is absent from
   // the CREATE TABLE while the descriptor names a JSON column, so the runtime table binds a column
@@ -231,6 +272,7 @@ const ACCEPTED = byColumn([
   ...everywhere(
     ["chips"],
     ["plain"],
+    "absence",
     "field-group generator emits no column at all for chips; descriptor names a JSON column",
     { builders: ["fieldGroup"] }
   ),
@@ -241,6 +283,7 @@ const ACCEPTED = byColumn([
   ...everywhere(
     ["number"],
     ["decimal"],
+    "type",
     "collection generator ignores dbType and emits an integer column; descriptor says exact decimal",
     { builders: ["collection"] }
   ),
@@ -252,6 +295,7 @@ const ACCEPTED = byColumn([
   ...everywhere(
     FK_TYPES,
     ["required"],
+    "nullability",
     "generator emits NOT NULL for a required FK column; descriptor calls every FK column nullable"
   ),
 
@@ -262,6 +306,7 @@ const ACCEPTED = byColumn([
   ...everywhere(
     FK_TYPES,
     ["optional", "required"],
+    "type",
     "field-group generator types an FK column as UUID; descriptor and the runtime say text",
     { builders: ["fieldGroup"], dialects: ["postgresql"] }
   ),
@@ -270,8 +315,38 @@ const ACCEPTED = byColumn([
   ...everywhere(
     ["upload"],
     ["optional", "required"],
+    "type",
     "collection generator emits text for an upload FK; descriptor bounds it at varchar(36)",
     { builders: ["collection"], dialects: ["mysql"] }
+  ),
+
+  // --- 🔴 Many values in one column ----------------------------------------
+  // A field that holds MANY values stores them as a JSON array, and the descriptor says so for
+  // every one of them. Neither generator asks the question: both route these through the same
+  // scalar mapping a single-valued field of that type gets, so the column holds one value while
+  // the runtime binds an array to it. `dbType` does not rescue the number case — the descriptor
+  // ignores it once `hasMany` is set, and the field-group generator still emits DECIMAL.
+  ...everywhere(
+    ["number"],
+    ["hasMany", "hasMany decimal"],
+    "type",
+    "generator emits a scalar number column for a hasMany field; descriptor stores the array as JSON"
+  ),
+  // SQLite is absent from the two below on purpose: it stores JSON as text, so the two sides land
+  // on the same column there and there is nothing to accept.
+  ...everywhere(
+    ["upload"],
+    ["hasMany"],
+    "type",
+    "collection generator emits a single FK column for a hasMany upload; descriptor stores the ids as JSON",
+    { builders: ["collection"], dialects: ["postgresql", "mysql"] }
+  ),
+  ...everywhere(
+    ["relationship"],
+    ["hasMany", "polymorphic"],
+    "type",
+    "collection generator emits a single FK column for a multi-reference relationship; descriptor stores the ids as JSON",
+    { builders: ["collection"], dialects: ["postgresql", "mysql"] }
   ),
 
   // --- Structured values ---------------------------------------------------
@@ -281,6 +356,7 @@ const ACCEPTED = byColumn([
   ...everywhere(
     ["repeater", "group"],
     ["plain"],
+    "type",
     "collection generator stores structured values as text; descriptor names the JSON type",
     { builders: ["collection"], dialects: ["postgresql", "mysql"] }
   ),
@@ -294,18 +370,21 @@ const ACCEPTED = byColumn([
   ...everywhere(
     ["select", "radio"],
     ["plain"],
+    "type",
     "generator emits text, descriptor emits varchar(255); narrowing would truncate, so the descriptor moves",
     { builders: ["collection"], dialects: ["mysql"] }
   ),
   ...everywhere(
     ["select", "radio"],
     ["plain"],
+    "type",
     "field-group generator bounds the column at varchar(255); descriptor leaves it text",
     { builders: ["fieldGroup"], dialects: ["postgresql"] }
   ),
   ...everywhere(
     ["email", "password"],
     ["plain"],
+    "type",
     "generator bounds the column at varchar(255); descriptor leaves it unbounded text",
     { dialects: ["postgresql"] }
   ),
@@ -316,6 +395,7 @@ const ACCEPTED = byColumn([
   ...everywhere(
     ["date"],
     ["plain"],
+    "type",
     "field-group generator emits DATETIME; descriptor says timestamp",
     { builders: ["fieldGroup"], dialects: ["mysql"] }
   ),
@@ -457,34 +537,47 @@ function modifier(type: string): string {
 function difference(
   generated: Rendered | null,
   described: { dialectType: string; nullable: boolean } | null
-): string | null {
-  if (!generated && !described) return null;
+): Array<{ aspect: DivergenceAspect; detail: string }> {
+  if (!generated && !described) return [];
   if (!generated)
-    return `generator produces no column; descriptor says ${described?.dialectType}`;
+    return [
+      {
+        aspect: "absence",
+        detail: `generator produces no column; descriptor says ${described?.dialectType}`,
+      },
+    ];
   if (!described)
-    return `descriptor produces no column; generator says ${generated.type}`;
+    return [
+      {
+        aspect: "absence",
+        detail: `descriptor produces no column; generator says ${generated.type}`,
+      },
+    ];
 
-  const parts: string[] = [];
+  const parts: Array<{ aspect: DivergenceAspect; detail: string }> = [];
   const base = normalizeType(generated.type);
   if (base !== normalizeType(described.dialectType)) {
-    parts.push(
-      `type: generator=${generated.type} descriptor=${described.dialectType}`
-    );
+    parts.push({
+      aspect: "type",
+      detail: `generator=${generated.type} descriptor=${described.dialectType}`,
+    });
   } else if (
     base !== undefined &&
     WIDTH_BEARING.has(base) &&
     modifier(generated.type) !== modifier(described.dialectType)
   ) {
-    parts.push(
-      `width: generator=${generated.type} descriptor=${described.dialectType}`
-    );
+    parts.push({
+      aspect: "width",
+      detail: `generator=${generated.type} descriptor=${described.dialectType}`,
+    });
   }
   if (generated.notNull === described.nullable) {
-    parts.push(
-      `nullability: generator=${generated.notNull ? "NOT NULL" : "nullable"} descriptor=${described.nullable ? "nullable" : "NOT NULL"}`
-    );
+    parts.push({
+      aspect: "nullability",
+      detail: `generator=${generated.notNull ? "NOT NULL" : "nullable"} descriptor=${described.nullable ? "nullable" : "NOT NULL"}`,
+    });
   }
-  return parts.length > 0 ? parts.join(", ") : null;
+  return parts;
 }
 
 interface Observed {
@@ -492,6 +585,7 @@ interface Observed {
   dialect: SupportedDialect;
   type: DynamicFieldType;
   variation: string;
+  aspect: DivergenceAspect;
   detail: string;
 }
 
@@ -517,13 +611,13 @@ function measure(): Observed[] {
             columnName
           );
           const described = getColumnDescriptor(field, dialect, builder.origin);
-          const detail = difference(generated, described);
-          if (detail) {
+          for (const { aspect, detail } of difference(generated, described)) {
             found.push({
               builder: builder.label,
               dialect,
               type,
               variation: testCase.label,
+              aspect,
               detail,
             });
           }
@@ -549,7 +643,7 @@ describe("column conformance: the generators against the descriptor", () => {
     const observedKeys = new Set(observed.map(key));
     const stale = [...ACCEPTED.entries()].filter(([k]) => !observedKeys.has(k));
     expect(
-      stale.map(([k, reasons]) => `${k} (${reasons.join("; ")})`),
+      stale.map(([k, reason]) => `${k} (${reason})`),
       "this disagreement was resolved; delete its entry so the list keeps meaning what it says"
     ).toEqual([]);
   });
@@ -563,6 +657,6 @@ describe("column conformance: the generators against the descriptor", () => {
     expect(
       variations * BUILDERS.length * DIALECTS.length,
       "columns compared"
-    ).toBeGreaterThanOrEqual(100);
+    ).toBeGreaterThanOrEqual(150);
   });
 });
