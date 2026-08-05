@@ -51,12 +51,23 @@ import type {
   SingleMigrationStatus,
 } from "../../../schemas/dynamic-singles/types";
 import type { Logger } from "../../../shared/types";
-import { DynamicCollectionSchemaService } from "../../dynamic-collections/services/dynamic-collection-schema-service";
 import { applyMigrationStatements } from "../../schema/services/apply-migration-statements";
-import { generateRuntimeSchema } from "../../schema/services/runtime-schema-generator";
 
-import { reconcileSingleCompanion } from "./reconcile-single-companion";
 import type { SingleRegistryService } from "./single-registry-service";
+
+/**
+ * 🔴 The schema generators, the runtime-schema builder and the companion reconcile are loaded on
+ * demand, NOT at the top of this file.
+ *
+ * This service is registered in the DI container, and the registration module is imported during
+ * boot by anything that touches the container. A static import here would pull the whole schema and
+ * i18n machinery into that graph for every consumer, including every process that never creates a
+ * Single. `di/register.ts` avoids exactly this with 37 `await import()` calls covering these same
+ * three modules, and a static import from a registration module quietly undoes that work — measured
+ * at +41% on the package's own test suite, enough to push its slowest files past their timeout.
+ *
+ * The cost of loading them here is paid once, on a path that is already writing DDL to a database.
+ */
 
 /**
  * The registry row to create, minus the one field this service owns.
@@ -149,6 +160,9 @@ export class SingleMetadataService {
     const isLocalized = input.localized === true;
     const hasStatus = input.status === true;
     const fields = input.fields as unknown as FieldDefinition[];
+    const { DynamicCollectionSchemaService } = await import(
+      "../../dynamic-collections/services/dynamic-collection-schema-service"
+    );
     const schemaService = new DynamicCollectionSchemaService(
       undefined,
       this.dialect
@@ -193,12 +207,21 @@ export class SingleMetadataService {
       return "failed";
     }
 
-    this.registerRuntimeSchema(input, fields, adapter, hasStatus, isLocalized);
+    await this.registerRuntimeSchema(
+      input,
+      fields,
+      adapter,
+      hasStatus,
+      isLocalized
+    );
 
     // The companion is the other half of a localized single's storage, so failing to provision it
     // leaves translatable values with nowhere to live. Reported as a failed migration rather than
     // thrown: the main table exists and the row describes it, which is what makes a retry possible.
     try {
+      const { reconcileSingleCompanion } = await import(
+        "./reconcile-single-companion"
+      );
       await reconcileSingleCompanion({
         slug: input.slug,
         tableName: input.tableName,
@@ -233,14 +256,17 @@ export class SingleMetadataService {
    * rather than from the container, because that adapter is the one whose reads have to resolve
    * the name and a caller may hold one the container has never seen.
    */
-  private registerRuntimeSchema(
+  private async registerRuntimeSchema(
     input: CreateSingleInput,
     fields: FieldDefinition[],
     adapter: DrizzleAdapter,
     hasStatus: boolean,
     isLocalized: boolean
-  ): void {
+  ): Promise<void> {
     try {
+      const { generateRuntimeSchema } = await import(
+        "../../schema/services/runtime-schema-generator"
+      );
       const { table } = generateRuntimeSchema(
         input.tableName,
         fields,
