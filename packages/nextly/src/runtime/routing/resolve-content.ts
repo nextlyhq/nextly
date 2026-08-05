@@ -143,6 +143,15 @@ export interface ResolveContentOptions {
    * cached pages should read its public content with `overrideAccess: true`.
    */
   overrideAccess?: boolean;
+  /**
+   * What the CALLER authorized, before a draft decision widened it.
+   *
+   * A route forces `overrideAccess` on so a granted entry can be reached at
+   * all. That forcing is justified only while the grant is answering the path,
+   * so a read that runs after it stops answering uses this instead. Defaults to
+   * `overrideAccess`, leaving a caller that widened nothing where it was.
+   */
+  callerOverrideAccess?: boolean;
   /** User identity to evaluate access rules against (with `overrideAccess: false`). */
   user?: UserContext;
 }
@@ -194,6 +203,7 @@ export async function resolveContent(
   const depth = options.depth ?? 1;
   const locale = options.locale;
   const overrideAccess = options.overrideAccess ?? false;
+  const callerOverrideAccess = options.callerOverrideAccess ?? overrideAccess;
   const user = options.user;
 
   // Widening the lifecycle scope follows TRUST, not the draft flag.
@@ -222,6 +232,13 @@ export async function resolveContent(
    * Used when a named grant did not answer this path. Reading with the widened
    * scope would surface a never-published row the grant never named, which is
    * exactly the disclosure the grant is supposed to bound.
+   *
+   * Trust is withdrawn in BOTH dimensions, not just the lifecycle one. The
+   * access widening exists to reach the entry a grant NAMES; once the grant is
+   * not answering this path the request is an ordinary anonymous one, and
+   * carrying the widening here would let one document-scoped grant return any
+   * published row in the collection, including rows the collection's own
+   * access rules withhold from the caller.
    */
   const publishedOnly = async (): Promise<ContentEntry | null> => {
     const result = await nextly.find({
@@ -231,7 +248,7 @@ export async function resolveContent(
       limit: 1,
       sort: "id",
       depth,
-      overrideAccess,
+      overrideAccess: callerOverrideAccess,
       user,
       ...(options.richTextFormat
         ? { richTextFormat: options.richTextFormat }
