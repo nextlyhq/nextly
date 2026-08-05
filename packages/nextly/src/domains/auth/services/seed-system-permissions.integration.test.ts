@@ -155,3 +155,72 @@ describe("system permission slugs", () => {
     expect(String(rows[0].id)).toBe("p-stale");
   });
 });
+
+describe("a plugin declaring a permission on a Builder entity", () => {
+  /**
+   * The reproduction from the follow-up doc: a collection that exists only in
+   * `dynamic_collections`, and a plugin declaring a permission on its slug.
+   *
+   * `collectCustomPermissions` decides what an entity is from the CONFIG, so a
+   * Builder collection is invisible to it and its permissions are collected as
+   * custom. Attaching an owner then makes the row look plugin-provided, and the
+   * role presets grant Editor on `!isSystem && !isPlugin` — so the permission
+   * silently stops being granted, and becomes eligible for the orphan sweep the
+   * day the plugin is removed.
+   */
+  async function ownerOf(
+    handle: TestNextly,
+    action: string,
+    resource: string
+  ): Promise<string | null | undefined> {
+    const rows = (await handle.adapter.executeQuery(
+      `SELECT owner FROM permissions WHERE action = '${action}' AND resource = '${resource}'`
+    )) as unknown as Array<{ owner: string | null }>;
+    return rows[0] ? rows[0].owner : undefined;
+  }
+
+  it("leaves the permission unowned, so presets still grant it", async () => {
+    const handle = await bootWithCoreTables();
+    current = handle;
+    await handle.adapter.executeQuery(
+      // Every NOT NULL column, so the row is one the registry would accept. The seeder reads
+      // only `slug`, but a partial insert fails before it gets there.
+      `INSERT INTO dynamic_collections
+         (id, slug, labels, table_name, fields, timestamps, status, localized,
+          source, locked, schema_hash, schema_version, migration_status, created_at, updated_at)
+       VALUES ('dc1', 'reports', '{}', 'reports', '[]', 1, 0, 0, 'ui', 0, 'h1', 1, 'applied', 0, 0)`
+    );
+
+    const seeder = handle.getService("permissionSeedService");
+    await seeder.seedAllCollectionPermissions();
+    await seeder.seedCustomPermissions([
+      {
+        action: "publish",
+        resource: "reports",
+        slug: "publish-reports",
+        name: "Publish Reports",
+        owner: "some-plugin",
+      },
+    ] as never);
+
+    expect(await ownerOf(handle, "publish", "reports")).toBeFalsy();
+  });
+
+  it("still lets a plugin own a permission on a resource that is not an entity", async () => {
+    const handle = await bootWithCoreTables();
+    current = handle;
+
+    const seeder = handle.getService("permissionSeedService");
+    await seeder.seedCustomPermissions([
+      {
+        action: "run",
+        resource: "imports",
+        slug: "run-imports",
+        name: "Run Imports",
+        owner: "some-plugin",
+      },
+    ] as never);
+
+    expect(await ownerOf(handle, "run", "imports")).toBe("some-plugin");
+  });
+});

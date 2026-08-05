@@ -281,6 +281,29 @@ const SYSTEM_PERMISSIONS: SystemPermissionDef[] = [
  * await seedService.assignNewPermissionsToSuperAdmin(result.newPermissionIds);
  * ```
  */
+/**
+ * The actions the built-in seeder creates for every collection and every single.
+ *
+ * Stated once because two things read them: the seeding loops below, and the check that decides
+ * whether a plugin may claim a permission. A second copy is how the reservation drifted from what
+ * is actually seeded in the first place.
+ */
+const COLLECTION_SEEDED_ACTIONS = [
+  "create",
+  "read",
+  "update",
+  "delete",
+  "publish",
+  "unpublish",
+] as const;
+
+const SINGLE_SEEDED_ACTIONS = [
+  "read",
+  "update",
+  "publish",
+  "unpublish",
+] as const;
+
 export class PermissionSeedService extends BaseService {
   private _permissionService?: PermissionService;
   private _rolePermissionService?: RolePermissionService;
@@ -370,14 +393,7 @@ export class PermissionSeedService extends BaseService {
   async seedCollectionPermissions(collectionSlug: string): Promise<SeedResult> {
     const result = this.emptySeedResult();
     const label = this.slugToLabel(collectionSlug);
-    const actions = [
-      "create",
-      "read",
-      "update",
-      "delete",
-      "publish",
-      "unpublish",
-    ] as const;
+    const actions = COLLECTION_SEEDED_ACTIONS;
 
     for (const action of actions) {
       const actionLabel = action.charAt(0).toUpperCase() + action.slice(1);
@@ -422,7 +438,7 @@ export class PermissionSeedService extends BaseService {
   async seedSinglePermissions(singleSlug: string): Promise<SeedResult> {
     const result = this.emptySeedResult();
     const label = this.slugToLabel(singleSlug);
-    const actions = ["read", "update", "publish", "unpublish"] as const;
+    const actions = SINGLE_SEEDED_ACTIONS;
 
     for (const action of actions) {
       const actionLabel = action.charAt(0).toUpperCase() + action.slice(1);
@@ -521,9 +537,26 @@ export class PermissionSeedService extends BaseService {
     perms: CollectedPermission[]
   ): Promise<SeedResult> {
     const result = this.emptySeedResult();
+    const builtIn = await this.builtInOwnedPermissions();
 
     for (const perm of perms) {
       result.total++;
+      // A permission the built-in seeder owns is not a plugin's to claim, however it was
+      // declared. `collectCustomPermissions` refuses these from the CONFIG, but it decides what
+      // an entity is from the config alone, so a Schema Builder collection — which exists only in
+      // `dynamic_collections` — is invisible to it and its permissions were collected as custom.
+      //
+      // The consequence is not cosmetic. Attaching an owner makes the row look plugin-provided,
+      // and the role presets grant Editor on `!isSystem && !isPlugin`, so a Builder collection's
+      // publish permission silently stopped being granted — and became eligible for the orphan
+      // sweep the day the plugin was removed.
+      //
+      // Decided here rather than at collection time because this is the layer that knows: the
+      // list below is read from the database, which the pure collector deliberately cannot touch.
+      if (builtIn.has(`${perm.action}:${perm.resource}`)) {
+        result.skipped++;
+        continue;
+      }
       try {
         const ensured = await this.permissionService.ensurePermission(
           perm.action,
@@ -952,6 +985,37 @@ export class PermissionSeedService extends BaseService {
     }
 
     return result;
+  }
+
+  /**
+   * The `${action}:${resource}` pairs the built-in seeders own.
+   *
+   * Read from the same slug sources the seeding passes read — which include entities that exist
+   * only in the database — and the same action lists they seed. Deriving it any other way is what
+   * let the reservation and the seeder disagree about which entities exist.
+   *
+   * A database that cannot answer yields an empty set, leaving today's behaviour rather than
+   * refusing every declared permission on a fresh or half-migrated install.
+   */
+  private async builtInOwnedPermissions(): Promise<Set<string>> {
+    const owned = new Set<string>();
+    try {
+      for (const slug of await this.getAllCollectionSlugs()) {
+        for (const action of COLLECTION_SEEDED_ACTIONS) {
+          owned.add(`${action}:${slug}`);
+        }
+      }
+      for (const slug of await this.getAllSingleSlugs()) {
+        for (const action of SINGLE_SEEDED_ACTIONS) {
+          owned.add(`${action}:${slug}`);
+        }
+      }
+    } catch {
+      this.logger.warn(
+        "Could not read the entity tables — plugin permissions were not checked against built-in ones."
+      );
+    }
+    return owned;
   }
 
   private async getAllCollectionSlugs(): Promise<string[]> {
