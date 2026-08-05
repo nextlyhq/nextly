@@ -88,6 +88,10 @@ import {
   stripPasswordFieldValues,
   stripSystemOwnerField,
 } from "../../../shared/lib/password-fields";
+import {
+  isWriteIntegrityFailure,
+  markWriteIntegrityFailure,
+} from "../../../shared/write-integrity";
 import type { SupportedDialect } from "../../../types/database";
 import { willRecordMutationActivity } from "../../audit/record-activity";
 import type { DynamicCollectionService } from "../../dynamic-collections";
@@ -164,37 +168,12 @@ type CompanionReadDb = Parameters<
 >[0]["db"];
 
 /**
- * Errors raised AFTER a content row was written on a shared transaction — a
- * version-capture or outbox-recording failure — where reporting the item as a
- * soft per-item failure would commit the row without its promised snapshot or
- * event. A batch runs every item on ONE transaction with no per-item savepoint,
- * so the only way to keep such a row from committing is to abort the whole
- * transaction: these errors are marked here and re-thrown by the bulk write
- * loops instead of being swallowed. Tracked by object identity, so the original
- * error propagates unwrapped.
+ * Re-exported for the bulk write loops, which read it to decide whether an
+ * error raised after a row was written may be softened into a per-item failure
+ * or must abort the shared transaction. Defined in `shared/write-integrity` so
+ * the recorders that SET the mark do not have to import this service graph.
  */
-const writeIntegrityFailures = new WeakSet<object>();
-
-export function markWriteIntegrityFailure<E>(error: E): E {
-  if (typeof error === "object" && error !== null) {
-    writeIntegrityFailures.add(error);
-  }
-  return error;
-}
-
-/**
- * Whether `error` was marked a write-integrity failure — a post-write capture or
- * recording failure that must roll the enclosing transaction back rather than be
- * reported as a soft per-item failure. The bulk create/update loops re-throw
- * these to abort the transaction.
- */
-export function isWriteIntegrityFailure(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    writeIntegrityFailures.has(error)
-  );
-}
+export { isWriteIntegrityFailure };
 
 /**
  * Emit a post-commit `collection.<slug>.<action>` event (D8/D51). Observe-only,
@@ -3368,6 +3347,8 @@ export class CollectionMutationService extends BaseService {
     // A scoped API key is judged on its own `publish-<slug>` grant, not the key
     // owner's — the route authorized this POST only as `update`.
     authenticatedScope?: AuthenticatedScope;
+    /** Who performed the publish, recorded on the events and the trail. */
+    actor?: RequestActor;
   }): Promise<CollectionServiceResult> {
     // Set when the in-transaction document-rule re-check refuses the publish
     // against the row-locked document. Declared out here so the catch can read
@@ -3838,7 +3819,7 @@ export class CollectionMutationService extends BaseService {
             fields,
             tx.getDrizzle()
           );
-          const publishActor = actorForWrite(undefined, params.user);
+          const publishActor = actorForWrite(params.actor, params.user);
           const baseRecorded = await recordMutationEvent(tx, {
             type: "entry.updated",
             resource: {
@@ -6082,7 +6063,7 @@ export class CollectionMutationService extends BaseService {
                       ? { locale: localizedUpdate.writeLocale }
                       : {}),
                   },
-                  data: updatedDocument,
+                  data: workingDraftDocument ?? updatedDocument,
                   previous: previousDocument,
                   fields: webhookFields,
                   actor: actorForWrite(params.actor, params.user),
@@ -6094,12 +6075,18 @@ export class CollectionMutationService extends BaseService {
                 // documents. Recorded on its own seam because the two answer
                 // different questions; routing it through the event above would
                 // have to invent a public event for a private edit.
+                // Diffed against the DRAFT, not the live row. A draft save
+                // deliberately leaves the live document and its relations
+                // untouched, so comparing the live before and after reports every
+                // draft edit as having changed nothing. These are the same two
+                // documents the afterUpdate hooks compare — the new draft against
+                // the prior one, or against the published row on the first save.
                 await recordEntryActivity(tx, {
                   action: "update",
                   collection: params.collectionName,
                   entryId: params.entryId,
-                  data: updatedDocument,
-                  previous: previousDocument,
+                  data: workingDraftDocument ?? updatedDocument,
+                  previous: priorWorkingDraftDocument ?? previousDocument,
                   actor: actorForWrite(params.actor, params.user),
                 });
               }
@@ -6200,7 +6187,7 @@ export class CollectionMutationService extends BaseService {
                   from: localizedPreviousStatus,
                   to: companionNext,
                   isCreate: false,
-                  data: updatedDocument,
+                  data: workingDraftDocument ?? updatedDocument,
                   previous: previousDocument,
                   fields: webhookFields,
                   actor,

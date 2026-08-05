@@ -22,11 +22,11 @@ import type {
   ActivityLogAction,
   ActivityWriteDb,
 } from "../../services/dashboard/activity-log-service";
+import { markWriteIntegrityFailure } from "../../shared/write-integrity";
 import {
   recordMutationActivity,
   type RecordMutationActivityInput,
 } from "../audit/record-activity";
-import { markWriteIntegrityFailure } from "../collections/services/collection-mutation-service";
 
 import { buildEnvelope } from "./envelope";
 import {

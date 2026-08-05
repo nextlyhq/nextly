@@ -169,6 +169,80 @@ describe.each(getConfiguredTestDialects())(
       expect(metadataOf(updated!).changedFields).toContain("title");
     });
 
+    it("names a relationship-only draft edit, which leaves the live row alone", async () => {
+      // A draft save deliberately does not rewrite the live document or its
+      // relations, so diffing the live before and after reports every draft edit
+      // as changing nothing. The entry has to be diffed against the DRAFT.
+      current = await withActor(dialect, [
+        defineCollection({ slug: "tags", fields: [text({ name: "title" })] }),
+        defineCollection({
+          slug: "posts",
+          status: true,
+          versions: true,
+          fields: [
+            text({ name: "title" }),
+            relationship({ name: "tags", relationTo: "tags", hasMany: true }),
+          ],
+        }),
+      ]);
+      const handler = current.getService("collectionsHandler");
+
+      const tag = await handler.createEntry(asActor("tags"), { title: "news" });
+      const tagId = (tag.data as { id: string }).id;
+      const created = await handler.createEntry(asActor("posts"), {
+        title: "live",
+        status: "published",
+      });
+      const id = (created.data as { id: string }).id;
+
+      // Status-less, so it accumulates as a working draft.
+      await handler.updateEntry(
+        { ...asActor("posts"), entryId: id },
+        { title: "first draft edit" }
+      );
+      // A SECOND draft save, editing only the relationship. This is the case
+      // that needs the prior DRAFT as its baseline: the live row is unchanged by
+      // either save, so comparing against it reports nothing changed, and
+      // comparing against the published row would re-report the first save's
+      // title edit as changing again.
+      await handler.updateEntry(
+        { ...asActor("posts"), entryId: id },
+        { tags: [tagId] }
+      );
+
+      const rows = (await activity(current)).filter(
+        row => row.action === "update" && row.entryId === id
+      );
+      expect(rows).toHaveLength(2);
+      const second = rows
+        .map(row => metadataOf(row).changedFields)
+        .find(fields => Array.isArray(fields) && fields.includes("tags"));
+      expect(second).toBeDefined();
+      // The first save's field is not re-reported by the second.
+      expect(second).not.toContain("title");
+    });
+
+    it("leaves no entry for a write carrying the system context", async () => {
+      // `SYSTEM_CONTEXT` is a RequestContext whose user has the reserved id
+      // `system`, so an internal caller passing it resolves to a USER actor
+      // rather than a system one. No account owns that id, so the entry would be
+      // stored as an already-erased identity — an internal write attributed to a
+      // person who does not exist.
+      current = await withActor(dialect);
+      const handler = current.getService("collectionsHandler");
+
+      await handler.createEntry(
+        {
+          collectionName: "posts",
+          overrideAccess: true,
+          user: { id: "system", email: "system@nextly.local" },
+        },
+        { title: "seeded" }
+      );
+
+      expect(await activity(current)).toHaveLength(0);
+    });
+
     it("records a bulk write, and attributes it to whoever performed it", async () => {
       // The in-transaction methods the bulk workers call resolved their actor
       // as `actorForWrite(undefined, params.user)` — discarding the transport

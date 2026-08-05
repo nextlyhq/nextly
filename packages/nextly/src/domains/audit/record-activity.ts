@@ -22,6 +22,7 @@ import type {
   ActivityLogService,
   ActivityWriteDb,
 } from "../../services/dashboard/activity-log-service";
+import { SYSTEM_CONTEXT } from "../../shared/types";
 import { computeChangedFields } from "../webhooks/envelope";
 
 /** What one mutation records, as the choke point already knows it. */
@@ -139,6 +140,13 @@ export function willRecordMutationActivity(
   actor?: RequestActor | null
 ): actor is RequestActor & { type: "user"; id: string } {
   if (actor?.type !== "user" || !actor.id) return false;
+  // `SYSTEM_CONTEXT` is a RequestContext whose user carries the reserved id
+  // `system`, so a seed or migration passing it — with no transport actor to
+  // override it — resolves to a USER actor rather than a system one. No account
+  // owns that id, so the entry would be stored already-erased, attributing an
+  // internal write to a person who does not exist. Compared against the
+  // sentinel itself so the two cannot drift apart.
+  if (actor.id === SYSTEM_CONTEXT.user?.id) return false;
   return !collectionViews().hidden.has(collection);
 }
 
