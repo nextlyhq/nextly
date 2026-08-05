@@ -37,8 +37,6 @@ import {
   getConfiguredTestDialects,
   type TestNextly,
 } from "../../../plugins/test-nextly";
-import type { SingleRegistryService } from "../services/single-registry-service";
-
 let current: TestNextly | undefined;
 
 afterEach(async () => {
@@ -51,9 +49,7 @@ async function registryRow(
   instance: TestNextly,
   slug: string
 ): Promise<{ migrationStatus?: string; tableName?: string } | undefined> {
-  const registry = instance.getService<SingleRegistryService>(
-    "singleRegistryService"
-  );
+  const registry = instance.getService("singleRegistryService");
   return (await registry.getSingleBySlug(slug)) ?? undefined;
 }
 
@@ -135,9 +131,7 @@ for (const dialect of getConfiguredTestDialects()) {
 
       // The interrupted state the guarantee is about: the table landed, the row describing it did
       // not survive. Recovery has to be able to finish the operation over what is already there.
-      const registry = current.getService<SingleRegistryService>(
-        "singleRegistryService"
-      );
+      const registry = current.getService("singleRegistryService");
       // `force` because a Single is site-wide configuration the registry refuses to drop casually;
       // here the row is being removed on purpose to recreate an interrupted create.
       await registry.deleteSingle(plain, { force: true });
