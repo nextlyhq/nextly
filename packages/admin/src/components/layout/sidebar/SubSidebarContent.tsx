@@ -175,9 +175,12 @@ export function SubSidebarContent({
     );
   }
 
-  if (selectedMain === "manage") {
+  if (selectedMain === "settings") {
     return (
-      <div className="space-y-6 px-4 py-6">
+      <div className="space-y-8 px-4 py-6">
+        {/* User Management Group — Users, User Fields, and Roles moved here
+            from the former top-level Users icon (id "manage"), which no
+            longer has its own main-menu entry. */}
         <div className="space-y-1">
           {(hasPermission("read-users") ||
             hasPermission("manage-settings") ||
@@ -232,15 +235,11 @@ export function SubSidebarContent({
               </SidebarMenuItem>
             )}
           </SidebarMenu>
+          {/* Plugin collections explicitly placed under the old "users"
+              section follow User Management, matching the prior grouping. */}
+          <DynamicPluginSectionItems placement="users" isActive={isActive} />
         </div>
-        <DynamicPluginSectionItems placement="users" isActive={isActive} />
-      </div>
-    );
-  }
 
-  if (selectedMain === "settings") {
-    return (
-      <div className="space-y-8 px-4 py-6">
         {/* System Settings Group */}
         <div className="space-y-1">
           {(hasPermission("manage-settings") ||
