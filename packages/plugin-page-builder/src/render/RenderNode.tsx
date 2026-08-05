@@ -129,7 +129,15 @@ export function RenderNode({
         budget={budget}
         refs={refs}
         refStack={[...(refStack ?? []), refId]}
-        classes={classes}
+        // Not this document's map. It is keyed by id, and a stored subtree can
+        // hold an id the document also holds — a block made reusable from a node
+        // that stayed put is the ordinary way — so passing it on would give the
+        // referenced node a class disambiguated for the OTHER node of that id,
+        // compiled from styles that are not its own. The referenced subtree is
+        // outside the walk the map is built from, so it has no entry to inherit
+        // and its nodes take the plain class, which is what the compiler would
+        // name them if it reached them.
+        classes={undefined}
       />
     );
   }
