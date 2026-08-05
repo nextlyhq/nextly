@@ -184,6 +184,82 @@ for (const dialect of getConfiguredTestDialects()) {
     });
 
     /**
+     * 🔴 Exactly ONE retry may own a failed create, even when two start together.
+     *
+     * Reading `failed` and then writing is not enough: both retries can observe it before either
+     * writes, and both would then run their own DDL against one slug. The claim puts the status in
+     * the WHERE clause so the database picks the winner. Issued concurrently here rather than in
+     * sequence, because a sequential pair would pass even with the check-then-act version.
+     */
+    it("lets only one of two concurrent retries take over", async () => {
+      current = await createTestNextly({ dialect });
+
+      const payload = {
+        slug: plain,
+        label: "Plain",
+        fields: [{ name: "body", type: "text" }],
+      };
+      await dispatchSingles("createSingle", {}, payload);
+
+      const registry = current.getService("singleRegistryService");
+      await registry.updateMigrationStatus(plain, "failed");
+
+      // The same payload on purpose: that is the retry a user actually makes, and the one whose
+      // unchanged field hash stops `updateSingle` from re-flagging the row.
+      const outcomes = await Promise.allSettled([
+        dispatchSingles("createSingle", {}, payload),
+        dispatchSingles("createSingle", {}, payload),
+      ]);
+
+      const claimed = outcomes.filter(o => o.status === "fulfilled");
+      expect(claimed).toHaveLength(1);
+      expect((await registryRow(current, plain))?.migrationStatus).toBe(
+        "applied"
+      );
+    });
+
+    /**
+     * A normal schema UPDATE on a Single must stay `applied`.
+     *
+     * 🔴 The ALTER path builds its verification shape from a normalized field list that carries a
+     * synthetic `title` so the generator can see the existing system column. If that list reaches
+     * the descriptor unchanged, `title` is described as a Builder text field rather than the system
+     * one — and on MySQL the system column is `varchar(255)` while a Builder text field is not, so
+     * an ordinary successful field update would be recorded as failed.
+     */
+    it("keeps a schema update applied after adding a field", async () => {
+      current = await createTestNextly({ dialect });
+
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: plain,
+          label: "Plain",
+          fields: [{ name: "body", type: "text" }],
+        }
+      );
+      expect((await registryRow(current, plain))?.migrationStatus).toBe(
+        "applied"
+      );
+
+      await dispatchSingles(
+        "updateSingleSchema",
+        { slug: plain },
+        {
+          fields: [
+            { name: "body", type: "text" },
+            { name: "subtitle", type: "text" },
+          ],
+        }
+      );
+
+      expect((await registryRow(current, plain))?.migrationStatus).toBe(
+        "applied"
+      );
+    });
+
+    /**
      * 🔴 The other half of adoption: a create still in flight must NOT be taken over.
      *
      * `pending` is indistinguishable from "running right now". Adopting one would overwrite its

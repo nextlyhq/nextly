@@ -199,18 +199,22 @@ export class SingleMetadataService {
       });
     }
 
-    // 🔴 Only `failed` is adopted, and the distinction is about concurrency rather than tidiness.
+    // 🔴 Only `failed` is adopted, and only by CLAIMING it, which are two separate points.
     //
-    // `failed` is a FINISHED attempt: it recorded its own outcome, so nothing is still running
-    // against this slug and taking it over is safe. `pending` cannot say that — it is equally the
-    // state of a create that is in flight RIGHT NOW, and adopting one would overwrite its row with
-    // a second payload while its DDL is still building the first schema, after which the original
-    // confirms `applied` against a description that is no longer its own.
+    // WHICH state: `failed` is a FINISHED attempt — it recorded its own outcome, so nothing is
+    // still running against this slug. `pending` cannot say that; it is equally the state of a
+    // create in flight right now, and taking that over would overwrite its row with a second
+    // payload while its DDL is still building the first schema.
     //
-    // Serialising the slug is what would make `pending` adoptable, and that is the migration lock
-    // this relocation exists to unblock: it needs the table change and the registry write inside
-    // one method, which is what this service now provides. Inventing a second, timestamp-based
-    // exclusion here would leave the codebase with two of them.
+    // HOW: reading `failed` and then writing is not enough. Two retries can both read it before
+    // either writes, and both would then run DDL against one slug. The claim puts the status in the
+    // WHERE clause so the database picks the winner — and it cannot go through `updateSingle`,
+    // which writes `migration_status` only when the field hash or status flag changes and so would
+    // leave the commonest retry of all, the same payload again, looking unclaimed for the whole
+    // time its DDL was running.
+    //
+    // Serialising `pending` as well is the migration lock this relocation exists to unblock. This
+    // claim is not a substitute for it; it is the narrower guarantee available without one.
     if (existing.migrationStatus !== "failed") {
       throw NextlyError.conflict({
         logContext: {
@@ -218,6 +222,16 @@ export class SingleMetadataService {
           slug: input.slug,
           migrationStatus: existing.migrationStatus,
           hint: "A create for this slug has not recorded an outcome yet. Retry once it has.",
+        },
+      });
+    }
+
+    if (!(await this.registry.claimFailedForRetry(input.slug))) {
+      throw NextlyError.conflict({
+        logContext: {
+          reason: "single-create-claimed-elsewhere",
+          slug: input.slug,
+          hint: "Another retry took over this failed create first.",
         },
       });
     }
