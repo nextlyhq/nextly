@@ -164,6 +164,15 @@ describe("sanitizeBlockCss", () => {
     expect(out).not.toContain("javascript");
   });
 
+  it("keeps a bare selector inside its own block", () => {
+    // The boundary a block's custom CSS needs is the NODE, and it cannot be
+    // traded for a wider one: anchored to a document instead, `p { color: red }`
+    // emits `.<document> p` and restyles every matching element in every other
+    // block on the page.
+    const out = cleanBlock("p { color: red }", "nx-pb-abc");
+    expect(out).toBe(".nx-pb-abc p{color:red}");
+  });
+
   it("does not double-scope a selector already prefixed with the block class", () => {
     // Written with the class already at the front, which is what the
     // already-scoped branch actually looks for. Passing `selector { … }` here
@@ -1217,6 +1226,18 @@ describe("custom CSS may not reach off this origin", () => {
       );
       expect(out.css).toContain(`animation:${ns("fade")} 1s`);
       expect(out.css).not.toMatch(/animation:\s*fade\b/);
+    });
+
+    it("reads an escaped attr() in a fetch position as the function it is", () => {
+      // css-tree keeps the spelling it was given, so `a\\74tr(...)` arrives named
+      // `a\\74tr` while a browser reads it as `attr()`. Undecoded it is recorded
+      // as an ordinary function and never reaches the attr guard — which exists
+      // because an `attr()` in a URL position has no literal to inspect.
+      const out = sanitizeCustomCss(
+        `.a { background: image-set(a\\74tr(data-probe) 1x) }`,
+        SCOPE
+      );
+      expect(out.css).not.toContain("data-probe");
     });
 
     it("still refuses a remote url inside a keyframe step", () => {

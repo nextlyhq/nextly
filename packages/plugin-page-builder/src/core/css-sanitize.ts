@@ -22,6 +22,7 @@ import {
 } from "./css-global-names";
 import {
   attrFetchesFromDom,
+  functionName,
   isRemoteUrl,
   MAX_VALUE_NESTING,
   SUBSTITUTION_FUNCTIONS,
@@ -150,13 +151,13 @@ function remoteUrlInValue(
   const raws: { text: string; position: string[] }[] = [];
   csstree.walk(value, {
     enter(node: csstree.CssNode) {
-      if (node.type === "Function") functions.push(asciiLower(node.name));
+      if (node.type === "Function") functions.push(functionName(node.name));
       if (found !== undefined) return;
       // A custom property can land anywhere, so there every `attr()` is a
       // potential fetch; elsewhere the enclosing function decides.
       if (
         node.type === "Function" &&
-        asciiLower(node.name) === "attr" &&
+        functionName(node.name) === "attr" &&
         (anyPositionIsUrl ||
           attrFetchesFromDom(node, positionOf(functions, outerPosition)))
       ) {
@@ -716,15 +717,15 @@ export function sanitizeCustomCss(
  */
 export function sanitizeBlockCss(
   css: string,
-  scopeClass: string,
-  documentScope?: string
+  scopeClass: string
 ): SanitizedCss {
   if (!css) return { css: "", warnings: [] };
   // Replace the `selector` keyword (word-boundary, not part of .foo-selector).
   const withScope = css.replace(/(^|[^\w.#-])selector\b/g, `$1.${scopeClass}`);
-  // Anchored to the document when the caller supplies one, so a block's own CSS
-  // cannot reach a block of the same id in another document on the same page.
-  // The node class stays in the selector either way — it is what the block's
-  // element carries — so only the boundary changes, not what is targeted.
-  return sanitizeCustomCss(withScope, documentScope ?? scopeClass);
+  // The NODE class, and only it. Anchoring to a document scope instead would
+  // swap one boundary for the other rather than nesting them: `p { color: red }`
+  // would emit `.<document> p` and restyle every matching element in every other
+  // block. Separating two documents that hold the same node id is the node
+  // class's own job, not this one's.
+  return sanitizeCustomCss(withScope, scopeClass);
 }

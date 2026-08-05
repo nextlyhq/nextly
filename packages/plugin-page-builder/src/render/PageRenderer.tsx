@@ -74,7 +74,7 @@ export function PageRenderer({
     compileTokensCss(scope, tokens),
     compileDocumentMotionCss(document),
     compileDocumentCss(document, { breakpoints, remotePatterns, scope }),
-    compileDocumentBlockCss(document, scope),
+    compileDocumentBlockCss(document),
     // `.css` alone: the sanitizer also returns what it removed, and this path
     // renders rather than edits, so there is nowhere to show a warning. The
     // editor reads the same result and displays them.
