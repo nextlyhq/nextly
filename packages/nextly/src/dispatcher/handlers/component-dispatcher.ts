@@ -52,7 +52,6 @@ import {
 import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredFieldGroup } from "../../domains/schema/pipeline/types";
-import { applyMigrationStatements } from "../../domains/schema/services/apply-migration-statements";
 import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
@@ -62,11 +61,11 @@ import { getProductionNotifier } from "../../runtime/notifications/index";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import type { FieldGroupRegistryService } from "../../services/field-groups/field-group-registry-service";
-import { FieldGroupSchemaService } from "../../services/field-groups/field-group-schema-service";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
   getComponentRegistryFromDI,
+  getFieldGroupMetadataServiceFromDI,
   getMigrationJournalFromDI,
 } from "../helpers/di";
 import { requireParam, toNumber } from "../helpers/validation";
@@ -214,117 +213,33 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         });
       }
 
-      // Use FieldGroupSchemaService to generate tables with parent
-      // reference columns (_parent_id, _parent_table, _parent_field,
-      // _order, _component_type).
-      const adapter = getAdapterFromDI();
-      const dialect = adapter?.dialect || "postgresql";
-      const fieldGroupSchemaService = new FieldGroupSchemaService(dialect);
-
-      const migrationSQL = fieldGroupSchemaService.generateMigrationSQL(
-        tableName,
-        b.fields,
-        // i18n: omit translatable columns from the main comp_ table when localized — they live
-        // in the companion comp_<slug>_locales table (provisioned below).
-        { localized: isLocalized }
-      );
-
-      let migrationStatus: "pending" | "applied" | "failed" = "pending";
-
-      try {
-        if (container.has("adapter")) {
-          const diAdapter = container.get<DrizzleAdapter>("adapter");
-
-          await applyMigrationStatements(diAdapter, migrationSQL);
-
-          const tableExists = await diAdapter.tableExists(tableName);
-          if (tableExists) {
-            migrationStatus = "applied";
-            registerComponentRuntimeSchema(
-              diAdapter,
-              dialect,
-              tableName,
-              b.fields,
-              // 🔴 The constant, NOT a probe — and this is the one path where
-              // that inference is sound, so the reason is worth stating.
-              //
-              // This is the CREATE path for a new slug, and the statement
-              // executed above is the DDL generator's own, which writes
-              // `STORAGE_FORMAT.columns.type`. The storage migration cannot
-              // have moved a table that did not exist a moment ago, and a
-              // migrated table would carry the migrated PREFIX, so it could not
-              // be addressed by this name at all.
-              //
-              // Probing here can only hurt: a transient introspection failure
-              // is caught below, records the registry row as `failed`, and
-              // still returns 201 — leaving a created table with no runtime
-              // schema and its CRUD unavailable until a restart. Contrast the
-              // code-first sync path, where `CREATE TABLE IF NOT EXISTS` may
-              // no-op over a table that is years old; there the probe is
-              // required, and assuming the constant was a real defect.
-              STORAGE_FORMAT.columns.type,
-              // i18n: main runtime table omits translatable columns for a localized component.
-              isLocalized
-            );
-            // i18n: provision the companion comp_<slug>_locales table for a localized component.
-            try {
-              await reconcileComponentCompanion({
-                slug: b.slug,
-                tableName,
-                oldFields: [],
-                newFields: b.fields as unknown as FieldDefinition[],
-                localized: isLocalized,
-                // A brand-new component was never localized, so a localized create is a
-                // create-only companion rather than an enable transition.
-                wasLocalized: false,
-                adapter: diAdapter,
-              });
-            } catch (companionErr) {
-              migrationStatus = "failed";
-              const m =
-                companionErr instanceof Error
-                  ? companionErr.message
-                  : String(companionErr);
-              console.error(
-                `[Components] Companion provisioning failed for "${tableName}": ${m}`
-              );
-            }
-          } else {
-            migrationStatus = "failed";
-            console.error(
-              `[Components] Table "${tableName}" was not created after migration`
-            );
-          }
-        } else {
-          console.warn(
-            "[Components] No adapter found in container, migration not executed"
-          );
-        }
-      } catch (migrationError) {
-        migrationStatus = "failed";
-        const message =
-          migrationError instanceof Error
-            ? migrationError.message
-            : String(migrationError);
-        console.error("[Components] Migration execution failed:", message);
-        console.error("[Components] Migration SQL was:", migrationSQL);
+      // One service owns the table change and the registry write. This handler used to hold the
+      // DDL itself, which is why the other two create transports could not perform the schema
+      // half and shipped a registry row describing a table that was never made.
+      const metadata = getFieldGroupMetadataServiceFromDI();
+      if (!metadata) {
+        throw NextlyError.internal({
+          logContext: {
+            reason: "field-group-metadata-service-unavailable",
+            slug: b.slug,
+          },
+        });
       }
-
-      const created = await svc.registry.registerComponent({
-        slug: b.slug,
-        label: b.label || b.slug,
-        tableName,
-        fields: b.fields,
-        admin: b.admin,
-        description: b.description,
-        source: "ui",
-        locked: false,
-        // i18n: persist the Internationalization flag so the component reads/writes per language.
-        localized: isLocalized,
-        schemaHash,
-        schemaVersion: 1,
-        migrationStatus,
-      });
+      const { record: created, migrationStatus } =
+        await metadata.createFieldGroup({
+          slug: b.slug,
+          label: b.label || b.slug,
+          tableName,
+          fields: b.fields,
+          admin: b.admin,
+          description: b.description,
+          source: "ui",
+          locked: false,
+          // i18n: persist the Internationalization flag so the component reads/writes per language.
+          localized: isLocalized,
+          schemaHash,
+          schemaVersion: 1,
+        });
 
       // Migration status drives the toast copy so admins immediately
       // know whether the table was applied.

@@ -20,6 +20,7 @@ import type { PermissionService } from "../../domains/auth/services/permission-s
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
 import type { RolePermissionService } from "../../domains/auth/services/role-permission-service";
 import type { RoleService } from "../../domains/auth/services/role-service";
+import type { FieldGroupMetadataService } from "../../domains/field-groups/services/field-group-metadata-service";
 import type { CollectionsHandler } from "../../services/collections-handler";
 import type { EmailProviderService } from "../../services/email/email-provider-service";
 import type { EmailService } from "../../services/email/email-service";
@@ -51,6 +52,7 @@ export interface NextlyContext {
   /** @internal */ readonly userService: UserService;
   /** @internal */ readonly mediaService: MediaService;
   /** @internal */ readonly fieldGroupRegistryService: FieldGroupRegistryService;
+  /** @internal */ readonly fieldGroupMetadataService: FieldGroupMetadataService;
   /** @internal */ readonly emailProviderService: EmailProviderService;
   /** @internal */ readonly emailTemplateService: EmailTemplateService;
   /** @internal */ readonly userFieldDefinitionService: UserFieldDefinitionService;
