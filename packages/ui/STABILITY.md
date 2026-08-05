@@ -84,8 +84,8 @@ the published type advertised less than the component actually promised.
 Everything else the barrel exports, including: `Accordion`, `Alert`, `AlertDialog`,
 `Avatar`, `Card`, `Collapsible`, `Command`, `ContextMenu` and its family, `Popover`,
 `Progress`, `ResizablePanelGroup`/`ResizablePanel`/`ResizableHandle`, `Separator`,
-`Skeleton`, `Spinner`, `Table` and its family, `TableSearch`, `TableSkeleton`, the table
-state components, the layout primitives (`Stack`, `Grid`, `Stat`) and `Toaster`.
+`Skeleton`, `Spinner`, `Table` and its family, `TableSearch`, `TableSkeleton`, `TreeView`, the
+table state components, the layout primitives (`Stack`, `Grid`, `Stat`) and `Toaster`.
 
 The context menu and the resizable split are the editor-shell primitives: an editor needs
 a right-click menu and draggable regions, and both belong in the kit rather than inside
