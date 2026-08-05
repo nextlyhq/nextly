@@ -10,36 +10,36 @@
  *
  * ## What it guarantees, and what it does not
  *
- * **Recoverable and idempotent. NOT atomic.** That is not a compromise, it is the only honest
- * claim: MySQL commits DDL implicitly, so a table change and a row write cannot be made atomic
- * there by any ordering or any transaction. The migration engine reached the same conclusion and
- * says so in `field-groups/migration/steps.ts` — "sequenced with repair rather than atomic, and
- * every half idempotent to make that repair possible". Promising atomicity would be a promise that
- * silently does not hold on one of the three supported databases.
+ * **NOT atomic, and not yet recoverable.** MySQL commits DDL implicitly, so a table change and a
+ * row write cannot be made atomic there by any ordering or any transaction. The migration engine
+ * reached the same conclusion and says so in `field-groups/migration/steps.ts` — "sequenced with
+ * repair rather than atomic, and every half idempotent to make that repair possible". Promising
+ * atomicity would be a promise that silently does not hold on one of the three supported databases.
  *
- * So the guarantee is: whatever happens, the database is left in a state that can be described and
- * finished.
+ * ## The write order, and what it costs
  *
- * ## How that is achieved: the intent is written first
+ * The DDL runs first and the registry row is written last, carrying the outcome the apply reached.
+ * Two consequences follow, and both are real:
  *
- * The row is persisted as `pending` BEFORE the table is touched, and confirmed afterwards. The
- * order matters more than it looks:
+ * - A crash between the DDL and the row leaves a table nothing has any record of, findable only by
+ *   guessing at table names.
+ * - A DDL that FAILS still writes its row, recording `failed`. That row owns the slug, and the
+ *   create path refuses a slug that is already owned, so a failed create cannot be retried through
+ *   the same path until the row is removed.
  *
- * - Written last (the previous behaviour) a crash between the DDL and the row leaves a table that
- *   nothing has any record of — an orphan findable only by guessing at table names.
- * - Written first, every interrupted operation leaves a durable row saying what was being
- *   attempted, and recovery is a query rather than an inference.
+ * Writing the intent first would trade the first cost for a worse one. A row persisted before the
+ * table is touched owns the slug from that moment, and nothing here can yet finish or discard an
+ * interrupted attempt, so a create killed mid-flight would block every retry rather than leaving a
+ * table that at least harms nobody. The two halves have to arrive together: the ordering changes
+ * when a recovery path exists to release what an interrupted attempt claimed.
  *
- * That query already exists: `SingleRegistryService.getPendingMigrations()`. It had no callers
- * before this service, because nothing ever left a row in `pending`.
+ * `SingleRegistryService.getPendingMigrations()` is the query such a path would use. It has no
+ * callers, because nothing on this path ever leaves a row in `pending` except an app with no
+ * adapter registered at all.
  *
- * The ordering also moves the registry's own rejections (a taken slug, a name reserved by a global
- * resource) to BEFORE the DDL rather than after it. Those checks used to run once the table had
- * already been created.
- *
- * 🔴 Everything else that can REJECT a create has to run before `createSingle` is called, or a
- * rejected request strands a `pending` row. Field validation, the reserved-slug check and the
- * table-name conflict check all belong to the caller and all happen first.
+ * 🔴 Everything that can REJECT a create runs before `createSingle` is called, so a rejected
+ * request neither creates a table nor writes a row: field validation, the reserved-slug check, the
+ * table-name conflict check and the global resource slug guard all belong to the caller.
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
