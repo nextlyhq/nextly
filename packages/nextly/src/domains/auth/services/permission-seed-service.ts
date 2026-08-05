@@ -3,6 +3,7 @@ import { sql, eq } from "drizzle-orm";
 
 import type { RBACDatabaseInstance } from "@nextly/types/rbac-operations";
 
+import { permissionCollisionError } from "../../../plugins/permission-error";
 import type { CollectedPermission } from "../../../plugins/permissions/collect-permissions";
 import { ADOPTED_LIFECYCLE_ACTIONS } from "../../../plugins/permissions/collect-permissions";
 import { SYSTEM_RESOURCES, permissionSlug } from "../../../schemas/_zod/rbac";
@@ -574,11 +575,18 @@ export class PermissionSeedService extends BaseService {
           result.skipped++;
           continue;
         }
-        result.errors++;
-        this.logger.error(
-          `Permission "${perm.slug}" declared by "${perm.owner}" is already the content permission for "${perm.resource}", so it was not attached. Declare it on a resource of the plugin's own.`
+        // Thrown, not counted. A soft seed error is invisible: the boot path does not read
+        // `errors`, presets sync from the still-unowned content row, and a plugin route enforcing
+        // `requiredPermission: "delete-reports"` goes on sharing it — so a role granted the
+        // content permission reaches plugin functionality that was meant to be granted
+        // separately. The same error the collector raises for an entity it CAN see, so both
+        // paths refuse a reserved CRUD permission identically.
+        throw permissionCollisionError(
+          perm.action,
+          perm.resource,
+          [perm.owner],
+          "crud-permission-reserved"
         );
-        continue;
       }
       try {
         const ensured = await this.permissionService.ensurePermission(

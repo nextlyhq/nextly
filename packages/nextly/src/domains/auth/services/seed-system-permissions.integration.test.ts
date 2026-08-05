@@ -258,11 +258,15 @@ describe("a plugin declaring a permission on a Builder entity", () => {
 
     const seeder = handle.getService("permissionSeedService");
     await seeder.seedAllCollectionPermissions();
-    const result = await seeder.seedCustomPermissions([
-      declared({ action: "delete", resource: "reports" }),
-    ]);
 
-    expect(result.errors).toBe(1);
+    // Thrown rather than counted. A soft seed error is never read by the boot path, so the
+    // collision would take effect anyway while the seed result quietly recorded it.
+    await expect(
+      seeder.seedCustomPermissions([
+        declared({ action: "delete", resource: "reports" }),
+      ])
+    ).rejects.toThrow(/permission/i);
+
     const row = await permissionRow(handle, "delete", "reports");
     expect(row?.owner).toBeNull();
   });
