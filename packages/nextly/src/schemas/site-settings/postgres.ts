@@ -8,7 +8,13 @@
  * @since 1.0.0
  */
 
-import { pgTable, text, varchar, timestamp } from "drizzle-orm/pg-core";
+import {
+  pgTable,
+  text,
+  varchar,
+  timestamp,
+  integer,
+} from "drizzle-orm/pg-core";
 
 export const siteSettingsPg = pgTable("site_settings", {
   /** Always 'default' — enforces singleton pattern. */
@@ -43,6 +49,21 @@ export const siteSettingsPg = pgTable("site_settings", {
 
   /** JSON object mapping plugin slugs to sidebar group overrides, e.g. {"form-builder":"collections"} */
   pluginPlacements: text("plugin_placements"),
+
+  /**
+   * Revocation generation for preview links. Every preview token records the
+   * generation it was minted under, and verification refuses a token whose
+   * generation is not the current one — so incrementing this invalidates every
+   * link ever issued, including sessions already in flight, with nothing to
+   * store, sweep or replicate per token.
+   *
+   * Monotonic by contract: it only ever moves forward. Lowering it would
+   * re-validate tokens that were already revoked, which is why the settings
+   * form cannot write it.
+   */
+  previewTokenGeneration: integer("preview_token_generation")
+    .notNull()
+    .default(0),
 
   /** When the settings were last updated. */
   updatedAt: timestamp("updated_at", { withTimezone: false })

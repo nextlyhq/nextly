@@ -10,7 +10,7 @@
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 
 import { siteSettingsMysql } from "../../schemas/site-settings/mysql";
 import { siteSettingsPg } from "../../schemas/site-settings/postgres";
@@ -36,6 +36,7 @@ function emptyRecord(): GeneralSettingsRecord {
     logoUrl: null,
     customSidebarGroups: null,
     pluginPlacements: null,
+    previewTokenGeneration: 0,
     updatedAt: new Date(),
   };
 }
@@ -80,6 +81,14 @@ export class GeneralSettingsService extends BaseService {
       logoUrl: (row.logoUrl as string) ?? null,
       customSidebarGroups: (row.customSidebarGroups as string) ?? null,
       pluginPlacements: (row.pluginPlacements as string) ?? null,
+      // A database that predates the column reads back `undefined` until the
+      // reconcile adds it, and generation 0 is what every token minted before
+      // any revoke carries — so the default keeps those links working rather
+      // than refusing them all until the next migrate.
+      previewTokenGeneration:
+        typeof row.previewTokenGeneration === "number"
+          ? row.previewTokenGeneration
+          : 0,
       updatedAt:
         row.updatedAt instanceof Date
           ? row.updatedAt
@@ -92,10 +101,7 @@ export class GeneralSettingsService extends BaseService {
    * Returns an all-null record if the singleton row has not been saved yet.
    */
   async getSettings(): Promise<GeneralSettingsRecord> {
-    const rows = await this.db
-      .select()
-      .from(this.siteSettings)
-      .limit(1);
+    const rows = await this.db.select().from(this.siteSettings).limit(1);
 
     if (!rows || rows.length === 0) {
       return emptyRecord();
@@ -115,6 +121,51 @@ export class GeneralSettingsService extends BaseService {
   }
 
   /**
+   * The current preview-link revocation generation.
+   *
+   * Read on every mint and every verification, so a revoke reaches sessions
+   * already in flight rather than only new links.
+   */
+  async getPreviewTokenGeneration(): Promise<number> {
+    const settings = await this.getSettings();
+    return settings.previewTokenGeneration;
+  }
+
+  /**
+   * Invalidate every preview link ever issued, and return the new generation.
+   *
+   * The increment is computed by the DATABASE rather than read-then-written,
+   * so two administrators revoking at once cannot both write the same value
+   * and leave one of the two revocations undone.
+   *
+   * Creates the singleton row when it does not exist yet: an installation that
+   * has never opened the settings form still has to be able to revoke, and
+   * generation 1 correctly refuses tokens minted at the implicit 0.
+   */
+  async revokeAllPreviewTokens(): Promise<number> {
+    const existing = await this.db.select().from(this.siteSettings).limit(1);
+
+    if (!existing || existing.length === 0) {
+      await this.db.insert(this.siteSettings).values({
+        id: SETTINGS_ID,
+        previewTokenGeneration: 1,
+        updatedAt: new Date(),
+      });
+      return 1;
+    }
+
+    await this.db
+      .update(this.siteSettings)
+      .set({
+        previewTokenGeneration: sql`${this.siteSettings.previewTokenGeneration} + 1`,
+        updatedAt: new Date(),
+      })
+      .where(eq(this.siteSettings.id, SETTINGS_ID));
+
+    return this.getPreviewTokenGeneration();
+  }
+
+  /**
    * Upsert the general settings singleton row.
    * Only the provided fields are updated; omitted fields are left unchanged.
    * If the row doesn't exist yet, it is created with the provided values.
@@ -124,10 +175,7 @@ export class GeneralSettingsService extends BaseService {
   ): Promise<GeneralSettingsRecord> {
     const now = new Date();
 
-    const existing = await this.db
-      .select()
-      .from(this.siteSettings)
-      .limit(1);
+    const existing = await this.db.select().from(this.siteSettings).limit(1);
 
     const hasRow = existing && existing.length > 0;
 
@@ -197,5 +245,4 @@ export class GeneralSettingsService extends BaseService {
     await this.updateSettings({ customSidebarGroups: json });
     return groups;
   }
-
 }
