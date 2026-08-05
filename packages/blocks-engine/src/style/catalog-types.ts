@@ -266,20 +266,6 @@ export interface StyleProperty {
   shape: StyleShape;
   /** One line describing the property, for the generated reference docs. */
   summary: string;
-  /**
-   * Whether a value set on an ancestor visibly reaches a descendant that states nothing.
-   *
-   * True for the CSS-inherited properties, and for the link colours, which this catalog emits on
-   * a descendant selector rather than on the element — different mechanisms, one consequence: a
-   * page-level value shows on a node until something closer overrides it. What it is NOT is a
-   * claim that the value competes in the cascade on the element itself; an inherited value loses
-   * to any declaration there, whatever the source order.
-   *
-   * `text-decoration` is deliberately absent. It is not an inherited property, and the decoration
-   * an ancestor draws is not something a descendant's own value cancels, so neither answer a
-   * provenance indicator could give about it would be true.
-   */
-  inherits?: true;
 }
 
 /** True when a shape is a leaf rather than a container. */

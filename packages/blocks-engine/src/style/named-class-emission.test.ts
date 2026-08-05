@@ -1,19 +1,20 @@
 /**
- * The compiler decides what the browser shows; the resolver tells an author where a value came
- * from. They read one order, expressed once, and these tests hold them to it — because a
- * provenance indicator that disagrees with the stylesheet is worse than none: it is confidently
- * wrong about the author's own page.
+ * What a class tier puts in the stylesheet, and in what order.
+ *
+ * At one specificity the cascade IS source order, so where a class rule is written relative to
+ * the block default and the node's own values is not a detail of the output — it is the whole
+ * definition of which value an author sees. These tests assert against the emitted CSS for that
+ * reason: the stylesheet is the only authority on what the browser does.
  */
 import { describe, expect, it } from "vitest";
 
 import type { BlockDocument, NodeStyles } from "../document";
-import { MAX_NAMED_CLASSES } from "../document";
+import { MAX_CLASSES_PER_NODE, MAX_NAMED_CLASSES } from "../document";
 import { FIXTURE_BREAKPOINTS } from "../validation.fixtures";
 
 import { compilePageCss } from "./compile-page";
 import type { NamedClass } from "./named-class";
-import { MAX_NAMED_CLASS_NAME_LENGTH, resolveNodeClasses } from "./named-class";
-import { resolveStyle } from "./resolve-style";
+import { MAX_NAMED_CLASS_NAME_LENGTH } from "./named-class";
 
 // The breakpoint id every fixture styles at. `base` is the widest in the shared set, which is
 // what desktop-first means: it applies until a narrower one says otherwise.
@@ -102,61 +103,12 @@ describe("the class tier is emitted where it belongs in the cascade", () => {
   });
 });
 
-describe("the resolver's answer matches what the compiler emitted", () => {
-  it("agrees that the last class in library order wins", () => {
-    const { css } = compile(doc({ classes: ["c1", "c2"] }), [card, feature]);
-    const resolved = resolveStyle("color", "base", BP, {
-      classes: [card, feature],
-    });
-
-    // The compiler puts feature last, so the browser shows green; the resolver must say so too.
-    expect(css.indexOf(".nx-c-feature")).toBeGreaterThan(
-      css.indexOf(".nx-c-card")
-    );
-    expect(resolved?.value).toBe("green");
-    expect(resolved?.source).toEqual({
-      tier: "class",
-      id: "c2",
-      slug: "feature",
-    });
-  });
-
-  it("agrees that a node's own value beats every class", () => {
-    const document = doc({ classes: ["c1"], styles: styles({ color: "red" }) });
-    const { css } = compile(document, [card]);
-    const resolved = resolveStyle("color", "base", BP, {
-      classes: [card],
-      node: styles({ color: "red" }),
-    });
-
-    expect(css.lastIndexOf("color: red")).toBeGreaterThan(
-      css.indexOf(".nx-c-card")
-    );
-    expect(resolved?.source).toEqual({ tier: "local" });
-  });
-
-  it("agrees that a class beats the block default", () => {
-    const { css } = compile(doc({ classes: ["c1"] }), [card], {
-      "core/box": styles({ color: "black" }),
-    });
-    const resolved = resolveStyle("color", "base", BP, {
-      blockBase: styles({ color: "black" }),
-      classes: [card],
-    });
-
-    expect(css.indexOf(".nx-c-card")).toBeGreaterThan(
-      css.indexOf(".nx-bt-core--box")
-    );
-    expect(resolved?.value).toBe("blue");
-    expect(resolved?.source).toEqual({ tier: "class", id: "c1", slug: "card" });
-  });
-});
-
 describe("tier order beats breakpoint order, in both halves", () => {
   it("emits the whole class tier before the whole node tier, across breakpoints", () => {
-    // The case the agreement suite was missing: a class at a NARROW breakpoint and a node at a
-    // WIDER one. Both match at the narrow width, and the node's rule is written later, so the
-    // node wins — even though its breakpoint is the wider of the two.
+    // A class at a NARROW breakpoint and a node at a WIDER one. Both match at the narrow width,
+    // and the node's rule is written later, so the node wins — even though its breakpoint is the
+    // wider of the two. Tier grouping outranks breakpoint order because the tiers are emitted
+    // whole, one after another, with the breakpoints nested inside each.
     const cardAtTablet: NamedClass = {
       id: "c1",
       slug: "card",
@@ -171,15 +123,6 @@ describe("tier order beats breakpoint order, in both halves", () => {
     expect(css.indexOf(".nx-c-card")).toBeLessThan(
       css.lastIndexOf("color: red")
     );
-
-    const resolved = resolveStyle("color", "base", "tablet", {
-      classes: [cardAtTablet],
-      node: styles({ color: "red" }),
-      viewportChain: [BP, "tablet"],
-    });
-
-    // The resolver has to say what the stylesheet does, not what feels more specific.
-    expect(resolved?.value).toBe("red");
   });
 
   it("writes only the first of two classes sharing a name, and says why", () => {
@@ -382,24 +325,6 @@ describe("link colour, where two properties reach one element", () => {
     // The stylesheet is the authority. Both rules match a hovered link; the class's is written
     // after, and neither outranks the other.
     expect(css.indexOf("a:hover")).toBeLessThan(css.indexOf(".nx-c-card a"));
-
-    const resolved = resolveStyle("linkColorHover", "base", BP, {
-      pageSettings: document.settings.styles as never,
-      classes: [linkCard],
-    });
-
-    expect(resolved?.value).toBe("blue");
-    expect(resolved?.source).toEqual({ tier: "class", id: "c1", slug: "card" });
-  });
-
-  it("still prefers a hover rule that does outrank the plain one", () => {
-    // Within one tier the hover selector carries an extra pseudo-class, so it wins there however
-    // the two are ordered in storage.
-    const resolved = resolveStyle("linkColorHover", "base", BP, {
-      node: styles({ linkColor: "blue", linkColorHover: "red" }),
-    });
-
-    expect(resolved?.value).toBe("red");
   });
 });
 
@@ -502,28 +427,6 @@ describe("a link colour set on an ancestor", () => {
     const parentRule = css.lastIndexOf(" a { color: red }");
     expect(classRule).toBeGreaterThan(-1);
     expect(parentRule).toBeGreaterThan(classRule);
-
-    const resolved = resolveStyle("linkColor", "base", BP, {
-      ancestors: [{ nodeId: "parent", node: styles({ linkColor: "red" }) }],
-      classes: [linkCard],
-      blockBase: styles({ linkColor: "green" }),
-    });
-
-    expect(resolved?.value).toBe("red");
-    expect(resolved?.source).toEqual({
-      tier: "ancestor",
-      nodeId: "parent",
-      source: { tier: "local" },
-    });
-  });
-
-  it("still loses to the child's own local rule, written later still", () => {
-    const resolved = resolveStyle("linkColor", "base", BP, {
-      ancestors: [{ nodeId: "parent", node: styles({ linkColor: "red" }) }],
-      node: styles({ linkColor: "blue" }),
-    });
-
-    expect(resolved?.source).toEqual({ tier: "local" });
   });
 });
 
@@ -585,61 +488,6 @@ describe("block defaults competing on a descendant selector", () => {
     expect(css.indexOf(".nx-bt-a--inner a")).toBeLessThan(
       css.indexOf(".nx-bt-z--outer a")
     );
-
-    const resolved = resolveStyle("linkColor", "base", BP, {
-      blockType: "a/inner",
-      blockBase: blockBases["a/inner"],
-      ancestors: [
-        {
-          nodeId: "outer",
-          blockType: "z/outer",
-          blockBase: blockBases["z/outer"],
-        },
-      ],
-    });
-
-    expect(resolved?.value).toBe("red");
-  });
-});
-
-describe("one class applied by both an ancestor and the node", () => {
-  it("names the node being edited, where the class can actually be changed", () => {
-    // A single `.nx-c-card a` rule exists however many nodes apply the class. Reporting the
-    // ancestor sends an author to a parent when the class is right there on the node in front of
-    // them.
-    const linkCard: NamedClass = {
-      id: "c1",
-      slug: "card",
-      orderIndex: 0,
-      styles: styles({ linkColor: "blue" }),
-    };
-    const resolved = resolveStyle("linkColor", "base", BP, {
-      classes: [linkCard],
-      ancestors: [{ nodeId: "parent", classes: [linkCard] }],
-    });
-
-    expect(resolved?.source).toEqual({
-      tier: "class",
-      id: "c1",
-      slug: "card",
-    });
-  });
-});
-
-describe("a class beyond the library cap", () => {
-  it("is not resolved, because the compiler never wrote it", () => {
-    const huge = Array.from(
-      { length: MAX_NAMED_CLASSES + 1 },
-      (_unused, index): NamedClass => ({
-        id: `c${index}`,
-        slug: `cls-${index}`,
-        orderIndex: index,
-        styles: styles({ color: "blue" }),
-      })
-    );
-    const beyond = huge[MAX_NAMED_CLASSES];
-
-    expect(resolveNodeClasses([beyond.id], huge)).toHaveLength(0);
   });
 });
 
@@ -681,47 +529,10 @@ describe("what an interactive state actually resolves to", () => {
     expect(css.indexOf(":where(:hover)")).toBeLessThan(
       css.lastIndexOf("color: red")
     );
-
-    const resolved = resolveStyle("color", "hover", BP, {
-      classes: [cardHover],
-      node: styles({ color: "red" }),
-    });
-    expect(resolved?.value).toBe("red");
-    expect(resolved?.source).toEqual({ tier: "local" });
-  });
-
-  it("still prefers the state over the base WITHIN one tier", () => {
-    const resolved = resolveStyle("color", "hover", BP, {
-      node: {
-        base: { [BP]: { color: "red" } },
-        hover: { [BP]: { color: "blue" } },
-      } as never,
-    });
-    expect(resolved?.value).toBe("blue");
   });
 });
 
 describe("a class library the compiler cannot use whole", () => {
-  it("does not resolve a class whose name another class already took", () => {
-    const first = card;
-    const second: NamedClass = { ...feature, slug: "card" };
-    const library = [first, second];
-
-    // The compiler writes only the first. Resolving the second would report its value while the
-    // block actually receives the first's declarations from the shared selector.
-    const resolvedFor = resolveNodeClasses([second.id], library);
-    expect(resolvedFor).toHaveLength(0);
-  });
-
-  it("does not resolve a class with no styles record", () => {
-    const broken = { id: "c9", slug: "broken", orderIndex: 0 } as never;
-    expect(resolveNodeClasses(["c9"], [broken])).toHaveLength(0);
-    // And asking it directly answers rather than throwing.
-    expect(
-      resolveStyle("color", "base", BP, { classes: [broken] })
-    ).toBeUndefined();
-  });
-
   it("spends a bad class's diagnostics without silencing the nodes", () => {
     // A site's class library is one document's configuration and every document's problem.
     // Sharing the node budget let one malformed global entry strip the styling from a page that
@@ -834,6 +645,50 @@ describe("a class name too long to be real", () => {
 
     expect(css).not.toContain(enormous);
     expect(warnings.length).toBeGreaterThan(0);
+  });
+});
+
+describe("a node listing more classes than a node can have", () => {
+  it("reads a bounded prefix and says it stopped", () => {
+    // Document data, unvalidated, walked on every render of the page holding it. The library cap
+    // bounds site settings; this is the same read on the other side of it.
+    const many = Array.from(
+      { length: MAX_CLASSES_PER_NODE + 5 },
+      (_unused, index) => `ghost-${index}`
+    );
+    const { warnings } = compile(doc({ classes: many }), [card]);
+
+    expect(warnings.map(w => w.code)).toContain("invalid-classes");
+    // Every id here is missing, so an unbounded read reports one per entry. The bound is what
+    // makes the last of them unreachable.
+    const missing = warnings.filter(w => w.code === "unknown-class").length;
+    expect(missing).toBeLessThanOrEqual(MAX_CLASSES_PER_NODE);
+  });
+
+  it("applies the classes inside the bound and none beyond it", () => {
+    const filler = Array.from(
+      { length: MAX_CLASSES_PER_NODE },
+      (_unused, index) => `ghost-${index}`
+    );
+    const { classes } = compile(doc({ classes: [...filler, card.id] }), [card]);
+
+    // `card` is real and would otherwise be applied; it sits one past the bound.
+    expect(classes.get("n1")).not.toContain("nx-c-card");
+  });
+});
+
+describe("two malformed library entries that are the same value", () => {
+  it("points at both, because they are two separate repairs", () => {
+    // An entry identified by its VALUE cannot tell these apart: `null` equals `null`, so both
+    // warnings addressed `/classes/0` and an editor following the pointer never reached the
+    // second — it looks repaired while the library is still broken.
+    const { warnings } = compile(doc({}), [null as never, null as never]);
+
+    const paths = warnings
+      .filter(w => w.code === "invalid-class-name")
+      .map(w => w.path);
+    expect(paths).toContain("/classes/0");
+    expect(paths).toContain("/classes/1");
   });
 });
 

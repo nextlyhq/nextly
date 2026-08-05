@@ -17,7 +17,6 @@
 // and it is the documented way one class overrides another.
 
 import type { NodeStyles } from "../document";
-import { MAX_NAMED_CLASSES } from "../document";
 import { isPlainRecord } from "../plain-record";
 
 /** The prefix every named class carries in the emitted CSS. */
@@ -71,9 +70,9 @@ export interface NamedClass {
  *
  * Persisted data reaches here whether or not a caller validated it, so a library entry may be
  * `null`, may be missing its slug, or may carry a name that cannot be written to CSS. Asked in
- * one place because the compiler and the resolver have to agree: a class the stylesheet omits
- * but the resolver still applies would report a value the browser never receives, which is the
- * one failure a provenance indicator must not have.
+ * one place so that a class the stylesheet omits is omitted everywhere: the rule the compiler
+ * writes and the class list a renderer is handed both read this one answer, and if they could
+ * disagree a node would carry a class token for a selector that was never emitted.
  */
 export function isUsableNamedClass(value: unknown): value is NamedClass {
   if (!isPlainRecord(value)) return false;
@@ -104,8 +103,8 @@ export function isUsableNamedClass(value: unknown): value is NamedClass {
  * the other's declarations — and the later entry could override a class the block never
  * referenced.
  *
- * The compiler writes exactly this list and the resolver reads exactly this list, which is what
- * keeps a class the stylesheet dropped from being reported as the source of a value.
+ * The compiler writes exactly this list and hands the renderer exactly this list, so a class
+ * dropped here is dropped from both rather than from one of them.
  */
 export function usableNamedClasses(
   classes: readonly NamedClass[]
@@ -119,8 +118,8 @@ export function usableNamedClasses(
     // An id claimed twice is as unusable as a name claimed twice, and quieter about it. A
     // document references a class by id, so two entries sharing one make that reference
     // ambiguous: whichever is looked up last is the only one reachable, while both were written.
-    // Dropping the later keeps one id to one class everywhere — emission, application, and
-    // resolution all read this list.
+    // Dropping the later keeps one id to one class in both the rules emitted and the class list
+    // put on the element, which read this same list.
     if (takenIds.has(cls.id)) continue;
     takenSlugs.add(cls.slug);
     takenIds.add(cls.id);
@@ -144,6 +143,24 @@ export function namedClassName(slug: string): string {
 export function orderedNamedClasses(
   classes: readonly NamedClass[]
 ): NamedClass[] {
+  return orderedNamedClassPositions(classes).map(position => classes[position]);
+}
+
+/**
+ * The same order, as positions in the stored array rather than as entries.
+ *
+ * A warning has to point at WHERE an entry is stored, and a malformed library can hold the same
+ * primitive twice: `[null, null]` is two separate repairs at two separate pointers, so anything
+ * that identifies an entry by its value collapses them into one report and leaves the second
+ * entry unfixed. A position is unique whatever the entry is.
+ *
+ * The ordering itself lives here rather than in `orderedNamedClasses` so there is one comparator:
+ * the order a warning is reported in and the order the classes override one another are the same
+ * order, and two copies of it could drift apart.
+ */
+export function orderedNamedClassPositions(
+  classes: readonly NamedClass[]
+): number[] {
   // Sorting runs BEFORE anything checks whether an entry is usable, because the caller wants the
   // whole library in order to report on. So every read here tolerates an entry that is not a
   // record: a `null` in persisted data must cost a warning, not the entire stylesheet.
@@ -164,53 +181,18 @@ export function orderedNamedClasses(
       ? value.slice(0, MAX_NAMED_CLASS_NAME_LENGTH + 1)
       : "";
   };
-  return [...classes].sort(
-    (a, b) =>
-      index(a) - index(b) || (id(a) < id(b) ? -1 : id(a) > id(b) ? 1 : 0)
-  );
-}
-
-/**
- * The classes a node references, in library order, skipping ids the library does not have.
- *
- * An unknown id is not an error. A document is data and a class library is configuration, and
- * configuration that has not loaded yet must not make a document invalid — the same reason an
- * unresolved token name is a warning. The node keeps its other classes and its own values; the
- * caller reports the gap, and nothing here decides whether that is worth telling the author.
- */
-export function resolveNodeClasses(
-  ids: readonly string[],
-  library: readonly NamedClass[]
-): NamedClass[] {
-  // The library arrives as the ordered list, not as a map keyed by id, and that is the whole
-  // point: a map is built by the caller, and building one collapses two entries sharing an id
-  // before anything here can see the collision. The compiler keeps the FIRST of those and warns;
-  // a map keeps the last, so the resolver would report a class the stylesheet never emitted.
-  //
-  // Narrowed to what the compiler writes BEFORE anything is looked up, so a class dropped for
-  // colliding on its name or its id cannot be reported as the source of a value it never
-  // contributed.
-  // Capped exactly where the compiler caps it. The compiler slices the stored library before
-  // building its usable list, so a class past the bound is never written; resolving from the whole
-  // library would hand one back and report its values as visible on a page that has no rule for it.
-  const emitted = new Map(
-    usableNamedClasses(
-      library.length > MAX_NAMED_CLASSES
-        ? library.slice(0, MAX_NAMED_CLASSES)
-        : library
-    ).map(cls => [cls.id, cls])
-  );
-  const found: NamedClass[] = [];
-  const seen = new Set<string>();
-  for (const id of ids) {
-    // A node listing the same class twice applies it once. Applying it twice would emit nothing
-    // different, since both copies carry identical values at identical specificity.
-    if (seen.has(id)) continue;
-    seen.add(id);
-    // Unusable is treated exactly as unknown: the compiler writes nothing for it, so reporting
-    // it here would name a source the page does not have.
-    const cls = emitted.get(id);
-    if (cls !== undefined) found.push(cls);
-  }
-  return orderedNamedClasses(found);
+  return classes
+    .map((_unused, position) => position)
+    .sort((a, b) => {
+      const left = classes[a];
+      const right = classes[b];
+      return (
+        index(left) - index(right) ||
+        (id(left) < id(right) ? -1 : id(left) > id(right) ? 1 : 0) ||
+        // Two entries that compare equal keep their stored order. `Array.prototype.sort` is
+        // stable, so this only matters for entries whose comparison never reaches here — but
+        // stating it keeps the positions a total order rather than one that depends on it.
+        a - b
+      );
+    });
 }

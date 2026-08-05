@@ -328,6 +328,18 @@ export const MAX_BREAKPOINTS_PER_AXIS = 7;
  */
 export const MAX_NAMED_CLASSES = 2000;
 
+/**
+ * Maximum class references read from one node.
+ *
+ * The per-node counterpart to the library cap. A document reaches the compiler whether or not
+ * anything validated it, and a node's `classes` array is walked on every render of the page that
+ * holds it, so without a bound one corrupt array is copied and scanned in full each time.
+ *
+ * Set far above any real design. A named class is a preset, not a utility: a block carrying
+ * dozens of them is describing a class that should have been one.
+ */
+export const MAX_CLASSES_PER_NODE = 64;
+
 // ---------------------------------------------------------------------------
 // Component instances — a distinguished node type
 // ---------------------------------------------------------------------------

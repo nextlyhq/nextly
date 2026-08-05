@@ -23,11 +23,9 @@ import type {
   NumberLeaf,
   StyleGroup,
   StyleProperty,
-  StyleShape,
   TokenKind,
   UrlLeaf,
 } from "./catalog-types";
-import { shapeLeaves } from "./catalog-types";
 
 // --- Leaf constructors ------------------------------------------------------
 // Terse to author, explicit once built: every leaf carries the literal CSS
@@ -554,7 +552,6 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
     group: "typography",
     shape: cssValue("font-family", ["fontFamily"]),
     summary: "Typeface stack. Token-first: reference a typography token.",
-    inherits: true,
   },
   {
     property: "fontSize",
@@ -564,7 +561,6 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
       allowPercentage: true,
     }),
     summary: "Text size.",
-    inherits: true,
   },
   {
     property: "fontWeight",
@@ -580,7 +576,6 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
       ],
     },
     summary: "Text weight, as a keyword or a numeric weight.",
-    inherits: true,
   },
   {
     property: "lineHeight",
@@ -600,7 +595,6 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
       ],
     },
     summary: "Line box height, unitless (preferred) or as a length.",
-    inherits: true,
   },
   {
     property: "letterSpacing",
@@ -610,7 +604,6 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
       allowNegative: true,
     }),
     summary: "Space between characters.",
-    inherits: true,
   },
   {
     property: "wordSpacing",
@@ -621,7 +614,6 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
       allowPercentage: true,
     }),
     summary: "Space between words.",
-    inherits: true,
   },
   {
     property: "textAlign",
@@ -639,7 +631,6 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
       "justify",
     ]),
     summary: "Inline alignment. Logical: start flips with writing direction.",
-    inherits: true,
   },
   {
     property: "textTransform",
@@ -659,7 +650,6 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
       ]),
     ]),
     summary: "Letter-case transformation.",
-    inherits: true,
   },
   {
     property: "fontStyle",
@@ -675,7 +665,6 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
       ],
     },
     summary: "Upright or slanted text, with an optional oblique angle.",
-    inherits: true,
   },
   {
     property: "textDecoration",
@@ -688,7 +677,6 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
     group: "typography",
     shape: cssValue("text-shadow", ["shadow"]),
     summary: "Shadow cast by the text.",
-    inherits: true,
   },
 
   // --- color
@@ -698,7 +686,6 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
     flag: "text",
     shape: color("color"),
     summary: "Text color.",
-    inherits: true,
   },
   {
     property: "linkColor",
@@ -706,7 +693,6 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
     flag: "link",
     shape: color("color", "a"),
     summary: "Color of links inside the element.",
-    inherits: true,
   },
   {
     property: "linkColorHover",
@@ -714,7 +700,6 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
     flag: "link",
     shape: color("color", "a:hover"),
     summary: "Color of hovered links inside the element.",
-    inherits: true,
   },
 
   // --- background
@@ -922,232 +907,6 @@ const CATALOG_BY_PROPERTY: ReadonlyMap<string, StyleProperty> = new Map(
 /** The catalog row for a storage key, or `undefined` if it is not a style property. */
 export function getStyleProperty(property: string): StyleProperty | undefined {
   return CATALOG_BY_PROPERTY.get(property);
-}
-
-/**
- * The CSS properties one stored field of a value can turn into.
- *
- * A composite is stored as a record and emitted as separate declarations, so asking whether the
- * compiler wrote a particular FIELD means asking which declarations that field is responsible
- * for. `padding.blockEnd` answers `padding-block-end`; a field that is itself composite answers
- * every leaf beneath it.
- *
- * An empty answer means the path names nothing this catalog defines, which a caller should read
- * as "no claim", not as "emitted nothing" — persisted data reaches here unvalidated.
- */
-/**
- * The shape stored under one field of a composite, across whichever branch defines it.
- *
- * A union stores one branch at a time, so a field belongs to whichever of them has it.
- */
-function fieldShape(shape: StyleShape, key: string): StyleShape | undefined {
-  for (const branch of shape.kind === "union" ? shape.of : [shape]) {
-    const fields =
-      branch.kind === "logicalSides"
-        ? branch.sides
-        : branch.kind === "logicalCorners"
-          ? branch.corners
-          : branch.kind === "object"
-            ? branch.fields
-            : undefined;
-    if (fields === undefined) continue;
-    // Read through `entries` rather than by index: the side and corner records are declared with
-    // their exact keys, so a lookup by an arbitrary string is not something the types can answer,
-    // and persisted data is where these keys come from.
-    const found = Object.entries(fields).find(([name]) => name === key)?.[1];
-    if (found !== undefined) return found;
-  }
-  return undefined;
-}
-
-export function cssPropertiesForField(
-  property: string,
-  path: readonly string[]
-): readonly string[] {
-  let shape = CATALOG_BY_PROPERTY.get(property)?.shape;
-  for (const key of path) {
-    if (shape === undefined) return [];
-    shape = fieldShape(shape, key);
-  }
-  if (shape === undefined) return [];
-  return shapeLeaves(shape).map(leaf => leaf.cssProperty);
-}
-
-/** The descendant selector a property's declarations attach to, if any. */
-function descendantOf(entry: StyleProperty | undefined): string | undefined {
-  if (entry === undefined) return undefined;
-  for (const leaf of shapeLeaves(entry.shape)) {
-    if ("descendant" in leaf && typeof leaf.descendant === "string") {
-      return leaf.descendant;
-    }
-  }
-  return undefined;
-}
-
-/**
- * How many pseudo-classes a property's selector carries, which is what it adds to specificity.
- *
- * `linkColorHover` attaches to `a:hover` and `linkColor` to `a`, so the first outranks the second
- * by one class-worth wherever both are written on the same element. Counted rather than assumed,
- * because it is the difference that decides which of two matching rules the browser uses.
- */
-/**
- * Whether a property writes to something INSIDE the block rather than to the block itself.
- *
- * The distinction decides which cascade applies. A descendant rule from an ancestor lands on this
- * node's own links, competing with this node's rules at equal specificity; an inherited value
- * merely arrives when nothing here declares one, and loses to anything that does. Treating the
- * first as the second reports the wrong colour for a link inside a styled parent.
- */
-export function propertyUsesDescendantSelector(property: string): boolean {
-  return descendantOf(CATALOG_BY_PROPERTY.get(property)) !== undefined;
-}
-
-/**
- * The descendant selector a property emits under, if any.
- *
- * Needed to tell two catalog keys apart when they write the same CSS property: `color` lands on
- * the element and `linkColor` lands on `a` inside it, so a declaration is only evidence that a
- * key was written if the selector matches too.
- */
-export function propertyDescendantSelector(
-  property: string
-): string | undefined {
-  return descendantOf(CATALOG_BY_PROPERTY.get(property));
-}
-
-export function propertyPseudoClassCount(property: string): number {
-  const descendant = descendantOf(CATALOG_BY_PROPERTY.get(property));
-  if (descendant === undefined) return 0;
-  return descendant.split(":").length - 1;
-}
-
-/**
- * The properties whose declarations also land on what this property's declarations land on.
- *
- * `linkColor` writes `… a` and `linkColorHover` writes `… a:hover`, so a hovered link matches
- * BOTH, and asking only about the hover property reports a value a later `linkColor` rule
- * overrides. Same shape as a state joining the base rules rather than replacing them, one level
- * out: two properties, one element.
- *
- * Derived from the catalog rather than listed, so a property added with a `a:focus` selector is
- * related to `linkColor` without anything here being edited. Returned least specific first, which
- * is the order they have to be read in.
- */
-/**
- * The longhands a CSS shorthand sets, for the shorthands this catalog can emit.
- *
- * A shorthand and its longhands compete without sharing a property NAME: `gap` writes both
- * `row-gap` and `column-gap`, so a class setting `gap` and a node setting `rowGap` both reach the
- * same element and matching on the name alone sees neither. Everything else here is emitted as
- * logical longhands already, which is why the table is this short.
- */
-const SHORTHAND_LONGHANDS: Readonly<Record<string, readonly string[]>> = {
-  gap: ["row-gap", "column-gap"],
-};
-
-/** A CSS property and everything it sets, so two keys can be compared by what they overwrite. */
-export function declarationsCovered(cssProperty: string): readonly string[] {
-  const longhands = SHORTHAND_LONGHANDS[cssProperty];
-  return longhands === undefined ? [cssProperty] : [cssProperty, ...longhands];
-}
-
-/**
- * Every CSS declaration a property can write, shorthands expanded.
- *
- * Comparing two catalog keys by what they OVERWRITE rather than by the key they are written under
- * is the only test that holds: `gap` and `columnGap` share no property name and compete anyway,
- * while `background.position` and `backgroundGradient` share the `background-` prefix and do not.
- */
-export function declarationsWritten(property: string): readonly string[] {
-  const covered = new Set<string>();
-  for (const css of cssPropertiesForField(property, [])) {
-    for (const name of declarationsCovered(css)) covered.add(name);
-  }
-  return [...covered];
-}
-
-export function propertiesAlsoMatching(property: string): readonly string[] {
-  const entry = CATALOG_BY_PROPERTY.get(property);
-  if (entry === undefined) return [];
-  const descendant = descendantOf(entry);
-  const emits = new Set(declarationsWritten(property));
-  const related: string[] = [];
-  for (const other of STYLE_CATALOG) {
-    if (other.property === property) continue;
-    // Sharing a CSS property is the whole test. Two keys that write `background-image` compete
-    // whether or not either uses a descendant selector, and the earlier version asked only about
-    // descendants — so `background` and `backgroundGradient`, which are exactly this case, were
-    // resolved as though they could not overwrite each other.
-    // Overlap in what they WRITE, not in what they are called. `gap` against `columnGap` shares
-    // no name and overwrites it; `background` against `backgroundGradient` shares a prefix and
-    // only collides on `background-image`.
-    if (!declarationsWritten(other.property).some(css => emits.has(css))) {
-      continue;
-    }
-    const otherDescendant = descendantOf(other);
-    // A rule can only be read alongside this one if it lands on the same elements. Same selector,
-    // or this property's selector with its pseudo-classes stripped off — `a` against `a:hover`.
-    // A descendant rule and a plain one style different elements and never compete.
-    if (otherDescendant === descendant) related.push(other.property);
-    else if (
-      descendant !== undefined &&
-      otherDescendant !== undefined &&
-      descendant.startsWith(`${otherDescendant}:`)
-    ) {
-      related.push(other.property);
-    }
-  }
-  return related.sort(
-    (a, b) => propertyPseudoClassCount(a) - propertyPseudoClassCount(b)
-  );
-}
-
-/**
- * The field names a composite value carries at a path, across every branch that defines them.
- *
- * Used to expand a shorthand: a lower tier storing `borderRadius: "4px"` sets all four corners,
- * and a higher tier storing one corner overrides only that one — so the shorthand has to become
- * the four fields it stood for before the record folds over it, or the corners it is still
- * painting are reported as coming from nowhere.
- */
-export function compositeFieldNames(
-  property: string,
-  path: readonly string[] = []
-): readonly string[] {
-  let shape = CATALOG_BY_PROPERTY.get(property)?.shape;
-  for (const key of path) {
-    if (shape === undefined) return [];
-    shape = fieldShape(shape, key);
-  }
-  if (shape === undefined) return [];
-  const names: string[] = [];
-  for (const branch of shape.kind === "union" ? shape.of : [shape]) {
-    const fields =
-      branch.kind === "logicalSides"
-        ? branch.sides
-        : branch.kind === "logicalCorners"
-          ? branch.corners
-          : branch.kind === "object"
-            ? branch.fields
-            : undefined;
-    if (fields === undefined) continue;
-    for (const name of Object.keys(fields)) {
-      if (!names.includes(name)) names.push(name);
-    }
-  }
-  return names;
-}
-
-/**
- * Whether a value set on an ancestor visibly reaches a descendant that states nothing.
- *
- * Asked by provenance, so a control can report the page's own typography as the origin of the
- * text it is looking at, and can decline to report it for a property that never travels. An
- * unknown key answers false: nothing is written for it, so nothing reaches anywhere.
- */
-export function propertyInheritsToDescendants(property: string): boolean {
-  return CATALOG_BY_PROPERTY.get(property)?.inherits === true;
 }
 
 /** Every catalog row in one group, in catalog order. */

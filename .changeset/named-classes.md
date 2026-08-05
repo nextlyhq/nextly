@@ -23,4 +23,4 @@
 "@nextlyhq/tsconfig": patch
 ---
 
-Add named classes: a set of styles applied to many blocks and changed in one place, compiled between a block's defaults and a block's own values so a class overrides the first and is overridden by the second. Which of two classes wins is the order they are given in the library, not the order a block lists them. Also adds a resolver that reports where a style value came from — the block, a class, a wider breakpoint, or the block type's default — reading the same order the stylesheet is written in.
+Add named classes: a set of styles applied to many blocks and changed in one place, compiled between a block's defaults and a block's own values so a class overrides the first and is overridden by the second. Which of two classes wins is the order they are given in the library, not the order a block lists them. A block carrying more class references than a page can use now reads a bounded prefix and reports that it stopped, as the class library already did.

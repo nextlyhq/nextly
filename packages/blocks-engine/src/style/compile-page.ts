@@ -27,6 +27,7 @@ import type {
 } from "../document";
 import {
   MAX_BREAKPOINTS_PER_AXIS,
+  MAX_CLASSES_PER_NODE,
   MAX_NAMED_CLASSES,
   STYLE_STATES,
 } from "../document";
@@ -37,6 +38,7 @@ import { isPlainRecord } from "../plain-record";
 import type { ValidationIssue } from "../validation";
 
 import { BREAKPOINT_AXES } from "./breakpoint-axes";
+import type { BreakpointAxis } from "./breakpoint-axes";
 import { escapeIdentifier } from "./css-value";
 import { compileStyleValues, DEFAULT_TOKEN_PREFIX } from "./declarations";
 import type { Declaration } from "./declarations";
@@ -45,6 +47,7 @@ import {
   isUsableNamedClass,
   namedClassName,
   orderedNamedClasses,
+  orderedNamedClassPositions,
   usableNamedClasses,
   MAX_NAMED_CLASS_NAME_LENGTH,
   NAMED_CLASS_SLUG_RE,
@@ -182,7 +185,7 @@ interface BreakpointContext {
   id: string;
   atRule?: string;
   /** Which axis this belongs to; visibility bands are computed per axis. */
-  axis?: "viewport" | "container";
+  axis?: BreakpointAxis;
   /** The upper bound, for narrowing a hiding rule that a narrower id undoes. */
   maxWidth?: number;
 }
@@ -234,7 +237,7 @@ function breakpointContexts(set: BreakpointSet): BreakpointContext[] {
   // can never match: kept, its id would count as known, and the styles and
   // hiding stored under it would go missing with nothing reported at all.
   const rawSet: unknown = set;
-  const axisDefs = (axis: "viewport" | "container"): BreakpointDef[] => {
+  const axisDefs = (axis: BreakpointAxis): BreakpointDef[] => {
     const defs = isPlainRecord(rawSet) ? rawSet[axis] : undefined;
     if (!Array.isArray(defs)) return [];
     const usable = defs.filter((def: unknown): def is BreakpointDef => {
@@ -291,8 +294,8 @@ function breakpointContexts(set: BreakpointSet): BreakpointContext[] {
   };
   // Driven by the shared axis order rather than by two loops written in a
   // chosen sequence here. Which axis is emitted last decides which one wins at
-  // equal specificity, and provenance has to reproduce that exactly, so the
-  // order is stated once where both can read it.
+  // equal specificity, so that order is stated once, as data, rather than being
+  // implied by the shape of the code that walks it.
   for (const axis of BREAKPOINT_AXES) {
     for (const def of axisDefs(axis)) {
       if (def.id === BASE_BREAKPOINT) continue;
@@ -951,8 +954,8 @@ export function compilePageCss(
   // values. At one specificity the cascade is source order, so being emitted here IS what makes
   // a class beat the block default and lose to a local value.
   //
-  // `usableNamedClasses` decides which of them are written, and the resolver reads the same
-  // list, so a class dropped here cannot be reported as the source of a value.
+  // `usableNamedClasses` decides which of them are written, and the class list handed back for
+  // each node is built from that same call, so a class dropped here is dropped from both.
   //
   // Charged against an allowance of their own, one per class. A site's class library is one
   // document's configuration and every document's problem, and it took two goes to bound that
@@ -1006,11 +1009,21 @@ export function compilePageCss(
   // a name derived from it. A pointer built from the id does not resolve — the id may be missing,
   // may not be a string, and is exactly what is unreliable about a malformed entry — so an editor
   // could not highlight the class it is describing.
+  //
+  // Walked as POSITIONS rather than entries, because the entries reported on here are the ones
+  // the library could not use and those can be primitives: `[null, null]` is two entries needing
+  // two separate repairs, and a lookup keyed by the entry answers with the first position for
+  // both, sending an editor to a class it has already fixed.
+  const orderedPositions = orderedNamedClassPositions(library);
+  // Keyed by entry for the emission walk below, which sees only records that `usableNamedClasses`
+  // has already proven distinct — so no two of its keys can be the same value.
   const libraryIndex = new Map<unknown, number>();
-  library.forEach((cls, index) => {
-    if (!libraryIndex.has(cls)) libraryIndex.set(cls, index);
-  });
-  for (const cls of orderedNamedClasses(library)) {
+  for (const position of orderedPositions) {
+    const cls = library[position];
+    if (!libraryIndex.has(cls)) libraryIndex.set(cls, position);
+  }
+  for (const position of orderedPositions) {
+    const cls = library[position];
     if (written.has(cls)) continue;
     // Reported once per entry the library could not use, naming which of the three reasons it
     // was. A usable record whose name is free is not reachable here, so the remaining case after
@@ -1057,7 +1070,7 @@ export function compilePageCss(
                 suggestion: "Give every class a distinct name.",
               };
     pushBoundedWarning(warningAllowance, warnings, {
-      path: pointer("/classes", String(libraryIndex.get(cls) ?? 0)),
+      path: pointer("/classes", String(position)),
       severity: "warning",
       ...named,
     });
@@ -1159,8 +1172,36 @@ export function compilePageCss(
         suggestion: "Store node classes as an array of class ids.",
       });
     }
-    const applied = Array.isArray(node.classes) ? node.classes : [];
-    for (const id of new Set(applied)) {
+    const stored: readonly unknown[] = Array.isArray(node.classes)
+      ? node.classes
+      : [];
+    // Deduped once, bounded as it is read, and reused by both walks below. Each of them built its
+    // own set straight from the stored array, so a node holding a very large `classes` list was
+    // copied twice per render before either the warning allowance or the library lookup could cap
+    // anything — and a document is unvalidated data, so that list is whatever was persisted.
+    //
+    // The bound counts entries READ rather than distinct ids kept: a list of a million copies of
+    // one id allocates nothing either way, but only a read bound stops it being scanned.
+    const applied: unknown[] = [];
+    const seenIds = new Set<unknown>();
+    const readLimit = Math.min(stored.length, MAX_CLASSES_PER_NODE);
+    for (let index = 0; index < readLimit; index += 1) {
+      const id = stored[index];
+      if (seenIds.has(id)) continue;
+      seenIds.add(id);
+      applied.push(id);
+    }
+    if (stored.length > MAX_CLASSES_PER_NODE) {
+      pushBoundedWarning(warningAllowance, warnings, {
+        path: pointer(path, "classes"),
+        code: "invalid-classes",
+        severity: "warning",
+        message: `This node lists ${stored.length} classes; only the first ${MAX_CLASSES_PER_NODE} were applied.`,
+        suggestion:
+          "Remove the references the node no longer needs, or combine them into one class.",
+      });
+    }
+    for (const id of applied) {
       if (typeof id === "string" && byId.has(id)) continue;
       // A reference that reached nothing. Silently dropping it leaves an author with a class on
       // the node, no class on the element, and nothing connecting the two — the same account
@@ -1193,7 +1234,10 @@ export function compilePageCss(
       // Library order, not the order the node lists them in, so the value is stable for a caching
       // renderer and reads the way the stylesheet does.
       for (const cls of orderedNamedClasses(
-        [...new Set(applied)]
+        applied
+          // A stored reference that is not a string names nothing the library can hold, and was
+          // already reported above as unknown.
+          .filter((id): id is string => typeof id === "string")
           .map(id => byId.get(id))
           .filter((cls): cls is NamedClass => cls !== undefined)
       )) {
