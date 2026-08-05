@@ -120,6 +120,29 @@ function entryHeading(
 }
 
 /**
+ * Whether a write by this actor, on this collection, will produce an entry.
+ *
+ * Exported because a write path has to know BEFORE it assembles its documents:
+ * the changed-field names are derived by comparing the prior and written
+ * documents, and the batch paths skip reading component and many-to-many
+ * relations when nothing was going to consume them. An entry assembled from
+ * parent columns alone reports a relationship-only edit as having changed
+ * nothing, so the two decisions have to be made from the same facts.
+ *
+ * Deliberately excludes whether the service is registered: that is a boot-time
+ * fact this cannot answer without reaching into the container on a path that
+ * runs per write, and answering it wrongly here would only ever cost a read
+ * that goes unused.
+ */
+export function willRecordMutationActivity(
+  collection: string,
+  actor?: RequestActor | null
+): actor is RequestActor & { type: "user"; id: string } {
+  if (actor?.type !== "user" || !actor.id) return false;
+  return !collectionViews().hidden.has(collection);
+}
+
+/**
  * Which fields an update touched, as NAMES.
  *
  * Only for an update: a create reports every key it wrote and a delete every
@@ -157,8 +180,7 @@ export async function recordMutationActivity(
   db: () => ActivityWriteDb,
   input: RecordMutationActivityInput
 ): Promise<void> {
-  if (input.actor?.type !== "user" || !input.actor.id) return;
-  if (collectionViews().hidden.has(input.collection)) return;
+  if (!willRecordMutationActivity(input.collection, input.actor)) return;
 
   let service: ActivityLogService;
   try {

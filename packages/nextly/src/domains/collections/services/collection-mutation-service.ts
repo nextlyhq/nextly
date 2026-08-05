@@ -89,6 +89,7 @@ import {
   stripSystemOwnerField,
 } from "../../../shared/lib/password-fields";
 import type { SupportedDialect } from "../../../types/database";
+import { willRecordMutationActivity } from "../../audit/record-activity";
 import type { DynamicCollectionService } from "../../dynamic-collections";
 import {
   populateCompanionFields,
@@ -7895,17 +7896,26 @@ export class CollectionMutationService extends BaseService {
       // field tree are always assembled together: a decision that can flip
       // mid-write (a stored opt-out or endpoint activation) never leaves a
       // recorded event with a parent-only payload.
+      // The activity trail consumes these documents too, and it is NOT gated on
+      // webhook recording — so an opted-out collection whose update will be
+      // recorded still has to assemble its relations. Without this a
+      // relationship-only edit reaches the diff as two identical parent rows and
+      // is filed as an update that changed nothing.
+      const recordsActivity = willRecordMutationActivity(
+        params.collectionName,
+        actorForWrite(params.actor, params.user)
+      );
       const needsRelations =
         !!versionsConfig?.enabled ||
+        recordsActivity ||
         !isRecordingDisabledByConfig("collection", params.collectionName);
-      // The `previous` document is carried ONLY by the outbox event, never by the
-      // version snapshot, so gate its relation read on webhook recording alone: a
-      // version-only update (versioning on, recording disabled by config) skips it
-      // instead of paying a second full relational walk whose result is discarded.
-      const previousNeedsRelations = !isRecordingDisabledByConfig(
-        "collection",
-        params.collectionName
-      );
+      // The `previous` document is carried by the outbox event and by the
+      // trail's changed-field names, never by the version snapshot: a
+      // version-only update that records neither still skips it instead of
+      // paying a second full relational walk whose result is discarded.
+      const previousNeedsRelations =
+        recordsActivity ||
+        !isRecordingDisabledByConfig("collection", params.collectionName);
 
       // Assemble the `previous` document BEFORE the junction rows are rewritten,
       // so a relationship-only update still lists the changed field: reading m2m
@@ -9463,17 +9473,26 @@ export class CollectionMutationService extends BaseService {
       // field tree are always assembled together: a decision that can flip
       // mid-write (a stored opt-out or endpoint activation) never leaves a
       // recorded event with a parent-only payload.
+      // The activity trail consumes these documents too, and it is NOT gated on
+      // webhook recording — so an opted-out collection whose update will be
+      // recorded still has to assemble its relations. Without this a
+      // relationship-only edit reaches the diff as two identical parent rows and
+      // is filed as an update that changed nothing.
+      const recordsActivity = willRecordMutationActivity(
+        params.collectionName,
+        actorForWrite(params.actor, params.user)
+      );
       const needsRelations =
         !!versionsConfig?.enabled ||
+        recordsActivity ||
         !isRecordingDisabledByConfig("collection", params.collectionName);
-      // The `previous` document is carried ONLY by the outbox event, never by the
-      // version snapshot, so gate its relation read on webhook recording alone: a
-      // version-only update (versioning on, recording disabled by config) skips it
-      // instead of paying a second full relational walk whose result is discarded.
-      const previousNeedsRelations = !isRecordingDisabledByConfig(
-        "collection",
-        params.collectionName
-      );
+      // The `previous` document is carried by the outbox event and by the
+      // trail's changed-field names, never by the version snapshot: a
+      // version-only update that records neither still skips it instead of
+      // paying a second full relational walk whose result is discarded.
+      const previousNeedsRelations =
+        recordsActivity ||
+        !isRecordingDisabledByConfig("collection", params.collectionName);
 
       // Assemble the `previous` document BEFORE the junction rows are rewritten,
       // so a relationship-only update still lists the changed field: reading m2m

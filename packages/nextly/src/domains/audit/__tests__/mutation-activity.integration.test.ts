@@ -13,7 +13,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { defineCollection, text } from "../../../config";
+import { defineCollection, relationship, text } from "../../../config";
 import { container } from "../../../di/container";
 import {
   createTestNextly,
@@ -227,6 +227,50 @@ describe.each(getConfiguredTestDialects())(
       expect((await activity(current)).map(row => row.action)).toEqual([
         "create",
       ]);
+    });
+
+    it("names a relationship-only change on a collection that records no events", async () => {
+      // The batch paths skip reading component and many-to-many relations when
+      // nothing was going to consume them — a decision made from webhook
+      // recording alone. The trail consumes them too and is NOT gated on
+      // webhooks, so an opted-out collection's relationship-only edit reached
+      // the diff as two identical parent rows and was filed as an update that
+      // changed nothing.
+      current = await withActor(dialect, [
+        defineCollection({ slug: "tags", fields: [text({ name: "title" })] }),
+        defineCollection({
+          slug: "posts",
+          webhooks: false,
+          fields: [
+            text({ name: "title" }),
+            relationship({ name: "tags", relationTo: "tags", hasMany: true }),
+          ],
+        }),
+      ]);
+      const handler = current.getService("collectionsHandler");
+
+      const tag = await handler.createEntry(asActor("tags"), { title: "news" });
+      const tagId = (tag.data as { id: string }).id;
+      const created = await handler.createEntry(asActor("posts"), {
+        title: "unchanged",
+      });
+      const id = (created.data as { id: string }).id;
+
+      // Only the relationship moves; every parent column keeps its value.
+      await handler.bulkUpdateEntries({
+        collectionName: "posts",
+        ids: [id],
+        data: { tags: [tagId] },
+        overrideAccess: true,
+        user: { id: ACTOR.id, email: ACTOR.email },
+        actor: { type: "user", id: ACTOR.id },
+      });
+
+      const updated = (await activity(current)).find(
+        row => row.action === "update" && row.entryId === id
+      );
+      expect(updated).toBeDefined();
+      expect(metadataOf(updated!).changedFields).toContain("tags");
     });
 
     it("stores which fields an update changed, as names and never values", async () => {
