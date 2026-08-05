@@ -16,13 +16,13 @@ import {
   nodeClassNames,
   NODE_CLASS_PREFIX,
   blockTypeClassName,
-  defineBlock,
   type AnyBlockDefinition,
   type BlockDocument,
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
 
 import type { PageContext } from "./context";
+import { defineBlock } from "./context";
 import { PageRenderer } from "./page-renderer";
 import { createBlockResolver } from "./resolver";
 
@@ -756,7 +756,7 @@ describe("PageRenderer", () => {
         render: () => <List>{(item: string) => <li>{item}</li>}</List>,
       });
 
-      const Ignores = () => <p>ignored ok</p>;
+      const Ignores = (_props: { children?: unknown }) => <p>ignored ok</p>;
       const opaque = defineBlock({
         name: "test/opaque-children",
         version: 1,
@@ -1816,7 +1816,7 @@ describe("PageRenderer", () => {
               _context: null,
             } as unknown as string,
             null,
-            () => null
+            (() => null) as unknown as ReactElement
           ),
       });
 
