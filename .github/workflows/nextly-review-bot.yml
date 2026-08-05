@@ -86,6 +86,18 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      # The reviewer runs its OWN protocol, not the one in the tree it is
+      # reviewing. A pull request old enough to predate the bot carries neither
+      # file, which is how a dispatched review reaches the agent with no
+      # protocol to follow and no way to post; and a pull request that edits
+      # them must not get to rewrite the review it is about to receive.
+      - name: Take the reviewer's tooling from the default branch
+        run: |
+          set -euo pipefail
+          git checkout origin/${{ github.event.repository.default_branch || 'main' }} -- \
+            .github/review-prompt.md .github/scripts/review-bot-gh.sh
+          test -x .github/scripts/review-bot-gh.sh
+
       - name: Run review agent
         uses: anthropics/claude-code-action@9db594c7a0e82298c121c18b7f08aa1579ce7341 # v1.0.185
         env:
@@ -158,3 +170,19 @@ jobs:
             --allowedTools "Read,Grep,Glob,Write(.nextly-review/**),Bash(.github/scripts/review-bot-gh.sh:*),Bash(./.github/scripts/review-bot-gh.sh:*),Bash(bash .github/scripts/review-bot-gh.sh:*),Bash(${{ github.workspace }}/.github/scripts/review-bot-gh.sh:*),Bash(git show:*),Bash(git diff:*),Bash(git log:*),Bash(git merge-base:*),Bash(rg:*),Bash(ls:*)"
             --disallowedTools "WebSearch,WebFetch,Read(//proc/**),Read(//sys/**),Grep(//proc/**),Grep(//sys/**)"
             --max-turns 150
+
+      # A run that finishes without posting is the failure mode that looks most
+      # like success: the job is green, the agent spent its budget, and the pull
+      # request is silently unreviewed. Say so instead.
+      - name: Confirm a review was posted
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          posted=$(gh api "repos/${{ github.repository }}/pulls/${{ steps.pr.outputs.number }}/reviews" --paginate \
+            --jq '[.[] | select(.user.login == "github-actions[bot]" and .commit_id == "${{ steps.pr.outputs.sha }}")] | length')
+          if [ "$posted" -eq 0 ]; then
+            echo "::error::the agent finished but posted no review for ${{ steps.pr.outputs.sha }}"
+            exit 1
+          fi
+          echo "review(s) posted at this head: $posted"
