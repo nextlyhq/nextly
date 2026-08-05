@@ -9,12 +9,14 @@ import {
   createContext,
   useContext,
   useEffect,
+  useMemo,
   useReducer,
   useRef,
   type Dispatch,
   type ReactNode,
 } from "react";
 
+import { documentNodeClasses } from "../../core/style-compiler";
 import type { BlockDocument } from "../../core/types";
 import type { RemotePatternInput } from "../../core/url-policy";
 
@@ -39,6 +41,15 @@ interface EditorContextValue {
    * background does not vanish in the editor and reappear on the page.
    */
   remotePatterns: readonly RemotePatternInput[];
+  /**
+   * The document's node classes, with any hash collision disambiguated.
+   *
+   * Held here so the preview's markup and the stylesheet compiled beside it are
+   * named from ONE map. Derived from the whole document, which is the only
+   * scope a collision is visible at, and memoized on it so a keystroke that
+   * does not change the tree does not rebuild it.
+   */
+  nodeClasses: ReadonlyMap<string, string>;
 }
 
 const EditorContext = createContext<EditorContextValue | null>(null);
@@ -103,6 +114,10 @@ export function EditorProvider({
   );
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const firstRender = useRef(true);
+  const nodeClasses = useMemo(
+    () => documentNodeClasses(state.document),
+    [state.document]
+  );
 
   // Hold the latest callback in a ref so the sync effect depends ONLY on the document.
   // Callers (e.g. PageBuilderField) commonly pass an inline arrow — depending on its
@@ -162,6 +177,7 @@ export function EditorProvider({
         dispatch,
         pageCssEnabled: customCss !== undefined,
         remotePatterns: remotePatterns ?? EMPTY_PATTERNS,
+        nodeClasses,
       }}
     >
       {children}

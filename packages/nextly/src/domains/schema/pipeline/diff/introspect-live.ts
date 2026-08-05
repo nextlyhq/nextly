@@ -370,12 +370,55 @@ export async function introspectLiveSnapshot(
           // dflt_value can be string, number, null, or undefined.
           // Coerce primitives to string; treat anything non-primitive as
           // missing (defensive - SQLite never returns object defaults).
-          default: stringifyDefault(r.dflt_value),
+          default: sqliteDefaultExpression(r.dflt_value),
         })
       ),
     });
   }
   return { tables };
+}
+
+/**
+ * Bare keywords SQLite accepts as a default without parentheses.
+ *
+ * Everything else that is not a literal is an expression, and SQLite requires
+ * one to be parenthesised.
+ */
+const SQLITE_BARE_DEFAULTS = new Set([
+  "null",
+  "true",
+  "false",
+  "current_time",
+  "current_date",
+  "current_timestamp",
+]);
+
+/**
+ * A SQLite default as it must appear in DDL.
+ *
+ * `PRAGMA table_info` reports an expression default with its parentheses
+ * STRIPPED — a column declared `DEFAULT (strftime('%s','now'))` comes back as
+ * `strftime('%s', 'now')` — and SQLite refuses that same text without them
+ * (`near "(": syntax error`). Recorded verbatim, a snapshot taken from a live
+ * SQLite database produces a `CREATE TABLE` that cannot be applied anywhere,
+ * including back to the database it came from.
+ *
+ * String literals, numbers and the bare keywords are already valid as written
+ * and must NOT be wrapped, since parenthesising them would change a literal
+ * into an expression for no reason.
+ */
+function sqliteDefaultExpression(value: unknown): string | undefined {
+  const text = stringifyDefault(value);
+  if (text === undefined) return undefined;
+  const trimmed = text.trim();
+  if (trimmed === "") return text;
+  // Already parenthesised, a quoted literal, a blob literal, or a number.
+  if (trimmed.startsWith("(")) return text;
+  if (trimmed.startsWith("'") || trimmed.startsWith('"')) return text;
+  if (/^[xX]'/.test(trimmed)) return text;
+  if (/^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/.test(trimmed)) return text;
+  if (SQLITE_BARE_DEFAULTS.has(trimmed.toLowerCase())) return text;
+  return `(${trimmed})`;
 }
 
 function stringifyDefault(value: unknown): string | undefined {

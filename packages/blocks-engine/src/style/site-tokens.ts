@@ -287,7 +287,11 @@ const OPAQUE_VALUE =
 /** The only words `font-weight` takes; every other value is a number. */
 const FONT_WEIGHT_KEYWORDS = new Set(["normal", "bold", "bolder", "lighter"]);
 
-const MEASUREMENT = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?([a-z%]*)$/i;
+/** Text that begins the way a number does, whether or not it finishes like one. */
+const NUMERIC_LOOKING = /^[+-]?[.\d]/;
+
+const MEASUREMENT =
+  /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?(%|(?:[a-zA-Z]|\\[0-9a-fA-F]{1,6}\s?|\\.)*)$/;
 
 /**
  * Why a value cannot be what its token says it is, when that is knowable.
@@ -313,7 +317,41 @@ export function checkTokenKind(
   if (isCssWideKeyword(asciiLower(text))) return undefined;
 
   const measured = MEASUREMENT.exec(text);
-  const unit = measured?.[1]?.toLowerCase();
+  // Text plainly trying to be a number but failing to be one — `1.px`, `1..2` —
+  // reaches no verdict below, because nothing matches and every branch reads
+  // `undefined` as "cannot judge". For the kinds that ARE numbers, failing to
+  // parse is itself the answer.
+  if (
+    measured === null &&
+    NUMERIC_LOOKING.test(text) &&
+    (kind === "dimension" ||
+      kind === "duration" ||
+      kind === "number" ||
+      kind === "fontWeight" ||
+      // A colour too. Tightening the measurement pattern moved `1.px` out of
+      // the colour branch below without putting it anywhere else, so it stopped
+      // being reported at all — the silence this branch exists to end.
+      kind === "color")
+  ) {
+    return kind === "color"
+      ? "opens like a number and is not one, so it is not a colour"
+      : "is not a number CSS can read";
+  }
+  // A unit is an identifier, so `1m\\73` IS `1ms`. Read raw, the check reaches
+  // no verdict and stays silent about a value the browser drops.
+  const rawUnit = measured === null ? undefined : (measured[1] ?? "");
+  const unit =
+    rawUnit === undefined ? undefined : asciiLower(decodeIdentifier(rawUnit));
+  // A percentage is its own token and cannot be spelled with an escape: `1\\%`
+  // and `1\\25` decode to a unit reading `%`, but CSS sees an invalid dimension
+  // and drops the declaration. Only the literal counts.
+  const isPercentage = rawUnit === "%";
+  // `unitCategory` resolves the spelling itself, so it is handed the unit as
+  // written. Decoding first and passing the result resolves the escape twice,
+  // and `1\\5c s` — a dimension whose unit decodes to the two characters `\s`,
+  // which measures nothing — comes back reading `s` and passes as a duration
+  // the browser drops.
+  const measures = rawUnit === undefined ? undefined : unitCategory(rawUnit);
   const amount = measured === null ? undefined : Number.parseFloat(text);
   const isColor = parseColor(text) !== undefined;
 
@@ -337,8 +375,7 @@ export function checkTokenKind(
       // wrong quantity, and the browser drops the declaration that reads it.
       // Judged by what the unit MEASURES rather than by a second list of length
       // units kept beside the one the value checker already has.
-      if (unit === "%") return undefined;
-      const measures = unitCategory(unit);
+      if (isPercentage) return undefined;
       return measures === "length"
         ? undefined
         : `is measured in ${unit}, which is ${measures ?? "not a unit CSS knows"}, not a length`;
@@ -350,7 +387,7 @@ export function checkTokenKind(
       // is still a length, and `animation-duration: var(--site-time)` reading
       // it is a declaration the browser drops.
       if (unit === "" && amount === 0) return undefined;
-      return unitCategory(unit) === "time"
+      return measures === "time"
         ? undefined
         : `is measured in ${unit === "" ? "no unit" : unit}, not seconds or milliseconds`;
     }

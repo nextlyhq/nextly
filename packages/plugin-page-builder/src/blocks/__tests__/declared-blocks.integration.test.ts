@@ -18,6 +18,8 @@ import { definePlugin } from "@nextlyhq/plugin-sdk";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { PAGE_BUILDER_PLUGIN } from "../registration-service";
+import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
+
 import { pageBuilder } from "../../plugin";
 
 let current: TestNextly | undefined;
@@ -49,6 +51,33 @@ function declaring(
     contributes: { declarations: { [PAGE_BUILDER_PLUGIN]: { blocks } } },
   } as never);
 }
+
+describe("the core library at boot", () => {
+  it("is registered by booting the page builder alone", async () => {
+    // The unit test around `registerCoreBlocks` proves the function works; only
+    // a real boot proves it is CALLED. Removing the call from the plugin's
+    // `init` passes every other test in this package.
+    current = await createTestNextly({ plugins: [pageBuilder()] });
+
+    for (const block of coreBlocks) {
+      expect(
+        getBlock(block.name),
+        `${block.name} missing after boot`
+      ).toBeDefined();
+    }
+  });
+
+  it("survives a boot where another plugin also contributes", async () => {
+    // Core is registered first and the declared pass runs after it, so this
+    // fails if the second pass clears what the first added.
+    current = await createTestNextly({
+      plugins: [pageBuilder(), declaring()],
+    });
+
+    expect(getBlock("core/box")).toBeDefined();
+    expect(getBlock("acme/declared-pricing")).toBeDefined();
+  });
+});
 
 describe("a plugin declares blocks statically", () => {
   it("registers them at boot with no init of its own", async () => {

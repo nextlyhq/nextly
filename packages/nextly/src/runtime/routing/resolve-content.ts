@@ -23,12 +23,13 @@ import { markDynamic } from "./mark-dynamic";
 export type ContentEntry = Record<string, unknown>;
 
 /**
- * The booted-Nextly surface these helpers need: just a `find` reader. Typed
- * structurally (not as the Direct API class) so BOTH the internal singleton and
- * the public instance returned by `await getNextly(config)` satisfy it — the
- * public interface does not expose the Direct API's internal handlers.
+ * The booted-Nextly surface these helpers need: a `find` reader, plus
+ * `findByID` for the working-draft overlay. Typed structurally (not as the
+ * Direct API class) so BOTH the internal singleton and the public instance
+ * returned by `await getNextly(config)` satisfy it — the public interface does
+ * not expose the Direct API's internal handlers.
  */
-export type NextlyContentReader = Pick<Nextly, "find">;
+export type NextlyContentReader = Pick<Nextly, "find" | "findByID">;
 
 /** Options for {@link resolveContent}. */
 export interface ResolveContentOptions {
@@ -49,6 +50,36 @@ export interface ResolveContentOptions {
    * built-in lifecycle) it is a no-op — every row is live.
    */
   status?: "published" | "draft" | "all";
+  /**
+   * Return the pending working draft in place of the live row when one exists.
+   *
+   * The shipped draft model is TWO layers and a preview has to honour both.
+   * `status` covers an entry that has never been published; this covers pending
+   * edits on an ALREADY-published entry, which live in a sidecar row and are
+   * invisible to any `status` scope. Widening `status` alone therefore shows a
+   * published page's LIVE content while the edits being previewed stay hidden —
+   * the failure this option exists to prevent.
+   *
+   * Because the two belong together, `status` defaults to `"all"` when this is
+   * set on a TRUSTED read (`overrideAccess: true`), so the common case cannot
+   * be half-configured. An explicit `status` still wins. The widening is
+   * deliberately limited to trusted reads: the overlay is gated per row by an
+   * update-capability probe, but widening `status` is not gated by anything, so
+   * on an enforced read it would expose every never-published entry to whoever
+   * asked. An enforced draft read therefore stays published-only, and sees
+   * pending edits only through the (gated) overlay.
+   *
+   * Effective only on a drafts-enabled, non-localized collection with the
+   * `status` lifecycle, and gated by an update-capability probe: a caller who
+   * cannot edit the document still gets the published row. A read that is
+   * neither trusted (`overrideAccess: true`) nor carrying a `user` can never
+   * pass that probe, so a draft read must be one or the other.
+   *
+   * A draft read is NEVER cached — see the caching note below.
+   *
+   * @default false
+   */
+  draft?: boolean;
   /** Relation population depth for rendering (default `1`). */
   depth?: number;
   /** Read a specific locale (localized collections). */
@@ -106,6 +137,31 @@ export interface ResolveContentOptions {
  * if (!post) notFound();
  * ```
  */
+/**
+ * Runs the working-draft overlay read, answering `null` when there is no draft
+ * to be had rather than failing the page.
+ *
+ * Scoped to THIS read on purpose. A 404 here means the row went away between
+ * the slug lookup and this call, or that an enforced by-id read filtered it to
+ * published — both simply mean "no overlay", and the live row already in hand
+ * is the honest answer. Wrapping the slug lookup in the same handler would be
+ * much worse: a 404 from a mistyped collection, or from schema or hook code
+ * beneath it, would render as an ordinary content miss with nothing to say why.
+ *
+ * Every other failure still propagates, so a database blip stays a retryable
+ * error rather than becoming a permanently-cached 404.
+ */
+async function readOverlay(
+  read: () => Promise<ContentEntry | null>
+): Promise<ContentEntry | null> {
+  try {
+    return await read();
+  } catch (error) {
+    if (NextlyError.is(error) && error.statusCode === 404) return null;
+    throw error;
+  }
+}
+
 export async function resolveContent(
   collection: string,
   slug: string,
@@ -113,11 +169,27 @@ export async function resolveContent(
 ): Promise<ContentEntry | null> {
   const nextly = options.nextly ?? getNextly();
   const slugField = options.slugField ?? "slug";
-  const status = options.status ?? "published";
+  const draft = options.draft ?? false;
   const depth = options.depth ?? 1;
   const locale = options.locale;
   const overrideAccess = options.overrideAccess ?? false;
   const user = options.user;
+
+  // Widening the lifecycle scope follows TRUST, not the draft flag.
+  //
+  // The two halves of a draft read are gated very differently. The working-draft
+  // overlay is judged per row, by an update-capability probe, so asking for it
+  // is safe from anywhere. Widening `status` is not judged at all — the list
+  // read simply returns never-published rows — so tying it to `draft` alone
+  // would let a preview flag wired from an untrusted request publish
+  // unpublished pages.
+  //
+  // So an untrusted draft read still sees only published rows, and overlays
+  // their pending edits. Previewing an entry that has never been published
+  // needs `overrideAccess: true`, which is the caller stating they have already
+  // authorized it. An explicit `status` still wins either way.
+  const status =
+    options.status ?? (draft && overrideAccess ? "all" : "published");
 
   const read = async (): Promise<ContentEntry | null> => {
     try {
@@ -148,7 +220,42 @@ export async function resolveContent(
         // The content locale drives the localized read + fallback.
         ...(locale ? { locale } : {}),
       });
-      return result.items[0] ?? null;
+      const found = result.items[0] ?? null;
+      if (found === null || !draft) return found;
+
+      // The overlay lives on the by-id read, not the list read, so a slug
+      // lookup cannot surface it directly. Re-reading the resolved row by id is
+      // what turns "the live row whose slug matches" into "what an editor is
+      // about to publish"; the service still runs its update-capability probe,
+      // so this cannot widen who sees a draft.
+      //
+      // Consequence worth knowing: the lookup matches the LIVE row's slug. A
+      // draft that renamed its own slug is previewable at the published URL,
+      // not at the new one — resolve by id (the shape a preview link carries)
+      // when the new slug is what matters.
+      const id = found.id;
+      if (typeof id !== "string" && typeof id !== "number") return found;
+      // The overlay is an ENHANCEMENT, never a requirement. Deciding whether to
+      // attempt it from the row's own `status` was wrong twice over: an
+      // `afterRead` hook may reshape or drop that field before it is read here,
+      // and an unpublished row would be skipped even where it could be served.
+      // So it is always attempted, and anything answering "no draft" falls back
+      // to the live row already in hand.
+      const overlaid = await readOverlay(() =>
+        nextly.findByID({
+          collection,
+          id: String(id),
+          draft: true,
+          depth,
+          overrideAccess,
+          user,
+          ...(options.richTextFormat
+            ? { richTextFormat: options.richTextFormat }
+            : {}),
+          ...(locale ? { locale } : {}),
+        })
+      );
+      return overlaid ?? found;
     } catch (error) {
       // An access denial (403) means the read policy hides this entry from the
       // caller — treat it as absent (→ notFound), never as a transient error.
@@ -170,7 +277,15 @@ export async function resolveContent(
   // So caching requires `overrideAccess: true` AND no user; every enforced or
   // user-scoped read runs fresh per request. A public site that wants cached
   // pages reads its public content trusted (`overrideAccess: true`).
-  const cacheable = overrideAccess && !user;
+  //
+  // A DRAFT read is never cached either, and for a reason the key could not fix
+  // by being more specific: a working draft changes on every save while cache
+  // tags are busted by writes to the LIVE row, so a cached draft would show an
+  // editor their previous save and call it a preview. Serving it stale is the
+  // one thing a preview must not do, and per-request freshness is exactly what
+  // a preview wants. It also removes any path by which a draft entry could be
+  // handed to a request that never asked for one.
+  const cacheable = overrideAccess && !user && !draft;
   if (!cacheable) {
     // Bypassing `unstable_cache` alone does not opt out of Next's Full Route
     // Cache, so a page rendered while a policy was public could stay statically

@@ -7,8 +7,9 @@
  * helpers live at `@nextlyhq/blocks-react/next`, and `layering.test.ts` turns
  * that separation into a hard failure rather than a convention.
  *
- * The renderer components are added on top of this boundary; what ships here
- * is the boundary itself and the context contract every block renders against.
+ * Everything here is a Server Component and none of it is a client component,
+ * so a page whose blocks are all server blocks ships no JavaScript for the
+ * renderer itself.
  *
  * @module index
  */
@@ -20,3 +21,26 @@ export type {
   ResolvedMedia,
 } from "./context";
 export { createStandaloneContext, emptyDataProvider } from "./context";
+
+export { PageRenderer } from "./page-renderer";
+export type { PageRendererProps } from "./page-renderer";
+
+export { BlockBoundary, BlockList } from "./block-boundary";
+export type { BlockBoundaryProps, BlockListProps } from "./block-boundary";
+
+export { BlockPlaceholder } from "./placeholder";
+export type { BlockPlaceholderProps, PlaceholderReason } from "./placeholder";
+
+export {
+  createBlockResolver,
+  migrationSourceFor,
+  registeredBlocks,
+} from "./resolver";
+export type { BlockResolver } from "./resolver";
+
+export {
+  resolvePageStyles,
+  styleTextForInjection,
+  toPageStyles,
+} from "./styles";
+export type { PageStyles } from "./styles";

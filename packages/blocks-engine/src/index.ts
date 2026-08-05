@@ -227,6 +227,11 @@ export type {
 } from "./style/compile-page";
 export {
   blockTypeClassName,
+  // The digest itself, for a caller naming something other than a node from an
+  // id — a per-document scope class, say. Exported so that caller reaches for
+  // this rather than writing a second hash, which is how the two that existed
+  // before came to disagree about the width a class needs.
+  hashId,
   nodeClassName,
   nodeClassNames,
   BLOCK_TYPE_CLASS_PREFIX,
@@ -259,3 +264,19 @@ export type {
   MigrationSource,
   PropsMigrationResult,
 } from "./migration";
+
+// Named classes: reusable style presets a node applies by id.
+export type { NamedClass } from "./style/named-class";
+export {
+  isUsableNamedClass,
+  namedClassName,
+  orderedNamedClasses,
+  NAMED_CLASS_PREFIX,
+  NAMED_CLASS_SLUG_RE,
+} from "./style/named-class";
+export type { BreakpointAxis } from "./style/breakpoint-axes";
+
+// Where each emitted declaration came from, for an editor that has to tell an author which of
+// several tiers they are looking at. Produced only when `StyleCompileContext.trace` asks for it.
+export type { StyleOrigin, StyleTraceEntry } from "./style/style-trace";
+export { BREAKPOINT_AXES } from "./style/breakpoint-axes";

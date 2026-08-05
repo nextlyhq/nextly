@@ -222,6 +222,108 @@ describe("export", () => {
     expect(issues[0]?.message).toContain("cannot express");
   });
 
+  it("reports a family list that is a bare CSS-wide keyword", () => {
+    // `font-family: inherit` takes the parent's font. Exported as a `$value` it
+    // would describe a font actually named "inherit".
+    const { document, issues } = tokensToDtcg(
+      tokens([{ name: "f", kind: "fontFamily", values: { light: "inherit" } }])
+    );
+    expect(document).toEqual({});
+    expect(issues[0]?.message).toContain("cannot express");
+  });
+
+  it("reports a family list whose bare item is not an identifier run", () => {
+    // `10px` tokenizes as a dimension, so a browser drops any declaration
+    // reading the token — exporting it shows a stack the site never used.
+    const { document } = tokensToDtcg(
+      tokens([
+        { name: "f", kind: "fontFamily", values: { light: "10px, serif" } },
+      ])
+    );
+    expect(document).toEqual({});
+  });
+
+  it("reports a family run separated by whitespace only JavaScript knows", () => {
+    // A vertical tab is whitespace to `\s` and a delimiter to CSS, so `My\vFont`
+    // is not a run of identifiers and the browser drops the declaration reading
+    // it. Judged by the JavaScript set it exports as a font stack the site
+    // never rendered.
+    const { document } = tokensToDtcg(
+      tokens([
+        {
+          name: "f",
+          kind: "fontFamily",
+          values: { light: "My\u000bFont, serif" },
+        },
+      ])
+    );
+    expect(document).toEqual({});
+  });
+
+  it("still exports a family run separated by the whitespace CSS allows", () => {
+    // The other side of that rule: a form feed IS whitespace to CSS, so the run
+    // it separates is two identifiers and the token is expressible.
+    const { document } = tokensToDtcg(
+      tokens([
+        {
+          name: "f",
+          kind: "fontFamily",
+          values: { light: "My\u000cFont, serif" },
+        },
+      ])
+    );
+    expect((document.f as Record<string, unknown>)?.$value).toEqual([
+      "My\u000cFont",
+      "serif",
+    ]);
+  });
+
+  it("still exports a quoted item that would be a keyword bare", () => {
+    const { document } = tokensToDtcg(
+      tokens([
+        {
+          name: "f",
+          kind: "fontFamily",
+          values: { light: `"inherit", serif` },
+        },
+      ])
+    );
+    expect((document.f as Record<string, unknown>)?.$value).toEqual([
+      "inherit",
+      "serif",
+    ]);
+  });
+
+  it("exports a family whose identifier run is spelled with an escape", () => {
+    // `\\31 0px` is a legal identifier naming the family `10px`. Checked after
+    // decoding it looks like a dimension, and a valid token is lost.
+    const { document } = tokensToDtcg(
+      tokens([
+        {
+          name: "f",
+          kind: "fontFamily",
+          values: { light: "\\31 0px, serif" },
+        },
+      ])
+    );
+    expect((document.f as Record<string, unknown>)?.$value).toEqual([
+      "10px",
+      "serif",
+    ]);
+  });
+
+  it.each(["--brand, serif", "My  Font, serif"])(
+    "exports the valid unquoted family list %s",
+    css => {
+      // The check has to be CSS's grammar, not a stricter one: an identifier may
+      // open with dashes, and any run of whitespace separates two of them.
+      const { document } = tokensToDtcg(
+        tokens([{ name: "f", kind: "fontFamily", values: { light: css } }])
+      );
+      expect(document).not.toEqual({});
+    }
+  );
+
   it("carries another tool's extension data through untouched", () => {
     // "Tools that process design token files MUST preserve any extension data
     // they do not themselves understand."
@@ -374,6 +476,54 @@ describe("import", () => {
     });
     expect(read).toEqual([]);
     expect(issues[0]?.message).toContain("could not be read");
+  });
+
+  it("refuses a colour whose hex contradicts its components", () => {
+    // The hex is a FALLBACK for the components, not an alternative to them.
+    // Taking it imports black for a token that describes red.
+    const { tokens: read, issues } = dtcgToTokens({
+      c: {
+        $type: "color",
+        $value: {
+          colorSpace: "srgb",
+          components: [1, 0, 0],
+          hex: "#000000",
+        },
+      },
+    });
+    expect(read).toEqual([]);
+    expect(issues[0]?.message).toContain("could not be read");
+  });
+
+  it("still accepts a hex that merely rounded from its components", () => {
+    const { tokens: read } = dtcgToTokens({
+      c: {
+        $type: "color",
+        $value: {
+          colorSpace: "srgb",
+          components: [1, 0, 0],
+          hex: "#ff0000",
+        },
+      },
+    });
+    expect(read[0]?.values.light).toBe("#ff0000");
+  });
+
+  it("does not compare non-sRGB components to an sRGB hex", () => {
+    // In another space the components are not sRGB channels, so a file giving
+    // display-p3 components beside their converted sRGB fallback is valid and
+    // must import.
+    const { tokens: read } = dtcgToTokens({
+      c: {
+        $type: "color",
+        $value: {
+          colorSpace: "display-p3",
+          components: [1, 0, 0],
+          hex: "#fa0f00",
+        },
+      },
+    });
+    expect(read[0]?.values.light).toBe("#fa0f00");
   });
 
   it("skips a type it has no kind for, and says so", () => {

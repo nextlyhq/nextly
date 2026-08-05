@@ -87,6 +87,21 @@ describe("migrateDownCore", () => {
     await expect(migrateDownCore(deps)).rejects.toThrow(/irreversible/i);
   });
 
+  it("refuses when the DOWN section holds only a comment", async () => {
+    // `formatMigrationFile` writes an explanatory comment rather than nothing
+    // when a migration has no inverse, and a baseline never has one. Measuring
+    // the section's LENGTH reads that comment as rollback SQL: the run then
+    // executes zero statements, records the file rolled back, and the next
+    // `migrate` treats it as pending and re-applies its CREATE TABLEs against
+    // the tables that are still standing.
+    const { deps, executed } = baseDeps({
+      readDownSql: async () =>
+        "-- (no automatic down — this migration is not reversible. Hand-write rollback SQL here)",
+    });
+    await expect(migrateDownCore(deps)).rejects.toThrow(/irreversible/i);
+    expect(executed).toEqual([]);
+  });
+
   it("requires --allow-data-loss when DOWN drops a column", async () => {
     const { deps } = baseDeps();
     await expect(migrateDownCore(deps)).rejects.toThrow(/allow-data-loss/);

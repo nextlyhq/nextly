@@ -51,6 +51,11 @@ function makeAdapter(dialect: "postgresql" | "mysql" | "sqlite") {
     // one that does not exist. A blanket `true` here made the companion look pre-existing, which
     // is not a state a create ever starts from.
     tableExists: vi.fn(async (name: string) => !name.includes("_locales")),
+    // Read by the slug guard the create runs before any DDL, to find whether another resource
+    // already owns this slug. `null` is "nobody does", which is the state a successful create
+    // starts from. The return type names the owner case too, so the conflict test can replace this
+    // without widening the double's shape from outside it.
+    selectOne: vi.fn(async (): Promise<{ id: string } | null> => null),
     executeQuery: vi.fn(async (sql: string) => {
       executed.push(sql);
       return [];
@@ -153,7 +158,11 @@ async function ddlFor(
   const registry = wireRegistry();
   await dispatchSingles("createSingle", {}, payload);
 
-  const recorded = registry.updateMigrationStatus.mock.calls[0]?.[1];
+  const recorded = (
+    registry.registerSingle.mock.calls[0]?.[0] as
+      | { migrationStatus?: string }
+      | undefined
+  )?.migrationStatus;
   expect(recorded, "the create recorded its own outcome").toBe("applied");
 
   return executed.join("\n");
@@ -247,6 +256,31 @@ describe("createSingle — what the request forwards into the DDL", () => {
     expect(mainCreate).toContain("views");
     // And the translatable one is on the companion — proving it MOVED rather than was dropped.
     expect(companionCreate).toContain("body");
+  });
+
+  /**
+   * A slug another resource already owns is refused with NOTHING created.
+   *
+   * The registry makes this check too, but it makes it while inserting the row, which happens after
+   * the table has been created. A create rejected there answered with a duplicate error and left
+   * `single_<slug>` behind, described by nothing and found only by guessing at table names.
+   *
+   * Asserting the rejection alone would not cover it: the rejection happened before this change as
+   * well, just later. What is new is that no statement runs, so that is what is asserted.
+   */
+  it("refuses a slug another resource owns before running any DDL", async () => {
+    executed.length = 0;
+    adapter = makeAdapter("postgresql");
+    // A dynamic collection already holds this slug. The guard reads the two registry tables in
+    // turn, so answering every lookup is enough to make the first one own it.
+    adapter.selectOne = vi.fn(async () => ({ id: "col_1" }));
+    wireRegistry();
+
+    await expect(dispatchSingles("createSingle", {}, base)).rejects.toThrow();
+
+    expect(executed, "a rejected create must leave no table behind").toEqual(
+      []
+    );
   });
 
   /**

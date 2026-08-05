@@ -49,15 +49,13 @@ import { resolve } from "node:path";
 
 import type { Command } from "commander";
 
+import { toMinimalEntities } from "../../domains/schema/migrate-create/config-entities";
 import {
   formatBlankFile,
   formatTimestamp,
   slugify,
 } from "../../domains/schema/migrate-create/format-file";
-import {
-  generateMigration,
-  type MinimalConfigEntity,
-} from "../../domains/schema/migrate-create/generate";
+import { generateMigration } from "../../domains/schema/migrate-create/generate";
 import { PromptCancelledError } from "../../domains/schema/migrate-create/prompt-renames";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
 import {
@@ -454,80 +452,6 @@ async function runBlankPath(
   logger.success(`Blank migration created in ${formatDuration(duration)}`);
   logger.newline();
   logger.info("Edit the migration file to add your custom SQL.");
-}
-
-// ============================================================================
-// Config -> MinimalConfigEntity adapter
-// ============================================================================
-
-/**
- * Convert config entries (collections / singles / components) to the
- * minimal shape generateMigration needs. The table name is derived from
- * the slug + a per-entity prefix (matching runtime-schema-generator's
- * naming convention).
- *
- * MIRROR: keep this in sync with `migrate-check.ts:toMinimalEntities`
- * (same shape adapter; PR 4 duplicated rather than introducing a shared
- * CLI helper module just for this).
- */
-function toMinimalEntities(
-  entities: unknown[],
-  resolveTableName: (entity: { slug: string; dbName?: string }) => string
-): MinimalConfigEntity[] {
-  return entities.map(raw => {
-    const e = raw as {
-      slug: string;
-      fields?: {
-        name: string;
-        type: string;
-        required?: boolean;
-        hasMany?: boolean;
-        relationTo?: string | string[];
-        unique?: boolean;
-        index?: boolean;
-        localized?: boolean;
-        dbType?: "integer" | "decimal";
-        precision?: number;
-        scale?: number;
-      }[];
-      dbName?: string;
-      status?: boolean;
-      localized?: boolean;
-    };
-    const slug = e.slug;
-    const fields = (e.fields ?? []).map(f => ({
-      name: f.name,
-      type: f.type,
-      required: f.required,
-      hasMany: f.hasMany,
-      relationTo: f.relationTo,
-      unique: f.unique,
-      index: f.index,
-      // Forward the per-field localized flag so translatable columns are
-      // relocated to the companion `_locales` table (i18n M3b-2).
-      localized: f.localized,
-      // Forward decimal storage so migrate:create emits a decimal column, not
-      // the integer default, for a code-first `dbType: "decimal"` number field.
-      dbType: f.dbType,
-      precision: f.precision,
-      scale: f.scale,
-    }));
-    return {
-      slug,
-      // Resolve through the same per-kind helper the runtime uses so a dbName
-      // that omits the prefix (e.g. a plugin collection with dbName:"forms")
-      // still resolves to the table the runtime creates (dc_forms).
-      tableName: resolveTableName({ slug, dbName: e.dbName }),
-      fields,
-      // Why: forward the Draft/Published flag so migrate:create emits
-      // the system status column on first sync. Mirrors the same
-      // forwarding in migrate-check.ts:toMinimalEntities.
-      status: e.status === true,
-      // Forward collection-level localization so the main snapshot omits
-      // localized columns and a companion migration is emitted.
-      localized: e.localized === true,
-    };
-  });
 }
 
 // ============================================================================

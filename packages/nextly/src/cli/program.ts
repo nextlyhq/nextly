@@ -22,6 +22,7 @@ import { registerGenerateTypesCommand } from "./commands/generate-types";
 import { registerI18nRestoreCommand } from "./commands/i18n-restore";
 import { registerInitCommand } from "./commands/init";
 import { registerMigrateCommand } from "./commands/migrate";
+import { registerMigrateBaselineCommand } from "./commands/migrate-baseline";
 import { registerMigrateCheckCommand } from "./commands/migrate-check";
 import { registerMigrateCreateCommand } from "./commands/migrate-create";
 import { registerMigrateDownCommand } from "./commands/migrate-down";
@@ -215,6 +216,7 @@ function registerCommands(program: Command): void {
   registerMigrateCreateCommand(program);
   registerMigrateCheckCommand(program); // F11 PR 4
   registerMigrateStatusCommand(program);
+  registerMigrateBaselineCommand(program); // adopt an existing DB into the history
   registerMigrateResolveCommand(program); // Plan C3 — recovery command
   registerPruneCommand(program); // P2b — drop orphaned plugin/code schema (D14)
   registerWebhooksPruneCommand(program); // manual webhook-queue retention pass

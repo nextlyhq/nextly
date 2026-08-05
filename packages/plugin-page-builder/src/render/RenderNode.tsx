@@ -77,6 +77,19 @@ export interface RenderNodeProps {
   refs?: Record<string, BlockNode>;
   /** Visited ref ids on the current path — guards against reference cycles. */
   refStack?: string[];
+  /**
+   * The document's node classes, from `documentNodeClasses`.
+   *
+   * Threaded rather than read from context for the same reason `item` is:
+   * Server Components cannot consume context. It has to be the map the
+   * stylesheet was compiled from, because a class disambiguated in one and not
+   * the other names a selector the markup never carries.
+   *
+   * A node reached through `core/ref` is not in it — the compiler does not walk
+   * the reusable-block library either — and falls back to its plain class,
+   * which is what both halves already give it.
+   */
+  classes?: ReadonlyMap<string, string>;
 }
 
 const REF_TYPE = "core/ref";
@@ -90,8 +103,12 @@ export function RenderNode({
   budget,
   refs,
   refStack,
+  classes,
 }: RenderNodeProps): ReactNode {
-  const className = [nodeClass(node.id), node.customClass]
+  const className = [
+    classes?.get(node.id) ?? nodeClass(node.id),
+    node.customClass,
+  ]
     .filter(Boolean)
     .join(" ");
 
@@ -112,6 +129,15 @@ export function RenderNode({
         budget={budget}
         refs={refs}
         refStack={[...(refStack ?? []), refId]}
+        // Not this document's map. It is keyed by id, and a stored subtree can
+        // hold an id the document also holds — a block made reusable from a node
+        // that stayed put is the ordinary way — so passing it on would give the
+        // referenced node a class disambiguated for the OTHER node of that id,
+        // compiled from styles that are not its own. The referenced subtree is
+        // outside the walk the map is built from, so it has no entry to inherit
+        // and its nodes take the plain class, which is what the compiler would
+        // name them if it reached them.
+        classes={undefined}
       />
     );
   }
@@ -134,6 +160,7 @@ export function RenderNode({
           remotePatterns={remotePatterns}
           className={className}
           budget={budget ?? { n: 0 }}
+          classes={classes}
         />
       </BlockErrorBoundary>
     );
@@ -153,6 +180,7 @@ export function RenderNode({
           budget={budget}
           refs={refs}
           refStack={refStack}
+          classes={classes}
         />
       ));
     }

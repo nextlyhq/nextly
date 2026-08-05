@@ -23,6 +23,8 @@ export interface QueryLoopProps {
   remotePatterns?: readonly RemotePatternInput[];
   className: string;
   budget: QueryBudget;
+  /** The document's node classes, threaded on to the loop template. */
+  classes?: ReadonlyMap<string, string>;
 }
 
 export async function QueryLoop({
@@ -32,6 +34,7 @@ export async function QueryLoop({
   remotePatterns,
   className,
   budget,
+  classes,
 }: QueryLoopProps): Promise<ReactNode> {
   const config = node.props as QueryLoopConfig;
   const result = await runQuery(dataProvider, config, budget);
@@ -44,6 +47,7 @@ export async function QueryLoop({
       className={className}
       result={result}
       budget={budget}
+      classes={classes}
     />
   );
 }
