@@ -81,8 +81,8 @@ export function isUsableNamedClass(value: unknown): value is NamedClass {
     typeof candidate.id === "string" &&
     typeof candidate.slug === "string" &&
     // Length BEFORE the pattern. A slug of megabytes of otherwise-valid characters is scanned in
-    // full by the regex, on every compile and every resolution, only to be rejected afterwards —
-    // so the cheap test that rejects it has to come first for the cap to bound anything.
+    // full by the regex, on every compile, only to be rejected afterwards — so the cheap test
+    // that rejects it has to come first for the cap to bound anything.
     candidate.slug.length <= MAX_NAMED_CLASS_NAME_LENGTH &&
     candidate.id.length <= MAX_NAMED_CLASS_NAME_LENGTH &&
     NAMED_CLASS_SLUG_RE.test(candidate.slug) &&
