@@ -406,9 +406,12 @@ export default function SingleBuilderEditPage({
     if (!fieldDefinitions) return;
 
     try {
+      // i18n: preview with the toggle the apply will use, so the resolutions
+      // collected here match the DDL that actually runs.
       const preview = await singleApi.previewSchemaChanges(
         slug,
-        fieldDefinitions
+        fieldDefinitions,
+        settings?.i18n === true
       );
 
       if (!preview.hasChanges) {

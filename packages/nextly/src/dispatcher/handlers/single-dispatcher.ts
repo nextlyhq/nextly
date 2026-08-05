@@ -39,6 +39,7 @@ import { container } from "../../di/container";
 import { DynamicCollectionSchemaService } from "../../domains/dynamic-collections/services/dynamic-collection-schema-service";
 import { teardownEntityComponentData } from "../../domains/field-groups/services/teardown-entity-field-group-data";
 import { resolveLocalizedFieldNames } from "../../domains/i18n/classify-fields";
+import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { teardownEntityI18n } from "../../domains/i18n/migration/teardown-entity-i18n";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
@@ -103,6 +104,7 @@ import {
   getSingleMetadataServiceFromDI,
   getSingleRegistryFromDI,
 } from "../helpers/di";
+import { readRequestLocalized } from "../helpers/request-localized";
 import {
   offsetPaginationToMeta,
   unwrapServiceResult,
@@ -136,6 +138,8 @@ interface SingleField {
   label?: string;
   required?: boolean;
   unique?: boolean;
+  /** See the synthetic declarations below: system columns set this false. */
+  localized?: boolean;
   admin?: Record<string, unknown>;
   validation?: { pattern: string; message: string };
 }
@@ -152,6 +156,12 @@ const SINGLE_TITLE_FIELD: SingleField = {
   type: "text",
   label: "Title",
   required: true,
+  // A main-table system column, not content. Text-like fields localize by
+  // default, so without this the column the entity is titled by would be
+  // classified translatable on a localized single and dropped from the main
+  // table's desired shape. Collections declare their synthetic title the
+  // same way.
+  localized: false,
   admin: { placeholder: "Enter title" },
 };
 
@@ -162,6 +172,8 @@ const SINGLE_SLUG_FIELD: SingleField = {
   label: "Slug",
   required: true,
   unique: true,
+  // Main-table system column — see SINGLE_TITLE_FIELD.
+  localized: false,
   admin: { placeholder: "my-entry-slug" },
   validation: {
     pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$",
@@ -487,6 +499,16 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         : undefined;
       if (conflictAdapter) {
         await assertGlobalResourceSlugAvailable(conflictAdapter, b.slug);
+      }
+
+      // i18n: a localized single stores translatable values via the app's
+      // `localization` config; creating one without that config would split
+      // the tables into a shape the runtime cannot write to. Rejected here for
+      // the same reason as the refusals above — the create below applies the
+      // DDL and provisions the companion, so a rejection afterwards would
+      // leave both behind.
+      if (b.localized === true) {
+        assertLocalizationConfigured("single", b.slug);
       }
 
       // The table change and the registry row are one operation, so they are issued as one:
@@ -893,6 +915,12 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       const isLocalized =
         b.localized !== undefined ? b.localized === true : wasLocalized;
       const alterOmitLocalized = isLocalized || wasLocalized;
+      // i18n: gate the Internationalization enable on the app-level
+      // `localization` config (false→true only — an already-localized
+      // single keeps saving, and disabling is always allowed).
+      if (!wasLocalized && isLocalized) {
+        assertLocalizationConfigured("single", slug);
+      }
 
       let migrationStatus = existing.migrationStatus;
 
@@ -922,8 +950,14 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // so the diff doesn't try to ADD COLUMN for columns that already
         // exist in the physical table.
         const systemFields: FieldDefinition[] = [
-          { name: "title", type: "text", required: true },
-          { name: "slug", type: "text", required: true },
+          // `localized: false` for the same reason the synthetic declarations
+          // carry it: these are main-table system columns, and text-like
+          // fields localize by default. Without it `omitLocalized` below
+          // strips them from a localized single's ALTER input, so the
+          // main-table diff stops seeing the `title`/`slug` it already has
+          // and plans them as additions against columns that exist.
+          { name: "title", type: "text", required: true, localized: false },
+          { name: "slug", type: "text", required: true, localized: false },
         ];
 
         const existingFields = (existing.fields ??
@@ -1259,8 +1293,13 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // the `status` column into the desired snapshot.
         status: single.status === true,
         // i18n: carry localized so the preview omits translatable columns from the
-        // single's main table (mirrors the apply path).
-        localized: (single as { localized?: boolean }).localized === true,
+        // single's main table (mirrors the apply path). The REQUEST's flag wins
+        // when the Builder sent one, for the same reason the apply prefers it:
+        // otherwise the preview collects resolutions for DDL the apply will not
+        // run, and the save fails after the user has already confirmed.
+        localized:
+          readRequestLocalized(body) ??
+          (single as { localized?: boolean }).localized === true,
         // Authored in the Schema Builder: this is the Builder's own save path.
         builderOwned: true,
       };
@@ -1319,7 +1358,6 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         resolutions,
         renameResolutions,
         eventResolutions,
-        localized: requestLocalized,
       } = body as {
         fields: unknown[];
         confirmed: boolean;
@@ -1342,10 +1380,18 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
 
       // i18n: prefer the request's localized flag over the persisted one (which may be stale on a
       // simultaneous toggle+field-change save); fall back to the registry value.
-      const isLocalized =
-        requestLocalized !== undefined
-          ? requestLocalized === true
-          : (single as { localized?: boolean }).localized === true;
+      const wasLocalized =
+        (single as { localized?: boolean }).localized === true;
+      // Validated rather than coerced: `localized: "false"` would read as
+      // `false` under `=== true` and turn an ordinary save of a localized
+      // single into a DISABLE transition, restoring the companion's columns
+      // onto the main table and archiving it.
+      const isLocalized = readRequestLocalized(body) ?? wasLocalized;
+      // i18n: gate the Internationalization enable on the app-level
+      // `localization` config (false→true transition only).
+      if (!wasLocalized && isLocalized) {
+        assertLocalizationConfigured("single", slug);
+      }
 
       const currentVersion = single.schemaVersion ?? 1;
       // Reject a stale UI save before any DDL runs so two admins editing the

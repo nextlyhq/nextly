@@ -10,7 +10,12 @@ import { ServiceDispatcher } from "@nextly/services/dispatcher";
 import { buildAuthRouterDeps } from "../auth/handlers/deps-bridge";
 import { routeAuthRequest } from "../auth/handlers/router";
 import type { SanitizedNextlyConfig } from "../collections/config/define-config";
-import { isServicesRegistered, registerServices, getService } from "../di";
+import {
+  isServicesRegistered,
+  registerServices,
+  getService,
+  shutdownServices,
+} from "../di";
 import type { NextlyServiceConfig } from "../di/register";
 import { ensureHmrListener } from "../runtime/hmr-listener";
 import { getImageProcessor } from "../storage/image-processor";
@@ -42,6 +47,57 @@ export function getHandlerConfig(): SanitizedNextlyConfig | null {
 }
 
 /**
+ * The `localization` block, as it stood in the ROUTE config when services
+ * were last known to match it. Null until the first observation.
+ */
+let _registeredLocalization: string | null = null;
+
+/** The comparable form of a config's localization block. */
+function localizationKey(config: SanitizedNextlyConfig | null): string {
+  return JSON.stringify(config?.localization ?? null);
+}
+
+/**
+ * Whether the stored config's `localization` block has moved since services
+ * were registered from it.
+ *
+ * Compared against the route config's OWN previous value rather than the
+ * container's: what `registerServices` stores is the plugin-transformed
+ * config, so an app whose plugin supplies or normalizes `localization` would
+ * show a difference that re-registering can never remove — every request
+ * would tear the services down and rebuild the adapter, forever.
+ *
+ * Callers reach this only once services are already registered, and this
+ * module records a baseline whenever IT registers them — so no recorded value
+ * means some other path did (an `instrumentation.ts` boot). Those services
+ * captured whatever `localization` was current when that path ran, which is
+ * not observable from here: the config may have been edited before this route
+ * module ever saw a request. Unverifiable is treated as changed, costing one
+ * rebuild on the first request of such a process. It cannot loop, because the
+ * rebuild records this same route config as the baseline and every later
+ * request then compares equal.
+ */
+function localizationBlockChanged(stored: SanitizedNextlyConfig): boolean {
+  const current = localizationKey(stored);
+  if (_registeredLocalization === null) return true;
+  return _registeredLocalization !== current;
+}
+
+// Test seams: the staleness decision is the behavioral contract of the
+// dev-only re-registration in ensureServicesInitialized; exporting these
+// under verbose names keeps the public surface honest while letting unit
+// tests pin it. The decision function deliberately does not write the
+// baseline — only a registration does — so pinning any behavior past the
+// first observation needs the recording step too.
+export const _localizationBlockChangedForTest = localizationBlockChanged;
+
+export function _recordRegisteredLocalizationForTest(
+  config: SanitizedNextlyConfig | null
+): void {
+  _registeredLocalization = localizationKey(config);
+}
+
+/**
  * Ensure services are initialized, auto-initializing if needed.
  * This is critical for Singles and other services that depend on the DI container.
  *
@@ -61,6 +117,53 @@ export function getHandlerConfig(): SanitizedNextlyConfig | null {
  * consumes no request body, so a handler that parses its own body still can.
  */
 export async function ensureServicesInitialized(): Promise<void> {
+  // Single-flight: concurrent requests share one recovery+registration pass
+  // instead of interleaving. Without this, two dev requests could both
+  // detect a stale localization block and overlap shutdownServices() — the
+  // later teardown destroying the services the earlier request had just
+  // re-registered — and the same latch keeps a cold boot from being
+  // double-registered by simultaneous first requests.
+  while (_initInFlight) {
+    await _initInFlight;
+  }
+  const run = initializeServicesOnce().finally(() => {
+    if (_initInFlight === run) _initInFlight = null;
+  });
+  _initInFlight = run;
+  await run;
+}
+
+// The in-flight recovery/registration pass concurrent callers await.
+let _initInFlight: Promise<void> | null = null;
+
+async function initializeServicesOnce(): Promise<void> {
+  // Dev-only staleness recovery: services register ONCE per process, but
+  // editing nextly.config.ts re-evaluates the route module, which stores the
+  // NEW config here without re-registering anything. For most blocks that is
+  // fine (schema changes flow through the HMR reconcile), but `localization`
+  // is captured by the data services at construction — a stale value makes
+  // every localized read/write silently no-op to the main table (writes then
+  // fail with "no column named X" on a split table). When the stored block
+  // differs from the registered one, tear services down so the block below
+  // re-registers them with the current config. Gated to development: config
+  // modules never hot-change in production.
+  if (
+    process.env.NODE_ENV === "development" &&
+    isServicesRegistered() &&
+    _storedConfig &&
+    localizationBlockChanged(_storedConfig)
+  ) {
+    console.log(
+      "[Nextly] `localization` config changed — re-registering services to apply it..."
+    );
+    await shutdownServices();
+    // The cached dispatcher wraps a ServiceContainer built on the adapter
+    // that shutdown just disconnected, and its ensureInitialized() keeps an
+    // existing adapter. Drop it so the next getDispatcherInstance() builds
+    // one against the freshly registered services.
+    _dispatcher = null;
+  }
+
   if (!isServicesRegistered()) {
     const nextlyConfig = _storedConfig;
 
@@ -158,6 +261,9 @@ export async function ensureServicesInitialized(): Promise<void> {
     }
 
     await registerServices(serviceConfig as unknown as NextlyServiceConfig);
+    // Services now match the block this config was registered from, so that
+    // is the value a later request compares against.
+    _registeredLocalization = localizationKey(nextlyConfig);
 
     // Seed built-in email templates (password-reset, welcome, etc.)
     // This mirrors init.ts runPostInitTasks() so external apps using

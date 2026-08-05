@@ -45,7 +45,11 @@ import {
   countNulls as countNullsHelper,
   countRows as countRowsHelper,
 } from "./classifier/count-helpers";
-import { canEmitWithoutDrizzleKit, emitDdl } from "./ddl-emitter";
+import {
+  canEmitWithoutDrizzleKit,
+  emitDdl,
+  withoutUnemittableIndexes,
+} from "./ddl-emitter";
 import {
   buildDesiredTableFromFields,
   buildDesiredTableFromComponentFields,
@@ -61,9 +65,11 @@ import {
   findUnexpectedDestructiveStatements,
   getDrizzleTableName,
   isDrizzleTable,
+  stripKitDropsOfDeclaredIndexes,
 } from "./filter-unsafe-statements";
 import { indexRestoreStatements } from "./index-restore";
 import { MANAGED_TABLE_PREFIXES_REGEX, isManagedTable } from "./managed-tables";
+import { applyMakeOptionalToOperations } from "./pre-cleanup/snapshot-patch";
 import { applyResolutionsToOperations } from "./pre-resolution/apply-resolutions";
 import { executePreResolutionOps } from "./pre-resolution/executor";
 import {
@@ -791,12 +797,22 @@ export class PushSchemaPipeline {
         classificationResult.events
       );
 
-      const allResolvedOps =
+      const renameResolvedOps =
         this.testHooks._resolvedOpsOverride ??
         applyResolutionsToOperations(
           operations,
           toRenameResolutions(dispatchResult.confirmedRenames, candidates)
         );
+      // make_optional must reach the OPERATIONS too, not only `desired`: the
+      // fast-path emitters (and the kit-path table pre-creation) generate
+      // their SQL from these ops, so an unpatched add_column would still say
+      // NOT NULL despite the admin's resolution — failing the apply on a
+      // populated table or landing the column as required.
+      const allResolvedOps = applyMakeOptionalToOperations(
+        renameResolvedOps,
+        dispatchResult.resolutions,
+        classificationResult.events
+      );
 
       // Already excluded above, before the operation set was read. Resolutions are keyed to the
       // candidates and events that set produced, so none of them can reintroduce a locked table.
@@ -878,9 +894,14 @@ export class PushSchemaPipeline {
           ? scopedSchema
           : drizzleSchema;
 
-      const kit: DrizzleKitLike = this.testHooks._kitOverride
-        ? this.testHooks._kitOverride
-        : await this.importDrizzleKit(dialect, databaseName);
+      // Deferred until the route decision needs it: importing eagerly made
+      // MySQL fail its databaseName precondition even for applies that never
+      // reach drizzle-kit (empty or purely-additive op sets on an adapter
+      // wired without a parseable DATABASE_URL).
+      const getKit = async (): Promise<DrizzleKitLike> =>
+        this.testHooks._kitOverride
+          ? this.testHooks._kitOverride
+          : this.importDrizzleKit(dialect, databaseName);
 
       const isSqlite = dialect === "sqlite";
 
@@ -979,9 +1000,74 @@ export class PushSchemaPipeline {
 
         let emittedStatements: string[];
         let pushResult: PushSchemaPassResult | undefined;
+        // Statements this apply executed BEFORE drizzle-kit ran (kit-path
+        // add_table pre-creation below) — counted into the journal's
+        // executed total alongside the post-filter batch.
+        let preCreatedStatements = 0;
         if (useFastPath) {
           emittedStatements = emitDdl(resolvedOps, dialect);
         } else {
+          // Resolved BEFORE the pre-creation below writes anything. The
+          // import carries MySQL's `databaseName` precondition, and running
+          // it after the CREATEs would leave those tables behind on a
+          // dialect whose DDL auto-commits when the precondition then
+          // fails. The fast path never reaches this branch, so a kit-free
+          // apply still never evaluates the precondition at all.
+          const kit = await getKit();
+
+          // v1 kit crash guard (SQLite/MySQL only — PG scopes the kit's
+          // introspection with a tables filter): drizzle-kit v1's differ
+          // sees the WHOLE live DB on these dialects, so any live table
+          // absent from the desired schema (UI-created entities during a
+          // code-first apply, `_locales` companions, the i18n archive)
+          // reads as "deleted". Paired against a "created" table from this
+          // apply, its rename resolver throws `Internal error:
+          // resolver(table) was called without a HintsHandler` before
+          // emitting anything, failing the apply and leaving the new table
+          // uncreated. Creating the planned tables OURSELVES first empties
+          // the differ's created set — nothing to pair, no resolver call —
+          // and the kit then handles only the column-level remainder (it
+          // re-introspects and sees these tables live AND declared).
+          //
+          // On SQLite these CREATEs are not rolled back when the kit pass
+          // then fails: the pipeline runs SQLite outside `db.transaction()`
+          // by design, so `tx === db` here. That is the intended outcome
+          // rather than a gap — the retry's diff re-introspects, no longer
+          // plans `add_table` for them, and the table it finds is the one
+          // this emitter built, which carries the tracked indexes the kit's
+          // own CREATE would have omitted. The journal records the failed
+          // apply without these statements in `statements_executed`, which
+          // counts only a successful pass.
+          if (dialect !== "postgresql") {
+            const addTableOps = resolvedOps.filter(
+              op => op.type === "add_table"
+            );
+            if (addTableOps.length > 0) {
+              // This branch runs for tables the routing decision may have
+              // REJECTED, so it cannot emit them verbatim: a MySQL UNIQUE
+              // index over a TEXT/BLOB column is exactly what sent such an
+              // apply here, and emitting it would reinstate the prefix
+              // uniqueness that decision existed to avoid. The table body is
+              // still pre-created (that is the crash guard); drizzle-kit adds
+              // the stripped index from its own introspection.
+              const createStatements = emitDdl(
+                addTableOps.map(op => withoutUnemittableIndexes(op, dialect)),
+                dialect
+              );
+              try {
+                await this.deps.executor.executeStatements(
+                  tx,
+                  createStatements
+                );
+              } catch (err) {
+                throw new DdlExecutionError(
+                  err instanceof Error ? err.message : String(err),
+                  err
+                );
+              }
+              preCreatedStatements = createStatements.length;
+            }
+          }
           try {
             // withCapturedStdout reroutes any chatter drizzle-kit writes to
             // process.stdout/stderr so it doesn't leak into the dev console.
@@ -1010,7 +1096,27 @@ export class PushSchemaPipeline {
               err
             );
           }
-          emittedStatements = pushResult.sqlStatements;
+          // The kit reads every live index on a declared table as
+          // undeclared (its runtime schemas carry none) and emits DROP
+          // INDEX for it even on a no-op. An index the desired snapshot
+          // TRACKS is only ever dropped by our own diff's drop_index op,
+          // so the kit's drops of tracked indexes are stripped here —
+          // otherwise a kit-path apply would shed the canonical indexes
+          // of every managed table it did not rebuild.
+          const stripped = stripKitDropsOfDeclaredIndexes(
+            pushResult.sqlStatements,
+            desiredSnapshot
+          );
+          emittedStatements = stripped.kept;
+          if (stripped.strippedCount > 0) {
+            // Once per apply, not per statement: enough to see the guard
+            // acted without turning a routine emission into log noise.
+            console.debug(
+              `[Nextly schema] Kept ${stripped.strippedCount} tracked index(es) ` +
+                `drizzle-kit emitted a DROP INDEX for (they are declared in the ` +
+                `desired schema; only a drop_index operation removes one).`
+            );
+          }
         }
         // Safety net, v1 semantics (observed on all three dialects,
         // 2026-07): drizzle-kit now INCLUDES destructive statements in
@@ -1069,10 +1175,21 @@ export class PushSchemaPipeline {
             .map(t => t.toLowerCase())
             .filter(t => !lockedForThisApply.has(t))
         );
-        const unlocked = filterUnsafeStatements(
-          emittedStatements,
-          desiredTableNames
-        );
+        // Only drizzle-kit's output goes through the orphan filter. That
+        // filter answers "did the kit propose dropping something we never
+        // asked about?", and it identifies an index's owner from the
+        // suffix-style names the kit produces (`<table>_<col>_idx`). Nextly's
+        // own indexes are named `idx_<table>_<col>` / `uq_<table>_<col>`, for
+        // which that inference finds no owner and the drop is blocked — so
+        // running it over the fast path's statements would silently discard a
+        // `drop_index` this pipeline's own diff planned and the apply would
+        // report success with the index still in place. Fast-path SQL is
+        // emitted from those approved operations, so there is no orphan to
+        // find; the destructive scan and the lock filter below still apply to
+        // both routes.
+        const unlocked = useFastPath
+          ? emittedStatements
+          : filterUnsafeStatements(emittedStatements, desiredTableNames);
         // Op-level lock filtering covers what this pipeline decided to do, but
         // drizzle-kit re-derives drift from the full desired schema, so on the
         // kit path it can still emit DDL for a locked table. Scope reduction
@@ -1117,11 +1234,17 @@ export class PushSchemaPipeline {
         // index. On PG and MySQL that batch is transactional; SQLite runs
         // without a transaction by design, so a failing restore there is
         // reported but the rebuild it followed has already landed.
+        //
+        // The ops are handed over ONLY on the kit route: the restore's
+        // ops-replay exists because drizzle-kit never creates dynamic-table
+        // indexes, but the fast path emits every add_index itself, so
+        // replaying them would issue the same CREATE INDEX twice — fatal on
+        // MySQL, which has no IF NOT EXISTS for indexes.
         const restore = indexRestoreStatements(
           desiredSnapshot,
           dialect,
           safe,
-          resolvedOps
+          useFastPath ? [] : resolvedOps
         );
 
         try {
@@ -1133,12 +1256,14 @@ export class PushSchemaPipeline {
           );
         }
 
-        // `safe.length`, not the executed length: this number is the
-        // journal's `statements_executed`, read against `statements_planned`
-        // from the diff. The restore statements were never planned, so
-        // counting them would report a mismatch on every apply that had to
-        // put an index back.
-        return safe.length;
+        // `safe.length` plus the kit-path pre-created statements, not the
+        // executed length: this number is the journal's
+        // `statements_executed`, read against `statements_planned` from the
+        // diff. The restore statements were never planned, so counting them
+        // would report a mismatch on every apply that had to put an index
+        // back; the pre-created CREATEs WERE planned (add_table ops) and
+        // executed, so they count.
+        return safe.length + preCreatedStatements;
       };
 
       let statementsExecuted: number;

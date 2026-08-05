@@ -1,10 +1,13 @@
-// Unit tests for applyMakeOptionalToSnapshot.
+// Unit tests for the make_optional patches (snapshot + operations).
 
 import { describe, it, expect } from "vitest";
 
-import type { NextlySchemaSnapshot } from "../../diff/types";
+import type { NextlySchemaSnapshot, Operation } from "../../diff/types";
 import type { ClassifierEvent, Resolution } from "../../resolution/types";
-import { applyMakeOptionalToSnapshot } from "../snapshot-patch";
+import {
+  applyMakeOptionalToOperations,
+  applyMakeOptionalToSnapshot,
+} from "../snapshot-patch";
 
 describe("applyMakeOptionalToSnapshot", () => {
   it("flips nullable=true on the resolved event's column", () => {
@@ -144,5 +147,55 @@ describe("applyMakeOptionalToSnapshot", () => {
       [event]
     );
     expect(out.tables[0].columns[0].nullable).toBe(false);
+  });
+});
+
+describe("applyMakeOptionalToOperations", () => {
+  const event: ClassifierEvent = {
+    id: "add_required_field_no_default:dc_users.email",
+    kind: "add_required_field_no_default",
+    tableName: "dc_users",
+    columnName: "email",
+    tableRowCount: 47,
+    applicableResolutions: ["provide_default", "make_optional", "abort"],
+  };
+  const ops: Operation[] = [
+    {
+      type: "add_column",
+      tableName: "dc_users",
+      column: { name: "email", type: "text", nullable: false },
+    },
+    {
+      type: "add_column",
+      tableName: "dc_users",
+      column: { name: "age", type: "integer", nullable: false },
+    },
+  ];
+
+  it("flips nullable on the resolved add_column and leaves the rest", () => {
+    // The fast-path emitters build SQL from OPERATIONS, so the resolution
+    // must reach the op or the emitted column still says NOT NULL.
+    const out = applyMakeOptionalToOperations(
+      ops,
+      [{ kind: "make_optional", eventId: event.id }],
+      [event]
+    );
+    const email = out.find(
+      o => o.type === "add_column" && o.column.name === "email"
+    );
+    const age = out.find(
+      o => o.type === "add_column" && o.column.name === "age"
+    );
+    expect(email && email.type === "add_column" && email.column.nullable).toBe(
+      true
+    );
+    expect(age && age.type === "add_column" && age.column.nullable).toBe(false);
+    // Pure: the input ops keep their original nullability.
+    expect(ops[0].type === "add_column" && ops[0].column.nullable).toBe(false);
+  });
+
+  it("returns the ops unchanged when no make_optional resolutions", () => {
+    const out = applyMakeOptionalToOperations(ops, [], [event]);
+    expect(out).toEqual(ops);
   });
 });

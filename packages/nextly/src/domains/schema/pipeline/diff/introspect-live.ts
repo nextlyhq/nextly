@@ -70,6 +70,26 @@ function attachIndexes(snapshot: NextlySchemaSnapshot, rows: IndexRow[]): void {
   }
 }
 
+/**
+ * Put every table's indexes in a stable order.
+ *
+ * The order a DATABASE reports indexes in is not a property of the schema, and
+ * each dialect answers differently — SQLite's `PRAGMA index_list` walks them in
+ * reverse creation order, so which index was created first leaks into the
+ * snapshot. That makes two snapshots of the SAME schema compare unequal:
+ * introspect a table, write its indexes out in the order read, rebuild from
+ * that SQL and introspect again, and the list comes back reversed. Sorting by
+ * name is what makes a snapshot describe the schema rather than its history.
+ *
+ * Index COLUMNS keep their order — for a composite index that order IS the
+ * index, and every dialect query above already reads them by position.
+ */
+function normalizeIndexOrder(snapshot: NextlySchemaSnapshot): void {
+  for (const t of snapshot.tables) {
+    t.indexes?.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  }
+}
+
 interface PgRow {
   table_name: string;
   column_name: string;
@@ -235,6 +255,7 @@ export async function introspectLiveSnapshot(
         column: r.column,
       }))
     );
+    normalizeIndexOrder(snapshot);
     return snapshot;
   }
 
@@ -306,6 +327,7 @@ export async function introspectLiveSnapshot(
         column: r.COLUMN_NAME,
       }))
     );
+    normalizeIndexOrder(snapshot);
     return snapshot;
   }
 
@@ -375,7 +397,9 @@ export async function introspectLiveSnapshot(
       ),
     });
   }
-  return { tables };
+  const snapshot: NextlySchemaSnapshot = { tables };
+  normalizeIndexOrder(snapshot);
+  return snapshot;
 }
 
 /**

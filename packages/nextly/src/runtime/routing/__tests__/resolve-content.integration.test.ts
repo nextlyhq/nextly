@@ -96,7 +96,16 @@ describe("resolveContent (integration)", () => {
 
   it("resolves duplicate published slugs deterministically (lowest id)", async () => {
     current = await createTestNextly({ collections: [pages()] });
-    // A slug field is not unique — seed several published rows on the same slug.
+    // Collection tables now materialize their canonical UNIQUE slug index on
+    // every dialect (SQLite/MySQL used to skip it on the drizzle-kit create
+    // path), so duplicate slugs can only exist as LEGACY data written before
+    // the index. Simulate that table state by dropping the index, then seed
+    // several published rows on the same slug — resolveContent must still
+    // pick a deterministic winner.
+    const adapter = current.adapter as unknown as {
+      executeQuery: (sql: string) => Promise<unknown[]>;
+    };
+    await adapter.executeQuery(`DROP INDEX IF EXISTS "idx_dc_pages_slug"`);
     for (let i = 0; i < 4; i++) {
       await current.nextly.create({
         collection: "pages",

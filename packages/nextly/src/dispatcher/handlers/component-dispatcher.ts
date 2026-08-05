@@ -30,6 +30,7 @@ import {
   resolveFieldGroupRegistryName,
   resolveTypeColumns,
 } from "../../domains/field-groups/storage/resolve-storage-names";
+import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
 import { localizedColumnsOnMain } from "../../domains/i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
@@ -369,6 +370,12 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
       assertValidPluginFieldOptions(b.fields);
 
       const isLocalized = b.localized === true;
+      // i18n: a localized component stores translatable values via the
+      // app's `localization` config; creating one without that config
+      // would split the tables into a shape the runtime cannot write to.
+      if (isLocalized) {
+        assertLocalizationConfigured("component", b.slug);
+      }
       const schemaHash = calculateSchemaHash(b.fields);
       // Canonical name derivation, shared with the registry sync and
       // migrate:create paths, so the created table and the registry row agree.
@@ -571,6 +578,11 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         (existing as { localized?: boolean }).localized === true;
       const isLocalized =
         b?.localized !== undefined ? b.localized === true : wasLocalized;
+      // i18n: gate the Internationalization enable on the app-level
+      // `localization` config (false→true transition only).
+      if (!wasLocalized && isLocalized) {
+        assertLocalizationConfigured("component", slug);
+      }
 
       if (b?.fields) {
         assertValidPluginFieldOptions(b.fields);
@@ -752,10 +764,17 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
 
       // i18n: prefer the request's localized flag over the persisted one (stale on a
       // simultaneous toggle+field-change save); fall back to the registry value.
+      const wasLocalized =
+        (component as { localized?: boolean }).localized === true;
       const isLocalized =
         requestLocalized !== undefined
           ? requestLocalized === true
-          : (component as { localized?: boolean }).localized === true;
+          : wasLocalized;
+      // i18n: gate the Internationalization enable on the app-level
+      // `localization` config (false→true transition only).
+      if (!wasLocalized && isLocalized) {
+        assertLocalizationConfigured("component", slug);
+      }
 
       const currentVersion = component.schemaVersion ?? 1;
       // Reject a stale UI save before any DDL runs so two admins editing the

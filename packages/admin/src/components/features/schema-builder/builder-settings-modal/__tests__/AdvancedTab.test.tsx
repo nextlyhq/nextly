@@ -1,13 +1,15 @@
 // Why: AdvancedTab is config-driven (only fields in advancedFields
-// render), the i18n switch is always disabled with a "Coming Soon" chip
-// until i18n ships, and the status switch toggles the Draft/Published
-// union and the per-kind configs; the type system blocks them being
-// passed as fields, so negative-render assertions are unnecessary.
+// render), the i18n switch is gated on the app's `localization` config
+// (surfaced via BrandingProvider's admin-meta), and the status switch
+// toggles the Draft/Published union and the per-kind configs; the type
+// system blocks them being passed as fields, so negative-render
+// assertions are unnecessary.
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { render, screen } from "@admin/__tests__/utils";
+import { createTestQueryClient, render, screen } from "@admin/__tests__/utils";
+import { BrandingProvider } from "@admin/context/providers/BrandingProvider";
 
 import type { BuilderSettingsValues } from "../../BuilderSettingsModal";
 import type { AdvancedField } from "../../builder-config";
@@ -40,6 +42,26 @@ function Controlled(props: {
   );
 }
 
+/**
+ * Render with a BrandingProvider whose admin-meta query is pre-seeded with a
+ * localization config, so `useLocalization()` reports configured locales —
+ * the state in which the Internationalization switch is interactive.
+ */
+function renderWithLocales(ui: React.ReactElement) {
+  const queryClient = createTestQueryClient();
+  queryClient.setQueryData(["admin-meta"], {
+    locales: {
+      defaultLocale: "en",
+      fallback: true,
+      locales: [
+        { code: "en", label: "English", rtl: false, fallbackLocale: [] },
+        { code: "de", label: "German", rtl: false, fallbackLocale: ["en"] },
+      ],
+    },
+  });
+  return render(<BrandingProvider>{ui}</BrandingProvider>, { queryClient });
+}
+
 describe("AdvancedTab", () => {
   it("renders only the fields listed in the per-kind config", () => {
     render(<Controlled fields={["status"]} />);
@@ -50,15 +72,34 @@ describe("AdvancedTab", () => {
     expect(screen.queryByText(/coming soon/i)).not.toBeInTheDocument();
   });
 
-  it("toggles i18n when the Internationalization switch is clicked", async () => {
+  it("toggles i18n when localization is configured", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
-    render(<Controlled fields={["i18n"]} onChange={onChange} />);
+    renderWithLocales(<Controlled fields={["i18n"]} onChange={onChange} />);
     const sw = screen.getByRole("switch", { name: /internationalization/i });
     expect(sw).not.toBeDisabled();
     await user.click(sw);
     const last = onChange.mock.lastCall?.[0] as BuilderSettingsValues;
     expect(last.i18n).toBe(true);
+  });
+
+  it("disables the i18n switch with instructions when the app has no localization config", () => {
+    // No BrandingProvider/admin-meta → useLocalization reports zero locales.
+    render(<Controlled fields={["i18n"]} />);
+    const sw = screen.getByRole("switch", { name: /internationalization/i });
+    expect(sw).toBeDisabled();
+    expect(screen.getByText(/not configured/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/requires a `localization` block/i)
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the i18n switch interactive for an already-localized entity", () => {
+    // Disabling must stay possible even when the config block was removed:
+    // locking the switch would trap the entity in the localized state.
+    render(<Controlled fields={["i18n"]} initial={{ i18n: true }} />);
+    const sw = screen.getByRole("switch", { name: /internationalization/i });
+    expect(sw).not.toBeDisabled();
   });
 
   it("toggles status when the status switch is clicked", async () => {

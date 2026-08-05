@@ -5,6 +5,8 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { dispatchSingles } from "../../dispatcher/handlers/single-dispatcher";
+import { NextlyError } from "../../errors";
 import { createTestNextly, type TestNextly } from "../../plugins/test-nextly";
 
 // The UI-create path only runs the generated migration in development (it otherwise
@@ -33,11 +35,15 @@ async function boot(): Promise<TestNextly> {
 
 function handlerOf(t: TestNextly) {
   return t.getService("collectionsHandler") as unknown as {
-    createCollection: (data: Record<string, unknown>) => Promise<unknown>;
+    createCollection: (data: Record<string, unknown>) => Promise<{
+      success: boolean;
+      statusCode: number;
+      message?: string;
+    }>;
     updateCollection: (
       params: { collectionName: string },
       body: Record<string, unknown>
-    ) => Promise<unknown>;
+    ) => Promise<{ success: boolean; statusCode: number; message?: string }>;
   };
 }
 
@@ -137,5 +143,95 @@ describe("UI-created localized collection (create path)", () => {
     expect(compCols).toContain("body");
     expect(compCols).toContain("summary");
     expect(await columns(t, "dc_notes")).not.toContain("summary");
+  });
+});
+
+// Enabling entity-level localization REQUIRES the app-level `localization`
+// config: the DDL path splits storage unconditionally while the runtime
+// resolves locales from that config, so an app without it would get a schema
+// every write 500s against ("table dc_x has no column named y"). The create
+// and enable paths must reject with a validation error instead.
+describe("UI-created localized entities without app localization config", () => {
+  async function bootWithoutLocalization(): Promise<TestNextly> {
+    current = await createTestNextly({ collections: [] });
+    return current;
+  }
+
+  it("rejects a localized collection create with a 400 and builds no tables", async () => {
+    const t = await bootWithoutLocalization();
+    const result = await handlerOf(t).createCollection({
+      name: "broken",
+      label: "Broken",
+      status: true,
+      localized: true,
+      fields: [{ name: "heading", type: "text" }],
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(400);
+    // Rejected before any DDL: neither the split main table nor the
+    // companion exists.
+    expect(await tableExists(t, "dc_broken")).toBe(false);
+    expect(await tableExists(t, "dc_broken_locales")).toBe(false);
+  });
+
+  it("rejects ENABLING i18n on an existing collection without the config", async () => {
+    const t = await bootWithoutLocalization();
+    await handlerOf(t).createCollection({
+      name: "plain",
+      label: "Plain",
+      status: true,
+      localized: false,
+      fields: [{ name: "heading", type: "text" }],
+    });
+
+    const result = await handlerOf(t).updateCollection(
+      { collectionName: "plain" },
+      { localized: true }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(400);
+    // The main table keeps its translatable column — no split happened.
+    expect(await columns(t, "dc_plain")).toContain("heading");
+    expect(await tableExists(t, "dc_plain_locales")).toBe(false);
+  });
+
+  it("rejects a localized single create and builds no tables", async () => {
+    const t = await bootWithoutLocalization();
+    // The dispatcher throws NextlyError.validation; its public message is
+    // the generic validation envelope, so the specific reason is asserted
+    // via logContext.
+    const err = await dispatchSingles(
+      "createSingle",
+      {},
+      {
+        slug: "broken-page",
+        label: "Broken page",
+        status: true,
+        localized: true,
+        fields: [],
+      }
+    ).then(
+      () => null,
+      (e: unknown) => e
+    );
+    expect(err).toBeInstanceOf(NextlyError);
+    expect((err as NextlyError).logContext?.reason).toBe(
+      "localization-not-configured"
+    );
+    expect(await tableExists(t, "single_broken_page")).toBe(false);
+    expect(await tableExists(t, "single_broken_page_locales")).toBe(false);
+  });
+
+  it("still allows a NON-localized create without the config", async () => {
+    const t = await bootWithoutLocalization();
+    const result = await handlerOf(t).createCollection({
+      name: "regular",
+      label: "Regular",
+      fields: [{ name: "heading", type: "text" }],
+    });
+    expect(result.success).toBe(true);
+    expect(await tableExists(t, "dc_regular")).toBe(true);
   });
 });

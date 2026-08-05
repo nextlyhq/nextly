@@ -31,6 +31,7 @@ import {
   respondList,
   respondMutation,
 } from "../../api/response-shapes";
+import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
 import {
   companionHasStatusColumn,
@@ -93,6 +94,7 @@ import {
   getMigrationJournalFromDI,
   getSchemaRegistryFromDI,
 } from "../helpers/di";
+import { readRequestLocalized } from "../helpers/request-localized";
 import {
   paginatedResponseToMeta,
   toPaginationMeta,
@@ -460,6 +462,7 @@ const COLLECTIONS_METHODS: Record<
       }
       const { fields } = body as { fields: unknown[] };
       if (!fields) throw new Error("fields is required in request body");
+      const previewLocalized = readRequestLocalized(body);
       // Same rules as the ui-schema.json mirror (see api/fields-payload):
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
@@ -493,8 +496,13 @@ const COLLECTIONS_METHODS: Record<
         // companion `_locales` table). buildFullDesiredSchema already sets this
         // from the registry, but the splice above overwrites that entry, so we
         // must re-supply it or the preview would show translatable columns being
-        // added to the main table.
-        localized: (collection as { localized?: boolean }).localized === true,
+        // added to the main table. The REQUEST's flag wins when the Builder
+        // sent one: the apply prefers it too, and a preview that diffed against
+        // the persisted flag instead would collect resolutions for DDL the
+        // apply is not going to run.
+        localized:
+          previewLocalized ??
+          (collection as { localized?: boolean }).localized === true,
         // Authored in the Schema Builder: this is the Builder's own save path.
         builderOwned: true,
       };
@@ -580,13 +588,13 @@ const COLLECTIONS_METHODS: Record<
         renameResolutions,
         eventResolutions,
         hints,
-        localized: requestLocalized,
       } = body as {
         fields: unknown[];
         confirmed: boolean;
         schemaVersion?: number;
-        // i18n: the request's Internationalization flag. Forwarded so a toggle+field-change
-        // save applies with the NEW state instead of the stale persisted `collection.localized`.
+        // i18n: the request's Internationalization flag is read through
+        // `readRequestLocalized` below rather than destructured here, so a
+        // non-boolean is rejected instead of silently coerced.
         localized?: boolean;
         // Legacy admin UI shape (per-field, used by the old
         // SchemaChangeService path). Kept alive while admin dialogs
@@ -644,10 +652,18 @@ const COLLECTIONS_METHODS: Record<
       // after this apply). `wasLocalized` drives enable/disable detection for the companion.
       const wasLocalized =
         (collection as { localized?: boolean }).localized === true;
-      const isLocalized =
-        requestLocalized !== undefined
-          ? requestLocalized === true
-          : wasLocalized;
+      // Validated rather than coerced: `localized: "false"` would read as
+      // `false` under `=== true` and turn an ordinary save of a localized
+      // collection into a DISABLE transition, restoring the companion's
+      // columns onto the main table and archiving it.
+      const isLocalized = readRequestLocalized(body) ?? wasLocalized;
+      // i18n: enabling Internationalization needs the app-level
+      // `localization` config — without it the companion reconcile below
+      // would move translatable columns into a table the runtime cannot
+      // address. Gate the false→true transition only.
+      if (!wasLocalized && isLocalized) {
+        assertLocalizationConfigured("collection", p.collectionName);
+      }
 
       // Legacy per-field resolutions get translated to typed
       // Resolution[] inside BrowserPromptDispatcher.dispatch() once the
@@ -923,6 +939,12 @@ const COLLECTIONS_METHODS: Record<
           {
             fields: JSON.stringify(fields),
             schema_version: newSchemaVersion,
+            // i18n: persist the state this apply actually ran with (mirrors
+            // the singles apply). The DDL above already performed any
+            // false→true transition, so leaving the stored flag behind would
+            // make the settings write that follows read another false→true
+            // transition and reconcile the companion a second time.
+            localized: isLocalized,
             updated_at: new Date(),
           },
           { and: [{ column: "slug", op: "=", value: p.collectionName }] }
@@ -930,8 +952,30 @@ const COLLECTIONS_METHODS: Record<
       } catch (err) {
         versionPersisted = false;
         const msg = err instanceof Error ? err.message : String(err);
-        // Non-fatal: the schema apply itself already succeeded. If the
-        // metadata write fails, the actual DB column was already
+        // A localization TRANSITION that reaches this point has already moved
+        // the translatable columns between the main table and the companion.
+        // The stored flag is what every later process reads to decide which
+        // of those two tables a translatable field lives in, so failing to
+        // store it does not leave a cosmetic gap — it leaves the registry
+        // describing a layout the database no longer has, and the next boot
+        // generates runtime schemas against the wrong table. That is the same
+        // half-migrated state the companion reconcile above refuses to return
+        // success for, so it is refused the same way.
+        if (wasLocalized !== isLocalized) {
+          throw NextlyError.internal({
+            cause: err instanceof Error ? err : undefined,
+            logContext: {
+              op: "persistLocalizedFlag",
+              collection: p.collectionName,
+              detail: msg,
+              wasLocalized,
+              isLocalized,
+              note: "columns moved but dynamic_collections.localized was not updated; re-apply to retry",
+            },
+          });
+        }
+        // Otherwise non-fatal: the schema apply itself already succeeded. If
+        // the metadata write fails, the actual DB column was already
         // renamed and the collection is in a good state structurally;
         // only the admin's view of the field name is stale, and the version
         // was not advanced (the response reports the current version so a

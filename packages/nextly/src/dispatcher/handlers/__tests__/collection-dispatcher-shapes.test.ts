@@ -14,7 +14,7 @@
 //   respondBulk:     bulkDeleteEntries, bulkUpdateEntries,
 //                    bulkUpdateByQuery
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // The respondAction test for applySchemaChanges and the respondData
 // test for previewSchemaChanges need to drive code paths that pull
@@ -27,11 +27,20 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // translatePipelinePreviewToLegacy) are mocked so we exercise the
 // dispatcher's response-shape contract without spinning up a real
 // drizzle-kit pipeline.
+// `buildFullDesiredSchema` reaches for the single and component registries so
+// drizzle-kit sees every managed table; both preview and apply go through it.
+// A factory mock replaces the WHOLE module, so an accessor missing here is not
+// "undefined" (which the helper handles — it skips that entity kind) but a
+// hard "No export is defined on the mock" throw before any assertion runs.
 vi.mock("../../helpers/di", () => ({
   getAdapterFromDI: vi.fn(),
   getCollectionRegistryFromDI: vi.fn(),
   getCollectionsHandlerFromDI: vi.fn(),
   getMigrationJournalFromDI: vi.fn(),
+  getSingleRegistryFromDI: vi.fn(),
+  getComponentRegistryFromDI: vi.fn(),
+  getSchemaRegistryFromDI: vi.fn(),
+  getConfigFromDI: vi.fn(),
 }));
 
 vi.mock("../../../domains/schema/pipeline/apply", () => ({
@@ -57,6 +66,10 @@ import { createApplyDesiredSchema } from "../../../domains/schema/pipeline/apply
 import { previewDesiredSchema } from "../../../domains/schema/pipeline/preview";
 import { translatePipelinePreviewToLegacy } from "../../../domains/schema/legacy-preview/translate";
 import { dispatchCollections } from "../collection-dispatcher";
+// Not mocked: the i18n enable guard reads the app config off the real
+// container, so these tests register one rather than stubbing the guard.
+import { container } from "../../../di/container";
+import { NextlyError } from "../../../errors";
 
 // Helper: build a ServiceContainer-shaped fake whose `collections`
 // service-object methods are individually mockable via vi.fn(). The
@@ -861,12 +874,14 @@ function makeFakeRegistry(seed: {
   tableName: string;
   schemaVersion: number;
   fields?: unknown[];
+  localized?: boolean;
 }) {
   const record = {
     slug: seed.slug,
     tableName: seed.tableName,
     schemaVersion: seed.schemaVersion,
     fields: seed.fields ?? [],
+    localized: seed.localized ?? false,
     locked: false,
   };
   return {
@@ -1070,5 +1085,279 @@ describe("dispatchCollections, previewSchemaChanges (respondData)", () => {
     expect(body).not.toHaveProperty("data");
     expect(body).not.toHaveProperty("item");
     expect(body).not.toHaveProperty("message");
+  });
+});
+
+// i18n: the Schema Builder sends the toggle as it stands in the unsaved form,
+// so one save can flip Internationalization AND change fields. These pin the
+// three places that has to hold together: the apply must diff with the sent
+// flag, PERSIST it, and reject a non-boolean rather than reading it as a
+// disable; the preview must diff with the same flag the apply will use.
+describe("dispatchCollections, i18n request flag", () => {
+  const LOCALIZATION = {
+    locales: [{ code: "en", label: "English", rtl: false, fallbackLocale: [] }],
+    defaultLocale: "en",
+    fallback: true,
+  };
+
+  beforeEach(() => {
+    // The enable guard reads the app config straight off the container.
+    container.register("config", () => ({ localization: LOCALIZATION }));
+  });
+
+  afterEach(() => {
+    container.clear();
+  });
+
+  function wire(localized: boolean) {
+    const registry = makeFakeRegistry({
+      slug: "posts",
+      tableName: "posts",
+      schemaVersion: 4,
+      localized,
+    });
+    // A localized apply runs the companion transition before the metadata
+    // write, so this fake has to answer the questions that plan asks. The
+    // companion is reported as already present and the statements as no-ops:
+    // what is under test here is which flag the apply diffed and stored, not
+    // the reconcile SQL (covered by the i18n migration suites).
+    const adapter = {
+      ...makeFakeAdapter(),
+      tableExists: vi.fn().mockResolvedValue(true),
+      getDrizzle: vi.fn().mockReturnValue({
+        all: vi.fn().mockResolvedValue([]),
+        run: vi.fn().mockResolvedValue(undefined),
+        execute: vi.fn().mockResolvedValue([]),
+      }),
+      execute: vi.fn().mockResolvedValue(undefined),
+      executeQuery: vi.fn().mockResolvedValue([]),
+      raw: vi.fn().mockResolvedValue(undefined),
+    };
+    vi.mocked(getCollectionRegistryFromDI).mockReturnValue(
+      registry as unknown as ReturnType<typeof getCollectionRegistryFromDI>
+    );
+    vi.mocked(getAdapterFromDI).mockReturnValue(
+      adapter as unknown as ReturnType<typeof getAdapterFromDI>
+    );
+    return adapter;
+  }
+
+  function stubApply() {
+    const fakeApply = vi.fn().mockResolvedValue({
+      success: true,
+      newSchemaVersions: { posts: 5 },
+      statementsExecuted: 3,
+      renamesApplied: 0,
+      durationMs: 12,
+      summary: { added: 1, removed: 0, renamed: 0, changed: 0 },
+    });
+    vi.mocked(createApplyDesiredSchema).mockReturnValue(
+      fakeApply as unknown as ReturnType<typeof createApplyDesiredSchema>
+    );
+  }
+
+  // The apply performs the false→true companion transition. If it does not
+  // also store the flag, the settings write that follows reads ANOTHER
+  // false→true transition and reconciles the companion a second time.
+  it("persists the localized state the apply ran with", async () => {
+    const adapter = wire(false);
+    stubApply();
+
+    await dispatchCollections(
+      { collections: {} } as unknown as ServiceContainer,
+      "applySchemaChanges",
+      { collectionName: "posts" },
+      {
+        fields: [{ name: "title", type: "text" }],
+        confirmed: true,
+        schemaVersion: 4,
+        localized: true,
+      }
+    );
+
+    expect(adapter.update).toHaveBeenCalledWith(
+      "dynamic_collections",
+      expect.objectContaining({ localized: true }),
+      expect.anything()
+    );
+  });
+
+  it("leaves the stored flag alone when the request sends none", async () => {
+    const adapter = wire(true);
+    stubApply();
+
+    await dispatchCollections(
+      { collections: {} } as unknown as ServiceContainer,
+      "applySchemaChanges",
+      { collectionName: "posts" },
+      {
+        fields: [{ name: "title", type: "text" }],
+        confirmed: true,
+        schemaVersion: 4,
+      }
+    );
+
+    expect(adapter.update).toHaveBeenCalledWith(
+      "dynamic_collections",
+      expect.objectContaining({ localized: true }),
+      expect.anything()
+    );
+  });
+
+  // `"false"` under a `=== true` read would mean DISABLE — restoring the
+  // companion's columns onto the main table and archiving it — from a request
+  // that never asked for one.
+  it("rejects a non-boolean localized instead of reading it as a disable", async () => {
+    wire(true);
+    stubApply();
+
+    await expect(
+      dispatchCollections(
+        { collections: {} } as unknown as ServiceContainer,
+        "applySchemaChanges",
+        { collectionName: "posts" },
+        {
+          fields: [{ name: "title", type: "text" }],
+          confirmed: true,
+          schemaVersion: 4,
+          localized: "false",
+        }
+      )
+    ).rejects.toThrow(NextlyError);
+  });
+
+  // The preview collects the resolutions the apply then runs with, so a
+  // preview that diffed against the PERSISTED flag could miss a required
+  // column prompt the apply needs, failing the save after confirmation.
+  it("previews against the request's flag, not the persisted one", async () => {
+    wire(true);
+    vi.mocked(previewDesiredSchema).mockResolvedValue({
+      operations: [],
+      events: [],
+      candidates: [],
+      classification: "safe",
+      liveSnapshot: {} as unknown,
+    } as unknown as Awaited<ReturnType<typeof previewDesiredSchema>>);
+    vi.mocked(translatePipelinePreviewToLegacy).mockResolvedValue({
+      hasChanges: false,
+      hasDestructiveChanges: false,
+      classification: "safe",
+      changes: { added: [], removed: [], changed: [], unchanged: [] },
+      warnings: [],
+      interactiveFields: [],
+      ddlPreview: [],
+    } as unknown as Awaited<
+      ReturnType<typeof translatePipelinePreviewToLegacy>
+    >);
+
+    await dispatchCollections(
+      { collections: {} } as unknown as ServiceContainer,
+      "previewSchemaChanges",
+      { collectionName: "posts" },
+      { fields: [{ name: "title", type: "text" }], localized: false }
+    );
+
+    const passed = vi.mocked(previewDesiredSchema).mock.calls[0][0] as {
+      desired: { collections: Record<string, { localized?: boolean }> };
+    };
+    expect(passed.desired.collections.posts.localized).toBe(false);
+  });
+});
+
+// Persisting the flag is not bookkeeping when the flag MOVED: the DDL above
+// has already relocated the translatable columns, and the stored flag is what
+// every later process reads to decide which table those columns live in.
+// Losing that write leaves the registry describing a layout the database no
+// longer has, so the apply must not report success.
+describe("dispatchCollections, localized persistence failure", () => {
+  const LOCALIZATION = {
+    locales: [{ code: "en", label: "English", rtl: false, fallbackLocale: [] }],
+    defaultLocale: "en",
+    fallback: true,
+  };
+
+  beforeEach(() => {
+    container.register("config", () => ({ localization: LOCALIZATION }));
+  });
+
+  afterEach(() => {
+    container.clear();
+  });
+
+  function wireFailingUpdate(storedLocalized: boolean) {
+    const registry = makeFakeRegistry({
+      slug: "posts",
+      tableName: "posts",
+      schemaVersion: 4,
+      localized: storedLocalized,
+    });
+    const adapter = {
+      dialect: "postgresql" as const,
+      tableExists: vi.fn().mockResolvedValue(true),
+      getDrizzle: vi.fn().mockReturnValue({
+        all: vi.fn().mockResolvedValue([]),
+        run: vi.fn().mockResolvedValue(undefined),
+        execute: vi.fn().mockResolvedValue([]),
+      }),
+      execute: vi.fn().mockResolvedValue(undefined),
+      executeQuery: vi.fn().mockResolvedValue([]),
+      update: vi.fn().mockRejectedValue(new Error("registry write failed")),
+    };
+    vi.mocked(getCollectionRegistryFromDI).mockReturnValue(
+      registry as unknown as ReturnType<typeof getCollectionRegistryFromDI>
+    );
+    vi.mocked(getAdapterFromDI).mockReturnValue(
+      adapter as unknown as ReturnType<typeof getAdapterFromDI>
+    );
+    vi.mocked(createApplyDesiredSchema).mockReturnValue(
+      vi.fn().mockResolvedValue({
+        success: true,
+        newSchemaVersions: { posts: 5 },
+        statementsExecuted: 3,
+        renamesApplied: 0,
+        durationMs: 12,
+        summary: { added: 1, removed: 0, renamed: 0, changed: 0 },
+      }) as unknown as ReturnType<typeof createApplyDesiredSchema>
+    );
+  }
+
+  it("refuses success when a localization transition could not be stored", async () => {
+    wireFailingUpdate(false);
+
+    await expect(
+      dispatchCollections(
+        { collections: {} } as unknown as ServiceContainer,
+        "applySchemaChanges",
+        { collectionName: "posts" },
+        {
+          fields: [{ name: "title", type: "text" }],
+          confirmed: true,
+          schemaVersion: 4,
+          localized: true,
+        }
+      )
+    ).rejects.toThrow(NextlyError);
+  });
+
+  // Without a transition the write carries only `fields`/`schema_version`, and
+  // losing it leaves the admin showing stale names over a correct database —
+  // the long-standing non-fatal case, which must stay non-fatal.
+  it("still reports success when no transition was involved", async () => {
+    wireFailingUpdate(true);
+
+    const result = await dispatchCollections(
+      { collections: {} } as unknown as ServiceContainer,
+      "applySchemaChanges",
+      { collectionName: "posts" },
+      {
+        fields: [{ name: "title", type: "text" }],
+        confirmed: true,
+        schemaVersion: 4,
+        localized: true,
+      }
+    );
+
+    expect(result).toBeInstanceOf(Response);
+    expect((result as Response).status).toBe(200);
   });
 });

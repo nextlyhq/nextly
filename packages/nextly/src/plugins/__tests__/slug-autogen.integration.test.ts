@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { defineCollection } from "../../collections/config/define-collection";
 import { text } from "../../collections/fields";
+import { NextlyError } from "../../errors";
 import { createTestNextly } from "../test-nextly";
 
 // The auto-injected `slug` column is required + unique. Create derives it from
@@ -60,20 +61,26 @@ describe("slug auto-generation on create", () => {
       collection: "posts",
       data: { title: "First", slug: "shared" },
     });
-    const second = await current.nextly.create({
-      collection: "posts",
-      data: { title: "Second", slug: "shared" },
-    });
 
     // Isolates the app-level slug decision: a generated slug would dedupe to
-    // "shared-2", but an explicit slug bypasses that path and is kept verbatim.
-    // Enforcing uniqueness on a duplicate is the DB unique index's job (the
-    // production backstop), which surfaces the conflict there rather than
-    // silently renaming the caller's canonical URL. This in-memory harness does
-    // not enforce that index, so the assertion here checks only the no-dedupe
-    // guarantee — never that a duplicate is accepted.
-    expect((second.item as { slug?: string }).slug).toBe("shared");
-    expect((second.item as { slug?: string }).slug).not.toBe("shared-2");
+    // "shared-2", but an explicit slug bypasses that path and is kept
+    // verbatim. Enforcing uniqueness on a duplicate is the DB unique index's
+    // job (the production backstop), which surfaces the conflict rather than
+    // silently renaming the caller's canonical URL. The harness table now
+    // carries that canonical index on every dialect, so the no-dedupe
+    // guarantee is observable as the conflict itself: a dedupe would have
+    // succeeded with "shared-2"; keeping the slug verbatim collides.
+    const second = await current.nextly
+      .create({
+        collection: "posts",
+        data: { title: "Second", slug: "shared" },
+      })
+      .then(
+        () => null,
+        (e: unknown) => e
+      );
+    expect(second).toBeInstanceOf(NextlyError);
+    expect((second as NextlyError).code).toBe("DUPLICATE");
   });
 
   it("keeps and sanitizes an explicitly provided slug", async () => {

@@ -67,10 +67,18 @@ let adapter: ReturnType<typeof makeAdapter>;
 
 vi.mock("../../../di/container", () => ({
   container: {
-    // Only the adapter is registered. Permission seeding and every other optional service stay
-    // absent so this exercises the DDL path and nothing else.
-    has: vi.fn((key: string) => key === "adapter"),
-    get: vi.fn((key: string) => (key === "adapter" ? adapter : undefined)),
+    // The adapter, plus a config carrying a `localization` block: creating a
+    // localized single is refused without one, so the localized cases below
+    // would never reach the DDL they are asserting on. Permission seeding and
+    // every other optional service stay absent so this exercises the DDL path
+    // and nothing else.
+    has: vi.fn((key: string) => key === "adapter" || key === "config"),
+    get: vi.fn((key: string) => {
+      if (key === "adapter") return adapter;
+      if (key === "config")
+        return { localization: { locales: ["en"], defaultLocale: "en" } };
+      return undefined;
+    }),
   },
 }));
 

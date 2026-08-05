@@ -15,6 +15,7 @@ import { getI18nArchiveDdl } from "../../../schemas/nextly-i18n-archive";
 import { BaseService } from "../../../shared/base-service";
 import type { Logger } from "../../../shared/types";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
+import { assertLocalizationConfigured } from "../../i18n/config/require-app-config";
 import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec";
 import { buildCompanionCreateOnlySql } from "../../i18n/migration/generate-up";
 import { buildCompanionTransitionPlans } from "../../i18n/migration/reconcile-companion";
@@ -142,10 +143,24 @@ export class DynamicCollectionService extends BaseService {
    * config; defaults to "en" for setups without localization (where transitions never run).
    */
   private readonly defaultLocale: string;
+  /**
+   * i18n: whether the constructing caller holds a localization config, when it
+   * knows. `CollectionsHandler` takes one as a constructor argument and can be
+   * built outside DI, so that instance must not be told localization is
+   * unconfigured by a container it never used. Undefined defers to DI, which is
+   * the registered-services path every dispatcher request takes.
+   */
+  private readonly localizationConfigured?: boolean;
 
-  constructor(adapter: DrizzleAdapter, logger: Logger, defaultLocale = "en") {
+  constructor(
+    adapter: DrizzleAdapter,
+    logger: Logger,
+    defaultLocale = "en",
+    localizationConfigured?: boolean
+  ) {
     super(adapter, logger);
     this.defaultLocale = defaultLocale;
+    this.localizationConfigured = localizationConfigured;
 
     this.validationService = new DynamicCollectionValidationService();
     this.schemaService = new DynamicCollectionSchemaService(
@@ -283,6 +298,18 @@ export class DynamicCollectionService extends BaseService {
     const tableName = `dc_${normalizedName}`;
 
     this.validationService.validateCollectionName(normalizedName);
+
+    // i18n: a localized collection stores translatable values via the app's
+    // `localization` config; creating one without that config would split
+    // the tables into a shape the runtime cannot write to (every entry
+    // create then 500s). Reject up front with an actionable message.
+    if (data.localized === true) {
+      assertLocalizationConfigured(
+        "collection",
+        normalizedName,
+        this.localizationConfigured
+      );
+    }
 
     const exists = await this.registryService.collectionExists(normalizedName);
     if (exists) {
@@ -713,6 +740,18 @@ export class DynamicCollectionService extends BaseService {
         : collectionWasLocalized;
     const localizedTransition =
       collectionWasLocalized !== collectionIsLocalized;
+    // i18n: turning Internationalization ON requires the app-level
+    // `localization` config — without it the enable transition would move
+    // translatable columns into a companion the runtime cannot address.
+    // Only the false→true transition is gated: an already-localized
+    // collection keeps saving, and disabling is always allowed.
+    if (!collectionWasLocalized && collectionIsLocalized) {
+      assertLocalizationConfigured(
+        "collection",
+        collectionName,
+        this.localizationConfigured
+      );
+    }
     const reservedForFields = [
       "id",
       "title",
