@@ -65,8 +65,15 @@ export interface ActivityLogEntry {
 /** Input for recording a new activity. */
 export interface LogActivityInput {
   userId: string;
-  userName: string;
-  userEmail: string;
+  /**
+   * Display name to denormalize onto the row. Omit to take it from the account
+   * itself, which is what a caller that holds only an actor id does — the write
+   * already reads that row to decide whether the account still exists, so the
+   * name comes from the same look, under the same lock, as that decision.
+   */
+  userName?: string;
+  /** Email to denormalize onto the row; omit to take it from the account. */
+  userEmail?: string;
   action: ActivityLogAction;
   collection: string;
   entryId?: string;
@@ -98,7 +105,7 @@ const TABLE = "activity_log";
  * dialect-specific (NodePgDatabase / MySql2Database / BetterSQLite3Database),
  * while the fluent API is identical.
  */
-interface ActivityWriteDb {
+export interface ActivityWriteDb {
   insert(table: unknown): { values(data: unknown): Promise<unknown> };
   select(fields: unknown): {
     from(table: unknown): {
@@ -121,7 +128,7 @@ interface TransactionalActivityDb extends ActivityWriteDb {
 /** The two tables an activity write reads and writes. */
 interface ActivityWriteTables {
   activityLog: Table & { identityErasedAt: Column };
-  users: Table & { id: Column };
+  users: Table & { id: Column; name: Column; email: Column };
 }
 
 /**
@@ -187,86 +194,25 @@ export class ActivityLogService extends BaseService {
   }
 
   /**
-   * Record an activity log entry.
+   * Record an activity log entry as a self-contained write.
    *
-   * The identity a row may carry has to be decided against an account that may
-   * be deleted at this very moment, and the two dialect families need
-   * different mechanisms for it.
-   *
-   * **Postgres and MySQL** run the write inside a transaction that first takes
-   * a SHARED lock on the account row. `deleteUser` takes an EXCLUSIVE lock on
-   * that row before it erases anything, so the two cannot be in flight at
-   * once: either this lock is taken first and the deletion waits, so its
-   * erasure covers a row that already exists, or the deletion holds the row and
-   * this waits for its commit and then correctly finds the account gone. The
-   * lock is what closes the gap a single statement cannot — its subquery is
-   * answered when it STARTS while its row becomes visible when it COMMITS, and
-   * an insert spanning the deletion's commit satisfies neither the deletion's
-   * own erasure nor its post-commit sweep. Shared rather than exclusive so
-   * concurrent writes by the same author do not serialise against each other;
-   * only the deletion has to exclude them, for the length of one insert.
-   *
-   * **SQLite** has one writer, so its insert cannot interleave with the
-   * deletion's transaction at all and needs no lock. It decides the identity
-   * inside the statement instead, because a check followed by a separate
-   * insert would leave a durable row that a second statement was still going
-   * to correct — and `BaseService`'s SQLite transaction cannot be used to hold
-   * the two together: it issues `BEGIN IMMEDIATE` on the shared synchronous
-   * connection, which throws whenever another transaction is open and would
-   * become a silently missing audit entry here.
-   *
-   * Errors are caught and logged but never propagated — activity logging must
-   * never break a content operation.
+   * For callers that own no transaction of their own — the auth and account
+   * seams. Supplies the transaction the identity decision needs (see
+   * {@link logActivityInTx}) and swallows failures: these callers have already
+   * committed by the time they log, so a throw here could only turn a recorded
+   * action into a failed one. A mutation recording inside its own write
+   * transaction wants the opposite and calls {@link logActivityInTx} directly.
    */
   async logActivity(input: LogActivityInput): Promise<void> {
     try {
-      const tables = this.tables as ActivityWriteTables;
-      const { activityLog, users } = tables;
-
       if (this.dialect === "sqlite") {
-        // Nothing to wait for here: SQLite takes no lock, so the statement
-        // runs at the moment this is read.
-        const now = new Date();
-        const actorIsGone = sql`NOT EXISTS (SELECT 1 FROM ${users} WHERE ${users.id} = ${input.userId})`;
-        // Encoded through the column itself: the stamp is an epoch integer
-        // here, and an SQL fragment bypasses the mapping Drizzle would
-        // otherwise apply to a plain value.
-        const erasedAt = activityLog.identityErasedAt.mapToDriverValue(now);
-        await (this.db as ActivityWriteDb).insert(activityLog).values(
-          this.entryValues(input, now, {
-            userName: sql`CASE WHEN ${actorIsGone} THEN NULL ELSE ${input.userName} END`,
-            userEmail: sql`CASE WHEN ${actorIsGone} THEN NULL ELSE ${input.userEmail} END`,
-            identityErasedAt: sql`CASE WHEN ${actorIsGone} THEN ${erasedAt} ELSE NULL END`,
-          })
-        );
+        await this.logActivityInTx(this.db as ActivityWriteDb, input);
         return;
       }
 
-      await (this.db as TransactionalActivityDb).transaction(async tx => {
-        const actor = await tx
-          .select({ id: users.id })
-          .from(users)
-          .where(eq(users.id, input.userId))
-          .limit(1)
-          .for("share");
-        // Read AFTER the lock is granted. Acquiring it can wait out a whole
-        // deletion, and a stamp taken before the wait would claim the identity
-        // was erased at a moment that precedes the deletion it records.
-        const settled = new Date();
-        // Plain values, decided in JS: the lock makes the answer stable for the
-        // rest of this transaction, and the transaction makes the read and the
-        // write land together. Deciding it in SQL instead would need the same
-        // CASE the SQLite path uses, whose untyped branches Postgres cannot
-        // infer a parameter type for.
-        const actorStillExists = actor.length > 0;
-        await tx.insert(activityLog).values(
-          this.entryValues(input, settled, {
-            userName: actorStillExists ? input.userName : null,
-            userEmail: actorStillExists ? input.userEmail : null,
-            identityErasedAt: actorStillExists ? null : settled,
-          })
-        );
-      });
+      await (this.db as TransactionalActivityDb).transaction(tx =>
+        this.logActivityInTx(tx, input)
+      );
     } catch (error) {
       this.logger.error("Failed to log activity", {
         error: error instanceof Error ? error.message : String(error),
@@ -277,6 +223,114 @@ export class ActivityLogService extends BaseService {
         },
       });
     }
+  }
+
+  /**
+   * Write one activity entry through an executor the CALLER owns.
+   *
+   * Holds the whole erasure-aware identity decision, so the two writers — the
+   * standalone {@link logActivity} above and the mutation seam that records
+   * inside a content transaction — cannot come to disagree about what a row may
+   * carry. Both dialect mechanisms live here; only the transaction the
+   * statements run in differs between callers.
+   *
+   * Failures PROPAGATE, deliberately. A caller recording inside a content
+   * transaction needs the write to fail with it — an entry that cannot be
+   * written must take the change it describes down with it, rather than leaving
+   * a committed mutation nothing recorded. Swallowing is the standalone
+   * caller's decision to make, and it makes it above.
+   *
+   * The identity a row may carry has to be decided against an account that may
+   * be deleted at this very moment, and the two dialect families need
+   * different mechanisms for it.
+   *
+   * **Postgres and MySQL** first take a SHARED lock on the account row.
+   * `deleteUser` takes an EXCLUSIVE lock on that row before it erases anything,
+   * so the two cannot be in flight at once: either this lock is taken first and
+   * the deletion waits, so its erasure covers a row that already exists, or the
+   * deletion holds the row and this waits for its commit and then correctly
+   * finds the account gone. The lock is what closes the gap a single statement
+   * cannot — its subquery is answered when it STARTS while its row becomes
+   * visible when it COMMITS, and an insert spanning the deletion's commit
+   * satisfies neither the deletion's own erasure nor its post-commit sweep.
+   * Shared rather than exclusive so concurrent writes by the same author do not
+   * serialise against each other; only the deletion has to exclude them, for
+   * the length of one insert.
+   *
+   * **SQLite** has one writer, so its insert cannot interleave with the
+   * deletion's transaction at all and needs no lock. It decides the identity
+   * inside the statement instead, because a check followed by a separate
+   * insert would leave a durable row that a second statement was still going
+   * to correct.
+   */
+  async logActivityInTx(
+    db: ActivityWriteDb,
+    input: LogActivityInput
+  ): Promise<void> {
+    const tables = this.tables as ActivityWriteTables;
+    const { activityLog, users } = tables;
+
+    if (this.dialect === "sqlite") {
+      // Nothing to wait for here: SQLite takes no lock, so the statement
+      // runs at the moment this is read.
+      const now = new Date();
+      const actorIsGone = sql`NOT EXISTS (SELECT 1 FROM ${users} WHERE ${users.id} = ${input.userId})`;
+      // Encoded through the column itself: the stamp is an epoch integer
+      // here, and an SQL fragment bypasses the mapping Drizzle would
+      // otherwise apply to a plain value.
+      const erasedAt = activityLog.identityErasedAt.mapToDriverValue(now);
+      // A caller that supplied no identity takes it from the account row. The
+      // scalar subquery is answered in the same statement as the existence
+      // check above, so the name stored and the decision to store one cannot
+      // disagree about whether the account was there.
+      const nameSource =
+        input.userName !== undefined
+          ? sql`${input.userName}`
+          : sql`(SELECT ${users.name} FROM ${users} WHERE ${users.id} = ${input.userId})`;
+      const emailSource =
+        input.userEmail !== undefined
+          ? sql`${input.userEmail}`
+          : sql`(SELECT ${users.email} FROM ${users} WHERE ${users.id} = ${input.userId})`;
+      await db.insert(activityLog).values(
+        this.entryValues(input, now, {
+          userName: sql`CASE WHEN ${actorIsGone} THEN NULL ELSE ${nameSource} END`,
+          userEmail: sql`CASE WHEN ${actorIsGone} THEN NULL ELSE ${emailSource} END`,
+          identityErasedAt: sql`CASE WHEN ${actorIsGone} THEN ${erasedAt} ELSE NULL END`,
+        })
+      );
+      return;
+    }
+
+    const actor = await db
+      .select({ id: users.id, name: users.name, email: users.email })
+      .from(users)
+      .where(eq(users.id, input.userId))
+      .limit(1)
+      .for("share");
+    // Read AFTER the lock is granted. Acquiring it can wait out a whole
+    // deletion, and a stamp taken before the wait would claim the identity
+    // was erased at a moment that precedes the deletion it records.
+    const settled = new Date();
+    // Plain values, decided in JS: the lock makes the answer stable for the
+    // rest of this transaction, and the transaction makes the read and the
+    // write land together. Deciding it in SQL instead would need the same
+    // CASE the SQLite path uses, whose untyped branches Postgres cannot
+    // infer a parameter type for.
+    const actorStillExists = actor.length > 0;
+    // The caller's identity when it supplied one, otherwise the account's own,
+    // read under the lock that just answered whether the account exists.
+    const account = actor[0];
+    await db.insert(activityLog).values(
+      this.entryValues(input, settled, {
+        userName: actorStillExists
+          ? (input.userName ?? toNullableString(account?.name))
+          : null,
+        userEmail: actorStillExists
+          ? (input.userEmail ?? toNullableString(account?.email))
+          : null,
+        identityErasedAt: actorStillExists ? null : settled,
+      })
+    );
   }
 
   /**

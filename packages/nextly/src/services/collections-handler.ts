@@ -814,6 +814,8 @@ export class CollectionsHandler {
     routeAuthorized?: boolean;
     /** API-key scope; gates the unconditional publish check. */
     authenticatedScope?: AuthenticatedScope;
+    /** Acting identity from the transport, forwarded to the recorded event. */
+    actor?: RequestActor;
   }) {
     return this.entryService.publishAllLocales(this.resolveUserParam(params));
   }
