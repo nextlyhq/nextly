@@ -39,6 +39,7 @@ import { getSchemaEventsDdl } from "../../../domains/schema/events/schema-events
 import { SchemaEventsRepository } from "../../../domains/schema/events/schema-events-repository";
 import { clearCachedSnapshot } from "../../../init/schema-snapshot-cache";
 import { toMinimalEntities } from "../../../domains/schema/migrate-create/config-entities";
+import { introspectLiveSnapshot } from "../../../domains/schema/pipeline/diff/introspect-live";
 import { generateMigration } from "../../../domains/schema/migrate-create/generate";
 import { resolveCollectionTableName } from "../../../domains/schema/utils/resolve-table-name";
 import { createLogger } from "../../utils/logger";
@@ -114,7 +115,10 @@ interface Harness {
  * to `public`, so a schema would not separate this suite's tables from any
  * other's.
  */
-async function makeHarness(dialect: SupportedDialect): Promise<Harness> {
+async function makeHarness(
+  dialect: SupportedDialect,
+  suffix = ""
+): Promise<Harness> {
   const dir = mkdtempSync(join(tmpdir(), "nextly-baseline-"));
   const migrationsDir = join(dir, "migrations");
 
@@ -136,7 +140,7 @@ async function makeHarness(dialect: SupportedDialect): Promise<Harness> {
     };
   }
 
-  const dbName = `nextly_baseline_${RUN_ID}`;
+  const dbName = `nextly_baseline_${RUN_ID}${suffix ? `_${suffix}` : ""}`;
   const admin = new Pool({ connectionString: PG_URL });
   await admin.query(`CREATE DATABASE "${dbName}"`);
   await admin.end();
@@ -451,6 +455,50 @@ function runSuite(dialect: SupportedDialect): void {
     const names = recorded.snapshot.tables.map(t => t.name);
     expect(names).toContain(LOCALIZED_TABLE);
     expect(names).not.toContain(`${LOCALIZED_TABLE}_locales`);
+  });
+
+  it("rebuilds the same schema in an environment that has only the files", async () => {
+    // The reason a baseline writes real SQL instead of a marker: a new
+    // environment, a CI job, or `migrate:fresh` builds the schema from the
+    // history alone. Nothing proved that until here — the other tests assert
+    // what the file CONTAINS, and containing the right statements is not the
+    // same as producing the right schema.
+    //
+    // So the baseline is applied to a second, empty database and the two are
+    // introspected and compared. This is the assertion that was failing while
+    // generated `CREATE TABLE` omitted primary keys entirely.
+    await runDbSync(h, configV1);
+
+    const adopted = await baselineCore({
+      adapter: h.adapter,
+      db: h.db,
+      dialect: h.dialect,
+      migrationsDir: h.migrationsDir,
+      logger,
+    });
+    if (adopted.kind !== "baselined") throw new Error("expected a baseline");
+
+    const source = await introspectLiveSnapshot(h.db, h.dialect, [TABLE]);
+    const target = await makeHarness(h.dialect, "rebuilt");
+    try {
+      for (const stmt of splitSqlStatements(
+        parseSqlSections(await readFile(adopted.sqlPath, "utf-8")).upSql
+      )) {
+        await (target.adapter as unknown as DrizzleAdapter).executeQuery(stmt);
+      }
+
+      const rebuilt = await introspectLiveSnapshot(target.db, target.dialect, [
+        TABLE,
+      ]);
+      expect(rebuilt.tables).toEqual(source.tables);
+      // Named explicitly as well, because a deep-equal of two snapshots that
+      // both lost the key would still pass.
+      expect(
+        rebuilt.tables[0]?.columns.find(c => c.name === "id")?.primaryKey
+      ).toBe(true);
+    } finally {
+      await target.dispose();
+    }
   });
 
   it("refuses to give a project that already migrated a second starting point", async () => {
