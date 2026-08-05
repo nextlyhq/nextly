@@ -1,0 +1,54 @@
+/**
+ * `core/text` — a paragraph.
+ *
+ * Plain text, not rich text. Bold, links inside a sentence and lists belong to
+ * the rich-text block, which brings an editor with it; keeping them apart means
+ * a page that needs one short line does not load one. Line breaks in the stored
+ * value are preserved by CSS rather than by splitting into elements, so the
+ * document holds what the author typed.
+ *
+ * @module blocks/paragraph
+ */
+import { defineBlock } from "@nextlyhq/blocks-engine";
+import type { ReactElement } from "react";
+
+import type { BlockRenderArgs, PageContext } from "../context";
+
+import { text } from "./props";
+
+export interface ParagraphProps {
+  /** The paragraph's text. */
+  text?: string;
+}
+
+export function renderParagraph({
+  props,
+  className,
+}: BlockRenderArgs<ParagraphProps>): ReactElement {
+  return <p className={className}>{text(props.text)}</p>;
+}
+
+// Defined against the ENGINE's `defineBlock`, not the plugin SDK's: the engine
+// declares the contract and the SDK re-exports it for third parties. The
+// context is named rather than augmented, so a block compiled against the
+// published types is typed the same as one compiled here. See `./index.ts`.
+export const paragraph = defineBlock<ParagraphProps, PageContext>({
+  name: "core/text",
+  version: 1,
+  description:
+    "A paragraph of plain text. Rich formatting lives in the rich-text block, which carries its own editor.",
+  props: { text: { type: "textarea" } },
+  defaultProps: { text: "" },
+  example: { props: { text: "A paragraph of text." } },
+  supports: {
+    typography: true,
+    color: true,
+    spacing: true,
+    dimensions: true,
+    background: true,
+    border: true,
+    effects: true,
+    position: true,
+  },
+  render: renderParagraph,
+});
