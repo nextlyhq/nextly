@@ -4,7 +4,21 @@
  * the database, so this registry restores them by capturing the live
  * config. A regression would silently disable field access rules and hooks.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// The registry resolves the caller's grants through these. Mocked so a field
+// rule's permission check is driven by the test rather than by a database, and
+// so the number of LOOKUPS is observable — the resolver promises to make one
+// per call however many rules ask.
+const listEffectivePermissions = vi.fn(
+  async (_userId: string) => [] as string[]
+);
+const listRoleSlugsForUser = vi.fn(async (_userId: string) => [] as string[]);
+vi.mock("../../../services/lib/permissions", () => ({
+  listEffectivePermissions: (userId: string) =>
+    listEffectivePermissions(userId),
+  listRoleSlugsForUser: (userId: string) => listRoleSlugsForUser(userId),
+}));
 
 import { validateEntryData } from "../entry-validation";
 import {
@@ -19,6 +33,124 @@ import {
 } from "../field-level-registry";
 
 afterEach(() => clearFieldFunctions());
+
+describe("field access can ask what the caller is granted", () => {
+  beforeEach(() => {
+    listEffectivePermissions.mockReset().mockResolvedValue([]);
+    listRoleSlugsForUser.mockReset().mockResolvedValue([]);
+  });
+
+  const registerGated = (): void =>
+    registerFieldFunctions("collection", "pages", [
+      { name: "title" },
+      {
+        name: "customCss",
+        access: {
+          update: ({ permissions }: { permissions: string[] }) =>
+            permissions.includes("builder-custom-css:write"),
+        },
+      },
+    ]);
+
+  it("strips the field when the caller lacks the permission", async () => {
+    listEffectivePermissions.mockResolvedValue(["pages:update"]);
+    registerGated();
+    const data: Record<string, unknown> = { title: "Home", customCss: ".a{}" };
+    await applyFieldWriteAccess({
+      kind: "collection",
+      slug: "pages",
+      data,
+      operation: "update",
+      user: { id: "u1" },
+    });
+    // Silently stripped, not rejected: the rest of the write goes through and
+    // whatever CSS is stored stays as it was.
+    expect(data).toEqual({ title: "Home" });
+  });
+
+  it("keeps the field when the caller has it", async () => {
+    listEffectivePermissions.mockResolvedValue([
+      "pages:update",
+      "builder-custom-css:write",
+    ]);
+    registerGated();
+    const data: Record<string, unknown> = { title: "Home", customCss: ".a{}" };
+    await applyFieldWriteAccess({
+      kind: "collection",
+      slug: "pages",
+      data,
+      operation: "update",
+      user: { id: "u1" },
+    });
+    expect(data).toEqual({ title: "Home", customCss: ".a{}" });
+  });
+
+  it("resolves the grants once however many rules ask", async () => {
+    listEffectivePermissions.mockResolvedValue(["a:read"]);
+    registerFieldFunctions("collection", "pages", [
+      {
+        name: "one",
+        access: {
+          update: ({ permissions }: { permissions: string[] }) =>
+            permissions.length > 0,
+        },
+      },
+      {
+        name: "two",
+        access: {
+          update: ({ permissions }: { permissions: string[] }) =>
+            permissions.length > 0,
+        },
+      },
+      {
+        name: "three",
+        access: {
+          update: ({ permissions }: { permissions: string[] }) =>
+            permissions.length > 0,
+        },
+      },
+    ]);
+    await applyFieldWriteAccess({
+      kind: "collection",
+      slug: "pages",
+      data: { one: 1, two: 2, three: 3 },
+      operation: "update",
+      user: { id: "u1" },
+    });
+    // Three rules, one lookup. Field access runs on every authenticated write,
+    // so a per-rule lookup would multiply the cost by the field count.
+    expect(listEffectivePermissions).toHaveBeenCalledTimes(1);
+  });
+
+  it("makes no lookup at all when no rule runs", async () => {
+    registerFieldFunctions("collection", "pages", [
+      { name: "title", validate: () => true },
+    ]);
+    await applyFieldWriteAccess({
+      kind: "collection",
+      slug: "pages",
+      data: { title: "Home" },
+      operation: "update",
+      user: { id: "u1" },
+    });
+    expect(listEffectivePermissions).not.toHaveBeenCalled();
+  });
+
+  it("denies when the grant lookup fails", async () => {
+    listEffectivePermissions.mockRejectedValue(new Error("db down"));
+    registerGated();
+    const data: Record<string, unknown> = { title: "Home", customCss: ".a{}" };
+    await applyFieldWriteAccess({
+      kind: "collection",
+      slug: "pages",
+      data,
+      operation: "update",
+      user: { id: "u1" },
+    });
+    // Fail CLOSED: an unreadable grant set is not an open one.
+    expect(data).toEqual({ title: "Home" });
+  });
+});
 
 describe("field-level registry", () => {
   it("captures only function-bearing fields and replaces on re-register", () => {
