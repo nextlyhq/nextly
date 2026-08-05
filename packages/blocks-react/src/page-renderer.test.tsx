@@ -4095,6 +4095,42 @@ describe("PageRenderer", () => {
       expect(placeholderReasons(html)).toEqual(["invalid-output"]);
     });
 
+    it("recompiles without the placeholder node's own rules", async () => {
+      // Withholding the sheet is the fallback when there is nothing to
+      // recompile from. With a compile context present the sheet IS rebuilt,
+      // and rebuilding from a tree that still held the node would emit its
+      // rules again — so the style input is a tree with it removed, while the
+      // render keeps it to draw the placeholder.
+      //
+      // Both nodes carry styles, so the assertion can tell "the placeholder's
+      // rules are gone" from "no rules were compiled at all".
+      const ahead = doc(
+        node("a", "test/text", {
+          version: 9,
+          props: { value: "ahead" },
+          styles: { base: { base: { color: "#ff0000" } } },
+        }),
+        node("b", "test/text", {
+          props: { value: "healthy" },
+          styles: { base: { base: { color: "#00ff00" } } },
+        })
+      );
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={ahead}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+          styleContext={{ limits: DEFAULT_LIMITS }}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual(["version-ahead"]);
+      // The healthy node keeps its rule; the placeholder's is gone. Asserting
+      // both is what separates the prune from a sheet that failed to compile.
+      expect(html).toContain("#00ff00");
+      expect(html).not.toContain("#ff0000");
+    });
+
     it("does not trust a stored stylesheet when a node becomes a placeholder", async () => {
       // A knowable placeholder emits only a hidden marker, so a sheet compiled
       // for the markup it WOULD have rendered ships rules for content that is

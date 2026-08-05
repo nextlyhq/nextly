@@ -85,6 +85,62 @@ function rendersOwnMarkup(node: BlockNode, resolver: BlockResolver): boolean {
 }
 
 /**
+ * The tree a stylesheet should be compiled from.
+ *
+ * A node that resolves to a placeholder emits only a hidden marker, so every
+ * rule compiled for the markup it WOULD have rendered matches nothing and ships
+ * anyway, carrying whatever those rules referenced. Dropping the node from the
+ * style input is what stops that.
+ *
+ * It has to be a SEPARATE tree from the one that renders. The render still
+ * needs the node, because drawing its placeholder is how the failure becomes
+ * visible; only the stylesheet should pretend it was never there. Marking the
+ * document "repaired" is not enough on its own, because recompiling from a tree
+ * that still contains the node produces the same rules again.
+ *
+ * The subtree goes with it: a placeholder replaces the node entirely, so its
+ * children never reach the page either.
+ *
+ * Returns the ORIGINAL document when every node renders, so the common case
+ * allocates nothing and the caller can compare by identity.
+ */
+function pruneKnownPlaceholders(
+  document: BlockDocument,
+  resolver: BlockResolver
+): BlockDocument {
+  let changed = false;
+
+  const prune = (nodes: BlockNode[]): BlockNode[] => {
+    const kept: BlockNode[] = [];
+    for (const node of nodes) {
+      if (!rendersOwnMarkup(node, resolver)) {
+        changed = true;
+        continue;
+      }
+
+      const slots = node.slots;
+      if (slots === undefined) {
+        kept.push(node);
+        continue;
+      }
+
+      let slotsChanged = false;
+      const nextSlots: Record<string, BlockNode[]> = {};
+      for (const [name, children] of Object.entries(slots)) {
+        const pruned = prune(children);
+        if (pruned !== children) slotsChanged = true;
+        nextSlots[name] = pruned;
+      }
+      kept.push(slotsChanged ? { ...node, slots: nextSlots } : node);
+    }
+    return changed ? kept : nodes;
+  };
+
+  const nodes = prune(document.nodes);
+  return changed ? { ...document, nodes } : document;
+}
+
+/**
  * Renders a block document as React.
  *
  * A Server Component, and synchronous: nothing at this level needs to wait, so
@@ -105,22 +161,6 @@ function rendersOwnMarkup(node: BlockNode, resolver: BlockResolver): boolean {
  *    class, so the element carrying it has to exist or no rule matches
  *    anything.
  */
-/** Whether any node in the tree will be replaced by a knowable placeholder. */
-function hasKnownPlaceholder(
-  nodes: BlockNode[],
-  resolver: BlockResolver
-): boolean {
-  for (const node of nodes) {
-    if (!rendersOwnMarkup(node, resolver)) return true;
-    const slots = node.slots;
-    if (slots === undefined) continue;
-    for (const children of Object.values(slots)) {
-      if (hasKnownPlaceholder(children, resolver)) return true;
-    }
-  }
-  return false;
-}
-
 export function PageRenderer({
   document,
   context,
@@ -219,11 +259,15 @@ export function PageRenderer({
   // unchanged and the stale sheet would be trusted. Skipping the reservation
   // and then trusting the sheet is worse than either on its own, because the
   // colliding case previously repaired the tree and therefore recompiled.
+  // Compiled from a tree with the knowable placeholders removed, while the
+  // render keeps them so their placeholders still appear.
+  const styleInput = pruneKnownPlaceholders(visible, resolver);
+
   const repairedDocument =
     sanitized !== document ||
     pruned !== doc ||
     visible !== pruned ||
-    hasKnownPlaceholder(visible.nodes, resolver);
+    styleInput !== visible;
 
   // Recompiling after pruning must not lose what the stored artifact and the
   // renderer knew. `scope` lives on the artifact rather than in the compile
@@ -249,7 +293,7 @@ export function PageRenderer({
         };
 
   const { css, classes, scope } = resolvePageStyles(
-    visible,
+    styleInput,
     styles,
     compileContext,
     resolver,
