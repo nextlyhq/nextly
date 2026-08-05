@@ -36,6 +36,7 @@ import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
+import { buildDesiredTableFromComponentFields } from "../../domains/schema/pipeline/diff/build-from-fields";
 import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanup/executor";
 import { previewDesiredSchema } from "../../domains/schema/pipeline/preview";
 import {
@@ -51,9 +52,11 @@ import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detect
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import { isIdempotencyError } from "../../domains/schema/pipeline/sql-statement-utils";
 import type { DesiredFieldGroup } from "../../domains/schema/pipeline/types";
+import { applyMigrationStatements } from "../../domains/schema/services/apply-migration-statements";
 import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
+import { shapeMismatches } from "../../domains/schema/services/verify-applied-shape";
 import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { NextlyError } from "../../errors";
 import { getProductionNotifier } from "../../runtime/notifications/index";
@@ -110,31 +113,6 @@ function offsetPaginationToMeta(args: {
     hasNext: page < totalPages,
     hasPrev: page > 1,
   };
-}
-
-// ============================================================
-// Migration SQL execution helper
-// ============================================================
-
-async function executeMigrationStatements(
-  adapter: DrizzleAdapter,
-  migrationSQL: string
-): Promise<void> {
-  const statements = migrationSQL
-    .split("--> statement-breakpoint")
-    .map(s => s.trim())
-    .filter(s => s.length > 0);
-
-  for (const statement of statements) {
-    const cleanStatement = statement
-      .split("\n")
-      .filter(line => !line.trim().startsWith("--"))
-      .join("\n")
-      .trim();
-    if (cleanStatement) {
-      await adapter.executeQuery(cleanStatement);
-    }
-  }
 }
 
 // Refresh the cached Drizzle table so the next entry query joining this
@@ -305,6 +283,18 @@ async function reconcileComponentCompanion(args: {
       }
     }
   }
+  // 🔴 STRICT on purpose: the companion does NOT tolerate a re-run.
+  //
+  // Tolerating it would make a half-finished localization ENABLE look like success. Interrupted
+  // after the companion is created but before the seed and the main-column drops, the retry is
+  // indistinguishable from an orphan repair — the planner cannot tell them apart, because the
+  // signal that separates them (`existingMainColumns`) is consumed only on the disable path — so
+  // the duplicate columns would be swallowed and the entity recorded as localized while its
+  // default-locale content is still stranded on the main table.
+  //
+  // A loud failure is the worse experience and the safer outcome. It costs the repair of a
+  // localized entity whose create half-failed; it prevents silently reporting a migration that did
+  // not happen.
   for (const stmt of plan.statements) {
     await adapter.executeQuery(stmt);
   }
@@ -428,10 +418,37 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         if (container.has("adapter")) {
           const diAdapter = container.get<DrizzleAdapter>("adapter");
 
-          await executeMigrationStatements(diAdapter, migrationSQL);
+          await applyMigrationStatements(diAdapter, migrationSQL);
 
           const tableExists = await diAdapter.tableExists(tableName);
-          if (tableExists) {
+          // 🔴 Existence is not enough now that a re-run is tolerated. `CREATE TABLE IF NOT
+          // EXISTS` no-ops against a field group's table left by an earlier attempt whose
+          // registry row is gone, and the index statements after it are tolerated, so a repair
+          // with a changed field set emits no error at all. Compared through the same builder
+          // the schema diff uses, so this cannot disagree with the pipeline about a column's
+          // name or its type.
+          const mismatches = tableExists
+            ? await shapeMismatches(
+                diAdapter,
+                dialect,
+                tableName,
+                buildDesiredTableFromComponentFields(
+                  tableName,
+                  b.fields as unknown as FieldDefinition[],
+                  dialect,
+                  // A field group's table is made by the field-group creator, which reads a text
+                  // field's width from a different key than the collection creator does — so the
+                  // desired column shape depends on saying which builder made it.
+                  { localized: isLocalized, builtBy: "fieldGroup" }
+                )
+              )
+            : [];
+          if (mismatches.length > 0) {
+            migrationStatus = "failed";
+            console.error(
+              `[Components] Table "${tableName}" does not match this schema: ${mismatches.join("; ")}`
+            );
+          } else if (tableExists) {
             migrationStatus = "applied";
             registerComponentRuntimeSchema(
               diAdapter,
