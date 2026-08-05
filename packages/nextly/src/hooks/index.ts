@@ -16,4 +16,3 @@ export * from "./stored-hook-executor";
 export * from "./register-collection-hooks";
 export * from "./register-single-hooks";
 export * from "./sanitization-hooks";
-export * from "./activity-log-hooks";
