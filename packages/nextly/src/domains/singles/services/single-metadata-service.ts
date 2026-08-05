@@ -156,12 +156,15 @@ export class SingleMetadataService {
 
     // 1. INTENT. Durable before anything is touched, so an interruption from here on leaves a row
     // that `getPendingMigrations()` can find and finish.
-    const record = await this.registry.registerSingle({
-      ...input,
-      migrationStatus: "pending",
-    });
+    //
+    // 🔴 Which is only worth writing if something can finish it. An unfinished attempt owns the
+    // slug, so without this the write-ahead row is not a recovery aid but a permanent blocker: the
+    // retry is refused as a duplicate and the user has no way forward short of editing the registry
+    // by hand. That would be strictly worse than the orphan table intent-first exists to prevent —
+    // an orphan at least left the slug free.
+    const record = await this.adoptOrRegister(input);
 
-    // 2. APPLY.
+    // 2. APPLY. Idempotent, so it can run over whatever the interrupted attempt managed to create.
     const migrationStatus = await this.applyCreateDdl(input, plan);
 
     // 3. CONFIRM. Recorded against the row written in step 1.
@@ -171,6 +174,37 @@ export class SingleMetadataService {
     // confirm write changed, so it is carried over rather than re-fetched; returning the step-1
     // copy unchanged would report every applied create as still pending.
     return { record: { ...record, migrationStatus }, migrationStatus };
+  }
+
+  /**
+   * Write the intent, taking over an unfinished attempt at the same Single rather than colliding
+   * with it.
+   *
+   * A row that is not `applied` describes an operation that never reported success, so a create
+   * naming the same slug is a retry of it. The row is re-stated from THIS request — a corrected
+   * retry usually differs from the attempt that failed, and confirming the old field set while
+   * applying the new DDL would leave the registry describing a table nobody asked for.
+   *
+   * An `applied` Single is left alone: that is a genuine duplicate and belongs to whoever holds it.
+   */
+  private async adoptOrRegister(
+    input: CreateSingleInput
+  ): Promise<DynamicSingleRecord> {
+    const existing = await this.registry.getSingleBySlug(input.slug);
+    if (!existing || existing.migrationStatus === "applied") {
+      return this.registry.registerSingle({
+        ...input,
+        migrationStatus: "pending",
+      });
+    }
+
+    this.logger.info(
+      `[Singles] Resuming an unfinished create for "${input.slug}" (was ${existing.migrationStatus})`
+    );
+    return this.registry.updateSingle(input.slug, {
+      ...input,
+      migrationStatus: "pending",
+    });
   }
 
   /**

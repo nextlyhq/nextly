@@ -267,6 +267,42 @@ for (const dialect of getConfiguredTestDialects()) {
     });
 
     /**
+     * 🔴 An unfinished attempt must not become a permanent blocker.
+     *
+     * Writing the intent first is only worth doing if something can finish it. The row owns the
+     * slug the moment it is written, so a create interrupted before it could record its outcome
+     * would otherwise be refused as a duplicate for ever, leaving the user no way forward short of
+     * editing the registry by hand — strictly worse than the orphan table this ordering prevents,
+     * because an orphan at least left the slug free.
+     */
+    it("resumes a create whose outcome was never recorded", async () => {
+      current = await createTestNextly({ dialect });
+
+      const payload = {
+        slug: plain,
+        label: "Plain",
+        fields: [{ name: "body", type: "text" }],
+      };
+
+      await dispatchSingles("createSingle", {}, payload);
+
+      // The interrupted state: the row is there and still says `pending`, because the process
+      // stopped between writing the intent and recording the result.
+      const registry = current.getService("singleRegistryService");
+      await registry.updateMigrationStatus(plain, "pending");
+      expect((await registryRow(current, plain))?.migrationStatus).toBe(
+        "pending"
+      );
+
+      // The retry a user would make. It has to succeed rather than collide with its own leftovers.
+      await dispatchSingles("createSingle", {}, payload);
+
+      expect((await registryRow(current, plain))?.migrationStatus).toBe(
+        "applied"
+      );
+    });
+
+    /**
      * 🔴 The lifecycle columns come from create OPTIONS, not from the field list.
      *
      * A check derived from the fields alone passes here while `status` is absent, and the runtime
