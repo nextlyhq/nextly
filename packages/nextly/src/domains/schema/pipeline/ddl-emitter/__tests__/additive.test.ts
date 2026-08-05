@@ -215,7 +215,7 @@ describe("emitAdditiveDdl — add_table", () => {
 });
 
 describe("emitAdditiveDdl — indexes and contracts", () => {
-  it("add_index / drop_index per dialect", () => {
+  it("add_index per dialect", () => {
     const add: Operation = {
       type: "add_index",
       tableName: "dc_authors",
@@ -228,6 +228,19 @@ describe("emitAdditiveDdl — indexes and contracts", () => {
     expect(emitAdditiveDdl(add, "sqlite")).toEqual([
       `CREATE INDEX IF NOT EXISTS "idx_dc_authors_email" ON "dc_authors" ("email")`,
     ]);
+    expect(emitAdditiveDdl(add, "mysql")).toEqual([
+      "CREATE INDEX `idx_dc_authors_email` ON `dc_authors` (`email`)",
+    ]);
+  });
+
+  // `drop_index` is no longer emitted here: it moved into
+  // PRE_RESOLUTION_OP_TYPES, so the executor drops the index before the
+  // emitter runs and emitting it again would drop it twice — fatal on MySQL,
+  // whose DROP INDEX has no IF EXISTS. The emitter needed no edit for that
+  // move because it derives its no-op set from `isPreResolutionOp`; this
+  // assertion states the resulting behavior, and the set-driven test below is
+  // what keeps the two in step through any future move.
+  it("emits nothing for drop_index, which pre-resolution now owns", () => {
     const drop: Operation = {
       type: "drop_index",
       tableName: "dc_authors",
@@ -237,13 +250,8 @@ describe("emitAdditiveDdl — indexes and contracts", () => {
         unique: false,
       },
     };
-    // SQLite indexes are namespace-global; MySQL scopes drop to the table.
-    expect(emitAdditiveDdl(drop, "sqlite")).toEqual([
-      `DROP INDEX IF EXISTS "idx_dc_authors_email"`,
-    ]);
-    expect(emitAdditiveDdl(drop, "mysql")).toEqual([
-      "DROP INDEX `idx_dc_authors_email` ON `dc_authors`",
-    ]);
+    expect(emitAdditiveDdl(drop, "sqlite")).toEqual([]);
+    expect(emitAdditiveDdl(drop, "mysql")).toEqual([]);
   });
 
   it("emits nothing for pre-resolution-handled ops", () => {

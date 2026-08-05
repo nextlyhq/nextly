@@ -151,6 +151,28 @@ describe("canEmitWithoutDrizzleKit", () => {
     expect(canEmitWithoutDrizzleKit([], "sqlite")).toBe(true);
   });
 
+  // `drop_index` is now a PRE-RESOLUTION op, so the emitter produces nothing
+  // for it — but it must still keep the apply on the fast path. The executor
+  // runs inside `runApply` on both routes, so the drop happens either way;
+  // what routing decides is whether drizzle-kit ALSO gets invoked, and on
+  // SQLite/MySQL that is the introspection crash this fast path exists to
+  // avoid. A drop_index-only apply emitting zero statements is the expected
+  // shape, not a reason to fall back.
+  it("keeps a drop_index-only apply on the fast path (executor owns the drop)", () => {
+    const dropIndex: Operation = {
+      type: "drop_index",
+      tableName: "dc_authors",
+      index: {
+        name: "idx_dc_authors_email",
+        columns: ["email"],
+        unique: false,
+      },
+    };
+    expect(canEmitWithoutDrizzleKit([dropIndex], "sqlite")).toBe(true);
+    expect(canEmitWithoutDrizzleKit([dropIndex], "mysql")).toBe(true);
+    expect(canEmitWithoutDrizzleKit([dropIndex], "postgresql")).toBe(true);
+  });
+
   it("sends a standalone add_index to drizzle-kit on MySQL only", () => {
     // MySQL needs a key length to index a TEXT column, and an add_index op
     // carries column NAMES with no types — so that apply belongs to the kit,
