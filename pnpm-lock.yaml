@@ -792,6 +792,9 @@ importers:
       eslint:
         specifier: ^9.39.1
         version: 9.39.1(jiti@2.7.0)
+      nextly:
+        specifier: workspace:*
+        version: link:../nextly
       react:
         specifier: 19.2.0
         version: 19.2.0
@@ -13327,7 +13330,7 @@ snapshots:
       '@humanfs/node': 0.16.6
       '@humanwhocodes/module-importer': 1.0.1
       '@humanwhocodes/retry': 0.4.3
-      '@types/estree': 1.0.9
+      '@types/estree': 1.0.8
       ajv: 6.15.0
       chalk: 4.1.2
       cross-spawn: 7.0.6

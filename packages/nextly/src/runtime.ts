@@ -80,6 +80,8 @@ export {
   type ContentRoute,
   type ContentRouteArgs,
   type ContentRouteConfig,
+  type RenderContext,
+  type NextlyContentReader,
   type ResolvedContext,
   type NextlySitemapEntry,
   type NextlySitemapOptions,

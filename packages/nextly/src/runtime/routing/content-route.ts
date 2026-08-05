@@ -36,12 +36,32 @@ import {
   type NextlyContentReader,
 } from "./resolve-content";
 
-/** Where a resolved entry was found — passed to `render`/`buildMetadata`. */
+/** Where a resolved entry was found. */
 export interface ResolvedContext {
   /** The collection the entry was resolved from. */
   collection: string;
   /** The joined slug path (no leading slash), e.g. `"about/team"`. */
   slug: string;
+}
+
+/**
+ * What `render` and `buildMetadata` receive: where the entry was found, plus
+ * the reader it was found through.
+ *
+ * The reader travels with the result rather than being looked up again, because
+ * a render that needs a second read — a referenced author, the media behind an
+ * image — otherwise has to obtain an instance of its own. On a per-tenant setup
+ * that is a different database, so the page and the records it embeds would
+ * come from two places, and the mismatch appears as missing relations rather
+ * than as an error.
+ *
+ * Deliberately NOT given to the `draft` decision, which answers from a path
+ * alone: handing it a reader would invite an authorization check to read
+ * content it is in the middle of deciding access to.
+ */
+export interface RenderContext extends ResolvedContext {
+  /** The instance this route resolved the entry through. */
+  reader: NextlyContentReader;
 }
 
 /**
@@ -60,12 +80,12 @@ export interface ContentRouteConfig<TNode> {
   /** Render the resolved entry (your server component body). May be async. */
   render: (
     entry: ContentEntry,
-    context: ResolvedContext
+    context: RenderContext
   ) => TNode | Promise<TNode>;
   /** Optional per-entry metadata (e.g. via `buildMetadata`). */
   buildMetadata?: (
     entry: ContentEntry,
-    context: ResolvedContext
+    context: RenderContext
   ) => Metadata | Promise<Metadata>;
   /** Field holding the slug (default `"slug"`). */
   slugField?: string;
@@ -267,7 +287,7 @@ export function createContentRoute<TNode>(
   /** Resolve the joined slug across the configured collections (first match wins). */
   async function resolve(
     slug: string
-  ): Promise<{ entry: ContentEntry; context: ResolvedContext } | null> {
+  ): Promise<{ entry: ContentEntry; context: RenderContext } | null> {
     for (const collection of collections) {
       // Asked per collection, not once per request: the answer is scoped to a
       // document, and the same slug can name a different document in each
@@ -319,7 +339,7 @@ export function createContentRoute<TNode>(
       // compares a POST-`afterRead` document, so a collection that reshapes its
       // public read would fail a valid grant and send the editor to live
       // content.
-      return { entry, context: { collection, slug } };
+      return { entry, context: { collection, slug, reader: getInstance() } };
     }
     return null;
   }
