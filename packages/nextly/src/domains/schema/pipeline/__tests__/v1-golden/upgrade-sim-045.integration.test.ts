@@ -181,6 +181,19 @@ const addsWebhooksColumn = (stmt: string): boolean =>
     stmt.trim()
   );
 
+// The `preview_token_generation` column is additive on `site_settings`, which
+// predates this fixture, so a v1 upgrade of a schema captured before it emits
+// one `ADD COLUMN`. It is NOT NULL with a default of 0, which is data-preserving
+// on an existing row: 0 is the generation every preview link minted before any
+// revoke already carries, so the backfill leaves those links working rather than
+// refusing them all. Scoped to `site_settings` and to that column, so an
+// unrelated NOT NULL addition cannot ride in behind it. Tolerant of pg/MySQL
+// quoting and the optional COLUMN keyword.
+const addsPreviewGenerationColumn = (stmt: string): boolean =>
+  /^ALTER TABLE [`"]?site_settings[`"]? ADD (COLUMN )?[`"]?preview_token_generation[`"]?\b/i.test(
+    stmt.trim()
+  );
+
 // `activity_log` carried `user_id` with a cascading foreign key when this
 // fixture was captured, which meant deleting a user destroyed their entire
 // activity trail. Undoing that is a one-time migration on a table that predates
@@ -363,7 +376,8 @@ describe("existing-user upgrade sim (0.45 DDL → v1)", () => {
               addsRevalidateColumn(s) ||
               addsWebhooksColumn(s) ||
               migratesActivityLogActor(s) ||
-              addsAuditLogErasureStamp(s),
+              addsAuditLogErasureStamp(s) ||
+              addsPreviewGenerationColumn(s),
             `phantom diff: ${s}`
           ).toBe(true);
         }
@@ -441,7 +455,8 @@ describe("existing-user upgrade sim (0.45 DDL → v1)", () => {
               addsRevalidateColumn(s) ||
               addsWebhooksColumn(s) ||
               migratesActivityLogActor(s) ||
-              addsAuditLogErasureStamp(s),
+              addsAuditLogErasureStamp(s) ||
+              addsPreviewGenerationColumn(s),
             `unexpected reconcile statement shape: ${s}`
           ).toBe(true);
         }
