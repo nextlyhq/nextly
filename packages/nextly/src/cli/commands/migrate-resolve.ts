@@ -25,7 +25,7 @@ import { parseSnapshotFile } from "../../domains/schema/migrate-create/snapshot-
 import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
 import type { NextlySchemaSnapshot } from "../../domains/schema/pipeline/diff/types";
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
-import { isSnapshotComparableTable } from "../../domains/schema/pipeline/managed-tables";
+import { snapshotComparableTables } from "../../domains/schema/pipeline/managed-tables";
 import { describeError } from "../../errors/index";
 import { createContext, type CommandContext } from "../program";
 import {
@@ -166,7 +166,23 @@ export async function runMigrateResolve(
           // migration-owned and never appears in a `migrate:create` snapshot,
           // so including one here can never match the file this is compared
           // against and the equivalence check refuses the command.
-          const managed = live.filter(isSnapshotComparableTable);
+          // Junctions are excluded for exactly the reason the comment above
+          // gives for companions: neither is declared by config, so neither
+          // appears in the snapshot this is compared against, and a live
+          // snapshot carrying one can never match it. The target's own tables
+          // are the declaration, so a collection whose name resembles the
+          // generated junction shape is not mistaken for one.
+          // The same snapshot `loadTargetSnapshot` returns, read again rather
+          // than threaded: it is a file read, and the two callbacks are
+          // independent by design so the verifier can be driven without one.
+          // A missing snapshot is the verifier's own error to report; here it
+          // just means no declaration is available, and the name pattern alone
+          // decides.
+          const target = await loadSnapshot(metaDir, filename);
+          const managed = snapshotComparableTables(
+            live,
+            new Set((target?.tables ?? []).map(t => t.name))
+          );
           return introspectLiveSnapshot(db, dialect, managed);
         },
       })

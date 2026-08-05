@@ -61,6 +61,7 @@ import {
   snapshotComparableTables,
 } from "../../domains/schema/pipeline/managed-tables";
 import { generateSQL } from "../../domains/schema/pipeline/sql-templates/index";
+import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
 import {
   resolveCollectionTableName,
   resolveComponentTableName,
@@ -121,6 +122,28 @@ async function listMigrationFiles(migrationsDir: string): Promise<string[]> {
     if ((err as { code?: string }).code === "ENOENT") return [];
     throw err;
   }
+}
+
+/**
+ * The junction names a config states outright.
+ *
+ * A many-to-many field may carry `options.junctionTable`, and both production
+ * naming sites use it verbatim rather than the `<mainA>_<mainB>_<field>`
+ * convention — so it cannot be inferred from a name, only read from the field
+ * that declares it.
+ */
+function customJunctionNames(collections: readonly unknown[]): string[] {
+  const names: string[] = [];
+  for (const raw of collections) {
+    const fields =
+      (raw as { fields?: { options?: { junctionTable?: unknown } }[] })
+        .fields ?? [];
+    for (const field of fields) {
+      const custom = field.options?.junctionTable;
+      if (typeof custom === "string" && custom.length > 0) names.push(custom);
+    }
+  }
+  return names;
 }
 
 /**
@@ -202,6 +225,15 @@ export interface BaselineCoreDeps {
   /** From `config.localization.defaultLocale`; defaults to `"en"`. */
   defaultLocale?: string;
   /**
+   * Junction tables the schema names outright.
+   *
+   * A many-to-many field may carry `options.junctionTable`, which the
+   * production DDL uses verbatim, so no naming convention can infer it. A
+   * junction recorded in the snapshot makes the next `migrate:create` see an
+   * undeclared table and emit `DROP TABLE`, taking the relationship rows.
+   */
+  knownJunctions?: ReadonlySet<string>;
+  /**
    * From `config.db.migrateLockTtlSeconds`.
    *
    * The stored expiry is what every later command reads to decide whether a
@@ -265,8 +297,9 @@ export async function baselineCore(
       const declared = new Set(
         (deps.localizedEntities ?? []).map(e => e.tableName)
       );
-      const junctionTables = junctionTablesAmong(managed, declared);
-      const snapshotTables = snapshotComparableTables(managed, declared);
+      const known = deps.knownJunctions ?? new Set<string>();
+      const junctionTables = junctionTablesAmong(managed, declared, known);
+      const snapshotTables = snapshotComparableTables(managed, declared, known);
 
       const live = await introspectLiveSnapshot(db, dialect, snapshotTables);
 
@@ -468,6 +501,29 @@ export async function runMigrateBaseline(
     );
 
     const config = configResult.config;
+    // The Builder's entities count as declared too. `migrate:create` merges
+    // them from `ui-schema.json`, and a Builder collection whose table name
+    // resembles the generated junction shape would otherwise be classified as
+    // derived — left out of the snapshot while the SQL still builds it.
+    let uiEntityTables: string[] = [];
+    let uiJunctions: string[] = [];
+    try {
+      const manifest = await loadUiSchema({
+        projectRoot: cwd,
+        uiSchemaFile: config.db.uiSchemaFile,
+      });
+      uiEntityTables = [
+        ...(manifest.collections ?? []).map(e =>
+          resolveCollectionTableName(e.slug)
+        ),
+        ...(manifest.singles ?? []).map(e =>
+          resolveSingleTableName({ slug: e.slug })
+        ),
+      ];
+      uiJunctions = customJunctionNames(manifest.collections ?? []);
+    } catch {
+      // No manifest is the ordinary code-first case.
+    }
     const result = await baselineCore({
       adapter,
       db,
@@ -479,6 +535,11 @@ export async function runMigrateBaseline(
       // `migrate:create` reduces them so the emitted DDL matches what a
       // generated companion migration would have produced.
       localizedEntities: [
+        ...uiEntityTables.map(tableName => ({
+          slug: tableName,
+          tableName,
+          fields: [],
+        })),
         ...toMinimalEntities(config.collections, e =>
           resolveCollectionTableName(e.slug, e.dbName)
         ),
@@ -491,6 +552,10 @@ export async function runMigrateBaseline(
       ],
       defaultLocale: config.localization?.defaultLocale,
       ttlSeconds: config.db.migrateLockTtlSeconds,
+      knownJunctions: new Set([
+        ...customJunctionNames(config.collections),
+        ...uiJunctions,
+      ]),
     });
 
     if (result.kind === "already-baselined") {

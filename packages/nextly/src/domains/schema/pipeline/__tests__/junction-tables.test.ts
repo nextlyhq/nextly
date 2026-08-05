@@ -62,4 +62,20 @@ describe("junctionTablesAmong", () => {
   it("does not treat a table as its own junction", () => {
     expect([...junctionTablesAmong(["dc_posts"])]).toEqual([]);
   });
+
+  it("takes a custom junction name the config states outright", () => {
+    // A many-to-many field may carry `options.junctionTable`, and both
+    // production naming sites use it verbatim rather than the generated
+    // convention — so nothing about the name reveals what it is. Missed, it is
+    // recorded as a first-class table and the next diff drops it, taking the
+    // relationship rows.
+    const live = ["dc_posts", "dc_tags", "dc_custom_link"];
+    expect([...junctionTablesAmong(live, new Set(), new Set())]).toEqual([]);
+    expect([
+      ...junctionTablesAmong(live, new Set(), new Set(["dc_custom_link"])),
+    ]).toEqual(["dc_custom_link"]);
+    expect(
+      snapshotComparableTables(live, new Set(), new Set(["dc_custom_link"]))
+    ).toEqual(["dc_posts", "dc_tags"]);
+  });
 });

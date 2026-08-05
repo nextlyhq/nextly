@@ -86,13 +86,23 @@ export function isSnapshotComparableTable(name: string): boolean {
  */
 export function junctionTablesAmong(
   liveTables: readonly string[],
-  declaredTables: ReadonlySet<string> = new Set()
+  declaredTables: ReadonlySet<string> = new Set(),
+  knownJunctions: ReadonlySet<string> = new Set()
 ): Set<string> {
   const mains = liveTables
     .filter(name => isManagedTable(name) && !isCompanionTable(name))
     .sort();
   const junctions = new Set<string>();
   for (const table of liveTables) {
+    // A name the schema states outright, which the pattern below cannot infer:
+    // a many-to-many field may carry `options.junctionTable`, and the
+    // production DDL uses that verbatim instead of the generated convention.
+    // Callers that can read the relationship definitions pass those names in;
+    // the pattern is what remains for callers that cannot.
+    if (knownJunctions.has(table)) {
+      junctions.add(table);
+      continue;
+    }
     // A table the schema declares is never derived, whatever its name looks
     // like. A collection can legitimately resolve to `dc_posts_dc_tags_notes`
     // through its slug or `dbName`, and treating that as a junction is worse
@@ -122,9 +132,14 @@ export function junctionTablesAmong(
  */
 export function snapshotComparableTables(
   liveTables: readonly string[],
-  declaredTables: ReadonlySet<string> = new Set()
+  declaredTables: ReadonlySet<string> = new Set(),
+  knownJunctions: ReadonlySet<string> = new Set()
 ): string[] {
-  const junctions = junctionTablesAmong(liveTables, declaredTables);
+  const junctions = junctionTablesAmong(
+    liveTables,
+    declaredTables,
+    knownJunctions
+  );
   return liveTables.filter(
     name => isSnapshotComparableTable(name) && !junctions.has(name)
   );
