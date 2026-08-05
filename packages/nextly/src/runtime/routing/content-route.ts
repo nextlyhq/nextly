@@ -95,9 +95,15 @@ export interface ContentRouteConfig<TNode> {
    * draft: async ({ collection, slug }) => {
    *   const scope = await readPreviewScope(previewConfig);
    *   if (scope === null || scope.collection !== collection) return false;
-   *   return slug === (await slugOf(scope.collection, scope.entryId));
+   *   if (slug !== (await slugOf(scope.collection, scope.entryId))) return false;
+   *   return { entryId: scope.entryId };
    * }
    * ```
+   *
+   * Name the entry rather than returning a bare `true`. A slug is not unique,
+   * so a boolean grants whichever row this route resolves the path to, which
+   * need not be the one the token was minted for; `{ entryId }` is checked
+   * against the document that was actually resolved.
    *
    * **Returning `true` is an authorization decision, not a display
    * preference.** This route always resolves anonymously, and the working-draft
@@ -261,7 +267,14 @@ export function createContentRoute<TNode>(
   /** Whether a grant covers the document the path actually resolved to. */
   function grantCovers(grant: DraftGrant, entry: ContentEntry): boolean {
     if (typeof grant === "boolean") return grant;
-    return String(entry.id) === grant.entryId;
+    // Only a primitive id can be compared. An `afterRead` hook's return value
+    // REPLACES the document, so a collection that reshapes its public read can
+    // hand back a row whose id is absent or an object — and stringifying those
+    // yields `"undefined"` and `"[object Object]"`, values a grant could carry
+    // literally and thereby match a document it never named.
+    const id = entry.id;
+    if (typeof id !== "string" && typeof id !== "number") return false;
+    return String(id) === grant.entryId;
   }
 
   /** Resolve the joined slug across the configured collections (first match wins). */

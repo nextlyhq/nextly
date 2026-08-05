@@ -61,8 +61,13 @@ export interface ResolveContentOptions {
    * the failure this option exists to prevent.
    *
    * Because the two belong together, `status` defaults to `"all"` when this is
-   * set (an explicit `status` still wins), so the common case cannot be
-   * half-configured.
+   * set on a TRUSTED read (`overrideAccess: true`), so the common case cannot
+   * be half-configured. An explicit `status` still wins. The widening is
+   * deliberately limited to trusted reads: the overlay is gated per row by an
+   * update-capability probe, but widening `status` is not gated by anything, so
+   * on an enforced read it would expose every never-published entry to whoever
+   * asked. An enforced draft read therefore stays published-only, and sees
+   * pending edits only through the (gated) overlay.
    *
    * Effective only on a drafts-enabled, non-localized collection with the
    * `status` lifecycle, and gated by an update-capability probe: a caller who

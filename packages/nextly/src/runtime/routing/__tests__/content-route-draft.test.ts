@@ -22,7 +22,14 @@ function stubReader(
     id: "1",
     slug: "a",
     status: "published",
-  }
+  },
+  /**
+   * Apply the lifecycle scope the way the query service does, so a
+   * never-published row is only returned to a read that widened `status`.
+   * Off by default: most cases here are about which arguments the route sends,
+   * and a stub that answers regardless keeps them independent of the filter.
+   */
+  options: { enforceStatus?: boolean } = {}
 ): {
   reader: NextlyContentReader;
   calls: FindArgs[];
@@ -33,7 +40,11 @@ function stubReader(
   const reader: NextlyContentReader = {
     find: async (args): Promise<ListResult<Record<string, unknown>>> => {
       calls.push(args);
-      const items = row ? [row] : [];
+      const withheld =
+        options.enforceStatus === true &&
+        args.status !== "all" &&
+        row?.status !== "published";
+      const items = row && !withheld ? [row] : [];
       return {
         items,
         meta: {
@@ -236,6 +247,38 @@ describe("the content route's draft decision", () => {
 
     expect((rightEntry as ContentEntry)._isWorkingDraft).toBe(true);
     expect(byIdCalls).toHaveLength(1);
+  });
+
+  it("refuses a grant when the resolved document has no comparable id", async () => {
+    // An `afterRead` hook's return value REPLACES the document, so a collection
+    // that reshapes its public read can hand back a row whose id is absent or
+    // structured. Stringifying those yields `"undefined"` and
+    // `"[object Object]"` — values a grant can carry literally.
+    //
+    // What that would cost is a disclosure, not a degraded preview: a grant the
+    // route honours is read with the lifecycle scope widened to `"all"`, so the
+    // row it matches by accident can be one that was NEVER published.
+    for (const id of [undefined, { nested: "1" }]) {
+      const { reader, calls } = stubReader(
+        { id, slug: "a", status: "draft" },
+        { enforceStatus: true }
+      );
+
+      const route = createContentRoute({
+        collections: ["pages"],
+        nextly: reader,
+        render: (row: ContentEntry) => row,
+        buildMetadata: (row: ContentEntry) => ({ title: String(row.slug) }),
+        draft: () => ({ entryId: String(id) }),
+      });
+
+      // The never-published row is the only one there is, so refusing the grant
+      // leaves nothing to serve. Asserting the REFUSAL rather than the throw:
+      // the route re-read published-only, which is what a rejected grant does
+      // and what returning the row instead would have skipped.
+      await expect(route.ContentPage(params)).rejects.toThrow();
+      expect(calls.map(call => call.status)).toEqual(["all", "published"]);
+    }
   });
 
   it("never pre-renders draft paths", async () => {
