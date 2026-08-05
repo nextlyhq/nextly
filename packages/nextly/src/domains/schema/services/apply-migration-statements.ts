@@ -55,7 +55,23 @@ export async function applyMigrationStatements(
   adapter: MigrationStatementRunner,
   migrationSQL: string
 ): Promise<void> {
-  for (const statement of splitStatements([migrationSQL])) {
+  await applyStatements(adapter, splitStatements([migrationSQL]));
+}
+
+/**
+ * The same tolerance for statements a planner has already separated.
+ *
+ * The companion transition arrives this way — as a list rather than one rendered migration — and it
+ * needs the identical rule: half of a localized entity's storage lives in the companion, so a
+ * guarantee that the main table can be re-applied but the companion cannot is not a guarantee at
+ * all. Unlike the main table this is NOT MySQL-specific: the companion's ADD COLUMN statements
+ * carry no `IF NOT EXISTS` on any dialect, so re-running fails everywhere.
+ */
+export async function applyStatements(
+  adapter: MigrationStatementRunner,
+  statements: readonly string[]
+): Promise<void> {
+  for (const statement of statements) {
     try {
       await adapter.executeQuery(statement);
     } catch (error) {

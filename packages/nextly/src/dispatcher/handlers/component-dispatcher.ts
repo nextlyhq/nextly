@@ -51,7 +51,10 @@ import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detect
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import { isIdempotencyError } from "../../domains/schema/pipeline/sql-statement-utils";
 import type { DesiredFieldGroup } from "../../domains/schema/pipeline/types";
-import { applyMigrationStatements } from "../../domains/schema/services/apply-migration-statements";
+import {
+  applyMigrationStatements,
+  applyStatements,
+} from "../../domains/schema/services/apply-migration-statements";
 import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
@@ -281,9 +284,10 @@ async function reconcileComponentCompanion(args: {
       }
     }
   }
-  for (const stmt of plan.statements) {
-    await adapter.executeQuery(stmt);
-  }
+  // Tolerant for the same reason the main table is: a create that meets a companion already left
+  // by an earlier attempt asks to ADD columns that are there, and those statements carry no
+  // `IF NOT EXISTS` on any dialect. The matcher still refuses a duplicate ROW.
+  await applyStatements(adapter, plan.statements);
 
   // The transition record describes a companion that no longer exists, so it stops being true
   // the moment the disable succeeds. Left behind, it would refuse the next enable's real

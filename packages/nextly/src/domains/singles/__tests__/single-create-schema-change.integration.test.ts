@@ -184,6 +184,44 @@ for (const dialect of getConfiguredTestDialects()) {
     });
 
     /**
+     * The same repair for a LOCALIZED single, where there are two tables to find already present.
+     *
+     * The companion reconcile is told `wasLocalized: false` and `oldFields: []`, because from the
+     * registry's point of view this really is a brand-new localized single — the row describing the
+     * previous attempt is gone. Meeting a companion that already exists, it must not try to add
+     * columns that are already there.
+     */
+    it("re-applies over a localized single's tables", async () => {
+      current = await createTestNextly({
+        dialect,
+        localization: { locales: ["en", "es"], defaultLocale: "en" },
+      });
+
+      const payload = {
+        slug: localized,
+        label: "Localized",
+        localized: true,
+        fields: [
+          { name: "headline", type: "text", localized: true },
+          { name: "views", type: "number" },
+        ],
+      };
+
+      await dispatchSingles("createSingle", {}, payload);
+      const table = `single_${localized}`;
+      expect(await current.adapter.tableExists(`${table}_locales`)).toBe(true);
+
+      const registry = current.getService("singleRegistryService");
+      await registry.deleteSingle(localized, { force: true });
+
+      await dispatchSingles("createSingle", {}, payload);
+
+      const row = await registryRow(current, localized);
+      expect(row?.migrationStatus).toBe("applied");
+      expect(await current.adapter.tableExists(`${table}_locales`)).toBe(true);
+    });
+
+    /**
      * 🔴 The dangerous half of tolerating a re-run: the table is there, but it is the WRONG table.
      *
      * `CREATE TABLE IF NOT EXISTS` no-ops against an existing table on every dialect, and the

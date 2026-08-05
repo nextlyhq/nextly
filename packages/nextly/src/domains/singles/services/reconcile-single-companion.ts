@@ -35,6 +35,7 @@ import {
 } from "../../i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../../i18n/runtime/companion-registration";
 import { isIdempotencyError } from "../../schema/pipeline/sql-statement-utils";
+import { applyStatements } from "../../schema/services/apply-migration-statements";
 
 /** Everything the companion reconcile needs about the save that triggered it. */
 export interface ReconcileSingleCompanionArgs {
@@ -134,9 +135,14 @@ export async function reconcileSingleCompanion(
       }
     }
   }
-  for (const stmt of plan.statements) {
-    await adapter.executeQuery(stmt);
-  }
+  // 🔴 Tolerant, because a create can meet a companion that is already there.
+  //
+  // Repairing an orphan — main and companion present, the registry row gone — reaches here as a
+  // brand-new localized single, since that is all the registry can say: `wasLocalized: false` and
+  // no old fields. The plan then asks to ADD every translatable column, and those statements carry
+  // no `IF NOT EXISTS` on ANY dialect, so the repair failed everywhere rather than only on MySQL.
+  // The same rule the main table gets, from the same matcher, which still refuses a duplicate ROW.
+  await applyStatements(adapter, plan.statements);
 
   // The transition record describes a companion that no longer exists, so it stops being true the
   // moment the disable succeeds. Left behind, it would refuse the next enable's real source locale
