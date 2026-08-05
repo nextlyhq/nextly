@@ -25,8 +25,6 @@
  * @since 1.0.0
  */
 
-import { randomUUID } from "node:crypto";
-
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
@@ -305,53 +303,6 @@ export class SingleRegistryService extends BaseRegistryService<
 
   async getPendingMigrations(): Promise<DynamicSingleRecord[]> {
     return this.getRecordsWithPendingMigrations();
-  }
-
-  /**
-   * Take ownership of a Single whose last schema change FAILED, so exactly one retry can proceed.
-   *
-   * 🔴 A compare-and-swap, not a read followed by a write. Two retries can both observe `failed`
-   * before either writes, and both would then run their own DDL against one slug while each
-   * believes it owns the row. The database decides instead: the status is part of the WHERE, so the
-   * update matches for the first caller and matches nothing for the second.
-   *
-   * `updateSingle` cannot serve this. It writes `migration_status` only when the field hash or the
-   * status flag changes, so the commonest retry of all — the same payload again — would leave the
-   * row saying `failed` for the whole time the DDL was running, and every concurrent retry would
-   * see an unclaimed row.
-   *
-   * @returns true when this caller claimed it, false when someone else already had.
-   */
-  async claimFailedForRetry(slug: string): Promise<boolean> {
-    // 🔴 A compare-and-swap that does not depend on RETURNING or on an affected-row count.
-    //
-    // Counting returned rows is wrong on MySQL, which has no RETURNING: the adapter emulates it by
-    // re-reading with the same predicate, and this update has just falsified that predicate, so a
-    // successful claim reports zero rows on the one dialect it succeeded on.
-    //
-    // So the claim leaves a mark instead. Only one caller's update can match while the status is
-    // still `failed`; every other one matches nothing and cannot have written its token. Reading
-    // the row back therefore names the winner on every dialect, with no driver-specific plumbing.
-    const token = randomUUID();
-    await this.adapter.update(
-      await this.resolveRegistryTableName(),
-      {
-        migration_status: "pending",
-        last_migration_id: token,
-        updated_at: this.formatDateForDb(),
-      },
-      {
-        and: [
-          { column: "slug", op: "=", value: slug },
-          // The WHERE side addresses the Drizzle property; the data side writes the physical
-          // column, which is the split `updateRecordMigrationStatus` already uses.
-          { column: "migrationStatus", op: "=", value: "failed" },
-        ],
-      }
-    );
-
-    const claimed = await this.getSingleBySlug(slug);
-    return claimed?.lastMigrationId === token;
   }
 
   // ============================================================

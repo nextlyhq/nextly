@@ -464,13 +464,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       const owner = (await svc.registry.getAllSingles()).find(
         s => s.tableName === tableName
       );
-      // 🔴 Except when the owner is an unfinished attempt at THIS single. A create writes its
-      // intent before touching the database, so an interrupted one leaves a row that still owns
-      // the name. Refusing here would make that row a permanent blocker rather than the recovery
-      // aid it is meant to be — the service adopts it and re-runs the idempotent DDL instead.
-      const ownerIsUnfinishedRetry =
-        owner?.slug === b.slug && owner?.migrationStatus !== "applied";
-      if (owner && !ownerIsUnfinishedRetry) {
+      if (owner) {
         throw NextlyError.duplicate({
           logContext: {
             reason: "single-table-conflict",

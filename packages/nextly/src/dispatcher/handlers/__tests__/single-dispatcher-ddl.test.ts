@@ -145,7 +145,11 @@ async function ddlFor(
   const registry = wireRegistry();
   await dispatchSingles("createSingle", {}, payload);
 
-  const recorded = registry.updateMigrationStatus.mock.calls[0]?.[1];
+  const recorded = (
+    registry.registerSingle.mock.calls[0]?.[0] as
+      | { migrationStatus?: string }
+      | undefined
+  )?.migrationStatus;
   expect(recorded, "the create recorded its own outcome").toBe("applied");
 
   return executed.join("\n");

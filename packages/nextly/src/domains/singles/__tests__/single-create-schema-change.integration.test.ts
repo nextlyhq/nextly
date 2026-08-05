@@ -184,41 +184,6 @@ for (const dialect of getConfiguredTestDialects()) {
     });
 
     /**
-     * 🔴 Exactly ONE retry may own a failed create, even when two start together.
-     *
-     * Reading `failed` and then writing is not enough: both retries can observe it before either
-     * writes, and both would then run their own DDL against one slug. The claim puts the status in
-     * the WHERE clause so the database picks the winner. Issued concurrently here rather than in
-     * sequence, because a sequential pair would pass even with the check-then-act version.
-     */
-    it("lets only one of two concurrent retries take over", async () => {
-      current = await createTestNextly({ dialect });
-
-      const payload = {
-        slug: plain,
-        label: "Plain",
-        fields: [{ name: "body", type: "text" }],
-      };
-      await dispatchSingles("createSingle", {}, payload);
-
-      const registry = current.getService("singleRegistryService");
-      await registry.updateMigrationStatus(plain, "failed");
-
-      // The same payload on purpose: that is the retry a user actually makes, and the one whose
-      // unchanged field hash stops `updateSingle` from re-flagging the row.
-      const outcomes = await Promise.allSettled([
-        dispatchSingles("createSingle", {}, payload),
-        dispatchSingles("createSingle", {}, payload),
-      ]);
-
-      const claimed = outcomes.filter(o => o.status === "fulfilled");
-      expect(claimed).toHaveLength(1);
-      expect((await registryRow(current, plain))?.migrationStatus).toBe(
-        "applied"
-      );
-    });
-
-    /**
      * 🔴 Enabling localization in the same request that sends fields must COMPLETE.
      *
      * A required field moving to the companion is still a NOT NULL column on the main table until
@@ -330,32 +295,6 @@ for (const dialect of getConfiguredTestDialects()) {
     });
 
     /**
-     * 🔴 The other half of adoption: a create still in flight must NOT be taken over.
-     *
-     * `pending` is indistinguishable from "running right now". Adopting one would overwrite its
-     * row with a second payload while its DDL is still building the first schema, after which the
-     * original confirms `applied` against a description that is no longer its own. Refusing keeps
-     * the two requests from interleaving; serialising them properly is the migration lock's job.
-     */
-    it("refuses to take over a create that has not recorded an outcome", async () => {
-      current = await createTestNextly({ dialect });
-
-      const payload = {
-        slug: plain,
-        label: "Plain",
-        fields: [{ name: "body", type: "text" }],
-      };
-      await dispatchSingles("createSingle", {}, payload);
-
-      const registry = current.getService("singleRegistryService");
-      await registry.updateMigrationStatus(plain, "pending");
-
-      await expect(
-        dispatchSingles("createSingle", {}, payload)
-      ).rejects.toThrow();
-    });
-
-    /**
      * 🔴 A LOCALIZED single's repair is REFUSED, deliberately, and this pins that decision.
      *
      * The companion reconcile is told `wasLocalized: false` and `oldFields: []`, because from the
@@ -402,44 +341,6 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(row?.migrationStatus).toBe("failed");
       // The tables are untouched by the refusal — nothing is destroyed, the operator is told.
       expect(await current.adapter.tableExists(`${table}_locales`)).toBe(true);
-    });
-
-    /**
-     * 🔴 An unfinished attempt must not become a permanent blocker.
-     *
-     * Writing the intent first is only worth doing if something can finish it. The row owns the
-     * slug the moment it is written, so a create interrupted before it could record its outcome
-     * would otherwise be refused as a duplicate for ever, leaving the user no way forward short of
-     * editing the registry by hand — strictly worse than the orphan table this ordering prevents,
-     * because an orphan at least left the slug free.
-     */
-    it("resumes a create that recorded a failure", async () => {
-      current = await createTestNextly({ dialect });
-
-      const payload = {
-        slug: plain,
-        label: "Plain",
-        fields: [{ name: "body", type: "text" }],
-      };
-
-      await dispatchSingles("createSingle", {}, payload);
-
-      // The state that is safe to take over: the attempt RECORDED its own failure, so nothing is
-      // still running against this slug. A `pending` row is deliberately NOT adopted — it is
-      // equally the state of a create that is in flight right now, and serialising that is the
-      // migration lock's job rather than a second mechanism here.
-      const registry = current.getService("singleRegistryService");
-      await registry.updateMigrationStatus(plain, "failed");
-      expect((await registryRow(current, plain))?.migrationStatus).toBe(
-        "failed"
-      );
-
-      // The retry a user would make. It has to succeed rather than collide with its own leftovers.
-      await dispatchSingles("createSingle", {}, payload);
-
-      expect((await registryRow(current, plain))?.migrationStatus).toBe(
-        "applied"
-      );
     });
   });
 }
