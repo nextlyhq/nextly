@@ -109,10 +109,28 @@ export function isUsableNamedClass(value: unknown): value is NamedClass {
 export function usableNamedClasses(
   classes: readonly NamedClass[]
 ): NamedClass[] {
+  return usableNamedClassPositions(classes).map(position => classes[position]);
+}
+
+/**
+ * The same list, as positions in the stored array rather than as entries.
+ *
+ * Which SLOT was written, not which value. A caller can supply one object in two slots, and only
+ * the first is written — asking "was this entry written" answers yes for the slot that was
+ * dropped, so the duplicate goes unreported and an editor is never told which slot to repair.
+ *
+ * Shares the ordering and the claim rules with `usableNamedClasses` rather than restating them,
+ * because the list of what is written and the list of where it was written have to be the same
+ * list.
+ */
+export function usableNamedClassPositions(
+  classes: readonly NamedClass[]
+): number[] {
   const takenSlugs = new Set<string>();
   const takenIds = new Set<string>();
-  const usable: NamedClass[] = [];
-  for (const cls of orderedNamedClasses(classes)) {
+  const usable: number[] = [];
+  for (const position of orderedNamedClassPositions(classes)) {
+    const cls = classes[position];
     if (!isUsableNamedClass(cls)) continue;
     if (takenSlugs.has(cls.slug)) continue;
     // An id claimed twice is as unusable as a name claimed twice, and quieter about it. A
@@ -123,7 +141,7 @@ export function usableNamedClasses(
     if (takenIds.has(cls.id)) continue;
     takenSlugs.add(cls.slug);
     takenIds.add(cls.id);
-    usable.push(cls);
+    usable.push(position);
   }
   return usable;
 }
