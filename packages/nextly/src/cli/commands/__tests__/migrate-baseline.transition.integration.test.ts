@@ -583,6 +583,75 @@ function runSuite(dialect: SupportedDialect): void {
     expect(files.filter(f => f.endsWith(".sql"))).toEqual([]);
   });
 
+  it("--adopt-unknown rebuilds the companion from the database, undescribed column and all", async () => {
+    // The escape hatch from the refusal above. The operator is mid-recovery and
+    // both other ways out are bad: re-declare a field they deliberately removed,
+    // or drop a column holding real translations. So the table is adopted as it
+    // stands, rendered from the live shape rather than from a config that cannot
+    // describe it.
+    await runDbSync(h, localizedConfig);
+    const companionTable = `${LOCALIZED_TABLE}_locales`;
+    expect(await tableExists(h, companionTable)).toBe(true);
+
+    const adopted = await baselineCore({
+      adapter: h.adapter,
+      db: h.db,
+      dialect: h.dialect,
+      migrationsDir: h.migrationsDir,
+      logger,
+      adoptUnknown: true,
+      localizedEntities: [
+        {
+          slug: LOCALIZED_SLUG,
+          tableName: LOCALIZED_TABLE,
+          fields: [text({ name: "summary", localized: true })],
+          status: false,
+          builtBy: "codeFirst" as const,
+        },
+      ],
+      defaultLocale: "en",
+    });
+    if (adopted.kind !== "baselined") throw new Error("expected a baseline");
+
+    const up = splitSqlStatements(
+      parseSqlSections(await readFile(adopted.sqlPath, "utf-8")).upSql
+    );
+    const companionSql = up.filter(st => st.includes(companionTable));
+    expect(companionSql).not.toEqual([]);
+    // `title` has no field describing it and is carried anyway.
+    expect(companionSql.join("\n")).toContain("title");
+    expect(companionSql.join("\n")).toMatch(/ON DELETE CASCADE/i);
+
+    // Asserted by EXECUTING the statement against a database that does not have
+    // the table and reading the result back, not by matching the text. The
+    // dialects disagree about where a key may sit and how a default is spelled,
+    // and only the server settles it.
+    const source = await introspectLiveSnapshot(h.db, h.dialect, [
+      companionTable,
+    ]);
+    const target = await makeHarness(h.dialect, "adopted");
+    try {
+      for (const stmt of up) {
+        await (target.adapter as unknown as DrizzleAdapter).executeQuery(stmt);
+      }
+
+      const rebuilt = await introspectLiveSnapshot(target.db, target.dialect, [
+        companionTable,
+      ]);
+      expect(rebuilt.tables).toEqual(source.tables);
+      // Named explicitly as well, because a deep-equal of two snapshots that
+      // both lost the composite key would still pass. It is what makes a
+      // companion row addressable per (document, locale).
+      const keyed = (rebuilt.tables[0]?.columns ?? [])
+        .filter(c => c.primaryKey === true)
+        .map(c => c.name)
+        .sort();
+      expect(keyed).toEqual(["_locale", "_parent"]);
+    } finally {
+      await target.dispose();
+    }
+  });
+
   it("rebuilds the same schema in an environment that has only the files", async () => {
     // The reason a baseline writes real SQL instead of a marker: a new
     // environment, a CI job, or `migrate:fresh` builds the schema from the
