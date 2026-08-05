@@ -74,7 +74,30 @@ function generateAddIndex(op: AddIndexOp): string {
 }
 
 function generateDropIndex(op: DropIndexOp): string {
-  return `DROP INDEX IF EXISTS ${q(op.index.name)}`;
+  // A non-unique index is never owned by a constraint, so the plain form is
+  // always correct for it.
+  if (!op.index.unique) return `DROP INDEX IF EXISTS ${q(op.index.name)}`;
+
+  // A managed unique exists in one of two physical forms on Postgres, and the
+  // name alone does not say which: `ALTER TABLE ... ADD CONSTRAINT <name>
+  // UNIQUE` (how the dynamic collection/component/user-ext schema services
+  // create a `unique: true` field) leaves an index OWNED by that constraint,
+  // while the diff's own add_index path emits `CREATE UNIQUE INDEX <name>`,
+  // which is a bare index. Postgres refuses `DROP INDEX` on the constraint-
+  // owned form — "cannot drop index ... because constraint ... requires it" —
+  // and `IF EXISTS` does not suppress that, it only suppresses a missing
+  // object. There is no single statement covering both forms, so run both
+  // idempotent drops in one DO block: dropping the constraint takes its index
+  // with it and the following DROP INDEX no-ops, while for a bare index the
+  // DROP CONSTRAINT no-ops and the DROP INDEX does the work.
+  // Emitted as two plain statements rather than a DO block: this SQL is also
+  // written verbatim into migrate:create files, and the migration runner's
+  // splitter understands quotes and semicolons but not dollar-quoting, so a
+  // DO block would be split into unterminated fragments.
+  return (
+    `ALTER TABLE ${q(op.tableName)} DROP CONSTRAINT IF EXISTS ${q(op.index.name)}; ` +
+    `DROP INDEX IF EXISTS ${q(op.index.name)}`
+  );
 }
 
 function generateAddTable(op: AddTableOp): string {

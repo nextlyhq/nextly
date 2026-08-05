@@ -8,8 +8,12 @@
 //   1. rename_table  - parent-level rename happens first; subsequent column
 //                      ops reference the new table name.
 //   2. rename_column - column-level renames within tables.
-//   3. drop_column   - column drops on tables that survive the apply.
-//   4. drop_table    - last so we don't lose tables we still need to
+//   3. drop_index    - after renames (MySQL's DROP INDEX ... ON <table>
+//                      references the current table name) and before column
+//                      drops: SQLite cannot DROP COLUMN while an index still
+//                      covers the column.
+//   4. drop_column   - column drops on tables that survive the apply.
+//   5. drop_table    - last so we don't lose tables we still need to
 //                      reference for column-level ops.
 //
 // Each op is executed via the dialect's standard call pattern:
@@ -67,15 +71,23 @@ export async function executePreResolutionOps(
 function orderForExecution(ops: Operation[]): Operation[] {
   const renameTables: Operation[] = [];
   const renameColumns: Operation[] = [];
+  const dropIndexes: Operation[] = [];
   const dropColumns: Operation[] = [];
   const dropTables: Operation[] = [];
   for (const op of ops) {
     if (op.type === "rename_table") renameTables.push(op);
     else if (op.type === "rename_column") renameColumns.push(op);
+    else if (op.type === "drop_index") dropIndexes.push(op);
     else if (op.type === "drop_column") dropColumns.push(op);
     else if (op.type === "drop_table") dropTables.push(op);
   }
-  return [...renameTables, ...renameColumns, ...dropColumns, ...dropTables];
+  return [
+    ...renameTables,
+    ...renameColumns,
+    ...dropIndexes,
+    ...dropColumns,
+    ...dropTables,
+  ];
 }
 
 // F11 PR 3: this function used to dispatch to four `buildXxxSql` helpers

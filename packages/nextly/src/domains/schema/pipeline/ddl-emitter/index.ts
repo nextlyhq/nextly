@@ -6,12 +6,21 @@ import { emitPostgresDdl } from "./postgres";
 
 // Op types the fast path can handle end-to-end on PostgreSQL.
 //
-// The four pre-resolution-handled types
+// The rename/drop pre-resolution types
 // (rename_table / rename_column / drop_column / drop_table) are
 // intentionally NOT here — they are owned by `executePreResolutionOps`,
 // which runs before this routing decision; the emitter returns an
 // empty string list for them so a stray inclusion would still be a
 // no-op rather than a double-apply.
+//
+// drop_index is ALSO pre-resolution-owned (it must run before its
+// column's drop_column — SQLite rejects DROP COLUMN on an indexed
+// column) but stays in this set for ROUTING only: an apply whose ops
+// are all additive plus index drops must keep taking the fast path
+// rather than falling back to drizzle-kit's full re-introspection
+// (which can emit destructive DDL our differ never planned — see the
+// `_pkey` incident below). The emitter returns [] for it, same as the
+// other pre-resolved types.
 //
 // The three change_* ops are explicitly listed here because punting
 // them to drizzle-kit's pushSchema caused the silent-skip class of

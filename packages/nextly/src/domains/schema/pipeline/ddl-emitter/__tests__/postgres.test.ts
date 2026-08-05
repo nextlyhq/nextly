@@ -67,6 +67,19 @@ describe("emitPostgresDdl — add_column", () => {
     };
     expect(emitPostgresDdl(drop)).toEqual([]);
   });
+
+  it("emits nothing for drop_index (pre-resolution executes it before column drops)", () => {
+    const drop: Operation = {
+      type: "drop_index",
+      tableName: "dc_authors",
+      index: {
+        name: "idx_dc_authors_avatar",
+        columns: ["avatar"],
+        unique: false,
+      },
+    };
+    expect(emitPostgresDdl(drop)).toEqual([]);
+  });
 });
 
 describe("emitPostgresDdl — add_table", () => {
