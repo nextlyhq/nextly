@@ -181,18 +181,24 @@ export function orderedNamedClassPositions(
       ? value.slice(0, MAX_NAMED_CLASS_NAME_LENGTH + 1)
       : "";
   };
-  return classes
-    .map((_unused, position) => position)
-    .sort((a, b) => {
-      const left = classes[a];
-      const right = classes[b];
-      return (
-        index(left) - index(right) ||
-        (id(left) < id(right) ? -1 : id(left) > id(right) ? 1 : 0) ||
-        // Two entries that compare equal keep their stored order. `Array.prototype.sort` is
-        // stable, so this only matters for entries whose comparison never reaches here — but
-        // stating it keeps the positions a total order rather than one that depends on it.
-        a - b
-      );
-    });
+  // Built by counting rather than by mapping the input. `Array.prototype.map` preserves a sparse
+  // array's holes, and a stored library is persisted data that can arrive with them, so the list
+  // would carry holes where positions should be and every warning built from one would address
+  // `/classes/undefined`.
+  const positions: number[] = [];
+  for (let position = 0; position < classes.length; position += 1) {
+    positions.push(position);
+  }
+  return positions.sort((a, b) => {
+    const left = classes[a];
+    const right = classes[b];
+    return (
+      index(left) - index(right) ||
+      (id(left) < id(right) ? -1 : id(left) > id(right) ? 1 : 0) ||
+      // Two entries that compare equal keep their stored order. `Array.prototype.sort` is
+      // stable, so this only matters for entries whose comparison never reaches here — but
+      // stating it keeps the positions a total order rather than one that depends on it.
+      a - b
+    );
+  });
 }

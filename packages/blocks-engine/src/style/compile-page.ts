@@ -1156,6 +1156,17 @@ export function compilePageCss(
   // Narrowed through `usableClasses` for the same reason resolution is: a class the stylesheet
   // dropped must not be put on an element, where it would match a rule some other class owns.
   const byId = new Map(usableClasses.map(cls => [cls.id, cls]));
+
+  /**
+   * Whether a stored reference could name a class at all.
+   *
+   * Length first, and before the value is hashed. A Set or a Map reads a string key in full to
+   * hash it, so an unvalidated node holding a megabyte-long id would pay that on every render —
+   * once to dedupe, once to look it up, once to apply it — for a value no class can carry, since
+   * `isUsableNamedClass` caps an id at the same bound.
+   */
+  const couldNameAClass = (id: unknown): id is string =>
+    typeof id === "string" && id.length <= MAX_NAMED_CLASS_NAME_LENGTH;
   const attributeClasses = new Map<string, string>();
   const reportedMissingClasses = new Map<string, Set<string>>();
   for (const { node, path } of nodes) {
@@ -1192,8 +1203,15 @@ export function compilePageCss(
     const readLimit = Math.min(stored.length, MAX_CLASSES_PER_NODE);
     for (let index = 0; index < readLimit; index += 1) {
       const id = stored[index];
-      if (seenIds.has(id)) continue;
-      seenIds.add(id);
+      // A string too long to name a class is not deduped, because deduping is what reads it in
+      // full. It is still kept, so it is still accounted for — reported once at each position it
+      // was stored at, which the per-node entry cap already bounds.
+      const tooLongToName =
+        typeof id === "string" && id.length > MAX_NAMED_CLASS_NAME_LENGTH;
+      if (!tooLongToName) {
+        if (seenIds.has(id)) continue;
+        seenIds.add(id);
+      }
       applied.push({ id, index });
     }
     if (stored.length > MAX_CLASSES_PER_NODE) {
@@ -1207,12 +1225,12 @@ export function compilePageCss(
       });
     }
     for (const { id, index } of applied) {
-      if (typeof id === "string" && byId.has(id)) continue;
+      if (couldNameAClass(id) && byId.has(id)) continue;
       const entryPath = pointer(pointer(path, "classes"), index);
       // A value that is not a string is not a class id the library could ever define, so telling
       // an author to add it there sends them to fix something that cannot be fixed that way. The
       // same shape validation calls malformed, called malformed here too.
-      if (typeof id !== "string") {
+      if (!couldNameAClass(id)) {
         pushBoundedWarning(warningAllowance, warnings, {
           path: entryPath,
           code: "invalid-classes",
@@ -1226,19 +1244,24 @@ export function compilePageCss(
       // the node, no class on the element, and nothing connecting the two — the same account
       // every other unwritten value in this compile gets. Once per id, because a second report
       // would name the same missing class and the same fix.
-      // A set per node, because the pointer above names one stored reference and a reference is
+      // A set per stored node, because the pointer above names one reference and a reference is
       // per node. Deduped across the document, the first node to list a missing class takes the
       // only report, and an author who follows that pointer and repairs it hears nothing about
       // the others. Nested rather than keyed on a joined string, so no separator has to be a
       // character an id cannot contain.
+      //
+      // Keyed by the node's PATH, not its id. A forgiving compile reads a document whose ids may
+      // repeat, and two nodes sharing one would then share a set — collapsing exactly the reports
+      // this split apart. A path is the position in the document, so it is one per stored node
+      // however corrupt the ids are.
       //
       // On the RAW id, because `describeValue` truncates and would collapse two distinct
       // references into one report. The message still uses the described form: an unvalidated
       // document can carry an enormous id, and the allowance charges paths rather than message
       // text, so interpolating the raw one returns a diagnostic its size.
       const reportedHere =
-        reportedMissingClasses.get(node.id) ?? new Set<string>();
-      reportedMissingClasses.set(node.id, reportedHere);
+        reportedMissingClasses.get(path) ?? new Set<string>();
+      reportedMissingClasses.set(path, reportedHere);
       if (reportedHere.has(id)) continue;
       reportedHere.add(id);
       pushBoundedWarning(warningAllowance, warnings, {
@@ -1261,7 +1284,7 @@ export function compilePageCss(
           // A stored reference that is not a string names nothing the library can hold, and was
           // already reported above as malformed.
           .map(entry =>
-            typeof entry.id === "string" ? byId.get(entry.id) : undefined
+            couldNameAClass(entry.id) ? byId.get(entry.id) : undefined
           )
           .filter((cls): cls is NamedClass => cls !== undefined)
       )) {

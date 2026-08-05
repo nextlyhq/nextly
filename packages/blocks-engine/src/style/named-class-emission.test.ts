@@ -808,6 +808,51 @@ describe("what a warning about one class reference points at", () => {
     expect(warnings.filter(w => w.code === "unknown-class")).toHaveLength(1);
   });
 
+  it("keeps two nodes apart when the document repeats an id", () => {
+    // A forgiving compile reads documents whose node ids repeat. Keyed by id, two stored nodes
+    // share one set and the second node's reference goes unreported — the collapse the per-node
+    // split exists to prevent, reintroduced by choosing a key the document controls.
+    const repeated = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "same",
+          type: "core/box",
+          version: 1,
+          props: {},
+          classes: ["ghost"],
+        },
+        {
+          id: "same",
+          type: "core/box",
+          version: 1,
+          props: {},
+          classes: ["ghost"],
+        },
+      ],
+    } as unknown as BlockDocument;
+
+    const { warnings } = compile(repeated, [card]);
+
+    expect(
+      warnings.filter(w => w.code === "unknown-class").map(w => w.path)
+    ).toEqual(["/nodes/0/classes/0", "/nodes/1/classes/0"]);
+  });
+
+  it("calls an id too long to name a class malformed", () => {
+    // `isUsableNamedClass` caps an id, so no class can carry a longer one. Hashing it to dedupe
+    // or to look it up reads the whole string, on every render, for a value nothing can match.
+    const enormous = "c".repeat(MAX_NAMED_CLASS_NAME_LENGTH + 1);
+    const { warnings } = compile(doc({ classes: [enormous] }), [card]);
+
+    const reported = warnings.find(
+      w => w.code === "invalid-classes" || w.code === "unknown-class"
+    );
+    expect(reported?.code).toBe("invalid-classes");
+    expect(reported?.path).toBe("/nodes/0/classes/0");
+  });
+
   it("calls a non-string entry malformed rather than unknown", () => {
     // No library can define `null`, so advising the author to add it there sends them to fix
     // something that cannot be fixed that way. Validation calls this shape malformed; so does it.
@@ -852,7 +897,11 @@ describe("two missing class ids that begin alike", () => {
   it("reports both, because they are separate repairs", () => {
     // `describeValue` truncates, so a report keyed on the described form collapses ids sharing a
     // long prefix into one and leaves the second class unreported.
-    const prefix = "ghost-".padEnd(200, "x");
+    //
+    // Long enough to be truncated in a message, short enough that the ids stay inside the length
+    // a class id may have — past that they are malformed rather than merely missing, which is a
+    // different report and would not exercise this.
+    const prefix = "ghost-".padEnd(MAX_NAMED_CLASS_NAME_LENGTH - 4, "x");
     const { warnings } = compile(
       doc({ classes: [`${prefix}-one`, `${prefix}-two`] }),
       [card]
@@ -907,5 +956,23 @@ describe("a class whose name is too long", () => {
 
     expect(warnings.map(w => w.code)).toContain("invalid-class-name");
     expect(warnings.map(w => w.code)).not.toContain("invalid-class");
+  });
+});
+
+describe("a stored class library with holes in it", () => {
+  it("reports each hole at the position it sits in", () => {
+    // Persisted data can arrive sparse, and `Array.prototype.map` preserves a sparse array's
+    // holes — so positions derived that way carry holes where indexes should be, and every
+    // warning built from one addresses `/classes/undefined`, which resolves to nothing.
+    const sparse: NamedClass[] = [];
+    sparse[2] = card;
+
+    const { warnings } = compile(doc({}), sparse);
+    const paths = warnings
+      .filter(w => w.path.startsWith("/classes/"))
+      .map(w => w.path);
+
+    expect(paths).not.toContain("/classes/undefined");
+    expect(paths).toEqual(["/classes/0", "/classes/1"]);
   });
 });
