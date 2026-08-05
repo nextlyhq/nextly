@@ -64,7 +64,12 @@ describe("pre-resolution drop_index — PostgreSQL constraint-backed uniques", (
         { name: "code", type: "text" },
         { name: "views", type: "number", index: true },
       ] as never,
-      "postgresql"
+      "postgresql",
+      // The provenance this fixture is about: its own header names form 1 as what the dynamic
+      // collection / component / user-ext schema services emit, and those are the Schema Builder's
+      // collection creator. A widthless text field resolves differently per builder, so the wrong
+      // answer here would build a table the templates under test never see.
+      { builtBy: "collection" }
     );
     await pool.query(generatePgSQL({ type: "add_table", table: spec }));
 
