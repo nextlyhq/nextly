@@ -78,7 +78,11 @@ jobs:
               correction.
           # Same reasoning as the review workflow: all GitHub access through the
           # gateway script, local-only git verbs, no raw `gh`, and Write scoped
-          # away from the gateway so it cannot be rewritten and then run.
+          # away from the gateway so it cannot be rewritten and then run. As
+          # there, this bounds where a request can go, not what the agent may
+          # disclose: the key lives in its environment and only the fork skip,
+          # the collaborator gate and key rotation bound a hijacked run.
           claude_args: |
             --allowedTools "Read,Grep,Glob,Write(.nextly-review/**),Bash(.github/scripts/review-bot-gh.sh:*),Bash(./.github/scripts/review-bot-gh.sh:*),Bash(bash .github/scripts/review-bot-gh.sh:*),Bash(${{ github.workspace }}/.github/scripts/review-bot-gh.sh:*),Bash(git show:*),Bash(git diff:*),Bash(git log:*),Bash(git merge-base:*),Bash(jq:*),Bash(rg:*),Bash(ls:*)"
+            --disallowedTools "WebSearch,WebFetch,Read(//proc/**),Read(//sys/**),Grep(//proc/**),Grep(//sys/**)"
             --max-turns 60
