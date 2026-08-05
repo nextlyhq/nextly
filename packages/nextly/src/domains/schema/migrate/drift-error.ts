@@ -126,9 +126,14 @@ export function migrationDriftError(args: MigrationDriftArgs): NextlyError {
   // only the `.sql` leaves the snapshot behind to do the same thing.
   const recovery = args.unadoptedDatabase
     ? [
-        "  Recovery — this migration cannot be applied and has to go first.",
-        "  Remove it and its snapshot (the glob covers per-dialect variants,",
-        "  which are one migration and have to go together):",
+        "  Recovery — nothing in this history can be applied, so all of it has",
+        "  to go first. `migrate:baseline` refuses a project that has ANY",
+        "  migration or snapshot, and every file here was generated against a",
+        "  schema that already exists. Move the directory aside:",
+        `          mv ${shellQuote(dirname(args.file))} ${shellQuote(`${dirname(args.file)}.pre-baseline`)}`,
+        "",
+        "  Or, if this is the only migration, remove just it and its snapshot",
+        "  (the glob covers per-dialect variants, which are one migration):",
         `          rm ${variantGlobFor(args.file, args.migration)} ${shellQuote(snapshotPathFor(args.file, args.migration))}`,
         "",
         "  Record what the database already has, once:",

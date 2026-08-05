@@ -61,8 +61,16 @@ import type { ResolvedDevOptions } from "../db-sync";
 
 const PG_URL = process.env.TEST_POSTGRES_URL ?? "";
 
-/** Unique per run so a leftover database from a crashed run is never reused. */
-const RUN_ID = randomBytes(8).toString("hex");
+/**
+ * Unique per run so a leftover database from a crashed run is never reused.
+ *
+ * Deliberately short. A junction table is named `<mainA>_<mainB>_<field>`, and
+ * PostgreSQL truncates an identifier at 63 bytes without complaining — so a
+ * long slug here would silently create a table under a different name than the
+ * one asserted, and the junction case would fail for a reason that has nothing
+ * to do with what it tests.
+ */
+const RUN_ID = randomBytes(4).toString("hex");
 
 const SLUG = `baseline_posts_${RUN_ID}`;
 const TABLE = resolveCollectionTableName(SLUG);
@@ -499,6 +507,42 @@ function runSuite(dialect: SupportedDialect): void {
     } finally {
       await target.dispose();
     }
+  });
+
+  it("keeps a relationship's junction table out of the snapshot but in the SQL", async () => {
+    // A many-to-many field creates `<mainA>_<mainB>_<field>`, which carries the
+    // managed prefix. Recorded in the snapshot, the next `migrate:create`
+    // compares it against a desired snapshot that declares only collections,
+    // singles and components, sees an extra table, and emits `DROP TABLE` —
+    // silently destroying every relationship row on the graduation path.
+    await runDbSync(h, configV1);
+    const junction = `${TABLE}_${TABLE}_related`;
+    await (h.adapter as unknown as DrizzleAdapter).executeQuery(
+      `CREATE TABLE "${junction}" (a text NOT NULL, b text NOT NULL)`
+    );
+
+    const adopted = await baselineCore({
+      adapter: h.adapter,
+      db: h.db,
+      dialect: h.dialect,
+      migrationsDir: h.migrationsDir,
+      logger,
+      localizedEntities: toMinimalEntities(configV1.collections, e =>
+        resolveCollectionTableName(e.slug, e.dbName)
+      ),
+    });
+    if (adopted.kind !== "baselined") throw new Error("expected a baseline");
+
+    const recorded = JSON.parse(
+      await readFile(adopted.snapshotPath, "utf-8")
+    ) as { snapshot: { tables: { name: string }[] } };
+    expect(recorded.snapshot.tables.map(t => t.name)).not.toContain(junction);
+
+    // But a fresh environment still needs it, so it is in the SQL.
+    const up = splitSqlStatements(
+      parseSqlSections(await readFile(adopted.sqlPath, "utf-8")).upSql
+    );
+    expect(up.filter(st => st.includes(junction))).not.toEqual([]);
   });
 
   it("refuses to give a project that already migrated a second starting point", async () => {

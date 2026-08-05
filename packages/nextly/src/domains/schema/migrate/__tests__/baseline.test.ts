@@ -227,10 +227,19 @@ describe("the drift error an unadopted database produces", () => {
     expect(error.publicMessage).toContain(
       `'${join("migrations", "20260805120000_add_localization")}'*.sql`
     );
-    const removeAt = error.publicMessage.indexOf("rm ");
-    const baselineAt = error.publicMessage.indexOf("migrate:baseline");
-    expect(removeAt).toBeGreaterThanOrEqual(0);
-    expect(removeAt).toBeLessThan(baselineAt);
+    // Clearing the WHOLE history is offered first: `migrate:baseline` refuses
+    // a project with any migration or snapshot left, so a db:sync project that
+    // generated more than one file before running `migrate` is not unblocked
+    // by removing only the one that hit drift.
+    expect(error.publicMessage).toContain(`mv '${"migrations"}'`);
+    const clearAt = error.publicMessage.indexOf("mv ");
+    // The COMMAND, not the prose: the explanation above it names
+    // `migrate:baseline` too, and matching that would compare the wrong pair.
+    const baselineAt = error.publicMessage.indexOf(
+      "pnpm nextly migrate:baseline"
+    );
+    expect(clearAt).toBeGreaterThanOrEqual(0);
+    expect(clearAt).toBeLessThan(baselineAt);
   });
 
   it("prints paths a shell can actually take", () => {
