@@ -260,8 +260,13 @@ export async function baselineCore(
       // still needs it built. The same exclusion runs in `migrate`'s drift
       // check, from the same helper, because a live snapshot that includes a
       // junction cannot match a recorded one that never could have held it.
-      const junctionTables = junctionTablesAmong(managed);
-      const snapshotTables = snapshotComparableTables(managed);
+      // The config's own tables, so a collection whose resolved name happens
+      // to look like a junction is not mistaken for one.
+      const declared = new Set(
+        (deps.localizedEntities ?? []).map(e => e.tableName)
+      );
+      const junctionTables = junctionTablesAmong(managed, declared);
+      const snapshotTables = snapshotComparableTables(managed, declared);
 
       const live = await introspectLiveSnapshot(db, dialect, snapshotTables);
 

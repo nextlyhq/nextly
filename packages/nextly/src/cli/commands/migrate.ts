@@ -662,7 +662,15 @@ export async function runFileMigrations(args: {
     // Junctions are excluded alongside companions: neither is declared by
     // config, so neither can appear in the snapshot this is compared against,
     // and including one reports drift that no migration could ever resolve.
-    const managed = snapshotComparableTables(liveTables);
+    //
+    // The snapshots on either side of this file ARE the declaration, so a
+    // table named in them is a real one however much its name resembles the
+    // `<mainA>_<mainB>_<field>` shape a relationship produces.
+    const declared = new Set([
+      ...before.tables.map(t => t.name),
+      ...target.tables.map(t => t.name),
+    ]);
+    const managed = snapshotComparableTables(liveTables, declared);
     const live = await introspectLiveSnapshot(db, dialect, managed);
     await reconcileFile({
       file: { filename, sql: m.upSql, path: m.filePath, sha256: m.checksum },

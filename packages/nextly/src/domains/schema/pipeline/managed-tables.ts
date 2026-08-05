@@ -85,13 +85,22 @@ export function isSnapshotComparableTable(name: string): boolean {
  * can reach it: `migrate`'s drift check has no config to consult.
  */
 export function junctionTablesAmong(
-  liveTables: readonly string[]
+  liveTables: readonly string[],
+  declaredTables: ReadonlySet<string> = new Set()
 ): Set<string> {
   const mains = liveTables
     .filter(name => isManagedTable(name) && !isCompanionTable(name))
     .sort();
   const junctions = new Set<string>();
   for (const table of liveTables) {
+    // A table the schema declares is never derived, whatever its name looks
+    // like. A collection can legitimately resolve to `dc_posts_dc_tags_notes`
+    // through its slug or `dbName`, and treating that as a junction is worse
+    // than missing a real one: it is left out of the recorded snapshot but
+    // still built by the SQL, so the next `migrate:create` sees a declared
+    // collection with no table behind it and emits `CREATE TABLE` for one the
+    // baseline has already created.
+    if (declaredTables.has(table)) continue;
     for (const a of mains) {
       if (table === a) continue;
       for (const b of mains) {
@@ -112,9 +121,10 @@ export function junctionTablesAmong(
  * are standing beside it.
  */
 export function snapshotComparableTables(
-  liveTables: readonly string[]
+  liveTables: readonly string[],
+  declaredTables: ReadonlySet<string> = new Set()
 ): string[] {
-  const junctions = junctionTablesAmong(liveTables);
+  const junctions = junctionTablesAmong(liveTables, declaredTables);
   return liveTables.filter(
     name => isSnapshotComparableTable(name) && !junctions.has(name)
   );
