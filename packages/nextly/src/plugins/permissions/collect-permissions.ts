@@ -50,7 +50,7 @@ const SINGLE_ACTIONS = new Set(["read", "update"]);
 // `owner`, and `markOrphanedPermissions` only considers owned rows. Letting the
 // declaration through would put a permission the seeder depends on at risk of
 // being swept the day the plugin is removed.
-const ADOPTED_LIFECYCLE_ACTIONS = new Set(["publish", "unpublish"]);
+export const ADOPTED_LIFECYCLE_ACTIONS = new Set(["publish", "unpublish"]);
 
 /**
  * The parts of a config a permission collector reads.
@@ -87,6 +87,12 @@ export function collectCustomPermissions(
 ): CollectedPermission[] {
   const collectionSlugs = new Set((config.collections ?? []).map(c => c.slug));
   const singleSlugs = new Set((config.singles ?? []).map(s => s.slug));
+  const lowerCollectionSlugs = new Set(
+    [...collectionSlugs].map(slug => slug.toLowerCase())
+  );
+  const lowerSingleSlugs = new Set(
+    [...singleSlugs].map(slug => slug.toLowerCase())
+  );
   const seen = new Map<string, string>(); // `${action}:${resource}` -> first owner
   const out: CollectedPermission[] = [];
 
@@ -113,12 +119,18 @@ export function collectCustomPermissions(
         "system-resource-reserved"
       );
     }
+    // Both halves read in lower case, because the seeder decides the same question that way:
+    // `ensurePermission` matches an existing row with `LOWER(action) = LOWER(action)`. Left
+    // case-sensitive here, `{ action: "Publish", resource: "Posts" }` is collected as a custom
+    // permission while the seeder recognises it as the seeded `publish/posts` and withholds it —
+    // so a role bundle and a generated type name a slug no row was ever written under.
+    const entitySlug = resource.toLowerCase();
     const ownedByEntity =
-      collectionSlugs.has(resource) || singleSlugs.has(resource);
+      lowerCollectionSlugs.has(entitySlug) || lowerSingleSlugs.has(entitySlug);
 
     // Redundant with what the seeder now emits, and valid before it did. Drop
     // it and carry on rather than failing the boot of an app that upgraded.
-    if (ADOPTED_LIFECYCLE_ACTIONS.has(action) && ownedByEntity) {
+    if (ADOPTED_LIFECYCLE_ACTIONS.has(action.toLowerCase()) && ownedByEntity) {
       return;
     }
 
@@ -138,6 +150,11 @@ export function collectCustomPermissions(
     out.push({
       action,
       resource,
+      // Composed from the identity exactly as stored, not from a normalized copy of it. The slug
+      // is what a route guard declares, and `parsePermissionSlug` turns that back into an action
+      // and a resource which `hasPermission` matches with `eq()` — case-sensitively. Composing
+      // from lower-cased halves while the row keeps the declared casing breaks that round trip,
+      // and a role holding the grant is denied by a guard naming the permission it holds.
       slug: permissionSlug(action, resource),
       name: perm.label ?? permissionName(action, resource),
       description: perm.description,

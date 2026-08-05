@@ -1,9 +1,10 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { sql, eq } from "drizzle-orm";
+import { sql, eq, and } from "drizzle-orm";
 
 import type { RBACDatabaseInstance } from "@nextly/types/rbac-operations";
 
 import type { CollectedPermission } from "../../../plugins/permissions/collect-permissions";
+import { ADOPTED_LIFECYCLE_ACTIONS } from "../../../plugins/permissions/collect-permissions";
 import { SYSTEM_RESOURCES, permissionSlug } from "../../../schemas/_zod/rbac";
 import { BaseService } from "../../../services/base-service";
 import type { Logger } from "../../../services/shared";
@@ -281,6 +282,29 @@ const SYSTEM_PERMISSIONS: SystemPermissionDef[] = [
  * await seedService.assignNewPermissionsToSuperAdmin(result.newPermissionIds);
  * ```
  */
+/**
+ * The actions the built-in seeder creates for every collection and every single.
+ *
+ * Stated once because two things read them: the seeding loops below, and the check that decides
+ * whether a plugin may claim a permission. A second copy is how the reservation drifted from what
+ * is actually seeded in the first place.
+ */
+const COLLECTION_SEEDED_ACTIONS = [
+  "create",
+  "read",
+  "update",
+  "delete",
+  "publish",
+  "unpublish",
+] as const;
+
+const SINGLE_SEEDED_ACTIONS = [
+  "read",
+  "update",
+  "publish",
+  "unpublish",
+] as const;
+
 export class PermissionSeedService extends BaseService {
   private _permissionService?: PermissionService;
   private _rolePermissionService?: RolePermissionService;
@@ -370,14 +394,7 @@ export class PermissionSeedService extends BaseService {
   async seedCollectionPermissions(collectionSlug: string): Promise<SeedResult> {
     const result = this.emptySeedResult();
     const label = this.slugToLabel(collectionSlug);
-    const actions = [
-      "create",
-      "read",
-      "update",
-      "delete",
-      "publish",
-      "unpublish",
-    ] as const;
+    const actions = COLLECTION_SEEDED_ACTIONS;
 
     for (const action of actions) {
       const actionLabel = action.charAt(0).toUpperCase() + action.slice(1);
@@ -422,7 +439,7 @@ export class PermissionSeedService extends BaseService {
   async seedSinglePermissions(singleSlug: string): Promise<SeedResult> {
     const result = this.emptySeedResult();
     const label = this.slugToLabel(singleSlug);
-    const actions = ["read", "update", "publish", "unpublish"] as const;
+    const actions = SINGLE_SEEDED_ACTIONS;
 
     for (const action of actions) {
       const actionLabel = action.charAt(0).toUpperCase() + action.slice(1);
@@ -517,13 +534,91 @@ export class PermissionSeedService extends BaseService {
    * `(action, resource)` unique index + `ensurePermission` make re-seeding a
    * no-op. New IDs are returned for super-admin assignment by the caller.
    */
+  /**
+   * Give a built-in permission back to the presets, on a database that already got it wrong.
+   *
+   * Ownership is what `role-presets.ts` reads to decide a permission is a plugin's, so a row left
+   * attributed goes on being withheld from Editor however the declaration is treated now. Matched
+   * case-insensitively, the way `ensurePermission` matches.
+   *
+   * `orphanedAt` is cleared with it, and has to be: the orphan sweep skips a row with no owner, so
+   * a permission marked while it was misattributed — declared, then absent for one boot, then
+   * declared again — would never be unmarked by anything, and `listPermissions` filters marked
+   * rows out before the presets are seeded. The permission would exist, and its collection would
+   * exist, and Editor would still not be granted it. This is the same reconciliation
+   * `ensurePermission` performs for a row it writes; a row withheld from it needs it too.
+   */
+  private async returnPermissionToPresets(
+    action: string,
+    resource: string
+  ): Promise<void> {
+    const { permissions } = this.tables;
+    try {
+      await (this.db as RBACDatabaseInstance)
+        .update(permissions)
+        .set({ owner: null, orphanedAt: null })
+        .where(
+          and(
+            sql`LOWER(${permissions.action}) = LOWER(${action})`,
+            sql`LOWER(${permissions.resource}) = LOWER(${resource})`
+          )
+        );
+    } catch {
+      // The table may predate the column on a partially migrated database. Nothing is written and
+      // the permission keeps whatever it had, which is the state this repair found it in.
+    }
+  }
+
   async seedCustomPermissions(
     perms: CollectedPermission[]
   ): Promise<SeedResult> {
     const result = this.emptySeedResult();
+    const builtIn = await this.builtInOwnedPermissions();
 
     for (const perm of perms) {
       result.total++;
+      // A permission the built-in seeder owns is not a plugin's to claim, however it was
+      // declared. `collectCustomPermissions` refuses these from the CONFIG, but it decides what
+      // an entity is from the config alone, so a Schema Builder collection — which exists only in
+      // `dynamic_collections` — is invisible to it and its permissions were collected as custom.
+      //
+      // The consequence is not cosmetic. Attaching an owner makes the row look plugin-provided,
+      // and the role presets grant Editor on `!isSystem && !isPlugin`, so a Builder collection's
+      // publish permission silently stopped being granted — and became eligible for the orphan
+      // sweep the day the plugin was removed.
+      //
+      // Decided here rather than at collection time because this is the layer that knows: the
+      // list below is read from the database, which the pure collector deliberately cannot touch.
+      // Compared in lower case, because `ensurePermission` matches an existing row with
+      // `LOWER(action) = LOWER(action)`. An exact-match guard here is bypassed by a declaration
+      // that differs only in case — `{ action: "Publish", resource: "Reports" }` walks straight
+      // past it and then patches the seeded `publish/reports` row anyway.
+      //
+      // Only the ADOPTED LIFECYCLE actions are held back, which is the same line the collector
+      // draws for entities it can see. Held back because ownership is what withholds the Editor
+      // grant: the presets grant on `!isSystem && !isPlugin`, so a `publish` declaration landing
+      // on a Builder collection's own row stops that collection being publishable by an editor.
+      //
+      // A CRUD collision is deliberately left owned by its declarer. Withholding ownership there
+      // would leave the row unowned and therefore granted to Editor by the presets, reaching a
+      // plugin route guarded by `delete-reports` that is protected today precisely because the
+      // plugin owns it. Refusing such a declaration outright belongs at boot validation, before
+      // anything is served, rather than here where the rows are being written.
+      if (
+        ADOPTED_LIFECYCLE_ACTIONS.has(perm.action.toLowerCase()) &&
+        builtIn.has(
+          `${perm.action.toLowerCase()}:${perm.resource.toLowerCase()}`
+        )
+      ) {
+        // Repaired, not merely skipped. On a database seeded by the old behaviour the row already
+        // carries `owner = <plugin>`, and nothing else revisits it: `markOrphanedPermissions`
+        // leaves an attribution alone while the declaration is still there. Withholding ownership
+        // from here on would fix new installs and leave every upgraded one exactly as broken —
+        // the Editor grant still missing, for the same reason.
+        await this.returnPermissionToPresets(perm.action, perm.resource);
+        result.skipped++;
+        continue;
+      }
       try {
         const ensured = await this.permissionService.ensurePermission(
           perm.action,
@@ -952,6 +1047,38 @@ export class PermissionSeedService extends BaseService {
     }
 
     return result;
+  }
+
+  /**
+   * The `${action}:${resource}` pairs the built-in seeders own.
+   *
+   * Read from the same slug sources the seeding passes read — which include entities that exist
+   * only in the database — and the same action lists they seed. Deriving it any other way is what
+   * let the reservation and the seeder disagree about which entities exist.
+   *
+   * A database that cannot answer yields an empty set, leaving today's behaviour rather than
+   * refusing every declared permission on a fresh or half-migrated install.
+   */
+  private async builtInOwnedPermissions(): Promise<Set<string>> {
+    const owned = new Set<string>();
+    try {
+      // Keyed in lower case, matching how `ensurePermission` finds an existing row.
+      for (const slug of await this.getAllCollectionSlugs()) {
+        for (const action of COLLECTION_SEEDED_ACTIONS) {
+          owned.add(`${action}:${slug.toLowerCase()}`);
+        }
+      }
+      for (const slug of await this.getAllSingleSlugs()) {
+        for (const action of SINGLE_SEEDED_ACTIONS) {
+          owned.add(`${action}:${slug.toLowerCase()}`);
+        }
+      }
+    } catch {
+      this.logger.warn(
+        "Could not read the entity tables — plugin permissions were not checked against built-in ones."
+      );
+    }
+    return owned;
   }
 
   private async getAllCollectionSlugs(): Promise<string[]> {

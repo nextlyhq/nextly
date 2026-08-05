@@ -225,6 +225,40 @@ describe("the publish lifecycle a plugin may already have declared", () => {
     expect(out).toEqual([]);
   });
 
+  it("drops one declared with a different case, as the seeder does", () => {
+    // The seeder compares in lower case, because `ensurePermission` matches an existing row that
+    // way. Left case-sensitive here, `Publish` survives collection while the seeder withholds it,
+    // so codegen and role bundles go on referencing a slug that is never seeded under that name.
+    const out = collectCustomPermissions(cfg(["posts"]), [
+      plugin("@acme/workflow", [{ action: "Publish", resource: "posts" }]),
+    ]);
+
+    expect(out).toEqual([]);
+  });
+
+  it("drops one whose RESOURCE differs in case too", () => {
+    // The seeder lowercases both halves. With only the action normalised here, `Publish-Posts`
+    // survives collection while the seeder withholds `publish:posts` — so role bundles and
+    // generated types reference a slug that is never seeded.
+    const out = collectCustomPermissions(cfg(["posts"]), [
+      plugin("@acme/workflow", [{ action: "Publish", resource: "Posts" }]),
+    ]);
+
+    expect(out).toEqual([]);
+  });
+
+  it("derives the slug from the identity exactly as declared", () => {
+    // `parsePermissionSlug` turns a route guard's slug back into an action and a resource, and
+    // `hasPermission` matches those with `eq()`. A slug composed from a normalized copy of the
+    // identity no longer round-trips to the row it names, so a role holding the grant is denied
+    // by the guard that asks for it.
+    const out = collectCustomPermissions(cfg(), [
+      plugin("@acme/workflow", [{ action: "Export", resource: "Reports" }]),
+    ]);
+
+    expect(out.map(p => p.slug)).toEqual(["Export-Reports"]);
+  });
+
   it("drops unpublish on a collection too", () => {
     const out = collectCustomPermissions(cfg(["posts"]), [
       plugin("@acme/workflow", [{ action: "unpublish", resource: "posts" }]),
