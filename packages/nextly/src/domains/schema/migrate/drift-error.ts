@@ -65,7 +65,36 @@ function snapshotPathFor(file: string, migration: string): string {
  * ordering here exists to avoid.
  */
 function variantGlobFor(file: string, migration: string): string {
-  return join(dirname(file), `${migration}*.sql`);
+  // The literal part is quoted and the `*` left outside it, so a path with
+  // spaces stays one argument AND the glob still expands. Quoting the whole
+  // thing would pass `*.sql` to `rm` verbatim.
+  return `${shellQuote(join(dirname(file), migration))}*.sql`;
+}
+
+/**
+ * A path as a single shell argument.
+ *
+ * These commands are printed for an operator to paste. An absolute migrations
+ * directory with a space in it — which is ordinary on macOS and Windows —
+ * otherwise splits into two arguments and the cleanup fails before the
+ * recovery can start. Single quotes suppress every expansion, so only the
+ * closing quote itself needs handling.
+ */
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * A migration's name with its generated timestamp removed.
+ *
+ * `formatTimestamp` writes `YYYYMMDD_HHMMSS_mmm_`, three underscore-separated
+ * groups. Stripping only the first leaves `120000_123_add_subtitle`, which
+ * still works as a name but bakes a fragment of the old timestamp into the new
+ * file. The older single-group form is accepted too, so a file generated
+ * before that format still reads back as its own name.
+ */
+function migrationNameWithoutTimestamp(migration: string): string {
+  return migration.replace(/^\d{8}_\d{6}_\d{3}_/, "").replace(/^\d+_/, "");
 }
 
 export function migrationDriftError(args: MigrationDriftArgs): NextlyError {
@@ -100,13 +129,13 @@ export function migrationDriftError(args: MigrationDriftArgs): NextlyError {
         "  Recovery — this migration cannot be applied and has to go first.",
         "  Remove it and its snapshot (the glob covers per-dialect variants,",
         "  which are one migration and have to go together):",
-        `          rm ${variantGlobFor(args.file, args.migration)} ${snapshotPathFor(args.file, args.migration)}`,
+        `          rm ${variantGlobFor(args.file, args.migration)} ${shellQuote(snapshotPathFor(args.file, args.migration))}`,
         "",
         "  Record what the database already has, once:",
         "          pnpm nextly migrate:baseline",
         "",
         "  Then re-create the migration; it will contain only what changed:",
-        `          pnpm nextly migrate:create --name ${args.migration.replace(/^\d+_/, "")}`,
+        `          pnpm nextly migrate:create --name ${migrationNameWithoutTimestamp(args.migration)}`,
       ]
     : [
         "  Recovery (pick one):",

@@ -33,6 +33,7 @@ import type { Command } from "commander";
 
 import { deriveCompanionSpec } from "../../domains/i18n/migration/derive-companion-spec";
 import { buildCompanionCreateOnlySql } from "../../domains/i18n/migration/generate-up";
+import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
 import { getSchemaEventsDdl } from "../../domains/schema/events/schema-events-ddl";
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
 import { planBaseline } from "../../domains/schema/migrate/baseline";
@@ -195,6 +196,14 @@ export interface BaselineCoreDeps {
   localizedEntities?: MinimalConfigEntity[];
   /** From `config.localization.defaultLocale`; defaults to `"en"`. */
   defaultLocale?: string;
+  /**
+   * From `config.db.migrateLockTtlSeconds`.
+   *
+   * The stored expiry is what every later command reads to decide whether a
+   * lock is stale, so a crashed run that wrote the 900s default would block a
+   * project that configured a shorter takeover for far longer than it asked.
+   */
+  ttlSeconds?: number;
   /** Override the clock so a test can predict the filename. */
   now?: Date;
 }
@@ -364,7 +373,8 @@ export async function baselineCore(
         snapshotPath,
         tableCount: plan.snapshot.tables.length,
       };
-    }
+    },
+    { ttlSeconds: deps.ttlSeconds }
   );
 
   // `withMigrateLock` resolves without running its body only in "wait" mode,
@@ -413,6 +423,15 @@ export async function runMigrateBaseline(
   try {
     const db = (adapter as unknown as DrizzleAdapter).getDrizzle();
 
+    // The same Phase 0 gate `migrate` runs. A database still carrying the
+    // pre-consolidation tables has to be upgraded first; adopting before that
+    // writes a baseline and a ledger row into bookkeeping that `nextly upgrade`
+    // is about to consolidate, and the next `migrate` then stops at this gate
+    // with the baseline already mixed in.
+    await assertNoLegacyBookkeeping(
+      adapter as unknown as { tableExists: (n: string) => Promise<boolean> }
+    );
+
     await maybeForceUnlock(
       { forceUnlock: options.forceUnlock === true },
       db,
@@ -442,6 +461,7 @@ export async function runMigrateBaseline(
         ),
       ],
       defaultLocale: config.localization?.defaultLocale,
+      ttlSeconds: config.db.migrateLockTtlSeconds,
     });
 
     if (result.kind === "already-baselined") {

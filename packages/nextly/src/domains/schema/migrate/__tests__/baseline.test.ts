@@ -225,12 +225,62 @@ describe("the drift error an unadopted database produces", () => {
     // one migration: deleting only the selected file leaves its siblings and
     // `migrate:baseline` refuses the project as `history-not-empty`.
     expect(error.publicMessage).toContain(
-      join("migrations", "20260805120000_add_localization*.sql")
+      `'${join("migrations", "20260805120000_add_localization")}'*.sql`
     );
     const removeAt = error.publicMessage.indexOf("rm ");
     const baselineAt = error.publicMessage.indexOf("migrate:baseline");
     expect(removeAt).toBeGreaterThanOrEqual(0);
     expect(removeAt).toBeLessThan(baselineAt);
+  });
+
+  it("prints paths a shell can actually take", () => {
+    // These commands are pasted by an operator. A migrations directory with a
+    // space in it is ordinary on macOS and Windows, and unquoted it splits
+    // into two arguments — so the cleanup fails before the recovery starts.
+    const error = migrationDriftError({
+      migration: "20260805_120000_123_add_subtitle",
+      file: "/Users/a b/site/migrations/20260805_120000_123_add_subtitle.sql",
+      driftItems: [{ kind: "+", detail: "table 'dc_posts' present in DB" }],
+      unadoptedDatabase: true,
+    });
+
+    // The literal part is quoted; the `*` stays outside so the glob still
+    // expands. Quoting the whole thing would hand `*.sql` to `rm` verbatim.
+    expect(error.publicMessage).toContain(
+      `'${join("/Users/a b/site/migrations", "20260805_120000_123_add_subtitle")}'*.sql`
+    );
+    expect(error.publicMessage).toContain(
+      `'${join("/Users/a b/site/migrations", "meta", "20260805_120000_123_add_subtitle.snapshot.json")}'`
+    );
+  });
+
+  it("suggests the original name, not a fragment of the timestamp", () => {
+    // `formatTimestamp` writes three underscore-separated groups
+    // (`YYYYMMDD_HHMMSS_mmm_`). Stripping only the first leaves
+    // `120000_123_add_subtitle`, which works but bakes a piece of the old
+    // timestamp into the new file's name.
+    const error = migrationDriftError({
+      migration: "20260805_120000_123_add_subtitle",
+      file: "migrations/20260805_120000_123_add_subtitle.sql",
+      driftItems: [{ kind: "+", detail: "table 'dc_posts' present in DB" }],
+      unadoptedDatabase: true,
+    });
+
+    expect(error.publicMessage).toContain("--name add_subtitle");
+    expect(error.publicMessage).not.toContain("--name 120000_123_add_subtitle");
+  });
+
+  it("carries a status the error registry knows", () => {
+    // An unregistered code falls back to 500 and skips the canonical
+    // code/status tests, so the lock refusal would report a server fault for
+    // what is a conflict.
+    const error = migrationDriftError({
+      migration: "m",
+      file: "migrations/m.sql",
+      driftItems: [{ kind: "+", detail: "x" }],
+      unadoptedDatabase: true,
+    });
+    expect(error.statusCode).toBe(409);
   });
 
   it("keeps the generic recoveries for real drift", () => {
