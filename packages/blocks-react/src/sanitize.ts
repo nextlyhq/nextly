@@ -131,6 +131,15 @@ export function sanitizeDocument(
  * case-insensitively because HTML treats them that way and the render path
  * lowercases before writing, so a stored `ID` becomes an `id` on the page.
  *
+ * Case variants resolve LAST-write-wins, mirroring the render path exactly: it
+ * lowercases each name into one bag, so `{ id: "old", ID: "hero" }` renders
+ * `hero`. Answering `old` here would reserve an id the page never uses and let
+ * the one it does use collide with a later node.
+ *
+ * Only STRING values count, and for the same reason: the render path skips a
+ * non-string after computing the key, so a later non-string variant does not
+ * displace an earlier string one.
+ *
  * The VALUE is compared exactly. Ids are case-sensitive in the DOM: `#Hero` and
  * `#hero` address different elements, and folding them together would strip an
  * id that was never ambiguous.
@@ -145,10 +154,13 @@ function renderedDomId(node: BlockNode): string | undefined {
   ) {
     return undefined;
   }
+  let rendered: string | undefined;
   for (const [name, value] of Object.entries(attributes)) {
-    if (name.toLowerCase() === "id" && typeof value === "string") return value;
+    if (name.toLowerCase() === "id" && typeof value === "string") {
+      rendered = value;
+    }
   }
-  return undefined;
+  return rendered;
 }
 
 /** A node with whatever supplied the given DOM id removed. */

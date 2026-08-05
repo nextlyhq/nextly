@@ -4,6 +4,7 @@ import {
   PAGE_ROOT_CLASS,
   migrateDocument,
   type BlockDocument,
+  type BlockNode,
   type DocumentLimits,
   type StyleCompileContext,
 } from "@nextlyhq/blocks-engine";
@@ -58,6 +59,32 @@ export interface PageRendererProps {
 }
 
 /**
+ * Whether a node will render its own host markup, decided BEFORE rendering.
+ *
+ * Two passes need this answer early: address repair, which must not let a node
+ * that emits no `id` reserve one away from a healthy sibling, and the stylesheet
+ * decision, which must not publish rules compiled for markup that never ships.
+ *
+ * Only the placeholder outcomes that are knowable from the document and the
+ * resolver are covered — an unregistered type, a failed migration, and a node
+ * stored ahead of the definition that would render it. All three are pure
+ * comparisons.
+ *
+ * The rest are NOT knowable here, and deliberately so: whether a block throws,
+ * returns something unrenderable, or renders a given slot at all is only
+ * settled by calling it, which happens inside the boundary further down. A node
+ * that ends in one of those placeholders can still reserve an address it never
+ * uses. Closing that would mean deciding addresses after render, which is a
+ * different design than compiling the document once up front.
+ */
+function rendersOwnMarkup(node: BlockNode, resolver: BlockResolver): boolean {
+  if (node.migrationFailed === true) return false;
+  const definition = resolver.get(node.type);
+  if (definition === undefined) return false;
+  return node.version <= definition.version;
+}
+
+/**
  * Renders a block document as React.
  *
  * A Server Component, and synchronous: nothing at this level needs to wait, so
@@ -104,6 +131,24 @@ export function PageRenderer({
   // envelope itself may mean something different, so migrating and rendering
   // whatever sits under `nodes` shows content that was never authored this way
   // — worse than showing nothing, because nothing announces itself.
+  // The ENVELOPE is database input too, and it is read before any of the
+  // repair passes that make its contents safe. A corrupt JSON column holding
+  // `null` throws on the first property access below, in the page component
+  // itself, where no block boundary exists to contain it. (A primitive does
+  // not throw — it just reads `undefined` — but it is no more renderable, so
+  // both are refused the same way.)
+  if (
+    typeof document !== "object" ||
+    document === null ||
+    Array.isArray(document)
+  ) {
+    return (
+      <div className={PAGE_ROOT_CLASS}>
+        <BlockPlaceholder reason="unsupported-format" type="document" />
+      </div>
+    );
+  }
+
   if (document.formatVersion !== DOCUMENT_FORMAT_VERSION) {
     return (
       <div className={PAGE_ROOT_CLASS}>
@@ -137,12 +182,7 @@ export function PageRenderer({
   // dropped or stripped of its anchor, and the node it collided with would then
   // be pruned anyway.
   const visible = dedupeAddresses(pruned, node =>
-    // A node that will resolve to a placeholder emits no `id` of its own, so it
-    // must not reserve one: the healthy node it collided with would be stripped
-    // of an anchor that nothing else was going to use.
-    node.migrationFailed === true
-      ? false
-      : resolver.get(node.type) !== undefined
+    rendersOwnMarkup(node, resolver)
   );
 
   // Whether the tree that renders is the tree the stored stylesheet was

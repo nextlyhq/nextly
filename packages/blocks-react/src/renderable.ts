@@ -230,7 +230,22 @@ const ELEMENT_TYPE_SHAPE: ReadonlyMap<
   ],
   [
     Symbol.for("react.lazy"),
-    (type: object) => typeof (type as { _init?: unknown })._init === "function",
+    // Both fields React's own `lazy()` builds, not just the one React calls.
+    //
+    // What a lazy RESOLVES to cannot be checked here: React calls `_init` while
+    // rendering, long after this boundary has returned, and calling it here to
+    // find out would run the block author's loader twice and suspend outside
+    // any boundary. So a forged `{ _init: () => 42 }` reaches React and throws
+    // "Element type is invalid" uncontained.
+    //
+    // Requiring `_payload` narrows that to objects deliberately impersonating
+    // the full shape. React itself tolerates its absence, but nothing genuine
+    // lacks it — `lazy()` always sets both — so this refuses no real lazy while
+    // turning the accidental impersonation into a placeholder.
+    (type: object) => {
+      const lazyType = type as { _init?: unknown; _payload?: unknown };
+      return typeof lazyType._init === "function" && "_payload" in lazyType;
+    },
   ],
   [
     Symbol.for("react.consumer"),
@@ -323,6 +338,36 @@ function rendersOwnChildren(element: unknown): boolean {
  * React hardcodes the same list. Nothing has been added to it since `<wbr>`,
  * and a new one would be a change to HTML itself.
  */
+/**
+ * Whether React can convert a value to a string without throwing.
+ *
+ * Checked by SHAPE rather than by attempting the conversion, because a
+ * `toString` here is code the block author wrote: coercing to find out would
+ * run it once for the check and again for the render, and a method with a side
+ * effect would perform it twice.
+ *
+ * Primitives all coerce except a symbol, which throws. An object coerces
+ * through `toString` or `valueOf`, so one of the two has to be reachable and
+ * callable — a plain object inherits `Object.prototype.toString` and is fine
+ * (React renders `[object Object]`), while `Object.create(null)` and an object
+ * that nulls both inherit nothing and throw.
+ *
+ * The residual case is a REACHABLE method that throws when called. It cannot be
+ * detected without calling it, and block code that wants to throw during render
+ * can simply throw, which this boundary already contains.
+ */
+function isStringable(value: unknown): boolean {
+  if (typeof value === "symbol") return false;
+  if (value === null || typeof value !== "object") {
+    return typeof value !== "function" || typeof value.toString === "function";
+  }
+  const candidate = value as { toString?: unknown; valueOf?: unknown };
+  return (
+    typeof candidate.toString === "function" ||
+    typeof candidate.valueOf === "function"
+  );
+}
+
 const VOID_ELEMENTS: ReadonlySet<string> = new Set([
   "area",
   "base",
@@ -383,6 +428,15 @@ function hostPropReason(element: unknown): string | null {
     }
     if (children != null) {
       return `both \`children\` and \`dangerouslySetInnerHTML\` on <${type}>, which React refuses`;
+    }
+    // React STRINGIFIES `__html` while serializing, which is after this
+    // boundary has returned — so a value that cannot be coerced throws where
+    // nothing can contain it. Verified against React 19.2: a symbol and an
+    // object with no reachable `toString`/`valueOf` both throw, while a number,
+    // a boolean, an array and a plain object are all coerced without complaint.
+    const markup = (html as { __html?: unknown }).__html;
+    if (!isStringable(markup)) {
+      return `a \`dangerouslySetInnerHTML.__html\` value on <${type}> that React cannot convert to a string`;
     }
   }
 
@@ -587,7 +641,14 @@ export function normalizeRenderable(
 
     if (isValidElement(current)) {
       const elementReason = elementShapeReason(current);
-      if (elementReason !== null) return elementReason;
+      if (elementReason !== null) {
+        // Refused for its own shape, so nothing below descends. Any promise a
+        // block already started inside these children would be left with no
+        // handler at all.
+        sweepThenables(suspenseFallbackOf(current));
+        sweepThenables(childrenOf(current));
+        return elementReason;
+      }
       if (!rendersOwnChildren(current)) return null;
       // A Suspense fallback is rendered by React as surely as its children are,
       // just later, so an unrenderable one fails at the first suspension —
@@ -675,7 +736,11 @@ export function normalizeRenderable(
 
     if (isValidElement(current)) {
       const elementReason = elementShapeReason(current);
-      if (elementReason !== null) return { ok: false, reason: elementReason };
+      if (elementReason !== null) {
+        sweepThenables(suspenseFallbackOf(current));
+        sweepThenables(childrenOf(current));
+        return { ok: false, reason: elementReason };
+      }
       if (!rendersOwnChildren(current)) {
         return { ok: true, node: current as ReactNode, hasUnwrappedThenable };
       }
@@ -718,6 +783,64 @@ export function normalizeRenderable(
 
   const markHandled = (pending: PromiseLike<unknown>): void => {
     void Promise.resolve(pending).catch(() => undefined);
+  };
+
+  /**
+   * Budget for the refusal sweep below, separate from the inspection budget.
+   *
+   * Sharing one would mean a refusal discovered near the limit had nothing left
+   * to sweep with, which is exactly the case where an unhandled rejection is
+   * most likely.
+   */
+  let sweepBudget = MAX_CHECKED_VALUES;
+
+  /**
+   * Marks every thenable inside a subtree that is being refused.
+   *
+   * An element is judged by its OWN shape before its children are looked at, so
+   * refusing it returns before anything descends — and a promise a block had
+   * already started sits there with no handler attached. React never renders it
+   * (the element was replaced by a placeholder), so nothing else will attach one
+   * either, and Node's default `--unhandled-rejections=throw` turns that into a
+   * process exit: strictly worse than the escape the refusal closed.
+   *
+   * Marking is not swallowing. The placeholder is where the failure is
+   * reported; this only declines to let a value already refused kill the server.
+   *
+   * Consuming a single-use iterator here is deliberate and safe: this runs only
+   * on a subtree nothing will render.
+   */
+  const sweepThenables = (current: unknown): void => {
+    if (sweepBudget <= 0) return;
+    sweepBudget -= 1;
+    if (current === null || current === undefined) return;
+
+    const type = typeof current;
+    if (type !== "object" && type !== "function") return;
+
+    if (isThenable(current)) {
+      markHandled(current);
+      return;
+    }
+
+    if (isValidElement(current)) {
+      sweepThenables(suspenseFallbackOf(current));
+      sweepThenables(childrenOf(current));
+      return;
+    }
+
+    if (Array.isArray(current)) {
+      for (const item of current) sweepThenables(item);
+      return;
+    }
+
+    if (!isIterable(current)) return;
+    try {
+      for (const item of current) sweepThenables(item);
+    } catch {
+      // A hostile iterator throwing mid-sweep must not replace the refusal that
+      // is already on its way back with a different one.
+    }
   };
 
   try {
