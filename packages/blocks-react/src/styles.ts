@@ -141,9 +141,33 @@ export function resolvePageStyles(
   document: BlockDocument,
   styles: PageStyles | undefined,
   styleContext: StyleCompileContext | undefined,
-  blocks: BlockResolver
+  blocks: BlockResolver,
+  /**
+   * Whether condition-gated nodes were removed from `document` before this ran.
+   *
+   * It changes what a STORED artifact may be trusted for. The artifact is
+   * compiled at write time from the whole document, and conditions are decided
+   * at read time, so a sheet saved before any gating knows nothing about it:
+   * the gated node's markup is withheld while the rules compiled for it — and
+   * any URL inside them — are still published.
+   *
+   * Recompiling is the right answer whenever the inputs to do so are present.
+   * When they are not, the sheet is withheld: the format says a hidden node is
+   * omitted from server output, and an unstyled page keeps that promise while a
+   * styled one breaks it. Classes are kept either way, so blocks still carry
+   * the names the rest of the system expects.
+   *
+   * The complete fix is not available from this package: it needs the artifact
+   * to carry its rules per node so a reader can drop the ones it prunes,
+   * which is a change to what the compiler emits.
+   */
+  prunedGatedNodes = false
 ): PageStyles {
-  if (styles) return normalizeStoredStyles(styles, document);
+  if (styles && !prunedGatedNodes)
+    return normalizeStoredStyles(styles, document);
+  if (styles && styleContext === undefined) {
+    return { ...normalizeStoredStyles(styles, document), css: "" };
+  }
   if (styleContext) {
     const context: StyleCompileContext =
       styleContext.blockBases === undefined

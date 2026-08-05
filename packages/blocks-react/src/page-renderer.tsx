@@ -132,12 +132,17 @@ export function PageRenderer({
   // render would withhold a gated node's HTML while still publishing its
   // scoped CSS, and with it whatever that CSS referenced.
   const visible = pruneHiddenNodes(doc);
+  // `pruneHiddenNodes` returns the original document when nothing was gated, so
+  // identity is the signal — and it is exactly what decides whether a stored
+  // stylesheet can still be trusted.
+  const prunedGatedNodes = visible !== doc;
 
   const { css, classes, scope } = resolvePageStyles(
     visible,
     styles,
     styleContext,
-    resolver
+    resolver,
+    prunedGatedNodes
   );
   const rootClassName = scope ? `${PAGE_ROOT_CLASS} ${scope}` : PAGE_ROOT_CLASS;
 

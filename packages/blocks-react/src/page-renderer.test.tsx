@@ -1450,6 +1450,76 @@ describe("PageRenderer", () => {
   });
 
   describe("visibility", () => {
+    it("withholds a stored stylesheet compiled before the node was gated", async () => {
+      // The artifact is compiled at WRITE time from the whole document, and
+      // conditions are decided at READ time, so a sheet saved before any gating
+      // still carries the gated node's rules — and any URL inside them. The
+      // markup being withheld while the assets it referenced are published is
+      // the leak, so with nothing to recompile from the sheet is withheld.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", {
+              props: { value: "gated body" },
+              visibility: {
+                conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+              },
+            }),
+            node("b", "test/text", { props: { value: "public body" } })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+          styles={{
+            css: ".nx-a { background-image: url(/gated-asset.png) }",
+            classes: { a: "nx-a", b: "nx-b" },
+          }}
+        />
+      );
+
+      expect(html).not.toContain("gated body");
+      expect(html).not.toContain("gated-asset.png");
+      expect(html).not.toContain("<style");
+      // The page still renders, and blocks still carry their classes.
+      expect(html).toContain("public body");
+      expect(html).toContain("nx-b");
+    });
+
+    it("recompiles rather than withholding when it can", async () => {
+      // With a compile context present there is no need to lose the styling:
+      // the sheet is rebuilt from the pruned document, so the visible nodes keep
+      // their rules and the gated one contributes none.
+      const styled = defineBlock({
+        name: "test/recompiled",
+        version: 1,
+        description: "A block whose instance carries styles.",
+        example: { props: {} },
+        render: ({ className }) => <p className={className}>visible body</p>,
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/recompiled", {
+              styles: { base: { base: { color: "rebeccapurple" } } },
+              visibility: {
+                conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+              },
+            }),
+            node("b", "test/recompiled", {
+              styles: { base: { base: { color: "teal" } } },
+            })
+          )}
+          blocks={createBlockResolver([styled as AnyBlockDefinition])}
+          styles={{ css: ".stale { color: red }", classes: {} }}
+          styleContext={{ breakpoints: { viewport: [], container: [] } }}
+        />
+      );
+
+      expect(html).toContain("teal");
+      expect(html).not.toContain("rebeccapurple");
+      expect(html).not.toContain("stale");
+      expect(html).toContain("visible body");
+    });
+
     it("keeps a gated node's styles out of the page too", async () => {
       // The tree is read twice — once for HTML, once for the stylesheet. If only
       // the render is filtered, a gated node's markup is withheld while its
