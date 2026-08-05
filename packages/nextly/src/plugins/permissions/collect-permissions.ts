@@ -134,9 +134,16 @@ export function collectCustomPermissions(
       return;
     }
 
+    // Compared in lower case, like the lifecycle check above and like `ensurePermission`, which
+    // matches an existing row with `LOWER(action) = LOWER(action)`. Left case-sensitive,
+    // `{ action: "Delete", resource: "Posts" }` walks past this reservation and is collected as a
+    // custom permission — and the seeder then patches an owner onto the collection's OWN
+    // `delete-posts` row, which `role-presets.ts` grants Editor on `!isSystem && !isPlugin`. The
+    // collection quietly stops being deletable by an editor.
+    const lowerAction = action.toLowerCase();
     if (
-      (CRUD_ACTIONS.has(action) && collectionSlugs.has(resource)) ||
-      (SINGLE_ACTIONS.has(action) && singleSlugs.has(resource))
+      (CRUD_ACTIONS.has(lowerAction) && lowerCollectionSlugs.has(entitySlug)) ||
+      (SINGLE_ACTIONS.has(lowerAction) && lowerSingleSlugs.has(entitySlug))
     ) {
       throw permissionCollisionError(
         action,
@@ -166,13 +173,114 @@ export function collectCustomPermissions(
     });
   };
 
-  // App-declared permissions first (owner "app"), then each plugin's.
-  for (const perm of config.permissions ?? []) consider(perm, "app");
-  for (const plugin of plugins) {
-    for (const perm of plugin.contributes?.permissions ?? []) {
-      consider(perm, plugin.name);
-    }
-  }
+  eachDeclaredPermission(config, plugins, consider);
 
   return out;
+}
+
+/**
+ * Every declared permission with the owner that declared it, app first then each plugin.
+ *
+ * One iterator, because two walks over the same declarations are two chances for them to
+ * disagree about what was declared — and the second walk here decides whether a boot is refused.
+ */
+function eachDeclaredPermission(
+  config: PermissionConfigSource,
+  plugins: PluginDefinition[],
+  visit: (perm: PluginPermission, owner: string) => void
+): void {
+  for (const perm of config.permissions ?? []) visit(perm, "app");
+  for (const plugin of plugins) {
+    for (const perm of plugin.contributes?.permissions ?? []) {
+      visit(perm, plugin.name);
+    }
+  }
+}
+
+/** A CRUD-shaped declaration whose resource the config cannot classify. */
+export interface UnresolvedPermission {
+  action: string;
+  resource: string;
+  owner: string;
+}
+
+/**
+ * @experimental Collect every CRUD-shaped declaration whose resource is NOT a config entity,
+ * WITHOUT throwing.
+ *
+ * A resource collected here may be a Schema Builder collection — which lives in
+ * `dynamic_collections` and is unknowable at fold time — or it may be a genuine custom resource a
+ * plugin owns outright, which is the ordinary case and entirely legal. The two are
+ * indistinguishable until Builder slugs load, so the verdict is deferred to
+ * {@link finalizePermissionTargets}.
+ *
+ * The same shape `collectUnresolvedRelationTargets` uses, for the same reason: config answers
+ * part of the question and the database answers the rest.
+ */
+export function collectUnresolvedPermissionTargets(
+  config: PermissionConfigSource,
+  plugins: PluginDefinition[]
+): UnresolvedPermission[] {
+  const configEntities = new Set([
+    ...(config.collections ?? []).map(c => c.slug.toLowerCase()),
+    ...(config.singles ?? []).map(s => s.slug.toLowerCase()),
+  ]);
+  const unresolved: UnresolvedPermission[] = [];
+  eachDeclaredPermission(config, plugins, (perm, owner) => {
+    const action = perm.action.toLowerCase();
+    if (!CRUD_ACTIONS.has(action) && !SINGLE_ACTIONS.has(action)) return;
+    // A resource the config knows was already settled by `collectCustomPermissions`, which threw
+    // if it collided. What is left is what only the database can classify.
+    if (configEntities.has(perm.resource.toLowerCase())) return;
+    unresolved.push({ action: perm.action, resource: perm.resource, owner });
+  });
+  return unresolved;
+}
+
+/**
+ * @experimental Settle deferred permission collisions once Builder slugs are known.
+ *
+ * A declaration that survived {@link collectUnresolvedPermissionTargets} and names a Builder
+ * entity is the same authoring error `crud-permission-reserved` already refuses for a config
+ * entity: the seeder owns that entity's CRUD permissions, so the declaration cannot be honoured
+ * as a custom permission. It is refused here rather than at fold time only because the config
+ * cannot see the entity.
+ *
+ * REFUSED rather than dropped, and refused rather than merely stripped of ownership, because
+ * both softer options end somewhere worse. Dropping it silently leaves the plugin's route
+ * guarded by a permission the collection also grants, so every editor reaches it. Withholding
+ * ownership does the same thing by a different route: `role-presets.ts` grants Editor on
+ * `!isSystem && !isPlugin`, so an unowned row is a granted row.
+ *
+ * `allowOverride` exists for an application already running such a plugin, which would otherwise
+ * have no way to boot while it waits for a fix. It is opt-in, and it says so in the warning.
+ */
+export function finalizePermissionTargets(
+  unresolved: readonly UnresolvedPermission[],
+  builderSlugs: Iterable<string>,
+  opts?: {
+    allowOverride?: boolean;
+    logger?: { warn?(message: string): void };
+  }
+): void {
+  if (unresolved.length === 0) return;
+  const builder = new Set<string>();
+  for (const slug of builderSlugs) builder.add(slug.toLowerCase());
+  for (const declaration of unresolved) {
+    if (!builder.has(declaration.resource.toLowerCase())) continue;
+    if (opts?.allowOverride !== true) {
+      throw permissionCollisionError(
+        declaration.action,
+        declaration.resource,
+        [declaration.owner],
+        "crud-permission-reserved"
+      );
+    }
+    opts.logger?.warn?.(
+      `[plugins] "${declaration.owner}" declares "${declaration.action}" on "${declaration.resource}", ` +
+        `which is a Schema Builder entity whose CRUD permissions the seeder owns. ` +
+        `Honouring it lets the plugin take that permission from the roles the presets grant it. ` +
+        `(unset NEXTLY_ALLOW_PLUGIN_PERMISSION_OVERRIDE to refuse this at boot instead)`
+    );
+  }
 }

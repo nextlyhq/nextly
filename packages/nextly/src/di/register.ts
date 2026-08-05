@@ -96,7 +96,11 @@ import { createSanitizationHook } from "../hooks/sanitization-hooks";
 import type { PluginPermission, PluginRole } from "../plugins/contributions";
 import { getCoreVersion } from "../plugins/core-version";
 import { setInitializedPlugins } from "../plugins/initialized-plugins";
-import { collectCustomPermissions } from "../plugins/permissions/collect-permissions";
+import {
+  collectCustomPermissions,
+  collectUnresolvedPermissionTargets,
+  finalizePermissionTargets,
+} from "../plugins/permissions/collect-permissions";
 import type {
   PluginContext,
   PluginDefinition,
@@ -448,6 +452,16 @@ export async function registerServices(
   // only here; the list is re-derived + seeded in runPostInitTasks.
   collectCustomPermissions(transformedConfig, resolvedPlugins);
 
+  // The half of that check the config cannot answer. A CRUD action on a
+  // resource the config does not define may name a Schema Builder collection,
+  // whose permissions the seeder owns — or a resource the plugin owns
+  // outright, which is ordinary and legal. Only the database tells them apart,
+  // so the verdict waits for Builder slugs, the same way relation targets do.
+  const unresolvedPermissions = collectUnresolvedPermissionTargets(
+    transformedConfig,
+    resolvedPlugins
+  );
+
   // Fail fast on role-bundle collisions (D67). Validation only here; roles are
   // re-derived + seeded (resolving permission slugs→ids) in runPostInitTasks.
   collectRoles(transformedConfig, resolvedPlugins);
@@ -785,6 +799,21 @@ export async function registerServices(
       strict: isStrictPluginTargets(transformedConfig),
       logger: resolvedLogger,
     });
+
+    // Settled here, where both halves of the question are answerable, and
+    // before any service is registered or any route installed — so a refusal
+    // stops the boot rather than being discovered by a request.
+    finalizePermissionTargets(
+      unresolvedPermissions,
+      [
+        ...builderCollectionSlugs,
+        ...builderEntities.singles.map(single => single.slug),
+      ],
+      {
+        allowOverride: allowsPluginPermissionOverride(transformedConfig),
+        logger: resolvedLogger,
+      }
+    );
   }
 
   // F8 PR 3: SchemaChangeService + DrizzlePushService DI registration
@@ -2743,6 +2772,21 @@ export function clearServices(): void {
 }
 
 /** Strict plugin-target resolution — config flag OR env (CI/prod). */
+/**
+ * Whether a plugin may keep a permission that collides with an entity's own.
+ *
+ * Off by default: a collision is an authoring error, and honouring it takes a permission away
+ * from the roles the presets grant it. The escape hatch is for an application already running
+ * such a plugin, which would otherwise be unable to boot at all while it waits for a fix.
+ */
+function allowsPluginPermissionOverride(config: NextlyServiceConfig): boolean {
+  return (
+    (config as { allowPluginPermissionOverride?: boolean })
+      .allowPluginPermissionOverride === true ||
+    process.env.NEXTLY_ALLOW_PLUGIN_PERMISSION_OVERRIDE === "1"
+  );
+}
+
 function isStrictPluginTargets(config: NextlyServiceConfig): boolean {
   return (
     config.strictPluginTargets === true ||

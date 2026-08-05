@@ -123,100 +123,37 @@ export function sanitizeDocument(
 }
 
 /**
- * The DOM id a node will actually render with, if any.
+ * Makes every NODE ID in a document unique.
  *
- * `cssId` is the modelled field and the attribute bag is the escape hatch
- * beside it, so a node carrying both renders the modelled one — which means
- * that is the only value worth reserving. Attribute NAMES are matched
- * case-insensitively because HTML treats them that way and the render path
- * lowercases before writing, so a stored `ID` becomes an `id` on the page.
+ * Node ids are the document's addressing mechanism and the renderer's React
+ * keys. A duplicate makes React reuse one block's instance for another, which
+ * is a wrong page rather than a missing one, so it has to be settled before
+ * anything renders — the key is chosen by the caller, not by the block.
  *
- * Case variants resolve LAST-write-wins, mirroring the render path exactly: it
- * lowercases each name into one bag, so `{ id: "old", ID: "hero" }` renders
- * `hero`. Answering `old` here would reserve an id the page never uses and let
- * the one it does use collide with a later node.
+ * **DOM ids are deliberately NOT settled here.** Which node ends up writing an
+ * `id` is only knowable once a block has run: one that throws, or returns
+ * something with no host root, is replaced by a placeholder that emits no id at
+ * all. Reserving ids in advance therefore meant a block that later failed had
+ * already taken `#pricing`, and the healthy node that wanted it was stripped in
+ * exchange for nothing. Each boundary now writes its own id at the moment it
+ * successfully produces a host root, which is the only point at which the
+ * answer is known.
  *
- * Only STRING values count, and for the same reason: the render path skips a
- * non-string after computing the key, so a later non-string variant does not
- * displace an earlier string one.
- *
- * The VALUE is compared exactly. Ids are case-sensitive in the DOM: `#Hero` and
- * `#hero` address different elements, and folding them together would strip an
- * id that was never ambiguous.
- */
-function renderedDomId(node: BlockNode): string | undefined {
-  if (typeof node.cssId === "string") return node.cssId;
-  const attributes: unknown = node.attributes;
-  if (
-    typeof attributes !== "object" ||
-    attributes === null ||
-    Array.isArray(attributes)
-  ) {
-    return undefined;
-  }
-  let rendered: string | undefined;
-  for (const [name, value] of Object.entries(attributes)) {
-    if (name.toLowerCase() === "id" && typeof value === "string") {
-      rendered = value;
-    }
-  }
-  return rendered;
-}
-
-/** A node with whatever supplied the given DOM id removed. */
-function withoutDomId(node: BlockNode): BlockNode {
-  const stripped: BlockNode = { ...node };
-  delete stripped.cssId;
-  const attributes: unknown = stripped.attributes;
-  if (
-    typeof attributes === "object" &&
-    attributes !== null &&
-    !Array.isArray(attributes)
-  ) {
-    stripped.attributes = Object.fromEntries(
-      Object.entries(attributes).filter(([name]) => name.toLowerCase() !== "id")
-    );
-  }
-  return stripped;
-}
-
-/**
- * Makes every address in a document unique.
- *
- * Two kinds, both of which have to be unique only among nodes that will
- * actually render:
- *
- * - **Node ids** are the document's addressing mechanism and the renderer's
- *   React keys. A duplicate makes React reuse one block's instance for another,
- *   which is a wrong page rather than a missing one.
- * - **DOM ids** are what an anchor, a label's `for` and an `#id` selector
- *   resolve against. Two elements answering to one is the ambiguity `cssId`
- *   exists to prevent, and it can arrive through `cssId` or through the
- *   attribute bag.
+ * What that gives up is a repair for a document holding two identical DOM ids.
+ * Engine validation rejects that shape at write time (`duplicate-dom-id`), so
+ * it can only arrive from a row edited outside the product — and a browser
+ * resolves a duplicated id to the first match rather than failing, which is a
+ * smaller cost than silently unsticking an anchor on a healthy page.
  *
  * Run AFTER condition-gated nodes are pruned, deliberately. A hidden node never
- * reaches the page, so letting it reserve an address would take that address
- * away from a visible node for no benefit: the visible one would be dropped or
- * stripped, the hidden one would then be pruned, and the page would be missing
- * content or an anchor that was never in conflict with anything.
+ * reaches the page, so letting it reserve an id would take that id from a
+ * visible node for no benefit.
  *
- * Engine validation rejects both shapes at write time; this is the forgiving
- * render path declining to reintroduce what a stored document may already hold.
  * Returns the ORIGINAL document when nothing collided.
  */
-export function dedupeAddresses(
-  document: BlockDocument,
-  /**
-   * Whether a node will render its own markup. A node that resolves to a
-   * placeholder emits no `id`, so reserving one for it would strip the anchor
-   * off a healthy node in exchange for nothing. Defaults to assuming every node
-   * renders, which is the answer for a caller with no registry to ask.
-   */
-  rendersMarkup: (node: BlockNode) => boolean = () => true
-): BlockDocument {
+export function dedupeNodeIds(document: BlockDocument): BlockDocument {
   let changed = false;
   const seenIds = new Set<string>();
-  const seenDomIds = new Set<string>();
 
   const walk = (nodes: BlockNode[]): BlockNode[] => {
     const result: BlockNode[] = [];
@@ -227,22 +164,9 @@ export function dedupeAddresses(
       }
       seenIds.add(node.id);
 
-      let kept = node;
-      const domId = rendersMarkup(node) ? renderedDomId(node) : undefined;
-      if (domId !== undefined) {
-        if (seenDomIds.has(domId)) {
-          // The first node to claim an id keeps it; the later one renders
-          // without one rather than being dropped, since its content is fine.
-          changed = true;
-          kept = withoutDomId(node);
-        } else {
-          seenDomIds.add(domId);
-        }
-      }
-
-      const slots = kept.slots;
+      const slots = node.slots;
       if (slots === undefined) {
-        result.push(kept);
+        result.push(node);
         continue;
       }
 
@@ -253,7 +177,7 @@ export function dedupeAddresses(
         if (walked !== children) slotsChanged = true;
         nextSlots[name] = walked;
       }
-      result.push(slotsChanged ? { ...kept, slots: nextSlots } : kept);
+      result.push(slotsChanged ? { ...node, slots: nextSlots } : node);
     }
     return changed ? result : nodes;
   };

@@ -3,7 +3,11 @@ import { describe, expect, it } from "vitest";
 import type { NextlyServiceConfig } from "../../di/register";
 import type { PluginDefinition } from "../plugin-context";
 
-import { collectCustomPermissions } from "./collect-permissions";
+import {
+  collectCustomPermissions,
+  collectUnresolvedPermissionTargets,
+  finalizePermissionTargets,
+} from "./collect-permissions";
 
 const cfg = (
   collections: string[] = [],
@@ -319,5 +323,103 @@ describe("the publish lifecycle a plugin may already have declared", () => {
     ]);
 
     expect(out.map(p => p.slug)).toEqual(["publish-newsletter"]);
+  });
+});
+
+/**
+ * The collision code and reason a refusal carries.
+ *
+ * Asserted instead of the message: the public message is one sentence for every collision, so a
+ * test matching on it passes for a duplicate-permission refusal as readily as for this one.
+ */
+function collisionOf(run: () => void): { code: string; reason: unknown } {
+  try {
+    run();
+  } catch (error) {
+    const err = error as { code?: string; logContext?: { reason?: unknown } };
+    return { code: err.code ?? "", reason: err.logContext?.reason };
+  }
+  throw new Error("expected a collision, and nothing was thrown");
+}
+
+describe("a CRUD collision the config cannot see", () => {
+  const declaring = (action: string, resource: string) =>
+    collectUnresolvedPermissionTargets(cfg(["posts"]), [
+      plugin("@acme/reports", [{ action, resource }]),
+    ]);
+
+  it("defers a CRUD action on a resource the config does not define", () => {
+    // It may be a Builder collection or a resource the plugin owns outright. Both look the same
+    // here, so neither is refused yet.
+    expect(declaring("delete", "reports")).toEqual([
+      { action: "delete", resource: "reports", owner: "@acme/reports" },
+    ]);
+  });
+
+  it("defers a case-mismatched one too, since the seeder compares in lower case", () => {
+    expect(declaring("Delete", "Reports")).toHaveLength(1);
+  });
+
+  it("does not defer a resource the config already settled", () => {
+    // `collectCustomPermissions` threw on it, or allowed it; either way the answer is in.
+    expect(declaring("delete", "posts")).toEqual([]);
+  });
+
+  it("does not defer a non-CRUD action, which no seeder owns", () => {
+    expect(declaring("export", "reports")).toEqual([]);
+  });
+
+  it("refuses the declaration once the resource is known to be a Builder entity", () => {
+    const unresolved = declaring("delete", "reports");
+
+    expect(
+      collisionOf(() => finalizePermissionTargets(unresolved, ["reports"]))
+    ).toEqual({
+      code: "NEXTLY_PERMISSION_COLLISION",
+      reason: "crud-permission-reserved",
+    });
+  });
+
+  it("refuses it whatever case the declaration used", () => {
+    expect(
+      collisionOf(() =>
+        finalizePermissionTargets(declaring("Delete", "Reports"), ["reports"])
+      ).reason
+    ).toBe("crud-permission-reserved");
+  });
+
+  it("allows a resource no entity claims, which is the ordinary custom permission", () => {
+    expect(() =>
+      finalizePermissionTargets(declaring("delete", "reports"), ["invoices"])
+    ).not.toThrow();
+  });
+
+  it("warns instead of refusing only when an application opts in", () => {
+    const warnings: string[] = [];
+
+    expect(() =>
+      finalizePermissionTargets(declaring("delete", "reports"), ["reports"], {
+        allowOverride: true,
+        logger: { warn: message => warnings.push(message) },
+      })
+    ).not.toThrow();
+    // Silence would leave an application running with a permission taken from its own editors and
+    // nothing saying so.
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("@acme/reports");
+  });
+});
+
+describe("a CRUD collision on a config entity", () => {
+  it("is refused whatever case the action was declared in", () => {
+    // `ensurePermission` matches an existing row with `LOWER(action) = LOWER(action)`, so a
+    // capitalised action reaches the same row — and reached it without passing this check.
+    expect(
+      collisionOf(() =>
+        collectCustomPermissions(cfg(["posts"]), [
+          plugin("@acme/x", [{ action: "Delete", resource: "Posts" }]),
+        ])
+      ).reason
+    ).toBe("crud-permission-reserved");
   });
 });

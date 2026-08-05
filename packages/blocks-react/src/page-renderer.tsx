@@ -18,7 +18,7 @@ import {
   migrationSourceFor,
   type BlockResolver,
 } from "./resolver";
-import { dedupeAddresses, sanitizeDocument } from "./sanitize";
+import { dedupeNodeIds, sanitizeDocument } from "./sanitize";
 import {
   resolvePageStyles,
   styleTextForInjection,
@@ -237,9 +237,7 @@ export function PageRenderer({
   // take that address from a visible node for nothing: the visible one would be
   // dropped or stripped of its anchor, and the node it collided with would then
   // be pruned anyway.
-  const visible = dedupeAddresses(pruned, node =>
-    rendersOwnMarkup(node, resolver)
-  );
+  const visible = dedupeNodeIds(pruned);
 
   // Whether the tree that renders is the tree the stored stylesheet was
   // compiled from. Each pass returns its input unchanged when it had nothing to
