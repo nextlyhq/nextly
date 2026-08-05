@@ -464,7 +464,7 @@ const NUMBER_FUNCTION_DOMAIN: ReadonlyMap<string, NumericDomain> = new Map([
  * unit strings would call `1s` and `1ms` incompatible; a unit in no listed
  * category is answered with `null`, which abstains rather than guesses.
  */
-function unitCategory(unit: string): string | null {
+export function unitCategory(unit: string): string | null {
   const folded = asciiLower(decodeIdentifier(unit));
   if (LENGTH_UNITS.has(folded)) return "length";
   if (ANGLE_UNITS.has(folded)) return "angle";

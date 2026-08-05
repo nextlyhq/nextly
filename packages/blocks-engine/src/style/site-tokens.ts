@@ -1,0 +1,672 @@
+/**
+ * Site tokens and font faces: what a site defines once and every page reads.
+ *
+ * A token is a NAME the styling layer already knows how to reference —
+ * `tokenCustomProperty` turns `color.primary` into `--site-color-primary`, and
+ * the catalog decides which properties may hold which kind. What was missing
+ * was the other half: the table those names resolve in, and the CSS that makes
+ * them resolve at all.
+ *
+ * ## Names are dot paths; the CSS prefix is applied at emission
+ *
+ * `color.primary`, `space.4`, `content.width`. The prefix is the site's choice
+ * (`--site-` by default) and is validated rather than trusted, because two of
+ * them are reserved: `--nx-` is the admin's own namespace and `--tw-` is
+ * Tailwind's internals. A site that took either would restyle surfaces it does
+ * not own.
+ *
+ * ## Modes are in the model from the start
+ *
+ * Not because dark mode is being built here, but because retrofitting a second
+ * value onto a one-value token is a data migration, and adding it now costs one
+ * optional field. What activates a mode is the HOST's decision — it owns the
+ * document, and it may already have a theme toggle — so this emits the values
+ * under a strategy and takes no position on who flips it.
+ *
+ * @module style/site-tokens
+ */
+import type { ValidationIssue } from "../validation";
+
+import type { TokenKind } from "./catalog-types";
+import { parseColor } from "./contrast";
+import {
+  asciiLower,
+  checkCssValue,
+  checkUrlValue,
+  decodeIdentifier,
+  isCssWideKeyword,
+  unitCategory,
+} from "./css-value";
+import {
+  isTokenName,
+  safeTokenPrefix,
+  tokenCustomProperty,
+} from "./declarations";
+
+/** The modes a token may carry a value for. */
+export type TokenMode = "light" | "dark";
+
+export const TOKEN_MODES: readonly TokenMode[] = ["light", "dark"];
+
+/**
+ * How a dark-mode token block is made to apply.
+ *
+ * `attribute` is the default because it is the only one the site can control:
+ * a host with a theme toggle sets `data-nx-theme="dark"` and the values follow.
+ * `media` follows the operating system instead, which is right for a site with
+ * no toggle and wrong for one that has it — hence a choice rather than a
+ * constant.
+ */
+export type DarkModeStrategy = "attribute" | "media";
+
+/** One site token: a name, what kind of value it holds, and that value. */
+export interface SiteToken {
+  /** Dot-path name, as authors read and write it. */
+  name: string;
+  kind: TokenKind;
+  /**
+   * The value for each mode.
+   *
+   * `light` is required and is what a document with no mode resolves — a token
+   * defined only for dark would vanish for every reader who never turns it on.
+   */
+  values: { light: string; dark?: string };
+  /** Author-facing note, carried through DTCG import/export. */
+  description?: string;
+  /**
+   * Vendor data from other tools, carried untouched.
+   *
+   * The DTCG format requires it: "Tools that process design token files MUST
+   * preserve any extension data they do not themselves understand." A token
+   * that came from Figma or Style Dictionary and goes back to it has to arrive
+   * with whatever those tools wrote about it, so importing has somewhere to
+   * put data this system has no opinion on.
+   */
+  extensions?: Readonly<Record<string, unknown>>;
+}
+
+/** Everything a site defines for its pages to read. */
+export interface SiteTokenSet {
+  tokens: readonly SiteToken[];
+  /** Custom-property prefix; `--site-` when unset. */
+  prefix?: string;
+  darkMode?: DarkModeStrategy;
+}
+
+/** One file a font face can be loaded from. */
+export interface FontSource {
+  /**
+   * A path on this site. Absolute-with-host is refused — see
+   * {@link validateFontFace}.
+   */
+  url: string;
+  /** `woff2`, `woff`, … Emitted as `format(…)` when present. */
+  format?: string;
+}
+
+/** A `@font-face` a site self-hosts. */
+export interface FontFaceDef {
+  family: string;
+  src: readonly FontSource[];
+  weight?: string;
+  style?: string;
+  /** Defaults to `swap`: text is readable while the file loads. */
+  display?: string;
+  unicodeRange?: string;
+}
+
+/**
+ * The attribute a host sets to activate dark values.
+ *
+ * Named rather than themed: it says what it selects and belongs to no design
+ * system, so a host wiring its own toggle to it is not adopting anything else.
+ */
+export const DARK_MODE_ATTRIBUTE = "data-nx-theme";
+
+/** The `format()` hints a face may declare: plain keywords, nothing else. */
+const FONT_FORMAT = /^[a-z0-9-]+$/i;
+
+/**
+ * The prefix to emit under, with a reason when the requested one is refused.
+ *
+ * The rule itself lives with the compiler, which is the other half of the same
+ * decision: this side writes the definitions and that side writes the `var()`
+ * that reads them, so a prefix either side refused alone would leave the two
+ * pointing at different custom properties. Only the shape of the report differs
+ * here, because the token table answers in issues rather than strings.
+ *
+ * A refused prefix falls back rather than throwing, in keeping with the rest of
+ * the compiler: one bad setting should cost the site its naming choice, not its
+ * stylesheet.
+ */
+export function resolveTokenPrefix(prefix: string | undefined): {
+  prefix: string;
+  issue?: ValidationIssue;
+} {
+  const safe = safeTokenPrefix(prefix);
+  return safe.warning === undefined
+    ? { prefix: safe.prefix }
+    : { prefix: safe.prefix, issue: tokenIssue(safe.warning) };
+}
+
+function tokenIssue(
+  message: string,
+  severity: ValidationIssue["severity"] = "warning"
+): ValidationIssue {
+  return { path: "siteTokens", code: "invalid-style-value", severity, message };
+}
+
+/**
+ * Whether a name may be turned into a custom property.
+ *
+ * The compiler's grammar, not a second one: it is what a `$token` reference is
+ * held to, and a table that accepted names references cannot name would hold
+ * tokens that exist and resolve to nothing. Re-exported because this is where
+ * a reader of the token table looks for it.
+ *
+ * The check matters beyond agreement, too — the name becomes the custom
+ * PROPERTY, so a name carrying `}` closes the rule the emitter opened and
+ * everything after it is CSS the site never wrote. `x:1}body{color` is the
+ * whole attack.
+ */
+export { isTokenName };
+
+/**
+ * A font descriptor that goes inside a quoted CSS string, made safe to put
+ * there.
+ *
+ * A family name is author data and reaches the stylesheet inside quotes, so a
+ * quote in it closes the string and the rest is read as CSS —
+ * `Brand";src:url(/ok)}body{display:none}/*` ends the rule and writes another.
+ * Escaped rather than refused, because a backslash or a quote in a family name
+ * is legal CSS and the escape is what the spec provides for exactly this.
+ */
+function cssString(value: string): string {
+  let out = "";
+  for (const char of value) {
+    const code = char.codePointAt(0) ?? 0;
+    if (char === "\\" || char === '"') {
+      out += `\\${char}`;
+    } else if (code < 0x20 || code === 0x7f) {
+      // A raw control character cannot appear in a CSS string — a newline ends
+      // it outright, so the whole `@font-face` is discarded and the uploaded
+      // font never loads. The hex escape is what the grammar provides, and the
+      // trailing space is what ends the escape.
+      out += `\\${code.toString(16)} `;
+    } else {
+      out += char;
+    }
+  }
+  return out;
+}
+
+/**
+ * Descriptor values that are written unquoted, so they are checked instead.
+ *
+ * `font-weight`, `font-style`, `font-display` and `unicode-range` land in the
+ * rule as written. `checkCssValue` is the same guard the style compiler applies
+ * to any stored value, and it refuses the characters that end a declaration or
+ * a rule.
+ */
+function unquotedDescriptor(value: string): boolean {
+  return checkCssValue(value) === null;
+}
+
+/**
+ * Functions in a token value that can make the browser fetch something.
+ *
+ * `url()` is the obvious one; `image-set()` and `cross-fade()` hold URLs of
+ * their own, `element()` and `paint()` name a source, and `attr()` reads its
+ * destination out of the DOM at use time, where nothing here can see it.
+ */
+const FETCHING_FUNCTION =
+  /(^|[^\w-])(url|src|image|image-set|-webkit-image-set|cross-fade|-webkit-cross-fade|element|paint|attr)\s*\(/;
+
+/**
+ * Whether a token value can reach off this site, which none of them may.
+ *
+ * A token is emitted as a custom property and read back by `var()` somewhere
+ * this cannot see. That is the whole problem: sanitized custom CSS may write
+ * `background: var(--site-hero)` with no URL literal anywhere in it, so the
+ * origin policy that guards custom CSS has nothing to inspect and the
+ * selector-gated request channel it exists to close is open again through
+ * stored token data.
+ *
+ * Refused outright rather than origin-checked, because no token KIND denotes a
+ * URL — colours, lengths, durations, families, weights, numbers and shadows are
+ * the whole list. A value that fetches is not a restricted token, it is not a
+ * token. An image belongs in a block's `backgroundImage`, which carries the
+ * declared-hosts policy and is checked where it is written.
+ *
+ * Read decoded, because `\75 rl(…)` IS `url(…)` to a browser and a check
+ * against the raw text is one an author can write straight past.
+ */
+export function tokenValueFetches(value: string): boolean {
+  const read = asciiLower(decodeIdentifier(value));
+  return FETCHING_FUNCTION.test(read) || REMOTE_REFERENCE.test(read);
+}
+
+/**
+ * A remote destination written as text rather than as a call.
+ *
+ * The function check above is not enough on its own, because the FUNCTION need
+ * not be in the token. A token holding the bare string
+ * `"https://evil.example/a.png"` is inert until custom CSS writes
+ * `background-image: image-set(var(--site-x) 1x)` — and that declaration
+ * contains no URL for the origin policy to inspect, only a substitution. The
+ * two halves are written in different places by different people, which is
+ * exactly why neither half can be judged alone.
+ *
+ * Same-origin paths are left alone. `/logo.svg` resolves against the site
+ * serving the page and needs no allowlisting, which is the same line
+ * {@link isSameOriginUrl} draws for a font file. What is refused is anything
+ * naming another server: a scheme, or the `//host` form that names one while
+ * looking like a path.
+ */
+const REMOTE_REFERENCE = /\/\/|(?:^|[\s"'(,])[a-z][a-z0-9+.-]*:/;
+
+/**
+ * A value whose kind nothing can judge from the text alone.
+ *
+ * `var()` resolves elsewhere, `calc()` and its relatives compute, and
+ * `color-mix()` produces a colour from arguments this is not going to evaluate.
+ * A guess about any of them would be a guess, so they are passed.
+ */
+const OPAQUE_VALUE =
+  /^(?:var|calc|clamp|min|max|env|attr|color-mix|light-dark|round|abs)\(/i;
+
+/**
+ * A bare number, with the unit it carries — the shape most kinds disagree over.
+ *
+ * The exponent branch is not decoration: without it `1e3px` does not match at
+ * all, so the check reaches no verdict and stays silent about a duration token
+ * that will be dropped by the browser. The rest of the token code accepts that
+ * spelling, and a grammar narrower here than there is a check that quietly
+ * stops covering the values the other side lets through.
+ */
+/** The only words `font-weight` takes; every other value is a number. */
+const FONT_WEIGHT_KEYWORDS = new Set(["normal", "bold", "bolder", "lighter"]);
+
+const MEASUREMENT = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?([a-z%]*)$/i;
+
+/**
+ * Why a value cannot be what its token says it is, when that is knowable.
+ *
+ * The kind is not decoration: it decides which properties may reference the
+ * token, so a `dimension` holding `red` compiles into `padding:var(--site-…)`
+ * and the browser drops the declaration at use time. Nothing on the page says
+ * why, and the author is left looking at a padding that does not apply.
+ *
+ * Deliberately one-sided. It reports only what it is CERTAIN of — a length
+ * where a colour belongs, a colour where a length belongs — and stays quiet
+ * about everything it merely cannot parse, because `oklch()`, a named colour
+ * and next year's colour function are all valid CSS this has no business
+ * refusing. And it is a warning rather than a refusal for the same reason: a
+ * wrong verdict then costs a message, not the token.
+ */
+export function checkTokenKind(
+  kind: TokenKind,
+  value: string
+): string | undefined {
+  const text = value.trim();
+  if (text === "" || OPAQUE_VALUE.test(text)) return undefined;
+  if (isCssWideKeyword(asciiLower(text))) return undefined;
+
+  const measured = MEASUREMENT.exec(text);
+  const unit = measured?.[1]?.toLowerCase();
+  const amount = measured === null ? undefined : Number.parseFloat(text);
+  const isColor = parseColor(text) !== undefined;
+
+  switch (kind) {
+    case "color":
+      // A number is never a colour, whatever unit it wears.
+      return measured
+        ? `is a ${unit === "" ? "number" : "measurement"}, not a colour`
+        : undefined;
+    case "dimension": {
+      if (isColor) return "is a colour, not a length";
+      if (unit === undefined) return undefined;
+      // Only zero may go without a unit; `16` is not `16px` to CSS.
+      if (unit === "") {
+        return amount === 0
+          ? undefined
+          : "is a number with no unit, so it is not a length";
+      }
+      // A percentage stands in for a length wherever a length token is used.
+      // Anything else that measures something — `150ms`, `20deg` — measures the
+      // wrong quantity, and the browser drops the declaration that reads it.
+      // Judged by what the unit MEASURES rather than by a second list of length
+      // units kept beside the one the value checker already has.
+      if (unit === "%") return undefined;
+      const measures = unitCategory(unit);
+      return measures === "length"
+        ? undefined
+        : `is measured in ${unit}, which is ${measures ?? "not a unit CSS knows"}, not a length`;
+    }
+    case "duration": {
+      if (isColor) return "is a colour, not a duration";
+      if (unit === undefined) return undefined;
+      // CSS allows a unitless zero for a time, and only a unitless one: `0px`
+      // is still a length, and `animation-duration: var(--site-time)` reading
+      // it is a declaration the browser drops.
+      if (unit === "" && amount === 0) return undefined;
+      return unitCategory(unit) === "time"
+        ? undefined
+        : `is measured in ${unit === "" ? "no unit" : unit}, not seconds or milliseconds`;
+    }
+    case "number":
+      if (isColor) return "is a colour, not a number";
+      return unit !== undefined && unit !== ""
+        ? `carries the unit "${unit}", so it is not a plain number`
+        : undefined;
+    case "fontWeight":
+      if (unit !== undefined && unit !== "") {
+        return `carries the unit "${unit}", so it is not a font weight`;
+      }
+      if (amount !== undefined) {
+        return amount < 1 || amount > 1000
+          ? "is outside the 1 to 1000 a font weight may take"
+          : undefined;
+      }
+      // Not a number, so it has to be one of the four words the property
+      // takes. Accepting every other word meant a weight of `heavy` was
+      // emitted with nothing said about it and dropped where it was used.
+      return FONT_WEIGHT_KEYWORDS.has(asciiLower(text))
+        ? undefined
+        : `is not a font weight; the words are ${[...FONT_WEIGHT_KEYWORDS].join(", ")}`;
+    // A family is any text, a shadow is a list this does not parse, and
+    // `custom` exists precisely so a site can hold something with no rules.
+    case "fontFamily":
+    case "shadow":
+    case "custom":
+      return undefined;
+  }
+}
+
+/**
+ * The tokens a site starts with.
+ *
+ * Deliberately small. Every entry here is one an author would otherwise have to
+ * invent before the system does anything for them, and `content.width` is the
+ * one that earns its place loudest: the Container preset reads it, so editing
+ * one token re-widths every container on the site. A default set that tried to
+ * be a design system would be a set most sites delete.
+ */
+export function defaultSiteTokens(): SiteToken[] {
+  return [
+    {
+      name: "content.width",
+      kind: "dimension",
+      values: { light: "72rem" },
+      description: "How wide a centred container may grow.",
+    },
+    {
+      name: "color.text",
+      kind: "color",
+      values: { light: "#111827", dark: "#f9fafb" },
+    },
+    {
+      name: "color.background",
+      kind: "color",
+      values: { light: "#ffffff", dark: "#0b0f19" },
+    },
+    {
+      name: "color.primary",
+      kind: "color",
+      values: { light: "#2563eb", dark: "#60a5fa" },
+    },
+    { name: "font.body", kind: "fontFamily", values: { light: "system-ui" } },
+    { name: "space.4", kind: "dimension", values: { light: "1rem" } },
+  ];
+}
+
+/**
+ * A font face a site may actually serve, or the reasons it may not.
+ *
+ * Self-hosted only, and this is a product rule rather than a technical one: a
+ * `@font-face` pointing at somebody else's server makes every visitor's browser
+ * announce itself to that server, with their IP address, before a word of the
+ * page is readable. A German court found exactly that arrangement unlawful for
+ * Google Fonts, so a site cannot be handed a text box that quietly recreates
+ * it. The remedy is to upload the file, which is why the message says so.
+ */
+export function validateFontFace(
+  face: FontFaceDef,
+  path: string
+): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  const fail = (message: string): void => {
+    issues.push({
+      path,
+      code: "invalid-style-value",
+      severity: "error",
+      message,
+    });
+  };
+
+  if (face.family.trim() === "") fail("A font needs a family name.");
+  // The family is escaped at emission so a quote cannot close its string, but
+  // it is refused outright if it carries structural characters. Escaping alone
+  // would leave `{`, `}` and `<` sitting inside a stylesheet that is written
+  // into a `<style>` element — and `</style>` inside a quoted CSS string still
+  // ends the element, because the HTML parser reads the bytes before the CSS
+  // parser ever sees the quotes.
+  else if (checkCssValue(face.family) !== null) {
+    fail(`"${face.family}" is not a usable font family name.`);
+  }
+  if (face.src.length === 0) {
+    fail(`"${face.family}" has no font file to load.`);
+  }
+
+  // Every descriptor is author data that reaches the stylesheet, not only the
+  // URL. The family is quoted and therefore escaped at emission; these are
+  // written as given, so they are checked here.
+  const unquoted: Array<[string, string | undefined]> = [
+    ["font-weight", face.weight],
+    ["font-style", face.style],
+    ["font-display", face.display],
+    ["unicode-range", face.unicodeRange],
+  ];
+  for (const [descriptor, value] of unquoted) {
+    if (value !== undefined && !unquotedDescriptor(value)) {
+      fail(`"${face.family}" has a ${descriptor} value that cannot be used.`);
+    }
+  }
+  for (const source of face.src) {
+    if (source.format !== undefined && !FONT_FORMAT.test(source.format)) {
+      fail(`"${face.family}" has a font format that cannot be used.`);
+    }
+  }
+
+  for (const source of face.src) {
+    const rejection = checkUrlValue(source.url, "raw");
+    if (rejection !== null) {
+      fail(`"${face.family}" has a font file URL that cannot be used.`);
+      continue;
+    }
+    if (!isSameOriginUrl(source.url)) {
+      fail(
+        `"${face.family}" loads a font from "${source.url}", which is on another server. Upload the font file to this site and point it at a path here — a font fetched from elsewhere tells that server every visitor's IP address before the page can be read.`
+      );
+    }
+  }
+
+  return issues;
+}
+
+/**
+ * Whether a URL stays on the site serving the page.
+ *
+ * A path, with or without a leading slash, and nothing carrying a scheme or an
+ * authority. `//host/f.woff2` is refused with the rest: it names another server
+ * while looking like a path, which is the whole reason it is worth naming here.
+ */
+function isSameOriginUrl(url: string): boolean {
+  const value = url.trim();
+  if (value === "") return false;
+  if (value.startsWith("//")) return false;
+  return !/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(value);
+}
+
+/**
+ * The `@font-face` rules for the faces that passed validation.
+ *
+ * A face with any error contributes nothing: half a `@font-face` — a family
+ * declaring a file the browser will not fetch — renders as the default font
+ * rather than as the next family the author listed, so emitting it would be
+ * worse than leaving it out.
+ */
+export function emitFontFaces(faces: readonly FontFaceDef[]): {
+  css: string;
+  issues: ValidationIssue[];
+} {
+  const issues: ValidationIssue[] = [];
+  const blocks: string[] = [];
+
+  faces.forEach((face, index) => {
+    const faceIssues = validateFontFace(face, `fonts[${index}]`);
+    issues.push(...faceIssues);
+    if (faceIssues.length > 0) return;
+
+    const src = face.src
+      .map(source =>
+        source.format === undefined || source.format === ""
+          ? `url("${cssString(source.url)}")`
+          : `url("${cssString(source.url)}") format("${cssString(source.format)}")`
+      )
+      .join(",");
+
+    const parts = [
+      `font-family:"${cssString(face.family)}"`,
+      `src:${src}`,
+      `font-display:${face.display ?? "swap"}`,
+    ];
+    if (face.weight !== undefined) parts.push(`font-weight:${face.weight}`);
+    if (face.style !== undefined) parts.push(`font-style:${face.style}`);
+    if (face.unicodeRange !== undefined) {
+      parts.push(`unicode-range:${face.unicodeRange}`);
+    }
+    blocks.push(`@font-face{${parts.join(";")}}`);
+  });
+
+  return { css: blocks.join(""), issues };
+}
+
+/**
+ * The custom-property blocks a site's tokens resolve in.
+ *
+ * Emitted onto a selector the caller supplies rather than `:root`, so a page's
+ * tokens reach the page and stop there. Writing them at the document root would
+ * make a site's values apply to a host's own markup, which is the collision
+ * this styling layer spends its effort avoiding everywhere else.
+ *
+ * The dark block is only written when some token actually differs in dark. An
+ * empty block is not free: it is a selector a host reads in devtools and takes
+ * for a place where something should be happening.
+ */
+export function emitTokenBlocks(
+  set: SiteTokenSet,
+  selector: string
+): { css: string; issues: ValidationIssue[] } {
+  const { prefix, issue } = resolveTokenPrefix(set.prefix);
+  const issues: ValidationIssue[] = issue ? [issue] : [];
+
+  const light: string[] = [];
+  const dark: string[] = [];
+  const seen = new Map<string, string>();
+
+  for (const token of set.tokens) {
+    // The name becomes the custom PROPERTY, so it is checked before it is
+    // composed: a name holding `}` closes the rule this opened, and everything
+    // after it is CSS the site never wrote.
+    if (!isTokenName(token.name)) {
+      issues.push(
+        tokenIssue(
+          `"${token.name}" is not a token name, so it was not written. A name is dot-separated words of letters, digits and dashes, like "color.primary".`
+        )
+      );
+      continue;
+    }
+    // The value is checked with the same guard the style compiler applies to
+    // any stored value. Without it a semicolon ends the custom property and
+    // whatever follows becomes a declaration on the page root.
+    const invalid = TOKEN_MODES.filter(mode => {
+      const value = token.values[mode];
+      return value !== undefined && checkCssValue(value) !== null;
+    });
+    if (invalid.length > 0) {
+      issues.push(
+        tokenIssue(
+          `"${token.name}" has a value that cannot be used, so it was not written.`
+        )
+      );
+      continue;
+    }
+    // Refused as an error rather than reported and written, unlike the kind
+    // check below: this one is not about whether the value renders. A token
+    // that fetches is read by a `var()` in a stylesheet that has no URL in it
+    // for the origin policy to see.
+    const fetching = TOKEN_MODES.filter(mode => {
+      const value = token.values[mode];
+      return value !== undefined && tokenValueFetches(value);
+    });
+    if (fetching.length > 0) {
+      issues.push(
+        tokenIssue(
+          `"${token.name}" has a value that would load a file, so it was not written. A token holds a colour, a length, a duration, a font or a number; put an image on the block that shows it, where the site's allowed hosts still apply.`,
+          "error"
+        )
+      );
+      continue;
+    }
+    const property = tokenCustomProperty(token.name, prefix);
+    // Two names can land on one property — `color.primary-dark` and
+    // `color-primary.dark` both give `--site-color-primary-dark`. Emitting both
+    // would let one silently resolve to the other's value, so the second is
+    // refused and named.
+    const previous = seen.get(property);
+    if (previous !== undefined) {
+      issues.push(
+        tokenIssue(
+          `"${token.name}" and "${previous}" both become "${property}", so "${token.name}" was not written. Rename one of them.`
+        )
+      );
+      continue;
+    }
+    seen.set(property, token.name);
+
+    // Reported, and then written anyway. A value that does not match its kind
+    // is dropped by the browser where it is USED, which costs the author the
+    // one declaration and no more; a refusal here would cost them the token on
+    // a verdict this is deliberately not certain enough to act on.
+    for (const mode of TOKEN_MODES) {
+      const modeValue = token.values[mode];
+      if (modeValue === undefined) continue;
+      const mismatch = checkTokenKind(token.kind, modeValue);
+      if (mismatch !== undefined) {
+        issues.push(
+          tokenIssue(
+            `"${token.name}" is a ${token.kind} token, but its ${mode} value "${modeValue}" ${mismatch}. It was written as given, and will do nothing where the token is used.`
+          )
+        );
+      }
+    }
+
+    light.push(`${property}:${token.values.light}`);
+    if (token.values.dark !== undefined) {
+      dark.push(`${property}:${token.values.dark}`);
+    }
+  }
+
+  if (light.length === 0) return { css: "", issues };
+
+  let css = `${selector}{${light.join(";")}}`;
+  if (dark.length > 0) {
+    const body = `${selector}{${dark.join(";")}}`;
+    css +=
+      (set.darkMode ?? "attribute") === "media"
+        ? `@media (prefers-color-scheme:dark){${body}}`
+        : `[${DARK_MODE_ATTRIBUTE}="dark"] ${body}`;
+  }
+  return { css, issues };
+}

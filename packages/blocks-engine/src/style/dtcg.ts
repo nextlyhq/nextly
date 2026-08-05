@@ -1,0 +1,788 @@
+/**
+ * Site tokens as a DTCG file, and back.
+ *
+ * The Design Tokens Community Group format is what Figma, Style Dictionary and
+ * Tokens Studio read and write, so this is the door a site's tokens leave and
+ * arrive through. The token KINDS were chosen as a subset of DTCG's `$type`
+ * vocabulary for exactly this reason: the mapping is a projection rather than a
+ * translation.
+ *
+ * ## A dot-path name is a PATH, not a name
+ *
+ * DTCG reserves the period: "the following characters MUST NOT be used anywhere
+ * in a token or group name: `{`, `}`, `.`". So `color.primary` is not a DTCG
+ * name at all — it is the token `primary` inside the group `color`. Export
+ * nests, import flattens, and because the spec forbids a period inside a name
+ * the two directions cannot disagree about where a path divides.
+ *
+ * ## Most DTCG values are objects now
+ *
+ * A dimension is `{"value": 16, "unit": "px"}` and only `px` or `rem` are
+ * allowed; a duration is the same shape; a colour is
+ * `{"colorSpace", "components", "alpha?", "hex?"}` and a bare hex string is no
+ * longer valid on its own. That has a consequence worth stating plainly rather
+ * than discovering later: a token holding `1.5em`, `100%`, `clamp(...)` or a
+ * `var()` reference **cannot be written as a conformant DTCG value at all**.
+ *
+ * So the export carries two things for every token it can: the native DTCG
+ * value, for the tools this exists to talk to, and the exact CSS under this
+ * vendor's `$extensions` key. Import prefers the extension when it is there,
+ * which makes a Nextly-to-Nextly round trip exact, and falls back to converting
+ * the native value, which makes a file from Figma import correctly. A token
+ * with no representable value is reported rather than emitted with a shape that
+ * would be a lie about what it holds.
+ *
+ * Foreign extension data is carried in both directions untouched, because the
+ * format requires it: "Tools that process design token files MUST preserve any
+ * extension data they do not themselves understand."
+ *
+ * @module style/dtcg
+ */
+import type { ValidationIssue } from "../validation";
+
+import type { TokenKind } from "./catalog-types";
+// The colour reader the contrast utility already uses. One parser rather than
+// two, because a second would have to be kept in step with it by hand and the
+// symptom of failure is silent: an exported `$value` that describes a different
+// colour from the one the site renders.
+import { parseColor } from "./contrast";
+import type { Rgb } from "./contrast";
+import { asciiLower, checkCssValue, decodeIdentifier } from "./css-value";
+import type { SiteToken, SiteTokenSet } from "./site-tokens";
+import { isTokenName, tokenValueFetches } from "./site-tokens";
+
+/** The key this vendor's data lives under, in the notation the format asks for. */
+export const NEXTLY_EXTENSION = "com.nextlyhq.nextly";
+
+/** What this writes under its own extension key. */
+interface NextlyExtension {
+  /** The exact CSS per mode, which is what makes a round trip exact. */
+  css: { light: string; dark?: string };
+  kind: TokenKind;
+}
+
+/** A DTCG group or token; the format is a tree of plain JSON. */
+export type DtcgNode = { [key: string]: unknown };
+
+/** The `$type` each kind projects onto, or `undefined` where DTCG has none. */
+const DTCG_TYPE: Partial<Record<TokenKind, string>> = {
+  color: "color",
+  dimension: "dimension",
+  fontFamily: "fontFamily",
+  fontWeight: "fontWeight",
+  number: "number",
+  duration: "duration",
+  shadow: "shadow",
+};
+
+/** The kinds a `$type` projects back onto. */
+const KIND_BY_TYPE = new Map<string, TokenKind>(
+  Object.entries(DTCG_TYPE).map(([kind, type]) => [type, kind as TokenKind])
+);
+
+function issue(message: string): ValidationIssue {
+  return {
+    path: "siteTokens",
+    code: "invalid-style-value",
+    severity: "warning",
+    message,
+  };
+}
+
+/* ------------------------------------------------------------------ export */
+
+/**
+ * A site's tokens as a DTCG document, with what could not be represented.
+ *
+ * Reported rather than dropped in silence: a designer handed a file with three
+ * tokens missing has no way to know, and the ones that go missing are the
+ * interesting ones — the `clamp()` that took an afternoon to get right.
+ */
+export function tokensToDtcg(set: SiteTokenSet): {
+  document: DtcgNode;
+  issues: ValidationIssue[];
+} {
+  const document: DtcgNode = {};
+  const issues: ValidationIssue[] = [];
+
+  for (const token of set.tokens) {
+    if (!isTokenName(token.name)) {
+      issues.push(
+        issue(`"${token.name}" is not a token name, so it was not exported.`)
+      );
+      continue;
+    }
+
+    const type = DTCG_TYPE[token.kind];
+    const value = type === undefined ? undefined : toDtcgValue(token);
+    if (type === undefined || value === undefined) {
+      issues.push(
+        issue(
+          `"${token.name}" holds a value the design-token format cannot express, so it was not exported. Its value is still here in Nextly.`
+        )
+      );
+      continue;
+    }
+
+    const extension: NextlyExtension = {
+      css:
+        token.values.dark === undefined
+          ? { light: token.values.light }
+          : { light: token.values.light, dark: token.values.dark },
+      kind: token.kind,
+    };
+    const entry: DtcgNode = {
+      $type: type,
+      $value: value,
+      $extensions: {
+        ...(token.extensions ?? {}),
+        [NEXTLY_EXTENSION]: extension,
+      },
+    };
+    if (token.description !== undefined) entry.$description = token.description;
+
+    place(document, token.name.split("."), entry, issues);
+  }
+
+  return { document, issues };
+}
+
+/** Put a token at its path, creating the groups it passes through. */
+function place(
+  root: DtcgNode,
+  path: string[],
+  entry: DtcgNode,
+  issues: ValidationIssue[]
+): void {
+  let node = root;
+  for (let index = 0; index < path.length - 1; index++) {
+    const segment = path[index] ?? "";
+    const existing = node[segment];
+    if (existing === undefined) {
+      const group: DtcgNode = {};
+      node[segment] = group;
+      node = group;
+      continue;
+    }
+    if (!isPlainObject(existing) || "$value" in existing) {
+      // A token and a group cannot share a path: `color.primary` and
+      // `color.primary.hover` ask for `primary` to be both.
+      issues.push(
+        issue(
+          `"${path.join(".")}" cannot be exported, because "${path.slice(0, index + 1).join(".")}" is already a token.`
+        )
+      );
+      return;
+    }
+    node = existing;
+  }
+  const leaf = path[path.length - 1] ?? "";
+  if (node[leaf] !== undefined) {
+    issues.push(issue(`"${path.join(".")}" is exported more than once.`));
+    return;
+  }
+  node[leaf] = entry;
+}
+
+/**
+ * The units the format allows, named once for both directions.
+ *
+ * Export restricting them while import accepted any string is how a file
+ * exported from here could fail to come back: the two sides of one rule, and
+ * only one of them was written down.
+ */
+const DTCG_LENGTH_UNITS = ["px", "rem"];
+const DTCG_TIME_UNITS = ["ms", "s"];
+
+/** A token's light value in the shape its `$type` requires, or `undefined`. */
+function toDtcgValue(token: SiteToken): unknown {
+  const css = token.values.light.trim();
+  switch (token.kind) {
+    case "color":
+      return colorToDtcg(css);
+    case "dimension":
+      return measureToDtcg(css, DTCG_LENGTH_UNITS);
+    case "duration":
+      return measureToDtcg(css, DTCG_TIME_UNITS);
+    case "fontFamily":
+      return familyToDtcg(css);
+    case "fontWeight":
+      return weightToDtcg(css);
+    case "number":
+      return numberToDtcg(css);
+    // A CSS shadow is a list of lengths and a colour in an order DTCG models as
+    // named fields. Converting it means parsing the shorthand, which is the
+    // kind of guessing this file exists to avoid; the extension carries it.
+    case "shadow":
+      return undefined;
+    default:
+      return undefined;
+  }
+}
+
+/** `16px` as `{value, unit}`, when the unit is one the format allows. */
+function measureToDtcg(
+  css: string,
+  units: readonly string[]
+): { value: number; unit: string } | undefined {
+  const match = CSS_MEASURE.exec(css);
+  if (!match) return undefined;
+  const value = Number.parseFloat(match[1] ?? "");
+  // A unit is an identifier, so a browser reads `1r\\65m` as `1rem`. Comparing
+  // the raw text against the allowed units reports a good measurement as one
+  // the format cannot express.
+  const unit = asciiLower(decodeIdentifier(match[2] ?? ""));
+  if (!Number.isFinite(value) || !units.includes(unit)) return undefined;
+  return { value, unit };
+}
+
+/** A hex or `rgb()` colour in the format's object form. */
+function colorToDtcg(css: string): DtcgNode | undefined {
+  const rgb: Rgb | undefined = parseColor(css);
+  if (rgb === undefined) return undefined;
+  const component = (value: number): number =>
+    Math.round((value / 255) * 10000) / 10000;
+  const node: DtcgNode = {
+    colorSpace: "srgb",
+    components: [component(rgb.r), component(rgb.g), component(rgb.b)],
+    hex: toHex(rgb),
+  };
+  if (rgb.a < 1) node.alpha = rgb.a;
+  return node;
+}
+
+/** A family list as one string or an array, which is what the format takes. */
+function familyToDtcg(css: string): string | string[] | undefined {
+  const parts = splitFamilyList(css);
+  if (parts.length === 0) return undefined;
+  // A family list holding `var(--brand-font)` has no DTCG form: the format
+  // stores NAMES, so exporting the text would describe a font literally called
+  // `var(--brand-font)` to every tool that reads the standard value rather than
+  // this vendor's extension. Reported as unrepresentable instead, which is the
+  // same answer a `clamp()` dimension already gets.
+  if (parts.some(part => !part.valid)) return undefined;
+  if (parts.some(part => !part.quoted && /[()]/.test(part.name))) {
+    return undefined;
+  }
+  return parts.length === 1 ? parts[0]?.name : parts.map(part => part.name);
+}
+
+/**
+ * A CSS family list split into its families.
+ *
+ * The comma only separates families outside quotes: `"ACME, Inc", serif` names
+ * two families, not three, and a plain split turns a real company's font into a
+ * fallback list that fails over to a family called `Inc`. Quotes are removed
+ * because the name is the family, not the spelling, and backslash escapes are
+ * resolved for the same reason.
+ */
+function splitFamilyList(css: string): FamilyPart[] {
+  const parts: FamilyPart[] = [];
+  let current = "";
+  let quoted = false;
+  let strings = 0;
+  let outsideQuotes = "";
+  let quote: string | undefined;
+
+  for (let index = 0; index < css.length; index++) {
+    const char = css[index];
+    if (char === "\\") {
+      // An escape stands for what it denotes, which is not always the next
+      // character: `\26 ` is `&`, so `"ACME\26 Co"` is the family `ACME&Co`.
+      // Taking the character after the backslash literally would export the
+      // family `ACME26 Co`, a different font stack to every tool that reads the
+      // standard value.
+      const escape = readCssEscape(css, index);
+      current += escape.text;
+      index = escape.next - 1;
+      continue;
+    }
+    if (quote !== undefined) {
+      if (char === quote) quote = undefined;
+      else current += char;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      // A second string in one item is what makes `"Bad" "Name"` invalid, so
+      // they are counted rather than merely noted.
+      strings += 1;
+      quoted = true;
+      continue;
+    }
+    if (char === ",") {
+      parts.push(finishPart(current, quoted, strings, outsideQuotes));
+      current = "";
+      quoted = false;
+      strings = 0;
+      outsideQuotes = "";
+      continue;
+    }
+    if (quote === undefined) outsideQuotes += char;
+    current += char;
+  }
+  parts.push(finishPart(current, quoted, strings, outsideQuotes));
+
+  return parts.filter(part => part.name !== "");
+}
+
+/** One family from a list, how it was written, and whether CSS accepts it. */
+interface FamilyPart {
+  name: string;
+  quoted: boolean;
+  valid: boolean;
+}
+
+/**
+ * One item of a family list, judged against the grammar CSS applies to it.
+ *
+ * `<family-name>` is one string OR a run of identifiers, exclusively. `"Bad"
+ * "Name"` is neither, and a browser drops the declaration that holds it — so
+ * joining the two into `Bad Name` would export a font stack the site never
+ * rendered to any tool reading the standard value.
+ */
+function finishPart(
+  current: string,
+  quoted: boolean,
+  strings: number,
+  outsideQuotes: string
+): FamilyPart {
+  const name = current.trim();
+  const valid = quoted
+    ? strings === 1 && outsideQuotes.trim() === ""
+    : strings === 0;
+  return { name, quoted, valid };
+}
+
+/**
+ * The CSS `<number>` grammar, which is wider than one canonical spelling.
+ *
+ * `1.0`, `+2` and `1e3` are all valid numbers a person may reasonably have
+ * typed. Accepting only the text `String(Number.parseFloat(x))` happens to
+ * produce reports those as inexpressible and drops them from the export, which
+ * is a formatting preference presented to the author as a limitation of the
+ * format. The exact text is kept in the extension either way, so the round trip
+ * stays byte for byte.
+ */
+// A decimal point is consumed only when a digit follows it: CSS reads `1.` as a
+// number and then a delimiter, not as the number `1`. Accepting it let `1.px`
+// split into `1` + `px` and export as a dimension the browser would drop.
+const CSS_NUMBER_SOURCE = "[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:[eE][+-]?\\d+)?";
+const CSS_NUMBER = new RegExp(`^${CSS_NUMBER_SOURCE}$`);
+
+/**
+ * The same number, followed by a unit.
+ *
+ * Built from one source rather than written again, because a measurement is a
+ * number with a unit on it and two spellings of "number" is how the two come to
+ * disagree — a token exporting as `1e3` while `1e3px` is reported as something
+ * the format cannot express.
+ */
+const CSS_MEASURE = new RegExp(
+  `^(${CSS_NUMBER_SOURCE})((?:[a-zA-Z]|\\\\[0-9a-fA-F]{1,6}\\s?|\\\\.)+)$`
+);
+
+/** A number token as the format stores it: a JSON number. */
+function numberToDtcg(css: string): number | undefined {
+  if (!CSS_NUMBER.test(css)) return undefined;
+  const value = Number.parseFloat(css);
+  return Number.isFinite(value) ? value : undefined;
+}
+
+/** A weight as a number, or one of the two keywords the format names. */
+function weightToDtcg(css: string): number | string | undefined {
+  const numeric = numberToDtcg(css);
+  if (numeric !== undefined) return numeric;
+  const keyword = css.toLowerCase();
+  return keyword === "normal" || keyword === "bold" ? keyword : undefined;
+}
+
+/* ------------------------------------------------------------------ import */
+
+/**
+ * The tokens a DTCG document describes.
+ *
+ * Everything it cannot read is reported rather than guessed at, because a token
+ * imported with the wrong value is worse than one that did not arrive: the site
+ * renders, and nobody looks again.
+ */
+export function dtcgToTokens(input: unknown): {
+  tokens: SiteToken[];
+  issues: ValidationIssue[];
+} {
+  const tokens: SiteToken[] = [];
+  const issues: ValidationIssue[] = [];
+  if (!isPlainObject(input)) {
+    return {
+      tokens,
+      issues: [issue("The file is not a design-token document.")],
+    };
+  }
+  read(input, [], undefined, tokens, issues);
+  return { tokens, issues };
+}
+
+/** Walk a group, carrying the `$type` its children inherit. */
+function read(
+  node: DtcgNode,
+  path: string[],
+  inherited: string | undefined,
+  tokens: SiteToken[],
+  issues: ValidationIssue[]
+): void {
+  const groupType = typeof node.$type === "string" ? node.$type : inherited;
+
+  for (const [key, child] of Object.entries(node)) {
+    // `$`-prefixed keys are the format's own; a name may not begin with one.
+    if (key.startsWith("$")) continue;
+    if (!isPlainObject(child)) continue;
+    const here = [...path, key];
+
+    if ("$value" in child) {
+      const token = readToken(child, here, groupType, issues);
+      if (token !== undefined) tokens.push(token);
+      continue;
+    }
+    read(child, here, groupType, tokens, issues);
+  }
+}
+
+/** One token, preferring this vendor's exact CSS over a conversion. */
+function readToken(
+  node: DtcgNode,
+  path: string[],
+  inherited: string | undefined,
+  issues: ValidationIssue[]
+): SiteToken | undefined {
+  // Each segment on its own first. The format forbids `.` in a name, so a key
+  // spelled `"color.primary"` is malformed — joined into the dot path it is
+  // indistinguishable from the nested `color` -> `primary` it would collide
+  // with, and the next export would rewrite it into exactly those groups.
+  const malformed = path.find(segment => /[.{}]/.test(segment));
+  if (malformed !== undefined) {
+    issues.push(
+      issue(
+        `"${malformed}" is not a usable name in a design-token file: a name may not contain ".", "{" or "}". It was skipped.`
+      )
+    );
+    return undefined;
+  }
+  const name = path.join(".");
+  if (!isTokenName(name)) {
+    issues.push(
+      issue(`"${name}" is not a usable token name, so it was skipped.`)
+    );
+    return undefined;
+  }
+
+  const extensions = isPlainObject(node.$extensions)
+    ? { ...node.$extensions }
+    : {};
+  const own = extensions[NEXTLY_EXTENSION];
+  // Carried, not consumed: everything except this vendor's own key goes back
+  // out with the token, which is what the format requires of any tool.
+  delete extensions[NEXTLY_EXTENSION];
+
+  const description =
+    typeof node.$description === "string" ? node.$description : undefined;
+  const carried = Object.keys(extensions).length > 0 ? extensions : undefined;
+
+  // The exact CSS this system wrote, when the file came from here. Read field
+  // by field rather than asserted: the extension is arbitrary JSON from a file,
+  // and a cast would be this function agreeing to whatever shape it found.
+  if (isPlainObject(own)) {
+    const css = own.css;
+    const kind = own.kind;
+    if (isPlainObject(css) && typeof css.light === "string" && isKind(kind)) {
+      const dark = css.dark;
+      const values =
+        typeof dark === "string"
+          ? { light: css.light, dark }
+          : { light: css.light };
+      // The extension is arbitrary JSON from a file, so its CSS gets the same
+      // guards a value read from `$value` does. It is the shorter path, not the
+      // trusted one.
+      if (!isWritableValue(values, name, issues)) return undefined;
+      return {
+        name,
+        kind,
+        values,
+        ...(description !== undefined ? { description } : {}),
+        ...(carried !== undefined ? { extensions: carried } : {}),
+      };
+    }
+  }
+
+  const type = typeof node.$type === "string" ? node.$type : inherited;
+  const kind = type === undefined ? undefined : KIND_BY_TYPE.get(type);
+  if (kind === undefined) {
+    issues.push(
+      issue(
+        `"${name}" has the type "${type ?? "none"}", which this site has no token kind for, so it was skipped.`
+      )
+    );
+    return undefined;
+  }
+
+  const light = fromDtcgValue(node.$value, kind);
+  if (light === undefined) {
+    issues.push(
+      issue(`"${name}" has a value that could not be read, so it was skipped.`)
+    );
+    return undefined;
+  }
+
+  const values = { light };
+  if (!isWritableValue(values, name, issues)) return undefined;
+  return {
+    name,
+    kind,
+    values,
+    ...(description !== undefined ? { description } : {}),
+    ...(carried !== undefined ? { extensions: carried } : {}),
+  };
+}
+
+/**
+ * Whether an imported value could ever be written, reported where it arrived.
+ *
+ * The emitter refuses these anyway, so nothing unsafe reaches a stylesheet
+ * either way. What changes is WHERE the author is told: without this the file
+ * imports cleanly, the token is stored, and the reason appears on every page
+ * compile from then on instead of once, naming the import that carried it.
+ *
+ * The same two guards the emitter applies, called from here rather than
+ * restated — a value the emitter would refuse and this accepted, or the
+ * reverse, is a disagreement with no symptom to follow.
+ */
+function isWritableValue(
+  values: { light: string; dark?: string },
+  name: string,
+  issues: ValidationIssue[]
+): boolean {
+  for (const [mode, value] of Object.entries(values)) {
+    if (typeof value !== "string") continue;
+    if (checkCssValue(value) !== null) {
+      issues.push(
+        issue(
+          `"${name}" has a ${mode} value that cannot be written as CSS, so it was skipped.`
+        )
+      );
+      return false;
+    }
+    if (tokenValueFetches(value)) {
+      issues.push(
+        issue(
+          `"${name}" has a ${mode} value that would load a file, so it was skipped. A token holds a colour, a length, a duration, a font or a number.`
+        )
+      );
+      return false;
+    }
+  }
+  return true;
+}
+
+/** Whether a value is one of this system's token kinds. */
+function isKind(value: unknown): value is TokenKind {
+  return typeof value === "string" && Object.hasOwn(DTCG_TYPE, value);
+}
+
+/** A DTCG value as the CSS this system stores, or `undefined`. */
+function fromDtcgValue(value: unknown, kind: TokenKind): string | undefined {
+  switch (kind) {
+    case "color":
+      return colorFromDtcg(value);
+    case "dimension":
+    case "duration": {
+      if (!isPlainObject(value)) return undefined;
+      const amount = value.value;
+      const unit = value.unit;
+      // The same units the export side allows, so the two directions agree. A
+      // unit is text from a file being concatenated into a stored value: read
+      // unchecked, `{ value: 16, unit: "px;color:red" }` becomes CSS nothing
+      // here wrote.
+      const allowed =
+        kind === "dimension" ? DTCG_LENGTH_UNITS : DTCG_TIME_UNITS;
+      if (
+        typeof amount !== "number" ||
+        !Number.isFinite(amount) ||
+        typeof unit !== "string" ||
+        !allowed.includes(unit.toLowerCase())
+      ) {
+        return undefined;
+      }
+      return `${amount}${unit.toLowerCase()}`;
+    }
+    case "fontFamily":
+      // A DTCG family value is a NAME, not CSS. `ACME,Inc` is one family in the
+      // file and two the moment it is written into a stylesheet unquoted, and a
+      // name holding a quote produces CSS that does not parse at all.
+      if (typeof value === "string") return cssFamilyName(value);
+      if (Array.isArray(value) && value.every(v => typeof v === "string")) {
+        return value.map(cssFamilyName).join(", ");
+      }
+      return undefined;
+    case "fontWeight":
+      if (typeof value === "number") return String(value);
+      return typeof value === "string" ? value : undefined;
+    case "number":
+      return typeof value === "number" ? String(value) : undefined;
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * A DTCG colour as CSS.
+ *
+ * The `hex` fallback is preferred where the file supplies one, because it is
+ * exactly what the format says it is for and it round-trips byte for byte.
+ * Otherwise the components are written as `rgb()`, which every browser reads —
+ * `color(srgb …)` is newer and this is a value that has to render.
+ */
+function colorFromDtcg(value: unknown): string | undefined {
+  if (!isPlainObject(value)) return undefined;
+  // `alpha` is a member of its own, and `hex` is the six-digit fallback for the
+  // colour WITHOUT it. Taking the hex on its own therefore imports a
+  // half-transparent colour as an opaque one — a value that renders, looks
+  // deliberate, and is not the colour the file described.
+  // Validated rather than clamped, for the same reason the components are: an
+  // alpha of 2 or -0.5 is not an alpha, and folding it to 1 or 0 imports a
+  // colour the file did not describe.
+  if (
+    value.alpha !== undefined &&
+    (typeof value.alpha !== "number" ||
+      !Number.isFinite(value.alpha) ||
+      value.alpha < 0 ||
+      value.alpha > 1)
+  ) {
+    return undefined;
+  }
+  const alpha = typeof value.alpha === "number" ? value.alpha : 1;
+  if (typeof value.hex === "string" && /^#[0-9a-f]{6}$/i.test(value.hex)) {
+    if (alpha >= 1) return value.hex;
+    const rgb = parseColor(value.hex);
+    if (rgb !== undefined) return `rgb(${rgb.r} ${rgb.g} ${rgb.b} / ${alpha})`;
+  }
+  const components = value.components;
+  // Exactly three. sRGB has three channels and alpha is a member of its own, so
+  // a fourth entry means the value was not written as the format describes —
+  // dropping it silently would import a colour nobody wrote.
+  if (!Array.isArray(components) || components.length !== 3) return undefined;
+  if (value.colorSpace !== "srgb") return undefined;
+  const channels = components;
+  if (!channels.every(part => typeof part === "number")) return undefined;
+  // Refused rather than clamped. A component outside 0-1 is not an sRGB
+  // channel, and folding `[2, 0, 0]` down to red stores a colour the file did
+  // not describe — rendered, believed, and never reported.
+  if (
+    !channels.every(part => Number.isFinite(part) && part >= 0 && part <= 1)
+  ) {
+    return undefined;
+  }
+  const [r, g, b] = channels.map(part => Math.round(part * 255));
+  return alpha < 1 ? `rgb(${r} ${g} ${b} / ${alpha})` : `rgb(${r} ${g} ${b})`;
+}
+
+/* ------------------------------------------------------------------ shared */
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * One CSS escape sequence, and where the text continues after it.
+ *
+ * Two forms, and only one of them is "the next character". A backslash followed
+ * by up to six hex digits is that code point, and a single whitespace after the
+ * digits belongs to the escape rather than to the name — that trailing space is
+ * how `\26 Co` says `&Co` instead of leaving the parser to guess where the hex
+ * ended. Anything else after a backslash stands for itself.
+ */
+function readCssEscape(
+  text: string,
+  at: number
+): { text: string; next: number } {
+  const hex = /^[0-9a-fA-F]{1,6}/.exec(text.slice(at + 1, at + 7));
+  if (hex === null) {
+    return { text: text[at + 1] ?? "", next: at + 2 };
+  }
+  const digits = hex[0];
+  let next = at + 1 + digits.length;
+  // Exactly one whitespace character is consumed as the terminator.
+  if (/\s/.test(text[next] ?? "")) next += 1;
+  const code = Number.parseInt(digits, 16);
+  // A zero or out-of-range code point is the replacement character, which is
+  // what CSS says a parser must substitute.
+  const safe = code === 0 || code > 0x10ffff ? 0xfffd : code;
+  return { text: String.fromCodePoint(safe), next };
+}
+
+/**
+ * A family name written so CSS reads back the name the file gave.
+ *
+ * `<family-name>` is a string or a run of identifiers, so a name that already
+ * IS such a run is left bare — which matters beyond tidiness, because the
+ * generic families (`serif`, `system-ui`, `monospace`) mean the generic only
+ * while unquoted. Quoting `serif` would ask for a font actually installed under
+ * that name and lose the fallback the file was describing.
+ *
+ * Everything else is quoted and escaped: a comma would otherwise split one
+ * family into two, and a quote would end the string and leave the rest of the
+ * declaration to be read as CSS.
+ */
+function cssFamilyName(name: string): string {
+  const text = name.trim();
+  // A CSS-wide keyword bare is that keyword, not a font: `font-family: inherit`
+  // takes the parent's font rather than one called "inherit". The generics are
+  // the opposite case and must stay bare, which is why this is a list of the
+  // words that change meaning rather than a rule about identifiers.
+  if (
+    SAFE_FAMILY_IDENTS.test(text) &&
+    !FAMILY_MUST_QUOTE.has(text.toLowerCase())
+  ) {
+    return text;
+  }
+
+  let escaped = "";
+  for (const char of text) {
+    const code = char.codePointAt(0) ?? 0;
+    if (char === "\\" || char === '"') {
+      escaped += `\\${char}`;
+    } else if (code < 0x20 || code === 0x7f) {
+      // A raw control character cannot appear in a CSS string. The hex escape
+      // can, and the trailing space is what ends the escape.
+      escaped += `\\${code.toString(16)} `;
+    } else {
+      escaped += char;
+    }
+  }
+  return `"${escaped}"`;
+}
+
+/**
+ * Names that mean something else when written bare.
+ *
+ * The CSS-wide keywords and `default` are not font names in a declaration, so a
+ * file describing a family called `inherit` has to get it back quoted.
+ */
+const FAMILY_MUST_QUOTE = new Set([
+  "inherit",
+  "initial",
+  "unset",
+  "revert",
+  "revert-layer",
+  "default",
+]);
+
+/** A run of identifiers, which is the one family spelling needing no quotes. */
+const SAFE_FAMILY_IDENTS =
+  /^[A-Za-z_][A-Za-z0-9_-]*(?: [A-Za-z_][A-Za-z0-9_-]*)*$/;
+
+function toHex(rgb: { r: number; g: number; b: number }): string {
+  const part = (value: number): string =>
+    Math.round(Math.min(255, Math.max(0, value)))
+      .toString(16)
+      .padStart(2, "0");
+  return `#${part(rgb.r)}${part(rgb.g)}${part(rgb.b)}`;
+}
