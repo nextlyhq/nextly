@@ -156,7 +156,6 @@ describe("applyMakeOptionalToOperations", () => {
     kind: "add_required_field_no_default",
     tableName: "dc_users",
     columnName: "email",
-    nullCount: 0,
     tableRowCount: 47,
     applicableResolutions: ["provide_default", "make_optional", "abort"],
   };

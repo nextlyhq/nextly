@@ -13,7 +13,7 @@
 // one that answers null for the single's tables until something registers
 // them — exactly worker B's starting state.
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { defineSingle, text, textarea } from "../../../config";
 import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
@@ -22,18 +22,17 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 
-let prevNodeEnv: string | undefined;
 beforeEach(() => {
-  // The UI-create path only runs its migration in development.
-  prevNodeEnv = process.env.NODE_ENV;
-  process.env.NODE_ENV = "development";
+  // The UI-create path only runs its migration in development. `vi.stubEnv`
+  // rather than assigning: `NODE_ENV` is declared read-only.
+  vi.stubEnv("NODE_ENV", "development");
 });
 
 let current: TestNextly | undefined;
 afterEach(async () => {
   await current?.destroy();
   current = undefined;
-  process.env.NODE_ENV = prevNodeEnv;
+  vi.unstubAllEnvs();
 });
 
 const LOCALIZATION = {
@@ -52,7 +51,11 @@ interface ResolverLike {
  * single existed.
  */
 function blockSingleTables(t: TestNextly, ...blocked: string[]): void {
-  const inner = t.getService("schemaRegistry") as unknown as ResolverLike;
+  // The adapter's own resolver, not the DI service: it is the object the
+  // read path actually consults, and it is what the replacement below
+  // delegates to for every table this test does not block.
+  const inner = (t.adapter as unknown as { tableResolver: ResolverLike })
+    .tableResolver;
   const blockedSet = new Set(blocked);
   const own = new Map<string, unknown>();
   const adapter = t.adapter as unknown as {

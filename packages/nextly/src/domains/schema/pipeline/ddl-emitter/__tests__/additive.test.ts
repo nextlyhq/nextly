@@ -299,12 +299,14 @@ describe("emitAdditiveDdl — indexes and contracts", () => {
         type: "change_column_nullable",
         tableName: "dc_a",
         columnName: "c",
+        fromNullable: false,
         toNullable: true,
       },
       change_column_default: {
         type: "change_column_default",
         tableName: "dc_a",
         columnName: "c",
+        fromDefault: undefined,
         toDefault: "'x'",
       },
     };
