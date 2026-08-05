@@ -6,6 +6,8 @@
 
 import { z } from "zod";
 
+import type { ServiceErrorCode } from "../errors/error-codes";
+
 // ========================================
 // MEDIA TYPE ENUM
 // ========================================
@@ -139,6 +141,7 @@ export type MediaParams = z.infer<typeof MediaParamsSchema>;
 // ========================================
 
 export interface MediaListResponse {
+  code?: ServiceErrorCode;
   success: boolean;
   statusCode: number;
   message: string;
@@ -152,6 +155,7 @@ export interface MediaListResponse {
 }
 
 export interface MediaResponse {
+  code?: ServiceErrorCode;
   success: boolean;
   statusCode: number;
   message: string;
@@ -159,6 +163,7 @@ export interface MediaResponse {
 }
 
 export interface DeleteMediaResponse {
+  code?: ServiceErrorCode;
   success: boolean;
   statusCode: number;
   message: string;

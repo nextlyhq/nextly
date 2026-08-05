@@ -1,3 +1,4 @@
+import { permissionSlug } from "../../schemas/_zod/rbac";
 import type { AuthContext } from "../session/session-types";
 
 export interface ErrorResponse {
@@ -67,7 +68,7 @@ export async function checkPermission(
 ): Promise<boolean> {
   if (context.authMethod === "api-key") {
     // API keys have pre-resolved permissions
-    const permSlug = `${action}-${resource}`;
+    const permSlug = permissionSlug(action, resource);
     return context.permissions.get(permSlug) === true;
   }
 

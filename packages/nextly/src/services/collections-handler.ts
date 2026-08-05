@@ -8,15 +8,16 @@ import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import type { RequestActor } from "../auth/request-actor";
 import type { FieldConfig } from "../collections/fields/types";
 import { container } from "../di/container";
+import type { ResolvedAuditRetentionConfig } from "../domains/audit/retention-config";
 import type { PermissionSeedService } from "../domains/auth/services/permission-seed-service";
 import type { RBACAccessControlService } from "../domains/auth/services/rbac-access-control-service";
 import { DynamicCollectionService } from "../domains/dynamic-collections";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
+import { MetaRetentionGate } from "../domains/retention/gate";
+import { buildRetentionRunner } from "../domains/retention/passes";
 import { schemaDraftsEnabled } from "../domains/versions/draft-split-eligibility";
 import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
 import type { ResolvedWebhookRetentionConfig } from "../domains/webhooks/retention-config";
-import { MetaRetentionGate } from "../domains/webhooks/retention-gate";
-import { WebhookRetentionRunner } from "../domains/webhooks/retention-runner";
 import type { RichTextOutputFormat } from "../lib/rich-text-html";
 import type { CacheRevalidator } from "../revalidation/types";
 import type { FieldDefinition } from "../schemas/dynamic-collections";
@@ -76,23 +77,31 @@ export class CollectionsHandler {
     /**
      * Resolved webhook retention policy. Content writes offer to run a pass so
      * the event ledger stays bounded in installs that never configure a webhook
-     * and therefore never run the drain. Null or absent disables it.
+     * and therefore never run the drain. Null or absent leaves the event ledger
+     * unpruned; it no longer decides whether a runner exists at all, since the
+     * audit policy below can call for one on its own.
      */
-    webhookRetention?: ResolvedWebhookRetentionConfig | null
+    webhookRetention?: ResolvedWebhookRetentionConfig | null,
+    /**
+     * Resolved audit-trail retention windows, forwarded for the same reason and
+     * needed here in particular: this is the seam a dispatcher-driven install
+     * writes through, so a policy that does not reach it is a trail that
+     * install never prunes. Absent means the trails are kept in full.
+     */
+    auditRetention?: ResolvedAuditRetentionConfig
   ) {
     this.logger = logger;
     this.collectionService = new DynamicCollectionService(adapter, logger);
 
     // Built here because this is where the resolved policy arrives, but handed
     // to the entry service, which is the seam every write path runs through.
-    const retentionRunner = webhookRetention
-      ? new WebhookRetentionRunner({
-          policy: webhookRetention,
-          prune: { adapter, logger },
-          gate: new MetaRetentionGate(adapter),
-          logger,
-        })
-      : undefined;
+    const retentionRunner = buildRetentionRunner({
+      adapter: adapter,
+      webhookPolicy: webhookRetention,
+      auditPolicy: auditRetention,
+      gate: new MetaRetentionGate(adapter),
+      logger,
+    });
 
     const hookRegistry = getHookRegistry();
 
@@ -805,6 +814,8 @@ export class CollectionsHandler {
     routeAuthorized?: boolean;
     /** API-key scope; gates the unconditional publish check. */
     authenticatedScope?: AuthenticatedScope;
+    /** Acting identity from the transport, forwarded to the recorded event. */
+    actor?: RequestActor;
   }) {
     return this.entryService.publishAllLocales(this.resolveUserParam(params));
   }

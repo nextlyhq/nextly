@@ -97,6 +97,8 @@ async function migrate(t: TestNextly): Promise<void> {
     dialect: t.adapter.dialect,
     defaultLocale: "en",
     collectionLocalized: true,
+    // Defined in config, so the pipeline built this table.
+    builtBy: "codeFirst",
     status: true,
   });
   if (!spec) {

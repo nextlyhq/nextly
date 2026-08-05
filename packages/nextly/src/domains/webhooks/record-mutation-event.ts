@@ -18,6 +18,15 @@ import type {
 } from "@nextlyhq/adapter-drizzle/types";
 
 import type { RequestActor } from "../../auth/request-actor";
+import type {
+  ActivityLogAction,
+  ActivityWriteDb,
+} from "../../services/dashboard/activity-log-service";
+import { markWriteIntegrityFailure } from "../../shared/write-integrity";
+import {
+  recordMutationActivity,
+  type RecordMutationActivityInput,
+} from "../audit/record-activity";
 
 import { buildEnvelope } from "./envelope";
 import {
@@ -28,9 +37,11 @@ import {
 import {
   endpointsPresent,
   isWebhookAuditEnabled,
+  resolveEventRetentionClass,
   shouldRecordEvent,
 } from "./recording-activation";
 import { isWebhookRecordingEnabled } from "./recording-policy";
+import type { EventRetentionClass } from "./retention-config";
 import {
   sensitiveFieldPaths,
   type SensitiveFieldSource,
@@ -94,23 +105,29 @@ export interface RecordMutationEventArgs {
  * the flag TTL across processes; a few events recorded just before the last
  * endpoint is removed are pruned by retention.
  */
-function prepareMutationEnvelope(
-  args: RecordMutationEventArgs
-): WebhookEvent | null {
+function prepareMutationEnvelope(args: RecordMutationEventArgs): {
+  envelope: WebhookEvent;
+  retentionClass: EventRetentionClass;
+} | null {
   if (!resourceRecordingEnabled(args.resource)) {
     return null;
   }
+  // Read once and reuse: the gate and the retention class are two decisions
+  // from the same facts, and reading the flags twice could straddle a refresh
+  // and record a row whose class disagrees with why it was admitted.
+  const auditEnabled = isWebhookAuditEnabled();
+  const hasEndpoints = endpointsPresent();
   if (
     !shouldRecordEvent({
       collectionAllows: true,
-      auditEnabled: isWebhookAuditEnabled(),
-      hasEndpoints: endpointsPresent(),
+      auditEnabled,
+      hasEndpoints,
     })
   ) {
     return null;
   }
 
-  return buildEnvelope({
+  const envelope = buildEnvelope({
     id: (args.newId ?? (() => crypto.randomUUID()))(),
     type: args.type,
     timestamp: args.timestamp ?? new Date(),
@@ -124,15 +141,98 @@ function prepareMutationEnvelope(
       ? { statusChange: args.statusChange }
       : {}),
   });
+  return {
+    envelope,
+    retentionClass: resolveEventRetentionClass({ auditEnabled, hasEndpoints }),
+  };
+}
+
+/**
+ * The activity action one event type stands for, or undefined when it stands
+ * for none.
+ *
+ * Only the three primary entry events map. The lifecycle events
+ * (`entry.published` and its siblings) and a collection's curated event
+ * accompany one of them for the SAME write, so mapping those too would file one
+ * change as several. Singles are absent deliberately: the trail's scope column
+ * is read as a collection slug by everything that renders it, and a single's
+ * slug there would resolve to a collection that does not exist.
+ */
+const ACTIVITY_ACTIONS: Partial<Record<WebhookEventType, ActivityLogAction>> = {
+  "entry.created": "create",
+  "entry.updated": "update",
+  "entry.deleted": "delete",
+};
+
+/**
+ * Record the mutation's activity entry, ahead of the outbox gates.
+ *
+ * Deliberately BEFORE them: the outbox is delivery infrastructure and an
+ * install with no endpoints records nothing there, while the trail answers who
+ * changed what and has to hold whether or not anyone subscribed. Gating the two
+ * together would make an install's audit history a side effect of whether it
+ * happened to use webhooks.
+ */
+async function recordActivity(
+  db: () => ActivityWriteDb,
+  args: RecordMutationEventArgs
+): Promise<void> {
+  const action = ACTIVITY_ACTIONS[args.type];
+  if (!action || args.resource.kind !== "entry") return;
+  await writeActivity(db, {
+    action,
+    collection: args.resource.collection,
+    ...(args.resource.id !== undefined ? { entryId: args.resource.id } : {}),
+    data: args.data,
+    previous: args.previous ?? null,
+    actor: args.actor ?? null,
+  });
+}
+
+/**
+ * Write the entry, failing the surrounding transaction if it cannot be written.
+ *
+ * The failure is marked before it can reach the bulk workers: they turn an
+ * ordinary error raised after a row was written into a soft per-item failure
+ * and carry on inside the SAME transaction, which would commit the content
+ * change with no entry describing it — the exact outcome recording inside the
+ * transaction exists to prevent.
+ */
+async function writeActivity(
+  db: () => ActivityWriteDb,
+  input: RecordMutationActivityInput
+): Promise<void> {
+  try {
+    await recordMutationActivity(db, input);
+  } catch (err) {
+    throw markWriteIntegrityFailure(err);
+  }
+}
+
+/**
+ * Record an entry's activity for a write that appends NO outbox event.
+ *
+ * The outbox and the trail answer different questions, and a working-draft save
+ * is where they diverge: no published document changed, so no subscriber has
+ * anything to receive — but a person did edit content, and the trail records
+ * people. Recording it through the event seam would either invent a public
+ * event for a private edit or, as it did, drop the edit from the trail entirely.
+ */
+export async function recordEntryActivity(
+  tx: TransactionContext,
+  input: RecordMutationActivityInput
+): Promise<void> {
+  await writeActivity(() => tx.getDrizzle(), input);
 }
 
 export async function recordMutationEvent(
   tx: TransactionContext,
   args: RecordMutationEventArgs
 ): Promise<boolean> {
-  const envelope = prepareMutationEnvelope(args);
-  if (!envelope) return false;
-  await recordEvent(tx, { envelope });
+  await recordActivity(() => tx.getDrizzle(), args);
+  const prepared = prepareMutationEnvelope(args);
+  if (!prepared) return false;
+  await recordEvent(tx, prepared);
   return true;
 }
 
@@ -148,8 +248,13 @@ export async function recordMutationEventInTx(
   dialect: SupportedDialect,
   args: RecordMutationEventArgs
 ): Promise<boolean> {
-  const envelope = prepareMutationEnvelope(args);
-  if (!envelope) return false;
-  await recordEventInTx(tx, dialect, { envelope });
+  // Widened, not converted: the value IS a dialect-specific Drizzle
+  // transaction, whose generic builder types do not structurally match the
+  // minimal read/write surface the activity write is written against. The
+  // service casts its own handle for the same reason.
+  await recordActivity(() => tx as unknown as ActivityWriteDb, args);
+  const prepared = prepareMutationEnvelope(args);
+  if (!prepared) return false;
+  await recordEventInTx(tx, dialect, prepared);
   return true;
 }

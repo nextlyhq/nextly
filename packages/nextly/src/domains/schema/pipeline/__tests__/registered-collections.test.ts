@@ -67,6 +67,37 @@ describe("mergeRegisteredCollections", () => {
     expect(merged.hero.localized).toBe(true);
   });
 
+  it("states Builder ownership for every registry-sourced entity", () => {
+    // A row only reaches this merge when the registry holds it and no config entry claimed the
+    // slug, which is exactly what it means for the Schema Builder to own it. Left unstated, such an
+    // entity is described the way a code-first table is, and a db:sync or HMR pass reports its
+    // columns as drift — on MySQL, an existing unbounded text column as a narrowing to 255.
+    const merged = mergeRegisteredEntities(
+      {},
+      [{ slug: "hero", tableName: "single_hero", fields: [] }],
+      (_row, base) => base
+    );
+
+    expect(merged.hero.builderOwned).toBe(true);
+  });
+
+  // A code-first or plugin entity dropped from the config keeps its registry row on purpose, so
+  // reaching this merge does not make it the Builder's. Calling it so would rewrite its columns on
+  // the next sync against a table that orphan retention exists to leave alone.
+  it.each([
+    ["a locked row", { locked: true }],
+    ["a code-sourced row", { source: "code" }],
+    ["a plugin-sourced row", { source: "plugin:seo" }],
+  ])("does not claim %s for the Builder", (_, ownership) => {
+    const merged = mergeRegisteredEntities(
+      {},
+      [{ slug: "orphan", tableName: "dc_orphan", fields: [], ...ownership }],
+      (_row, base) => base
+    );
+
+    expect(merged.orphan.builderOwned).toBe(false);
+  });
+
   it("defaults localized to false rather than undefined", () => {
     const merged = mergeRegisteredEntities(
       {},

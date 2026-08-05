@@ -49,10 +49,11 @@
 // with NextlyError factories. Identifiers (mediaId/folderId/etc) move to
 // logContext per §13.8; public messages remain generic and end with a period.
 import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
+import type { RetentionRunner } from "../../../domains/retention/runner";
 import type { WebhookFastDrainScheduler } from "../../../domains/webhooks/after-drain";
 import { isUnscopedRecordingActive } from "../../../domains/webhooks/recording-activation";
-import type { WebhookRetentionRunner } from "../../../domains/webhooks/retention-runner";
 import { NextlyError } from "../../../errors";
+import { errorFromServiceEnvelope } from "../../../errors/from-service-envelope";
 import { emitMediaEvent } from "../../../events/domain-events";
 import { normalizeDbTimestamp } from "../../../lib/date-formatting";
 import { toAbsoluteMediaUrl } from "../../../lib/media-variant";
@@ -160,6 +161,27 @@ export function toMediaDate(value: unknown): Date {
   return new Date(normalized || new Date());
 }
 
+/**
+ * Whether a failed folder result is the service refusing well-formed input.
+ *
+ * A folder that cannot be moved into itself, or deleted while it still holds
+ * something, is not a malformed request: the boundary answers it with a
+ * field-anchored validation error a caller can act on, rather than the generic
+ * sentence a bare code carries.
+ *
+ * Reads the code the service names, and still recognises a bare 400 for a
+ * producer that names none — those were the only failures reaching this branch
+ * before any of them named a code, and the branch has to keep answering them
+ * the same way.
+ */
+function isRefusedInput(result: {
+  code?: string;
+  statusCode: number;
+}): boolean {
+  if (result.code) return result.code === "INVALID_INPUT";
+  return result.statusCode === 400;
+}
+
 // ============================================================
 // MediaService
 // ============================================================
@@ -193,11 +215,16 @@ export class MediaService {
     private readonly svgCsp: boolean = true,
     private readonly logger: Logger = consoleLogger,
     /**
-     * Prunes the outbox after a media write appends an event. The media write
-     * path records events through this service, so it carries its own runner
-     * (the webhook handler's is not on this path), mirroring collections.
+     * Retention passes offered after a write. The shared runner carries both —
+     * the webhook outbox and the audit trails — each on its own window and its
+     * own gate, and decides which are configured.
+     *
+     * Absent only when NEITHER has anything to prune: an install with webhook
+     * retention off and audit retention on still gets one. A construction site
+     * that forwards a single policy leaves that domain unpruned rather than
+     * failing, so both belong wherever this is built.
      */
-    private readonly retentionRunner?: WebhookRetentionRunner,
+    private readonly retentionRunner?: RetentionRunner,
     /**
      * Shared post-response drain fast path. A media write commits its outbox
      * row inside the DB transaction; `offer()` then schedules the immediate
@@ -426,10 +453,18 @@ export class MediaService {
     const result = await this.legacyMediaService.getMediaById(mediaId);
 
     if (!result.success || !result.data) {
-      // §13.8: generic "Not found." with mediaId only in logContext.
-      throw NextlyError.notFound({
-        logContext: { entity: "media", mediaId },
-      });
+      // Through the converter, so a lookup that failed for a reason OTHER than
+      // absence says so. Answering every failure as "not found" told a caller a
+      // record does not exist when the database was unreachable or the request
+      // was rate limited, and no retry follows from that.
+      //
+      // A code-less failure still resolves to NOT_FOUND, since 404 is what a
+      // missing row reports and that is the overwhelming case; the id stays
+      // operator-side either way (spec 13.8).
+      throw this.mapLegacyErrorToNextlyError(
+        { ...result, statusCode: result.statusCode ?? 404, data: null },
+        { entity: "media", mediaId }
+      );
     }
 
     return this.mapToMediaFile(result.data);
@@ -530,13 +565,14 @@ export class MediaService {
     );
 
     if (!result.success || !result.data) {
-      if (result.statusCode === 404) {
-        // §13.8: generic "Not found." with mediaId only in logContext.
-        throw NextlyError.notFound({
-          logContext: { entity: "media", mediaId },
-        });
-      }
-      throw this.mapLegacyErrorToNextlyError(result);
+      // One throw. The converter answers a code-less 404 with the same generic
+      // "Not found.", so the status branch that stood here only decided whether
+      // the caller's context reached the log -- and a result naming its own code
+      // skipped it, taking the id with it. Identifiers are operator-only.
+      throw this.mapLegacyErrorToNextlyError(result, {
+        entity: "media",
+        mediaId,
+      });
     }
 
     this.logger.info("Media file updated", { mediaId });
@@ -574,13 +610,10 @@ export class MediaService {
     );
 
     if (!result.success) {
-      if (result.statusCode === 404) {
-        // §13.8: generic "Not found." with mediaId only in logContext.
-        throw NextlyError.notFound({
-          logContext: { entity: "media", mediaId },
-        });
-      }
-      throw this.mapSimpleErrorToNextlyError(result);
+      throw this.mapSimpleErrorToNextlyError(result, {
+        entity: "media",
+        mediaId,
+      });
     }
 
     this.logger.info("Media file deleted", { mediaId });
@@ -825,14 +858,14 @@ export class MediaService {
     );
 
     if (!result.success) {
-      if (result.statusCode === 404) {
-        // Driver text moves into logContext per §13.8 — only generic "Not found."
-        // hits the wire.
-        throw NextlyError.notFound({
-          logContext: { entity: "media", mediaId, folderId },
-        });
-      }
-      throw this.mapLegacyErrorToNextlyError(result);
+      // One throw. The converter answers a code-less 404 with the same generic
+      // "Not found.", so the branch that stood here only decided whether the
+      // caller's context reached the log. Identifiers are operator-only.
+      throw this.mapLegacyErrorToNextlyError(result, {
+        entity: "media",
+        mediaId,
+        folderId,
+      });
     }
 
     this.logger.info("Media moved to folder", { mediaId, folderId });
@@ -888,28 +921,19 @@ export class MediaService {
     const result = await this.legacyFolderService.createFolder(legacyInput);
 
     if (!result.success || !result.data) {
-      if (result.statusCode === 404) {
-        // Generic NOT_FOUND — parentId stays operator-side.
-        throw NextlyError.notFound({
-          logContext: {
-            entity: "folder",
-            reason: "parent-folder-missing",
-            parentId: input.parentId,
-          },
-        });
-      }
-      if (result.statusCode === 409) {
-        // Generic "Resource already exists." per §13.8 — name stays operator-side.
-        throw NextlyError.duplicate({
-          logContext: {
-            entity: "folder",
-            reason: "folder-name-conflict",
-            name: input.name,
-            legacyMessage: result.message,
-          },
-        });
-      }
-      throw this.mapSimpleErrorToNextlyError(result);
+      // One throw, whatever the failure was. The status branches that used to
+      // stand here answered exactly what the shared converter answers, so all
+      // they decided was whether the caller's context reached the log — and a
+      // folder service that names its own code skipped them, taking the name
+      // and parent with it.
+      //
+      // Identifiers go to the operator only; the public message never carries
+      // them (spec 13.8).
+      throw this.mapSimpleErrorToNextlyError(result, {
+        entity: "folder",
+        name: input.name,
+        parentId: input.parentId,
+      });
     }
 
     this.logger.info("Folder created", { folderId: result.data.id });
@@ -934,10 +958,12 @@ export class MediaService {
     const result = await this.legacyFolderService.getFolderById(folderId);
 
     if (!result.success || !result.data) {
-      // §13.8: generic "Not found." with folderId only in logContext.
-      throw NextlyError.notFound({
-        logContext: { entity: "folder", folderId },
-      });
+      // Same as findById: a failure that named its own reason keeps it, rather
+      // than every lookup failure being reported as absence.
+      throw this.mapSimpleErrorToNextlyError(
+        { ...result, statusCode: result.statusCode ?? 404 },
+        { entity: "folder", folderId }
+      );
     }
 
     return this.mapToMediaFolder(result.data);
@@ -955,7 +981,9 @@ export class MediaService {
     const result = await this.legacyFolderService.listRootFolders();
 
     if (!result.success) {
-      throw this.mapSimpleErrorToNextlyError(result);
+      // No id to name: this lists the root, so the entity is all the context
+      // there is.
+      throw this.mapSimpleErrorToNextlyError(result, { entity: "folder" });
     }
 
     return (result.data ?? []).map(f => this.mapToMediaFolder(f));
@@ -977,7 +1005,10 @@ export class MediaService {
     const result = await this.legacyFolderService.listSubfolders(parentId);
 
     if (!result.success) {
-      throw this.mapSimpleErrorToNextlyError(result);
+      throw this.mapSimpleErrorToNextlyError(result, {
+        entity: "folder",
+        parentId,
+      });
     }
 
     return (result.data ?? []).map(f => this.mapToMediaFolder(f));
@@ -999,13 +1030,13 @@ export class MediaService {
     const result = await this.legacyFolderService.getFolderContents(folderId);
 
     if (!result.success || !result.data) {
-      if (result.statusCode === 404) {
-        // §13.8: generic "Not found." with folderId only in logContext.
-        throw NextlyError.notFound({
-          logContext: { entity: "folder", folderId },
-        });
-      }
-      throw this.mapSimpleErrorToNextlyError(result);
+      // One throw. The converter answers a code-less 404 with the same generic
+      // "Not found.", so the branch that stood here only decided whether the
+      // caller's context reached the log. Identifiers are operator-only.
+      throw this.mapSimpleErrorToNextlyError(result, {
+        entity: "folder",
+        folderId,
+      });
     }
 
     return {
@@ -1046,13 +1077,7 @@ export class MediaService {
     );
 
     if (!result.success || !result.data) {
-      if (result.statusCode === 404) {
-        // §13.8: generic "Not found." with folderId only in logContext.
-        throw NextlyError.notFound({
-          logContext: { entity: "folder", folderId },
-        });
-      }
-      if (result.statusCode === 400) {
+      if (isRefusedInput(result)) {
         // Per §13.8 the per-error message names the field but never the value;
         // driver text moves to logContext.
         throw NextlyError.validation({
@@ -1066,7 +1091,10 @@ export class MediaService {
           logContext: { folderId, legacyMessage: result.message },
         });
       }
-      throw this.mapSimpleErrorToNextlyError(result);
+      throw this.mapSimpleErrorToNextlyError(result, {
+        entity: "folder",
+        folderId,
+      });
     }
 
     this.logger.info("Folder updated", { folderId });
@@ -1095,13 +1123,7 @@ export class MediaService {
     );
 
     if (!result.success) {
-      if (result.statusCode === 404) {
-        // §13.8: generic "Not found." with folderId only in logContext.
-        throw NextlyError.notFound({
-          logContext: { entity: "folder", folderId },
-        });
-      }
-      if (result.statusCode === 400) {
+      if (isRefusedInput(result)) {
         // Folder-not-empty rejection. Per §13.8 the per-error message names
         // the field but never the value; the operator hint stays in logContext.
         throw NextlyError.validation({
@@ -1119,7 +1141,10 @@ export class MediaService {
           },
         });
       }
-      throw this.mapSimpleErrorToNextlyError(result);
+      throw this.mapSimpleErrorToNextlyError(result, {
+        entity: "folder",
+        folderId,
+      });
     }
 
     this.logger.info("Folder deleted", { folderId });
@@ -1214,63 +1239,53 @@ export class MediaService {
    * which §13.8 allows on the public message. The legacy message is stored
    * on logContext and the factory's canonical public message is used.
    */
-  private mapLegacyErrorToNextlyError(result: {
-    success: boolean;
-    statusCode: number;
-    message: string;
-    data: unknown;
-  }): NextlyError {
-    const { statusCode, message } = result;
-    const logContext = { legacyStatusCode: statusCode, legacyMessage: message };
-
-    switch (statusCode) {
-      case 400:
-        // We don't know the offending field here, so use a generic
-        // "request" path; driver text stays in logContext.
-        return NextlyError.validation({
-          errors: [
-            {
-              path: "request",
-              code: "INVALID",
-              message: "Request is invalid.",
-            },
-          ],
-          logContext,
-        });
-      case 401:
-        return NextlyError.authRequired({ logContext });
-      case 403:
-        return NextlyError.forbidden({ logContext });
-      case 404:
-        return NextlyError.notFound({ logContext });
-      case 409:
-        return NextlyError.duplicate({ logContext });
-      case 422:
-        // BUSINESS_RULE_VIOLATION has no factory — build directly per spec.
-        return new NextlyError({
-          code: "BUSINESS_RULE_VIOLATION",
-          publicMessage:
-            "The operation could not be completed due to a business rule.",
-          statusCode: 422,
-          logContext,
-        });
-      default:
-        return NextlyError.internal({ logContext });
-    }
+  /**
+   * Rebuild the error a failed media result came from.
+   *
+   * Through the shared converter, so a media failure and a collection failure
+   * with the same meaning answer with the same code. This kept its own status
+   * table -- the third in the codebase -- and it disagreed with the others on
+   * 409 and 422 while its parameter type omitted `code`, `messageKey` and
+   * `publicData` entirely, so every media failure arrived stripped of them.
+   *
+   * `logContext` carries what the caller knows and the envelope does not: which
+   * entity, and which id. Operator-only; it never reaches the wire.
+   */
+  private mapLegacyErrorToNextlyError(
+    result: {
+      success: boolean;
+      statusCode: number;
+      code?: string;
+      message: string;
+      messageKey?: string;
+      publicData?: unknown;
+      data: unknown;
+    },
+    logContext: Record<string, unknown> = {}
+  ): NextlyError {
+    return errorFromServiceEnvelope(result, {
+      legacyStatusCode: result.statusCode,
+      legacyMessage: result.message,
+      ...logContext,
+    });
   }
 
   /**
    * Convert the simple legacy result-shape (no `data` field) into a
    * NextlyError. Thin adapter over the full mapper.
    */
-  private mapSimpleErrorToNextlyError(result: {
-    success: boolean;
-    statusCode: number;
-    message: string;
-  }): NextlyError {
-    return this.mapLegacyErrorToNextlyError({
-      ...result,
-      data: null,
-    });
+  private mapSimpleErrorToNextlyError(
+    result: {
+      success: boolean;
+      statusCode: number;
+      code?: string;
+      message: string;
+    },
+    logContext: Record<string, unknown> = {}
+  ): NextlyError {
+    return this.mapLegacyErrorToNextlyError(
+      { ...result, data: null },
+      logContext
+    );
   }
 }

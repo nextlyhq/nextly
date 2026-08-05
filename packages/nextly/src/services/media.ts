@@ -41,9 +41,9 @@ import {
 // Actor threading + outbox recording for media writes. Each write records a
 // durable `media.*` event in the same transaction as the row change.
 import { actorForWrite, type RequestActor } from "../auth/request-actor";
+import type { RetentionRunner } from "../domains/retention/runner";
 import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
 import { recordMutationEvent } from "../domains/webhooks/record-mutation-event";
-import type { WebhookRetentionRunner } from "../domains/webhooks/retention-runner";
 import { keysToSnakeCase } from "../lib/case-conversion";
 import { isImageMimeType, validateFileSize } from "../types/media";
 import type {
@@ -86,8 +86,13 @@ export class MediaService extends BaseService {
      * exactly once per write.
      */
     private readonly fastDrainScheduler?: WebhookFastDrainScheduler,
-    /** Prunes the outbox after a write, paired with the drain fast path. */
-    private readonly retentionRunner?: WebhookRetentionRunner
+    /**
+     * Prunes after a write, paired with the drain fast path. The shared runner
+     * carries both passes — the webhook outbox and the audit trails — each on
+     * its own window and gate, and is absent only when neither has anything to
+     * prune.
+     */
+    private readonly retentionRunner?: RetentionRunner
   ) {
     super(adapter, logger);
   }
@@ -199,6 +204,7 @@ export class MediaService extends BaseService {
       return {
         success: false,
         statusCode: 500,
+        code: "INTERNAL_ERROR",
         message: "Failed to fetch media",
         data: null,
       };
@@ -222,6 +228,7 @@ export class MediaService extends BaseService {
         return {
           success: false,
           statusCode: 404,
+          code: "NOT_FOUND",
           message: "Media not found",
           data: null,
         };
@@ -238,6 +245,7 @@ export class MediaService extends BaseService {
       return {
         success: false,
         statusCode: 500,
+        code: "INTERNAL_ERROR",
         message: "Failed to retrieve media",
         data: null,
       };
@@ -267,6 +275,7 @@ export class MediaService extends BaseService {
         return {
           success: false,
           statusCode: 400,
+          code: "VALIDATION_ERROR",
           message: sizeValidation.error || "Invalid file size",
           data: null,
         };
@@ -283,6 +292,7 @@ export class MediaService extends BaseService {
           return {
             success: false,
             statusCode: 400,
+            code: "VALIDATION_ERROR",
             message: "Invalid image file",
             data: null,
           };
@@ -464,6 +474,7 @@ export class MediaService extends BaseService {
       return {
         success: false,
         statusCode: 500,
+        code: "INTERNAL_ERROR",
         message: "Failed to upload media",
         data: null,
       };
@@ -790,6 +801,7 @@ export class MediaService extends BaseService {
         return {
           success: false,
           statusCode: 404,
+          code: "NOT_FOUND",
           message: "Media not found",
           data: null,
         };
@@ -816,6 +828,7 @@ export class MediaService extends BaseService {
       return {
         success: false,
         statusCode: 500,
+        code: "INTERNAL_ERROR",
         message: "Failed to update media",
         data: null,
       };
@@ -835,6 +848,7 @@ export class MediaService extends BaseService {
         return {
           success: false,
           statusCode: 404,
+          code: "NOT_FOUND",
           message: "Media not found",
         };
       }
@@ -888,6 +902,7 @@ export class MediaService extends BaseService {
         return {
           success: false,
           statusCode: 404,
+          code: "NOT_FOUND",
           message: "Media not found",
         };
       }
@@ -950,6 +965,7 @@ export class MediaService extends BaseService {
       return {
         success: false,
         statusCode: 500,
+        code: "INTERNAL_ERROR",
         message: "Failed to delete media",
       };
     }
@@ -1027,6 +1043,7 @@ export class MediaService extends BaseService {
             success: false,
             error: error instanceof Error ? error.message : "Unknown error",
             statusCode: 500,
+            code: "INTERNAL_ERROR",
           };
         }
       });

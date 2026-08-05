@@ -83,6 +83,7 @@ import type {
   RenameCandidate,
   RenameDetector,
 } from "./pushschema-pipeline-interfaces";
+import { builtByFor } from "./registered-collections";
 import type { ClassifierEvent, Resolution } from "./resolution/types";
 import { withCapturedStdout } from "./stdout-capture";
 import type { DesiredSchema } from "./types";
@@ -372,10 +373,14 @@ export function computeJournalSummaryFromOperations(
 // Pure helper. Test seam: exported.
 export function computeJournalScope(
   source: "ui" | "code",
-  uiTargetSlug: string | undefined
+  uiTargetSlug: string | undefined,
+  // Defaulted to `collection` so the many existing UI callers that target one keep their scope
+  // without restating it. A single or field group must say so: recording either as a collection
+  // hid its migrations from every scope-filtered audit query.
+  uiTargetKind: "collection" | "single" | "component" = "collection"
 ): MigrationJournalScope {
   if (source === "ui" && uiTargetSlug) {
-    return { kind: "collection", slug: uiTargetSlug };
+    return { kind: uiTargetKind, slug: uiTargetSlug };
   }
   return { kind: "global" };
 }
@@ -451,7 +456,7 @@ export function excludeLockedTableOps(
   return { kept, skipped };
 }
 
-function logSkippedLockedOps(skipped: Operation[]): void {
+export function logSkippedLockedOps(skipped: Operation[]): void {
   if (skipped.length === 0 || process.env.DEBUG_SCHEMA !== "1") return;
   const tables = [
     ...new Set(skipped.map(op => operationTargetTable(op) ?? "<unknown>")),
@@ -484,12 +489,10 @@ function toNotificationScope(scope: MigrationJournalScope): MigrationScope {
       ? { kind: "global", slug: scope.slug }
       : { kind: "global" };
   }
-  // collection | single — both require a slug per
-  // MigrationJournalScope's contract (asserted at the type-system
-  // level because slug is optional only for fresh-push/global).
-  return scope.slug
-    ? { kind: scope.kind, slug: scope.slug }
-    : { kind: "global" };
+  // collection | single | component — the scope type requires a slug on each of them, so there is
+  // no slugless case left to fall back for. The fallback this replaces silently retargeted such a
+  // scope to the whole schema, which is the one outcome an entity-scoped apply must not produce.
+  return { kind: scope.kind, slug: scope.slug };
 }
 
 export class PushSchemaPipeline {
@@ -512,9 +515,20 @@ export class PushSchemaPipeline {
     // slug: <user's collection> }`. HMR/code-first applies omit it
     // and get tagged as global.
     uiTargetSlug?: string;
+    /** Which entity kind `uiTargetSlug` names, so the journal row records it accurately. */
+    uiTargetKind?: "collection" | "single" | "component";
   }): Promise<PipelineResult> {
-    const { desired, db, dialect, source, promptChannel, databaseName } = args;
-    const scope = computeJournalScope(source, args.uiTargetSlug);
+    const { db, dialect, source, promptChannel, databaseName } = args;
+    // Resolved once, before anything reads it. A desired schema is consumed by TWO builders — the
+    // snapshot the diff compares and the Drizzle tables drizzle-kit turns into DDL — and resolving
+    // inside either leaves the other on the raw fields, so a table would converge and then report a
+    // type change against itself on every following diff.
+    const desired = args.desired;
+    const scope = computeJournalScope(
+      source,
+      args.uiTargetSlug,
+      args.uiTargetKind
+    );
     // F10 PR 3: track wall-clock for the notification event. The
     // journal already computes its own duration; we duplicate here so
     // the notification event surfaces duration even when the journal
@@ -660,7 +674,11 @@ export class PushSchemaPipeline {
               // localized collection's translatable columns are omitted from the
               // main table's desired snapshot (they live in the companion
               // `_locales` table) rather than being re-added by the diff.
-              { hasStatus: c.status === true, localized: c.localized === true }
+              {
+                builtBy: builtByFor("collection", c.builderOwned),
+                hasStatus: c.status === true,
+                localized: c.localized === true,
+              }
             )
           ),
           ...Object.values(desired.singles).map(s =>
@@ -671,6 +689,7 @@ export class PushSchemaPipeline {
               >[1],
               dialect,
               {
+                builtBy: builtByFor("single", s.builderOwned),
                 hasStatus: s.status === true,
                 localized: (s as { localized?: boolean }).localized === true,
               }
@@ -684,6 +703,7 @@ export class PushSchemaPipeline {
               >[1],
               dialect,
               {
+                builtBy: builtByFor("fieldGroup", c.builderOwned),
                 localized: (c as { localized?: boolean }).localized === true,
                 typeColumn: fieldGroupTypeColumns.get(c.tableName),
               }
@@ -692,7 +712,22 @@ export class PushSchemaPipeline {
         ],
       };
 
-      const operations = diffSnapshots(liveSnapshot, desiredSnapshot);
+      const allOperations = diffSnapshots(liveSnapshot, desiredSnapshot);
+
+      // A UI save owns only the entity being edited. An operation targeting a code-first or
+      // plugin-owned table is dropped here, BEFORE anything reads the operation set, because those
+      // tables belong to `nextly.config.ts` and reconciling their drift is db:sync's job.
+      //
+      // 🔴 Dropped before rename detection rather than after prompting, which is where this used to
+      // happen. An operation on a locked table still reached the rename detector and the prompt gate
+      // on the way, and an unresolved candidate fails closed — so unapplied drift on a table the
+      // save was never going to touch could refuse the entire save, over an operation the very next
+      // step discards. Code-first applies keep the full set: they ARE the authority for those tables.
+      const { kept: operations, skipped: skippedLockedOps } =
+        source === "ui"
+          ? excludeLockedTableOps(allOperations, desired)
+          : { kept: allOperations, skipped: [] as Operation[] };
+      logSkippedLockedOps(skippedLockedOps);
 
       // Phase B: rename detection + prompt + resolution application.
       const candidates = this.deps.renameDetector.detect(operations, dialect);
@@ -763,15 +798,9 @@ export class PushSchemaPipeline {
           toRenameResolutions(dispatchResult.confirmedRenames, candidates)
         );
 
-      // A UI save owns only the entity being edited. Drop any operation that
-      // targets a code-first/plugin-owned table so the Schema Builder can never
-      // alter schema the user did not edit. Code-first applies (db:sync) are
-      // the authority for those tables and keep the full operation set.
-      const { kept: resolvedOps, skipped: skippedLockedOps } =
-        source === "ui"
-          ? excludeLockedTableOps(allResolvedOps, desired)
-          : { kept: allResolvedOps, skipped: [] as Operation[] };
-      logSkippedLockedOps(skippedLockedOps);
+      // Already excluded above, before the operation set was read. Resolutions are keyed to the
+      // candidates and events that set produced, so none of them can reintroduce a locked table.
+      const resolvedOps = allResolvedOps;
 
       // Phase C+D: execute pre-resolution ops, then pushSchema for the rest.
       const drizzleSchema = this.testHooks._buildDrizzleSchemaOverride
@@ -1275,6 +1304,9 @@ export class PushSchemaPipeline {
         c.fields as unknown as Parameters<typeof generateRuntimeSchema>[1],
         dialect,
         {
+          // This schema is what drizzle-kit renders as DDL, so the width rule matters here and the
+          // builder that made the table has to be named.
+          builtBy: builtByFor("collection", c.builderOwned),
           status: c.status === true,
           localized: (c as { localized?: boolean }).localized === true,
         }
@@ -1293,6 +1325,8 @@ export class PushSchemaPipeline {
         s.fields as unknown as Parameters<typeof generateRuntimeSchema>[1],
         dialect,
         {
+          // Rendered as DDL by drizzle-kit, so the builder that made it is named here too.
+          builtBy: builtByFor("single", s.builderOwned),
           status: s.status === true,
           localized: (s as { localized?: boolean }).localized === true,
         }

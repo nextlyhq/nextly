@@ -163,6 +163,7 @@ for (const entry of DIALECTS) {
       const provisioned = await ensureCompanionTable(
         adapter as never,
         {
+          builtBy: "codeFirst" as const,
           slug: mainTable,
           tableName: mainTable,
           fields,

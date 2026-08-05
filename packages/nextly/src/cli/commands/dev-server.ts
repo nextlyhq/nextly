@@ -43,6 +43,7 @@ import type {
   DesiredSingle,
 } from "../../domains/schema/pipeline/types";
 import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
+import { columnsDeclaredBy } from "../../domains/schema/services/field-column-descriptor";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 // F8 PR 1: SchemaPushService dropped from this module. The env check
 // (was getEnvironment().isProduction) is now an inline NODE_ENV read.
@@ -633,17 +634,17 @@ export async function performSinglesAutoSync(
         // Ensure system columns (title, slug) exist — they may be missing
         // on tables created before the fix that added them to the schema.
         // Singles always need title/slug for createDefaultDocument().
+        // Matched on the COLUMN each field becomes, as `defineSingle` and the generators do. An
+        // author writing `Title` already owns the `title` column, so adding the system field
+        // beside it asks for that column twice.
         const systemFields = [];
-        const hasTitleField = (
-          singleConfig.fields as Array<{ name?: string }>
-        ).some(f => f.name === "title");
-        if (!hasTitleField) {
+        const declaredColumns = columnsDeclaredBy(
+          singleConfig.fields as Array<{ name?: string; type?: string }>
+        );
+        if (!declaredColumns.has("title")) {
           systemFields.push({ name: "title", type: "text" });
         }
-        const hasSlugField = (
-          singleConfig.fields as Array<{ name?: string }>
-        ).some(f => f.name === "slug");
-        if (!hasSlugField) {
+        if (!declaredColumns.has("slug")) {
           systemFields.push({ name: "slug", type: "text" });
         }
 
@@ -652,7 +653,7 @@ export async function performSinglesAutoSync(
           serviceLogger,
           tableName,
           [...systemFields, ...singleConfig.fields] as unknown as FieldConfig[],
-          { timestamps: true }
+          { timestamps: true, builtBy: "collection" }
         );
 
         if (addedColumns.length > 0) {
@@ -929,7 +930,7 @@ export async function performComponentsAutoSync(
           serviceLogger,
           tableName,
           componentConfig.fields,
-          { timestamps: true }
+          { timestamps: true, builtBy: "fieldGroup" }
         );
 
         if (addedColumns.length > 0) {

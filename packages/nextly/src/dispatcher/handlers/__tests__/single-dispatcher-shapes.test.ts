@@ -19,6 +19,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../../helpers/di", () => ({
   getSingleRegistryFromDI: vi.fn(),
   getSingleEntryServiceFromDI: vi.fn(),
+  getSingleMetadataServiceFromDI: vi.fn(),
   getComponentRegistryFromDI: vi.fn().mockReturnValue(undefined),
   getAdapterFromDI: vi.fn(),
 }));
@@ -53,16 +54,30 @@ vi.mock(
   }
 );
 
+import { SingleMetadataService } from "../../../domains/singles/services/single-metadata-service";
+import type { SingleRegistryService } from "../../../domains/singles/services/single-registry-service";
+import type { Logger } from "../../../shared/types";
 import {
   getSingleEntryServiceFromDI,
+  getSingleMetadataServiceFromDI,
   getSingleRegistryFromDI,
 } from "../../helpers/di";
 import { dispatchSingles } from "../single-dispatcher";
 
+/** Silent: these tests read Response shapes, not the log. */
+const logger: Logger = {
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+};
+
 type Registry = {
   listSingles: ReturnType<typeof vi.fn>;
   registerSingle: ReturnType<typeof vi.fn>;
+  updateMigrationStatus: ReturnType<typeof vi.fn>;
   getSingleBySlug: ReturnType<typeof vi.fn>;
+  getAllSingles: ReturnType<typeof vi.fn>;
   updateSingle: ReturnType<typeof vi.fn>;
   deleteSingle: ReturnType<typeof vi.fn>;
 };
@@ -75,7 +90,13 @@ function makeRegistry(overrides: Partial<Registry> = {}): Registry {
   return {
     listSingles: vi.fn(),
     registerSingle: vi.fn(),
+    // A create persists its intent as `pending` and records the outcome here afterwards, so a
+    // double without it fails the request rather than the assertion under test.
+    updateMigrationStatus: vi.fn(),
     getSingleBySlug: vi.fn(),
+    // Answers "no single owns that table" so a create reaches the path under test. The handler
+    // asks before it emits any DDL, so a double that cannot answer fails the request instead.
+    getAllSingles: vi.fn().mockResolvedValue([]),
     updateSingle: vi.fn(),
     deleteSingle: vi.fn(),
     ...overrides,
@@ -97,11 +118,21 @@ function wireDi(registry: Registry, entry: Entry) {
   vi.mocked(getSingleEntryServiceFromDI).mockReturnValue(
     entry as unknown as ReturnType<typeof getSingleEntryServiceFromDI>
   );
+  // The real service over the same double, with no adapter — which is the state this file puts the
+  // container in, and the state that leaves a create recorded as `pending`. A stub here would make
+  // the pending message an assumption of the test rather than a consequence of the code.
+  vi.mocked(getSingleMetadataServiceFromDI).mockReturnValue(
+    new SingleMetadataService(
+      registry as unknown as SingleRegistryService,
+      logger
+    )
+  );
 }
 
 beforeEach(() => {
   vi.mocked(getSingleRegistryFromDI).mockReset();
   vi.mocked(getSingleEntryServiceFromDI).mockReset();
+  vi.mocked(getSingleMetadataServiceFromDI).mockReset();
 });
 
 describe("dispatchSingles, paginated lists (respondList)", () => {

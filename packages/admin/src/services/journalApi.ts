@@ -7,6 +7,7 @@ import { protectedApi } from "@admin/lib/api/protectedApi";
 export type JournalScope =
   | { kind: "collection"; slug: string }
   | { kind: "single"; slug: string }
+  | { kind: "component"; slug: string }
   | { kind: "global"; slug?: string }
   | { kind: "fresh-push" };
 

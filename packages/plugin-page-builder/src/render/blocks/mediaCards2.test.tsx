@@ -2,15 +2,22 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { defaultBlockRegistry } from "../../core/registry";
+import type { RemotePattern } from "../../core/url-policy";
 import { makeNode } from "../../core/tree";
 import type { BlockNode } from "../../core/types";
 import { RenderNode } from "../RenderNode";
 
 import "./index";
 
-const html = (node: BlockNode) =>
+/** Forwards the media policy the way `PageRenderer` does, so these render the
+ *  way a real page would rather than with the policy silently absent. */
+const html = (node: BlockNode, remotePatterns?: RemotePattern[]) =>
   renderToStaticMarkup(
-    <RenderNode node={node} registry={defaultBlockRegistry} />
+    <RenderNode
+      node={node}
+      registry={defaultBlockRegistry}
+      remotePatterns={remotePatterns}
+    />
   );
 
 describe("batch 4a — media & card blocks", () => {
@@ -72,10 +79,17 @@ describe("batch 4a — media & card blocks", () => {
     expect(out).toContain("B");
   });
 
-  it("lottie requires an https url", () => {
+  it("lottie requires an https url from a declared host", () => {
+    // The player fetches the animation itself, so https alone is not the
+    // question — https says the transport is encrypted and nothing about
+    // WHERE the request goes. An undeclared host is refused like any other
+    // media the page loads.
     expect(html(makeNode("core/lottie", { src: "http://x/a.json" }))).toBe("");
+    expect(html(makeNode("core/lottie", { src: "https://x/a.json" }))).toBe("");
     expect(
-      html(makeNode("core/lottie", { src: "https://x/a.json" }))
+      html(makeNode("core/lottie", { src: "https://x/a.json" }), [
+        { protocol: "https", hostname: "x" },
+      ])
     ).toContain("lottie-player");
   });
 });

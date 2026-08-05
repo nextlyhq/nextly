@@ -51,11 +51,13 @@ import type { LocalizedColumnSpec } from "../../i18n/migration/types";
 import {
   type ColumnDescriptor,
   type ColumnKind,
+  type ColumnOrigin,
   type SupportedDialect as DescriptorDialect,
   DEFAULT_DECIMAL_PRECISION,
   DEFAULT_DECIMAL_SCALE,
   getColumnDescriptor,
   getSystemColumnDescriptors,
+  toSnakeCase,
 } from "./field-column-descriptor";
 
 export type SupportedDialect = DescriptorDialect;
@@ -73,6 +75,25 @@ export interface RuntimeSchemaResult {
  * options so the runtime schema matches the diff descriptor's view.
  */
 export interface RuntimeSchemaOptions {
+  /**
+   * Which builder made this table, for the callers whose output becomes DDL.
+   *
+   * 🔴 Optional here, and required by `getColumnDescriptor`, because this function has two
+   * consumers that observe its columns very differently:
+   *
+   * - `buildDrizzleSchema` in the push pipeline hands the result to drizzle-kit, which renders it
+   *   as `CREATE` / `ALTER`. There the declared width IS the column, so that caller states it.
+   * - every other caller registers the result with `SchemaRegistry.registerDynamicSchema`, whose
+   *   own comment says it exists to "look up a table object by SQL table name (for queries)". A
+   *   query binds a string either way — Drizzle does not enforce a varchar length on read or write,
+   *   the database does — so the width is not observed on that path.
+   *
+   * The default is therefore the reading that changes nothing for a query, and the one path where
+   * it does change something passes it. Requiring it everywhere would have put a judgement call at
+   * roughly fifty sites that cannot observe the answer, which is how a value nobody can verify ends
+   * up pasted in until it compiles.
+   */
+  builtBy?: ColumnOrigin;
   /** When true, inject a `status` column ('draft' | 'published', default 'draft'). */
   status?: boolean;
   /**
@@ -253,7 +274,7 @@ function generateSQLiteSchema(
 function buildDrizzleColumnRecord(
   fields: FieldDefinition[],
   dialect: SupportedDialect,
-  options: RuntimeSchemaOptions = {}
+  options: RuntimeSchemaOptions
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle requires dialect-specific column builder unions
 ): Record<string, any> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- as above
@@ -262,11 +283,14 @@ function buildDrizzleColumnRecord(
   // A column-less field (e.g. a component, stored in its own table) must not
   // suppress the system title/slug column, or the table would have neither.
   const producesColumn = (f: FieldDefinition): boolean =>
-    getColumnDescriptor(f, dialect) !== null;
-  const hasTitleField = fields.some(
-    f => f.name === "title" && producesColumn(f)
-  );
-  const hasSlugField = fields.some(f => f.name === "slug" && producesColumn(f));
+    getColumnDescriptor(f, dialect, options.builtBy ?? "codeFirst") !== null;
+  // Matched on the COLUMN the field becomes, not its declared name: an author writing `Title`
+  // means the same column, and the three places that make this decision have to agree or one
+  // injects a system column the others do not have.
+  const declaresColumn = (column: string): boolean =>
+    fields.some(f => toSnakeCase(f.name) === column && producesColumn(f));
+  const hasTitleField = declaresColumn("title");
+  const hasSlugField = declaresColumn("slug");
 
   // Localized fields live in the companion `_locales` table; omit them from the main table.
   const localizedNames = options.localized
@@ -293,7 +317,11 @@ function buildDrizzleColumnRecord(
   // come back as `null` from getColumnDescriptor and are skipped.
   for (const field of fields) {
     if (localizedNames.has(field.name)) continue; // companion-owned
-    const desc = getColumnDescriptor(field, dialect);
+    const desc = getColumnDescriptor(
+      field,
+      dialect,
+      options.builtBy ?? "codeFirst"
+    );
     if (!desc) continue;
     out[field.name] = buildUserDrizzleColumn(desc, dialect);
   }
@@ -441,6 +469,12 @@ function buildPgColumnFromKind(
     case "longText":
     case "varchar":
       return nullable ? pgText(name) : pgText(name).notNull();
+    case "shortText": {
+      // The one string kind PostgreSQL bounds. The others render `text` there, so binding this as
+      // text too would leave the ORM describing a column the DDL declared with a width.
+      const col = pgVarchar(name, { length: desc.length ?? 255 });
+      return nullable ? col : col.notNull();
+    }
     case "boolean":
       return nullable ? pgBoolean(name) : pgBoolean(name).notNull();
     case "integer":
@@ -473,6 +507,7 @@ function buildMysqlColumnFromKind(
 ): unknown {
   switch (kind) {
     case "text":
+    case "shortText":
     case "varchar": {
       const col = mysqlVarchar(name, { length: length ?? 255 });
       return nullable ? col : col.notNull();
@@ -508,6 +543,7 @@ function buildSqliteColumnFromKind(
   switch (kind) {
     case "text":
     case "longText":
+    case "shortText":
     case "varchar":
       return nullable ? sqliteText(name) : sqliteText(name).notNull();
     case "boolean":

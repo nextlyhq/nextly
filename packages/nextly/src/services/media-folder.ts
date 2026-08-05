@@ -38,6 +38,8 @@ import crypto from "crypto";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { and, eq, isNull, sql } from "drizzle-orm";
 
+import type { ServiceErrorCode } from "../errors/error-codes";
+
 import { BaseService } from "./base-service";
 import type { Logger } from "./shared";
 
@@ -74,11 +76,13 @@ export interface FolderContents {
 export interface FolderResponse {
   success: boolean;
   statusCode: number;
+  code?: ServiceErrorCode;
   message: string;
   data?: MediaFolder | null;
 }
 
 export interface FolderListResponse {
+  code?: ServiceErrorCode;
   success: boolean;
   statusCode: number;
   message: string;
@@ -86,6 +90,7 @@ export interface FolderListResponse {
 }
 
 export interface FolderContentsResponse {
+  code?: ServiceErrorCode;
   success: boolean;
   statusCode: number;
   message: string;
@@ -126,6 +131,7 @@ export class MediaFolderService extends BaseService {
           return {
             success: false,
             statusCode: 404,
+            code: "NOT_FOUND",
             message: "Parent folder not found",
             data: null,
           };
@@ -149,6 +155,12 @@ export class MediaFolderService extends BaseService {
         return {
           success: false,
           statusCode: 409,
+          // The service names its own meaning. 409 covers both a name clash and
+          // a stale write, so a boundary inferring from the status alone has to
+          // pick the safer reading -- which would tell someone whose folder
+          // name is taken to refresh the page, advice that cannot rename
+          // anything.
+          code: "DUPLICATE",
           message: "A folder with this name already exists in this location",
           data: null,
         };
@@ -180,6 +192,7 @@ export class MediaFolderService extends BaseService {
       return {
         success: false,
         statusCode: 500,
+        code: "INTERNAL_ERROR",
         message: "Failed to create folder",
         data: null,
       };
@@ -203,6 +216,7 @@ export class MediaFolderService extends BaseService {
         return {
           success: false,
           statusCode: 404,
+          code: "NOT_FOUND",
           message: "Folder not found",
           data: null,
         };
@@ -219,6 +233,7 @@ export class MediaFolderService extends BaseService {
       return {
         success: false,
         statusCode: 500,
+        code: "INTERNAL_ERROR",
         message: "Failed to retrieve folder",
         data: null,
       };
@@ -263,6 +278,7 @@ export class MediaFolderService extends BaseService {
       return {
         success: false,
         statusCode: 500,
+        code: "INTERNAL_ERROR",
         message: "Failed to retrieve root folders",
         data: [],
       };
@@ -302,6 +318,7 @@ export class MediaFolderService extends BaseService {
       return {
         success: false,
         statusCode: 500,
+        code: "INTERNAL_ERROR",
         message: "Failed to retrieve subfolders",
         data: [],
       };
@@ -324,6 +341,7 @@ export class MediaFolderService extends BaseService {
           return {
             success: false,
             statusCode: 404,
+            code: "NOT_FOUND",
             message: "Folder not found",
           };
         }
@@ -333,6 +351,7 @@ export class MediaFolderService extends BaseService {
           return {
             success: false,
             statusCode: 404,
+            code: "NOT_FOUND",
             message: "Folder not found",
           };
         }
@@ -381,6 +400,7 @@ export class MediaFolderService extends BaseService {
       return {
         success: false,
         statusCode: 500,
+        code: "INTERNAL_ERROR",
         message: "Failed to retrieve folder contents",
       };
     }
@@ -427,6 +447,7 @@ export class MediaFolderService extends BaseService {
         return {
           success: false,
           statusCode: 404,
+          code: "NOT_FOUND",
           message: "Folder not found",
           data: null,
         };
@@ -438,6 +459,7 @@ export class MediaFolderService extends BaseService {
           return {
             success: false,
             statusCode: 400,
+            code: "INVALID_INPUT",
             message: "Cannot move folder into itself",
             data: null,
           };
@@ -448,6 +470,7 @@ export class MediaFolderService extends BaseService {
           return {
             success: false,
             statusCode: 400,
+            code: "INVALID_INPUT",
             message: "Cannot move folder into its own subfolder",
             data: null,
           };
@@ -479,6 +502,7 @@ export class MediaFolderService extends BaseService {
       return {
         success: false,
         statusCode: 500,
+        code: "INTERNAL_ERROR",
         message: "Failed to update folder",
         data: null,
       };
@@ -539,6 +563,7 @@ export class MediaFolderService extends BaseService {
   ): Promise<{
     success: boolean;
     statusCode: number;
+    code?: ServiceErrorCode;
     message: string;
     deletedMedia?: number;
     deletedFolders?: number;
@@ -551,6 +576,7 @@ export class MediaFolderService extends BaseService {
         return {
           success: false,
           statusCode: 404,
+          code: "NOT_FOUND",
           message: "Folder not found",
         };
       }
@@ -565,6 +591,7 @@ export class MediaFolderService extends BaseService {
           return {
             success: false,
             statusCode: 400,
+            code: "INVALID_INPUT",
             message:
               "Folder is not empty. Set deleteContents=true to delete all contents.",
           };
@@ -635,9 +662,7 @@ export class MediaFolderService extends BaseService {
       }
 
       // Delete folder (CASCADE handles subfolder records)
-      await this.db
-        .delete(mediaFolders)
-        .where(eq(mediaFolders.id, folderId));
+      await this.db.delete(mediaFolders).where(eq(mediaFolders.id, folderId));
 
       return {
         success: true,
@@ -651,6 +676,7 @@ export class MediaFolderService extends BaseService {
       return {
         success: false,
         statusCode: 500,
+        code: "INTERNAL_ERROR",
         message: "Failed to delete folder",
       };
     }
@@ -662,7 +688,12 @@ export class MediaFolderService extends BaseService {
   async moveMediaToFolder(
     mediaId: string,
     folderId: string | null
-  ): Promise<{ success: boolean; statusCode: number; message: string }> {
+  ): Promise<{
+    success: boolean;
+    statusCode: number;
+    code?: ServiceErrorCode;
+    message: string;
+  }> {
     try {
       const { media } = this.tables;
 
@@ -672,6 +703,7 @@ export class MediaFolderService extends BaseService {
           return {
             success: false,
             statusCode: 404,
+            code: "NOT_FOUND",
             message: "Folder not found",
           };
         }
@@ -694,6 +726,7 @@ export class MediaFolderService extends BaseService {
       return {
         success: false,
         statusCode: 500,
+        code: "INTERNAL_ERROR",
         message: "Failed to move media",
       };
     }

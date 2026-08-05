@@ -101,6 +101,7 @@ export { toast };
  *
  * @see https://sonner.emilkowal.ski/ - Sonner documentation
  * @see https://ui.shadcn.com/docs/components/sonner - shadcn/ui integration guide
+ * @experimental
  */
 export function Toaster({ theme = "system", ...props }: ToasterProps) {
   return (

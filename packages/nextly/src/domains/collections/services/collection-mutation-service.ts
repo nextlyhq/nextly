@@ -33,7 +33,8 @@ import { toDbError } from "../../../database/errors";
 // only the internal error mapping changed. fromDatabaseError keeps driver
 // text out of the wire and routes identifying detail to logContext (§13.8).
 import { NextlyError } from "../../../errors";
-import { typedErrorEnvelopeFields } from "../../../errors/from-service-envelope";
+import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
+import { withOriginalError } from "../../../errors/original-error";
 import type { ValidationPublicData } from "../../../errors/public-data";
 import { emitDocumentEvent } from "../../../events/domain-events";
 import { getEventBus } from "../../../events/event-bus";
@@ -87,7 +88,12 @@ import {
   stripPasswordFieldValues,
   stripSystemOwnerField,
 } from "../../../shared/lib/password-fields";
+import {
+  isWriteIntegrityFailure,
+  markWriteIntegrityFailure,
+} from "../../../shared/write-integrity";
 import type { SupportedDialect } from "../../../types/database";
+import { willRecordMutationActivity } from "../../audit/record-activity";
 import type { DynamicCollectionService } from "../../dynamic-collections";
 import {
   populateCompanionFields,
@@ -127,7 +133,10 @@ import { withVersionConflictRetry } from "../../versions/version-conflict";
 import { VersionsRepository } from "../../versions/versions-repository";
 import { expandComponentFields } from "../../webhooks/expand-component-fields";
 import { projectFields } from "../../webhooks/project-fields";
-import { recordMutationEvent } from "../../webhooks/record-mutation-event";
+import {
+  recordEntryActivity,
+  recordMutationEvent,
+} from "../../webhooks/record-mutation-event";
 import {
   getWebhookEmitSpec,
   isRecordingDisabledByConfig,
@@ -159,37 +168,12 @@ type CompanionReadDb = Parameters<
 >[0]["db"];
 
 /**
- * Errors raised AFTER a content row was written on a shared transaction — a
- * version-capture or outbox-recording failure — where reporting the item as a
- * soft per-item failure would commit the row without its promised snapshot or
- * event. A batch runs every item on ONE transaction with no per-item savepoint,
- * so the only way to keep such a row from committing is to abort the whole
- * transaction: these errors are marked here and re-thrown by the bulk write
- * loops instead of being swallowed. Tracked by object identity, so the original
- * error propagates unwrapped.
+ * Re-exported for the bulk write loops, which read it to decide whether an
+ * error raised after a row was written may be softened into a per-item failure
+ * or must abort the shared transaction. Defined in `shared/write-integrity` so
+ * the recorders that SET the mark do not have to import this service graph.
  */
-const writeIntegrityFailures = new WeakSet<object>();
-
-function markWriteIntegrityFailure<E>(error: E): E {
-  if (typeof error === "object" && error !== null) {
-    writeIntegrityFailures.add(error);
-  }
-  return error;
-}
-
-/**
- * Whether `error` was marked a write-integrity failure — a post-write capture or
- * recording failure that must roll the enclosing transaction back rather than be
- * reported as a soft per-item failure. The bulk create/update loops re-throw
- * these to abort the transaction.
- */
-export function isWriteIntegrityFailure(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    writeIntegrityFailures.has(error)
-  );
-}
+export { isWriteIntegrityFailure };
 
 /**
  * Emit a post-commit `collection.<slug>.<action>` event (D8/D51). Observe-only,
@@ -246,27 +230,34 @@ function errorToServiceResult<T = unknown>(
       error.code === "VALIDATION_ERROR"
         ? (error.publicData as ValidationPublicData | undefined)?.errors
         : undefined;
-    return {
-      success: false,
-      statusCode: error.statusCode,
-      // The canonical code rides along so boundary translators can rebuild
-      // the exact error (409 alone cannot separate DUPLICATE from CONFLICT).
-      code: error.code,
-      // A localized error selects its message by key, so dropping it leaves a
-      // client unable to render anything but the default string.
-      ...(error.messageKey !== undefined
-        ? { messageKey: error.messageKey }
-        : {}),
-      // Public by definition -- it is what `toResponseJSON` puts on the wire --
-      // so it rides the envelope and the boundary can rebuild an error whose
-      // meaning lives in it rather than in its code.
-      ...(error.publicData !== undefined
-        ? { publicData: error.publicData }
-        : {}),
-      message: error.publicMessage,
-      data: null,
-      ...(validationErrors ? { errors: validationErrors } : {}),
-    };
+    // The envelope carries the thrown error itself, not just what survives
+    // being made public, so the boundary that rebuilds from it can keep the
+    // original as the rebuilt error's `cause`. Symbol-keyed, so it cannot
+    // reach a response body.
+    return withOriginalError(
+      {
+        success: false,
+        statusCode: error.statusCode,
+        // The canonical code rides along so boundary translators can rebuild
+        // the exact error (409 alone cannot separate DUPLICATE from CONFLICT).
+        code: error.code,
+        // A localized error selects its message by key, so dropping it leaves a
+        // client unable to render anything but the default string.
+        ...(error.messageKey !== undefined
+          ? { messageKey: error.messageKey }
+          : {}),
+        // Public by definition -- it is what `toResponseJSON` puts on the wire --
+        // so it rides the envelope and the boundary can rebuild an error whose
+        // meaning lives in it rather than in its code.
+        ...(error.publicData !== undefined
+          ? { publicData: error.publicData }
+          : {}),
+        message: error.publicMessage,
+        data: null,
+        ...(validationErrors ? { errors: validationErrors } : {}),
+      },
+      error
+    );
   }
   // Free helper takes dialect explicitly (no `this`) so callers pass
   // `this.dialect` from BaseService. Normalising raw driver errors first
@@ -275,23 +266,33 @@ function errorToServiceResult<T = unknown>(
   // The mapping is where a unique or FK violation gains the context that says
   // WHICH constraint; the envelope below drops it, so it is kept here too.
   recordFlattenedError(mapped);
+  // Both mapped branches carry the provenance too. A driver failure is the
+  // case where the chained cause is worth the most — it is the only place the
+  // constraint that actually rejected the write is named.
   if (mapped.code === "INTERNAL_ERROR") {
-    return {
-      success: false,
-      statusCode: fallback.statusCode ?? 500,
-      message: error instanceof Error ? error.message : fallback.defaultMessage,
-      data: null,
-    };
+    return withOriginalError(
+      {
+        success: false,
+        statusCode: fallback.statusCode ?? 500,
+        message:
+          error instanceof Error ? error.message : fallback.defaultMessage,
+        data: null,
+      },
+      mapped
+    );
   }
-  return {
-    success: false,
-    statusCode: mapped.statusCode,
-    // Same passthrough as the NextlyError branch: a unique-violation maps to
-    // DUPLICATE here, and the code keeps that distinction across the envelope.
-    code: mapped.code,
-    message: mapped.publicMessage,
-    data: null,
-  };
+  return withOriginalError(
+    {
+      success: false,
+      statusCode: mapped.statusCode,
+      // Same passthrough as the NextlyError branch: a unique-violation maps to
+      // DUPLICATE here, and the code keeps that distinction across the envelope.
+      code: mapped.code,
+      message: mapped.publicMessage,
+      data: null,
+    },
+    mapped
+  );
 }
 
 /**
@@ -3346,6 +3347,8 @@ export class CollectionMutationService extends BaseService {
     // A scoped API key is judged on its own `publish-<slug>` grant, not the key
     // owner's — the route authorized this POST only as `update`.
     authenticatedScope?: AuthenticatedScope;
+    /** Who performed the publish, recorded on the events and the trail. */
+    actor?: RequestActor;
   }): Promise<CollectionServiceResult> {
     // Set when the in-transaction document-rule re-check refuses the publish
     // against the row-locked document. Declared out here so the catch can read
@@ -3816,7 +3819,7 @@ export class CollectionMutationService extends BaseService {
             fields,
             tx.getDrizzle()
           );
-          const publishActor = actorForWrite(undefined, params.user);
+          const publishActor = actorForWrite(params.actor, params.user);
           const baseRecorded = await recordMutationEvent(tx, {
             type: "entry.updated",
             resource: {
@@ -4110,7 +4113,7 @@ export class CollectionMutationService extends BaseService {
         // A typed error keeps its own status and code. Hardcoding 500 reported
         // a hook's refusal or rate limit as a server fault, and left a boundary
         // nothing to rebuild it from.
-        ...(typedErrorEnvelopeFields(error) ?? {}),
+        ...errorEnvelopeFields(error),
       };
     }
   }
@@ -6060,9 +6063,30 @@ export class CollectionMutationService extends BaseService {
                       ? { locale: localizedUpdate.writeLocale }
                       : {}),
                   },
-                  data: updatedDocument,
+                  data: workingDraftDocument ?? updatedDocument,
                   previous: previousDocument,
                   fields: webhookFields,
+                  actor: actorForWrite(params.actor, params.user),
+                });
+              } else {
+                // A working-draft save changes no live document, so there is no
+                // public event for a subscriber to receive — but a person did
+                // edit content, and the trail records people rather than
+                // documents. Recorded on its own seam because the two answer
+                // different questions; routing it through the event above would
+                // have to invent a public event for a private edit.
+                // Diffed against the DRAFT, not the live row. A draft save
+                // deliberately leaves the live document and its relations
+                // untouched, so comparing the live before and after reports every
+                // draft edit as having changed nothing. These are the same two
+                // documents the afterUpdate hooks compare — the new draft against
+                // the prior one, or against the published row on the first save.
+                await recordEntryActivity(tx, {
+                  action: "update",
+                  collection: params.collectionName,
+                  entryId: params.entryId,
+                  data: workingDraftDocument ?? updatedDocument,
+                  previous: priorWorkingDraftDocument ?? previousDocument,
                   actor: actorForWrite(params.actor, params.user),
                 });
               }
@@ -6163,7 +6187,7 @@ export class CollectionMutationService extends BaseService {
                   from: localizedPreviousStatus,
                   to: companionNext,
                   isCreate: false,
-                  data: updatedDocument,
+                  data: workingDraftDocument ?? updatedDocument,
                   previous: previousDocument,
                   fields: webhookFields,
                   actor,
@@ -6855,7 +6879,7 @@ export class CollectionMutationService extends BaseService {
         // A typed error keeps its own status and code. Hardcoding 500 reported
         // a hook's refusal or rate limit as a server fault, and left a boundary
         // nothing to rebuild it from.
-        ...(typedErrorEnvelopeFields(error) ?? {}),
+        ...errorEnvelopeFields(error),
         eventRecorded,
         revalidationIntent,
         committed: committedWrite,
@@ -6892,6 +6916,13 @@ export class CollectionMutationService extends BaseService {
       overrideAccess?: boolean;
       // See createEntry: route-authorized REST responses stay redacted.
       routeAuthorized?: boolean;
+      /**
+       * Who performed the write. The bulk callers already spread this in; until
+       * it was declared here it was received and dropped, so every event and
+       * activity entry these paths recorded attributed an API-key write to the
+       * key's OWNER as though a person had made it.
+       */
+      actor?: RequestActor;
       // Publish/unpublish authorization resolved by the batch caller before this
       // transaction opened, so the transition is enforced under the row lock with
       // no permission read inside the transaction. Self-resolved (pooled) when a
@@ -7307,7 +7338,7 @@ export class CollectionMutationService extends BaseService {
         fields,
         tx.getDrizzle()
       );
-      const eventActor = actorForWrite(undefined, params.user);
+      const eventActor = actorForWrite(params.actor, params.user);
       let eventRecorded = await recordMutationEvent(tx, {
         type: "entry.created",
         resource: {
@@ -7465,6 +7496,13 @@ export class CollectionMutationService extends BaseService {
       overrideAccess?: boolean;
       // See createEntry: route-authorized REST responses stay redacted.
       routeAuthorized?: boolean;
+      /**
+       * Who performed the write. The bulk callers already spread this in; until
+       * it was declared here it was received and dropped, so every event and
+       * activity entry these paths recorded attributed an API-key write to the
+       * key's OWNER as though a person had made it.
+       */
+      actor?: RequestActor;
       // Publish/unpublish authorization resolved by the batch caller before this
       // transaction opened, so the transition is enforced under the row lock with
       // no permission read inside the transaction. Self-resolved (pooled) when a
@@ -7845,17 +7883,26 @@ export class CollectionMutationService extends BaseService {
       // field tree are always assembled together: a decision that can flip
       // mid-write (a stored opt-out or endpoint activation) never leaves a
       // recorded event with a parent-only payload.
+      // The activity trail consumes these documents too, and it is NOT gated on
+      // webhook recording — so an opted-out collection whose update will be
+      // recorded still has to assemble its relations. Without this a
+      // relationship-only edit reaches the diff as two identical parent rows and
+      // is filed as an update that changed nothing.
+      const recordsActivity = willRecordMutationActivity(
+        params.collectionName,
+        actorForWrite(params.actor, params.user)
+      );
       const needsRelations =
         !!versionsConfig?.enabled ||
+        recordsActivity ||
         !isRecordingDisabledByConfig("collection", params.collectionName);
-      // The `previous` document is carried ONLY by the outbox event, never by the
-      // version snapshot, so gate its relation read on webhook recording alone: a
-      // version-only update (versioning on, recording disabled by config) skips it
-      // instead of paying a second full relational walk whose result is discarded.
-      const previousNeedsRelations = !isRecordingDisabledByConfig(
-        "collection",
-        params.collectionName
-      );
+      // The `previous` document is carried by the outbox event and by the
+      // trail's changed-field names, never by the version snapshot: a
+      // version-only update that records neither still skips it instead of
+      // paying a second full relational walk whose result is discarded.
+      const previousNeedsRelations =
+        recordsActivity ||
+        !isRecordingDisabledByConfig("collection", params.collectionName);
 
       // Assemble the `previous` document BEFORE the junction rows are rewritten,
       // so a relationship-only update still lists the changed field: reading m2m
@@ -7936,7 +7983,7 @@ export class CollectionMutationService extends BaseService {
         fields,
         tx.getDrizzle()
       );
-      const eventActor = actorForWrite(undefined, params.user);
+      const eventActor = actorForWrite(params.actor, params.user);
       let eventRecorded = await recordMutationEvent(tx, {
         type: "entry.updated",
         resource: {
@@ -8364,7 +8411,7 @@ export class CollectionMutationService extends BaseService {
         // A typed error keeps its own status and code. Hardcoding 500 reported
         // a hook's refusal or rate limit as a server fault, and left a boundary
         // nothing to rebuild it from.
-        ...(typedErrorEnvelopeFields(error) ?? {}),
+        ...errorEnvelopeFields(error),
         revalidationIntent,
       };
     }
@@ -8396,6 +8443,13 @@ export class CollectionMutationService extends BaseService {
       overrideAccess?: boolean;
       // See createEntry: route-authorized REST responses stay redacted.
       routeAuthorized?: boolean;
+      /**
+       * Who performed the write. The bulk callers already spread this in; until
+       * it was declared here it was received and dropped, so every event and
+       * activity entry these paths recorded attributed an API-key write to the
+       * key's OWNER as though a person had made it.
+       */
+      actor?: RequestActor;
       // Publish authorization resolved once by the batch caller before this
       // shared transaction opened, so the create-as-published is enforced with no
       // permission read inside the transaction. Self-resolved (pooled) when a
@@ -8797,7 +8851,7 @@ export class CollectionMutationService extends BaseService {
         fields,
         tx.getDrizzle()
       );
-      const eventActor = actorForWrite(undefined, params.user);
+      const eventActor = actorForWrite(params.actor, params.user);
       let eventRecorded = await recordMutationEvent(tx, {
         type: "entry.created",
         resource: {
@@ -8969,6 +9023,13 @@ export class CollectionMutationService extends BaseService {
       overrideAccess?: boolean;
       // See createEntry: route-authorized REST responses stay redacted.
       routeAuthorized?: boolean;
+      /**
+       * Who performed the write. The bulk callers already spread this in; until
+       * it was declared here it was received and dropped, so every event and
+       * activity entry these paths recorded attributed an API-key write to the
+       * key's OWNER as though a person had made it.
+       */
+      actor?: RequestActor;
       // Publish/unpublish authorization resolved once by the batch caller before
       // this shared transaction opened, so the transition is enforced under the
       // row lock with no permission read inside the transaction. Self-resolved
@@ -9399,17 +9460,26 @@ export class CollectionMutationService extends BaseService {
       // field tree are always assembled together: a decision that can flip
       // mid-write (a stored opt-out or endpoint activation) never leaves a
       // recorded event with a parent-only payload.
+      // The activity trail consumes these documents too, and it is NOT gated on
+      // webhook recording — so an opted-out collection whose update will be
+      // recorded still has to assemble its relations. Without this a
+      // relationship-only edit reaches the diff as two identical parent rows and
+      // is filed as an update that changed nothing.
+      const recordsActivity = willRecordMutationActivity(
+        params.collectionName,
+        actorForWrite(params.actor, params.user)
+      );
       const needsRelations =
         !!versionsConfig?.enabled ||
+        recordsActivity ||
         !isRecordingDisabledByConfig("collection", params.collectionName);
-      // The `previous` document is carried ONLY by the outbox event, never by the
-      // version snapshot, so gate its relation read on webhook recording alone: a
-      // version-only update (versioning on, recording disabled by config) skips it
-      // instead of paying a second full relational walk whose result is discarded.
-      const previousNeedsRelations = !isRecordingDisabledByConfig(
-        "collection",
-        params.collectionName
-      );
+      // The `previous` document is carried by the outbox event and by the
+      // trail's changed-field names, never by the version snapshot: a
+      // version-only update that records neither still skips it instead of
+      // paying a second full relational walk whose result is discarded.
+      const previousNeedsRelations =
+        recordsActivity ||
+        !isRecordingDisabledByConfig("collection", params.collectionName);
 
       // Assemble the `previous` document BEFORE the junction rows are rewritten,
       // so a relationship-only update still lists the changed field: reading m2m
@@ -9491,7 +9561,7 @@ export class CollectionMutationService extends BaseService {
         fields,
         tx.getDrizzle()
       );
-      const eventActor = actorForWrite(undefined, params.user);
+      const eventActor = actorForWrite(params.actor, params.user);
       let eventRecorded = await recordMutationEvent(tx, {
         type: "entry.updated",
         resource: {
@@ -9982,7 +10052,7 @@ export class CollectionMutationService extends BaseService {
         // A typed error keeps its own status and code. Hardcoding 500 reported
         // a hook's refusal or rate limit as a server fault, and left a boundary
         // nothing to rebuild it from.
-        ...(typedErrorEnvelopeFields(error) ?? {}),
+        ...errorEnvelopeFields(error),
         eventRecorded,
         revalidationIntent,
       };

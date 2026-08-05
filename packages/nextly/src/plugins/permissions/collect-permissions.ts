@@ -1,4 +1,8 @@
-import { isSystemResource } from "../../schemas/_zod/rbac";
+import {
+  isSystemResource,
+  permissionName,
+  permissionSlug,
+} from "../../schemas/_zod/rbac";
 import type { PluginPermission } from "../contributions";
 import { permissionCollisionError } from "../permission-error";
 import type { PluginDefinition } from "../plugin-context";
@@ -47,13 +51,6 @@ const SINGLE_ACTIONS = new Set(["read", "update"]);
 // declaration through would put a permission the seeder depends on at risk of
 // being swept the day the plugin is removed.
 const ADOPTED_LIFECYCLE_ACTIONS = new Set(["publish", "unpublish"]);
-
-const titleCase = (s: string): string =>
-  s
-    .split(/[-_\s]+/)
-    .filter(Boolean)
-    .map(w => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(" ");
 
 /**
  * The parts of a config a permission collector reads.
@@ -141,8 +138,8 @@ export function collectCustomPermissions(
     out.push({
       action,
       resource,
-      slug: `${action}-${resource}`,
-      name: perm.label ?? `${titleCase(action)} ${titleCase(resource)}`,
+      slug: permissionSlug(action, resource),
+      name: perm.label ?? permissionName(action, resource),
       description: perm.description,
       owner,
       // `group` was accepted and dropped: the interface documented it, the

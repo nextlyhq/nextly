@@ -4,12 +4,16 @@ import * as React from "react";
 import { cn } from "../lib/utils";
 import { usePortalContainer } from "../providers/portal-provider";
 
+/** @experimental */
 const Popover = PopoverPrimitive.Root;
 
+/** @experimental */
 const PopoverTrigger = PopoverPrimitive.Trigger;
 
+/** @experimental */
 const PopoverAnchor = PopoverPrimitive.Anchor;
 
+/** @experimental */
 const PopoverContent = React.forwardRef<
   React.ElementRef<typeof PopoverPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof PopoverPrimitive.Content>

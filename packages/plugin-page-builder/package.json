@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/plugin-page-builder",
-  "version": "0.0.2-alpha.50",
+  "version": "0.0.2-alpha.52",
   "description": "Visual page builder plugin for Nextly (blocks, drag-and-drop, server-first rendering)",
   "license": "MIT",
   "type": "module",
@@ -57,7 +57,8 @@
     "@dnd-kit/react": "0.5.0",
     "@nextlyhq/blocks-engine": "workspace:*",
     "css-tree": "^2.3.1",
-    "isomorphic-dompurify": "^2"
+    "isomorphic-dompurify": "^2",
+    "picomatch": "^4.0.5"
   },
   "peerDependencies": {
     "@nextlyhq/admin": "workspace:*",
@@ -79,6 +80,7 @@
     "@tanstack/react-query": "^5.62.0",
     "@types/css-tree": "^2.3.4",
     "@types/node": "^20.19.17",
+    "@types/picomatch": "^4.0.3",
     "@types/react": "19.2.0",
     "@types/react-dom": "19.2.0",
     "lucide-react": "^0.544.0",

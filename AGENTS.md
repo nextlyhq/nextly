@@ -14,6 +14,11 @@ for all published packages. Status: alpha, all packages version in lockstep.
 - `packages/admin` - the admin panel UI (`@nextlyhq/admin`).
 - `packages/adapter-{drizzle,postgres,mysql,sqlite}` - database adapters.
   `adapter-drizzle` is shared logic; the per-dialect adapters extend it.
+- `packages/blocks-engine` - the runtime-free block document model, validation
+  and style compiler. `packages/blocks-react` - the React/RSC renderer for those
+  documents; its root entry imports no `next/*`, no admin and no CMS runtime, so
+  it is usable standalone (enforced by `src/layering.test.ts`). Next-coupled
+  helpers live at the `/next` subpath.
 - `packages/plugin-sdk` - the ONLY stable import surface for plugin authors.
 - `packages/plugin-{form-builder,page-builder}` - first-party plugins.
 - `packages/storage-{s3,vercel-blob,uploadthing}` - media storage adapters.
@@ -69,7 +74,7 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
   `adapter-postgres`, `adapter-mysql`, `adapter-sqlite`, `adapter-drizzle`,
   `storage-s3`, `storage-vercel-blob`, `storage-uploadthing`,
   `plugin-form-builder`, `plugin-page-builder`, `plugin-seo`, `plugin-sdk`,
-  `blocks-engine`,
+  `blocks-engine`, `blocks-react`,
   `create-nextly-app`, `eslint-config`, `prettier-config`, `tsconfig`,
   `telemetry`, `client`) plus `playground`, `root`, `ci`, `docs`, `deps`,
   `release`. Scope is optional; the subject must not start with an uppercase
@@ -109,7 +114,14 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
   `0.0.0` placeholder containing no code (`package.json` + `README` only) to
   claim the name; it refuses to run when `CI` is set, so this never becomes a
   long-lived npm token in a workflow. Every real version still publishes only
-  from CI. Details: the `release-and-changesets` skill.
+  from CI. Claiming the name is only half of it: attach the package's Trusted
+  Publisher at npmjs.com (repository `nextlyhq/nextly`, workflow `release.yml`,
+  environment `Production`) and then add the package to
+  `scripts/release/first-publish-acknowledged.json` in the same PR that adds it.
+  Preflight refuses to start a release while a package carries only its
+  placeholder and is missing from that list, because a publish without a trusted
+  publisher answers 404 and would strand it after the rest of the train is
+  already live. Details: the `release-and-changesets` skill.
 
 ## Git and PR rules
 

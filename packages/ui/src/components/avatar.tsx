@@ -76,6 +76,7 @@ import type {
  *
  * @see {@link https://www.radix-ui.com/primitives/docs/components/avatar Radix UI Avatar}
  * @see {@link https://github.com/nextlyhq/nextly/blob/main/ui-revamp/04-design-system-specification.md Design System Specification}
+ * @experimental
  */
 export const avatarVariants = cva(
   "relative inline-flex shrink-0 overflow-hidden rounded-full items-center justify-center bg-primary/5 text-muted-foreground",
@@ -119,6 +120,7 @@ const AvatarSizeContext = createContext<AvatarProps["size"]>("md");
  * Container element for avatar image and fallback. Provides consistent sizing
  * and styling across the application. Uses React Context to pass size to
  * AvatarFallback for reliable text scaling.
+ * @experimental
  */
 const Avatar = forwardRef<HTMLSpanElement, AvatarProps>(
   ({ className, size = "md", ...props }, ref) => {
@@ -149,6 +151,7 @@ Avatar.displayName = "Avatar";
  *
  * @example
  * <AvatarImage src="/users/john-doe.jpg" alt="John Doe" />
+ * @experimental
  */
 const AvatarImage = forwardRef<HTMLImageElement, AvatarImageProps>(
   ({ className, ...props }, ref) => {
@@ -194,6 +197,7 @@ AvatarImage.displayName = "AvatarImage";
  * @example
  * // Custom delay before showing fallback
  * <AvatarFallback delayMs={300}>AB</AvatarFallback>
+ * @experimental
  */
 const AvatarFallback = forwardRef<HTMLSpanElement, AvatarFallbackProps>(
   ({ className, children, ...props }, ref) => {

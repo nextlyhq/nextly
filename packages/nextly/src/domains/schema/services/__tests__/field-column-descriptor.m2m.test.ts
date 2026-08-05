@@ -14,7 +14,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
 import { getColumnDescriptor } from "../field-column-descriptor";
 
 describe("getColumnDescriptor — many-to-many relationship fields", () => {
@@ -25,9 +25,9 @@ describe("getColumnDescriptor — many-to-many relationship fields", () => {
       options: { relationType: "manyToMany", target: "tags" },
     } as unknown as FieldDefinition;
 
-    expect(getColumnDescriptor(field, "postgresql")).toBeNull();
-    expect(getColumnDescriptor(field, "mysql")).toBeNull();
-    expect(getColumnDescriptor(field, "sqlite")).toBeNull();
+    expect(getColumnDescriptor(field, "postgresql", "codeFirst")).toBeNull();
+    expect(getColumnDescriptor(field, "mysql", "codeFirst")).toBeNull();
+    expect(getColumnDescriptor(field, "sqlite", "codeFirst")).toBeNull();
   });
 
   it("still emits an fkSingle column for a single-target (manyToOne) relationship", () => {
@@ -37,7 +37,7 @@ describe("getColumnDescriptor — many-to-many relationship fields", () => {
       options: { relationType: "manyToOne", target: "users" },
     } as unknown as FieldDefinition;
 
-    const desc = getColumnDescriptor(field, "postgresql");
+    const desc = getColumnDescriptor(field, "postgresql", "codeFirst");
     expect(desc).not.toBeNull();
     expect(desc?.kind).toBe("fkSingle");
     expect(desc?.name).toBe("author");
@@ -51,7 +51,7 @@ describe("getColumnDescriptor — many-to-many relationship fields", () => {
       options: { target: "users" },
     } as unknown as FieldDefinition;
 
-    const desc = getColumnDescriptor(field, "postgresql");
+    const desc = getColumnDescriptor(field, "postgresql", "codeFirst");
     expect(desc).not.toBeNull();
     expect(desc?.kind).toBe("json");
   });
@@ -63,7 +63,7 @@ describe("getColumnDescriptor — many-to-many relationship fields", () => {
       relationTo: ["posts", "pages"],
     } as unknown as FieldDefinition;
 
-    const desc = getColumnDescriptor(field, "postgresql");
+    const desc = getColumnDescriptor(field, "postgresql", "codeFirst");
     expect(desc).not.toBeNull();
     expect(desc?.kind).toBe("json");
   });

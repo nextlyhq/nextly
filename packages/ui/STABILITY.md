@@ -70,16 +70,28 @@ that swap fails the snapshot too.
 | Design tokens | `theme.css`, `styles.css`, `styles.scoped.css`, and the `--nx-*` custom properties they define                                        | admin, all plugins         |
 | Portals       | `PortalProvider`, `usePortalContainer`                                                                                                | admin, `styles.scoped.css` |
 
-| Prop types | `ButtonProps`, `InputProps`, `FormLabelWithTooltipProps` | form-builder, page-builder |
+| Prop types | `ButtonProps`, `InputProps`, `FormLabelWithTooltipProps`, `BadgeProps`, `TabsProps`, `TabsListProps`, `TabsTriggerProps`, `TabsContentProps`, `DialogContentProps`, `DialogHeaderProps`, `DialogFooterProps`, `DialogTitleProps`, `DialogDescriptionProps`, `DropdownMenuContentProps`, `DropdownMenuItemProps`, `DropdownMenuCheckboxItemProps`, `DropdownMenuSeparatorProps`, `SelectTriggerProps`, `SheetProps`, `SheetContentProps`, `SheetHeaderProps`, `SheetTitleProps`, `SheetDescriptionProps` | form-builder, page-builder |
 
-Prop types carry the same guarantee as the component they belong to.
+Prop types carry the same guarantee as the component they belong to. That is not
+a convention anyone has to remember: a stable component you cannot type the
+props of is not usable stably, since wrapping it or forwarding to it needs the
+type. The rule is enforced by a test rather than stated, because it had drifted
+on twenty of them — every one tagged weaker than the component it belongs to, so
+the published type advertised less than the component actually promised.
 
 ## Experimental surface (`@experimental`)
 
 Everything else the barrel exports, including: `Accordion`, `Alert`, `AlertDialog`,
-`Avatar`, `Card`, `Collapsible`, `Command`, `Popover`, `Progress`, `Separator`,
-`Skeleton`, `Spinner`, `Table` and its family, `TableSearch`, `TableSkeleton`, the table
-state components, the layout primitives (`Stack`, `Grid`, `Stat`) and `Toaster`.
+`Avatar`, `Card`, `Collapsible`, `Command`, `ContextMenu` and its family, `Popover`,
+`Progress`, `ResizablePanelGroup`/`ResizablePanel`/`ResizableHandle`, `Separator`,
+`Skeleton`, `Spinner`, `Table` and its family, `TableSearch`, `TableSkeleton`, `TreeView`, the
+table state components, the layout primitives (`Stack`, `Grid`, `Stat`) and `Toaster`.
+
+The context menu and the resizable split are the editor-shell primitives: an editor needs
+a right-click menu and draggable regions, and both belong in the kit rather than inside
+one plugin, because every plugin that builds an editing surface needs the same two. They
+enter experimental like everything else — the ladder does not make exceptions for the
+component that motivated it.
 
 These are shipped and used by the admin, but no first-party plugin depends on them yet,
 so they have not met the graduation bar. Use them — that is what promotes them — but

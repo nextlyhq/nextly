@@ -31,8 +31,14 @@ import { STORAGE_FORMAT } from "../../../../schemas/storage-format";
 import { resolveLocalizedFieldNames } from "../../../i18n/classify-fields";
 import {
   getColumnDescriptor,
+  type ColumnOrigin,
   getSystemColumnDescriptors,
+  toSnakeCase,
 } from "../../services/field-column-descriptor";
+import {
+  columnTypeIsIndexable,
+  indexNameForColumn,
+} from "../../services/index-name";
 
 import { indexKey } from "./index-util";
 import type { ColumnSpec, IndexSpec, TableSpec } from "./types";
@@ -79,6 +85,12 @@ export interface BuildDesiredTableOptions {
    * dropped.
    */
   localized?: boolean;
+  /**
+   * Which builder made this table. Required, because a text field with no stated width has no one
+   * right answer: the Schema Builder's two creators and the pipeline each read silence differently,
+   * and the diff has to describe the column the way whatever built it did.
+   */
+  builtBy: ColumnOrigin;
 }
 
 /**
@@ -105,6 +117,15 @@ interface CollectionIndexContext<F> {
    * change would otherwise produce indexes naming columns that do not exist.
    */
   columnNameFor: (field: F) => string | null;
+  /**
+   * Whether an index on this column can exist at all, asked per column.
+   *
+   * Supplied rather than derived here because it depends on the dialect AND the column type,
+   * and because the statements that create indexes ask the same question: a desired schema that
+   * declares an index the generator deliberately never writes makes every diff propose creating
+   * it and every apply refuse it.
+   */
+  columnIsIndexable?: (field: F, column: string) => boolean;
 }
 
 /**
@@ -129,7 +150,7 @@ export function collectionIndexSpecs<F extends MinimalFieldDef>(
   const indexes: IndexSpec[] = [];
   if (context.hasSlugColumn) {
     indexes.push({
-      name: `idx_${tableName}_slug`,
+      name: indexNameForColumn(tableName, "slug"),
       columns: ["slug"],
       unique: true,
     });
@@ -141,14 +162,14 @@ export function collectionIndexSpecs<F extends MinimalFieldDef>(
     // every index the replacement table does not declare, and the restore
     // replays only what the snapshot carries.
     indexes.push({
-      name: `idx_${tableName}_created_by`,
+      name: indexNameForColumn(tableName, "created_by"),
       columns: ["created_by"],
       unique: false,
     });
   }
   if (context.hasCreatedAtColumn) {
     indexes.push({
-      name: `idx_${tableName}_created_at`,
+      name: indexNameForColumn(tableName, "created_at"),
       columns: ["created_at"],
       unique: false,
     });
@@ -168,13 +189,16 @@ export function collectionIndexSpecs<F extends MinimalFieldDef>(
       !Array.isArray(field.relationTo);
     if (field.unique === true) {
       indexes.push({
-        name: `uq_${tableName}_${col}`,
+        name: indexNameForColumn(tableName, col).replace(/^idx_/, "uq_"),
         columns: [col],
         unique: true,
       });
-    } else if (field.index === true || isSingleRelation) {
+    } else if (
+      (field.index === true || isSingleRelation) &&
+      (context.columnIsIndexable?.(field, col) ?? true)
+    ) {
       indexes.push({
-        name: `idx_${tableName}_${col}`,
+        name: indexNameForColumn(tableName, col),
         columns: [col],
         unique: false,
       });
@@ -187,7 +211,7 @@ export function buildDesiredTableFromFields(
   tableName: string,
   fields: MinimalFieldDef[],
   dialect: SupportedDialect,
-  options: BuildDesiredTableOptions = {}
+  options: BuildDesiredTableOptions
 ): TableSpec {
   const columns: ColumnSpec[] = [];
 
@@ -205,16 +229,20 @@ export function buildDesiredTableFromFields(
   const producesColumn = (f: (typeof fields)[number]): boolean =>
     getColumnDescriptor(
       f as unknown as Parameters<typeof getColumnDescriptor>[0],
-      dialect
+      dialect,
+      options.builtBy
     ) !== null;
 
   // Inject reserved system columns first - mirrors runtime-schema-generator's
   // behavior. title/slug only when a column-producing user field replaces them
   // (user wins). status only when Draft/Published is enabled.
-  const hasTitleField = fields.some(
-    f => f.name === "title" && producesColumn(f)
-  );
-  const hasSlugField = fields.some(f => f.name === "slug" && producesColumn(f));
+  // Matched on the COLUMN the field becomes, so this agrees with the runtime schema and the DDL
+  // generator. Comparing declared names makes `Title` suppress the column in one place and not
+  // the others, and the diff then reconciles a column the table does not have.
+  const declaresColumn = (column: string): boolean =>
+    fields.some(f => toSnakeCase(f.name) === column && producesColumn(f));
+  const hasTitleField = declaresColumn("title");
+  const hasSlugField = declaresColumn("slug");
   for (const reserved of getSystemColumnDescriptors(dialect, {
     hasTitleField,
     hasSlugField,
@@ -248,7 +276,8 @@ export function buildDesiredTableFromFields(
       // keys). Cast through unknown to bridge the two surface types
       // without leaking either back through the module graph.
       field as unknown as Parameters<typeof getColumnDescriptor>[0],
-      dialect
+      dialect,
+      options.builtBy
     );
     if (!desc) continue;
     columns.push({
@@ -263,11 +292,17 @@ export function buildDesiredTableFromFields(
     hasSlugColumn: columns.some(c => c.name === "slug"),
     hasCreatedAtColumn: columns.some(c => c.name === "created_at"),
     hasCreatedByColumn: columns.some(c => c.name === "created_by"),
+    columnIsIndexable: (_field, col) =>
+      columnTypeIsIndexable(
+        columns.find(c => c.name === col)?.type ?? "",
+        dialect
+      ),
     localizedNames,
     columnNameFor: field =>
       getColumnDescriptor(
         field as unknown as Parameters<typeof getColumnDescriptor>[0],
-        dialect
+        dialect,
+        options.builtBy
       )?.name ?? null,
   });
 
@@ -286,6 +321,8 @@ export function buildDesiredTableFromComponentFields(
   dialect: SupportedDialect,
   options: {
     localized?: boolean;
+    /** Which builder made this table — see `BuildDesiredTableOptions`. */
+    builtBy: ColumnOrigin;
     /**
      * The discriminator this table actually carries.
      *
@@ -299,7 +336,7 @@ export function buildDesiredTableFromComponentFields(
      * table about to be created and for every database that has not migrated.
      */
     typeColumn?: string;
-  } = {}
+  }
 ): TableSpec {
   const typeColumn = options.typeColumn ?? STORAGE_FORMAT.columns.type;
   const columns: ColumnSpec[] = [];
@@ -440,7 +477,8 @@ export function buildDesiredTableFromComponentFields(
     if (localizedNames.has(field.name)) continue; // lives in the companion table
     const desc = getColumnDescriptor(
       field as unknown as Parameters<typeof getColumnDescriptor>[0],
-      dialect
+      dialect,
+      options.builtBy
     );
     if (!desc) continue;
     columns.push({
@@ -519,6 +557,11 @@ export function buildDesiredTableFromComponentFields(
     // rebuild dropped them and nothing put them back — including the unique
     // ones, which is a constraint silently disappearing, not just an index.
     ...collectionIndexSpecs(tableName, fields, {
+      columnIsIndexable: (_field, col) =>
+        columnTypeIsIndexable(
+          columns.find(c => c.name === col)?.type ?? "",
+          dialect
+        ),
       // Components have no slug column; created_at is present when the
       // component carries timestamps.
       hasSlugColumn: false,
@@ -527,7 +570,8 @@ export function buildDesiredTableFromComponentFields(
       columnNameFor: field =>
         getColumnDescriptor(
           field as unknown as Parameters<typeof getColumnDescriptor>[0],
-          dialect
+          dialect,
+          options.builtBy
         )?.name ?? null,
     }),
   ];

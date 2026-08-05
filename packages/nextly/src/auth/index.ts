@@ -66,3 +66,16 @@ export {
 
 export { routeAuthRequest } from "./handlers/router";
 export type { AuthRouterDeps } from "./handlers/router";
+
+// Preview tokens — minting and checking scoped, short-lived draft links. The
+// route that consumes them lives in `nextly/runtime`, since only that half
+// touches Next.
+export {
+  DEFAULT_PREVIEW_TTL_SECONDS,
+  previewTokenCovers,
+  signPreviewToken,
+  verifyPreviewToken,
+  type PreviewTokenScope,
+  type PreviewVerifyResult,
+  type SignPreviewTokenOptions,
+} from "./preview/preview-token";

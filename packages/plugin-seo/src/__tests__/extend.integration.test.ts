@@ -70,11 +70,20 @@ describe("seoPlugin extend (integration)", () => {
 
     // Without the plugin the collection has no `seo` column, so the same write
     // that succeeds above is rejected here — proof the plugin is what adds it.
+    //
+    // What rejects it is the database refusing an unknown column, so the text
+    // naming `seo` is the driver's own. That text is withheld from the caller
+    // and reported to the operator instead, which is where this reads it from:
+    // asserting it on the public message would be asserting that raw driver
+    // output reaches a caller.
     await expect(
       current.nextly.create({
         collection: "pages",
         data: { slug: "home", title: "Home", seo: { metaTitle: "ignored" } },
       })
-    ).rejects.toThrow(/seo/i);
+    ).rejects.toMatchObject({
+      code: "INTERNAL_ERROR",
+      logContext: { legacyMessage: expect.stringMatching(/seo/i) },
+    });
   });
 });

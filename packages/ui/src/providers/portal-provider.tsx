@@ -14,6 +14,7 @@ interface PortalProviderProps {
   children: ReactNode;
 }
 
+/** @public */
 function PortalProvider({ container, children }: PortalProviderProps) {
   return (
     <PortalContext.Provider value={{ container }}>
@@ -22,6 +23,7 @@ function PortalProvider({ container, children }: PortalProviderProps) {
   );
 }
 
+/** @public */
 function usePortalContainer(): HTMLElement | undefined {
   const { container } = useContext(PortalContext);
   return container ?? undefined; // undefined = Radix default (document.body)

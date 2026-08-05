@@ -9,9 +9,9 @@
  * and registered there so its setup happens before plugin init runs.
  */
 
+import { MetaRetentionGate } from "../../domains/retention/gate";
+import { buildRetentionRunner } from "../../domains/retention/passes";
 import type { WebhookFastDrainScheduler } from "../../domains/webhooks/after-drain";
-import { MetaRetentionGate } from "../../domains/webhooks/retention-gate";
-import { WebhookRetentionRunner } from "../../domains/webhooks/retention-runner";
 import { MediaService as LegacyMediaService } from "../../services/media";
 import { MediaService as UnifiedMediaService } from "../../services/media/media-service";
 import { MediaFolderService } from "../../services/media-folder";
@@ -57,14 +57,13 @@ export function registerMediaServices(ctx: RegistrationContext): void {
       // Media writes append outbox events through this service, so it carries
       // its own retention runner (the webhook handler's is not on this path),
       // mirroring collections and singles.
-      ctx.config.webhookRetention
-        ? new WebhookRetentionRunner({
-            policy: ctx.config.webhookRetention,
-            prune: { adapter, logger },
-            gate: new MetaRetentionGate(adapter),
-            logger,
-          })
-        : undefined,
+      buildRetentionRunner({
+        adapter,
+        webhookPolicy: ctx.config.webhookRetention,
+        auditPolicy: ctx.config.auditRetention,
+        gate: new MetaRetentionGate(adapter),
+        logger,
+      }),
       // Shared post-response drain fast path (registered by the webhook
       // services). Absent only when webhooks were never registered.
       container.has("webhookFastDrainScheduler")

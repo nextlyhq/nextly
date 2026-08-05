@@ -10,12 +10,16 @@ import { forwardRef } from "react";
 import { cn } from "../lib/utils";
 import { usePortalContainer } from "../providers/portal-provider";
 
+/** @experimental */
 const TooltipProvider = Provider;
 
+/** @public */
 const Tooltip = Root;
 
+/** @public */
 const TooltipTrigger = Trigger;
 
+/** @public */
 const TooltipContent = forwardRef<
   React.ElementRef<typeof Content>,
   React.ComponentPropsWithoutRef<typeof Content>

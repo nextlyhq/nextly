@@ -44,6 +44,17 @@ export interface DesiredCollection {
    * so drift is reconciled by db:sync, not by the Schema Builder.
    */
   locked?: boolean;
+  /**
+   * Whether this entity was authored in the Schema Builder rather than in code.
+   *
+   * Stated explicitly rather than inferred from `locked`, because most snapshot builders omit
+   * `locked` entirely and an absent flag says nothing about origin: reading it as "not locked,
+   * therefore the Builder's" reclassified every code-first entity on the HMR and db:sync paths.
+   *
+   * Absent means code-first, which is the conservative answer — a producer that has not learned to
+   * state this leaves behaviour exactly as it was.
+   */
+  builderOwned?: boolean;
 }
 
 export interface DesiredSingle {
@@ -63,6 +74,17 @@ export interface DesiredSingle {
    * so drift is reconciled by db:sync, not by the Schema Builder.
    */
   locked?: boolean;
+  /**
+   * Whether this entity was authored in the Schema Builder rather than in code.
+   *
+   * Stated explicitly rather than inferred from `locked`, because most snapshot builders omit
+   * `locked` entirely and an absent flag says nothing about origin: reading it as "not locked,
+   * therefore the Builder's" reclassified every code-first entity on the HMR and db:sync paths.
+   *
+   * Absent means code-first, which is the conservative answer — a producer that has not learned to
+   * state this leaves behaviour exactly as it was.
+   */
+  builderOwned?: boolean;
 }
 
 export interface DesiredFieldGroup {
@@ -80,4 +102,15 @@ export interface DesiredFieldGroup {
    * so drift is reconciled by db:sync, not by the Schema Builder.
    */
   locked?: boolean;
+  /**
+   * Whether this entity was authored in the Schema Builder rather than in code.
+   *
+   * Stated explicitly rather than inferred from `locked`, because most snapshot builders omit
+   * `locked` entirely and an absent flag says nothing about origin: reading it as "not locked,
+   * therefore the Builder's" reclassified every code-first entity on the HMR and db:sync paths.
+   *
+   * Absent means code-first, which is the conservative answer — a producer that has not learned to
+   * state this leaves behaviour exactly as it was.
+   */
+  builderOwned?: boolean;
 }

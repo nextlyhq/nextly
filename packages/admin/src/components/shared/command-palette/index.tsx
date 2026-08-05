@@ -42,7 +42,7 @@ import { UserSearchResults } from "./UserSearchResults";
  * - Dialog: 512px (max-w-lg), 12px  border border-border radius
  * - Input: 48px height (h-12)
  * - Items: 36px desktop (h-9), 44px mobile (h-11)
- * - Backdrop: bg-black/80 with backdrop blur
+ * - Backdrop: the --nx-overlay scrim with backdrop blur
  * - Animation: 200ms duration
  *
  * @accessibility

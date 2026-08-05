@@ -90,6 +90,7 @@ import type {
  * ```
  *
  * @see https://www.radix-ui.com/primitives/docs/components/tabs
+ * @public
  */
 const Tabs = Root;
 
@@ -101,6 +102,7 @@ const Tabs = Root;
  * - Border-radius: none (for underline style)
  * - Background: transparent
  * - Layout: inline-flex (horizontal by default, use orientation="vertical" on Tabs root for vertical)
+ * @public
  */
 const TabsList = forwardRef<TabsListRef, TabsListProps>(
   ({ className, ...props }, ref) => (
@@ -135,6 +137,7 @@ TabsList.displayName = List.displayName;
  * - Focus ring: 2px with offset (WCAG 2.2 compliant)
  * - Disabled state: pointer-events-none, opacity-50
  * - Data attributes: [data-state="active|inactive"], [data-disabled]
+ * @public
  */
 const TabsTrigger = forwardRef<TabsTriggerRef, TabsTriggerProps>(
   ({ className, ...props }, ref) => (
@@ -164,6 +167,7 @@ TabsTrigger.displayName = Trigger.displayName;
  * - Focus indicator when navigating with Tab key
  * - Data attributes: [data-state="active|inactive"], [data-orientation]
  * - Only active content is visible, inactive content is hidden
+ * @public
  */
 const TabsContent = forwardRef<TabsContentRef, TabsContentProps>(
   ({ className, ...props }, ref) => (

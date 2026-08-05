@@ -7,8 +7,13 @@
 
 import { recordFlattenedError } from "../hooks/side-effect-warnings";
 
-import { NEXTLY_ERROR_STATUS } from "./error-codes";
+import {
+  genericPublicMessage,
+  NEXTLY_ERROR_STATUS,
+  statusToErrorCode,
+} from "./error-codes";
 import { NextlyError } from "./nextly-error";
+import { originalErrorOf, withOriginalError } from "./original-error";
 import type { PublicData } from "./public-data";
 
 /** The failure fields a service envelope can carry. */
@@ -43,7 +48,8 @@ export interface ServiceErrorEnvelope {
  */
 function validationFromEnvelope(
   envelope: ServiceErrorEnvelope,
-  logContext: Record<string, unknown>
+  logContext: Record<string, unknown>,
+  cause?: Error
 ): NextlyError {
   // The issues reach this in one of two shapes. A write path lifts them onto
   // the envelope's own `errors`, normalising the legacy `{field}` key on the
@@ -90,6 +96,9 @@ function validationFromEnvelope(
       envelope.code === "VALIDATION_ERROR" ? envelope.messageKey : undefined,
     publicData: { errors: normalized },
     logContext,
+    // Forwarded like every other branch: a field-transform failure carries
+    // the operator context that says which transform rejected the value.
+    ...(cause !== undefined ? { cause } : {}),
   });
 }
 
@@ -110,8 +119,24 @@ function validationFromEnvelope(
  */
 export function errorFromServiceEnvelope(
   envelope: ServiceErrorEnvelope,
-  logContext: Record<string, unknown> = {}
+  logContext: Record<string, unknown> = {},
+  // Only for a caller that holds the thrown error WITHOUT an envelope carrying
+  // it. An envelope built by a service already carries its own, read below, so
+  // passing this is not how a boundary normally forwards provenance.
+  // Chained rather than assigned afterwards because `cause` is read-only once
+  // a NextlyError exists — and it belongs to the error's identity, not to
+  // something bolted on after the fact.
+  cause?: Error
 ): NextlyError {
+  // Taken off the envelope rather than from each boundary's argument list. The
+  // envelope IS what the services attached the thrown error to, and it is the
+  // one value every boundary already hands this function, so reading it here
+  // covers all of them — the REST dispatcher, the singles route, the plugin
+  // facade, the bulk-by-query paths and the version writes — instead of each
+  // remembering to forward it. An explicit argument wins when given, for the
+  // caller that has the error but no envelope to carry it.
+  const original = cause ?? originalErrorOf(envelope);
+
   // Read from the canonical map rather than repeated literals: this converter
   // exists so one place decides how a status and a code correspond, and a
   // literal here would drift the moment that map changed.
@@ -121,7 +146,7 @@ export function errorFromServiceEnvelope(
     // Validation keeps its own path: it also normalises the legacy `{field}`
     // shape into the canonical `{path}` one the admin maps onto form fields.
     if (envelope.code === "VALIDATION_ERROR") {
-      return validationFromEnvelope(envelope, logContext);
+      return validationFromEnvelope(envelope, logContext, original);
     }
     return new NextlyError({
       code: envelope.code,
@@ -134,24 +159,44 @@ export function errorFromServiceEnvelope(
       messageKey: envelope.messageKey,
       publicData: envelope.publicData as PublicData | undefined,
       logContext,
+      ...(original !== undefined ? { cause: original } : {}),
     });
   }
 
-  if (status === NEXTLY_ERROR_STATUS.NOT_FOUND) {
-    return NextlyError.notFound({ logContext });
+  // Nothing named a code, so the ONE table decides. Every boundary used to
+  // decide separately, which is how the same 401 reached a Direct API caller as
+  // `AUTH_REQUIRED` and a REST caller as a 500.
+  const derived = statusToErrorCode(status);
+
+  // Validation keeps its own path either way: it is the only code whose public
+  // data is per-field issues the admin maps onto form inputs.
+  if (derived === "VALIDATION_ERROR") {
+    return validationFromEnvelope(envelope, logContext, original);
   }
-  if (status === NEXTLY_ERROR_STATUS.FORBIDDEN) {
-    return NextlyError.forbidden({ logContext });
-  }
-  if (status === NEXTLY_ERROR_STATUS.CONFLICT) {
-    // Without a code, staleness is the safer default: it tells the user to
-    // refresh rather than implying the write itself was invalid.
-    return NextlyError.conflict({ logContext });
-  }
-  if (status === NEXTLY_ERROR_STATUS.VALIDATION_ERROR) {
-    return validationFromEnvelope(envelope, logContext);
-  }
-  return NextlyError.internal({ logContext });
+
+  return new NextlyError({
+    code: derived,
+    // The GENERIC sentence for the derived code, never the envelope's own
+    // message. A code-less envelope comes from a legacy converter that may have
+    // stored a raw exception's text, and promoting that would put driver
+    // output and internal paths on the wire (spec 13.8). It stays in
+    // `logContext` for the operator.
+    publicMessage: genericPublicMessage(derived),
+    // The envelope's status rather than the code's canonical one, so an
+    // unrecognised legacy status still answers with what the producer chose
+    // instead of being rounded to 500.
+    statusCode: status,
+    // Forwarded even though the message is not. They are not the same kind of
+    // field: `message` is prose a legacy converter may have filled with a raw
+    // exception's text, while `publicData` is the structured payload whose
+    // whole purpose is to reach the caller. Dropping it silently disarmed the
+    // derived code -- a 429 answered RATE_LIMITED while `Retry-After` is read
+    // from `publicData.retryAfterSeconds`, so the caller was told to back off
+    // and not told for how long.
+    publicData: envelope.publicData as PublicData | undefined,
+    logContext,
+    ...(original !== undefined ? { cause: original } : {}),
+  });
 }
 
 /**
@@ -162,25 +207,53 @@ export function errorFromServiceEnvelope(
  * the status alone leaves the code-keyed rebuild nothing to key on and the
  * error reaches the caller as a generic 500 however good the converter is.
  *
- * Returns null for an untyped error, so a caller keeps whatever fallback it
- * already applies to those.
+ * Always returns an object, so no caller needs a null guard. A `NextlyError`
+ * yields the full set of envelope fields; any other `Error` yields no fields at
+ * all but still carries the thrown error itself, which
+ * {@link errorFromServiceEnvelope} reads back off the envelope; a non-`Error`
+ * value yields an empty object. Spreading the result is therefore correct in
+ * every case, and a caller that keeps its own fallback for an untyped failure
+ * keeps it by seeing no fields rather than by testing for null.
  */
-export function typedErrorEnvelopeFields(
+export function errorEnvelopeFields(
   error: unknown
-): Pick<
-  ServiceErrorEnvelope,
-  "code" | "statusCode" | "message" | "messageKey" | "publicData"
-> | null {
-  if (!NextlyError.is(error)) return null;
+): Partial<
+  Pick<
+    ServiceErrorEnvelope,
+    "code" | "statusCode" | "message" | "messageKey" | "publicData"
+  >
+> {
+  // A raw driver rejection has no typed fields to lift, but it is still the
+  // failure the operator needs to see — so it leaves with the provenance and
+  // nothing else, rather than with nothing at all. Returning an object in both
+  // cases is what stops this being an opt-in: a caller spreads the result and
+  // is covered, instead of each failure branch remembering to attach the
+  // original itself.
+  if (!NextlyError.is(error)) {
+    return error instanceof Error ? withOriginalError({}, error) : {};
+  }
   // Kept for the operator before the detail is dropped. This function IS the
   // flattening for every path that uses it, so recording here covers them all
   // rather than each call site remembering to.
   recordFlattenedError(error);
-  return {
-    code: String(error.code),
-    statusCode: error.statusCode,
-    message: error.publicMessage,
-    ...(error.messageKey !== undefined ? { messageKey: error.messageKey } : {}),
-    ...(error.publicData !== undefined ? { publicData: error.publicData } : {}),
-  };
+  // The provenance rides on the fields themselves, so every producer that
+  // spreads this gets it without remembering to. This function IS the
+  // flattening for the read paths and the singles, exactly as it is the one
+  // place they record the error — attaching anywhere else would mean each of
+  // them opting in separately, which is how the first version of this reached
+  // only the collection writes.
+  return withOriginalError(
+    {
+      code: String(error.code),
+      statusCode: error.statusCode,
+      message: error.publicMessage,
+      ...(error.messageKey !== undefined
+        ? { messageKey: error.messageKey }
+        : {}),
+      ...(error.publicData !== undefined
+        ? { publicData: error.publicData }
+        : {}),
+    },
+    error
+  );
 }

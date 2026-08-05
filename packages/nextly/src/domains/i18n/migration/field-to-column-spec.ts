@@ -1,7 +1,10 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
-import { getColumnDescriptor } from "../../schema/services/field-column-descriptor";
+import {
+  getColumnDescriptor,
+  type ColumnOrigin,
+} from "../../schema/services/field-column-descriptor";
 
 import type { LocalizedColumnSpec } from "./types";
 
@@ -19,9 +22,14 @@ interface FieldLike {
  */
 export function fieldToLocalizedColumnSpec(
   field: FieldLike,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  // A companion column mirrors the main table's, so it is described as whatever built that table.
+  // Deciding it here instead left a translatable field bounded on the companion while the same
+  // declaration was unbounded on the main table, so a value saved in one language was refused in
+  // another.
+  builtBy: ColumnOrigin
 ): LocalizedColumnSpec | null {
-  const desc = getColumnDescriptor(field as FieldDefinition, dialect);
+  const desc = getColumnDescriptor(field as FieldDefinition, dialect, builtBy);
   if (!desc || desc.kind === "skip") return null;
   const kind = desc.kind === "varchar" ? "text" : desc.kind;
   return {

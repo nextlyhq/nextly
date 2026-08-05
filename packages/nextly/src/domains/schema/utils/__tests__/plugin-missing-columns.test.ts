@@ -31,7 +31,8 @@ describe("adding a plugin field to an existing table", () => {
 
     const column = fieldToColumnDef(
       { name: "score", type: "star-rating" } as unknown as FieldConfig,
-      "postgresql"
+      "postgresql",
+      "codeFirst"
     );
 
     expect(column).not.toMatch(/TEXT/i);
@@ -50,7 +51,9 @@ describe("built-in columns agree with the descriptor the ORM binds", () => {
 
   it("adds an integer number column on every dialect", () => {
     for (const dialect of ["postgresql", "mysql", "sqlite"]) {
-      expect(fieldToColumnDef(number, dialect)).toMatch(/INTEGER/i);
+      expect(fieldToColumnDef(number, dialect, "codeFirst")).toMatch(
+        /INTEGER/i
+      );
     }
   });
 
@@ -58,7 +61,7 @@ describe("built-in columns agree with the descriptor the ORM binds", () => {
     // NUMERIC/DECIMAL/REAL here truncated or widened relative to the binder,
     // so the value read back was not the value written.
     for (const dialect of ["postgresql", "mysql", "sqlite"]) {
-      expect(fieldToColumnDef(number, dialect)).not.toMatch(
+      expect(fieldToColumnDef(number, dialect, "codeFirst")).not.toMatch(
         /NUMERIC|DECIMAL|REAL|DOUBLE/i
       );
     }
@@ -70,16 +73,20 @@ describe("built-in columns agree with the descriptor the ORM binds", () => {
       type: "number",
       dbType: "decimal",
     } as unknown as FieldConfig;
-    expect(fieldToColumnDef(money, "postgresql")).toMatch(/NUMERIC/i);
-    expect(fieldToColumnDef(money, "mysql")).toMatch(/DECIMAL/i);
+    expect(fieldToColumnDef(money, "postgresql", "codeFirst")).toMatch(
+      /NUMERIC/i
+    );
+    expect(fieldToColumnDef(money, "mysql", "codeFirst")).toMatch(/DECIMAL/i);
 
     const float = {
       name: "ratio",
       type: "number",
       options: { format: "float" },
     } as unknown as FieldConfig;
-    expect(fieldToColumnDef(float, "postgresql")).toMatch(/DOUBLE PRECISION/i);
-    expect(fieldToColumnDef(float, "sqlite")).toMatch(/REAL/i);
+    expect(fieldToColumnDef(float, "postgresql", "codeFirst")).toMatch(
+      /DOUBLE PRECISION/i
+    );
+    expect(fieldToColumnDef(float, "sqlite", "codeFirst")).toMatch(/REAL/i);
   });
 
   it("adds a SQLite date column the timestamp binder can read", () => {
@@ -88,9 +95,80 @@ describe("built-in columns agree with the descriptor the ORM binds", () => {
       type: "date",
     } as unknown as FieldConfig;
 
-    expect(fieldToColumnDef(date, "sqlite")).toMatch(/INTEGER/i);
+    expect(fieldToColumnDef(date, "sqlite", "codeFirst")).toMatch(/INTEGER/i);
     // The other two dialects keep the types they already had.
-    expect(fieldToColumnDef(date, "postgresql")).toMatch(/TIMESTAMP/i);
-    expect(fieldToColumnDef(date, "mysql")).toMatch(/DATETIME/i);
+    expect(fieldToColumnDef(date, "postgresql", "codeFirst")).toMatch(
+      /TIMESTAMP/i
+    );
+    expect(fieldToColumnDef(date, "mysql", "codeFirst")).toMatch(/DATETIME/i);
+  });
+});
+
+/**
+ * A text field that declared its own width gets the bounded column the descriptor binds.
+ *
+ * This helper stated TEXT for every string field, so a short field added to an existing table got a
+ * column the ORM then described as a varchar — and the next preview reported a type change on a
+ * column this path had just created.
+ */
+describe("adding a declared-short text field to an existing table", () => {
+  const shortField = {
+    name: "short_code",
+    type: "text",
+    options: { variant: "short" },
+    validation: { maxLength: 120 },
+  } as unknown as FieldConfig;
+
+  it.each([
+    ["postgresql", /VARCHAR\(120\)/i],
+    ["mysql", /VARCHAR\(120\)/i],
+  ] as const)("bounds the column on %s", (dialect, expected) => {
+    expect(fieldToColumnDef(shortField, dialect, "collection")).toMatch(
+      expected
+    );
+  });
+
+  // SQLite has one string type, so TEXT is what the descriptor says for it there too.
+  it("stays TEXT on sqlite", () => {
+    expect(fieldToColumnDef(shortField, "sqlite", "collection")).toMatch(
+      /TEXT/i
+    );
+  });
+
+  // A field that declares no width keeps the type this path has always emitted; only the declared
+  // case changes, so existing columns are not re-described.
+  it("leaves an undeclared text field as TEXT", () => {
+    const plain = { name: "body", type: "text" } as unknown as FieldConfig;
+    expect(fieldToColumnDef(plain, "postgresql", "codeFirst")).toMatch(/TEXT/i);
+    expect(fieldToColumnDef(plain, "mysql", "codeFirst")).toMatch(/TEXT/i);
+  });
+});
+
+/**
+ * A contributed type keeps the unbounded column its creator builds.
+ *
+ * The field-group creator deletes `options` from a contributed type before mapping it — a plugin's
+ * options are its own, and one that happens to be named `variant` must not reshape the column — so
+ * it builds such a field as TEXT. Reading the option here bounded a column the creator had just made
+ * unbounded, reporting a type change on it.
+ */
+describe("adding a contributed text field that carries a width option", () => {
+  it("keeps TEXT rather than reading the plugin's own option", () => {
+    registerFieldType({
+      type: "acme-swatch",
+      storage: "text",
+      component: "@acme/swatch/admin#Swatch",
+      surfaces: ["entries", "singles", "components"],
+    });
+
+    const field = {
+      name: "swatch",
+      type: "acme-swatch",
+      options: { variant: "short" },
+      validation: { maxLength: 64 },
+    } as unknown as FieldConfig;
+
+    expect(fieldToColumnDef(field, "postgresql", "codeFirst")).toMatch(/TEXT/i);
+    expect(fieldToColumnDef(field, "mysql", "codeFirst")).toMatch(/TEXT/i);
   });
 });

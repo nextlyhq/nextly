@@ -465,6 +465,14 @@ export const nextlyTables: TableDefinition[] = [
         nullable: false,
         default: { sql: "CURRENT_TIMESTAMP" },
       },
+      {
+        // `datetime`, not `timestamp`: MySQL can rewrite a nullable TIMESTAMP
+        // to NOT NULL DEFAULT CURRENT_TIMESTAMP, which would make a row whose
+        // identity was never erased read as erased. The production definition
+        // uses DATETIME for the same reason.
+        name: "identity_erased_at",
+        type: "datetime",
+      },
     ],
     indexes: [
       { name: "audit_log_kind_idx", columns: ["kind"] },

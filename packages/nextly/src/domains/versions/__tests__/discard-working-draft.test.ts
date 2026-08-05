@@ -34,8 +34,19 @@ vi.mock("../../../di", () => ({
   }),
 }));
 
+import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import type { UserContext } from "../../singles/types";
 import { discardWorkingDraft } from "../discard-working-draft";
+
+/**
+ * A failure envelope as the read path actually produces one, rather than a
+ * literal with the carrier attached by hand: the assertion is that what the
+ * producer attaches is what the rebuild reads, so a fixture attaching it itself
+ * would pass even if those two halves disagreed.
+ */
+function buildEntryErrorEnvelope(error: Error) {
+  return { success: false, statusCode: 500, ...errorEnvelopeFields(error) };
+}
 
 const user = { id: "u1", roles: ["editor"] } as unknown as UserContext;
 
@@ -105,5 +116,22 @@ describe("discardWorkingDraft", () => {
     await expect(discardWorkingDraft(args)).rejects.toMatchObject({
       code: "NOT_FOUND",
     });
+  });
+
+  it("propagates the failure the read was built from, not only its envelope", async () => {
+    // The read attaches the thrown error to the result it returns, and the
+    // rebuild reads it back off that object. Copying the envelope field by
+    // field left it behind, so a driver failure under a discard reached the
+    // caller as a bare internal error with nothing naming the real fault.
+    const driverFailure = new Error("connection terminated unexpectedly");
+    getEntrySpy.mockResolvedValue({
+      ...buildEntryErrorEnvelope(driverFailure),
+      data: null,
+    });
+
+    await expect(discardWorkingDraft(args)).rejects.toMatchObject({
+      cause: driverFailure,
+    });
+    expect(discardSpy).not.toHaveBeenCalled();
   });
 });

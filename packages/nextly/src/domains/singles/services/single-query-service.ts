@@ -85,7 +85,10 @@ import {
   isCompanionReady,
   resolveCompanionSchemaReadiness,
 } from "../../i18n/runtime/companion-readiness";
-import { getColumnDescriptor } from "../../schema/services/field-column-descriptor";
+import {
+  getColumnDescriptor,
+  isTextStorageKind,
+} from "../../schema/services/field-column-descriptor";
 import { captureInTx } from "../../versions/capture-in-tx";
 import { VersionCaptureService } from "../../versions/version-capture-service";
 import { withVersionConflictRetry } from "../../versions/version-conflict";
@@ -115,15 +118,6 @@ import {
  * the system column or receives a wrong-typed default.
  */
 const SINGLE_IDENTITY_FIELDS = new Set(["title", "slug"]);
-
-/**
- * Column-descriptor kinds that store text, so the label/slug string seed for a
- * reserved identity field is valid for them. Covers plain text (text/email/
- * password/select/radio) and long text (textarea/richText/code), plus explicit
- * varchar. Non-text kinds (number, json, fkSingle, ...) fall through to the
- * field's own default instead, so a label string never lands in them.
- */
-const IDENTITY_TEXT_COLUMN_KINDS = new Set(["text", "varchar", "longText"]);
 
 /**
  * A Single's default document, built but not yet written. The read path judges
@@ -2051,12 +2045,21 @@ export class SingleQueryService extends BaseService {
       // field is required: use its type default when required, otherwise drop the
       // seed so it is never inserted/seeded into (e.g.) a numeric column.
       if (SINGLE_IDENTITY_FIELDS.has(field.name)) {
+        // A Single's table is built by the same service that builds collections. The question
+        // asked here — does this kind store text — is answered the same way whatever built the
+        // table, so the builtBy cannot change the outcome; it is stated rather than defaulted so
+        // this call site cannot drift if that ever stops being true.
         const desc = getColumnDescriptor(
           field as unknown as FieldDefinition,
-          this.adapter.dialect
+          this.adapter.dialect,
+          "collection"
         );
-        if (!desc || IDENTITY_TEXT_COLUMN_KINDS.has(desc.kind)) {
-          continue; // keep the seeded label/slug for a text-storage column
+        // Keep the seeded label/slug whenever the column stores text. The descriptor answers that
+        // rather than a list of kind names kept here: a list restated locally judged a kind added
+        // later as non-text, replacing a Single's seeded identity with an empty default on the
+        // first read that created it.
+        if (!desc || isTextStorageKind(desc.kind)) {
+          continue;
         }
         if ("required" in field && field.required) {
           defaults[field.name] = getDefaultValue(field);
@@ -2095,9 +2098,11 @@ export class SingleQueryService extends BaseService {
       // same-named field emits none, so their seed must never be dropped here.
       if (SINGLE_IDENTITY_FIELDS.has(field.name)) continue;
       if (
+        // Only whether the field occupies a column at all, which no builtBy changes.
         getColumnDescriptor(
           field as unknown as FieldDefinition,
-          this.adapter.dialect
+          this.adapter.dialect,
+          "collection"
         ) == null
       ) {
         noColumnFieldNames.add(field.name);

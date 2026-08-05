@@ -81,3 +81,31 @@ describe("recordEventInTx", () => {
     }
   });
 });
+
+/**
+ * Every recorded event carries the outcome of the action it describes. Only
+ * successful writes are recorded today, so absence means success — but the
+ * column has to exist before anything records a refusal, or a denial and a
+ * completed change become indistinguishable after the fact.
+ */
+describe("recordEventInTx — outcome", () => {
+  it("records a successful outcome when the envelope states none", async () => {
+    const { tx, values } = fakeTx();
+
+    await recordEventInTx(tx, "sqlite", { envelope: makeEnvelope() });
+
+    const row = values.mock.calls[0][0] as Record<string, unknown>;
+    expect(row.outcome).toBe("success");
+  });
+
+  it("carries the outcome the envelope states", async () => {
+    const { tx, values } = fakeTx();
+
+    await recordEventInTx(tx, "sqlite", {
+      envelope: makeEnvelope({ outcome: "failure" }),
+    });
+
+    const row = values.mock.calls[0][0] as Record<string, unknown>;
+    expect(row.outcome).toBe("failure");
+  });
+});

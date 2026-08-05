@@ -24,7 +24,7 @@ describe("buildDesiredTableFromFields — indexes", () => {
         },
       ] as never,
       "postgresql",
-      {}
+      { builtBy: "codeFirst" }
     );
     expect(idxNames(t)).toEqual(
       [
@@ -50,7 +50,7 @@ describe("buildDesiredTableFromFields — indexes", () => {
         { name: "hero", type: "component", unique: true, index: true },
       ] as never,
       "postgresql",
-      {}
+      { builtBy: "codeFirst" }
     );
     expect(t.columns.some(c => c.name === "hero")).toBe(false);
     expect(idxNames(t)).not.toContain("uq_dc_posts_hero:u");
@@ -68,7 +68,7 @@ describe("buildDesiredTableFromFields — indexes", () => {
         { name: "body", type: "text" },
       ] as never,
       "postgresql",
-      {}
+      { builtBy: "codeFirst" }
     );
     const slugIndexes = (t.indexes ?? []).filter(i =>
       i.columns.includes("slug")

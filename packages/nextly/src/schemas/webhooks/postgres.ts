@@ -62,6 +62,11 @@ export const nextlyEvents = pgTable(
     // Which retention window governs this row. A single event can serve both
     // roles at once, so this records the LONGEST retention it needs: rows the
     // audit log depends on outlive rows that only ever drove a webhook.
+    // Whether the action this row describes succeeded. Defaults to "success"
+    // because a row is only written inside the transaction of a change that
+    // commits, so every event recorded before this column existed was one —
+    // which is also why the default is the correct value for those rows.
+    outcome: varchar("outcome", { length: 16 }).notNull().default("success"),
     retentionClass: varchar("retention_class", { length: 20 })
       .notNull()
       .default("webhook"),

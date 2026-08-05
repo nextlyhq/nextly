@@ -19,6 +19,11 @@ import type {
   StyleScalar,
   StyleValues,
 } from "./types";
+import {
+  fetchableValues,
+  isFetchableUrl,
+  type RemotePatternInput,
+} from "./url-policy";
 
 export interface BreakpointDef {
   id: string;
@@ -31,8 +36,17 @@ export const DEFAULT_BREAKPOINTS: BreakpointDef[] = [
   { id: "mobile", maxWidth: 640 },
 ];
 
+export type { RemotePatternInput } from "./url-policy";
+export { isAllowedRemoteUrl } from "./url-policy";
+
 export interface CompileOptions {
   breakpoints?: BreakpointDef[];
+  /**
+   * Hosts a block's images may be loaded from. Empty or absent means
+   * same-origin only, which is the default because an undeclared host is a
+   * request a custom-CSS selector can gate on a secret.
+   */
+  remotePatterns?: readonly RemotePatternInput[];
 }
 
 /**
@@ -83,29 +97,57 @@ function resolveScalar(v: StyleScalar): string {
   return String(v);
 }
 
-/** Validate a CSS *value*. Returns the value if safe, else null (dropped). */
-function safeValue(v: string): string | null {
+/**
+ * Validate a CSS *value*. Returns the value if safe, else null (dropped).
+ *
+ * The origin check runs over EVERY value rather than the properties someone
+ * remembered can fetch. `filter: url("https://…#f")` is a request, and it
+ * reached the page because `filter` went through the plain-value path while
+ * only `backgroundImage` was checked — a hand-kept list of fetch-capable
+ * properties is the same losing shape as a hand-kept list of dangerous
+ * schemes. Asking the parser which values contain a `url()` cannot miss one.
+ */
+export function safeValue(
+  v: string,
+  remotePatterns: readonly RemotePatternInput[] = []
+): string | null {
   if (v == null || v === "") return null;
   if (/[{};<>]/.test(v)) return null; // fast reject declaration/tag breakout
+  let ast: csstree.CssNode;
   try {
-    csstree.parse(v, {
+    ast = csstree.parse(v, {
       context: "value",
       onParseError: e => {
         throw e;
       },
     });
-    return v;
   } catch {
     return null;
   }
+  const { values, unreadable } = fetchableValues(ast);
+  // Unreadable is not safe. A fragment this could not resolve may hold a URL,
+  // so the value goes rather than being emitted unchecked.
+  if (unreadable !== undefined) return null;
+  const refused = values.some(url => !isFetchableUrl(url, remotePatterns));
+  return refused ? null : v;
 }
 
-/** Validate a URL for url(). css-tree accepts quoted `javascript:` urls, so check the scheme. */
-function safeUrl(url: string): string | null {
+/**
+ * Validate a URL for url().
+ *
+ * The syntactic half is unchanged: css-tree accepts a quoted `javascript:` url,
+ * and a quote or paren in the value would break out of the `url()` this is
+ * interpolated into. The origin half is the shared policy, so a structured
+ * style value and custom CSS answer "where may this fetch from" the same way.
+ */
+function safeUrl(
+  url: string,
+  remotePatterns: readonly RemotePatternInput[]
+): string | null {
   const u = url.trim();
   if (/^(javascript|data|vbscript):/i.test(u)) return null;
   if (/["')\\]/.test(u) || /[\n\r]/.test(u)) return null; // avoid url() breakout
-  return u;
+  return isFetchableUrl(u, remotePatterns) ? u : null;
 }
 
 const SIMPLE: [keyof StyleValues, string][] = [
@@ -143,7 +185,10 @@ const SIMPLE: [keyof StyleValues, string][] = [
   ["transition", "transition"],
 ];
 
-function compileStyleValues(sv: StyleValues): string[] {
+function compileStyleValues(
+  sv: StyleValues,
+  remotePatterns: readonly RemotePatternInput[]
+): string[] {
   const out: string[] = [];
 
   const box = (prop: "margin" | "padding") => {
@@ -152,7 +197,7 @@ function compileStyleValues(sv: StyleValues): string[] {
     for (const side of ["top", "right", "bottom", "left"] as const) {
       const raw = sides[side];
       if (raw == null) continue;
-      const v = safeValue(raw);
+      const v = safeValue(raw, remotePatterns);
       if (v) out.push(`${prop}-${side}: ${v}`);
     }
   };
@@ -162,12 +207,12 @@ function compileStyleValues(sv: StyleValues): string[] {
   for (const [key, cssName] of SIMPLE) {
     const raw = sv[key] as StyleScalar | undefined;
     if (raw == null) continue;
-    const v = safeValue(resolveScalar(raw));
+    const v = safeValue(resolveScalar(raw), remotePatterns);
     if (v) out.push(`${cssName}: ${v}`);
   }
 
   if (sv.backgroundImage != null) {
-    const url = safeUrl(resolveScalar(sv.backgroundImage));
+    const url = safeUrl(resolveScalar(sv.backgroundImage), remotePatterns);
     if (url) out.push(`background-image: url("${url}")`);
   }
 
@@ -178,16 +223,16 @@ function compileStyleValues(sv: StyleValues): string[] {
       for (const side of ["top", "right", "bottom", "left"] as const) {
         const raw = b.width[side];
         if (raw == null) continue;
-        const v = safeValue(raw);
+        const v = safeValue(raw, remotePatterns);
         if (v) out.push(`border-${side}-width: ${v}`);
       }
     }
     if (b.style) {
-      const v = safeValue(b.style);
+      const v = safeValue(b.style, remotePatterns);
       if (v) out.push(`border-style: ${v}`);
     }
     if (b.color != null) {
-      const v = safeValue(resolveScalar(b.color));
+      const v = safeValue(resolveScalar(b.color), remotePatterns);
       if (v) out.push(`border-color: ${v}`);
     }
   }
@@ -196,17 +241,17 @@ function compileStyleValues(sv: StyleValues): string[] {
   if (sv.position) {
     const p = sv.position;
     if (p.type) {
-      const v = safeValue(p.type);
+      const v = safeValue(p.type, remotePatterns);
       if (v) out.push(`position: ${v}`);
     }
     for (const side of ["top", "right", "bottom", "left"] as const) {
       const raw = p[side];
       if (raw == null) continue;
-      const v = safeValue(raw);
+      const v = safeValue(raw, remotePatterns);
       if (v) out.push(`${side}: ${v}`);
     }
     if (p.zIndex != null) {
-      const v = safeValue(String(p.zIndex));
+      const v = safeValue(String(p.zIndex), remotePatterns);
       if (v) out.push(`z-index: ${v}`);
     }
   }
@@ -215,7 +260,7 @@ function compileStyleValues(sv: StyleValues): string[] {
   if (sv.backgroundImageObj) {
     const bg = sv.backgroundImageObj;
     if (bg.url != null) {
-      const url = safeUrl(resolveScalar(bg.url));
+      const url = safeUrl(resolveScalar(bg.url), remotePatterns);
       if (url) out.push(`background-image: url("${url}")`);
     }
     for (const [k, cssName] of [
@@ -226,14 +271,14 @@ function compileStyleValues(sv: StyleValues): string[] {
     ] as const) {
       const raw = bg[k];
       if (raw == null) continue;
-      const v = safeValue(raw);
+      const v = safeValue(raw, remotePatterns);
       if (v) out.push(`${cssName}: ${v}`);
     }
   }
 
   // Gradient (emitted as background-image; safeValue validates the function).
   if (sv.backgroundGradient) {
-    const v = safeValue(sv.backgroundGradient);
+    const v = safeValue(sv.backgroundGradient, remotePatterns);
     if (v) out.push(`background-image: ${v}`);
   }
 
@@ -252,6 +297,7 @@ export function compileNodeCss(
   opts: CompileOptions = {}
 ): string {
   const bps = opts.breakpoints ?? DEFAULT_BREAKPOINTS;
+  const remotePatterns = opts.remotePatterns ?? [];
   const cls = nodeClass(node.id);
   const blocks: string[] = [];
 
@@ -261,11 +307,13 @@ export function compileNodeCss(
 
   const emit = (style: ResponsiveStyle | undefined, suffix: string): void => {
     if (!style) return;
-    const base = style.base ? compileStyleValues(style.base) : [];
+    const base = style.base
+      ? compileStyleValues(style.base, remotePatterns)
+      : [];
     if (base.length) blocks.push(`.${cls}${suffix} { ${base.join("; ")}; }`);
     for (const bp of bps) {
       const sv = style[bp.id];
-      const decls = sv ? compileStyleValues(sv) : [];
+      const decls = sv ? compileStyleValues(sv, remotePatterns) : [];
       if (decls.length) {
         blocks.push(
           `@media (max-width: ${bp.maxWidth}px) { .${cls}${suffix} { ${decls.join("; ")}; } }`
@@ -280,11 +328,11 @@ export function compileNodeCss(
   // Descendant link colors (Default / Hover) → `.cls a` / `.cls a:hover`.
   const base = node.style?.base;
   if (base?.linkColor != null) {
-    const v = safeValue(resolveScalar(base.linkColor));
+    const v = safeValue(resolveScalar(base.linkColor), remotePatterns);
     if (v) blocks.push(`.${cls} a { color: ${v}; }`);
   }
   if (base?.linkColorHover != null) {
-    const v = safeValue(resolveScalar(base.linkColorHover));
+    const v = safeValue(resolveScalar(base.linkColorHover), remotePatterns);
     if (v) blocks.push(`.${cls} a:hover { color: ${v}; }`);
   }
 
@@ -337,7 +385,9 @@ export function compileDocumentBlockCss(doc: BlockDocument): string {
   walk(doc.root, n => {
     if (n.customCss) {
       const scoped = sanitizeBlockCss(n.customCss, nodeClass(n.id));
-      if (scoped) parts.push(scoped);
+      // `.css`, not the result: the object is always truthy, so testing it
+      // would push an empty string for every block that has none.
+      if (scoped.css) parts.push(scoped.css);
     }
   });
   return parts.join("\n");

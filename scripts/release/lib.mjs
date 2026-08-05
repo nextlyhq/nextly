@@ -12,6 +12,12 @@ import { fileURLToPath } from "node:url";
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const PACKAGES_DIR = join(REPO_ROOT, "packages");
 const PRE_STATE_PATH = join(REPO_ROOT, ".changeset", "pre.json");
+const FIRST_PUBLISH_PATH = join(
+  REPO_ROOT,
+  "scripts",
+  "release",
+  "first-publish-acknowledged.json"
+);
 const REGISTRY = "https://registry.npmjs.org";
 
 /**
@@ -149,6 +155,37 @@ export function getExpectedDistTag(registryState, preState) {
 }
 
 /**
+ * The version `bootstrap-package.mjs` publishes to claim a name.
+ *
+ * A package sitting at exactly this and nothing else has had its NAME claimed
+ * and has never completed a real publish, which is a distinct state from both
+ * "unknown to npm" and "released": the trusted publisher may or may not have
+ * been attached, and nothing observable from here can tell the difference.
+ */
+export const PLACEHOLDER_VERSION = "0.0.0";
+
+/**
+ * Whether a package exists on the registry but has only ever been bootstrapped.
+ *
+ * npm requires a package to exist before a Trusted Publisher can be attached to
+ * it, so claiming the name and configuring the publisher are two separate acts
+ * by a human, and only the first leaves a trace the registry will show. A
+ * package in this state therefore has an UNPROVEN publish path: `npm publish`
+ * over OIDC answers 404 when the publisher is missing, and that answer is
+ * indistinguishable from the package not existing.
+ *
+ * It matters because a multi-package publish is not atomic. One package failing
+ * this way leaves every other package in the train already live, with no tag and
+ * no release describing them.
+ */
+export function isBootstrapPlaceholderOnly(state) {
+  if (state === null) return false;
+  return (
+    state.versions.length === 1 && state.versions[0] === PLACEHOLDER_VERSION
+  );
+}
+
+/**
  * Registry state for one package. Returns `null` when the package name has never
  * been published, which is a materially different situation from "published, but
  * not at this version": a first publish cannot authenticate through a trusted
@@ -170,6 +207,89 @@ export async function fetchRegistryState(name) {
   return {
     versions: Object.keys(body.versions ?? {}),
     distTags: body["dist-tags"] ?? {},
+  };
+}
+
+/**
+ * Packages a maintainer has confirmed are configured for trusted publishing.
+ *
+ * Read from a file in the repository rather than an environment variable so the
+ * acknowledgement arrives through review, in the same change that adds the
+ * package, instead of being typed once into a workflow run nobody can see
+ * afterwards.
+ */
+export function readFirstPublishAcknowledgements() {
+  if (!existsSync(FIRST_PUBLISH_PATH)) return [];
+  const contents = readJson(FIRST_PUBLISH_PATH);
+  return Array.isArray(contents.packages) ? contents.packages : [];
+}
+
+/**
+ * Everything preflight needs to decide whether a release may start.
+ *
+ * Pure, and separate from the script that prints it, so each rule can be tested
+ * against a constructed registry instead of against npm.
+ */
+export function classifyPreflight(
+  manifest,
+  registry,
+  expectedVersion,
+  acknowledged = []
+) {
+  const metadataErrors = [];
+  const versionMismatch = [];
+  const bootstrapNeeded = [];
+  const unprovenPublisher = [];
+  const staleAcknowledgements = [];
+  const alreadyPublished = [];
+  const toPublish = [];
+
+  for (const entry of manifest) {
+    const missing = findMissingPublishFields(entry.pkg);
+    if (missing.length > 0) {
+      metadataErrors.push({ name: entry.name, missing });
+    }
+
+    // Every publishable package shares one version through the Changesets
+    // `fixed` group; a package that drifts off it means the release is not the
+    // lockstep train the changelog and release notes will claim it is.
+    if (entry.version !== expectedVersion) {
+      versionMismatch.push({ name: entry.name, version: entry.version });
+    }
+
+    const state = registry.get(entry.name) ?? null;
+    const isAcknowledged = acknowledged.includes(entry.name);
+
+    if (state === null) {
+      bootstrapNeeded.push(entry.name);
+      continue;
+    }
+
+    if (isBootstrapPlaceholderOnly(state)) {
+      // Claimed but never really published: the publish path is unproven, and
+      // finding out by trying is what strands the rest of the train.
+      if (!isAcknowledged) unprovenPublisher.push(entry.name);
+    } else if (isAcknowledged) {
+      // The entry has done its job and now only invites confusion about which
+      // packages still need attention.
+      staleAcknowledgements.push(entry.name);
+    }
+
+    if (state.versions.includes(entry.version)) {
+      alreadyPublished.push(entry.name);
+    } else {
+      toPublish.push(entry.name);
+    }
+  }
+
+  return {
+    metadataErrors,
+    versionMismatch,
+    bootstrapNeeded,
+    unprovenPublisher,
+    staleAcknowledgements,
+    alreadyPublished,
+    toPublish,
   };
 }
 

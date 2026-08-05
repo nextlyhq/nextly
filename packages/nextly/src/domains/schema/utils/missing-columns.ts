@@ -25,11 +25,15 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { FieldConfig } from "../../../collections/fields/types/index";
+import { isBuiltInFieldType } from "../../../schemas/_zod/ui-schema";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections/legacy-types";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { Logger } from "../../../shared/types/index";
 import type { SupportedDialect } from "../../../types/database";
-import { getColumnDescriptor } from "../services/field-column-descriptor";
+import {
+  getColumnDescriptor,
+  type ColumnOrigin,
+} from "../services/field-column-descriptor";
 import { pluginStorageFieldType } from "../services/plugin-codegen";
 
 // Convert camelCase / PascalCase identifiers to snake_case column names.
@@ -52,11 +56,13 @@ function toSnakeCase(name: string): string {
  */
 function ddlTypeForKind(
   field: FieldConfig,
-  dialect: string
+  dialect: string,
+  builtBy: ColumnOrigin
 ): string | undefined {
   const descriptor = getColumnDescriptor(
     field as unknown as FieldDefinition,
-    dialect as SupportedDialect
+    dialect as SupportedDialect,
+    builtBy
   );
   if (!descriptor) return undefined;
 
@@ -83,6 +89,39 @@ function ddlTypeForKind(
         ? `DECIMAL${dimensions}`
         : `NUMERIC${dimensions}`;
     }
+    case "text": {
+      // Only the slug column. It is indexed by every generator that creates one, and MySQL cannot
+      // index an unbounded string, so a slug ADDed to an existing table has to arrive bounded or it
+      // cannot carry the index a freshly created table gives it.
+      //
+      // Every other `text` field deliberately keeps the TEXT below. Aligning those with the
+      // descriptor's `varchar(255)` is a real reduction in what the column can hold and is a
+      // separate decision, tracked on its own rather than taken as a side effect here.
+      if (toSnakeCase(String(field.name)) !== "slug") return undefined;
+      // Matches what the descriptor renders: bounded only where the dialect has a bounded string
+      // AND needs one.
+      return dialect === "mysql"
+        ? `VARCHAR(${descriptor.length ?? 255})`
+        : "TEXT";
+    }
+    case "shortText": {
+      // The one string kind that is not TEXT everywhere. Stated here because a column this path
+      // adds to an existing table is read back by the same descriptor the ORM binds: emitting TEXT
+      // for it left the next preview reporting a type change on a column boot had just created.
+      //
+      // Only for a type this schema names. A field group's creator deletes `options` from a
+      // contributed type before mapping it — a plugin's options are its own, and one that happens
+      // to be called `variant` must not reshape the column — so it builds such a field as TEXT.
+      // Bounding it here would report a type change on the column that creator had just made, which
+      // is the same defect in the opposite direction. Deciding it correctly needs to know which
+      // entity is being built, which this helper is not told.
+      if (!("type" in field) || !isBuiltInFieldType(String(field.type))) {
+        return undefined;
+      }
+      // SQLite has one string type, so the bound lives in validation there and TEXT is correct.
+      if (dialect === "sqlite") return "TEXT";
+      return `VARCHAR(${descriptor.length ?? 255})`;
+    }
     case "timestamp":
       // Only SQLite routes here; it stores a timestamp as an integer.
       return dialect === "sqlite" ? "INTEGER" : undefined;
@@ -105,7 +144,10 @@ function ddlTypeForKind(
 // without a migration story for existing user data.
 export function fieldToColumnDef(
   field: FieldConfig,
-  dialect: string
+  dialect: string,
+  // Which builder made the table this column is being added to. A column added later must match the
+  // one a fresh table gets, and the two Schema Builder creators size a text column differently.
+  builtBy: ColumnOrigin
 ): string | null {
   if (!("name" in field) || !field.name) {
     return null;
@@ -136,7 +178,10 @@ export function fieldToColumnDef(
     case "email":
     case "code":
     case "textarea":
-      columnType = "TEXT";
+      // A field that declared its own width gets the bounded column the descriptor binds and a
+      // freshly created table gets; every other string field keeps TEXT, which is what the
+      // descriptor says for them on all three dialects.
+      columnType = ddlTypeForKind(field, dialect, builtBy) ?? "TEXT";
       break;
 
     case "number":
@@ -148,7 +193,7 @@ export function fieldToColumnDef(
       // The descriptor also honours the two ways a field asks for fractions —
       // `dbType: "decimal"` and `options.format: "float"` — which a fixed
       // string here silently overrode in both directions.
-      columnType = ddlTypeForKind(field, dialect) ?? "INTEGER";
+      columnType = ddlTypeForKind(field, dialect, builtBy) ?? "INTEGER";
       break;
 
     case "checkbox": {
@@ -174,7 +219,7 @@ export function fieldToColumnDef(
           ? "TIMESTAMP WITH TIME ZONE"
           : dialect === "mysql"
             ? "DATETIME"
-            : (ddlTypeForKind(field, dialect) ?? "INTEGER");
+            : (ddlTypeForKind(field, dialect, builtBy) ?? "INTEGER");
       break;
 
     case "select":
@@ -335,14 +380,14 @@ export async function addMissingColumnsForFields(
   logger: Logger,
   tableName: string,
   fields: FieldConfig[],
-  options?: { timestamps?: boolean }
+  options: { timestamps?: boolean; builtBy: ColumnOrigin }
 ): Promise<string[]> {
   const dialect = adapter.getCapabilities().dialect as string;
   const columns = new Map<string, string>();
 
   for (const field of fields) {
     if ("name" in field && field.name) {
-      const colDef = fieldToColumnDef(field, dialect);
+      const colDef = fieldToColumnDef(field, dialect, options.builtBy);
       if (colDef) {
         columns.set(toSnakeCase(field.name), colDef);
       }

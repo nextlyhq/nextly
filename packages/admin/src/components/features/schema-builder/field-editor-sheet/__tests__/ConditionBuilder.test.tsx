@@ -110,6 +110,103 @@ describe("ConditionBuilder -- editing", () => {
   });
 });
 
+describe("ConditionBuilder -- value editor", () => {
+  it("offers a choice field's own options rather than free text", async () => {
+    // A select compares against one of its own options and nothing else, so
+    // typing the value by hand is a way to misspell it into a condition that
+    // never matches, with nothing on screen to say why.
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(
+      <ConditionBuilder
+        condition={{ field: "status", operator: "equals", value: "draft" }}
+        siblingFields={siblings}
+        onChange={onChange}
+      />
+    );
+    await user.click(
+      screen.getByRole("combobox", { name: /condition value/i })
+    );
+    await user.click(await screen.findByRole("option", { name: "Published" }));
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({ field: "status", value: "published" })
+    );
+  });
+
+  it("recomputes the operator when the source type changes", async () => {
+    // Switching a text `equals` condition to a checkbox has to STORE the
+    // checkbox's default. Carrying `equals` over stored one operator while the
+    // next render displayed the `isTrue` it fell back to, so what was saved and
+    // what was on screen disagreed and only the saved one was evaluated.
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(
+      <ConditionBuilder
+        condition={{ field: "title", operator: "equals", value: "x" }}
+        siblingFields={siblings}
+        onChange={onChange}
+      />
+    );
+    await user.click(
+      screen.getByRole("combobox", { name: /condition field/i })
+    );
+    await user.click(await screen.findByRole("option", { name: "Active" }));
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({ field: "isActive", operator: "isTrue" })
+    );
+  });
+
+  it("offers only the operators the source type supports", async () => {
+    // A checkbox has no "is greater than", and offering one builds a condition
+    // the evaluator can never satisfy.
+    const user = userEvent.setup();
+    render(
+      <ConditionBuilder
+        condition={{ field: "isActive", operator: "isTrue" }}
+        siblingFields={siblings}
+        onChange={vi.fn()}
+      />
+    );
+    await user.click(
+      screen.getByRole("combobox", { name: /condition operator/i })
+    );
+    expect(
+      await screen.findByRole("option", { name: "is true" })
+    ).toBeVisible();
+    expect(screen.queryByRole("option", { name: /greater than/i })).toBeNull();
+  });
+
+  it("stores both ends of a range even when only one is typed", async () => {
+    // The evaluator reads a missing end as NaN and quietly stops matching,
+    // which looks like a broken condition rather than an unfinished one.
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(
+      <ConditionBuilder
+        condition={{ field: "score", operator: "between" }}
+        siblingFields={[
+          ...siblings,
+          {
+            id: "s5",
+            name: "score",
+            label: "Score",
+            type: "number",
+            validation: {},
+          },
+        ]}
+        onChange={onChange}
+      />
+    );
+    await user.type(
+      screen.getByRole("spinbutton", { name: /condition value from/i }),
+      "5"
+    );
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({ value: { min: "5", max: "" } })
+    );
+  });
+});
+
 describe("ConditionBuilder -- backwards-compat", () => {
   it("loads legacy { field, equals } shape correctly", () => {
     const legacy = { field: "status", equals: "draft" };

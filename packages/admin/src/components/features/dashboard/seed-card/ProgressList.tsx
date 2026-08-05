@@ -29,7 +29,11 @@ export function ProgressList() {
           // even though we're not streaming real progress yet.
           style={{
             animationDelay: `${i * 250}ms`,
-            animation: "fade-in 600ms ease-out forwards",
+            // Namespaced, because the build renames this sheet's keyframes so
+            // they cannot collide with the host document's. An inline style
+            // never passes through that rename, so the unprefixed name here
+            // matched no definition and the rows stayed at opacity 0.
+            animation: "nx-fade-in 600ms ease-out forwards",
             opacity: 0,
           }}
         >

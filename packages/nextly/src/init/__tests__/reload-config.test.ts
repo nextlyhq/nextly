@@ -228,7 +228,7 @@ describe("reloadNextlyConfig", () => {
   // column — so the fixture is asked per table rather than shared.
   function reservedColumns(
     tableName: string,
-    options: BuildDesiredTableOptions = {}
+    options: BuildDesiredTableOptions = { builtBy: "codeFirst" }
   ): ColumnSpec[] {
     return buildDesiredTableFromFields(tableName, [], "sqlite", options)
       .columns;
@@ -1667,6 +1667,7 @@ describe("reloadNextlyConfig", () => {
       introspectSpy.mockResolvedValue({
         tables: [
           buildDesiredTableFromFields("dc_posts", fields, "sqlite", {
+            builtBy: "codeFirst" as const,
             hasStatus: false,
             localized: false,
           }),
@@ -1860,6 +1861,7 @@ describe("reloadNextlyConfig", () => {
       introspectSpy.mockResolvedValue({
         tables: [
           buildDesiredTableFromFields("dc_posts", fields, "sqlite", {
+            builtBy: "codeFirst" as const,
             hasStatus: false,
             localized: false,
           }),
@@ -2211,7 +2213,7 @@ describe("reloadNextlyConfig", () => {
     it("has exactly the landing points its paths need", () => {
       // A count rather than a proof. The scan this replaces looked for a
       // resolution in the lines before each early return, and passed while the
-      // no-DDL landing had none -- it was reading an `abandonReload()` that
+      // no-DDL landing had none -- it was reading an `undoOptimisticReloadWork()` that
       // belonged to the sibling branch. Line proximity cannot tell those apart,
       // so the paths are covered by the behaviour tests above instead and this
       // only stops a fourth landing appearing unnoticed.

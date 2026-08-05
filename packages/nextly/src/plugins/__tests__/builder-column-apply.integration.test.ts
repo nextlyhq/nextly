@@ -48,7 +48,7 @@ describe("boot-safe column apply for UI-Builder tables (Task 1)", () => {
       silentLogger,
       tableName,
       desired,
-      { timestamps: true }
+      { timestamps: true, builtBy: "codeFirst" }
     );
     expect(added).toContain("meta_title");
 
@@ -58,7 +58,7 @@ describe("boot-safe column apply for UI-Builder tables (Task 1)", () => {
       silentLogger,
       tableName,
       desired,
-      { timestamps: true }
+      { timestamps: true, builtBy: "codeFirst" }
     );
     expect(again).toHaveLength(0);
   });

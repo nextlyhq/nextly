@@ -60,6 +60,9 @@ export const NEXTLY_ERROR_STATUS = {
   NEXTLY_SCHEMA_CROSS_PLUGIN_RELATION: 409,
   // Plugin platform (P2c) — framework remap (.rename()).
   NEXTLY_SCHEMA_RENAME_UNKNOWN_TARGET: 400,
+  // Plugin platform — a declared admin.clientConfig that cannot be delivered
+  // to the browser, refused at boot rather than serialized mangled.
+  NEXTLY_PLUGIN_CLIENT_CONFIG_INVALID: 500,
   // Plugin platform (P0) — boot-time plugin dependency/version resolution.
   PLUGIN_RESOLUTION_ERROR: 500,
   // Plugin platform (P4) — contributes.routes collection (D25).
@@ -68,3 +71,118 @@ export const NEXTLY_ERROR_STATUS = {
 } as const;
 
 export type NextlyErrorCode = keyof typeof NEXTLY_ERROR_STATUS;
+
+/**
+ * The codes that REPRESENT their status, when a failure names none.
+ *
+ * A service that returns `{ success: false, statusCode }` without a code leaves
+ * every boundary to infer one, and three boundaries inferring separately is how
+ * the same 401 became `AUTH_REQUIRED` through the Direct API and
+ * `INTERNAL_ERROR` through the REST dispatcher. This list is the ONE inference,
+ * so they cannot disagree.
+ *
+ * Listed as CODES, not as status numbers: the number for each comes from
+ * {@link NEXTLY_ERROR_STATUS} below, so a code whose canonical status changes
+ * carries its inference with it instead of leaving a stale literal here.
+ *
+ * Several codes share a status -- 409 is both `CONFLICT` and `DUPLICATE`, 400
+ * is both `VALIDATION_ERROR` and `INVALID_INPUT` -- so this is a choice, not a
+ * mechanical inversion. Each entry is the reading that is still safe if the
+ * other was meant: `CONFLICT` says "reload", which is unhelpful for a name
+ * clash, while `DUPLICATE` would say "already exists", which is WRONG for a
+ * stale write. A producer that knows which it means sets `code` and is
+ * believed, and this list is never consulted for it.
+ */
+const CANONICAL_CODE_FOR_STATUS = [
+  "VALIDATION_ERROR",
+  "AUTH_REQUIRED",
+  "FORBIDDEN",
+  "NOT_FOUND",
+  "CONFLICT",
+  "PAYLOAD_TOO_LARGE",
+  "UNSUPPORTED_MEDIA_TYPE",
+  "RATE_LIMITED",
+  "EXTERNAL_SERVICE_ERROR",
+  "SERVICE_UNAVAILABLE",
+] as const satisfies readonly NextlyErrorCode[];
+
+/**
+ * 422, which no canonical code claims.
+ *
+ * `INVALID_INPUT` answers 400 in this system, so it cannot supply this key the
+ * way the codes above supply theirs. Legacy envelopes nonetheless use 422 for
+ * "understood but unprocessable", and reading it as an internal error would
+ * report the caller's own mistake as a server fault. Named rather than inlined
+ * so it is visibly the one entry that is NOT derived.
+ */
+const LEGACY_UNPROCESSABLE_STATUS = 422;
+
+const STATUS_TO_CODE: Readonly<Record<number, NextlyErrorCode>> = {
+  ...Object.fromEntries(
+    CANONICAL_CODE_FOR_STATUS.map(code => [NEXTLY_ERROR_STATUS[code], code])
+  ),
+  [LEGACY_UNPROCESSABLE_STATUS]: "INVALID_INPUT",
+};
+
+/**
+ * The canonical code for a status, for a failure that named none.
+ *
+ * Anything outside the table is an internal error: an unrecognised status from
+ * a legacy envelope says nothing a caller can act on, and inventing a specific
+ * code for it would assert a meaning no producer expressed.
+ */
+export function statusToErrorCode(statusCode: number): NextlyErrorCode {
+  return STATUS_TO_CODE[statusCode] ?? "INTERNAL_ERROR";
+}
+
+/**
+ * The sentence a caller reads for a code, when the failure supplied none.
+ *
+ * Kept beside the status table because they answer the same question together:
+ * a code-less envelope's own `message` is NOT usable here. Those envelopes come
+ * from legacy converters that store a raw exception's text, so promoting it
+ * would put driver output, table names and internal paths on the wire -- the
+ * disclosure the public error shape exists to prevent (spec 13.8).
+ *
+ * Every entry is generic by design. The specific detail stays in `logContext`
+ * for the operator, against the same request id.
+ */
+const GENERIC_PUBLIC_MESSAGE: Readonly<
+  Partial<Record<NextlyErrorCode, string>>
+> = {
+  VALIDATION_ERROR: "Validation failed.",
+  INVALID_INPUT: "The request could not be processed.",
+  AUTH_REQUIRED: "Authentication required.",
+  FORBIDDEN: "You don't have permission to perform this action.",
+  NOT_FOUND: "Not found.",
+  CONFLICT:
+    "The resource has changed since you last loaded it. Please refresh and try again.",
+  DUPLICATE: "Resource already exists.",
+  PAYLOAD_TOO_LARGE: "The request is too large.",
+  UNSUPPORTED_MEDIA_TYPE: "That file type is not supported.",
+  RATE_LIMITED: "Too many requests. Please try again later.",
+  EXTERNAL_SERVICE_ERROR: "An upstream service failed.",
+  SERVICE_UNAVAILABLE: "The service is temporarily unavailable.",
+  INTERNAL_ERROR: "An unexpected error occurred.",
+};
+
+/** The generic sentence for a code; the internal one for anything unlisted. */
+export function genericPublicMessage(code: string): string {
+  return (
+    GENERIC_PUBLIC_MESSAGE[code as NextlyErrorCode] ??
+    GENERIC_PUBLIC_MESSAGE.INTERNAL_ERROR!
+  );
+}
+
+/**
+ * The canonical error code a service names when it knows which one it means.
+ *
+ * A status is coarser than a code -- 409 covers both a name clash and a stale
+ * write, and they need opposite advice -- so a failure that knows the
+ * difference says so, and the boundary believes it instead of inferring the
+ * safer reading from the number alone.
+ *
+ * Widened to `string` rather than `NextlyErrorCode`: a plugin declares codes
+ * outside the canonical set, and the converter already carries those through.
+ */
+export type ServiceErrorCode = string;

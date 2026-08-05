@@ -43,6 +43,112 @@ import type {
 import { createDatabaseError, isDatabaseError } from "./types";
 
 /**
+ * A Drizzle column that decodes its own driver representation.
+ *
+ * `dataType` is the dialect-independent kind ("string", "boolean", "date");
+ * `mapFromDriverValue` turns what the driver handed back into the JS value a
+ * Drizzle query would have produced.
+ */
+interface DecodableColumn {
+  dataType: unknown;
+  mapFromDriverValue(value: unknown): unknown;
+  mapToDriverValue(value: unknown): unknown;
+}
+
+/**
+ * Matches the `dataType` a Drizzle timestamp/datetime column reports, in both
+ * the bare form and the object-qualified form some column classes carry.
+ */
+const DATE_DATA_TYPE = /(?:^|\s)date$/;
+
+/**
+ * How far an echoed timestamp may sit from the one that was bound and still
+ * count as the same value.
+ *
+ * A column with no fractional precision keeps whole seconds, so a stored value
+ * can differ from the bound one by up to a second without anything being wrong.
+ * Every real UTC offset is at least fifteen minutes, so a shift is never
+ * mistaken for rounding.
+ */
+/**
+ * Stem for the alias a statement spells a timestamp's wall clock out under.
+ *
+ * Short on purpose. PostgreSQL truncates an identifier at 63 bytes, and a
+ * truncated alias is worse than a rejected one: the statement still succeeds,
+ * the lookup misses the name it asked for, and the row keeps both the driver's
+ * value and a stray property. A stem plus an index stays far inside the limit
+ * whatever the column is called.
+ */
+const WALL_CLOCK_ALIAS_STEM = "__nx_wc";
+
+/**
+ * A timestamp as the database itself spells it, in a fixed field order.
+ *
+ * Matched rather than handed to `new Date`, so nothing depends on the host's
+ * parsing of a partial date. The fraction is optional and of any length, which
+ * covers PostgreSQL's milliseconds and MySQL's microseconds alike.
+ */
+const WALL_CLOCK_PATTERN =
+  /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?$/;
+
+/**
+ * Read a database's own rendering of a timestamp as UTC.
+ *
+ * The statement wrote a UTC wall clock, so reading one back as UTC is what
+ * makes a write agree with a later read. The rendering is one the statement
+ * asked for by name, so its shape does not depend on a session setting.
+ *
+ * Anything that does not match answers nothing, leaving the driver's value in
+ * place rather than replacing it with an `Invalid Date`.
+ */
+function parseWallClockAsUtc(text: string): Date | undefined {
+  const match = WALL_CLOCK_PATTERN.exec(text.trim());
+  if (!match) return undefined;
+  const [, year, month, day, hour, minute, second, fraction = ""] = match;
+  // Milliseconds, whatever precision the dialect rendered: a shorter fraction
+  // is padded and a longer one truncated, which is what a `Date` can hold.
+  const millis = Number(`${fraction}000`.slice(0, 3));
+  const parsed = new Date(
+    Date.UTC(
+      Number(year),
+      Number(month) - 1,
+      Number(day),
+      Number(hour),
+      Number(minute),
+      Number(second),
+      millis
+    )
+  );
+  // `Date.UTC` reads a year under 100 as shorthand for the 1900s, so year 50
+  // would land in 1950. The database said 0050 and meant it.
+  if (Number(year) < 100) parsed.setUTCFullYear(Number(year));
+  return parsed;
+}
+
+/** Whether a table property is a date column that can convert its own values. */
+function isDateColumn(colDef: unknown): colDef is DecodableColumn {
+  if (!colDef || typeof colDef !== "object") return false;
+  const candidate = colDef as Partial<DecodableColumn>;
+  return (
+    typeof candidate.mapFromDriverValue === "function" &&
+    typeof candidate.mapToDriverValue === "function" &&
+    DATE_DATA_TYPE.test(String(candidate.dataType))
+  );
+}
+
+/**
+ * Whether a date column records the zone its value belongs to.
+ *
+ * A column declared WITH a time zone stores an instant, so a driver reading it
+ * back gets the same moment whatever zone either end is in -- there is nothing
+ * ambiguous to resolve and nothing to correct. Rendering one as text would
+ * spell it in the session's zone, and reading that as UTC would move it.
+ */
+function carriesTimeZone(colDef: unknown): boolean {
+  return (colDef as { withTimezone?: unknown }).withTimezone === true;
+}
+
+/**
  * Abstract base class for database adapters.
  *
  * @remarks
@@ -495,6 +601,224 @@ export abstract class DrizzleAdapter {
       out[sqlToJs.get(key) ?? key] = value;
     }
     return out as T;
+  }
+
+  /**
+   * Decode a raw-SQL result row's DATE column values the way a Drizzle query
+   * would, so a write answers with the same representation a read of the same
+   * column gives.
+   *
+   * A Drizzle query path runs every value through its column definition; a
+   * raw-SQL path does not, so a dialect that stores a timestamp as a number
+   * answers a write with that number while every read answers a `Date`. Only
+   * date columns are touched, and a value that is already a `Date` is left
+   * alone, so a driver that decodes on its own is unaffected.
+   *
+   * Runs after {@link mapRowKeysToJs}: keys are Drizzle property names by then,
+   * which is what the table definition is keyed by.
+   */
+  protected mapDateValuesFromDriver<T = unknown>(tableObj: unknown, row: T): T {
+    if (
+      !tableObj ||
+      typeof tableObj !== "object" ||
+      !row ||
+      typeof row !== "object"
+    ) {
+      return row;
+    }
+
+    let decoded: Record<string, unknown> | undefined;
+    for (const [jsName, colDef] of Object.entries(
+      tableObj as Record<string, unknown>
+    )) {
+      if (!isDateColumn(colDef)) continue;
+      const value = (row as Record<string, unknown>)[jsName];
+      // `undefined` means the column was not projected; `null` is a stored
+      // absence. Neither is a driver representation to decode.
+      if (value == null || value instanceof Date) continue;
+      decoded ??= { ...(row as Record<string, unknown>) };
+      decoded[jsName] = colDef.mapFromDriverValue(value);
+    }
+    return (decoded as T | undefined) ?? row;
+  }
+
+  /**
+   * Encode a row's DATE values the way a Drizzle query would before binding
+   * them, so what lands in the column does not depend on the server's timezone.
+   *
+   * A column declared without a time zone stores a wall clock and records
+   * nothing about which zone it belongs to, so both ends have to agree. Drizzle
+   * writes UTC and reads UTC. A driver handed a `Date` writes the LOCAL wall
+   * clock instead, and the same row then reads back shifted by the offset --
+   * on a UTC server the two agree and nothing is visibly wrong, which is why
+   * this survives CI.
+   *
+   * Only date columns are touched. A value that is not a `Date` is left as it
+   * is, so a caller that already encoded one is not encoded twice.
+   *
+   * Keys may be spelled either way at this point, so both the Drizzle property
+   * name and the SQL column name resolve.
+   */
+  protected mapDateValuesToDriver(
+    tableObj: unknown,
+    data: Record<string, unknown>
+  ): Record<string, unknown> {
+    if (!tableObj || typeof tableObj !== "object" || !data) return data;
+
+    const dateColumns = new Map<string, DecodableColumn>();
+    for (const [jsName, colDef] of Object.entries(
+      tableObj as Record<string, unknown>
+    )) {
+      if (!isDateColumn(colDef)) continue;
+      dateColumns.set(jsName, colDef);
+      const sqlName = (colDef as { name?: unknown }).name;
+      if (typeof sqlName === "string") dateColumns.set(sqlName, colDef);
+    }
+    if (dateColumns.size === 0) return data;
+
+    let encoded: Record<string, unknown> | undefined;
+    for (const [key, value] of Object.entries(data)) {
+      if (!(value instanceof Date)) continue;
+      const column = dateColumns.get(key);
+      if (!column) continue;
+      encoded ??= { ...data };
+      encoded[key] = column.mapToDriverValue(value);
+    }
+    return encoded ?? data;
+  }
+
+  /**
+   * Bring a row about to be written through a raw-SQL statement into the shape
+   * a Drizzle query would have bound: SQL column names for keys, encoded values
+   * for date columns.
+   *
+   * The mirror of {@link mapRowFromRawSql}. The raw-SQL write paths exist
+   * because a dialect needs SQL a Drizzle query cannot express, not because
+   * their callers want different values in the table.
+   */
+  protected mapRowToRawSql(
+    tableObj: unknown,
+    data: Record<string, unknown>
+  ): Record<string, unknown> {
+    return this.mapDateValuesToDriver(
+      tableObj,
+      this.mapKeysToSqlColumns(tableObj, data)
+    );
+  }
+
+  /**
+   * Bring a raw-SQL result row into the shape a Drizzle query would have
+   * produced: Drizzle property names for keys, decoded values for date columns.
+   *
+   * The raw-SQL write paths exist because a dialect needs SQL a Drizzle query
+   * cannot express, not because their callers want a different row shape, so
+   * every one of them ends here.
+   */
+  protected mapRowFromRawSql<T = unknown>(
+    tableObj: unknown,
+    row: T,
+    aliases: ReadonlyArray<{ alias: string; jsName: string }> = []
+  ): T {
+    const mapped = this.mapDateValuesFromDriver(
+      tableObj,
+      this.mapRowKeysToJs(tableObj, row)
+    );
+    return this.applyWallClockAliases(mapped, aliases);
+  }
+
+  /**
+   * The date columns a statement is about to return, and the alias each one's
+   * wall clock is spelled out under.
+   *
+   * A driver turns a timestamp into a `Date` using ITS zone before any of this
+   * code runs, and that conversion is lossy: a wall clock inside a
+   * daylight-saving gap is a local time that does not exist, so the driver
+   * normalizes it and the original is gone. Asking the database for the wall
+   * clock as text alongside the row is the only way to read it exactly.
+   *
+   * `"*"` covers every date column; a projection covers only the ones it asked
+   * for, so a caller still gets back what it requested and nothing more.
+   */
+  protected dateWallClockAliases(
+    tableObj: unknown,
+    returning: string[] | "*" | undefined
+  ): Array<{ sqlName: string; alias: string; jsName: string }> {
+    if (!tableObj || typeof tableObj !== "object" || returning === undefined) {
+      return [];
+    }
+    const requested =
+      returning === "*" ? undefined : new Set(returning.map(String));
+
+    // Every name the row can already carry, so an alias cannot land on one and
+    // overwrite or delete it. A column really called `__nx_wc0` is far-fetched,
+    // but one set makes it impossible rather than unlikely.
+    const taken = new Set<string>();
+    for (const [jsName, colDef] of Object.entries(
+      tableObj as Record<string, unknown>
+    )) {
+      taken.add(jsName);
+      const columnName = (colDef as { name?: unknown }).name;
+      if (typeof columnName === "string") taken.add(columnName);
+    }
+
+    let next = 0;
+    const freeAlias = (): string => {
+      let candidate = `${WALL_CLOCK_ALIAS_STEM}${next++}`;
+      while (taken.has(candidate)) {
+        candidate = `${WALL_CLOCK_ALIAS_STEM}${next++}`;
+      }
+      taken.add(candidate);
+      return candidate;
+    };
+
+    const aliases: Array<{ sqlName: string; alias: string; jsName: string }> =
+      [];
+    for (const [jsName, colDef] of Object.entries(
+      tableObj as Record<string, unknown>
+    )) {
+      if (!isDateColumn(colDef)) continue;
+      // A column carrying its own zone is already unambiguous; spelling it out
+      // would render it in the session's zone and reading that as UTC would
+      // move an instant that was correct to begin with.
+      if (carriesTimeZone(colDef)) continue;
+      const sqlName = (colDef as { name?: unknown }).name;
+      if (typeof sqlName !== "string") continue;
+      if (requested && !requested.has(sqlName) && !requested.has(jsName)) {
+        continue;
+      }
+      aliases.push({ sqlName, alias: freeAlias(), jsName });
+    }
+    return aliases;
+  }
+
+  /**
+   * Replace each date in a row with the wall clock the database spelled out,
+   * read as UTC, and drop the aliases that carried it.
+   *
+   * The statement writes a UTC wall clock, so reading one back as UTC is what
+   * makes a write and a later read agree. Whatever the column actually stored
+   * is what arrives -- a column keeping only whole seconds reports whole
+   * seconds -- because this is the database's own text, not a value
+   * reconstructed from the one that was bound.
+   */
+  protected applyWallClockAliases<T>(
+    row: T,
+    aliases: ReadonlyArray<{ alias: string; jsName: string }>
+  ): T {
+    if (!row || typeof row !== "object" || aliases.length === 0) return row;
+    const record = row as Record<string, unknown>;
+
+    let resolved: Record<string, unknown> | undefined;
+    for (const { alias, jsName } of aliases) {
+      if (!(alias in record)) continue;
+      resolved ??= { ...record };
+      const text = resolved[alias];
+      delete resolved[alias];
+      if (typeof text !== "string") continue;
+      const parsed = parseWallClockAsUtc(text);
+      if (parsed !== undefined) resolved[jsName] = parsed;
+    }
+    return (resolved as T | undefined) ?? row;
   }
 
   /**
@@ -1491,11 +1815,21 @@ export abstract class DrizzleAdapter {
           sql = `
             SELECT EXISTS (
               SELECT FROM information_schema.tables
-              WHERE table_schema = $1
+              WHERE table_schema = COALESCE($1, (
+                SELECT n.nspname FROM pg_class c
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE c.oid = to_regclass($2)
+              ))
               AND table_name = $2
             ) as exists
           `;
-          params.push(schema ?? "public", tableName);
+          // Unqualified DDL and DML resolve across the whole search path, not against one
+          // schema. Naming `public` reported a populated table as absent whenever a deployment
+          // used a schema of its own, and naming only the FIRST entry misses a table that lives
+          // further along it. `to_regclass` resolves exactly as the statements do, so the
+          // lookup and the ALTER cannot disagree about which table is meant. A caller that
+          // reads "absent" as "nothing to conflict with" would otherwise act on the wrong one.
+          params.push(schema ?? null, tableName);
           break;
 
         case "mysql":

@@ -34,12 +34,17 @@ import {
 import { diffSnapshots } from "./diff/diff";
 import { introspectLiveSnapshot } from "./diff/introspect-live";
 import type { NextlySchemaSnapshot, Operation } from "./diff/types";
+import {
+  excludeLockedTableOps,
+  logSkippedLockedOps,
+} from "./pushschema-pipeline";
 import type {
   Classifier,
   ClassificationLevel,
   RenameCandidate,
   RenameDetector,
 } from "./pushschema-pipeline-interfaces";
+import { builtByFor } from "./registered-collections";
 import { RegexRenameDetector } from "./rename-detector";
 import type { ClassifierEvent } from "./resolution/types";
 import type { DesiredSchema } from "./types";
@@ -102,7 +107,11 @@ export async function previewDesiredSchema(
   args: PreviewDesiredSchemaArgs,
   deps: PreviewDesiredSchemaDeps = {}
 ): Promise<PipelinePreviewResult> {
-  const { desired, db, dialect } = args;
+  const { db, dialect } = args;
+  // Resolved once, here, so the snapshot this function builds and the DDL the apply path builds
+  // from the same declaration describe the same column. Two different builders read a desired
+  // schema, and normalising what they share is what keeps them from disagreeing forever.
+  const desired = args.desired;
   const renameDetector = deps.renameDetector ?? new RegexRenameDetector();
   const classifier = deps.classifier ?? new RealClassifier();
   const introspect = deps.introspect ?? introspectLiveSnapshot;
@@ -133,7 +142,11 @@ export async function previewDesiredSchema(
       // omitted from the preview's desired snapshot (they live in the companion
       // `_locales` table); otherwise the diff reports them as missing and the
       // SchemaChangeDialog tries to re-add them to the main table.
-      { hasStatus: c.status === true, localized: c.localized === true }
+      {
+        builtBy: builtByFor("collection", c.builderOwned),
+        hasStatus: c.status === true,
+        localized: c.localized === true,
+      }
     )
   );
   const singleTables = Object.values(desired.singles).map(s =>
@@ -144,7 +157,11 @@ export async function previewDesiredSchema(
       // Forward `localized` so a localized single's translatable columns are omitted from the
       // preview's desired snapshot (they live in the companion), matching the collection path —
       // otherwise the diff reports phantom main-table changes the apply never makes.
-      { hasStatus: s.status === true, localized: s.localized === true }
+      {
+        builtBy: builtByFor("single", s.builderOwned),
+        hasStatus: s.status === true,
+        localized: s.localized === true,
+      }
     )
   );
   const componentTables = Object.values(desired.components).map(c =>
@@ -156,14 +173,27 @@ export async function previewDesiredSchema(
       dialect,
       // Forward `localized` so a localized component's translatable columns are omitted from the
       // preview's desired snapshot (they live in the companion), matching collections/singles.
-      { localized: (c as { localized?: boolean }).localized === true }
+      {
+        builtBy: builtByFor("fieldGroup", c.builderOwned),
+        localized: (c as { localized?: boolean }).localized === true,
+      }
     )
   );
   const desiredSnapshot: NextlySchemaSnapshot = {
     tables: [...collectionTables, ...singleTables, ...componentTables],
   };
 
-  const operations = diffSnapshots(liveSnapshot, desiredSnapshot);
+  const allOperations = diffSnapshots(liveSnapshot, desiredSnapshot);
+
+  // Preview is what the browser asks the operator to confirm, so it must show the operation set the
+  // apply can actually run. The apply drops operations on code-first and plugin-owned tables before
+  // it reads them; leaving them in here surfaced destructive warnings and rename prompts for drift
+  // on a table the save does not own and would never have touched.
+  const { kept: operations, skipped } = excludeLockedTableOps(
+    allOperations,
+    desired
+  );
+  logSkippedLockedOps(skipped);
 
   // Phase B: rename detection + classification.
   // The rename detector reads typed Operation[] (post Option E) and
