@@ -163,7 +163,12 @@ export function PageRenderer({
       : {
           ...styleContext,
           limits: effectiveLimits,
-          ...(styleContext.scope === undefined && styles?.scope !== undefined
+          // Only a STRING scope is carried over. The artifact is a database
+          // record, so `scope` can be null or a number, and the compiler
+          // dereferences it before any block boundary exists — a malformed one
+          // would fail the whole page rather than render it unstyled.
+          ...(styleContext.scope === undefined &&
+          typeof styles?.scope === "string"
             ? { scope: styles.scope }
             : {}),
         };

@@ -158,9 +158,15 @@ function nodeRootReason(output: ReactNode, node: BlockNode): string | null {
     !Array.isArray(attributes) &&
     Object.keys(attributes).length > 0;
   if (!hasCssId && !hasAttributes) return null;
-  if (!isValidElement(output)) return null;
+  const named = hasCssId ? "`cssId`" : "attributes";
+  // A primitive or a list has no root at all, which loses the fields exactly as
+  // a wrapper root does — silently, and with the same broken anchors. The
+  // format says a block renders a single element for these to target.
+  if (!isValidElement(output)) {
+    return `a node carrying ${named} whose block returned no element, so there is no DOM root to put them on`;
+  }
   if (typeof output.type === "string") return null;
-  return `a node carrying ${hasCssId ? "`cssId`" : "attributes"} whose block returned a wrapper rather than an element, so there is no DOM root to put them on`;
+  return `a node carrying ${named} whose block returned a wrapper rather than an element, so there is no DOM root to put them on`;
 }
 
 /**

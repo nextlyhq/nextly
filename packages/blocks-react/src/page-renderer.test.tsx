@@ -126,6 +126,7 @@ const text = defineBlock<{ value: string }>({
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
 });
 
 describe("PageRenderer", () => {
@@ -968,11 +969,11 @@ describe("PageRenderer", () => {
   });
 
   describe("hostile stored documents", () => {
-    it("does not put the node's fields on an awaited child", async () => {
-      // The node's root-level fields belong to the block's own root element.
-      // Output validation is re-entered for each awaited child, so applying
-      // them again there would decorate a nested element while the block's own
-      // root — a list — received none of them.
+    it("does not decorate an awaited child of a list root", async () => {
+      // Output validation is re-entered for each awaited child, and the node's
+      // root-level fields belong to the block's own root. A list root has none,
+      // so nothing may be applied to the items either — re-entry that forgot
+      // that would decorate a nested element with fields no root received.
       const listWithPromise = defineBlock({
         name: "test/async-list",
         version: 1,
@@ -986,20 +987,67 @@ describe("PageRenderer", () => {
 
       const html = await renderToHtml(
         <PageRenderer
-          document={doc(
-            node("a", "test/async-list", {
-              cssId: "the-node",
-              attributes: { "data-node": "yes" },
-            })
-          )}
+          document={doc(node("a", "test/async-list"))}
           blocks={createBlockResolver([listWithPromise as AnyBlockDefinition])}
         />
       );
 
+      expect(placeholderReasons(html)).toEqual([]);
+      expect(html).toContain("sync child");
       expect(html).toContain("async child");
-      // Neither field may land on the child element.
-      expect(html).not.toContain('<em id="the-node"');
-      expect(html).not.toContain('data-node="yes"');
+      expect(html).not.toContain(" id=");
+    });
+
+    it("refuses a node whose block returns no element at all", async () => {
+      // A primitive or a list has no root to carry the node's DOM fields, and
+      // losing them is as silent as losing them on a fragment root: the anchor,
+      // the `label for=`, the `#id` selector all stop working on a page that
+      // still looks right.
+      const listRoot = defineBlock({
+        name: "test/list-root",
+        version: 1,
+        description: "Returns a list rather than an element.",
+        example: { props: {} },
+        render: () => [<span key="a">one</span>, <span key="b">two</span>],
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/list-root", { cssId: "anchor" }),
+            node("b", "test/text", { props: { value: "survivor" } })
+          )}
+          blocks={createBlockResolver([
+            listRoot as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual(["invalid-output"]);
+      expect(html).not.toContain('id="anchor"');
+      expect(html).toContain("survivor");
+    });
+
+    it("leaves a list root alone when the node asks for nothing", async () => {
+      const listRoot = defineBlock({
+        name: "test/list-plain",
+        version: 1,
+        description: "Returns a list and is asked for no DOM fields.",
+        example: { props: {} },
+        render: () => [<span key="a">one</span>, <span key="b">two</span>],
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(node("a", "test/list-plain"))}
+          blocks={createBlockResolver([listRoot as AnyBlockDefinition])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual([]);
+      expect(html).toContain("one");
+      expect(html).toContain("two");
     });
 
     it("survives an attributes envelope that is not a record", async () => {
@@ -2204,6 +2252,141 @@ describe("PageRenderer", () => {
       expect(html).toContain("survivor");
     });
 
+    it("contains a host element whose tag name is not one", async () => {
+      // React creates a valid element for these and then throws `Invalid tag:`
+      // while writing it, after the boundary has returned. A block building a
+      // host element from a stored `as` field is how such a name arrives.
+      for (const tag of ["bad tag", "1div", "a/b", "-x", "div>"]) {
+        const built = defineBlock({
+          name: `test/tag-${tag.replace(/[^a-z]/gi, "")}`,
+          version: 1,
+          description: "Builds a host element from a stored tag name.",
+          example: { props: {} },
+          render: () => createElement(tag, null, "x"),
+        });
+
+        const html = await renderToHtml(
+          <PageRenderer
+            document={doc(
+              node("a", built.name),
+              node("b", "test/text", { props: { value: "survivor" } })
+            )}
+            blocks={createBlockResolver([
+              built as AnyBlockDefinition,
+              text as AnyBlockDefinition,
+            ])}
+          />
+        );
+
+        expect(placeholderReasons(html), tag).toEqual(["invalid-output"]);
+        expect(html, tag).toContain("survivor");
+      }
+    });
+
+    it("still renders the tag names HTML actually allows", async () => {
+      // Custom elements and namespaced tags are ordinary output, so the grammar
+      // has to admit them or the guard costs working blocks.
+      const tags = defineBlock({
+        name: "test/tag-shapes",
+        version: 1,
+        description: "Uses the less common tag shapes HTML allows.",
+        example: { props: {} },
+        render: () => (
+          <div>
+            {createElement("my-el", null, "custom")}
+            {createElement("x:y", null, "namespaced")}
+            {createElement("a_b", null, "underscored")}
+          </div>
+        ),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(node("a", "test/tag-shapes"))}
+          blocks={createBlockResolver([tags as AnyBlockDefinition])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual([]);
+      for (const body of ["custom", "namespaced", "underscored"]) {
+        expect(html).toContain(body);
+      }
+    });
+
+    it("refuses a memo whose inner type React cannot render", async () => {
+      // The field-presence check is not enough: React unwraps the memo and
+      // renders what is inside, so `{ $$typeof: memo, type: 42 }` has the field
+      // and still reaches "Element type is invalid".
+      const forged = defineBlock({
+        name: "test/forged-memo-inner",
+        version: 1,
+        description: "Builds an element from a memo wrapping a number.",
+        example: { props: {} },
+        render: () =>
+          createElement(
+            {
+              $$typeof: Symbol.for("react.memo"),
+              type: 42,
+            } as unknown as string,
+            null,
+            "x"
+          ),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/forged-memo-inner"),
+            node("b", "test/text", { props: { value: "survivor" } })
+          )}
+          blocks={createBlockResolver([
+            forged as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual(["invalid-output"]);
+      expect(html).toContain("survivor");
+    });
+
+    it("survives a wrapper that points at itself", async () => {
+      // Unwrapping is recursive and a stored object can cite itself, so the
+      // walk is bounded. Without the bound this is a stack overflow in the page
+      // component, where nothing can contain it.
+      const cyclic: { $$typeof: symbol; type?: unknown } = {
+        $$typeof: Symbol.for("react.memo"),
+      };
+      cyclic.type = cyclic;
+      const looping = defineBlock({
+        name: "test/cyclic-memo",
+        version: 1,
+        description: "Builds an element from a self-referencing wrapper.",
+        example: { props: {} },
+        render: () => createElement(cyclic as unknown as string, null, "x"),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/cyclic-memo"),
+            node("b", "test/text", { props: { value: "survivor" } })
+          )}
+          blocks={createBlockResolver([
+            looping as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual(["invalid-output"]);
+      expect(html).toContain("survivor");
+      // Refused by the bound, NOT by a stack overflow the boundary happened to
+      // catch — both produce a placeholder, so only the reason separates a
+      // working guard from an accident.
+      expect(html).not.toContain("failed while being read");
+    });
+
     it("contains an invalid child inside a context provider", async () => {
       // React renders a provider's children itself, but its element type is an
       // object, so the rule that covers Suspense by symbol does not reach it.
@@ -2410,6 +2593,35 @@ describe("PageRenderer", () => {
         expect(placeholderReasons(html)).toEqual(["invalid-output"]);
         expect(html).toContain("survivor");
       }
+    });
+
+    it("contains a textarea given a value prop and children", async () => {
+      // The prop is `value` here rather than `defaultValue`, and React throws
+      // for it just the same.
+      const both = defineBlock({
+        name: "test/textarea-value-children",
+        version: 1,
+        description: "Gives a textarea a value prop and children.",
+        example: { props: {} },
+        render: () =>
+          createElement("textarea", { value: "x", readOnly: true }, "child"),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/textarea-value-children"),
+            node("b", "test/text", { props: { value: "survivor" } })
+          )}
+          blocks={createBlockResolver([
+            both as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual(["invalid-output"]);
+      expect(html).toContain("survivor");
     });
 
     it("still renders the form controls React only warns about", async () => {
@@ -2897,6 +3109,38 @@ describe("PageRenderer", () => {
       expect(html).toContain(".nx-doc-a");
     });
 
+    it("recompiles without a stored scope that is not text", async () => {
+      // The artifact is a database record, so `scope` can be null or a number,
+      // and the compiler dereferences it before any block boundary exists — a
+      // malformed one would fail the whole page rather than render it unstyled.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", {
+              props: { value: "gated" },
+              visibility: {
+                conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+              },
+            }),
+            node("b", "test/text", { props: { value: "public" } })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+          styles={
+            {
+              css: ".stale{}",
+              classes: { a: "nx-a", b: "nx-b" },
+              scope: null,
+            } as unknown as { css: string; classes: Record<string, string> }
+          }
+          styleContext={{ breakpoints: { viewport: [], container: [] } }}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual([]);
+      expect(html).toContain("public");
+      expect(html).not.toContain("gated");
+    });
+
     it("recompiles against the limits the caller enforces", async () => {
       // The compile has to be held to the same caps as the repair pass that ran
       // just before it. A site that raised `maxDepth` for deeply nested layouts
@@ -2960,6 +3204,30 @@ describe("PageRenderer", () => {
   });
 
   describe("containment (continued)", () => {
+    it("shows a placeholder where `process` does not exist", async () => {
+      // This renderer is meant to run anywhere React does, and an Edge or
+      // Worker runtime need not define `process`. A bare `process.env` read
+      // would throw on the one path that exists to CONTAIN a failure, turning a
+      // contained block error into a page-level crash.
+      vi.stubGlobal("process", undefined);
+      try {
+        const html = await renderToHtml(
+          <PageRenderer
+            document={doc(
+              node("a", "test/missing"),
+              node("b", "test/text", { props: { value: "survivor" } })
+            )}
+            blocks={createBlockResolver([text as AnyBlockDefinition])}
+          />
+        );
+
+        expect(placeholderReasons(html)).toEqual(["unknown-block"]);
+        expect(html).toContain("survivor");
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
     it("shows nothing but a marker in production", async () => {
       vi.stubEnv("NODE_ENV", "production");
 

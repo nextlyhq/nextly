@@ -211,30 +211,60 @@ function isReactBuiltinSymbol(value: unknown): boolean {
  * suite fails loudly in CI if a rename ever makes this too strict, rather than
  * silently refusing valid blocks in production.
  */
-const ELEMENT_TYPE_SHAPE: ReadonlyMap<symbol, (type: object) => boolean> =
-  new Map([
-    [Symbol.for("react.memo"), (type: object) => "type" in type],
-    [
-      Symbol.for("react.forward_ref"),
-      (type: object) =>
-        typeof (type as { render?: unknown }).render === "function",
-    ],
-    [
-      Symbol.for("react.lazy"),
-      (type: object) =>
-        typeof (type as { _init?: unknown })._init === "function",
-    ],
-    [Symbol.for("react.consumer"), (type: object) => "_context" in type],
-  ]);
+const ELEMENT_TYPE_SHAPE: ReadonlyMap<
+  symbol,
+  (type: object, depth: number) => boolean
+> = new Map([
+  [
+    Symbol.for("react.memo"),
+    // The memo's inner type, not merely a `type` field: React unwraps it and
+    // renders THAT, so `{ $$typeof: memo, type: 42 }` has the field and still
+    // reaches "Element type is invalid".
+    (type: object, depth: number) =>
+      isRenderableElementType((type as { type?: unknown }).type, depth + 1),
+  ],
+  [
+    Symbol.for("react.forward_ref"),
+    (type: object) =>
+      typeof (type as { render?: unknown }).render === "function",
+  ],
+  [
+    Symbol.for("react.lazy"),
+    (type: object) => typeof (type as { _init?: unknown })._init === "function",
+  ],
+  [Symbol.for("react.consumer"), (type: object) => "_context" in type],
+]);
+
+/**
+ * How far a wrapper may nest before it is refused.
+ *
+ * Unwrapping is recursive and a stored object can point at itself, so the walk
+ * needs a floor. Real nesting is one or two deep — `memo(forwardRef(fn))` — so
+ * this only ever stops a cycle.
+ */
+const MAX_WRAPPER_DEPTH = 8;
 
 /** The `$$typeof` tag of a value, when it is one React renders elements from. */
-function reactTag(value: unknown): symbol | null {
+function reactTag(value: unknown, depth = 0): symbol | null {
   if (typeof value !== "object" || value === null) return null;
   const tag = (value as { $$typeof?: unknown }).$$typeof;
   if (typeof tag !== "symbol" || !ELEMENT_TYPE_TAGS.has(tag)) return null;
+  if (depth > MAX_WRAPPER_DEPTH) return null;
   const hasShape = ELEMENT_TYPE_SHAPE.get(tag);
-  return hasShape === undefined || hasShape(value) ? tag : null;
+  return hasShape === undefined || hasShape(value, depth) ? tag : null;
 }
+
+/**
+ * A tag name React's serializer will accept.
+ *
+ * React creates a perfectly valid element for `"bad tag"`, `"1div"` or `"a/b"`
+ * and then throws `Invalid tag:` while writing it — after this boundary has
+ * returned. A block building a host element from a stored `as` field is how
+ * such a name arrives. The grammar mirrors React's own: a letter, then letters,
+ * digits, `-`, `_`, `:` or `.`, which keeps custom elements (`my-el`) and
+ * namespaced SVG (`x:y`) working.
+ */
+const VALID_TAG_NAME = /^[a-zA-Z][a-zA-Z0-9:_.-]*$/;
 
 /**
  * Whether React can render an element's TYPE at all.
@@ -246,8 +276,8 @@ function reactTag(value: unknown): symbol | null {
  * block boundary has returned. A block building JSX from stored data is exactly
  * how that value gets there.
  */
-function isRenderableElementType(type: unknown): boolean {
-  if (typeof type === "string") return type.length > 0;
+function isRenderableElementType(type: unknown, depth = 0): boolean {
+  if (typeof type === "string") return VALID_TAG_NAME.test(type);
   // A component, and every React built-in (fragment, Suspense, StrictMode).
   if (typeof type === "function") return true;
   if (isReactBuiltinSymbol(type)) return true;
@@ -256,7 +286,7 @@ function isRenderableElementType(type: unknown): boolean {
   // was the same enumeration mistake as accepting every `react.*` symbol, one
   // level over: `{ $$typeof: Symbol.for("react.portal") }` is React's own tag
   // on a value React refuses as a type.
-  return reactTag(type) !== null;
+  return reactTag(type, depth) !== null;
 }
 
 function rendersOwnChildren(element: unknown): boolean {
@@ -362,8 +392,9 @@ function hostPropReason(element: unknown): string | null {
   // for a mismatched `value`/`defaultValue` there and renders the element
   // anyway, so refusing would take a page that React was willing to serve.
   if (type === "textarea" && children != null) {
-    if ((props as { defaultValue?: unknown }).defaultValue != null) {
-      return "both `defaultValue` and children on <textarea>, which React refuses";
+    const controlled = props as { defaultValue?: unknown; value?: unknown };
+    if (controlled.defaultValue != null || controlled.value != null) {
+      return "both a value prop and children on <textarea>, which React refuses";
     }
     if (Array.isArray(children) && children.length > 1) {
       return "more than one child on <textarea>, which can hold at most one";

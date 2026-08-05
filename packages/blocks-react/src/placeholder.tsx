@@ -67,7 +67,12 @@ export function BlockPlaceholder({
 }: BlockPlaceholderProps): ReactElement {
   // Read at render rather than module scope so a consumer's bundler can inline
   // it per build, and so a test can exercise both modes in one process.
-  const isProduction = process.env.NODE_ENV === "production";
+  // Read defensively. This renderer is meant to run anywhere React does, and an
+  // Edge or Worker runtime need not define `process` at all — a bare access
+  // would throw HERE, on the one path that exists to contain a failure, turning
+  // a contained block error into a page-level crash.
+  const isProduction =
+    typeof process !== "undefined" && process.env?.NODE_ENV === "production";
 
   if (isProduction) {
     return (
