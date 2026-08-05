@@ -1,15 +1,11 @@
 /**
  * The permissions this plugin declares, and the strings its rules read.
  *
- * One permission, not a vocabulary. A `publish` permission was declared here
- * once and nothing ever read it: granting it did nothing and withholding it
- * prevented nothing, so it was removed with the instruction to declare it again
- * alongside the check. That rule holds for every name the page-builder plans
- * eventually need — classes, tokens, patterns, components — so each arrives
- * with the surface that enforces it rather than ahead of it.
- *
- * Custom CSS is the one that has a surface today: the `pages` collection
- * carries a `customCss` field, so there is somewhere for a check to live.
+ * One permission, not a vocabulary. A permission is only worth declaring where
+ * something reads it: one that no check consults grants nothing when held and
+ * prevents nothing when withheld, while still appearing in the admin's matrix
+ * as though it protected something. Custom CSS has a check to attach to — the
+ * `pages` collection carries a `customCss` field — so it is declared here.
  *
  * @module permissions
  */

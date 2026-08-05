@@ -112,9 +112,9 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) =>
       // could publish. Granting it did nothing and withholding it prevented
       // nothing. Declare it again alongside the check that reads it.
       //
-      // Custom CSS follows that rule rather than breaking it: the permission
-      // below ships WITH the field rule in `pagesCollection()` that reads it,
-      // so granting and withholding both do something the day it lands.
+      // The permission below is read by the `customCss` field rule in
+      // `pagesCollection()`, so granting and withholding it each change what a
+      // user can do.
       permissions: [
         {
           action: CUSTOM_CSS_ACTION,
