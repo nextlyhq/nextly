@@ -497,7 +497,13 @@ export default function CollectionBuilderEditPage({
     if (!fieldDefinitions) return;
 
     try {
-      const preview = await schemaApi.preview(slug, fieldDefinitions);
+      // i18n: preview with the toggle the apply will use, so the resolutions
+      // collected here match the DDL that actually runs.
+      const preview = await schemaApi.preview(
+        slug,
+        fieldDefinitions,
+        settings?.i18n === true
+      );
 
       if (!preview.hasChanges) {
         // No schema changes — just persist labels/settings/hooks.
@@ -520,7 +526,7 @@ export default function CollectionBuilderEditPage({
       const errorObj = err as { message?: string };
       toast.error(errorObj?.message || "Failed to preview schema changes");
     }
-  }, [slug, getValidatedFields, saveSettingsOnly]);
+  }, [slug, getValidatedFields, saveSettingsOnly, settings]);
 
   // Why: DnD reorder is row-level (BuilderFieldList packs fields into rows
   // by width). We compute the OLD row layout, apply the row swap, and

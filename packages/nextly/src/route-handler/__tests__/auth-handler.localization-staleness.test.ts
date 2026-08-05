@@ -5,19 +5,19 @@
 // The comparison is against the ROUTE config's own previous value, not the
 // container's. `registerServices` stores the plugin-TRANSFORMED config, so an
 // app whose plugin supplies or normalizes `localization` would show a
-// permanent difference there and rebuild its services on every request. The
-// first observation therefore adopts whatever is stored as the baseline, and
-// only a move away from that baseline counts.
+// permanent difference there and rebuild its services on every request.
 //
 // Written as one ordered walk because the baseline is module state that the
-// real flow advances at registration time, which a unit test cannot perform:
-// splitting these into separate cases would assert against whatever the
-// previous case happened to leave behind.
+// real flow advances at registration time: splitting these into separate
+// cases would assert against whatever the previous case left behind.
 
 import { describe, expect, it } from "vitest";
 
 import type { SanitizedNextlyConfig } from "../../collections/config/define-config";
-import { _localizationBlockChangedForTest } from "../auth-handler";
+import {
+  _localizationBlockChangedForTest,
+  _recordRegisteredLocalizationForTest,
+} from "../auth-handler";
 
 const LOCALIZATION = {
   locales: [{ code: "en", label: "English", rtl: false, fallbackLocale: [] }],
@@ -30,15 +30,26 @@ function storedWith(localization: unknown): SanitizedNextlyConfig {
 }
 
 describe("localization staleness decision", () => {
-  it("adopts what it first sees, then reports only moves away from it", () => {
+  it("rebuilds once for an unverifiable registration, then only on real moves", () => {
     const changed = _localizationBlockChangedForTest;
 
-    // 1. Nothing recorded yet. A registration this module did not make (an
-    //    instrumentation boot) must not be torn down on the first request.
-    expect(changed(storedWith(LOCALIZATION))).toBe(false);
+    // 1. No baseline. Callers reach this only once services are registered,
+    //    and this module records a baseline whenever IT registers them — so
+    //    no baseline means another path did (an instrumentation.ts boot),
+    //    holding a `localization` this module never saw. The config may have
+    //    been edited before the first request arrived, so the honest answer
+    //    is "cannot verify", and that has to mean rebuild.
+    expect(changed(storedWith(LOCALIZATION))).toBe(true);
 
-    // 2. Asked repeatedly with the same block, it stays quiet — this is the
-    //    property a comparison against the transformed config cannot hold.
+    // Re-registering is what records the baseline; the decision function
+    // deliberately does not write it. Standing in for that step here is what
+    // makes the rest of the walk represent the real sequence.
+    _recordRegisteredLocalizationForTest(storedWith(LOCALIZATION));
+
+    // 2. Now verifiable and unchanged — and it must STAY quiet on repeats.
+    //    This is the property a comparison against the container's
+    //    plugin-transformed config cannot hold, and it is why the single
+    //    rebuild above cannot become a loop.
     expect(changed(storedWith(LOCALIZATION))).toBe(false);
     expect(changed(storedWith(LOCALIZATION))).toBe(false);
 
@@ -53,11 +64,10 @@ describe("localization staleness decision", () => {
     expect(changed(storedWith(widened))).toBe(true);
 
     // 4. Removing the block entirely is a change too, not an absence to
-    //    ignore — the baseline is still the adopted one until a
-    //    re-registration records a new value.
+    //    ignore — the baseline stays put until a re-registration moves it.
     expect(changed(storedWith(undefined))).toBe(true);
 
-    // 5. Back to the adopted block: nothing to do.
+    // 5. Back to the recorded block: nothing to do.
     expect(changed(storedWith(LOCALIZATION))).toBe(false);
   });
 });

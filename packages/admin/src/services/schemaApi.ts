@@ -111,11 +111,17 @@ export const schemaApi = {
   // type the fetcher generic directly.
   preview: async (
     slug: string,
-    fields: unknown[]
+    fields: unknown[],
+    // i18n: the same toggle the apply will send. The preview is what collects
+    // the resolutions the apply then runs with, so a preview that diffs
+    // against a DIFFERENT localization state can miss a required-column
+    // prompt the apply turns out to need — the save then fails after the user
+    // already confirmed. Undefined leaves the persisted flag in charge.
+    localized?: boolean
   ): Promise<SchemaPreviewResponse> => {
     return protectedApi.post<SchemaPreviewResponse>(
       `/collections/schema/${slug}/preview`,
-      { fields }
+      { fields, ...(localized !== undefined ? { localized } : {}) }
     );
   },
 

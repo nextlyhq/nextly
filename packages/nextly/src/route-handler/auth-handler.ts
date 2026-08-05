@@ -67,24 +67,35 @@ function localizationKey(config: SanitizedNextlyConfig | null): string {
  * show a difference that re-registering can never remove — every request
  * would tear the services down and rebuild the adapter, forever.
  *
- * A registration this module did not make (an `instrumentation.ts` boot) has
- * no recorded value, so the first observation adopts the current block as the
- * baseline instead of forcing a rebuild; a later edit still moves it.
+ * Callers reach this only once services are already registered, and this
+ * module records a baseline whenever IT registers them — so no recorded value
+ * means some other path did (an `instrumentation.ts` boot). Those services
+ * captured whatever `localization` was current when that path ran, which is
+ * not observable from here: the config may have been edited before this route
+ * module ever saw a request. Unverifiable is treated as changed, costing one
+ * rebuild on the first request of such a process. It cannot loop, because the
+ * rebuild records this same route config as the baseline and every later
+ * request then compares equal.
  */
 function localizationBlockChanged(stored: SanitizedNextlyConfig): boolean {
   const current = localizationKey(stored);
-  if (_registeredLocalization === null) {
-    _registeredLocalization = current;
-    return false;
-  }
+  if (_registeredLocalization === null) return true;
   return _registeredLocalization !== current;
 }
 
-// Test seam: the staleness decision is the behavioral contract of the
-// dev-only re-registration in ensureServicesInitialized; exporting it under
-// a verbose name keeps the public surface honest while letting unit tests
-// pin it.
+// Test seams: the staleness decision is the behavioral contract of the
+// dev-only re-registration in ensureServicesInitialized; exporting these
+// under verbose names keeps the public surface honest while letting unit
+// tests pin it. The decision function deliberately does not write the
+// baseline — only a registration does — so pinning any behavior past the
+// first observation needs the recording step too.
 export const _localizationBlockChangedForTest = localizationBlockChanged;
+
+export function _recordRegisteredLocalizationForTest(
+  config: SanitizedNextlyConfig | null
+): void {
+  _registeredLocalization = localizationKey(config);
+}
 
 /**
  * Ensure services are initialized, auto-initializing if needed.

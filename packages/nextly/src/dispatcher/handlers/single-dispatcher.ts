@@ -105,6 +105,7 @@ import {
   getSingleMetadataServiceFromDI,
   getSingleRegistryFromDI,
 } from "../helpers/di";
+import { readRequestLocalized } from "../helpers/request-localized";
 import {
   offsetPaginationToMeta,
   unwrapServiceResult,
@@ -1311,8 +1312,13 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // the `status` column into the desired snapshot.
         status: single.status === true,
         // i18n: carry localized so the preview omits translatable columns from the
-        // single's main table (mirrors the apply path).
-        localized: (single as { localized?: boolean }).localized === true,
+        // single's main table (mirrors the apply path). The REQUEST's flag wins
+        // when the Builder sent one, for the same reason the apply prefers it:
+        // otherwise the preview collects resolutions for DDL the apply will not
+        // run, and the save fails after the user has already confirmed.
+        localized:
+          readRequestLocalized(body) ??
+          (single as { localized?: boolean }).localized === true,
         // Authored in the Schema Builder: this is the Builder's own save path.
         builderOwned: true,
       };
@@ -1371,7 +1377,6 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         resolutions,
         renameResolutions,
         eventResolutions,
-        localized: requestLocalized,
       } = body as {
         fields: unknown[];
         confirmed: boolean;
@@ -1396,10 +1401,11 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // simultaneous toggle+field-change save); fall back to the registry value.
       const wasLocalized =
         (single as { localized?: boolean }).localized === true;
-      const isLocalized =
-        requestLocalized !== undefined
-          ? requestLocalized === true
-          : wasLocalized;
+      // Validated rather than coerced: `localized: "false"` would read as
+      // `false` under `=== true` and turn an ordinary save of a localized
+      // single into a DISABLE transition, restoring the companion's columns
+      // onto the main table and archiving it.
+      const isLocalized = readRequestLocalized(body) ?? wasLocalized;
       // i18n: gate the Internationalization enable on the app-level
       // `localization` config (false→true transition only).
       if (!wasLocalized && isLocalized) {

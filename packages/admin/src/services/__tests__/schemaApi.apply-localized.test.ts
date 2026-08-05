@@ -49,3 +49,27 @@ describe("schemaApi.apply — localized flag", () => {
     expect(bodyOfLastCall()).not.toHaveProperty("localized");
   });
 });
+
+// The preview is what collects the resolutions the apply then runs with, so
+// the two have to diff against the SAME localization state. If preview used
+// the persisted flag while apply used the sent one, a save could need a
+// required-column resolution the dialog never offered — and fail after the
+// user had already confirmed it.
+describe("schemaApi.preview — localized flag", () => {
+  beforeEach(() => post.mockClear());
+
+  it("sends the same flag the apply will send", async () => {
+    await schemaApi.preview("posts", [], true);
+    expect(post.mock.calls[0][0]).toBe("/collections/schema/posts/preview");
+    expect(bodyOfLastCall()).toMatchObject({ localized: true });
+
+    post.mockClear();
+    await schemaApi.preview("posts", [], false);
+    expect(bodyOfLastCall()).toMatchObject({ localized: false });
+  });
+
+  it("omits the key when no toggle is supplied", async () => {
+    await schemaApi.preview("posts", []);
+    expect(bodyOfLastCall()).not.toHaveProperty("localized");
+  });
+});

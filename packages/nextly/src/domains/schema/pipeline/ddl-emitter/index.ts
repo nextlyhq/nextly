@@ -89,8 +89,40 @@ export function canEmitWithoutDrizzleKit(
     // apply goes to drizzle-kit, which introspects the types itself. Emitting
     // a bare `(col)` here instead would abort the apply and keep failing
     // identically on every retry.
-    return !(dialect === "mysql" && op.type === "add_index");
+    if (dialect === "mysql" && op.type === "add_index") return false;
+    // A UNIQUE index is the one case where the prefix is not merely a
+    // spelling. `col(191)` constrains the first 191 characters, so two rows
+    // whose values differ only after that point are rejected as duplicates —
+    // uniqueness the author did not ask for, enforced silently on their data.
+    // The emitter has no way to express full-value uniqueness on a MySQL
+    // TEXT/BLOB column, so an `add_table` carrying one goes to drizzle-kit
+    // rather than being approximated here. Non-unique indexes keep the
+    // prefix: there it changes only how much of the value is indexed, which
+    // is exactly what the Builder's own DDL does for the same columns.
+    if (dialect === "mysql" && op.type === "add_table") {
+      return !hasUniqueIndexOnTextColumn(op.table);
+    }
+    return true;
   });
+}
+
+/** Whether a table spec declares a UNIQUE index covering a TEXT/BLOB column. */
+function hasUniqueIndexOnTextColumn(table: {
+  columns?: ReadonlyArray<{ name: string; type: string }>;
+  indexes?: ReadonlyArray<{ columns: readonly string[]; unique?: boolean }>;
+}): boolean {
+  const indexes = table.indexes;
+  if (!indexes || indexes.length === 0) return false;
+  const textColumns = new Set(
+    (table.columns ?? [])
+      .filter(c => /\b(text|blob)\b/i.test(c.type))
+      .map(c => c.name)
+  );
+  if (textColumns.size === 0) return false;
+  return indexes.some(
+    index =>
+      index.unique === true && index.columns.some(c => textColumns.has(c))
+  );
 }
 
 /**

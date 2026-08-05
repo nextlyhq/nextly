@@ -194,4 +194,76 @@ describe("canEmitWithoutDrizzleKit", () => {
     };
     expect(canEmitWithoutDrizzleKit([addTable], "mysql")).toBe(true);
   });
+
+  // A prefix on a NON-unique index changes only how much of the value is
+  // indexed. On a UNIQUE index it constrains the DATA — `col(191)` rejects
+  // two rows differing only past character 191 — so MySQL cannot express the
+  // author's intent through this emitter and the apply goes to drizzle-kit.
+  it("sends an add_table with a UNIQUE index on a TEXT column to drizzle-kit on MySQL", () => {
+    const uniqueOnText: Operation = {
+      type: "add_table",
+      table: {
+        name: "dc_notes",
+        columns: [
+          {
+            name: "id",
+            type: "varchar(36)",
+            nullable: false,
+            primaryKey: true,
+          },
+          { name: "body", type: "text", nullable: true },
+        ],
+        indexes: [
+          { name: "uq_dc_notes_body", columns: ["body"], unique: true },
+        ],
+      },
+    };
+    expect(canEmitWithoutDrizzleKit([uniqueOnText], "mysql")).toBe(false);
+    // SQLite indexes the whole value, so uniqueness there means what it says.
+    expect(canEmitWithoutDrizzleKit([uniqueOnText], "sqlite")).toBe(true);
+  });
+
+  it("keeps a non-unique TEXT index, and a unique index on a sized column", () => {
+    const nonUniqueOnText: Operation = {
+      type: "add_table",
+      table: {
+        name: "dc_notes",
+        columns: [
+          {
+            name: "id",
+            type: "varchar(36)",
+            nullable: false,
+            primaryKey: true,
+          },
+          { name: "body", type: "text", nullable: true },
+        ],
+        indexes: [
+          { name: "idx_dc_notes_body", columns: ["body"], unique: false },
+        ],
+      },
+    };
+    expect(canEmitWithoutDrizzleKit([nonUniqueOnText], "mysql")).toBe(true);
+
+    // The canonical unique slug index must NOT be pushed off the fast path:
+    // a sized column takes no prefix, so its uniqueness is already exact.
+    const uniqueOnVarchar: Operation = {
+      type: "add_table",
+      table: {
+        name: "dc_notes",
+        columns: [
+          {
+            name: "id",
+            type: "varchar(36)",
+            nullable: false,
+            primaryKey: true,
+          },
+          { name: "slug", type: "varchar(255)", nullable: false },
+        ],
+        indexes: [
+          { name: "uq_dc_notes_slug", columns: ["slug"], unique: true },
+        ],
+      },
+    };
+    expect(canEmitWithoutDrizzleKit([uniqueOnVarchar], "mysql")).toBe(true);
+  });
 });

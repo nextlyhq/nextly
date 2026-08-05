@@ -53,6 +53,11 @@ function createIndexStatement(
   // index limit under utf8mb4 on every row format. Absent types mean the
   // caller could not know them, and routing keeps such an apply away from
   // this emitter on MySQL rather than guessing.
+  //
+  // The prefix is only safe because routing also keeps UNIQUE indexes on
+  // those columns away: on a unique index the prefix would constrain the
+  // data, rejecting rows that differ only past character 191. Non-unique
+  // indexes just index less of the value, which is the intended behavior.
   columnTypes?: ReadonlyMap<string, string>
 ): string {
   const cols = index.columns
