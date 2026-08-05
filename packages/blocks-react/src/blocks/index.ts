@@ -25,12 +25,35 @@
  */
 
 import { box } from "./box";
+import { button } from "./button";
 import { collectionLoop } from "./collection-loop";
+import { divider } from "./divider";
+import { embed } from "./embed";
+import { heading } from "./heading";
+import { image } from "./image";
+import { list } from "./list";
+import { paragraph } from "./paragraph";
+import { quote } from "./quote";
 import { section } from "./section";
+import { spacer } from "./spacer";
 
 export { box } from "./box";
+export { button, BUTTON_TYPES, type ButtonProps } from "./button";
 export { collectionLoop } from "./collection-loop";
+export { divider, type DividerProps } from "./divider";
+export { embed, type EmbedProps } from "./embed";
+export {
+  heading,
+  HEADING_LEVELS,
+  type HeadingLevel,
+  type HeadingProps,
+} from "./heading";
+export { image, IMAGE_LOADING, type ImageProps } from "./image";
+export { list, LIST_KINDS, type ListProps } from "./list";
+export { paragraph, type ParagraphProps } from "./paragraph";
+export { quote, type QuoteProps } from "./quote";
 export { section } from "./section";
+export { spacer, type SpacerProps } from "./spacer";
 export {
   CONTAINER_TAGS,
   CONTENT_WIDTH_CLASS,
@@ -48,4 +71,22 @@ export type { CollectionLoopProps } from "./collection-loop";
  * own registration service, and a test can take a subset. Exported as a plain
  * array because that is the shape both of those want.
  */
-export const coreBlocks = [box, collectionLoop, section];
+export const coreBlocks = [
+  // Layout
+  section,
+  box,
+  spacer,
+  // Typography
+  heading,
+  paragraph,
+  list,
+  // Media and interaction
+  image,
+  button,
+  // Structure
+  divider,
+  quote,
+  embed,
+  // Dynamic
+  collectionLoop,
+];

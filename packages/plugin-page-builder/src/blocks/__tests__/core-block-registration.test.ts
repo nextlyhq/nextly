@@ -58,8 +58,17 @@ describe("core block registration", () => {
     expect(coreBlocks.length).toBeGreaterThanOrEqual(3);
     expect(coreBlocks.map(block => block.name).sort()).toEqual([
       "core/box",
+      "core/button",
       "core/collection-loop",
+      "core/divider",
+      "core/embed",
+      "core/heading",
+      "core/image",
+      "core/list",
+      "core/quote",
       "core/section",
+      "core/spacer",
+      "core/text",
     ]);
   });
 });
