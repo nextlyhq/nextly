@@ -31,22 +31,22 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import type { Command } from "commander";
 
+import { deriveCompanionSpec } from "../../domains/i18n/migration/derive-companion-spec";
+import { buildCompanionCreateOnlySql } from "../../domains/i18n/migration/generate-up";
 import { getSchemaEventsDdl } from "../../domains/schema/events/schema-events-ddl";
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
-import {
-  EMPTY_SNAPSHOT,
-  planBaseline,
-} from "../../domains/schema/migrate/baseline";
+import { planBaseline } from "../../domains/schema/migrate/baseline";
+import { toMinimalEntities } from "../../domains/schema/migrate-create/config-entities";
 import {
   formatMigrationFile,
   formatTimestamp,
   slugify,
 } from "../../domains/schema/migrate-create/format-file";
+import type { MinimalConfigEntity } from "../../domains/schema/migrate-create/generate";
 import {
   loadLatestSnapshot,
   writeSnapshot,
 } from "../../domains/schema/migrate-create/snapshot-io";
-import { diffSnapshots } from "../../domains/schema/pipeline/diff/diff";
 import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
 import {
@@ -55,7 +55,13 @@ import {
   isSnapshotComparableTable,
 } from "../../domains/schema/pipeline/managed-tables";
 import { generateSQL } from "../../domains/schema/pipeline/sql-templates/index";
+import {
+  resolveCollectionTableName,
+  resolveComponentTableName,
+} from "../../domains/schema/utils/resolve-table-name";
+import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
 import { describeError, NextlyError } from "../../errors/index";
+import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { createContext, type CommandContext } from "../program";
 import {
   createAdapter,
@@ -112,6 +118,55 @@ async function listMigrationFiles(migrationsDir: string): Promise<string[]> {
 }
 
 /**
+ * `CREATE TABLE` for each companion standing in the database.
+ *
+ * The database decides WHICH companions exist; the config decides what each
+ * one looks like. Both are needed: introspection knows a `_locales` table is
+ * there but not that it cascades, and the config knows the shape but not
+ * whether `db:sync` ever created it.
+ *
+ * A companion whose entity is no longer in the config is skipped rather than
+ * guessed at. Its main table is about to be dropped by the next
+ * `migrate:create` anyway, and emitting a table with a foreign key to
+ * something that will not exist would produce a baseline that cannot be
+ * applied at all.
+ */
+function buildCompanionStatements(args: {
+  companionTables: string[];
+  entities: MinimalConfigEntity[];
+  dialect: SupportedDialect;
+  defaultLocale: string;
+}): string[] {
+  if (args.companionTables.length === 0) return [];
+  const present = new Set(args.companionTables);
+  const statements: string[] = [];
+
+  for (const entity of args.entities) {
+    if (!present.has(`${entity.tableName}${STORAGE_FORMAT.companionSuffix}`)) {
+      continue;
+    }
+    const spec = deriveCompanionSpec({
+      builtBy: "codeFirst",
+      slug: entity.slug,
+      dbName: entity.tableName,
+      fields: entity.fields,
+      dialect: args.dialect,
+      defaultLocale: args.defaultLocale,
+      // Asserted rather than read from the entity: the table is standing in
+      // the database, so this entity IS localized whatever the config's flag
+      // currently says, and a false flag would derive no companion at all.
+      collectionLocalized: true,
+      status: entity.status === true,
+    });
+    if (spec)
+      statements.push(
+        buildCompanionCreateOnlySql(spec, { emittedToFile: true })
+      );
+  }
+  return statements;
+}
+
+/**
  * Everything `migrate:baseline` needs once the environment has been resolved.
  *
  * Shaped like `MigrateCoreDeps` for the same reason: the command's work is
@@ -127,6 +182,19 @@ export interface BaselineCoreDeps {
   logger: CommandContext["logger"];
   /** Migration name; slug-cased here. */
   name?: string;
+  /**
+   * The config's entities, used only to rebuild localized companions.
+   *
+   * A companion's real DDL carries a composite key and a foreign key to its
+   * main table with `ON DELETE CASCADE`, and the snapshot model has no concept
+   * of a foreign key at all — so a companion reconstructed from introspection
+   * silently loses the cascade. These let the production companion DDL be
+   * emitted instead. Which companions to emit is still decided from the
+   * database; only their shape comes from here.
+   */
+  localizedEntities?: MinimalConfigEntity[];
+  /** From `config.localization.defaultLocale`; defaults to `"en"`. */
+  defaultLocale?: string;
   /** Override the clock so a test can predict the filename. */
   now?: Date;
 }
@@ -208,17 +276,26 @@ export async function baselineCore(
       // "already localized, the companion exists" and emits nothing. So if the
       // baseline does not carry them, no file ever will, and a fresh
       // environment gets main tables with nowhere to put translations.
-      const companionLive =
-        companionTables.length > 0
-          ? await introspectLiveSnapshot(db, dialect, companionTables)
-          : { tables: [] };
-      const companionOperations = diffSnapshots(EMPTY_SNAPSHOT, companionLive);
+      //
+      // They are emitted through the production companion DDL rather than
+      // from their introspected shape, because a companion is more than its
+      // columns: it carries a composite key and a foreign key to its main
+      // table with `ON DELETE CASCADE`, and the snapshot model has no concept
+      // of a foreign key. Rebuilt from a snapshot, the cascade is gone and
+      // deleting a document strands its translations.
+      const companionSql = buildCompanionStatements({
+        companionTables,
+        entities: deps.localizedEntities ?? [],
+        dialect,
+        defaultLocale: deps.defaultLocale ?? "en",
+      });
 
       // Companions carry a foreign key to their main table, so every main
       // table has to exist before any of them runs.
-      const sqlStatements = [...plan.operations, ...companionOperations].map(
-        op => generateSQL(op, dialect)
-      );
+      const sqlStatements = [
+        ...plan.operations.map(op => generateSQL(op, dialect)),
+        ...companionSql,
+      ];
       const sqlContent = formatMigrationFile({
         name,
         dialect,
@@ -249,8 +326,16 @@ export async function baselineCore(
       // insert below throws AFTER the migration and snapshot are on disk,
       // leaving files that look committed and will be replayed against the
       // database they were taken from.
-      for (const stmt of getSchemaEventsDdl(dialect)) {
-        await (adapter as unknown as DrizzleAdapter).executeQuery(stmt);
+      //
+      // Guarded on the table rather than replayed, matching `migrate`: MySQL
+      // has no `CREATE INDEX IF NOT EXISTS`, so re-running the DDL against a
+      // ledger that already exists fails on a duplicate key name — in exactly
+      // the same window, after both files are written.
+      const dz = adapter as unknown as DrizzleAdapter;
+      if (!(await dz.tableExists("nextly_schema_events"))) {
+        for (const stmt of getSchemaEventsDdl(dialect)) {
+          await dz.executeQuery(stmt);
+        }
       }
 
       // Recorded as applied without executing: the tables it describes are
@@ -334,6 +419,7 @@ export async function runMigrateBaseline(
       dialect
     );
 
+    const config = configResult.config;
     const result = await baselineCore({
       adapter,
       db,
@@ -341,6 +427,21 @@ export async function runMigrateBaseline(
       migrationsDir,
       logger,
       name: options.name,
+      // Every kind that can carry a companion, reduced the same way
+      // `migrate:create` reduces them so the emitted DDL matches what a
+      // generated companion migration would have produced.
+      localizedEntities: [
+        ...toMinimalEntities(config.collections, e =>
+          resolveCollectionTableName(e.slug, e.dbName)
+        ),
+        ...toMinimalEntities(config.singles ?? [], e =>
+          resolveSingleTableName({ slug: e.slug, dbName: e.dbName })
+        ),
+        ...toMinimalEntities(config.fieldGroups ?? [], e =>
+          resolveComponentTableName(e.slug)
+        ),
+      ],
+      defaultLocale: config.localization?.defaultLocale,
     });
 
     if (result.kind === "already-baselined") {

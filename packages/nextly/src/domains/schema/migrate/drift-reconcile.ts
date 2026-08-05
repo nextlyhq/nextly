@@ -44,6 +44,8 @@ export interface ReconcileRepo {
     supersededEventIds: string[];
     byEventId: string;
   }): Promise<void>;
+  /** Every `file_apply` row for one filename: applied, failed, rolled back. */
+  findFileApplies(filename: string): Promise<ReadonlyArray<unknown>>;
 }
 
 export interface ReconcileFileArgs {
@@ -150,6 +152,12 @@ export async function reconcileFile(
 
   // DRIFT — live matches neither baseline nor target.
   const driftItems = diffSnapshots(before, live).map(toDriftItem);
+  // A half-applied first migration is indistinguishable from an unadopted
+  // database by schema alone — MySQL commits each DDL statement as it runs, so
+  // a first migration that failed partway leaves its tables and the retry sees
+  // only tables that already exist. The ledger separates them: a failed
+  // attempt left a row, and a database nobody has adopted never has one.
+  const priorAttempts = await repo.findFileApplies(file.filename);
   throw migrationDriftError({
     migration,
     file: file.path,
@@ -159,6 +167,7 @@ export async function reconcileFile(
     unadoptedDatabase: isUnadoptedDatabase({
       before,
       driftKinds: driftItems.map(d => d.kind),
+      hasPriorAttempt: priorAttempts.length > 0,
     }),
   });
 }

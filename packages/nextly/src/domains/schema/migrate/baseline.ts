@@ -137,7 +137,19 @@ export function isUnadoptedDatabase(args: {
   before: NextlySchemaSnapshot;
   /** How the live database differs from that snapshot. */
   driftKinds: readonly string[];
+  /**
+   * Whether this migration has been attempted before.
+   *
+   * A half-applied first migration looks identical from the schema alone. On
+   * MySQL every DDL statement commits as it runs, so a first migration that
+   * fails partway leaves its tables behind; the retry then starts from an
+   * empty baseline and sees nothing but tables that already exist — the exact
+   * signature below. The ledger is what separates the two, because a failed
+   * attempt left a row and an unadopted database never has one.
+   */
+  hasPriorAttempt?: boolean;
 }): boolean {
+  if (args.hasPriorAttempt === true) return false;
   if (args.before.tables.length > 0) return false;
   if (args.driftKinds.length === 0) return false;
   return args.driftKinds.every(kind => kind === "+");

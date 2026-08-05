@@ -143,6 +143,30 @@ describe("isUnadoptedDatabase", () => {
     ).toBe(false);
   });
 
+  it("does not claim a retried failed migration is unadopted", () => {
+    // The signature is identical to a genuinely unadopted database, and only
+    // the ledger separates them. MySQL commits each DDL statement as it runs,
+    // so a first migration that failed partway leaves its tables behind; the
+    // retry starts from an empty baseline and sees nothing but tables that
+    // already exist. Sending that operator to `migrate:baseline` is sending
+    // them past the failed-cleanup path they actually need.
+    expect(
+      isUnadoptedDatabase({
+        before: snapshot(),
+        driftKinds: ["+", "+"],
+        hasPriorAttempt: true,
+      })
+    ).toBe(false);
+    // Same drift, no recorded attempt: still an adoption.
+    expect(
+      isUnadoptedDatabase({
+        before: snapshot(),
+        driftKinds: ["+", "+"],
+        hasPriorAttempt: false,
+      })
+    ).toBe(true);
+  });
+
   it("does not claim a half-applied migration is unadopted", () => {
     // A failed run leaves differences in BOTH directions. Only a database that
     // is entirely ahead of an empty baseline has never been adopted.
@@ -196,6 +220,12 @@ describe("the drift error an unadopted database produces", () => {
         "meta",
         "20260805120000_add_localization.snapshot.json"
       )
+    );
+    // The removal covers every per-dialect variant of the migration, which are
+    // one migration: deleting only the selected file leaves its siblings and
+    // `migrate:baseline` refuses the project as `history-not-empty`.
+    expect(error.publicMessage).toContain(
+      join("migrations", "20260805120000_add_localization*.sql")
     );
     const removeAt = error.publicMessage.indexOf("rm ");
     const baselineAt = error.publicMessage.indexOf("migrate:baseline");

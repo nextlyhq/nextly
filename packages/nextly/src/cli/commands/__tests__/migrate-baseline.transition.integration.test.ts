@@ -424,15 +424,26 @@ function runSuite(dialect: SupportedDialect): void {
       dialect: h.dialect,
       migrationsDir: h.migrationsDir,
       logger,
+      localizedEntities: toMinimalEntities(localizedConfig.collections, e =>
+        resolveCollectionTableName(e.slug, e.dbName)
+      ),
+      defaultLocale: "en",
     });
     if (adopted.kind !== "baselined") throw new Error("expected a baseline");
 
     const up = splitSqlStatements(
       parseSqlSections(await readFile(adopted.sqlPath, "utf-8")).upSql
     );
-    expect(
-      up.filter(st => st.includes(`${LOCALIZED_TABLE}_locales`))
-    ).not.toEqual([]);
+    const companionStatements = up.filter(st =>
+      st.includes(`${LOCALIZED_TABLE}_locales`)
+    );
+    expect(companionStatements).not.toEqual([]);
+    // Emitted through the production companion DDL, not rebuilt from the
+    // introspected shape: the snapshot model has no concept of a foreign key,
+    // so a companion reconstructed from one loses the cascade and deleting a
+    // document strands its translations.
+    expect(companionStatements.join("\n")).toMatch(/ON DELETE CASCADE/i);
+    expect(companionStatements.join("\n")).toContain(LOCALIZED_TABLE);
 
     const recorded = JSON.parse(
       await readFile(adopted.snapshotPath, "utf-8")

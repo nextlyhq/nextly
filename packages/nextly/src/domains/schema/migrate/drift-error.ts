@@ -55,6 +55,19 @@ function snapshotPathFor(file: string, migration: string): string {
   return join(dir, "meta", `${migration}.snapshot.json`);
 }
 
+/**
+ * Every `.sql` belonging to one migration, as a shell glob.
+ *
+ * A migration can be written once per dialect (`<name>.mysql.sql` beside
+ * `<name>.sql`), and discovery selects one of them. Naming only the selected
+ * file leaves its siblings behind, and `migrate:baseline` then refuses the
+ * project because the history is not empty — which is the same dead end the
+ * ordering here exists to avoid.
+ */
+function variantGlobFor(file: string, migration: string): string {
+  return join(dirname(file), `${migration}*.sql`);
+}
+
 export function migrationDriftError(args: MigrationDriftArgs): NextlyError {
   const lines = args.driftItems
     .map(d => `    ${d.kind} ${d.detail}`)
@@ -85,8 +98,9 @@ export function migrationDriftError(args: MigrationDriftArgs): NextlyError {
   const recovery = args.unadoptedDatabase
     ? [
         "  Recovery — this migration cannot be applied and has to go first.",
-        "  Remove it and its snapshot:",
-        `          rm ${args.file} ${snapshotPathFor(args.file, args.migration)}`,
+        "  Remove it and its snapshot (the glob covers per-dialect variants,",
+        "  which are one migration and have to go together):",
+        `          rm ${variantGlobFor(args.file, args.migration)} ${snapshotPathFor(args.file, args.migration)}`,
         "",
         "  Record what the database already has, once:",
         "          pnpm nextly migrate:baseline",
