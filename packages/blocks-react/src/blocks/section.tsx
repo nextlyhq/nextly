@@ -6,12 +6,14 @@
  *
  * @module blocks/library/section
  */
-import { defineBlock } from "@nextlyhq/plugin-sdk/blocks";
+import { defineBlock } from "@nextlyhq/blocks-engine";
+
+import type { PageContext } from "../context";
 
 import { renderContainer } from "./container";
 import type { ContainerProps } from "./container";
 
-export const section = defineBlock<ContainerProps>({
+export const section = defineBlock<ContainerProps, PageContext>({
   name: "core/section",
   version: 1,
   description:

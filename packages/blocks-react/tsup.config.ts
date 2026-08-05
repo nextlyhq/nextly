@@ -7,6 +7,11 @@ import { defineConfig } from "tsup";
  * database. That is what lets the renderer be used standalone, and a test
  * enforces it.
  *
+ * `blocks` is the core library. Its own entry rather than part of `index`
+ * because it grows toward the full primitive set while the root entry is the
+ * renderer's contract, and a consumer supplying their own blocks should not
+ * carry ours.
+ *
  * `next` is the only Next-coupled surface. Keeping it in its own entry means a
  * consumer who imports the renderer never pulls `next/*` into their graph, and
  * bundlers can drop it entirely. Puck ships a separate `/rsc` bundle for the
@@ -14,7 +19,7 @@ import { defineConfig } from "tsup";
  * server-rendering consumer.
  */
 export default defineConfig({
-  entry: ["src/index.ts", "src/next.ts"],
+  entry: ["src/index.ts", "src/next.ts", "src/blocks/index.ts"],
   format: ["esm"],
   dts: true,
   clean: true,

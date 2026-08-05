@@ -10,12 +10,14 @@
  *
  * @module blocks/library/box
  */
-import { defineBlock } from "@nextlyhq/plugin-sdk/blocks";
+import { defineBlock } from "@nextlyhq/blocks-engine";
+
+import type { PageContext } from "../context";
 
 import { renderContainer } from "./container";
 import type { ContainerProps } from "./container";
 
-export const box = defineBlock<ContainerProps>({
+export const box = defineBlock<ContainerProps, PageContext>({
   name: "core/box",
   version: 1,
   description:

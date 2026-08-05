@@ -8,13 +8,9 @@ import {
   registerBlocks,
 } from "@nextlyhq/blocks-engine";
 import type { BlockNode } from "@nextlyhq/blocks-engine";
-import type {
-  BlockRenderArgs,
-  BlockRenderContext,
-} from "@nextlyhq/plugin-sdk/blocks";
 import type { ReactElement } from "react";
 
-import type { DataProvider } from "../context";
+import type { BlockRenderArgs, PageContext } from "../context";
 
 import { box } from "./box";
 import { collectionLoop, renderCollectionLoop } from "./collection-loop";
@@ -38,16 +34,16 @@ function storedProps(props: unknown): ContainerProps {
  */
 function args<P>(
   props: P,
-  ctx: BlockRenderContext = {}
-): BlockRenderArgs<P> & { drawnWith: BlockRenderContext[] } {
-  const drawnWith: BlockRenderContext[] = [];
+  ctx: PageContext = {}
+): BlockRenderArgs<P> & { drawnWith: PageContext[] } {
+  const drawnWith: PageContext[] = [];
   return {
     props,
     node: NODE,
     className: "nx-n1",
     ctx,
     drawnWith,
-    renderSlot: (_name: string, override?: BlockRenderContext) => {
+    renderSlot: (_name: string, override?: PageContext) => {
       const used = override ?? ctx;
       drawnWith.push(used);
       const title = used.item?.title;
@@ -58,10 +54,10 @@ function args<P>(
 
 /** A data source that answers from a fixed list and records what it was asked. */
 function stubProvider(items: Record<string, unknown>[]): {
-  provider: DataProvider;
-  calls: Parameters<DataProvider["find"]>[0][];
+  provider: BlocksDataProvider;
+  calls: Parameters<BlocksDataProvider["find"]>[0][];
 } {
-  const calls: Parameters<DataProvider["find"]>[0][] = [];
+  const calls: Parameters<BlocksDataProvider["find"]>[0][] = [];
   return {
     calls,
     provider: {
@@ -168,7 +164,7 @@ describe("core/collection-loop", () => {
   });
 
   it("renders empty rather than throwing when the query fails", async () => {
-    const failing: DataProvider = {
+    const failing: BlocksDataProvider = {
       find: () => Promise.reject(new Error("no database")),
     };
     const element = await renderCollectionLoop(

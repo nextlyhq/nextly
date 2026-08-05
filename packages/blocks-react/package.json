@@ -26,6 +26,11 @@
       "types": "./dist/next.d.ts",
       "import": "./dist/next.mjs",
       "default": "./dist/next.mjs"
+    },
+    "./blocks": {
+      "types": "./dist/blocks/index.d.ts",
+      "import": "./dist/blocks/index.mjs",
+      "default": "./dist/blocks/index.mjs"
     }
   },
   "files": [

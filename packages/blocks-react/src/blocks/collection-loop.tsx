@@ -22,11 +22,10 @@
  *
  * @module blocks/library/collection-loop
  */
-import { defineBlock } from "@nextlyhq/plugin-sdk/blocks";
-import type { BlockRenderArgs } from "@nextlyhq/plugin-sdk/blocks";
+import { defineBlock } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 
-import "../context-augmentation";
+import type { BlockRenderArgs, PageContext } from "../context";
 
 export interface CollectionLoopProps {
   /** The collection queried. */
@@ -127,7 +126,7 @@ export async function renderCollectionLoop({
   );
 }
 
-export const collectionLoop = defineBlock<CollectionLoopProps>({
+export const collectionLoop = defineBlock<CollectionLoopProps, PageContext>({
   name: "core/collection-loop",
   version: 1,
   description:

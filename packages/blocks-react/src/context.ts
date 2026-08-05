@@ -1,3 +1,6 @@
+import type { BlockRenderArgs as EngineBlockRenderArgs } from "@nextlyhq/blocks-engine";
+import type { ReactNode } from "react";
+
 /**
  * What a block render receives, and where the renderer gets its data.
  *
@@ -72,6 +75,24 @@ export const emptyDataProvider: BlocksDataProvider = {
 };
 
 /**
+ * How many more reads this page render may perform.
+ *
+ * A loop inside a loop asks its data source once per entry of the outer one, so
+ * depth in a document turns into MULTIPLICATION in queries: three nested
+ * repeaters over ten entries each is a thousand reads from one page view. The
+ * budget is shared by the whole render and claimed before each read, which
+ * turns an unbounded page into a bounded one that renders what it could reach.
+ *
+ * A counter rather than a depth limit, because the cost is the number of reads
+ * and not the shape of the tree: one loop over a thousand entries and a
+ * thousand loops over one both spend the same.
+ */
+export interface QueryBudget {
+  /** Claim one read. False when the page has spent its allowance. */
+  take(): boolean;
+}
+
+/**
  * The context every block render receives.
  *
  * Resolver functions rather than raw maps: a host that resolves media through a
@@ -111,6 +132,50 @@ export interface PageContext {
    * and status, which is a read.
    */
   resolveEntryPath(collection: string, id: string): Promise<string | null>;
+  /**
+   * The entry the surrounding repeater is currently on.
+   *
+   * Distinct from `entry`, which is the record the PAGE renders: a loop over
+   * posts sets this per iteration while `entry` stays the page itself, so a
+   * block inside the loop can read the post without losing the page.
+   *
+   * It lives on the context rather than being passed as a prop because a
+   * repeater does not know, and should not know, which of its descendants
+   * cares. The value flows down to all of them and each takes what it needs.
+   *
+   * Absent outside a repeater.
+   */
+  item?: Record<string, unknown>;
+  /**
+   * What is left of this render's query allowance.
+   *
+   * Absent means nothing is counting, which is the editor drawing one block in
+   * isolation. A block that reads data should claim before it reads and render
+   * nothing when refused, so a page that outruns its budget degrades instead of
+   * hanging.
+   */
+  queries?: QueryBudget;
+}
+
+/**
+ * What one of this package's blocks receives.
+ *
+ * The engine declares `BlockRenderArgs<P, C>` with `renderSlot` returning
+ * `BlockRenderResult`, which is `unknown`: the engine is runtime-free, so it
+ * cannot name a React type without acquiring React. Naming it is the React
+ * renderer's job, and this module already exists to do exactly that for `ctx`.
+ *
+ * `ReactNode` rather than `ReactNode | Promise<ReactNode>`, which is what
+ * `render` may RETURN, and the asymmetry is deliberate. This value is one a
+ * block places into its own JSX, and that union is not a legal child under
+ * either supported peer: React 18 admits no promise at all, and React 19 admits
+ * only `Promise<AwaitedReactNode>` — a promise of a settled node — so a promise
+ * that may itself yield a promise is refused there too. Widening here would
+ * move the error onto every block that draws a slot.
+ */
+export interface BlockRenderArgs<P>
+  extends Omit<EngineBlockRenderArgs<P, PageContext>, "renderSlot"> {
+  renderSlot(this: void, name: string, ctx?: PageContext): ReactNode;
 }
 
 /** A context with nothing wired up: the standalone default. */
