@@ -121,10 +121,15 @@ function parseRgbFunction(body: string): Rgb | undefined {
     if (alphaText === "" || alphaText.includes("/")) return undefined;
   }
 
-  const parts = channelText
+  const split = channelText
     .split(commas ? "," : /\s+/)
-    .map(part => part.trim())
-    .filter(part => part !== "");
+    .map(part => part.trim());
+  // An empty field is only ever whitespace in the space form — `rgb( 0 0 0 )`
+  // splits with empties at the ends. Between commas it is a MISSING component,
+  // and dropping it silently turns `rgb(0,,0,0)` into `rgb(0,0,0)`: a colour
+  // the browser rejects, reported here as one it accepts.
+  if (commas && split.some(part => part === "")) return undefined;
+  const parts = split.filter(part => part !== "");
 
   if (commas) {
     // The legacy form carries its alpha as a fourth comma-separated component.
@@ -134,7 +139,19 @@ function parseRgbFunction(body: string): Rgb | undefined {
     return undefined;
   }
 
-  const channels = parts.slice(0, 3).map(part => channel(part));
+  const channelParts = parts.slice(0, 3);
+  // The legacy grammar is three numbers or three percentages, never a mixture:
+  // `rgb() = rgb(<percentage>#{3}, <alpha-value>?) | rgb(<number>#{3},
+  // <alpha-value>?)`. The modern form does allow mixing, so this applies only
+  // where the commas say the value is the legacy one.
+  if (
+    commas &&
+    new Set(channelParts.map(part => part.endsWith("%"))).size > 1
+  ) {
+    return undefined;
+  }
+
+  const channels = channelParts.map(part => channel(part));
   if (channels.some(value => value === undefined)) return undefined;
   const alpha = alphaText === undefined ? 1 : alphaOf(alphaText);
   if (alpha === undefined) return undefined;

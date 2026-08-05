@@ -66,6 +66,13 @@ describe("parseColor", () => {
     expect(checkContrast("rgb(0 0 0 0.5)", "#fff")).toBeUndefined();
     // Nor may the two syntaxes be mixed.
     expect(parseColor("rgb(0, 0, 0 / 0.5)")).toBeUndefined();
+    // A comma with nothing between it and the next is a MISSING component, not
+    // whitespace. Dropping it turns `rgb(0,,0,0)` into `rgb(0,0,0)`.
+    for (const value of ["rgb(0,,0,0)", "rgb(,0,0,0)", "rgb(0,0,0,)"]) {
+      expect(parseColor(value), value).toBeUndefined();
+    }
+    // The legacy grammar is three numbers or three percentages, never a mix.
+    expect(parseColor("rgb(1, 2%, 3)")).toBeUndefined();
     // A component is a whole number, not a prefix of one.
     expect(parseColor("rgb(0 0 0abc)")).toBeUndefined();
     expect(parseColor("rgb(0, 0, 0 0.5)")).toBeUndefined();
@@ -77,6 +84,11 @@ describe("parseColor", () => {
     expect(parseColor("rgba(0, 0, 0, 0.5)")?.a).toBeCloseTo(0.5, 5);
     expect(parseColor("rgb(0 0 0)")?.a).toBe(1);
     expect(parseColor("rgb(0, 0, 0)")?.a).toBe(1);
+    // All-percentage legacy, and a mix in the MODERN form, which does allow it.
+    expect(parseColor("rgb(100%, 0%, 0%)")?.r).toBe(255);
+    expect(parseColor("rgb(100% 0 0)")?.r).toBe(255);
+    // Whitespace around the space form is not a missing component.
+    expect(parseColor("rgb( 0 0 0 )")?.a).toBe(1);
   });
 
   it("refuses what it cannot read rather than guessing", () => {

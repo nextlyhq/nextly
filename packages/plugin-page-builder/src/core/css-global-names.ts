@@ -368,9 +368,12 @@ export function namespaceDefinedNames(
 export function rewriteNameReferences(
   ast: csstree.CssNode,
   map: GlobalNameMap,
-  css: CssTreeApi
+  css: CssTreeApi,
+  nestingBudget = 0
 ): void {
   if (map.keyframes.size === 0 && map.fontFamilies.size === 0) return;
+
+  rewriteNestedRules(ast, map, css, nestingBudget);
 
   css.walk(ast, {
     visit: "Declaration",
@@ -662,6 +665,53 @@ function rewriteCustomProperty(
   // Written only when a name actually moved, so a value this had no business
   // touching is not silently reformatted by the generator on its way out.
   if (after !== before) value.value = after;
+}
+
+/**
+ * Follow the renamed names into rules nested inside other rules.
+ *
+ * A nested rule is a `Raw` child of its parent's block in this parser, not a
+ * structure, so the declaration walk never sees inside it. Left alone, a
+ * stylesheet's own `@keyframes` is renamed while `.a { .b { animation: fade } }`
+ * still asks for `fade` — the animation resolves to nothing, and nothing in the
+ * output says why. The same applies to a nested `font-family`.
+ *
+ * Each level is parsed, rewritten by the same pass, and written back only if a
+ * name actually moved. The budget is the caller's, and it is the reason there
+ * is one: every level is re-parsed from the text of the level above it, so
+ * following them without a bound is work quadratic in the sheet's own size.
+ */
+function rewriteNestedRules(
+  ast: csstree.CssNode,
+  map: GlobalNameMap,
+  css: CssTreeApi,
+  budget: number
+): void {
+  if (budget <= 0) return;
+
+  css.walk(ast, {
+    enter(node: csstree.CssNode) {
+      if (node.type !== "Rule" && node.type !== "Atrule") return;
+      const block = node.block;
+      if (block == null) return;
+      block.children.forEach((child: csstree.CssNode) => {
+        if (child.type !== "Raw" || child.value.trim() === "") return;
+        let inner: csstree.CssNode;
+        try {
+          inner = css.parse(child.value, { context: "stylesheet" });
+        } catch {
+          // Unreadable to the parser is not this pass's problem to solve: the
+          // origin scan judges the same text and removes it if it cannot be
+          // checked.
+          return;
+        }
+        const before = css.generate(inner);
+        rewriteNameReferences(inner, map, css, budget - 1);
+        const after = css.generate(inner);
+        if (after !== before) child.value = after;
+      });
+    },
+  });
 }
 
 /** A raw value parsed as a CSS value, or `undefined` if it is not one. */

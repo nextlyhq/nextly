@@ -47,8 +47,9 @@ import type { TokenKind } from "./catalog-types";
 // colour from the one the site renders.
 import { parseColor } from "./contrast";
 import type { Rgb } from "./contrast";
+import { checkCssValue } from "./css-value";
 import type { SiteToken, SiteTokenSet } from "./site-tokens";
-import { isTokenName } from "./site-tokens";
+import { isTokenName, tokenValueFetches } from "./site-tokens";
 
 /** The key this vendor's data lives under, in the notation the format asks for. */
 export const NEXTLY_EXTENSION = "com.nextlyhq.nextly";
@@ -183,6 +184,16 @@ function place(
   node[leaf] = entry;
 }
 
+/**
+ * The units the format allows, named once for both directions.
+ *
+ * Export restricting them while import accepted any string is how a file
+ * exported from here could fail to come back: the two sides of one rule, and
+ * only one of them was written down.
+ */
+const DTCG_LENGTH_UNITS = ["px", "rem"];
+const DTCG_TIME_UNITS = ["ms", "s"];
+
 /** A token's light value in the shape its `$type` requires, or `undefined`. */
 function toDtcgValue(token: SiteToken): unknown {
   const css = token.values.light.trim();
@@ -190,9 +201,9 @@ function toDtcgValue(token: SiteToken): unknown {
     case "color":
       return colorToDtcg(css);
     case "dimension":
-      return measureToDtcg(css, ["px", "rem"]);
+      return measureToDtcg(css, DTCG_LENGTH_UNITS);
     case "duration":
-      return measureToDtcg(css, ["ms", "s"]);
+      return measureToDtcg(css, DTCG_TIME_UNITS);
     case "fontFamily":
       return familyToDtcg(css);
     case "fontWeight":
@@ -415,13 +426,18 @@ function readToken(
     const kind = own.kind;
     if (isPlainObject(css) && typeof css.light === "string" && isKind(kind)) {
       const dark = css.dark;
+      const values =
+        typeof dark === "string"
+          ? { light: css.light, dark }
+          : { light: css.light };
+      // The extension is arbitrary JSON from a file, so its CSS gets the same
+      // guards a value read from `$value` does. It is the shorter path, not the
+      // trusted one.
+      if (!isWritableValue(values, name, issues)) return undefined;
       return {
         name,
         kind,
-        values:
-          typeof dark === "string"
-            ? { light: css.light, dark }
-            : { light: css.light },
+        values,
         ...(description !== undefined ? { description } : {}),
         ...(carried !== undefined ? { extensions: carried } : {}),
       };
@@ -447,13 +463,54 @@ function readToken(
     return undefined;
   }
 
+  const values = { light };
+  if (!isWritableValue(values, name, issues)) return undefined;
   return {
     name,
     kind,
-    values: { light },
+    values,
     ...(description !== undefined ? { description } : {}),
     ...(carried !== undefined ? { extensions: carried } : {}),
   };
+}
+
+/**
+ * Whether an imported value could ever be written, reported where it arrived.
+ *
+ * The emitter refuses these anyway, so nothing unsafe reaches a stylesheet
+ * either way. What changes is WHERE the author is told: without this the file
+ * imports cleanly, the token is stored, and the reason appears on every page
+ * compile from then on instead of once, naming the import that carried it.
+ *
+ * The same two guards the emitter applies, called from here rather than
+ * restated — a value the emitter would refuse and this accepted, or the
+ * reverse, is a disagreement with no symptom to follow.
+ */
+function isWritableValue(
+  values: { light: string; dark?: string },
+  name: string,
+  issues: ValidationIssue[]
+): boolean {
+  for (const [mode, value] of Object.entries(values)) {
+    if (typeof value !== "string") continue;
+    if (checkCssValue(value) !== null) {
+      issues.push(
+        issue(
+          `"${name}" has a ${mode} value that cannot be written as CSS, so it was skipped.`
+        )
+      );
+      return false;
+    }
+    if (tokenValueFetches(value)) {
+      issues.push(
+        issue(
+          `"${name}" has a ${mode} value that would load a file, so it was skipped. A token holds a colour, a length, a duration, a font or a number.`
+        )
+      );
+      return false;
+    }
+  }
+  return true;
 }
 
 /** Whether a value is one of this system's token kinds. */
@@ -471,10 +528,21 @@ function fromDtcgValue(value: unknown, kind: TokenKind): string | undefined {
       if (!isPlainObject(value)) return undefined;
       const amount = value.value;
       const unit = value.unit;
-      if (typeof amount !== "number" || typeof unit !== "string") {
+      // The same units the export side allows, so the two directions agree. A
+      // unit is text from a file being concatenated into a stored value: read
+      // unchecked, `{ value: 16, unit: "px;color:red" }` becomes CSS nothing
+      // here wrote.
+      const allowed =
+        kind === "dimension" ? DTCG_LENGTH_UNITS : DTCG_TIME_UNITS;
+      if (
+        typeof amount !== "number" ||
+        !Number.isFinite(amount) ||
+        typeof unit !== "string" ||
+        !allowed.includes(unit.toLowerCase())
+      ) {
         return undefined;
       }
-      return `${amount}${unit}`;
+      return `${amount}${unit.toLowerCase()}`;
     }
     case "fontFamily":
       // A DTCG family value is a NAME, not CSS. `ACME,Inc` is one family in the

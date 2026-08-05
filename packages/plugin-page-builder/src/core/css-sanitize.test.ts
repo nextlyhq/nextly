@@ -1021,6 +1021,36 @@ describe("custom CSS may not reach off this origin", () => {
       expect(out.css).not.toContain("@font-face");
     });
 
+    it("follows a renamed name into a nested rule", () => {
+      // A nested rule is `Raw` to this parser, so the declaration walk never
+      // sees inside it. Left alone, the definition is renamed while the
+      // reference still asks for `fade` — the animation resolves to nothing and
+      // nothing in the output says why.
+      const out = sanitizeCustomCss(
+        `@keyframes fade { from { opacity: 0 } } .a { .b { animation: fade 1s } }`,
+        SCOPE
+      );
+      expect(out.css).toContain(`animation:${ns("fade")} 1s`);
+      expect(out.css).not.toMatch(/animation:\s*fade\b/);
+    });
+
+    it("follows a renamed family into a nested rule too", () => {
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: Brand; src: url("/f.woff2") }
+         .a { .b { font-family: Brand, serif } }`,
+        SCOPE
+      );
+      expect(out.css).toContain(`"${ns("Brand")}",serif`);
+    });
+
+    it("reaches a name nested more than one level down", () => {
+      const out = sanitizeCustomCss(
+        `@keyframes fade { from { opacity: 0 } } .a { .b { .c { animation: fade 1s } } }`,
+        SCOPE
+      );
+      expect(out.css).toContain(`animation:${ns("fade")} 1s`);
+    });
+
     it("still refuses a remote url inside a keyframe step", () => {
       // The step blocks are ordinary declarations, so the origin policy has to
       // reach them — allowing the at-rule must not open a door beneath it.

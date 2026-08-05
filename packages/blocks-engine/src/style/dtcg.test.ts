@@ -326,6 +326,56 @@ describe("import", () => {
     expect(read[0]?.extensions?.[NEXTLY_EXTENSION]).toBeUndefined();
   });
 
+  it("refuses a unit the export side would never have written", () => {
+    // Export restricts the unit to `px`/`rem` and `ms`/`s`; import concatenated
+    // whatever string the file carried, so the two directions disagreed and a
+    // unit could smuggle text into a stored value.
+    const read = (unit: string): unknown =>
+      dtcgToTokens({
+        d: { $type: "dimension", $value: { value: 16, unit } },
+      }).tokens[0]?.values.light;
+
+    expect(read("px")).toBe("16px");
+    expect(read("rem")).toBe("16rem");
+    expect(read("px;color:red")).toBeUndefined();
+    expect(read("vw")).toBeUndefined();
+  });
+
+  it("reports a value it could never write, at the file that carried it", () => {
+    // The emitter refuses these anyway, so nothing unsafe reaches a stylesheet
+    // either way. What changes is where the author is told: once, naming the
+    // import, instead of on every page compile from then on.
+    const fetching = dtcgToTokens({
+      bg: {
+        $type: "color",
+        $value: { colorSpace: "srgb", components: [0, 0, 0] },
+        $extensions: {
+          [NEXTLY_EXTENSION]: {
+            css: { light: "url(https://evil.example/a.png)" },
+            kind: "color",
+          },
+        },
+      },
+    });
+    expect(fetching.tokens).toEqual([]);
+    expect(fetching.issues[0]?.message).toContain("load a file");
+
+    const unwritable = dtcgToTokens({
+      x: {
+        $type: "color",
+        $value: { colorSpace: "srgb", components: [0, 0, 0] },
+        $extensions: {
+          [NEXTLY_EXTENSION]: {
+            css: { light: "red}body{display:none" },
+            kind: "color",
+          },
+        },
+      },
+    });
+    expect(unwritable.tokens).toEqual([]);
+    expect(unwritable.issues[0]?.message).toContain("cannot be written");
+  });
+
   it("refuses a document that is not one", () => {
     expect(dtcgToTokens("nope").issues).toHaveLength(1);
     expect(dtcgToTokens(null).tokens).toEqual([]);

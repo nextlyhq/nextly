@@ -543,7 +543,11 @@ export function sanitizeCustomCss(
     generate: csstree.generate,
   };
   const definedNames = namespaceDefinedNames(ast, scopeClass, cssTree);
-  rewriteNameReferences(ast, definedNames, cssTree);
+  // The same bound the origin scan follows nested rules with, passed in rather
+  // than restated there: both walk the same nesting for the same reason, and
+  // two numbers would let one of them reach a level the other reports as too
+  // deep to check.
+  rewriteNameReferences(ast, definedNames, cssTree, MAX_RULE_NESTING);
 
   // A nested rule is a `Raw` child of its parent's block in css-tree 2.3, not a
   // Declaration, so the declaration walk above never sees inside it and
