@@ -59,6 +59,7 @@ import {
 } from "./node-class";
 import { serializeRules } from "./serialize";
 import type { CssRule } from "./serialize";
+import type { StyleOrigin, StyleTraceEntry } from "./style-trace";
 import type { StyleIssueBudget } from "./validate-style-value";
 import { newStyleIssueBudget } from "./validate-style-value";
 import {
@@ -123,6 +124,15 @@ export interface StyleCompileContext {
    * limits when the caller has no opinion.
    */
   limits?: DocumentLimits;
+  /**
+   * Whether to record where each emitted declaration came from.
+   *
+   * Off by default, and deliberately: a visitor's page render has no use for it, and building it
+   * there would put an editor-only structure on the path that matters most. An editor asks for it
+   * once per compile and indexes what it gets, so a control's question is a lookup rather than a
+   * walk over the page.
+   */
+  trace?: boolean;
 }
 
 /** A library entry's id, for a record that may not have one. */
@@ -160,6 +170,14 @@ export interface CompiledPageCss {
    * this value is what makes that tier do anything at all.
    */
   classes: Map<string, string>;
+  /**
+   * Every declaration written, in the order it was written, with its origin.
+   *
+   * Present only when the caller set `trace`. The order is the cascade: everything here is
+   * anchored at the page root at one specificity, so a later entry beats an earlier one wherever
+   * both match the same element.
+   */
+  trace?: readonly StyleTraceEntry[];
 }
 
 /**
@@ -478,7 +496,10 @@ function envelopeRules(
   tokenPrefix: string,
   warnings: ValidationIssue[],
   budget: StyleIssueBudget,
-  warningAllowance: WarningAllowance
+  warningAllowance: WarningAllowance,
+  origin: StyleOrigin,
+  /** Appended to as declarations are emitted; absent when no caller asked for a trace. */
+  trace: StyleTraceEntry[] | undefined
 ): CssRule[] {
   if (styles === undefined) return [];
   // A stored envelope that is not an object — `[]`, a string, `null` — styles
@@ -566,6 +587,21 @@ function envelopeRules(
           selector: `${selector}${STATE_SELECTORS[state]}${rule.descendant}`,
           declarations: rule.declarations,
         });
+        // Recorded here, from the same declarations that were just emitted, in the same loop.
+        // Anywhere else it would be a second reading of the document, and a second reading can
+        // disagree with the first — which is the one failure a provenance record must not have.
+        if (trace === undefined) continue;
+        for (const declaration of rule.declarations) {
+          trace.push({
+            origin,
+            property: declaration.property,
+            value: declaration.value,
+            ...(rule.descendant === "" ? {} : { descendant: rule.descendant }),
+            state,
+            breakpoint: context.id,
+            ...(context.atRule === undefined ? {} : { atRule: context.atRule }),
+          });
+        }
       }
     }
   }
@@ -889,6 +925,9 @@ export function compilePageCss(
   }
 
   const rules: CssRule[] = [];
+  // One array for the whole compile, appended to in emission order by every tier below.
+  const trace: StyleTraceEntry[] | undefined =
+    ctx.trace === true ? [] : undefined;
 
   // Page-scoped values, on the root every other selector is anchored to. First
   // because it is the outermost element: what it sets is what everything inside
@@ -902,7 +941,9 @@ export function compilePageCss(
       tokenPrefix,
       warnings,
       budget,
-      warningAllowance
+      warningAllowance,
+      { kind: "page" },
+      trace
     )
   );
 
@@ -947,7 +988,9 @@ export function compilePageCss(
         tokenPrefix,
         warnings,
         budget,
-        warningAllowance
+        warningAllowance,
+        { kind: "blockType", type },
+        trace
       )
     );
   }
@@ -1097,7 +1140,9 @@ export function compilePageCss(
         // library entry it never mentions. The tier's total output stays bounded by the warning
         // allowance, which is shared and is what actually caps the reporting.
         newStyleIssueBudget(),
-        warningAllowance
+        warningAllowance,
+        { kind: "class", id: cls.id, slug: cls.slug },
+        trace
       )
     );
   }
@@ -1133,7 +1178,9 @@ export function compilePageCss(
         tokenPrefix,
         warnings,
         budget,
-        warningAllowance
+        warningAllowance,
+        { kind: "node", id: node.id },
+        trace
       )
     );
     rules.push(
@@ -1298,5 +1345,8 @@ export function compilePageCss(
     css: serializeRules(rules),
     warnings,
     classes: attributeClasses,
+    // Omitted rather than empty when nobody asked, so a caller cannot mistake "not requested"
+    // for "nothing was written".
+    ...(trace === undefined ? {} : { trace }),
   };
 }
