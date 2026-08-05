@@ -438,7 +438,7 @@ function runSuite(dialect: SupportedDialect): void {
       logger,
       localizedEntities: toMinimalEntities(localizedConfig.collections, e =>
         resolveCollectionTableName(e.slug, e.dbName)
-      ),
+      ).map(e => ({ ...e, builtBy: "codeFirst" as const })),
       defaultLocale: "en",
     });
     if (adopted.kind !== "baselined") throw new Error("expected a baseline");
@@ -529,7 +529,7 @@ function runSuite(dialect: SupportedDialect): void {
       logger,
       localizedEntities: toMinimalEntities(configV1.collections, e =>
         resolveCollectionTableName(e.slug, e.dbName)
-      ),
+      ).map(e => ({ ...e, builtBy: "codeFirst" as const })),
     });
     if (adopted.kind !== "baselined") throw new Error("expected a baseline");
 

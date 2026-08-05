@@ -9,6 +9,8 @@
 
 import { resolve } from "node:path";
 
+import { customJunctionNames } from "../domains/schema/migrate/junction-names";
+
 interface AdapterLike {
   dialect: "postgresql" | "mysql" | "sqlite";
   getDrizzle: () => unknown;
@@ -34,6 +36,7 @@ interface MigrateCoreLike {
     ttlSeconds?: number;
     isSettled?: () => Promise<boolean>;
     ensureLedger?: () => Promise<void>;
+    knownJunctions?: ReadonlySet<string>;
   }): Promise<{ applied: number; coreChanged: boolean }>;
 }
 
@@ -44,6 +47,14 @@ export interface RunProdMigrationsArgs {
       migrationsDir: string;
       migrateLockTtlSeconds?: number;
     };
+    /**
+     * Read only to find many-to-many fields carrying `options.junctionTable`.
+     *
+     * A custom junction name matches no convention and appears in no snapshot,
+     * so the drift check has to be told about it or an install that migrates
+     * on boot stops with a difference the CLI path would not have reported.
+     */
+    collections?: readonly unknown[];
   };
   adapter: AdapterLike;
   logger: LoggerLike;
@@ -115,6 +126,9 @@ export async function runProdMigrationsIfEnabled(
       logger: coreLogger,
       lockMode: "wait",
       ttlSeconds: args.config.db.migrateLockTtlSeconds,
+      knownJunctions: new Set(
+        customJunctionNames(args.config.collections ?? [])
+      ),
       ensureLedger,
     });
     logger.info(`[Nextly] Boot migrations complete (${applied} applied).`);

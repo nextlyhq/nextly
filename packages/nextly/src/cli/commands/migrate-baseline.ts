@@ -62,7 +62,9 @@ import {
   snapshotComparableTables,
 } from "../../domains/schema/pipeline/managed-tables";
 import { generateSQL } from "../../domains/schema/pipeline/sql-templates/index";
+import type { ColumnOrigin } from "../../domains/schema/services/field-column-descriptor";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
+import { applyDeferredExtendsToManifest } from "../../domains/schema/ui-schema/merge";
 import {
   resolveCollectionTableName,
   resolveComponentTableName,
@@ -149,6 +151,17 @@ async function firstAppliedMigration(
   }
 }
 
+/** Tags entities with the builder that created their tables. */
+function asBuilderEntities(entities: MinimalConfigEntity[]): BaselineEntity[] {
+  return entities.map(e => ({ ...e, builtBy: "builder" as ColumnOrigin }));
+}
+
+function asCodeFirstEntities(
+  entities: MinimalConfigEntity[]
+): BaselineEntity[] {
+  return entities.map(e => ({ ...e, builtBy: "codeFirst" }));
+}
+
 /**
  * The Builder's manifest, when the project has one.
  *
@@ -185,7 +198,7 @@ async function loadUiSchemaIfPresent(
  */
 function buildCompanionStatements(args: {
   companionTables: string[];
-  entities: MinimalConfigEntity[];
+  entities: BaselineEntity[];
   dialect: SupportedDialect;
   defaultLocale: string;
 }): string[] {
@@ -198,7 +211,7 @@ function buildCompanionStatements(args: {
       continue;
     }
     const spec = deriveCompanionSpec({
-      builtBy: "codeFirst",
+      builtBy: entity.builtBy,
       slug: entity.slug,
       dbName: entity.tableName,
       fields: entity.fields,
@@ -225,6 +238,19 @@ function buildCompanionStatements(args: {
  * driving a database and a directory, and neither of those needs the CLI's
  * environment parsing to be exercised.
  */
+/**
+ * A config entity plus who created its table.
+ *
+ * `deriveCompanionSpec` maps a translatable field's column width differently
+ * for a Builder table than for a code-first one — on MySQL an unbounded
+ * Builder text field becomes `text`, while the code-first rules give it
+ * `varchar(255)`. Deriving a Builder companion with the code-first rules emits
+ * DDL that rejects translations the adopted database accepts.
+ */
+export interface BaselineEntity extends MinimalConfigEntity {
+  builtBy: ColumnOrigin;
+}
+
 export interface BaselineCoreDeps {
   adapter: CLIDatabaseAdapter;
   db: unknown;
@@ -244,7 +270,7 @@ export interface BaselineCoreDeps {
    * emitted instead. Which companions to emit is still decided from the
    * database; only their shape comes from here.
    */
-  localizedEntities?: MinimalConfigEntity[];
+  localizedEntities?: BaselineEntity[];
   /** From `config.localization.defaultLocale`; defaults to `"en"`. */
   defaultLocale?: string;
   /**
@@ -535,11 +561,25 @@ export async function runMigrateBaseline(
     // and an entity with no fields derives no companion at all — so a Builder
     // collection with translations would get its main table and nowhere to put
     // them.
-    let uiEntities: MinimalConfigEntity[] = [];
+    let uiEntities: BaselineEntity[] = [];
     let uiJunctions: string[] = [];
-    const manifest = await loadUiSchemaIfPresent(cwd, config.db.uiSchemaFile);
+    const rawManifest = await loadUiSchemaIfPresent(
+      cwd,
+      config.db.uiSchemaFile
+    );
+    // A plugin can extend a Builder entity, and `loadConfig` hands those
+    // fields back separately. `migrate:create` materialises them before
+    // generating DDL; without the same step a plugin-added translatable field
+    // is in the live companion but not in the one the baseline derives, so a
+    // fresh database is missing a translation column the adopted one had.
+    const manifest = rawManifest
+      ? applyDeferredExtendsToManifest(
+          rawManifest,
+          configResult.deferredExtends ?? []
+        )
+      : null;
     if (manifest) {
-      uiEntities = [
+      uiEntities = asBuilderEntities([
         ...toMinimalEntities(manifest.collections ?? [], e =>
           resolveCollectionTableName(e.slug)
         ),
@@ -551,7 +591,7 @@ export async function runMigrateBaseline(
         ...toMinimalEntities(manifest.components ?? [], e =>
           resolveComponentTableName(e.slug)
         ),
-      ];
+      ]);
       uiJunctions = customJunctionNames(manifest.collections ?? []);
     }
 
@@ -567,15 +607,17 @@ export async function runMigrateBaseline(
       // generated companion migration would have produced.
       localizedEntities: [
         ...uiEntities,
-        ...toMinimalEntities(config.collections, e =>
-          resolveCollectionTableName(e.slug, e.dbName)
-        ),
-        ...toMinimalEntities(config.singles ?? [], e =>
-          resolveSingleTableName({ slug: e.slug, dbName: e.dbName })
-        ),
-        ...toMinimalEntities(config.fieldGroups ?? [], e =>
-          resolveComponentTableName(e.slug)
-        ),
+        ...asCodeFirstEntities([
+          ...toMinimalEntities(config.collections, e =>
+            resolveCollectionTableName(e.slug, e.dbName)
+          ),
+          ...toMinimalEntities(config.singles ?? [], e =>
+            resolveSingleTableName({ slug: e.slug, dbName: e.dbName })
+          ),
+          ...toMinimalEntities(config.fieldGroups ?? [], e =>
+            resolveComponentTableName(e.slug)
+          ),
+        ]),
       ],
       defaultLocale: config.localization?.defaultLocale,
       ttlSeconds: config.db.migrateLockTtlSeconds,

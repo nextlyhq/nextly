@@ -17,6 +17,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
+import { customJunctionNames } from "../../domains/schema/migrate/junction-names";
 import {
   resolveMigration,
   type ResolveMode,
@@ -181,7 +182,12 @@ export async function runMigrateResolve(
           const target = await loadSnapshot(metaDir, filename);
           const managed = snapshotComparableTables(
             live,
-            new Set((target?.tables ?? []).map(t => t.name))
+            new Set((target?.tables ?? []).map(t => t.name)),
+            // A custom `options.junctionTable` name matches no convention and
+            // is in no snapshot, so without it the verifier compares a live
+            // scope containing the junction against a target that never could
+            // and refuses a recovery the operator has no other way to make.
+            new Set(customJunctionNames(configResult.config.collections))
           );
           return introspectLiveSnapshot(db, dialect, managed);
         },
