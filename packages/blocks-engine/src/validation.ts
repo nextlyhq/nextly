@@ -14,6 +14,7 @@ import {
   COMPONENT_INSTANCE_TYPE,
   DOCUMENT_FORMAT_VERSION,
   DOCUMENT_KINDS,
+  MAX_CLASSES_PER_NODE,
   STYLE_STATES,
 } from "./document";
 import { describeValue, pointer } from "./issue-text";
@@ -169,6 +170,8 @@ export const ISSUE_CODES = {
   "invalid-props": "A node props field is not an object.",
   "invalid-slots": "A node slots field or one of its slot arrays is malformed.",
   "invalid-classes": "A node classes field is not an array of strings.",
+  "too-many-classes":
+    "A node lists more classes than the compiler will apply to it.",
   "invalid-attributes": "A node attributes field is not a string map.",
   "invalid-css-id": "A node cssId is not a string.",
   "unknown-node-type": "A node type is not registered.",
@@ -824,6 +827,22 @@ function validateClasses(
       message: "A node classes field must be an array of class-id strings.",
     });
     return;
+  }
+  // The compiler applies a bounded prefix of this list, so a longer one is a document that
+  // validates and then renders differently from what it says. Reported here, where a save or a
+  // publish can still refuse it, rather than being discovered as styling that silently did
+  // nothing — the account this engine exists to give.
+  //
+  // An error only where a gate is being applied. A stored document already holding a longer list
+  // has to stay readable, and downgrading it to a warning there says the same thing without
+  // making the document unopenable.
+  if (node.classes.length > MAX_CLASSES_PER_NODE) {
+    issues.push({
+      path: pointer(path, "classes"),
+      code: "too-many-classes",
+      severity: ctx.mode === "strict" ? "error" : "warning",
+      message: `This node lists ${node.classes.length} classes; only the first ${MAX_CLASSES_PER_NODE} are applied.`,
+    });
   }
   const lookup = ctx.classes;
   if (lookup === undefined) return;

@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 
 import type { BlockDocument, NodeStyles } from "../document";
 import { MAX_CLASSES_PER_NODE, MAX_NAMED_CLASSES } from "../document";
+import { validate } from "../validation";
 import { FIXTURE_BREAKPOINTS } from "../validation.fixtures";
 
 import { compilePageCss } from "./compile-page";
@@ -664,6 +665,39 @@ describe("a node listing more classes than a node can have", () => {
     // makes the last of them unreachable.
     const missing = warnings.filter(w => w.code === "unknown-class").length;
     expect(missing).toBeLessThanOrEqual(MAX_CLASSES_PER_NODE);
+  });
+
+  it("is refused by a publish gate rather than silently truncated", () => {
+    // A document that validates and then renders differently from what it says is the one
+    // outcome the compiler's bound must not produce on its own: the extra class is stored,
+    // reported nowhere, and never reaches the element.
+    const many = Array.from(
+      { length: MAX_CLASSES_PER_NODE + 1 },
+      (_unused, index) => `c${index}`
+    );
+    const document = doc({ classes: many });
+    const known = { has: (id: string) => many.includes(id) };
+
+    const strict = validate(document, {
+      mode: "strict",
+      classes: known,
+    } as never);
+    const forgiving = validate(document, {
+      mode: "forgiving",
+      classes: known,
+    } as never);
+
+    expect(
+      strict.filter(
+        i => i.code === "too-many-classes" && i.severity === "error"
+      )
+    ).toHaveLength(1);
+    // A document already stored this way stays readable, and still says what it lost.
+    expect(
+      forgiving.filter(
+        i => i.code === "too-many-classes" && i.severity === "warning"
+      )
+    ).toHaveLength(1);
   });
 
   it("applies the classes inside the bound and none beyond it", () => {
