@@ -14,13 +14,14 @@ import { randomUUID } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SqlParam } from "@nextlyhq/adapter-drizzle/types";
-import { eq, sql, type Column, type Table } from "drizzle-orm";
+import { type Column, type Table } from "drizzle-orm";
 
 import { toDbError } from "../../database/errors";
 // PR 4 migration: switched from ServiceError.fromDatabaseError to
 // NextlyError.fromDatabaseError. Public message stays generic per §13.8;
 // the underlying DbError is preserved as `cause` and rich DB context
 // (kind, dialect, code) flows into logContext automatically.
+import { insertErasureAware } from "../../domains/audit/erasure-aware-insert";
 import { NextlyError } from "../../errors";
 import { BaseService } from "../base-service";
 import type { Logger } from "../shared";
@@ -166,24 +167,18 @@ export class ActivityLogService extends BaseService {
   }
 
   /**
-   * The column values for one entry, given whatever decides its identity.
+   * The columns of one entry that erasure never touches.
    *
-   * One source for the column list, so the two write paths below cannot come
-   * to disagree about the shape of a row.
+   * The identity columns are decided by the write itself, against an account
+   * that may be being deleted at that moment, so they are supplied separately.
    */
   private entryValues(
     input: LogActivityInput,
-    createdAt: Date,
-    identity: {
-      userName: unknown;
-      userEmail: unknown;
-      identityErasedAt: unknown;
-    }
+    createdAt: Date
   ): Record<string, unknown> {
     return {
       id: randomUUID(),
       userId: input.userId,
-      ...identity,
       action: input.action,
       collection: input.collection,
       entryId: input.entryId ?? null,
@@ -267,70 +262,26 @@ export class ActivityLogService extends BaseService {
     db: ActivityWriteDb,
     input: LogActivityInput
   ): Promise<void> {
-    const tables = this.tables as ActivityWriteTables;
-    const { activityLog, users } = tables;
+    const { activityLog, users } = this.tables as ActivityWriteTables;
+    // The caller's identity when it supplied one, otherwise the account's own.
+    // Taking it from the account is what a caller holding only an actor id
+    // does: the write already looks at that row to decide whether the account
+    // exists, so the name comes from the same look as that decision.
+    const supplied: Record<string, unknown> = {};
+    const fromAccount: Record<string, Column> = {};
+    if (input.userName !== undefined) supplied.userName = input.userName;
+    else fromAccount.userName = users.name;
+    if (input.userEmail !== undefined) supplied.userEmail = input.userEmail;
+    else fromAccount.userEmail = users.email;
 
-    if (this.dialect === "sqlite") {
-      // Nothing to wait for here: SQLite takes no lock, so the statement
-      // runs at the moment this is read.
-      const now = new Date();
-      const actorIsGone = sql`NOT EXISTS (SELECT 1 FROM ${users} WHERE ${users.id} = ${input.userId})`;
-      // Encoded through the column itself: the stamp is an epoch integer
-      // here, and an SQL fragment bypasses the mapping Drizzle would
-      // otherwise apply to a plain value.
-      const erasedAt = activityLog.identityErasedAt.mapToDriverValue(now);
-      // A caller that supplied no identity takes it from the account row. The
-      // scalar subquery is answered in the same statement as the existence
-      // check above, so the name stored and the decision to store one cannot
-      // disagree about whether the account was there.
-      const nameSource =
-        input.userName !== undefined
-          ? sql`${input.userName}`
-          : sql`(SELECT ${users.name} FROM ${users} WHERE ${users.id} = ${input.userId})`;
-      const emailSource =
-        input.userEmail !== undefined
-          ? sql`${input.userEmail}`
-          : sql`(SELECT ${users.email} FROM ${users} WHERE ${users.id} = ${input.userId})`;
-      await db.insert(activityLog).values(
-        this.entryValues(input, now, {
-          userName: sql`CASE WHEN ${actorIsGone} THEN NULL ELSE ${nameSource} END`,
-          userEmail: sql`CASE WHEN ${actorIsGone} THEN NULL ELSE ${emailSource} END`,
-          identityErasedAt: sql`CASE WHEN ${actorIsGone} THEN ${erasedAt} ELSE NULL END`,
-        })
-      );
-      return;
-    }
-
-    const actor = await db
-      .select({ id: users.id, name: users.name, email: users.email })
-      .from(users)
-      .where(eq(users.id, input.userId))
-      .limit(1)
-      .for("share");
-    // Read AFTER the lock is granted. Acquiring it can wait out a whole
-    // deletion, and a stamp taken before the wait would claim the identity
-    // was erased at a moment that precedes the deletion it records.
-    const settled = new Date();
-    // Plain values, decided in JS: the lock makes the answer stable for the
-    // rest of this transaction, and the transaction makes the read and the
-    // write land together. Deciding it in SQL instead would need the same
-    // CASE the SQLite path uses, whose untyped branches Postgres cannot
-    // infer a parameter type for.
-    const actorStillExists = actor.length > 0;
-    // The caller's identity when it supplied one, otherwise the account's own,
-    // read under the lock that just answered whether the account exists.
-    const account = actor[0];
-    await db.insert(activityLog).values(
-      this.entryValues(input, settled, {
-        userName: actorStillExists
-          ? (input.userName ?? toNullableString(account?.name))
-          : null,
-        userEmail: actorStillExists
-          ? (input.userEmail ?? toNullableString(account?.email))
-          : null,
-        identityErasedAt: actorStillExists ? null : settled,
-      })
-    );
+    await insertErasureAware(db, this.dialect, {
+      table: activityLog,
+      users,
+      row: this.entryValues(input, new Date()),
+      identity: supplied,
+      identityFromAccount: fromAccount,
+      actorUserId: input.userId,
+    });
   }
 
   /**
