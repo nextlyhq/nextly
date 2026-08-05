@@ -83,6 +83,22 @@ describe("planBaseline", () => {
     });
   });
 
+  it("refuses a database the ledger says has migrated, with no files on disk", () => {
+    // The damaging disagreement: a project whose migration files were deleted
+    // still has its applied rows, and the disk alone reads as no history at
+    // all. An origin written there leaves the database with two, and the old
+    // rows become applied migrations whose files are gone.
+    expect(
+      planBaseline({
+        live: snapshot("dc_posts"),
+        appliedMigration: "20260101000000_init.sql",
+      })
+    ).toEqual({
+      kind: "history-not-empty",
+      filename: "20260101000000_init.sql",
+    });
+  });
+
   it("names the origin rather than the files when both are present", () => {
     // An ordinary migrated project has both. The snapshot is the more useful
     // thing to name, because it is what the operator can point at to see the

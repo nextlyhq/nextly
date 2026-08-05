@@ -87,6 +87,16 @@ export interface PlanBaselineArgs {
    * carrying only those has a real history and no starting point.
    */
   existingMigrationFile?: string;
+  /**
+   * A filename the ledger already records as applied, when it has one.
+   *
+   * Checked separately from the files because the two can disagree in the
+   * damaging direction: a project whose migrations were deleted from disk
+   * still has its applied rows, and the files alone read as no history at all.
+   * Writing an origin there leaves the database with two, and the old rows
+   * become applied migrations whose files are gone.
+   */
+  appliedMigration?: string;
 }
 
 /**
@@ -105,8 +115,13 @@ export function planBaseline(args: PlanBaselineArgs): BaselinePlan {
   // Ordered after the snapshot check so a normal project keeps the message
   // that names its origin, and before the empty check because a history with
   // files in it is a refusal whatever the database looks like.
-  if (args.existingMigrationFile !== undefined) {
-    return { kind: "history-not-empty", filename: args.existingMigrationFile };
+  //
+  // Disk and ledger are both asked, because either can carry the history on
+  // its own: files without snapshots come from `--blank`, and applied rows
+  // without files come from a project whose migrations were deleted.
+  const existing = args.existingMigrationFile ?? args.appliedMigration;
+  if (existing !== undefined) {
+    return { kind: "history-not-empty", filename: existing };
   }
 
   if (args.live.tables.length === 0) {

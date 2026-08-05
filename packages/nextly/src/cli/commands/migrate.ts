@@ -51,6 +51,7 @@ import {
 } from "../../domains/schema/events/schema-events-repository";
 import { reconcileCore } from "../../domains/schema/migrate/core-reconcile";
 import { reconcileFile } from "../../domains/schema/migrate/drift-reconcile";
+import { customJunctionNames } from "../../domains/schema/migrate/junction-names";
 import {
   EMPTY_SNAPSHOT,
   parseSnapshotFile,
@@ -296,6 +297,13 @@ export async function runMigrate(
         logger,
         lockMode: "fail-fast",
         ttlSeconds: configResult.config.db.migrateLockTtlSeconds,
+        // A custom `options.junctionTable` name cannot be inferred from any
+        // convention, and such a table is in no snapshot — so the drift check
+        // has to be told about it or it reports a difference no migration can
+        // resolve.
+        knownJunctions: new Set(
+          customJunctionNames(configResult.config.collections)
+        ),
         allowDestructive: allowCoreDestructive,
         ensureLedger: async () => {
           if (!(await dz.tableExists("nextly_schema_events"))) {
@@ -398,6 +406,8 @@ export interface MigrateCoreDeps {
   step?: number;
   reconcileCoreFn?: typeof reconcileCore;
   runFileMigrationsFn?: typeof runFileMigrations;
+  /** Junction tables the config names outright; see `runFileMigrations`. */
+  knownJunctions?: ReadonlySet<string>;
   withLock?: typeof withMigrateLock;
 }
 
@@ -459,6 +469,7 @@ export async function migrateCore(
         migrationsDir: deps.migrationsDir,
         step: deps.step,
         logger: deps.logger,
+        knownJunctions: deps.knownJunctions,
       });
     },
     {
@@ -568,6 +579,15 @@ export async function runFileMigrations(args: {
   migrationsDir: string;
   step?: number;
   logger: CommandContext["logger"];
+  /**
+   * Junction tables the config names outright via `options.junctionTable`.
+   *
+   * The generated `<mainA>_<mainB>_<field>` shape can be inferred; a custom
+   * name cannot. Such a table appears in neither the before nor the target
+   * snapshot, so without this it stays in the live scope and the first
+   * migration after adoption stops with drift no migration could resolve.
+   */
+  knownJunctions?: ReadonlySet<string>;
 }): Promise<number> {
   const { adapter, db, dialect, migrationsDir, logger } = args;
   // Passing dialect prefers {name}.{dialect}.sql over base {name}.sql when both exist
@@ -670,7 +690,11 @@ export async function runFileMigrations(args: {
       ...before.tables.map(t => t.name),
       ...target.tables.map(t => t.name),
     ]);
-    const managed = snapshotComparableTables(liveTables, declared);
+    const managed = snapshotComparableTables(
+      liveTables,
+      declared,
+      args.knownJunctions
+    );
     const live = await introspectLiveSnapshot(db, dialect, managed);
     await reconcileFile({
       file: { filename, sql: m.upSql, path: m.filePath, sha256: m.checksum },

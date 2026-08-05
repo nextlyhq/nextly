@@ -40,6 +40,7 @@ import {
   EMPTY_SNAPSHOT,
   planBaseline,
 } from "../../domains/schema/migrate/baseline";
+import { customJunctionNames } from "../../domains/schema/migrate/junction-names";
 import { toMinimalEntities } from "../../domains/schema/migrate-create/config-entities";
 import {
   formatMigrationFile,
@@ -125,25 +126,47 @@ async function listMigrationFiles(migrationsDir: string): Promise<string[]> {
 }
 
 /**
- * The junction names a config states outright.
+ * A migration the ledger already records, when there is one.
  *
- * A many-to-many field may carry `options.junctionTable`, and both production
- * naming sites use it verbatim rather than the `<mainA>_<mainB>_<field>`
- * convention — so it cannot be inferred from a name, only read from the field
- * that declares it.
+ * A database managed by `db:sync` has never run `migrate`, so its ledger holds
+ * no `file_apply` rows — and on the oldest such databases the table does not
+ * exist at all, which is why a failure here reads as "no history" rather than
+ * propagating. Anything that DOES have rows has a history, whatever the
+ * migrations directory currently contains.
  */
-function customJunctionNames(collections: readonly unknown[]): string[] {
-  const names: string[] = [];
-  for (const raw of collections) {
-    const fields =
-      (raw as { fields?: { options?: { junctionTable?: unknown } }[] })
-        .fields ?? [];
-    for (const field of fields) {
-      const custom = field.options?.junctionTable;
-      if (typeof custom === "string" && custom.length > 0) names.push(custom);
-    }
+async function firstAppliedMigration(
+  repo: SchemaEventsRepository
+): Promise<string | undefined> {
+  try {
+    const rows = await repo.listFileApplies();
+    const names = rows
+      .map(r => (r as { filename?: string | null }).filename)
+      .filter((n): n is string => typeof n === "string" && n.length > 0)
+      .sort();
+    return names[0];
+  } catch {
+    return undefined;
   }
-  return names;
+}
+
+/**
+ * The Builder's manifest, when the project has one.
+ *
+ * Only an absent file is ordinary — that is the code-first case. A manifest
+ * that exists but cannot be read is the operator's to fix: swallowing it would
+ * silently drop every Builder declaration, and the baseline would record an
+ * incomplete starting point that looks deliberate.
+ */
+async function loadUiSchemaIfPresent(
+  projectRoot: string,
+  uiSchemaFile: string
+): Promise<Awaited<ReturnType<typeof loadUiSchema>> | null> {
+  try {
+    return await loadUiSchema({ projectRoot, uiSchemaFile });
+  } catch (error) {
+    if ((error as { code?: string }).code === "ENOENT") return null;
+    throw error;
+  }
 }
 
 /**
@@ -307,6 +330,7 @@ export async function baselineCore(
         live,
         latestSnapshotName: latest?.filename,
         existingMigrationFile: existingMigrations[0],
+        appliedMigration: await firstAppliedMigration(repo),
       });
 
       if (plan.kind === "already-baselined") {
@@ -502,28 +526,35 @@ export async function runMigrateBaseline(
 
     const config = configResult.config;
     // The Builder's entities count as declared too. `migrate:create` merges
-    // them from `ui-schema.json`, and a Builder collection whose table name
+    // them from `ui-schema.json`, and a Builder entity whose table name
     // resembles the generated junction shape would otherwise be classified as
     // derived — left out of the snapshot while the SQL still builds it.
-    let uiEntityTables: string[] = [];
+    //
+    // Reduced through `toMinimalEntities` rather than stubbed: the fields are
+    // what `deriveCompanionSpec` reads to build a localized entity's companion,
+    // and an entity with no fields derives no companion at all — so a Builder
+    // collection with translations would get its main table and nowhere to put
+    // them.
+    let uiEntities: MinimalConfigEntity[] = [];
     let uiJunctions: string[] = [];
-    try {
-      const manifest = await loadUiSchema({
-        projectRoot: cwd,
-        uiSchemaFile: config.db.uiSchemaFile,
-      });
-      uiEntityTables = [
-        ...(manifest.collections ?? []).map(e =>
+    const manifest = await loadUiSchemaIfPresent(cwd, config.db.uiSchemaFile);
+    if (manifest) {
+      uiEntities = [
+        ...toMinimalEntities(manifest.collections ?? [], e =>
           resolveCollectionTableName(e.slug)
         ),
-        ...(manifest.singles ?? []).map(e =>
+        ...toMinimalEntities(manifest.singles ?? [], e =>
           resolveSingleTableName({ slug: e.slug })
+        ),
+        // Components carry companions too, and a component table name can
+        // collide with the junction shape exactly as a collection's can.
+        ...toMinimalEntities(manifest.components ?? [], e =>
+          resolveComponentTableName(e.slug)
         ),
       ];
       uiJunctions = customJunctionNames(manifest.collections ?? []);
-    } catch {
-      // No manifest is the ordinary code-first case.
     }
+
     const result = await baselineCore({
       adapter,
       db,
@@ -535,11 +566,7 @@ export async function runMigrateBaseline(
       // `migrate:create` reduces them so the emitted DDL matches what a
       // generated companion migration would have produced.
       localizedEntities: [
-        ...uiEntityTables.map(tableName => ({
-          slug: tableName,
-          tableName,
-          fields: [],
-        })),
+        ...uiEntities,
         ...toMinimalEntities(config.collections, e =>
           resolveCollectionTableName(e.slug, e.dbName)
         ),
