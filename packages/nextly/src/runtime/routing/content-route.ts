@@ -115,7 +115,9 @@ export interface ContentRouteConfig<TNode> {
    *
    * @default false
    */
-  draft?: boolean | ((context: ResolvedContext) => boolean | Promise<boolean>);
+  draft?:
+    | boolean
+    | ((context: ResolvedContext) => DraftGrant | Promise<DraftGrant>);
   /** Relation depth for the resolved read (default `1`). */
   depth?: number;
   /** A booted Nextly instance (defaults to `getNextly()`). */
@@ -153,6 +155,20 @@ export interface ContentRouteConfig<TNode> {
    */
   staticParamsLimit?: number;
 }
+
+/**
+ * What a draft decision may answer.
+ *
+ * `true` grants the draft at this path unconditionally. `{ entryId }` grants it
+ * for ONE document, and the route discards the draft if the path resolved to a
+ * different one — which matters because a slug need not be unique: the resolver
+ * deliberately supports duplicates and settles them by sorting on `id`, so a
+ * token issued for one entry could otherwise reach another that shares its slug.
+ *
+ * A preview token names an entry, so `{ entryId: scope.entryId }` is the shape
+ * to return when one backs the decision.
+ */
+export type DraftGrant = boolean | { entryId: string };
 
 /** The optional-catch-all route arg: `{ params: Promise<{ slug?: string[] }> }`. */
 export interface ContentRouteArgs {
@@ -234,10 +250,18 @@ export function createContentRoute<TNode>(
   const getInstance = (): NextlyContentReader => config.nextly ?? getNextly();
 
   /** Whether this request may see unpublished edits at one collection + slug. */
-  async function draftForThisPath(context: ResolvedContext): Promise<boolean> {
+  async function draftForThisPath(
+    context: ResolvedContext
+  ): Promise<DraftGrant> {
     const decision = config.draft;
     if (decision === undefined) return false;
     return typeof decision === "function" ? decision(context) : decision;
+  }
+
+  /** Whether a grant covers the document the path actually resolved to. */
+  function grantCovers(grant: DraftGrant, entry: ContentEntry): boolean {
+    if (typeof grant === "boolean") return grant;
+    return String(entry.id) === grant.entryId;
   }
 
   /** Resolve the joined slug across the configured collections (first match wins). */
@@ -248,7 +272,8 @@ export function createContentRoute<TNode>(
       // Asked per collection, not once per request: the answer is scoped to a
       // document, and the same slug can name a different document in each
       // configured collection.
-      const draft = await draftForThisPath({ collection, slug });
+      const grant = await draftForThisPath({ collection, slug });
+      const draft = grant !== false;
       const entry = await resolveContent(collection, slug, {
         nextly: config.nextly,
         slugField,
@@ -268,7 +293,28 @@ export function createContentRoute<TNode>(
         // justifies this lives in the `draft` decision itself.
         overrideAccess: overrideAccess || draft,
       });
-      if (entry) return { entry, context: { collection, slug } };
+      if (!entry) continue;
+      if (draft && !grantCovers(grant, entry)) {
+        // The grant named a different document. A slug need not be unique, so
+        // this is where a token for one entry would otherwise have opened
+        // another that happens to share its slug — read again with no draft
+        // rather than serving the one that was never granted.
+        const published = await resolveContent(collection, slug, {
+          nextly: config.nextly,
+          slugField,
+          ...(config.status ? { status: config.status } : {}),
+          depth,
+          tags: config.tags,
+          revalidate: config.revalidate,
+          cacheScope: config.cacheScope,
+          overrideAccess,
+        });
+        if (published) {
+          return { entry: published, context: { collection, slug } };
+        }
+        continue;
+      }
+      return { entry, context: { collection, slug } };
     }
     return null;
   }

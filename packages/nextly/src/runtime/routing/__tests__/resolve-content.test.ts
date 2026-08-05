@@ -18,6 +18,8 @@ function stubReader(behavior: {
   error?: unknown;
   /** What the by-id re-read returns; `null` models a row deleted mid-resolve. */
   overlay?: Record<string, unknown> | null;
+  /** What the by-id re-read throws, modelling the real API's error behaviour. */
+  overlayError?: unknown;
 }): {
   reader: NextlyContentReader;
   calls: FindArgs[];
@@ -44,6 +46,7 @@ function stubReader(behavior: {
     },
     findByID: async (args): Promise<Record<string, unknown> | null> => {
       byIdCalls.push(args);
+      if (behavior.overlayError) throw behavior.overlayError;
       if (behavior.error) throw behavior.error;
       return behavior.overlay === undefined
         ? (behavior.items?.[0] ?? null)
@@ -212,23 +215,39 @@ describe("resolveContent (working-draft layer)", () => {
     });
   });
 
-  it("treats a deletion race as a miss rather than an error", async () => {
-    // The real by-id read THROWS `NOT_FOUND` rather than answering null, so the
-    // overlay asks it not to: a row deleted between the two reads is a content
-    // miss, and the slug lookup answering nothing would simply have rendered
-    // the not-found page.
-    const { reader, byIdCalls } = stubReader({
+  it("treats a deleted row as a miss and a broken read as an error", async () => {
+    // The by-id read THROWS `NOT_FOUND` rather than answering null, so a row
+    // deleted between the two reads has to be caught — the slug lookup finding
+    // nothing would simply have rendered the not-found page.
+    //
+    // Caught by STATUS rather than with `disableErrors`, which returns null for
+    // every unsuccessful result: a database blip would become a permanently
+    // cached 404, the exact failure the rethrow exists to prevent. Both halves
+    // are asserted, because only the second separates the two.
+    const gone = stubReader({
       items: [{ id: "1", status: "published" }],
-      overlay: null,
+      overlayError: NextlyError.notFound(),
     });
+    expect(
+      await resolveContent("posts", "a", {
+        nextly: gone.reader,
+        draft: true,
+        overrideAccess: true,
+      })
+    ).toBeNull();
 
-    await resolveContent("posts", "a", {
-      nextly: reader,
-      draft: true,
-      overrideAccess: true,
+    const broken = NextlyError.internal();
+    const blip = stubReader({
+      items: [{ id: "1", status: "published" }],
+      overlayError: broken,
     });
-
-    expect(byIdCalls[0].disableErrors).toBe(true);
+    await expect(
+      resolveContent("posts", "a", {
+        nextly: blip.reader,
+        draft: true,
+        overrideAccess: true,
+      })
+    ).rejects.toBe(broken);
   });
 
   it("still lets an explicit lifecycle scope win", async () => {

@@ -207,6 +207,37 @@ describe("the content route's draft decision", () => {
     ]);
   });
 
+  it("discards a draft the grant did not name", async () => {
+    // A slug need not be unique — the resolver supports duplicates and settles
+    // them by sorting on `id` — so a grant scoped to one entry could otherwise
+    // open another that happens to share its slug. The grant names the
+    // document, and a resolve that lands on a different one falls back to
+    // published rather than serving what was never granted.
+    const { reader, byIdCalls } = stubReader();
+
+    const wrongEntry = await createContentRoute({
+      collections: ["pages"],
+      nextly: reader,
+      render: (entry: ContentEntry) => entry,
+      buildMetadata: (entry: ContentEntry) => ({ title: String(entry.id) }),
+      draft: () => ({ entryId: "some-other-entry" }),
+    }).ContentPage(params);
+
+    expect((wrongEntry as ContentEntry)._isWorkingDraft).toBeUndefined();
+
+    byIdCalls.length = 0;
+    const rightEntry = await createContentRoute({
+      collections: ["pages"],
+      nextly: reader,
+      render: (entry: ContentEntry) => entry,
+      buildMetadata: (entry: ContentEntry) => ({ title: String(entry.id) }),
+      draft: () => ({ entryId: "1" }),
+    }).ContentPage(params);
+
+    expect((rightEntry as ContentEntry)._isWorkingDraft).toBe(true);
+    expect(byIdCalls).toHaveLength(1);
+  });
+
   it("never pre-renders draft paths", async () => {
     // `generateStaticParams` runs at build time, where there is no visitor and
     // no preview. Baking a draft into a static path would publish it to

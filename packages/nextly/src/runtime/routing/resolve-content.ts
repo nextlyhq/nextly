@@ -223,11 +223,6 @@ export async function resolveContent(
         depth,
         overrideAccess,
         user,
-        // A row deleted between the two reads is a content miss, not an error.
-        // Without this the by-id read THROWS `NOT_FOUND` and the throw escapes
-        // as a 500, where the slug lookup answering nothing would simply have
-        // rendered the not-found page.
-        disableErrors: true,
         ...(options.richTextFormat
           ? { richTextFormat: options.richTextFormat }
           : {}),
@@ -244,6 +239,18 @@ export async function resolveContent(
       // `NextlyError.is` matches across bundled package copies where a plain
       // `instanceof` would miss a differently-realmed error class.
       if (NextlyError.is(error) && error.statusCode === 403) {
+        return null;
+      }
+      // A row deleted between the slug lookup and the overlay read is a content
+      // miss too: the by-id read THROWS `NOT_FOUND`, and letting that escape
+      // would answer 500 where the slug lookup finding nothing would simply
+      // have rendered the not-found page.
+      //
+      // Narrowed to that one status rather than handled with `disableErrors`,
+      // which returns null for EVERY unsuccessful result — a database blip
+      // would become a permanently-cached 404, the exact failure the rethrow
+      // below exists to prevent.
+      if (NextlyError.is(error) && error.statusCode === 404) {
         return null;
       }
       throw error;
