@@ -63,6 +63,7 @@ import {
 import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredSingle } from "../../domains/schema/pipeline/types";
+import { applyMigrationStatements } from "../../domains/schema/services/apply-migration-statements";
 import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
 import { columnsDeclaredBy } from "../../domains/schema/services/field-column-descriptor";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
@@ -187,31 +188,6 @@ function injectSingleDefaultFields<T extends SingleWithFields | null>(
     ...single,
     fields: [SINGLE_TITLE_FIELD, SINGLE_SLUG_FIELD, ...userFields],
   };
-}
-
-// ============================================================
-// Migration SQL execution helper
-// ============================================================
-
-async function executeMigrationStatements(
-  adapter: DrizzleAdapter,
-  migrationSQL: string
-): Promise<void> {
-  const statements = migrationSQL
-    .split("--> statement-breakpoint")
-    .map(s => s.trim())
-    .filter(s => s.length > 0);
-
-  for (const statement of statements) {
-    const cleanStatement = statement
-      .split("\n")
-      .filter(line => !line.trim().startsWith("--"))
-      .join("\n")
-      .trim();
-    if (cleanStatement) {
-      await adapter.executeQuery(cleanStatement);
-    }
-  }
 }
 
 // ============================================================
@@ -1008,7 +984,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
               // Same boundary as the ALTER branch below: once a statement is sent, a failure
               // has left the table partly built rather than untouched.
               migrationBegan = true;
-              await executeMigrationStatements(adapter, createSQL);
+              await applyMigrationStatements(adapter, createSQL);
             } else {
               const db = adapter.getDrizzle();
               const liveDialect = adapter.getCapabilities().dialect;
@@ -1032,7 +1008,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
               // Past this point a statement may have run, so a failure is a partly-applied
               // migration rather than an edit that never started.
               migrationBegan = true;
-              await executeMigrationStatements(adapter, migrationSQL);
+              await applyMigrationStatements(adapter, migrationSQL);
             }
 
             const tableExistsAfter = await adapter.tableExists(tableName);

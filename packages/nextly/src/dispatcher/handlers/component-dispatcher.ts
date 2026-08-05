@@ -51,6 +51,7 @@ import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detect
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import { isIdempotencyError } from "../../domains/schema/pipeline/sql-statement-utils";
 import type { DesiredFieldGroup } from "../../domains/schema/pipeline/types";
+import { applyMigrationStatements } from "../../domains/schema/services/apply-migration-statements";
 import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
@@ -110,31 +111,6 @@ function offsetPaginationToMeta(args: {
     hasNext: page < totalPages,
     hasPrev: page > 1,
   };
-}
-
-// ============================================================
-// Migration SQL execution helper
-// ============================================================
-
-async function executeMigrationStatements(
-  adapter: DrizzleAdapter,
-  migrationSQL: string
-): Promise<void> {
-  const statements = migrationSQL
-    .split("--> statement-breakpoint")
-    .map(s => s.trim())
-    .filter(s => s.length > 0);
-
-  for (const statement of statements) {
-    const cleanStatement = statement
-      .split("\n")
-      .filter(line => !line.trim().startsWith("--"))
-      .join("\n")
-      .trim();
-    if (cleanStatement) {
-      await adapter.executeQuery(cleanStatement);
-    }
-  }
 }
 
 // Refresh the cached Drizzle table so the next entry query joining this
@@ -428,7 +404,7 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
         if (container.has("adapter")) {
           const diAdapter = container.get<DrizzleAdapter>("adapter");
 
-          await executeMigrationStatements(diAdapter, migrationSQL);
+          await applyMigrationStatements(diAdapter, migrationSQL);
 
           const tableExists = await diAdapter.tableExists(tableName);
           if (tableExists) {
