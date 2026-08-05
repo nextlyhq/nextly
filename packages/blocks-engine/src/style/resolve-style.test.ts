@@ -775,6 +775,22 @@ describe("an activation on a descendant", () => {
   });
 });
 
+describe("a breakpoint past the site's cap", () => {
+  it("reports nothing for it, because the compiler wrote nothing", () => {
+    // The compiler slices each axis before emitting contexts and reports the rest as unknown
+    // breakpoints. A chain that keeps them reports a value that reached no stylesheet.
+    const chain = Array.from({ length: 12 }, (_unused, index) => `bp${index}`);
+    const found = resolveStyle("color", "base", chain[11], {
+      node: {
+        base: { [chain[11]]: { color: "red" } },
+      } as unknown as NodeStyles,
+      viewportChain: chain,
+    });
+
+    expect(found).toBeUndefined();
+  });
+});
+
 describe("a state the compiler does not know", () => {
   it("reports nothing, because no rule was written for it", () => {
     // `pressed` is reported as `invalid-style-state` and emits nothing. Read here, it would hand

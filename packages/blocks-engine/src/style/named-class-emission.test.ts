@@ -880,3 +880,21 @@ describe("many classes that each exhaust their own style budget", () => {
     expect(markers(200)).toBe(small);
   });
 });
+
+describe("a class whose name is too long", () => {
+  it("is reported as a name problem, not as a missing id or styles", () => {
+    // Refused by `isUsableNamedClass` for its length, it fell through to the structural branch
+    // and told an author the id or styles were missing when the name was the whole of it.
+    const { warnings } = compile(doc({}), [
+      {
+        id: "c1",
+        slug: `c${"a".repeat(MAX_NAMED_CLASS_NAME_LENGTH)}`,
+        orderIndex: 0,
+        styles: styles({ color: "blue" }),
+      },
+    ]);
+
+    expect(warnings.map(w => w.code)).toContain("invalid-class-name");
+    expect(warnings.map(w => w.code)).not.toContain("invalid-class");
+  });
+});

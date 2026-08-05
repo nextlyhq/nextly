@@ -21,7 +21,11 @@
 // a page means without executing anything.
 
 import type { NodeStyles, StyleState, StyleValue } from "../document";
-import { isTokenRef, STYLE_STATES } from "../document";
+import {
+  isTokenRef,
+  MAX_BREAKPOINTS_PER_AXIS,
+  STYLE_STATES,
+} from "../document";
 import { isPlainRecord } from "../plain-record";
 
 import { BREAKPOINT_AXES } from "./breakpoint-axes";
@@ -343,7 +347,10 @@ function liveBreakpoints(
   const live: string[] = [];
   const claimed = new Set<string>();
   for (const axis of BREAKPOINT_AXES) {
-    for (const id of byAxis[axis] ?? []) {
+    // Capped per axis, the way the compiler caps its own context list. Over the bound the
+    // compiler writes nothing and reports the id as unknown, so reading it here reports a value
+    // that reached no stylesheet.
+    for (const id of (byAxis[axis] ?? []).slice(0, MAX_BREAKPOINTS_PER_AXIS)) {
       if (claimed.has(id)) continue;
       claimed.add(id);
       live.push(id);

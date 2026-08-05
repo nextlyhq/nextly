@@ -46,6 +46,7 @@ import {
   namedClassName,
   orderedNamedClasses,
   usableNamedClasses,
+  MAX_NAMED_CLASS_NAME_LENGTH,
   NAMED_CLASS_SLUG_RE,
 } from "./named-class";
 import {
@@ -1023,7 +1024,13 @@ export function compilePageCss(
     const slug = readClassSlug(cls);
     const id = readClassId(cls);
     const named =
-      typeof slug !== "string" || !NAMED_CLASS_SLUG_RE.test(slug)
+      typeof slug !== "string" ||
+      // Length before the pattern, and read as a NAME problem. An oversized slug is refused by
+      // `isUsableNamedClass`, so falling through to the structural branch told an author their id
+      // or styles were missing when the name was the whole of it — and ran the pattern over the
+      // corrupt string first to get there.
+      slug.length > MAX_NAMED_CLASS_NAME_LENGTH ||
+      !NAMED_CLASS_SLUG_RE.test(slug)
         ? {
             code: "invalid-class-name" as const,
             message: `A named class could not be written: ${describeValue(slug)} is not a class name.`,

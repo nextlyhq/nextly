@@ -156,7 +156,13 @@ export function orderedNamedClasses(
   };
   const id = (cls: NamedClass): string => {
     const value = (cls as { id?: unknown } | null)?.id;
-    return typeof value === "string" ? value : "";
+    // Bounded before it is compared. Sorting runs over the whole stored library, ahead of the
+    // check that rejects an oversized id, so a few thousand entries sharing a long prefix made
+    // the tie-break scan megabytes of settings text on every render — for entries thrown away
+    // immediately afterwards.
+    return typeof value === "string"
+      ? value.slice(0, MAX_NAMED_CLASS_NAME_LENGTH + 1)
+      : "";
   };
   return [...classes].sort(
     (a, b) =>
