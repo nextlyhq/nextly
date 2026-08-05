@@ -1,16 +1,8 @@
 /**
- * The core library IS registered at boot, and registered first.
- *
- * This replaces a guard that asserted the opposite. The gate blocks were
- * deliberately kept out of the registry while no renderer could draw them,
- * because registering them would have made validation call the type known while
- * the page still drew the unknown-block placeholder — a document that passes and
- * a page that is wrong. That guard named its own expiry: "they become built-ins
- * when a renderer can draw them". The renderer shipped, the blocks moved beside
- * it, and this is the inverted assertion.
+ * The core library is registered at boot, and registered first.
  *
  * Order is asserted as well as membership. Core registers before declared
- * blocks so that a contributed block colliding with a `core/` name is the one
+ * blocks so a contributed block colliding with a `core/` name is the one
  * reported as the duplicate, and so the boot's one-time registry clear happens
  * before core is added rather than after.
  */

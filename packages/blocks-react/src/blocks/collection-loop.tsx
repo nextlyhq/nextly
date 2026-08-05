@@ -126,6 +126,10 @@ export async function renderCollectionLoop({
   );
 }
 
+// Defined against the ENGINE's `defineBlock`, not the plugin SDK's: the engine
+// declares the contract and the SDK re-exports it for third parties. The
+// context is named rather than augmented, so a block compiled against the
+// published types is typed the same as one compiled here. See `./index.ts`.
 export const collectionLoop = defineBlock<CollectionLoopProps, PageContext>({
   name: "core/collection-loop",
   version: 1,

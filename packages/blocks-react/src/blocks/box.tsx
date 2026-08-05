@@ -17,6 +17,10 @@ import type { PageContext } from "../context";
 import { renderContainer } from "./container";
 import type { ContainerProps } from "./container";
 
+// Defined against the ENGINE's `defineBlock`, not the plugin SDK's: the engine
+// declares the contract and the SDK re-exports it for third parties. The
+// context is named rather than augmented, so a block compiled against the
+// published types is typed the same as one compiled here. See `./index.ts`.
 export const box = defineBlock<ContainerProps, PageContext>({
   name: "core/box",
   version: 1,

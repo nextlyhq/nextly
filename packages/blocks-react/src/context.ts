@@ -113,8 +113,16 @@ export interface PageContext {
    * renderer itself does not change behaviour on it.
    */
   isWorkingDraft?: boolean;
-  /** Data access for dynamic blocks. */
-  data: BlocksDataProvider;
+  /**
+   * Data access for dynamic blocks.
+   *
+   * Optional, because a host is not obliged to answer queries and a block that
+   * reads data has to cope with one that does not: the editor draws a block
+   * before a source is chosen, and a standalone render may have nothing behind
+   * it. `createStandaloneContext` supplies an empty provider, so the ordinary
+   * path never sees this absent.
+   */
+  data?: BlocksDataProvider;
   /**
    * Resolve a media id, or `null` when it cannot be resolved.
    *
