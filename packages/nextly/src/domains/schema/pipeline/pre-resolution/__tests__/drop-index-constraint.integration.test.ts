@@ -64,7 +64,11 @@ describe("pre-resolution drop_index — PostgreSQL constraint-backed uniques", (
         { name: "code", type: "text" },
         { name: "views", type: "number", index: true },
       ] as never,
-      "postgresql"
+      "postgresql",
+      // Required, and not a formality: a text field with no stated width has no
+      // one right answer, so the desired shape depends on who built the table.
+      // This fixture stands in for the pipeline, which is `codeFirst`.
+      { builtBy: "codeFirst" }
     );
     await pool.query(generatePgSQL({ type: "add_table", table: spec }));
 
