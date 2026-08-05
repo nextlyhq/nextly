@@ -137,10 +137,13 @@ export function createPreviewRoute(config: PreviewRouteConfig): {
 export interface PreviewScopeReaderConfig {
   secret: string;
   generation: number | (() => number | Promise<number>);
-  /** Reads the request's cookies. Injected so the reader is testable. */
-  cookies: () => Promise<{
-    get: (name: string) => { value: string } | undefined;
-  }>;
+  /**
+   * Reads the request's cookies. Injected so the reader is testable, and
+   * accepting a synchronous return for the same reason `draftMode` does.
+   */
+  cookies: () =>
+    | { get: (name: string) => { value: string } | undefined }
+    | Promise<{ get: (name: string) => { value: string } | undefined }>;
 }
 
 /**
