@@ -84,9 +84,11 @@ case "$command" in
   file-at)
     # Read one file at one commit. Used by the mention workflow, whose checkout
     # is the default branch rather than the PR head.
+    # The raw media type returns the file body itself, so there is no JSON
+    # envelope here to select a field out of.
     require_sha "${1:-}"
     [[ -n "${2:-}" ]] || die "usage: file-at <sha> <path>"
-    exec gh api "repos/$REPO/contents/$2?ref=$1" --jq '.content' --header "Accept: application/vnd.github.raw+json"
+    exec gh api "repos/$REPO/contents/$2?ref=$1" --header "Accept: application/vnd.github.raw+json"
     ;;
   post-review)
     # The agent composes the review JSON; this only decides where it is sent.

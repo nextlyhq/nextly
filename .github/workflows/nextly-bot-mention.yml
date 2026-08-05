@@ -79,5 +79,5 @@ jobs:
           # Same reasoning as the review workflow: all GitHub access through the
           # gateway script, local-only git verbs, no raw `gh`.
           claude_args: |
-            --allowedTools "Read,Grep,Glob,Write,Bash(.github/scripts/review-bot-gh.sh:*),Bash(./.github/scripts/review-bot-gh.sh:*),Bash(git show:*),Bash(git diff:*),Bash(git log:*),Bash(git merge-base:*),Bash(jq:*),Bash(rg:*),Bash(ls:*)"
+            --allowedTools "Read,Grep,Glob,Write,Bash(.github/scripts/review-bot-gh.sh:*),Bash(./.github/scripts/review-bot-gh.sh:*),Bash(bash .github/scripts/review-bot-gh.sh:*),Bash(${{ github.workspace }}/.github/scripts/review-bot-gh.sh:*),Bash(git show:*),Bash(git diff:*),Bash(git log:*),Bash(git merge-base:*),Bash(jq:*),Bash(rg:*),Bash(ls:*)"
             --max-turns 60

@@ -76,8 +76,11 @@ jobs:
             - Head SHA this run was triggered for: ${{ github.event.pull_request.head.sha }}
             - Base branch: ${{ github.event.pull_request.base.ref }}
 
-            Post the review with the single gh api reviews call the prompt
-            specifies. Do not approve, request changes, merge, close, or push.
+            Post the review with exactly one call, run from the repository root
+            as this relative path and no other spelling (an absolute path or a
+            `gh api` call of your own is not permitted and will be refused):
+              .github/scripts/review-bot-gh.sh post-review <PR> <payload.json>
+            Do not approve, request changes, merge, close, or push.
           # Allowlist entries match a command prefix, so every entry has to be
           # safe under ANY arguments appended to it. No raw `gh` qualifies:
           # `gh api` takes `--hostname` and `gh pr` takes `--repo HOST/O/R`, so
@@ -88,5 +91,5 @@ jobs:
           # with no Edit and no bare Bash the agent cannot alter the tree or
           # reach a network endpoint of its own choosing.
           claude_args: |
-            --allowedTools "Read,Grep,Glob,Write,Bash(.github/scripts/review-bot-gh.sh:*),Bash(./.github/scripts/review-bot-gh.sh:*),Bash(git show:*),Bash(git diff:*),Bash(git log:*),Bash(git merge-base:*),Bash(jq:*),Bash(rg:*),Bash(ls:*)"
+            --allowedTools "Read,Grep,Glob,Write,Bash(.github/scripts/review-bot-gh.sh:*),Bash(./.github/scripts/review-bot-gh.sh:*),Bash(bash .github/scripts/review-bot-gh.sh:*),Bash(${{ github.workspace }}/.github/scripts/review-bot-gh.sh:*),Bash(git show:*),Bash(git diff:*),Bash(git log:*),Bash(git merge-base:*),Bash(jq:*),Bash(rg:*),Bash(ls:*)"
             --max-turns 150

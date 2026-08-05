@@ -131,11 +131,13 @@ AGENTS.md permalink to the rule lines.>
 
 ## Phase 8: Post the review
 
-Everything in ONE review call so the PR gets one notification:
+Everything in ONE review call so the PR gets one notification. Write the payload with the Write tool, then run the gateway from the repository root using exactly this relative spelling. An absolute path, a `bash `-prefixed form, or a raw `gh api` call of your own will be refused, and a refusal here means your whole round is lost:
 
 ```bash
 .github/scripts/review-bot-gh.sh post-review <N> review.json
 ```
+
+If that call is ever refused, do NOT fall back to summarizing the review in a progress comment as though it were posted. Say plainly in your final message that posting failed and why, so the run is treated as a failed round rather than a clean one.
 
 ```json
 {
