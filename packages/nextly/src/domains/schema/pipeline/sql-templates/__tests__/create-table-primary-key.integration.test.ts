@@ -154,6 +154,57 @@ describe("generated CREATE TABLE declares its primary key", () => {
     sqlite.close();
   });
 
+  it.skipIf(!MYSQL_URL)(
+    "mysql round-trips a live snapshot back into DDL the server accepts",
+    async () => {
+      // MySQL reports a string default WITHOUT quotes, unlike PostgreSQL and
+      // SQLite. Recorded verbatim it renders `DEFAULT draft`, which the server
+      // reads as an identifier — so the schema a live snapshot describes could
+      // not be rebuilt anywhere. Asserting on the snapshot text alone would
+      // pin a spelling; rebuilding the table from it is what proves the point.
+      const conn = await mysql.createConnection(MYSQL_URL);
+      pools.push(() => conn.end());
+      const db = drizzleMysql({ client: conn });
+      const source = "dc_mysql_defaults";
+      const rebuilt = "dc_mysql_defaults_rebuilt";
+
+      await conn.query(`DROP TABLE IF EXISTS \`${source}\``);
+      await conn.query(`DROP TABLE IF EXISTS \`${rebuilt}\``);
+      await conn.query(
+        `CREATE TABLE \`${source}\` (
+           id varchar(36) PRIMARY KEY NOT NULL,
+           status varchar(20) NOT NULL DEFAULT 'draft',
+           quantity int DEFAULT 5,
+           note varchar(40) DEFAULT 'it''s here',
+           made_at datetime DEFAULT CURRENT_TIMESTAMP
+         )`
+      );
+
+      const live = await introspectLiveSnapshot(db, "mysql", [source]);
+      const spec = live.tables[0];
+      expect(spec).toBeDefined();
+      // A literal is quoted, a number is not, and an expression is untouched.
+      const byName = (n: string) => spec!.columns.find(c => c.name === n);
+      expect(byName("status")?.default).toBe("'draft'");
+      expect(byName("quantity")?.default).toBe("5");
+      expect(byName("note")?.default).toBe("'it''s here'");
+      expect(byName("made_at")?.default).toBe("CURRENT_TIMESTAMP");
+
+      // And the whole thing rebuilds. This is the assertion that fails when a
+      // default is recorded in a form the server cannot read back.
+      for (const stmt of statements({ ...spec!, name: rebuilt }, "mysql")) {
+        await conn.query(stmt);
+      }
+      const after = await introspectLiveSnapshot(db, "mysql", [rebuilt]);
+      expect(after.tables[0]?.columns.map(c => c.default)).toEqual(
+        spec!.columns.map(c => c.default)
+      );
+
+      await conn.query(`DROP TABLE IF EXISTS \`${source}\``);
+      await conn.query(`DROP TABLE IF EXISTS \`${rebuilt}\``);
+    }
+  );
+
   it("does not declare a key on ADD COLUMN", async () => {
     // The renderer is shared with the altering paths, and no dialect accepts
     // an inline key on a column added to a table that already exists.

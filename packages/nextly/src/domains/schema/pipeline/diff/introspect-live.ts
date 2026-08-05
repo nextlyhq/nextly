@@ -87,6 +87,8 @@ interface MysqlRow {
   IS_NULLABLE: "YES" | "NO";
   COLUMN_DEFAULT: string | null;
   COLUMN_KEY: string;
+  DATA_TYPE: string;
+  EXTRA: string;
 }
 
 interface MysqlIndexRow {
@@ -238,7 +240,7 @@ export async function introspectLiveSnapshot(
     // sometimes wraps it. Handle both shapes defensively.
     const result = (await dbTyped.execute(
       sql`SELECT TABLE_NAME, COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT,
-                 COLUMN_KEY
+                 COLUMN_KEY, DATA_TYPE, EXTRA
           FROM information_schema.columns
           WHERE TABLE_SCHEMA = DATABASE()
             AND TABLE_NAME IN (${tableNamesIn})
@@ -388,6 +390,50 @@ function buildSnapshotFromPgRows(rows: PgRow[]): NextlySchemaSnapshot {
   };
 }
 
+/** MySQL types whose default is reported as a bare number, not a literal. */
+const MYSQL_NUMERIC_TYPES = new Set([
+  "tinyint",
+  "smallint",
+  "mediumint",
+  "int",
+  "integer",
+  "bigint",
+  "decimal",
+  "numeric",
+  "float",
+  "double",
+  "real",
+]);
+
+/**
+ * A MySQL default as it must appear in DDL.
+ *
+ * MySQL is the odd one out. PostgreSQL reports `'draft'::character varying`
+ * and SQLite reports `'draft'`, both already quoted; MySQL's
+ * `information_schema.COLUMN_DEFAULT` strips the quotes and reports `draft`.
+ * Recorded verbatim, a snapshot then renders `DEFAULT draft`, which the server
+ * reads as an identifier and refuses — so a schema generated from a live MySQL
+ * snapshot could not be applied anywhere.
+ *
+ * `EXTRA` is what separates the two cases: an expression default (
+ * `CURRENT_TIMESTAMP`, `json_array()`) carries `DEFAULT_GENERATED` and must be
+ * left alone, while everything else is a literal. Numeric types need no quotes
+ * either, and quoting them would turn a number into a string.
+ */
+function mysqlDefaultExpression(row: MysqlRow): string | undefined {
+  const value = row.COLUMN_DEFAULT;
+  if (value === null || value === undefined) return undefined;
+  // An expression is already valid DDL as written.
+  if ((row.EXTRA ?? "").toUpperCase().includes("DEFAULT_GENERATED")) {
+    return value;
+  }
+  if (MYSQL_NUMERIC_TYPES.has((row.DATA_TYPE ?? "").toLowerCase())) {
+    return value;
+  }
+  // A literal, with any embedded quote doubled the way SQL spells it.
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
 function buildSnapshotFromMysqlRows(rows: MysqlRow[]): NextlySchemaSnapshot {
   const byTable = new Map<string, ColumnSpec[]>();
   for (const r of rows) {
@@ -400,7 +446,7 @@ function buildSnapshotFromMysqlRows(rows: MysqlRow[]): NextlySchemaSnapshot {
       name: r.COLUMN_NAME,
       type: r.COLUMN_TYPE,
       nullable: r.IS_NULLABLE === "YES",
-      default: r.COLUMN_DEFAULT ?? undefined,
+      default: mysqlDefaultExpression(r),
     };
     // `COLUMN_KEY` is "PRI" for every column of the PRIMARY key, and "UNI" or
     // "MUL" for other index positions, so only the first is the key itself.
