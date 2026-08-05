@@ -629,10 +629,13 @@ export function emitTokenBlocks(
     // render and reach here whether or not anything validated them, so a missing field has to
     // cost the token rather than the render: reading through it throws, and one corrupt row would
     // take down every page on the site.
-    if (!isPlainRecord(token.values)) {
+    if (
+      !isPlainRecord(token.values) ||
+      typeof token.values.light !== "string"
+    ) {
       issues.push(
         tokenIssue(
-          `"${token.name}" has no values, so it was not written. A token needs at least a light value.`
+          `"${token.name}" has no light value, so it was not written. Every token needs one: it is what a reader with no mode set resolves.`
         )
       );
       continue;

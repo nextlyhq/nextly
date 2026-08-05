@@ -107,8 +107,23 @@ export function compileSiteSheet(input: SiteSheetInput): SiteSheetArtifact {
   warnings.push(...fonts.issues);
   if (fonts.css !== "") blocks.push(fonts.css);
 
+  // ONE prefix, used to declare the custom properties and to reference them.
+  //
+  // The two halves read it from different places — `emitTokenBlocks` from the token set, the
+  // style compiler from its context — and a site that set one and not the other declared
+  // `--site-color-primary` while its pages asked for `var(--brand-color-primary)`. Nothing
+  // errors: the reference resolves to nothing and the value silently does not apply. Deriving it
+  // once here is what makes that impossible rather than merely unlikely.
+  const tokenPrefix = input.tokenPrefix ?? input.tokens?.prefix;
+
   if (input.tokens !== undefined) {
-    const tokens = emitTokenBlocks(input.tokens, TOKEN_SELECTOR);
+    const tokens = emitTokenBlocks(
+      {
+        ...input.tokens,
+        ...(tokenPrefix === undefined ? {} : { prefix: tokenPrefix }),
+      },
+      TOKEN_SELECTOR
+    );
     warnings.push(...tokens.issues);
     if (tokens.css !== "") blocks.push(tokens.css);
   }
@@ -118,9 +133,7 @@ export function compileSiteSheet(input: SiteSheetInput): SiteSheetArtifact {
     breakpoints: input.breakpoints,
     blockBases,
     namedClasses: input.classes ?? [],
-    ...(input.tokenPrefix === undefined
-      ? {}
-      : { tokenPrefix: input.tokenPrefix }),
+    ...(tokenPrefix === undefined ? {} : { tokenPrefix }),
   });
   warnings.push(...tiers.warnings);
   if (tiers.css !== "") blocks.push(tiers.css);

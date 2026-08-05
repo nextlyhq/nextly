@@ -180,6 +180,79 @@ describe("what the sheet declines to write", () => {
     expect(run().warnings.length).toBeGreaterThan(0);
   });
 
+  it("declares and references a token under the same prefix", () => {
+    // The two halves read the prefix from different places. Set one and not the other and the
+    // sheet declares `--site-color-primary` while the page asks for `var(--brand-color-primary)`:
+    // nothing errors, the reference resolves to nothing, and the colour silently does not apply.
+    const { css } = compileSiteSheet({
+      breakpoints: FIXTURE_BREAKPOINTS,
+      tokenPrefix: "--brand-",
+      tokens: {
+        tokens: [
+          {
+            name: "color.primary",
+            kind: "color" as const,
+            values: { light: "#123456" },
+          },
+        ],
+      },
+      blockBases: {
+        "core/box": {
+          base: { base: { color: { $token: "color.primary" } } },
+        } as unknown as NodeStyles,
+      },
+    });
+
+    expect(css).toContain("--brand-color-primary:#123456");
+    expect(css).toContain("var(--brand-color-primary)");
+    expect(css).not.toContain("--site-color-primary");
+  });
+
+  it("takes the prefix from the token set when no override is given", () => {
+    const { css } = compileSiteSheet({
+      breakpoints: FIXTURE_BREAKPOINTS,
+      tokens: {
+        prefix: "--brand-",
+        tokens: [
+          {
+            name: "color.primary",
+            kind: "color" as const,
+            values: { light: "#123456" },
+          },
+        ],
+      },
+      blockBases: {
+        "core/box": {
+          base: { base: { color: { $token: "color.primary" } } },
+        } as unknown as NodeStyles,
+      },
+    });
+
+    expect(css).toContain("--brand-color-primary:#123456");
+    expect(css).toContain("var(--brand-color-primary)");
+  });
+
+  it("refuses a token with no light value rather than writing undefined", () => {
+    // `light` is what a reader with no mode set resolves, so a token without one has no value at
+    // all. Accepted, it reached the sheet as the literal text `undefined` and warned about
+    // nothing.
+    const { css, warnings } = sheet({
+      tokens: {
+        tokens: [
+          { name: "color.a", kind: "color" as const, values: {} as never },
+          {
+            name: "color.b",
+            kind: "color" as const,
+            values: { dark: "#000000" } as never,
+          },
+        ],
+      },
+    });
+
+    expect(css).not.toContain("undefined");
+    expect(warnings.length).toBe(2);
+  });
+
   it("reports a font it refused rather than emitting it", () => {
     // Remote font sources are refused for privacy; the caller has to be told, or a missing
     // typeface has no explanation anywhere.
