@@ -48,7 +48,7 @@ import {
   namedClassName,
   orderedNamedClasses,
   orderedNamedClassPositions,
-  usableNamedClasses,
+  usableNamedClassPositions,
   MAX_NAMED_CLASS_NAME_LENGTH,
   NAMED_CLASS_SLUG_RE,
 } from "./named-class";
@@ -1034,7 +1034,7 @@ export function compilePageCss(
   // values. At one specificity the cascade is source order, so being emitted here IS what makes
   // a class beat the block default and lose to a local value.
   //
-  // `usableNamedClasses` decides which of them are written, and the class list handed back for
+  // `usableNamedClassPositions` decides which of them are written, and the class list handed
   // each node is built from that same call, so a class dropped here is dropped from both.
   //
   // Charged against an allowance of their own, one per class. A site's class library is one
@@ -1077,11 +1077,13 @@ export function compilePageCss(
       suggestion: "Store the class library as an array of classes.",
     });
   }
-  const usableClasses = usableNamedClasses(library);
-  // The entries themselves, not their ids. Two entries can carry ONE id, and only one of them is
-  // written: asking "was this id written" answers yes for the one that was dropped, and it goes
-  // unreported — the exact case this reporting exists to explain.
-  const written = new Set<unknown>(usableClasses);
+  // Which SLOTS were written, not which ids and not which entries. Two entries can carry one id,
+  // and one object can be supplied in two slots: asking "was this id written" answers yes for the
+  // entry that was dropped, and asking "was this ENTRY written" answers yes for the slot that was
+  // dropped. Both go unreported, which is the exact case this reporting exists to explain.
+  const writtenPositions = usableNamedClassPositions(library);
+  const written = new Set<number>(writtenPositions);
+  const usableClasses = writtenPositions.map(position => library[position]);
   // The ids the written classes claimed, so an entry dropped for sharing one can be told that
   // rather than being told its name collided.
   const usedIds = new Set(usableClasses.map(cls => cls.id));
@@ -1095,16 +1097,9 @@ export function compilePageCss(
   // two separate repairs, and a lookup keyed by the entry answers with the first position for
   // both, sending an editor to a class it has already fixed.
   const orderedPositions = orderedNamedClassPositions(library);
-  // Keyed by entry for the emission walk below, which sees only records that `usableNamedClasses`
-  // has already proven distinct — so no two of its keys can be the same value.
-  const libraryIndex = new Map<unknown, number>();
   for (const position of orderedPositions) {
     const cls = library[position];
-    if (!libraryIndex.has(cls)) libraryIndex.set(cls, position);
-  }
-  for (const position of orderedPositions) {
-    const cls = library[position];
-    if (written.has(cls)) continue;
+    if (written.has(position)) continue;
     // Reported once per entry the library could not use, naming which of the three reasons it
     // was. A usable record whose name is free is not reachable here, so the remaining case after
     // the two structural ones is a name another class already took.
@@ -1155,17 +1150,15 @@ export function compilePageCss(
       ...named,
     });
   }
-  for (const cls of usableClasses) {
+  for (const position of writtenPositions) {
+    const cls = library[position];
     rules.push(
       ...envelopeRules(
         cls.styles,
         `${pageRoot} .${escapeIdentifier(namedClassName(cls.slug))}`,
         // The envelope is stored under `styles`, so the pointer names it. Without that a warning
         // reads `/classes/0/base/base/bogus`, which resolves to nothing an editor can open.
-        pointer(
-          pointer("/classes", String(libraryIndex.get(cls) ?? 0)),
-          "styles"
-        ),
+        pointer(pointer("/classes", String(position)), "styles"),
         contexts,
         tokenPrefix,
         warnings,
