@@ -208,6 +208,10 @@ describe("a value that cannot be its kind", () => {
     ["dimension", "0"],
     ["dimension", "1.5rem"],
     ["dimension", "clamp(20rem, 80vw, 72rem)"],
+    ["dimension", "50%"],
+    ["dimension", "2em"],
+    ["dimension", "10vmin"],
+    ["fontWeight", "lighter"],
     ["duration", "150ms"],
     ["duration", "0"],
     ["number", "1.5"],
@@ -236,6 +240,13 @@ describe("a value that cannot be its kind", () => {
     // exponent branch these match nothing, the check reaches no verdict, and it
     // stays silent about a value the browser will drop.
     ["duration", "1e3px"],
+    // A measurement in the wrong quantity: valid CSS, dropped where the token
+    // is used, and previously passed because it merely had SOME unit.
+    ["dimension", "150ms"],
+    ["dimension", "20deg"],
+    ["duration", "16px"],
+    // A word `font-weight` does not take.
+    ["fontWeight", "heavy"],
     ["number", "1e3px"],
     ["fontWeight", "2e3"],
   ] as const)("names what is wrong with %s value %s", (kind, value) => {

@@ -35,6 +35,7 @@ import {
   checkUrlValue,
   decodeIdentifier,
   isCssWideKeyword,
+  unitCategory,
 } from "./css-value";
 import {
   isTokenName,
@@ -248,6 +249,9 @@ const OPAQUE_VALUE =
  * spelling, and a grammar narrower here than there is a check that quietly
  * stops covering the values the other side lets through.
  */
+/** The only words `font-weight` takes; every other value is a number. */
+const FONT_WEIGHT_KEYWORDS = new Set(["normal", "bold", "bolder", "lighter"]);
+
 const MEASUREMENT = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?([a-z%]*)$/i;
 
 /**
@@ -284,17 +288,33 @@ export function checkTokenKind(
       return measured
         ? `is a ${unit === "" ? "number" : "measurement"}, not a colour`
         : undefined;
-    case "dimension":
+    case "dimension": {
       if (isColor) return "is a colour, not a length";
+      if (unit === undefined) return undefined;
       // Only zero may go without a unit; `16` is not `16px` to CSS.
-      return unit === "" && amount !== 0
-        ? "is a number with no unit, so it is not a length"
-        : undefined;
-    case "duration":
+      if (unit === "") {
+        return amount === 0
+          ? undefined
+          : "is a number with no unit, so it is not a length";
+      }
+      // A percentage stands in for a length wherever a length token is used.
+      // Anything else that measures something — `150ms`, `20deg` — measures the
+      // wrong quantity, and the browser drops the declaration that reads it.
+      // Judged by what the unit MEASURES rather than by a second list of length
+      // units kept beside the one the value checker already has.
+      if (unit === "%") return undefined;
+      const measures = unitCategory(unit);
+      return measures === "length"
+        ? undefined
+        : `is measured in ${unit}, which is ${measures ?? "not a unit CSS knows"}, not a length`;
+    }
+    case "duration": {
       if (isColor) return "is a colour, not a duration";
-      return unit !== undefined && unit !== "s" && unit !== "ms" && amount !== 0
-        ? `is measured in ${unit === "" ? "no unit" : unit}, not seconds or milliseconds`
-        : undefined;
+      if (unit === undefined || amount === 0) return undefined;
+      return unitCategory(unit) === "time"
+        ? undefined
+        : `is measured in ${unit === "" ? "no unit" : unit}, not seconds or milliseconds`;
+    }
     case "number":
       if (isColor) return "is a colour, not a number";
       return unit !== undefined && unit !== ""
@@ -304,9 +324,17 @@ export function checkTokenKind(
       if (unit !== undefined && unit !== "") {
         return `carries the unit "${unit}", so it is not a font weight`;
       }
-      return amount !== undefined && (amount < 1 || amount > 1000)
-        ? "is outside the 1 to 1000 a font weight may take"
-        : undefined;
+      if (amount !== undefined) {
+        return amount < 1 || amount > 1000
+          ? "is outside the 1 to 1000 a font weight may take"
+          : undefined;
+      }
+      // Not a number, so it has to be one of the four words the property
+      // takes. Accepting every other word meant a weight of `heavy` was
+      // emitted with nothing said about it and dropped where it was used.
+      return FONT_WEIGHT_KEYWORDS.has(asciiLower(text))
+        ? undefined
+        : `is not a font weight; the words are ${[...FONT_WEIGHT_KEYWORDS].join(", ")}`;
     // A family is any text, a shadow is a list this does not parse, and
     // `custom` exists precisely so a site can hold something with no rules.
     case "fontFamily":

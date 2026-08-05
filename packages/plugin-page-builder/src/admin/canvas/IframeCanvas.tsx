@@ -164,7 +164,7 @@ export function IframeCanvas({ children }: { children: ReactNode }) {
     pageStyle.textContent =
       compileTokensCss(pageScope) +
       "\n" +
-      compileDocumentCss(state.document, { remotePatterns }) +
+      compileDocumentCss(state.document, { remotePatterns, scope: pageScope }) +
       "\n" +
       // Same sanitize+scope pass as PageRenderer, so the preview is faithful.
       sanitizeCustomCss(deferredCustomCss, pageScope).css;

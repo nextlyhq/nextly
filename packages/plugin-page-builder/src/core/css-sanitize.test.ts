@@ -1101,6 +1101,55 @@ describe("custom CSS may not reach off this origin", () => {
       expect(out.css).not.toContain(ns("fade"));
     });
 
+    it("ignores a keyframes rule named with a reserved word", () => {
+      // `<keyframes-name>` is `<custom-ident> | <string>`, and a custom-ident
+      // excludes `none`. `@keyframes none` is therefore invalid and ignored, so
+      // renaming it would turn an invalid rule into a valid private one and
+      // start an animation the source CSS never defined.
+      const out = sanitizeCustomCss(
+        `@keyframes none { from { opacity: 0 } } .x { animation-name: "none" }`,
+        SCOPE
+      );
+      expect(out.css).toContain(`animation-name:"none"`);
+      expect(out.css).not.toContain(ns("none"));
+    });
+
+    it("leaves an invalid mixed family reference alone", () => {
+      // `"My" Font` is a string beside an identifier, which is not a family
+      // item — the browser drops the whole declaration. Joining the run would
+      // make the private face apply exactly where the author's CSS applied
+      // nothing.
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: "My Font"; src: url("/f.woff2") }
+         .a { font-family: "My" Font, serif }`,
+        SCOPE
+      );
+      expect(out.css).not.toContain(`.a{font-family:"${ns("My Font")}"`);
+    });
+
+    it("drops a face whose src names nothing to load", () => {
+      // Presence is not usability: the browser reads `src: garbage` and
+      // discards it, so no face is defined. Recording the family anyway points
+      // every reference at a private name nothing defines — and `X` may be a
+      // font the reader already has.
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: X; src: garbage } .a { font-family: X, serif }`,
+        SCOPE
+      );
+      expect(out.css).toContain(".a{font-family:X,serif}");
+      expect(out.css).not.toContain("@font-face");
+    });
+
+    it("still keeps a face whose src is a local() source", () => {
+      // The refusal has to be about usability, not about `url()` specifically.
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: X; src: local("X") } .a { font-family: X }`,
+        SCOPE
+      );
+      expect(out.css).toContain("@font-face");
+      expect(out.css).toContain(`.a{font-family:"${ns("X")}"}`);
+    });
+
     it("still refuses a remote url inside a keyframe step", () => {
       // The step blocks are ordinary declarations, so the origin policy has to
       // reach them — allowing the at-rule must not open a door beneath it.

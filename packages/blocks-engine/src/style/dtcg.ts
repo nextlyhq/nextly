@@ -257,6 +257,7 @@ function familyToDtcg(css: string): string | string[] | undefined {
   // `var(--brand-font)` to every tool that reads the standard value rather than
   // this vendor's extension. Reported as unrepresentable instead, which is the
   // same answer a `clamp()` dimension already gets.
+  if (parts.some(part => !part.valid)) return undefined;
   if (parts.some(part => !part.quoted && /[()]/.test(part.name))) {
     return undefined;
   }
@@ -276,6 +277,8 @@ function splitFamilyList(css: string): FamilyPart[] {
   const parts: FamilyPart[] = [];
   let current = "";
   let quoted = false;
+  let strings = 0;
+  let outsideQuotes = "";
   let quote: string | undefined;
 
   for (let index = 0; index < css.length; index++) {
@@ -298,28 +301,54 @@ function splitFamilyList(css: string): FamilyPart[] {
     }
     if (char === '"' || char === "'") {
       quote = char;
-      // Remembered, because the quotes are what say the text is a NAME rather
-      // than syntax: `"var(--x)"` is a family somebody called that.
+      // A second string in one item is what makes `"Bad" "Name"` invalid, so
+      // they are counted rather than merely noted.
+      strings += 1;
       quoted = true;
       continue;
     }
     if (char === ",") {
-      parts.push({ name: current.trim(), quoted });
+      parts.push(finishPart(current, quoted, strings, outsideQuotes));
       current = "";
       quoted = false;
+      strings = 0;
+      outsideQuotes = "";
       continue;
     }
+    if (quote === undefined) outsideQuotes += char;
     current += char;
   }
-  parts.push({ name: current.trim(), quoted });
+  parts.push(finishPart(current, quoted, strings, outsideQuotes));
 
   return parts.filter(part => part.name !== "");
 }
 
-/** One family from a list, and whether the file wrote it as a quoted string. */
+/** One family from a list, how it was written, and whether CSS accepts it. */
 interface FamilyPart {
   name: string;
   quoted: boolean;
+  valid: boolean;
+}
+
+/**
+ * One item of a family list, judged against the grammar CSS applies to it.
+ *
+ * `<family-name>` is one string OR a run of identifiers, exclusively. `"Bad"
+ * "Name"` is neither, and a browser drops the declaration that holds it — so
+ * joining the two into `Bad Name` would export a font stack the site never
+ * rendered to any tool reading the standard value.
+ */
+function finishPart(
+  current: string,
+  quoted: boolean,
+  strings: number,
+  outsideQuotes: string
+): FamilyPart {
+  const name = current.trim();
+  const valid = quoted
+    ? strings === 1 && outsideQuotes.trim() === ""
+    : strings === 0;
+  return { name, quoted, valid };
 }
 
 /**
@@ -608,9 +637,15 @@ function colorFromDtcg(value: unknown): string | undefined {
   if (value.colorSpace !== "srgb") return undefined;
   const channels = components.slice(0, 3);
   if (!channels.every(part => typeof part === "number")) return undefined;
-  const [r, g, b] = channels.map(part =>
-    Math.round(Math.min(1, Math.max(0, part)) * 255)
-  );
+  // Refused rather than clamped. A component outside 0-1 is not an sRGB
+  // channel, and folding `[2, 0, 0]` down to red stores a colour the file did
+  // not describe — rendered, believed, and never reported.
+  if (
+    !channels.every(part => Number.isFinite(part) && part >= 0 && part <= 1)
+  ) {
+    return undefined;
+  }
+  const [r, g, b] = channels.map(part => Math.round(part * 255));
   return alpha < 1 ? `rgb(${r} ${g} ${b} / ${alpha})` : `rgb(${r} ${g} ${b})`;
 }
 
@@ -663,7 +698,16 @@ function readCssEscape(
  */
 function cssFamilyName(name: string): string {
   const text = name.trim();
-  if (SAFE_FAMILY_IDENTS.test(text)) return text;
+  // A CSS-wide keyword bare is that keyword, not a font: `font-family: inherit`
+  // takes the parent's font rather than one called "inherit". The generics are
+  // the opposite case and must stay bare, which is why this is a list of the
+  // words that change meaning rather than a rule about identifiers.
+  if (
+    SAFE_FAMILY_IDENTS.test(text) &&
+    !FAMILY_MUST_QUOTE.has(text.toLowerCase())
+  ) {
+    return text;
+  }
 
   let escaped = "";
   for (const char of text) {
@@ -680,6 +724,21 @@ function cssFamilyName(name: string): string {
   }
   return `"${escaped}"`;
 }
+
+/**
+ * Names that mean something else when written bare.
+ *
+ * The CSS-wide keywords and `default` are not font names in a declaration, so a
+ * file describing a family called `inherit` has to get it back quoted.
+ */
+const FAMILY_MUST_QUOTE = new Set([
+  "inherit",
+  "initial",
+  "unset",
+  "revert",
+  "revert-layer",
+  "default",
+]);
 
 /** A run of identifiers, which is the one family spelling needing no quotes. */
 const SAFE_FAMILY_IDENTS =

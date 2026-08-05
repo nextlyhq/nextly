@@ -124,6 +124,27 @@ describe("PageRenderer", () => {
     expect(documentScopeClass(first)).not.toBe(documentScopeClass(second));
   });
 
+  it("scopes generated node selectors to the document too", () => {
+    // The per-document boundary has to cover structured block styles, not only
+    // tokens and custom CSS. Two documents can hold the SAME node id — one
+    // reusable block rendered in both is the ordinary way — and bare node
+    // selectors let the later stylesheet restyle the other document's blocks.
+    const inner = makeNode("core/heading", { text: "Hi" });
+    const root = makeNode("core/container", {}, undefined, {
+      default: [inner],
+    });
+    inner.style = { base: { padding: { top: "10px" } } };
+    const doc = { version: 1 as const, root };
+    const html = renderToStaticMarkup(
+      <PageRenderer document={doc} registry={registry()} />
+    );
+    const scope = documentScopeClass(doc);
+    expect(html).toContain(`.${scope} .${nodeClass(inner.id)}`);
+    expect(html).not.toMatch(
+      new RegExp(`(^|[^ ])\\.${nodeClass(inner.id)}\\s*\\{`)
+    );
+  });
+
   it("keeps a document's scope stable across renders", () => {
     // The class is written into the markup by one render and into the
     // stylesheet by the same one, so a scope that changed per render would

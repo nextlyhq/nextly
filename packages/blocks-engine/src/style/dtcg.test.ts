@@ -205,6 +205,23 @@ describe("export", () => {
     ]);
   });
 
+  it("reports a family list CSS itself would drop", () => {
+    // `<family-name>` is one string OR a run of identifiers. `"Bad" "Name"` is
+    // neither, so a browser drops the declaration; joining them would export a
+    // font stack the site never rendered.
+    const { document, issues } = tokensToDtcg(
+      tokens([
+        {
+          name: "f",
+          kind: "fontFamily",
+          values: { light: `"Bad" "Name", serif` },
+        },
+      ])
+    );
+    expect(document).toEqual({});
+    expect(issues[0]?.message).toContain("cannot express");
+  });
+
   it("carries another tool's extension data through untouched", () => {
     // "Tools that process design token files MUST preserve any extension data
     // they do not themselves understand."
@@ -333,6 +350,30 @@ describe("import", () => {
     expect(read("serif")).toBe("serif");
     expect(read("system-ui")).toBe("system-ui");
     expect(read("My Font")).toBe("My Font");
+  });
+
+  it("quotes an imported family whose name is a CSS-wide keyword", () => {
+    // Bare, `inherit` takes the parent's font rather than naming one. The
+    // generics are the opposite case and have to stay bare.
+    const read = (value: unknown): string | undefined =>
+      dtcgToTokens({ f: { $type: "fontFamily", $value: value } }).tokens[0]
+        ?.values.light;
+    expect(read("inherit")).toBe('"inherit"');
+    expect(read("revert-layer")).toBe('"revert-layer"');
+    expect(read("serif")).toBe("serif");
+  });
+
+  it("refuses an sRGB component outside the range rather than clamping it", () => {
+    // Clamped, `[2, 0, 0]` imports as red — a colour the file did not describe,
+    // rendered and believed with nothing reported.
+    const { tokens: read, issues } = dtcgToTokens({
+      c: {
+        $type: "color",
+        $value: { colorSpace: "srgb", components: [2, 0, 0] },
+      },
+    });
+    expect(read).toEqual([]);
+    expect(issues[0]?.message).toContain("could not be read");
   });
 
   it("skips a type it has no kind for, and says so", () => {

@@ -113,6 +113,23 @@ const ANIMATION_NAME_KEYWORDS = new Set([
  * Brand`. Without these the shorthand looks sizeless, the family list is never
  * found, and a family the stylesheet defined keeps pointing at the global name.
  */
+/**
+ * Words a bare `@keyframes` prelude may not be.
+ *
+ * A `<custom-ident>` excludes the CSS-wide keywords and `default`; the
+ * keyframes grammar excludes `none` on top of that. A rule named with one of
+ * them is invalid and ignored, so it defines nothing to namespace.
+ */
+const KEYFRAMES_RESERVED_NAMES = new Set([
+  "none",
+  "initial",
+  "inherit",
+  "unset",
+  "revert",
+  "revert-layer",
+  "default",
+]);
+
 const FONT_SIZE_KEYWORDS = new Set([
   "xx-small",
   "x-small",
@@ -233,7 +250,34 @@ export function fontFaceHasSrc(node: csstree.Atrule): boolean {
     .toArray()
     .some(
       child =>
-        child.type === "Declaration" && propertyName(child.property) === "src"
+        child.type === "Declaration" &&
+        propertyName(child.property) === "src" &&
+        srcNamesAFile(child.value)
+    );
+}
+
+/**
+ * Whether a `src` descriptor actually names somewhere to load a font from.
+ *
+ * Presence is not usability. `src: garbage` is a descriptor the browser reads
+ * and discards, so no face is defined — and treating the rule as usable then
+ * records its family and rewrites every reference to a private name nothing
+ * defines. Where the family was one the reader already had, an installed font
+ * or one the host provides, that replaces a working fallback with a missing
+ * name.
+ *
+ * A `url()` or a `local()` is what counts. `format()` and `tech()` describe a
+ * source rather than being one, so neither makes a descriptor usable alone.
+ */
+function srcNamesAFile(value: csstree.CssNode): boolean {
+  if (value.type !== "Value") return false;
+  return value.children
+    .toArray()
+    .some(
+      child =>
+        child.type === "Url" ||
+        (child.type === "Function" &&
+          decodeIdentifier(child.name).toLowerCase() === "local")
     );
 }
 
@@ -328,6 +372,17 @@ export function namespaceDefinedNames(
         if (first !== prelude.children.last) return;
         const original = nameOf(first);
         if (original === undefined || original === "") return;
+        // `<keyframes-name>` is `<custom-ident> | <string>`, and a custom-ident
+        // excludes `none` and the CSS-wide keywords — so `@keyframes none` is
+        // invalid and a browser ignores it. Renaming it would turn an invalid
+        // rule into a valid private one and start an animation the source CSS
+        // never defined. Quoted, the same text is a legal name.
+        if (
+          first.type === "Identifier" &&
+          KEYFRAMES_RESERVED_NAMES.has(original.toLowerCase())
+        ) {
+          return;
+        }
         const namespaced = namespacedGlobalName(original, scopeClass);
         // Keyed by the DECODED name, because that is what a reference elsewhere
         // in the stylesheet reads as.
@@ -566,7 +621,7 @@ function rewriteFontFamilies(
   }> = [];
 
   const closeRun = (): void => {
-    if (run.length > 0 && parts.length > 0) {
+    if (run.length > 0 && parts.length > 0 && runIsFamilyName(run)) {
       const joined = parts.join(" ").toLowerCase();
       // A lone bare identifier that names a generic family or a CSS-wide
       // keyword is that keyword, not a family — even when the stylesheet
@@ -732,6 +787,24 @@ function lastIndexWhere(
     if (node !== undefined && accepts(node)) return index;
   }
   return -1;
+}
+
+/**
+ * Whether a run of nodes spells one family the way CSS allows.
+ *
+ * `<family-name>` is one string OR a run of identifiers, and the alternation is
+ * exclusive. `font-family: "My" Font, serif` is therefore invalid and the
+ * browser drops the whole declaration — so joining the run and matching it
+ * would make a private face apply exactly where the author's CSS applied
+ * nothing.
+ */
+function runIsFamilyName(
+  run: readonly csstree.ListItem<csstree.CssNode>[]
+): boolean {
+  const first = run[0];
+  if (first === undefined) return false;
+  if (first.data.type === "String") return run.length === 1;
+  return run.every(item => item.data.type === "Identifier");
 }
 
 /** Replace every child of a value with one quoted string. */
