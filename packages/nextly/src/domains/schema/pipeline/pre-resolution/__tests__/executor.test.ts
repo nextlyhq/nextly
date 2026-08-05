@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type {
   DropColumnOp,
+  DropIndexOp,
   DropTableOp,
   Operation,
   RenameColumnOp,
@@ -137,7 +138,7 @@ describe("executePreResolutionOps - PG/MySQL", () => {
     expect(executed[1]).toContain('DROP TABLE "dc_old"');
   });
 
-  it("safe order: rename_table -> rename_column -> drop_column -> drop_table", async () => {
+  it("safe order: rename_table -> rename_column -> drop_index -> drop_column -> drop_table", async () => {
     const { tx, executed } = makeRecordingTx();
     const ops: Operation[] = [
       {
@@ -159,6 +160,11 @@ describe("executePreResolutionOps - PG/MySQL", () => {
         columnType: "text",
       } satisfies DropColumnOp,
       {
+        type: "drop_index",
+        tableName: "dc_new",
+        index: { name: "idx_dc_new_old", columns: ["old"], unique: false },
+      } satisfies DropIndexOp,
+      {
         type: "rename_table",
         fromName: "dc_old",
         toName: "dc_new",
@@ -167,11 +173,61 @@ describe("executePreResolutionOps - PG/MySQL", () => {
 
     const count = await executePreResolutionOps(tx, ops, "postgresql");
 
-    expect(count).toBe(4);
+    expect(count).toBe(5);
     expect(executed[0]).toContain("RENAME TO"); // rename_table
     expect(executed[1]).toContain("RENAME COLUMN"); // rename_column
-    expect(executed[2]).toContain("DROP COLUMN"); // drop_column
-    expect(executed[3]).toContain("DROP TABLE"); // drop_table
+    expect(executed[2]).toContain("DROP INDEX"); // drop_index
+    expect(executed[3]).toContain("DROP COLUMN"); // drop_column
+    expect(executed[4]).toContain("DROP TABLE"); // drop_table
+  });
+
+  it("runs drop_index before drop_column so an indexed column can be dropped on SQLite", async () => {
+    // Input order deliberately reversed: the diff can hand the executor a
+    // column drop first, but the index covering it must go first or SQLite
+    // rejects the ALTER TABLE ... DROP COLUMN.
+    const { tx, executed } = makeRecordingTx();
+    const ops: Operation[] = [
+      {
+        type: "drop_column",
+        tableName: "single_home",
+        columnName: "hero_image",
+        columnType: "text",
+      } satisfies DropColumnOp,
+      {
+        type: "drop_index",
+        tableName: "single_home",
+        index: {
+          name: "idx_single_home_hero_image",
+          columns: ["hero_image"],
+          unique: false,
+        },
+      } satisfies DropIndexOp,
+    ];
+
+    const count = await executePreResolutionOps(tx, ops, "postgresql");
+
+    expect(count).toBe(2);
+    expect(executed[0]).toContain(
+      'DROP INDEX IF EXISTS "idx_single_home_hero_image"'
+    );
+    expect(executed[1]).toContain('DROP COLUMN "hero_image"');
+  });
+
+  it("mysql drop_index names the table (DROP INDEX ... ON)", async () => {
+    const { tx, executed } = makeRecordingTx();
+    const ops: Operation[] = [
+      {
+        type: "drop_index",
+        tableName: "dc_posts",
+        index: { name: "uq_dc_posts_slug", columns: ["slug"], unique: true },
+      } satisfies DropIndexOp,
+    ];
+
+    await executePreResolutionOps(tx, ops, "mysql");
+
+    expect(executed[0]).toContain(
+      "DROP INDEX `uq_dc_posts_slug` ON `dc_posts`"
+    );
   });
 
   it("dialect quoting: mysql uses backticks", async () => {
@@ -219,5 +275,39 @@ describe("executePreResolutionOps - SQLite", () => {
     expect(count).toBe(1);
     expect(db.run).toHaveBeenCalledTimes(1);
     expect(executed[0]).toContain("RENAME COLUMN");
+  });
+
+  it("drops a removed field's index before its column (SQLite rejects DROP COLUMN on an indexed column)", async () => {
+    const executed: string[] = [];
+    const db = {
+      run: vi.fn((sql: unknown) => {
+        executed.push(extractSqlString(sql));
+      }),
+    };
+    const ops: Operation[] = [
+      {
+        type: "drop_column",
+        tableName: "single_home",
+        columnName: "hero_image",
+        columnType: "text",
+      } satisfies DropColumnOp,
+      {
+        type: "drop_index",
+        tableName: "single_home",
+        index: {
+          name: "idx_single_home_hero_image",
+          columns: ["hero_image"],
+          unique: false,
+        },
+      } satisfies DropIndexOp,
+    ];
+
+    const count = await executePreResolutionOps(db, ops, "sqlite");
+
+    expect(count).toBe(2);
+    expect(executed[0]).toContain(
+      'DROP INDEX IF EXISTS "idx_single_home_hero_image"'
+    );
+    expect(executed[1]).toContain('DROP COLUMN "hero_image"');
   });
 });
