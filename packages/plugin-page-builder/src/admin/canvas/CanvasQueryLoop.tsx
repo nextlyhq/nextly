@@ -23,7 +23,10 @@ export function QueryLoopSamplePreview({ node }: { node: BlockNode }) {
   // The sample rows render through the production `RenderNode`, so it needs the
   // same allowlist the published page uses. Left off, the preview drops images
   // the page will show and the sample stops representing the output.
-  const { remotePatterns } = useEditor();
+  // …and the same node-class map, for the same reason: the rows are compiled
+  // against the document's classes, so rendering them from a different naming
+  // drops the styles the editable template above them shows.
+  const { remotePatterns, nodeClasses } = useEditor();
   const collection =
     typeof node.props.collection === "string" ? node.props.collection : "";
   const sort =
@@ -74,6 +77,7 @@ export function QueryLoopSamplePreview({ node }: { node: BlockNode }) {
                   registry={defaultBlockRegistry}
                   item={item}
                   remotePatterns={remotePatterns}
+                  classes={nodeClasses}
                 />
               ))}
             </div>
