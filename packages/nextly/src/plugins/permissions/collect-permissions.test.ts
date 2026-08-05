@@ -225,6 +225,17 @@ describe("the publish lifecycle a plugin may already have declared", () => {
     expect(out).toEqual([]);
   });
 
+  it("drops one declared with a different case, as the seeder does", () => {
+    // The seeder compares in lower case, because `ensurePermission` matches an existing row that
+    // way. Left case-sensitive here, `Publish` survives collection while the seeder withholds it,
+    // so codegen and role bundles go on referencing a slug that is never seeded under that name.
+    const out = collectCustomPermissions(cfg(["posts"]), [
+      plugin("@acme/workflow", [{ action: "Publish", resource: "posts" }]),
+    ]);
+
+    expect(out).toEqual([]);
+  });
+
   it("drops unpublish on a collection too", () => {
     const out = collectCustomPermissions(cfg(["posts"]), [
       plugin("@acme/workflow", [{ action: "unpublish", resource: "posts" }]),

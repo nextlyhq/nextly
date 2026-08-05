@@ -118,7 +118,10 @@ export function collectCustomPermissions(
 
     // Redundant with what the seeder now emits, and valid before it did. Drop
     // it and carry on rather than failing the boot of an app that upgraded.
-    if (ADOPTED_LIFECYCLE_ACTIONS.has(action) && ownedByEntity) {
+    // Compared in lower case, the way the seeder compares it. Left case-sensitive, a declaration
+    // like `Publish-Reports` survives here while the seeder withholds it — so codegen and role
+    // bundles go on referencing a slug that is never seeded under that name.
+    if (ADOPTED_LIFECYCLE_ACTIONS.has(action.toLowerCase()) && ownedByEntity) {
       return;
     }
 

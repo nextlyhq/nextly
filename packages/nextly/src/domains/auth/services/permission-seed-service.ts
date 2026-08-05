@@ -1,5 +1,5 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { sql, eq } from "drizzle-orm";
+import { sql, eq, and } from "drizzle-orm";
 
 import type { RBACDatabaseInstance } from "@nextly/types/rbac-operations";
 
@@ -534,6 +534,34 @@ export class PermissionSeedService extends BaseService {
    * `(action, resource)` unique index + `ensurePermission` make re-seeding a
    * no-op. New IDs are returned for super-admin assignment by the caller.
    */
+  /**
+   * Give a built-in permission back to the presets, on a database that already got it wrong.
+   *
+   * Ownership is what `role-presets.ts` reads to decide a permission is a plugin's, so a row left
+   * attributed goes on being withheld from Editor however the declaration is treated now. Matched
+   * case-insensitively, the way `ensurePermission` matches.
+   */
+  private async clearPluginOwner(
+    action: string,
+    resource: string
+  ): Promise<void> {
+    const { permissions } = this.tables;
+    try {
+      await (this.db as RBACDatabaseInstance)
+        .update(permissions)
+        .set({ owner: null })
+        .where(
+          and(
+            sql`LOWER(${permissions.action}) = LOWER(${action})`,
+            sql`LOWER(${permissions.resource}) = LOWER(${resource})`
+          )
+        );
+    } catch {
+      // The table may predate the column on a partially migrated database. Nothing is written and
+      // the permission keeps whatever it had, which is the state this repair found it in.
+    }
+  }
+
   async seedCustomPermissions(
     perms: CollectedPermission[]
   ): Promise<SeedResult> {
@@ -575,6 +603,12 @@ export class PermissionSeedService extends BaseService {
           `${perm.action.toLowerCase()}:${perm.resource.toLowerCase()}`
         )
       ) {
+        // Repaired, not merely skipped. On a database seeded by the old behaviour the row already
+        // carries `owner = <plugin>`, and nothing else revisits it: `markOrphanedPermissions`
+        // leaves an attribution alone while the declaration is still there. Withholding ownership
+        // from here on would fix new installs and leave every upgraded one exactly as broken —
+        // the Editor grant still missing, for the same reason.
+        await this.clearPluginOwner(perm.action, perm.resource);
         result.skipped++;
         continue;
       }

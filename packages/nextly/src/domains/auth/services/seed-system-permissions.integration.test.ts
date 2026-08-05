@@ -232,6 +232,31 @@ describe("a plugin declaring a permission on a Builder entity", () => {
     expect(row?.owner).toBeNull();
   });
 
+  it("repairs a row an earlier version already attributed to the plugin", async () => {
+    // The common case on upgrade. Nothing else revisits an attribution while the declaration is
+    // still present, so withholding ownership from here on would fix new installs and leave every
+    // existing one exactly as broken — the Editor grant still missing.
+    const handle = await bootWithBuilderCollection();
+    current = handle;
+
+    const seeder = handle.getService("permissionSeedService");
+    await seeder.seedAllCollectionPermissions();
+    await handle.adapter.executeQuery(
+      `UPDATE permissions SET owner = 'some-plugin' WHERE action = 'publish' AND resource = 'reports'`
+    );
+    expect((await permissionRow(handle, "publish", "reports"))?.owner).toBe(
+      "some-plugin"
+    );
+
+    await seeder.seedCustomPermissions([
+      declared({ action: "publish", resource: "reports" }),
+    ]);
+
+    expect(
+      (await permissionRow(handle, "publish", "reports"))?.owner
+    ).toBeNull();
+  });
+
   it("is not fooled by a declaration that differs only in case", async () => {
     // `ensurePermission` finds an existing row with `LOWER(action) = LOWER(action)`, so an exact
     // comparison here is walked straight past and the owner is patched anyway.
