@@ -6,7 +6,11 @@
  * @module runtime/routing
  */
 export { resolveContent } from "./resolve-content";
-export type { ContentEntry, ResolveContentOptions } from "./resolve-content";
+export type {
+  ContentEntry,
+  NextlyContentReader,
+  ResolveContentOptions,
+} from "./resolve-content";
 
 export { isReservedPath } from "./reserved-paths";
 
@@ -15,6 +19,7 @@ export type {
   ContentRoute,
   ContentRouteArgs,
   ContentRouteConfig,
+  RenderContext,
   ResolvedContext,
 } from "./content-route";
 
