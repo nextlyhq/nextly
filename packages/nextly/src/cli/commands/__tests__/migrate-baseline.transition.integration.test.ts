@@ -436,9 +436,15 @@ function runSuite(dialect: SupportedDialect): void {
       dialect: h.dialect,
       migrationsDir: h.migrationsDir,
       logger,
-      localizedEntities: toMinimalEntities(localizedConfig.collections, e =>
-        resolveCollectionTableName(e.slug, e.dbName)
-      ).map(e => ({ ...e, builtBy: "codeFirst" as const })),
+      // The RAW collections, as the command passes them: the column
+      // descriptor reads storage inputs the diff engine's reduction drops.
+      localizedEntities: localizedConfig.collections.map(c => ({
+        slug: c.slug,
+        tableName: resolveCollectionTableName(c.slug),
+        fields: c.fields,
+        status: false,
+        builtBy: "codeFirst" as const,
+      })),
       defaultLocale: "en",
     });
     if (adopted.kind !== "baselined") throw new Error("expected a baseline");
@@ -459,10 +465,21 @@ function runSuite(dialect: SupportedDialect): void {
 
     const recorded = JSON.parse(
       await readFile(adopted.snapshotPath, "utf-8")
-    ) as { snapshot: { tables: { name: string }[] } };
+    ) as { snapshot: { tables: { name: string; localized?: boolean }[] } };
     const names = recorded.snapshot.tables.map(t => t.name);
     expect(names).toContain(LOCALIZED_TABLE);
     expect(names).not.toContain(`${LOCALIZED_TABLE}_locales`);
+
+    // And the main table is marked localized. An introspected snapshot records
+    // columns and nothing about localization, and `planCompanionMigrations`
+    // treats a missing marker as unknown rather than inferring from shape — so
+    // without this, later DISABLING localization emits only the column re-add
+    // and leaves the translations unrestored, unarchived and the companion
+    // undropped.
+    const main = recorded.snapshot.tables.find(
+      (t: { name: string }) => t.name === LOCALIZED_TABLE
+    ) as { localized?: boolean } | undefined;
+    expect(main?.localized).toBe(true);
   });
 
   it("rebuilds the same schema in an environment that has only the files", async () => {
@@ -527,9 +544,13 @@ function runSuite(dialect: SupportedDialect): void {
       dialect: h.dialect,
       migrationsDir: h.migrationsDir,
       logger,
-      localizedEntities: toMinimalEntities(configV1.collections, e =>
-        resolveCollectionTableName(e.slug, e.dbName)
-      ).map(e => ({ ...e, builtBy: "codeFirst" as const })),
+      localizedEntities: configV1.collections.map(c => ({
+        slug: c.slug,
+        tableName: resolveCollectionTableName(c.slug),
+        fields: c.fields,
+        status: false,
+        builtBy: "codeFirst" as const,
+      })),
     });
     if (adopted.kind !== "baselined") throw new Error("expected a baseline");
 

@@ -41,19 +41,18 @@ import {
   planBaseline,
 } from "../../domains/schema/migrate/baseline";
 import { customJunctionNames } from "../../domains/schema/migrate/junction-names";
-import { toMinimalEntities } from "../../domains/schema/migrate-create/config-entities";
 import {
   formatMigrationFile,
   formatTimestamp,
   slugify,
 } from "../../domains/schema/migrate-create/format-file";
-import type { MinimalConfigEntity } from "../../domains/schema/migrate-create/generate";
 import {
   loadLatestSnapshot,
   writeSnapshot,
 } from "../../domains/schema/migrate-create/snapshot-io";
 import { diffSnapshots } from "../../domains/schema/pipeline/diff/diff";
 import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
+import type { NextlySchemaSnapshot } from "../../domains/schema/pipeline/diff/types";
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
 import {
   isCompanionTable,
@@ -151,15 +150,68 @@ async function firstAppliedMigration(
   }
 }
 
-/** Tags entities with the builder that created their tables. */
-function asBuilderEntities(entities: MinimalConfigEntity[]): BaselineEntity[] {
-  return entities.map(e => ({ ...e, builtBy: "builder" as ColumnOrigin }));
+/**
+ * Mark the tables that have a companion standing beside them.
+ *
+ * An introspected snapshot is a PRE-MARKER snapshot: it records columns and
+ * nothing about localization. `planCompanionMigrations` derives a transition
+ * from those markers and deliberately treats their absence as unknown rather
+ * than inferring from column shape — so after a baseline, DISABLING
+ * localization would emit only the column re-add, leaving the translations in
+ * `_locales` unrestored, unarchived and the companion undropped.
+ *
+ * The database answers this without needing the config: a companion table
+ * standing beside a main table IS the statement that the main table is
+ * localized. `localizedColumns` is left for the transition planner to resolve
+ * from the companion itself, which is where it already reads them.
+ */
+function annotateLocalization(
+  snapshot: NextlySchemaSnapshot,
+  companionTables: readonly string[]
+): NextlySchemaSnapshot {
+  const localized = new Set(
+    companionTables.map(name =>
+      name.slice(0, -STORAGE_FORMAT.companionSuffix.length)
+    )
+  );
+  if (localized.size === 0) return snapshot;
+  return {
+    ...snapshot,
+    tables: snapshot.tables.map(table =>
+      localized.has(table.name) ? { ...table, localized: true } : table
+    ),
+  };
 }
 
-function asCodeFirstEntities(
-  entities: MinimalConfigEntity[]
+/**
+ * Reduce raw entities to what the baseline needs, keeping their fields intact.
+ *
+ * `builtBy` is the service that created the table, not "who wrote the config":
+ * `DynamicCollectionSchemaService` builds Builder collections AND singles, and
+ * `FieldGroupSchemaService` builds components. Naming an origin outside that
+ * union does not fail to compile if it is cast — it reaches the descriptor's
+ * default branch and throws.
+ */
+function toBaselineEntities(
+  entities: readonly unknown[],
+  builtBy: ColumnOrigin,
+  resolveTableName: (entity: { slug: string; dbName?: string }) => string
 ): BaselineEntity[] {
-  return entities.map(e => ({ ...e, builtBy: "codeFirst" }));
+  return entities.map(raw => {
+    const e = raw as {
+      slug: string;
+      dbName?: string;
+      fields?: readonly unknown[];
+      status?: boolean;
+    };
+    return {
+      slug: e.slug,
+      tableName: resolveTableName({ slug: e.slug, dbName: e.dbName }),
+      fields: e.fields ?? [],
+      status: e.status === true,
+      builtBy,
+    };
+  });
 }
 
 /**
@@ -214,7 +266,9 @@ function buildCompanionStatements(args: {
       builtBy: entity.builtBy,
       slug: entity.slug,
       dbName: entity.tableName,
-      fields: entity.fields,
+      fields: entity.fields as Parameters<
+        typeof deriveCompanionSpec
+      >[0]["fields"],
       dialect: args.dialect,
       defaultLocale: args.defaultLocale,
       // Asserted rather than read from the entity: the table is standing in
@@ -239,15 +293,24 @@ function buildCompanionStatements(args: {
  * environment parsing to be exercised.
  */
 /**
- * A config entity plus who created its table.
+ * An entity as the baseline needs it: its table name, and enough of its fields
+ * to rebuild a companion the way the creator built it.
  *
- * `deriveCompanionSpec` maps a translatable field's column width differently
- * for a Builder table than for a code-first one — on MySQL an unbounded
- * Builder text field becomes `text`, while the code-first rules give it
- * `varchar(255)`. Deriving a Builder companion with the code-first rules emits
- * DDL that rejects translations the adopted database accepts.
+ * The fields are the RAW ones, not the diff engine's reduced shape. The column
+ * descriptor reads `options.variant`, `validation.maxLength` and
+ * `options.format` to decide a column's storage, and the reduction drops all
+ * three — so a companion derived from it recreates bounded text and formatted
+ * numbers as plain TEXT and integers, which is not the table `db:sync` built.
+ *
+ * `builtBy` names the service that created the table, because each reads those
+ * inputs differently: on MySQL an unbounded field is `text` under the
+ * collection rules and `varchar(255)` under the code-first ones.
  */
-export interface BaselineEntity extends MinimalConfigEntity {
+export interface BaselineEntity {
+  slug: string;
+  tableName: string;
+  fields: readonly unknown[];
+  status: boolean;
   builtBy: ColumnOrigin;
 }
 
@@ -437,7 +500,7 @@ export async function baselineCore(
       const snapshotPath = await writeSnapshot(
         metaDir,
         baseName,
-        plan.snapshot,
+        annotateLocalization(plan.snapshot, companionTables),
         sqlContent
       );
 
@@ -579,19 +642,23 @@ export async function runMigrateBaseline(
         )
       : null;
     if (manifest) {
-      uiEntities = asBuilderEntities([
-        ...toMinimalEntities(manifest.collections ?? [], e =>
+      uiEntities = [
+        // `DynamicCollectionSchemaService` builds Builder collections and
+        // singles alike, so both carry the `collection` reading.
+        ...toBaselineEntities(manifest.collections ?? [], "collection", e =>
           resolveCollectionTableName(e.slug)
         ),
-        ...toMinimalEntities(manifest.singles ?? [], e =>
+        ...toBaselineEntities(manifest.singles ?? [], "collection", e =>
           resolveSingleTableName({ slug: e.slug })
         ),
-        // Components carry companions too, and a component table name can
-        // collide with the junction shape exactly as a collection's can.
-        ...toMinimalEntities(manifest.components ?? [], e =>
+        // Components are built by `FieldGroupSchemaService`, which bounds on a
+        // top-level maxLength and reads no variant at all. They also carry
+        // companions, and their table names can collide with the junction
+        // shape exactly as a collection's can.
+        ...toBaselineEntities(manifest.components ?? [], "fieldGroup", e =>
           resolveComponentTableName(e.slug)
         ),
-      ]);
+      ];
       uiJunctions = customJunctionNames(manifest.collections ?? []);
     }
 
@@ -607,17 +674,15 @@ export async function runMigrateBaseline(
       // generated companion migration would have produced.
       localizedEntities: [
         ...uiEntities,
-        ...asCodeFirstEntities([
-          ...toMinimalEntities(config.collections, e =>
-            resolveCollectionTableName(e.slug, e.dbName)
-          ),
-          ...toMinimalEntities(config.singles ?? [], e =>
-            resolveSingleTableName({ slug: e.slug, dbName: e.dbName })
-          ),
-          ...toMinimalEntities(config.fieldGroups ?? [], e =>
-            resolveComponentTableName(e.slug)
-          ),
-        ]),
+        ...toBaselineEntities(config.collections, "codeFirst", e =>
+          resolveCollectionTableName(e.slug, e.dbName)
+        ),
+        ...toBaselineEntities(config.singles ?? [], "codeFirst", e =>
+          resolveSingleTableName({ slug: e.slug, dbName: e.dbName })
+        ),
+        ...toBaselineEntities(config.fieldGroups ?? [], "codeFirst", e =>
+          resolveComponentTableName(e.slug)
+        ),
       ],
       defaultLocale: config.localization?.defaultLocale,
       ttlSeconds: config.db.migrateLockTtlSeconds,
