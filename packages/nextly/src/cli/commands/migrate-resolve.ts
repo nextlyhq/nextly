@@ -151,14 +151,6 @@ export async function runMigrateResolve(
     // this flag, and recovery is exactly when a stale lock is most likely.
     await maybeForceUnlock(options, db, dialect);
 
-    // Config and the Builder manifest, merged as generation merges them, so
-    // the verifier excludes the same derived tables the snapshot never held.
-    const resolvedSchema = await resolveDeclaredSchema({
-      projectRoot: cwd,
-      config: configResult.config,
-      deferredExtends: configResult.deferredExtends,
-    });
-
     // fail-fast mode (the default) never returns undefined — it runs fn or
     // throws — so the non-null assertion below is safe.
     const result = (await withMigrateLock(db, dialect, () =>
@@ -170,6 +162,18 @@ export async function runMigrateResolve(
         fileExists: name => fileExistsIn(migrationsDir, name),
         loadTargetSnapshot: () => loadSnapshot(metaDir, filename),
         introspectLive: async () => {
+          // Config and the Builder manifest, merged as generation merges them,
+          // so the verifier excludes the same derived tables the snapshot never
+          // held. Resolved HERE rather than before the lock because this
+          // callback is its only consumer and a malformed `ui-schema.json`
+          // throws: loading it eagerly would take --rolled-back,
+          // --failed-cleanup and --skip-verify down with it, and those are the
+          // modes an operator reaches for when something is already broken.
+          const resolvedSchema = await resolveDeclaredSchema({
+            projectRoot: cwd,
+            config: configResult.config,
+            deferredExtends: configResult.deferredExtends,
+          });
           const live = await safeListTables(adapter);
           // Managed main tables only. A localized companion is
           // migration-owned and never appears in a `migrate:create` snapshot,

@@ -12,6 +12,24 @@ import type { CompanionCopyRef, CompanionMigrationSpec } from "./types";
  */
 export const COMPANION_DEFAULT_STATUS = "draft";
 
+/** Per-locale draft/publish state; present only when the entity has one. */
+export const COMPANION_STATUS_COLUMN = "_status";
+
+/**
+ * The columns a companion has by virtue of BEING a companion, rather than
+ * because a field is localized.
+ *
+ * Exported so a reader looking at an existing companion can subtract them and
+ * be left with exactly the translated columns. Kept beside the statement that
+ * writes them: a reader that decided this set for itself would misread the
+ * table the moment either side gained a column.
+ */
+export const COMPANION_STRUCTURAL_COLUMNS: ReadonlySet<string> = new Set([
+  "_parent",
+  "_locale",
+  COMPANION_STATUS_COLUMN,
+]);
+
 function buildCompanionCreateStatement(
   spec: CompanionMigrationSpec,
   ifNotExists: boolean
@@ -22,7 +40,7 @@ function buildCompanionCreateStatement(
     .join(",\n");
   // i18n M6: per-locale draft/publish status column (only when the collection has Draft/Published).
   const statusDef = spec.status
-    ? `  ${q("_status", dialect)} VARCHAR(20) NOT NULL DEFAULT '${COMPANION_DEFAULT_STATUS}',\n`
+    ? `  ${q(COMPANION_STATUS_COLUMN, dialect)} VARCHAR(20) NOT NULL DEFAULT '${COMPANION_DEFAULT_STATUS}',\n`
     : "";
   // 🔴 `IF NOT EXISTS` is OPT-IN, and only an emitted migration FILE may ask for it.
   //

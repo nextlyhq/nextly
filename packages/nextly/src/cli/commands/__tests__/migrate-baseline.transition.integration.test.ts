@@ -482,6 +482,107 @@ function runSuite(dialect: SupportedDialect): void {
     expect(main?.localized).toBe(true);
   });
 
+  it("records the companion columns the database has, not the ones config asks for", async () => {
+    // The drift error walks an operator into editing config BEFORE adopting,
+    // so the two disagreeing is the ordinary case rather than the exotic one.
+    // A baseline states where the schema starts, so it has to state what is
+    // actually there: recording a column the adopted database does not have
+    // describes a database that never existed, and the next `migrate:create`
+    // sees the companion already present and emits nothing to reconcile it.
+    await runDbSync(h, localizedConfig);
+    expect(await tableExists(h, `${LOCALIZED_TABLE}_locales`)).toBe(true);
+
+    const adopted = await baselineCore({
+      adapter: h.adapter,
+      db: h.db,
+      dialect: h.dialect,
+      migrationsDir: h.migrationsDir,
+      logger,
+      // Config has moved on: `subtitle` is localized here but was never
+      // pushed, so the live companion carries `title` alone.
+      localizedEntities: [
+        {
+          slug: LOCALIZED_SLUG,
+          tableName: LOCALIZED_TABLE,
+          fields: [
+            ...localizedConfig.collections[0].fields,
+            text({ name: "subtitle", localized: true }),
+          ],
+          status: false,
+          builtBy: "codeFirst" as const,
+        },
+      ],
+      defaultLocale: "en",
+    });
+    if (adopted.kind !== "baselined") throw new Error("expected a baseline");
+
+    const up = splitSqlStatements(
+      parseSqlSections(await readFile(adopted.sqlPath, "utf-8")).upSql
+    );
+    const companion = up
+      .filter(st => st.includes(`${LOCALIZED_TABLE}_locales`))
+      .join("\n");
+
+    expect(companion).toContain("title");
+    expect(companion).not.toContain("subtitle");
+    // Structure still comes from the production DDL builder — it is the only
+    // source for a foreign key, which the snapshot model cannot express.
+    expect(companion).toMatch(/ON DELETE CASCADE/i);
+
+    // And the recorded localized columns match, since a later disable
+    // restores, archives and drops exactly these.
+    const recorded = JSON.parse(
+      await readFile(adopted.snapshotPath, "utf-8")
+    ) as {
+      snapshot: { tables: { name: string; localizedColumns?: string[] }[] };
+    };
+    const main = recorded.snapshot.tables.find(t => t.name === LOCALIZED_TABLE);
+    expect(main?.localizedColumns).toEqual(["title"]);
+  });
+
+  it("refuses to adopt a companion holding a column nothing describes", async () => {
+    // The other direction, and it cannot be resolved by preferring either
+    // side. A column standing in the database that no field describes has no
+    // logical kind, and introspection recovers only the physical type — so the
+    // companion cannot be rebuilt faithfully. Emitting it without the column
+    // would produce a baseline whose fresh environments come up missing
+    // translations, which is the failure this command exists to prevent.
+    await runDbSync(h, localizedConfig);
+    expect(await tableExists(h, `${LOCALIZED_TABLE}_locales`)).toBe(true);
+
+    const refused = await baselineCore({
+      adapter: h.adapter,
+      db: h.db,
+      dialect: h.dialect,
+      migrationsDir: h.migrationsDir,
+      logger,
+      // `title` was removed from the config while its column, and whatever
+      // translations it holds, are still in the database.
+      localizedEntities: [
+        {
+          slug: LOCALIZED_SLUG,
+          tableName: LOCALIZED_TABLE,
+          fields: [text({ name: "summary", localized: true })],
+          status: false,
+          builtBy: "codeFirst" as const,
+        },
+      ],
+      defaultLocale: "en",
+    });
+
+    expect(refused.kind).toBe("companion-mismatch");
+    if (refused.kind !== "companion-mismatch") return;
+    expect(refused.mismatches).toEqual([
+      { table: `${LOCALIZED_TABLE}_locales`, columns: ["title"] },
+    ]);
+
+    // Nothing was written: a refusal that left a half-adopted history behind
+    // would be worse than the state it refused. The directory is created by
+    // the write itself, so its absence counts as empty.
+    const files = await readdir(h.migrationsDir).catch(() => []);
+    expect(files.filter(f => f.endsWith(".sql"))).toEqual([]);
+  });
+
   it("rebuilds the same schema in an environment that has only the files", async () => {
     // The reason a baseline writes real SQL instead of a marker: a new
     // environment, a CI job, or `migrate:fresh` builds the schema from the

@@ -32,7 +32,11 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import type { Command } from "commander";
 
 import { deriveCompanionSpec } from "../../domains/i18n/migration/derive-companion-spec";
-import { buildCompanionCreateOnlySql } from "../../domains/i18n/migration/generate-up";
+import {
+  buildCompanionCreateOnlySql,
+  COMPANION_STATUS_COLUMN,
+  COMPANION_STRUCTURAL_COLUMNS,
+} from "../../domains/i18n/migration/generate-up";
 import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
 import { getSchemaEventsDdl } from "../../domains/schema/events/schema-events-ddl";
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
@@ -208,21 +212,36 @@ function annotateLocalization(
  */
 function buildCompanionStatements(args: {
   companionTables: string[];
+  liveCompanions: NextlySchemaSnapshot;
   entities: ResolvedEntity[];
   dialect: SupportedDialect;
   defaultLocale: string;
-}): { statements: string[]; columnsByMain: Map<string, string[]> } {
+}): {
+  statements: string[];
+  columnsByMain: Map<string, string[]>;
+  undescribed: CompanionMismatch[];
+} {
   if (args.companionTables.length === 0) {
-    return { statements: [], columnsByMain: new Map() };
+    return { statements: [], columnsByMain: new Map(), undescribed: [] };
   }
   const present = new Set(args.companionTables);
+  const liveByTable = new Map(args.liveCompanions.tables.map(t => [t.name, t]));
   const statements: string[] = [];
   const columnsByMain = new Map<string, string[]>();
+  const undescribed: CompanionMismatch[] = [];
 
   for (const entity of args.entities) {
-    if (!present.has(`${entity.tableName}${STORAGE_FORMAT.companionSuffix}`)) {
-      continue;
-    }
+    const companionTable = `${entity.tableName}${STORAGE_FORMAT.companionSuffix}`;
+    if (!present.has(companionTable)) continue;
+    const liveTable = liveByTable.get(companionTable);
+    // The database is the authority on WHICH columns the companion has, and
+    // the config is the only source for what each one means. So the config
+    // derives the specs and the live table decides which of them survive:
+    // adopting is exactly the moment the two can disagree, because the drift
+    // recovery walks an operator into editing the config first, and a baseline
+    // that recorded the config's answer would describe a database that never
+    // existed.
+    const liveColumns = new Set((liveTable?.columns ?? []).map(c => c.name));
     const spec = deriveCompanionSpec({
       builtBy: entity.builtBy,
       slug: entity.slug,
@@ -236,21 +255,47 @@ function buildCompanionStatements(args: {
       // the database, so this entity IS localized whatever the config's flag
       // currently says, and a false flag would derive no companion at all.
       collectionLocalized: true,
-      status: entity.status === true,
+      // From the live table too: `_status` is a physical column, and deriving
+      // it from the config's Draft/Published flag would emit a companion the
+      // adopted one does not match in either direction.
+      status: liveColumns.has(COMPANION_STATUS_COLUMN),
     });
-    if (spec) {
-      statements.push(
-        buildCompanionCreateOnlySql(spec, { emittedToFile: true })
-      );
-      // The column names the companion actually declares, which is what a
-      // later disable transition restores, archives and drops.
-      columnsByMain.set(
-        entity.tableName,
-        spec.columns.map(c => c.name)
-      );
+    if (!spec) continue;
+
+    const described = new Set(spec.columns.map(c => c.name));
+    const missing = [...liveColumns].filter(
+      name => !COMPANION_STRUCTURAL_COLUMNS.has(name) && !described.has(name)
+    );
+    if (missing.length > 0) {
+      // Refused rather than skipped. A column standing in the database that
+      // the config no longer describes cannot be rendered faithfully — its
+      // logical kind is what decides the DDL type, and introspection recovers
+      // only the physical one — and emitting the companion without it would
+      // produce a baseline that rebuilds the table missing a column holding
+      // translations.
+      undescribed.push({ table: companionTable, columns: missing.sort() });
+      continue;
     }
+
+    // Config columns the live table does not have are dropped, not emitted:
+    // the recorded starting point has to be the schema that is actually there.
+    const reconciled = spec.columns.filter(c => liveColumns.has(c.name));
+    if (reconciled.length === 0) continue;
+
+    statements.push(
+      buildCompanionCreateOnlySql(
+        { ...spec, columns: reconciled },
+        { emittedToFile: true }
+      )
+    );
+    // The column names the companion actually declares, which is what a
+    // later disable transition restores, archives and drops.
+    columnsByMain.set(
+      entity.tableName,
+      reconciled.map(c => c.name)
+    );
   }
-  return { statements, columnsByMain };
+  return { statements, columnsByMain, undescribed };
 }
 
 export interface BaselineCoreDeps {
@@ -296,10 +341,17 @@ export interface BaselineCoreDeps {
   now?: Date;
 }
 
+/** A companion holding translated columns the config no longer describes. */
+export interface CompanionMismatch {
+  table: string;
+  columns: string[];
+}
+
 export type BaselineCoreResult =
   | { kind: "already-baselined"; snapshotName: string }
   | { kind: "history-not-empty"; filename: string }
   | { kind: "empty-database" }
+  | { kind: "companion-mismatch"; mismatches: CompanionMismatch[] }
   | {
       kind: "baselined";
       sqlPath: string;
@@ -405,12 +457,32 @@ export async function baselineCore(
         generateSQL(op, dialect)
       );
 
+      // The companion's own columns, read from the database for the same
+      // reason the junction's are: what is standing there is the schema being
+      // adopted. Only its structure — the composite key and the cascading
+      // foreign key, neither of which a snapshot can hold — comes from the
+      // config's DDL builder.
+      const companionLive =
+        companionTables.length > 0
+          ? await introspectLiveSnapshot(db, dialect, companionTables)
+          : EMPTY_SNAPSHOT;
+
       const companionSql = buildCompanionStatements({
         companionTables,
+        liveCompanions: companionLive,
         entities: deps.localizedEntities ?? [],
         dialect,
         defaultLocale: deps.defaultLocale ?? "en",
       });
+      if (companionSql.undescribed.length > 0) {
+        // Before anything is written. A baseline that silently omitted these
+        // would rebuild the companion without them, so the failure would not
+        // appear until a fresh environment came up missing translations.
+        return {
+          kind: "companion-mismatch",
+          mismatches: companionSql.undescribed,
+        };
+      }
 
       // Companions carry a foreign key to their main table, so every main
       // table has to exist before any of them runs.
@@ -600,6 +672,32 @@ export async function runMigrateBaseline(
         "replay them against tables it has not created yet. Move them aside, baseline,"
       );
       logger.info("then re-apply what they did as a new migration.");
+      return;
+    }
+
+    if (result.kind === "companion-mismatch") {
+      logger.info(
+        "Some translation tables hold columns this project no longer describes."
+      );
+      logger.newline();
+      for (const m of result.mismatches) {
+        logger.info(`  ${m.table}: ${m.columns.join(", ")}`);
+      }
+      logger.newline();
+      logger.info(
+        "A baseline records where the schema starts, so it has to describe every"
+      );
+      logger.info(
+        "column that is there. These have no field to say what they hold, and"
+      );
+      logger.info(
+        "adopting without them would rebuild the table missing translations."
+      );
+      logger.newline();
+      logger.info(
+        "Either restore the localized fields to your config, or drop"
+      );
+      logger.info("the columns if the content is no longer needed.");
       return;
     }
 

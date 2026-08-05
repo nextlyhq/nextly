@@ -227,4 +227,63 @@ describe("resolveMigration", () => {
       });
     });
   });
+
+  describe("modes that do not verify", () => {
+    // These are the modes an operator reaches for when something is already
+    // broken, so everything the equivalence check needs — the live database,
+    // the Builder manifest, the resolved schema — has to stay out of their
+    // path. The caller relies on this to defer that work into the callback:
+    // if any of these ever started verifying, the deferral would silently
+    // stop protecting them.
+    const exploding = {
+      introspectLive: (): Promise<NextlySchemaSnapshot> => {
+        throw new Error("verification input must not be built for this mode");
+      },
+    };
+
+    it("--rolled-back never builds the verification input", async () => {
+      const { repo, base } = makeDeps(testDb, exploding);
+      await repo.insertEvent({
+        eventType: "file_apply",
+        status: "applied",
+        source: "cli-migrate",
+        filename: "001_add_posts.sql",
+        startedAt: new Date(1),
+      });
+      const r = await resolveMigration({
+        mode: "rolled-back",
+        filename: "001_add_posts.sql",
+        ...base,
+      });
+      expect(r.kind).toBe("rolled-back");
+    });
+
+    it("--failed-cleanup never builds the verification input", async () => {
+      const { repo, base } = makeDeps(testDb, exploding);
+      await repo.insertEvent({
+        eventType: "file_apply",
+        status: "failed",
+        source: "cli-migrate",
+        filename: "001_add_posts.sql",
+        startedAt: new Date(1),
+      });
+      const r = await resolveMigration({
+        mode: "failed-cleanup",
+        filename: "001_add_posts.sql",
+        ...base,
+      });
+      expect(r.kind).toBe("failed-cleanup");
+    });
+
+    it("--applied with skipVerify never builds the verification input", async () => {
+      const { base } = makeDeps(testDb, exploding);
+      const r = await resolveMigration({
+        mode: "applied",
+        filename: "001_add_posts.sql",
+        skipVerify: true,
+        ...base,
+      });
+      expect(r.kind).toBe("applied");
+    });
+  });
 });

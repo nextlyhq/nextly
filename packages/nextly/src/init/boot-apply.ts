@@ -474,9 +474,14 @@ async function applyPendingMigrations(label: string): Promise<void> {
     };
 
     // Run migrateCore with appropriate options
-    const { customJunctionNames } = await import(
-      "../domains/schema/migrate/junction-names"
+    const { resolveDeclaredSchema } = await import(
+      "../domains/schema/migrate/resolved-schema"
     );
+    const resolvedSchema = await resolveDeclaredSchema({
+      projectRoot: process.cwd(),
+      config: configResult.config,
+      deferredExtends: configResult.deferredExtends,
+    });
     const result = await migrateCore({
       dialect: adapterDialect,
       db,
@@ -489,10 +494,11 @@ async function applyPendingMigrations(label: string): Promise<void> {
       // does, so it needs the same knowledge of which tables are derived. A
       // custom `options.junctionTable` name matches no convention and appears
       // in no snapshot, so without this an install that migrates on boot stops
-      // with drift the CLI path would not have reported.
-      knownJunctions: new Set(
-        customJunctionNames(configResult.config.collections)
-      ),
+      // with drift the CLI path would not have reported. Resolved through the
+      // same helper the CLI uses, because the name may come from a Builder
+      // collection rather than the config, and reading the config alone would
+      // make boot and CLI disagree about the same database.
+      knownJunctions: resolvedSchema.knownJunctions,
       allowDestructive: allowCoreDestructive,
       ensureLedger: async () => {
         const adapter = drizzleAdapter as {

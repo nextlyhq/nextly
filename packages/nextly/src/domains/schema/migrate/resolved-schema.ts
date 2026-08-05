@@ -102,6 +102,25 @@ function toResolved(
   });
 }
 
+/**
+ * Builder entities of one kind that no code-first entity of the SAME kind
+ * shadows.
+ *
+ * Per kind, deliberately: the manifest allows one slug on a collection, a
+ * single and a field group at once, and the merge resolves each kind
+ * separately. One combined set of shadowed slugs would drop an unshadowed
+ * Builder single named `home` because a collection of that name was shadowed,
+ * and its live `_locales` companion would then be skipped — leaving a baseline
+ * that cannot rebuild the schema it adopted.
+ */
+function survivingOf<T extends { slug: string }>(
+  builder: readonly T[],
+  codeFirst: readonly unknown[]
+): T[] {
+  const shadowed = new Set(codeFirst.map(e => (e as { slug: string }).slug));
+  return builder.filter(e => !shadowed.has(e.slug));
+}
+
 export interface ResolveSchemaArgs {
   projectRoot: string;
   config: {
@@ -159,26 +178,37 @@ export async function resolveDeclaredSchema(
         typeof applyDeferredExtendsToManifest
       >[1]
     );
+    // Code-first wins, so a shadowed Builder entity is dropped rather than
+    // ordered after: reaching companion derivation at all is what emits its
+    // stale shape first.
+    const survivingCollections = survivingOf(
+      merged.collections ?? [],
+      args.config.collections
+    );
     builder = [
-      ...toResolved(merged.collections ?? [], "collection", e =>
+      ...toResolved(survivingCollections, "collection", e =>
         resolveCollectionTableName(e.slug)
       ),
-      ...toResolved(merged.singles ?? [], "collection", resolvers.single),
-      ...toResolved(merged.components ?? [], "fieldGroup", e =>
-        resolveComponentTableName(e.slug)
+      ...toResolved(
+        survivingOf(merged.singles ?? [], args.config.singles ?? []),
+        "collection",
+        resolvers.single
+      ),
+      ...toResolved(
+        survivingOf(merged.components ?? [], args.config.fieldGroups ?? []),
+        "fieldGroup",
+        e => resolveComponentTableName(e.slug)
       ),
     ];
-    builderJunctions = customJunctionNames(merged.collections ?? []);
+    // From the SURVIVING collections only. A shadowed collection's custom
+    // junction name belongs to a relationship the winning schema no longer
+    // declares, so treating it as derived would exclude the table from the
+    // snapshot and preserve it forever instead of letting the first migration
+    // after adoption drop it.
+    builderJunctions = customJunctionNames(survivingCollections);
   }
 
-  // Code-first wins, so a shadowed Builder entity is dropped rather than
-  // ordered after: reaching companion derivation at all is what emits its
-  // stale shape first.
-  const codeFirstSlugs = new Set(codeFirst.map(e => e.slug));
-  const entities = [
-    ...codeFirst,
-    ...builder.filter(e => !codeFirstSlugs.has(e.slug)),
-  ];
+  const entities = [...codeFirst, ...builder];
 
   return {
     entities,
