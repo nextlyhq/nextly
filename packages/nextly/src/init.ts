@@ -52,7 +52,10 @@ import {
 } from "./init/build-service-config";
 import { runDriftCheck } from "./init/drift-check";
 import type { Nextly } from "./init/nextly-instance";
-import { runPostInitTasks } from "./init/post-init-tasks";
+import {
+  assertNoReservedPermissionCollisions,
+  runPostInitTasks,
+} from "./init/post-init-tasks";
 import { reloadNextlyConfig } from "./init/reload-config";
 // HMR listener primitives (F1 PR 2). Lazy WS setup inside getNextly()
 // detects code-first config edits and flips a reload flag; the next
@@ -269,11 +272,17 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
           logger: driftLogger,
         });
 
+        // A permission a plugin declares on an entity the built-in seeder owns is a configuration
+        // error, and it is checked BEFORE returning: the seeding below is fired without waiting,
+        // so a failure inside it would surface as an unhandled rejection after the app had
+        // already begun serving requests, with a plugin route sharing a content permission.
+        await assertNoReservedPermissionCollisions();
+
         // Run post-initialisation tasks (template seeding, code-field sync,
         // permission seeding, etc.) in the background so that getNextly()
-        // returns as soon as the DB connection is ready.  All tasks are
-        // idempotent and their errors are already caught internally, so
-        // firing without await is safe.
+        // returns as soon as the DB connection is ready.  Every task is
+        // idempotent, and the one failure that must stop boot was raised above,
+        // so firing the rest without await is safe.
         void runPostInitTasks();
       }
 

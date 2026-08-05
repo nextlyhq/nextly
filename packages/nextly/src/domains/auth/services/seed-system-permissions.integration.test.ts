@@ -271,6 +271,30 @@ describe("a plugin declaring a permission on a Builder entity", () => {
     expect(row?.owner).toBeNull();
   });
 
+  it("refuses the collision without seeding anything, for a caller that only checks", async () => {
+    // Its own entry point because the seeding it belongs to is fired without waiting, and because
+    // the route-handler cold start seeds permissions and never collects the custom ones — a check
+    // inside either path alone is skipped by the other.
+    const handle = await bootWithBuilderCollection();
+    current = handle;
+
+    const seeder = handle.getService("permissionSeedService");
+    await seeder.seedAllCollectionPermissions();
+
+    await expect(
+      seeder.assertNoReservedCollisions([
+        declared({ action: "delete", resource: "reports" }),
+      ])
+    ).rejects.toThrow(/permission/i);
+
+    // And it lets the adopted lifecycle through, exactly as seeding does.
+    await expect(
+      seeder.assertNoReservedCollisions([
+        declared({ action: "publish", resource: "reports" }),
+      ])
+    ).resolves.toBeUndefined();
+  });
+
   it("still lets a plugin own a permission on a resource that is not an entity", async () => {
     const handle = await bootWithCoreTables();
     current = handle;

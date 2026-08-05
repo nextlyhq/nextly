@@ -179,3 +179,25 @@ export async function runPostInitTasks(): Promise<void> {
     // marker stays unset, so the next boot tries again.
   }
 }
+
+/**
+ * Refuse a plugin permission that collides with one the built-in seeder owns.
+ *
+ * Its own entry point because the seeding it belongs to runs in the background, and because the
+ * route-handler cold start seeds permissions without ever collecting the custom ones — so a check
+ * living inside either path alone would be skipped by the other.
+ *
+ * Forgiving about everything except the collision: on a fresh database the tables may not exist
+ * yet, which is not a configuration error and must not stop boot.
+ */
+export async function assertNoReservedPermissionCollisions(): Promise<void> {
+  try {
+    const permissionSeedService = getService("permissionSeedService");
+    const config = getService("config");
+    await permissionSeedService.assertNoReservedCollisions(
+      collectCustomPermissions(config, config.plugins ?? [])
+    );
+  } catch (error) {
+    if (isPermissionCollision(error)) throw error;
+  }
+}

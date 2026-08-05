@@ -12,6 +12,7 @@ import { routeAuthRequest } from "../auth/handlers/router";
 import type { SanitizedNextlyConfig } from "../collections/config/define-config";
 import { isServicesRegistered, registerServices, getService } from "../di";
 import type { NextlyServiceConfig } from "../di/register";
+import { assertNoReservedPermissionCollisions } from "../init/post-init-tasks";
 import { ensureHmrListener } from "../runtime/hmr-listener";
 import { getImageProcessor } from "../storage/image-processor";
 
@@ -174,6 +175,11 @@ export async function ensureServicesInitialized(): Promise<void> {
     // createDynamicHandlers() get permissions auto-seeded on first request.
     // Without this, permissions like "update-api-keys" won't exist and
     // the admin UI will block access to protected settings tabs.
+    // The same refusal the main boot path makes. This cold start seeds permissions and never
+    // collects the custom ones, so without it an app reaching the engine only through
+    // `createDynamicHandlers` boots straight past a plugin sharing a content permission.
+    await assertNoReservedPermissionCollisions();
+
     try {
       const permissionSeedService = getService("permissionSeedService");
       const systemResult = await permissionSeedService.seedSystemPermissions();

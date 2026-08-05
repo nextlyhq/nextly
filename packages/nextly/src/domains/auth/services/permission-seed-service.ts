@@ -535,6 +535,35 @@ export class PermissionSeedService extends BaseService {
    * `(action, resource)` unique index + `ensurePermission` make re-seeding a
    * no-op. New IDs are returned for super-admin assignment by the caller.
    */
+  /**
+   * Refuse a declared permission the built-in seeder owns, before anything is written.
+   *
+   * Separate from seeding because the two run on different schedules. Seeding is deliberately
+   * fired without waiting — every task in it is idempotent and additive — while a collision is a
+   * configuration error the app must not serve requests with. Awaiting this alone keeps boot
+   * deterministic about the thing that matters without making it wait for the rest.
+   *
+   * Also the reason it is a method rather than a step inside `seedCustomPermissions`: the
+   * route-handler cold start seeds system, collection and single permissions and never the custom
+   * ones, so a check living only in that path would never run there.
+   */
+  async assertNoReservedCollisions(
+    perms: CollectedPermission[]
+  ): Promise<void> {
+    const builtIn = await this.builtInOwnedPermissions();
+    for (const perm of perms) {
+      const key = `${perm.action.toLowerCase()}:${perm.resource.toLowerCase()}`;
+      if (!builtIn.has(key)) continue;
+      if (ADOPTED_LIFECYCLE_ACTIONS.has(perm.action.toLowerCase())) continue;
+      throw permissionCollisionError(
+        perm.action,
+        perm.resource,
+        [perm.owner],
+        "crud-permission-reserved"
+      );
+    }
+  }
+
   async seedCustomPermissions(
     perms: CollectedPermission[]
   ): Promise<SeedResult> {
