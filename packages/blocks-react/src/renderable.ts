@@ -115,8 +115,58 @@ export function describeValue(value: unknown): string {
  * failure than the escape it would close — a component's children are its own
  * contract.
  */
+/**
+ * Element types whose children React renders itself even though the type is an
+ * object rather than a symbol.
+ *
+ * A context provider is the case: React 19 uses the context object directly
+ * (`react.context`) and earlier versions use `Ctx.Provider` (`react.provider`),
+ * and React renders the children of both. Enumerated rather than accepting any
+ * `react.*` tagged object, because `memo` and `lazy` are tagged the same way and
+ * are wrappers around a COMPONENT — their children are an ordinary prop, so
+ * inspecting them would reject valid render props. A consumer is excluded for
+ * exactly that reason: `<Ctx.Consumer>{value => ...}</Ctx.Consumer>` is a
+ * function child.
+ *
+ * Missing a future provider-like tag costs an escape; wrongly including a
+ * component wrapper costs a working block. The list stays conservative.
+ */
+const PROVIDER_TAGS: ReadonlySet<string> = new Set([
+  "react.context",
+  "react.provider",
+]);
+
+/** The `$$typeof` tag of a value, when it carries a React one. */
+function reactTag(value: unknown): string | null {
+  if (typeof value !== "object" || value === null) return null;
+  const tag = (value as { $$typeof?: unknown }).$$typeof;
+  if (typeof tag !== "symbol" || typeof tag.description !== "string") {
+    return null;
+  }
+  return tag.description.startsWith("react.") ? tag.description : null;
+}
+
+/**
+ * Whether React can render an element's TYPE at all.
+ *
+ * `isValidElement` answers whether a value is shaped like an element, not
+ * whether React can render it: `createElement(props.as)` with `as` stored as a
+ * number produces a perfectly valid element whose type React refuses with
+ * "Element type is invalid" — thrown from inside its own render, after the
+ * block boundary has returned. A block building JSX from stored data is exactly
+ * how that value gets there.
+ */
+function isRenderableElementType(type: unknown): boolean {
+  if (typeof type === "string") return type.length > 0;
+  // A component, and every React built-in (fragment, Suspense, StrictMode).
+  if (typeof type === "function" || typeof type === "symbol") return true;
+  return reactTag(type) !== null;
+}
+
 function rendersOwnChildren(element: unknown): boolean {
   const type = (element as { type?: unknown }).type;
+  const tag = reactTag(type);
+  if (tag !== null) return PROVIDER_TAGS.has(tag);
   // A host element (`type` is a tag name) and every React built-in (`type` is a
   // `react.*` symbol — fragment, Suspense, StrictMode, Profiler) render their
   // children themselves. Matching the symbol KIND rather than listing the known
@@ -282,6 +332,9 @@ export function normalizeRenderable(
     }
 
     if (isValidElement(current)) {
+      if (!isRenderableElementType((current as { type?: unknown }).type)) {
+        return "an element whose type React cannot render";
+      }
       const propReason = hostPropReason(current);
       if (propReason !== null) return propReason;
       return rendersOwnChildren(current) ? inspect(childrenOf(current)) : null;
@@ -352,6 +405,12 @@ export function normalizeRenderable(
     }
 
     if (isValidElement(current)) {
+      if (!isRenderableElementType((current as { type?: unknown }).type)) {
+        return {
+          ok: false,
+          reason: "an element whose type React cannot render",
+        };
+      }
       const propReason = hostPropReason(current);
       if (propReason !== null) return { ok: false, reason: propReason };
       const reason = rendersOwnChildren(current)

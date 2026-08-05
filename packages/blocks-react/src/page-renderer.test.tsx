@@ -1,4 +1,10 @@
-import { Suspense, memo, type ReactElement } from "react";
+import {
+  Suspense,
+  createContext,
+  createElement,
+  memo,
+  type ReactElement,
+} from "react";
 import { renderToReadableStream } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -1256,6 +1262,190 @@ describe("PageRenderer", () => {
       ]) {
         expect(html).not.toContain(forbidden);
       }
+    });
+  });
+
+  describe("documents this renderer cannot read", () => {
+    it("refuses a document from a newer formatter", async () => {
+      // The envelope itself may mean something different, so reading whatever
+      // sits under `nodes` would show content that was never authored that way.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={{
+            formatVersion: 2 as unknown as typeof DOCUMENT_FORMAT_VERSION,
+            kind: "page",
+            nodes: [node("a", "test/text", { props: { value: "guessed" } })],
+          }}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual(["unsupported-format"]);
+      expect(html).not.toContain("guessed");
+    });
+
+    it("repairs against the caller's limits, not the defaults", async () => {
+      // A site that raised its caps validates and compiles against them, so
+      // repairing against the default would truncate content that is
+      // legitimately there.
+      const box = defineBlock({
+        name: "test/limit-box",
+        version: 1,
+        description: "Nests one slot.",
+        example: { props: {} },
+        slots: { children: {} },
+        render: ({ className, renderSlot }) => (
+          <div className={className}>{renderSlot("children")}</div>
+        ),
+      });
+
+      let deep: BlockNode = node("leaf", "test/text", {
+        props: { value: "deep leaf" },
+      });
+      // Past the engine's default depth of 12, but within a raised cap.
+      for (let level = 0; level < 20; level++) {
+        deep = node(`box-${level}`, "test/limit-box", {
+          slots: { children: [deep] },
+        });
+      }
+      const blocks = createBlockResolver([
+        box as AnyBlockDefinition,
+        text as AnyBlockDefinition,
+      ]);
+
+      const withDefaults = await renderToHtml(
+        <PageRenderer document={doc(deep)} blocks={blocks} />
+      );
+      const withRaised = await renderToHtml(
+        <PageRenderer
+          document={doc(deep)}
+          blocks={blocks}
+          limits={{ maxDepth: 40, maxNodes: 5000, maxBytes: 2 * 1024 * 1024 }}
+        />
+      );
+
+      // The same document, truncated under one cap and whole under the other:
+      // asserting both is what shows the limit is being honoured rather than
+      // that the tree happened to fit.
+      expect(withDefaults).not.toContain("deep leaf");
+      expect(withRaised).toContain("deep leaf");
+    });
+
+    it("drops a node whose version is not a positive integer", async () => {
+      // `-1` and `1.5` are numbers. The migrator only upgrades non-negative
+      // integers and the version-ahead guard only catches values above the
+      // definition, so an impossible version slips between the two.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", {
+              version: 1.5,
+              props: { value: "fractional" },
+            }),
+            node("b", "test/text", {
+              version: -1,
+              props: { value: "negative" },
+            }),
+            node("c", "test/text", { props: { value: "survivor" } })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+        />
+      );
+
+      expect(html).not.toContain("fractional");
+      expect(html).not.toContain("negative");
+      expect(html).toContain("survivor");
+    });
+  });
+
+  describe("element shapes React refuses", () => {
+    it("contains an element whose type React cannot render", async () => {
+      // `createElement(props.as)` with `as` stored as a number produces a valid
+      // element whose type React refuses from inside its own render.
+      const built = defineBlock({
+        name: "test/bad-element-type",
+        version: 1,
+        description: "Builds JSX from a stored element type.",
+        example: { props: {} },
+        render: () => createElement(42 as unknown as string, null, "x"),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/bad-element-type"),
+            node("b", "test/text", { props: { value: "survivor" } })
+          )}
+          blocks={createBlockResolver([
+            built as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual(["invalid-output"]);
+      expect(html).toContain("survivor");
+    });
+
+    it("contains an invalid child inside a context provider", async () => {
+      // React renders a provider's children itself, but its element type is an
+      // object, so the rule that covers Suspense by symbol does not reach it.
+      const Theme = createContext("light");
+      const provided = defineBlock({
+        name: "test/provider-child",
+        version: 1,
+        description: "Puts a plain object inside a context provider.",
+        example: { props: {} },
+        render: () => (
+          <Theme.Provider value="dark">
+            {{ not: "a node" } as unknown as ReactElement}
+          </Theme.Provider>
+        ),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/provider-child"),
+            node("b", "test/text", { props: { value: "survivor" } })
+          )}
+          blocks={createBlockResolver([
+            provided as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual(["invalid-output"]);
+      expect(html).toContain("survivor");
+    });
+
+    it("still accepts a render prop passed to a memo component", async () => {
+      // `memo` carries a react.* tag like a provider does but wraps a COMPONENT,
+      // so its children are an ordinary prop. Treating every tagged object as
+      // owning its children would reject this.
+      const List = memo(
+        ({ children }: { children: (item: string) => ReactElement }) => (
+          <ul>{children("item")}</ul>
+        )
+      );
+      const withMemo = defineBlock({
+        name: "test/memo-render-prop",
+        version: 1,
+        description: "Passes a function as children to a memo component.",
+        example: { props: {} },
+        render: () => <List>{(item: string) => <li>{item}</li>}</List>,
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(node("a", "test/memo-render-prop"))}
+          blocks={createBlockResolver([withMemo as AnyBlockDefinition])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual([]);
+      expect(html).toContain("<li>item</li>");
     });
   });
 

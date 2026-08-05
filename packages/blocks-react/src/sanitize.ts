@@ -73,10 +73,16 @@ export function sanitizeDocument(
       // unknown-block placeholder, which puts that value in the DOM as a data
       // attribute and as text — so a hand-edited document would throw inside
       // React rather than be contained.
+      // The version must be what the engine calls valid — a positive integer.
+      // `-1` and `1.5` are numbers, and the migrator only upgrades non-negative
+      // integers while the version-ahead guard only catches values ABOVE the
+      // definition, so an impossible version would slip between the two and
+      // reach the current renderer with props from a schema that never existed.
       if (
         typeof candidate.id !== "string" ||
         typeof candidate.type !== "string" ||
-        typeof candidate.version !== "number"
+        !Number.isInteger(candidate.version) ||
+        candidate.version < 1
       ) {
         changed = true;
         continue;

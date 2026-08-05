@@ -1,13 +1,17 @@
 import {
+  DEFAULT_LIMITS,
+  DOCUMENT_FORMAT_VERSION,
   PAGE_ROOT_CLASS,
   migrateDocument,
   type BlockDocument,
+  type DocumentLimits,
   type StyleCompileContext,
 } from "@nextlyhq/blocks-engine";
 import type { ReactElement, ReactNode } from "react";
 
 import { BlockList } from "./block-boundary";
 import { createStandaloneContext, type PageContext } from "./context";
+import { BlockPlaceholder } from "./placeholder";
 import {
   registeredBlocks,
   migrationSourceFor,
@@ -42,6 +46,14 @@ export interface PageRendererProps {
   styleContext?: StyleCompileContext;
   /** Shown in place of an asynchronous block until its output arrives. */
   blockFallback?: ReactNode;
+  /**
+   * The caps this site holds its documents to, used while repairing the stored
+   * shape. A site that raised `maxNodes` for long pages validates and compiles
+   * against that number, so repairing against the default would truncate
+   * content that is legitimately there. Falls back to the compile context's
+   * limits, then to the engine defaults.
+   */
+  limits?: DocumentLimits;
 }
 
 /**
@@ -72,6 +84,7 @@ export function PageRenderer({
   styles,
   styleContext,
   blockFallback,
+  limits,
 }: PageRendererProps): ReactElement {
   const resolver = blocks ?? registeredBlocks();
   const pageContext = context ?? createStandaloneContext();
@@ -86,8 +99,26 @@ export function PageRenderer({
   // renderer is handed whatever the database returned — a slot holding an
   // object instead of a list would otherwise throw here, in the page component
   // itself, where no per-block boundary can contain it.
+  // A document written by a newer formatter is refused rather than read. The
+  // envelope itself may mean something different, so migrating and rendering
+  // whatever sits under `nodes` shows content that was never authored this way
+  // — worse than showing nothing, because nothing announces itself.
+  if (document.formatVersion !== DOCUMENT_FORMAT_VERSION) {
+    return (
+      <div className={PAGE_ROOT_CLASS}>
+        <BlockPlaceholder
+          reason="unsupported-format"
+          type={`formatVersion ${String(document.formatVersion)}`}
+        />
+      </div>
+    );
+  }
+
   const { doc } = migrateDocument(
-    sanitizeDocument(document),
+    sanitizeDocument(
+      document,
+      limits ?? styleContext?.limits ?? DEFAULT_LIMITS
+    ),
     migrationSourceFor(resolver)
   );
 

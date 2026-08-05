@@ -8,6 +8,8 @@ export type PlaceholderReason =
   | "migration-failed"
   /** The node was saved against a newer definition than this app has. */
   | "version-ahead"
+  /** The whole document is in a format version this renderer does not know. */
+  | "unsupported-format"
   /** The block's own render threw or rejected. */
   | "render-error"
   /** The block returned something React cannot render. */
@@ -17,8 +19,11 @@ export interface BlockPlaceholderProps {
   reason: PlaceholderReason;
   /** The node's block type, which is the first thing anyone debugging wants. */
   type: string;
-  /** The node's id, so a placeholder can be traced to a document position. */
-  id: string;
+  /**
+   * The node's id, so a placeholder can be traced to a document position.
+   * Absent for a document-level refusal, which belongs to no single node.
+   */
+  id?: string;
   /** What went wrong, when there is a message worth showing. */
   detail?: string;
 }
@@ -28,6 +33,7 @@ const REASON_TEXT: Readonly<Record<PlaceholderReason, string>> = {
   "unknown-block": "No block is registered for this type",
   "migration-failed": "This block could not be upgraded to its current version",
   "version-ahead": "This block was saved by a newer version of the app",
+  "unsupported-format": "This page is stored in a format this app cannot read",
   "render-error": "This block failed to render",
   "invalid-output": "This block returned something that cannot be rendered",
 };
