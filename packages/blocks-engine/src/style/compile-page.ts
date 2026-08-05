@@ -958,11 +958,11 @@ export function compilePageCss(
   // each node is built from that same call, so a class dropped here is dropped from both.
   //
   // Charged against an allowance of their own, one per class. A site's class library is one
-  // document's configuration and every document's problem, and it took two goes to bound that
-  // properly: sharing the NODE budget let a malformed library entry spend it before any node was
-  // reached, and sharing one budget across the tier let a single unreferenced entry spend it
-  // before any later class was read. Either way one bad entry stripped styling from a page that
-  // never referenced it.
+  // document's configuration and every document's problem, so neither wider budget will do:
+  // sharing the NODE budget lets a malformed library entry spend it before any node is reached,
+  // and sharing one budget across the whole tier lets a single unreferenced entry spend it before
+  // any later class is read. Either way one bad entry strips styling from a page that never
+  // referenced it.
   // The library is one site-settings record read by every page compile, and it arrives whether or
   // not anything validated it. A non-array — `{}` from a corrupt row — reaches a spread inside
   // `orderedNamedClasses` and throws, which would take down rendering for every page on the site

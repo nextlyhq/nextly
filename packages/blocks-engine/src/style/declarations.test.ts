@@ -116,8 +116,8 @@ describe("the emitter walks the catalog, not the stored map", () => {
   });
 
   it("orders declarations by property name, whatever order they were stored in", () => {
-    // What the stored-key sort used to provide. Emitted output is bytes a page caches and a diff
-    // is read against, so the order has to come from the catalog rather than from insertion.
+    // Emitted output is bytes a page caches and a diff is read against, so the order has to be a
+    // property of the catalog rather than of the order values happened to be stored in.
     const out = compileStyleValues(
       { width: "10px", color: "red", background: { color: "blue" } },
       "/nodes/0/styles/base/base"
