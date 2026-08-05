@@ -275,4 +275,8 @@ export {
   NAMED_CLASS_SLUG_RE,
 } from "./style/named-class";
 export type { BreakpointAxis } from "./style/breakpoint-axes";
+
+// Where each emitted declaration came from, for an editor that has to tell an author which of
+// several tiers they are looking at. Produced only when `StyleCompileContext.trace` asks for it.
+export type { StyleOrigin, StyleTraceEntry } from "./style/style-trace";
 export { BREAKPOINT_AXES } from "./style/breakpoint-axes";
