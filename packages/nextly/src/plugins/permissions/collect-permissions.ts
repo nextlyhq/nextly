@@ -152,7 +152,15 @@ export function collectCustomPermissions(
     out.push({
       action,
       resource,
-      slug: permissionSlug(action, resource),
+      // Composed from the normalized halves, because identity already is: two lines above, and in
+      // `ensurePermission`, an existing row is matched with `LOWER(action) = LOWER(action)`. So
+      // `Publish/Reports` and `publish/reports` are ONE permission, and deriving two slugs for it
+      // means whichever is written first owns the row while the other's role bundle and generated
+      // type reference a name no row answers to. The seeder cannot repair that: for an entity it
+      // cannot see — a Builder collection lives in `dynamic_collections`, not the config — the
+      // declaration is collected rather than dropped, and the row it collides with keeps its own
+      // canonical slug.
+      slug: permissionSlug(action.toLowerCase(), entitySlug),
       name: perm.label ?? permissionName(action, resource),
       description: perm.description,
       owner,

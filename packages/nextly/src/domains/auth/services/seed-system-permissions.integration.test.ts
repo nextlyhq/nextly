@@ -159,8 +159,8 @@ describe("system permission slugs", () => {
 
 describe("a plugin declaring a permission on a Builder entity", () => {
   /**
-   * The reproduction from the follow-up doc: a collection that exists only in
-   * `dynamic_collections`, and a plugin declaring a permission on its slug.
+   * A collection that exists only in `dynamic_collections`, and a plugin
+   * declaring a permission on its slug.
    *
    * `collectCustomPermissions` decides what an entity is from the CONFIG, so a
    * Builder collection is invisible to it and its permissions are collected as
@@ -173,10 +173,10 @@ describe("a plugin declaring a permission on a Builder entity", () => {
     handle: TestNextly,
     action: string,
     resource: string
-  ): Promise<{ owner: string | null } | undefined> {
+  ): Promise<{ owner: string | null; orphaned_at: unknown } | undefined> {
     const rows = (await handle.adapter.executeQuery(
-      `SELECT owner FROM permissions WHERE action = '${action}' AND resource = '${resource}'`
-    )) as unknown as Array<{ owner: string | null }>;
+      `SELECT owner, orphaned_at FROM permissions WHERE action = '${action}' AND resource = '${resource}'`
+    )) as unknown as Array<{ owner: string | null; orphaned_at: unknown }>;
     return rows[0];
   }
 
@@ -255,6 +255,31 @@ describe("a plugin declaring a permission on a Builder entity", () => {
     expect(
       (await permissionRow(handle, "publish", "reports"))?.owner
     ).toBeNull();
+  });
+
+  it("un-marks a row the orphan sweep retired while it was misattributed", async () => {
+    // The declaration was present, then absent for one boot, then present again. The sweep marks
+    // an owned row it no longer sees; giving the row back without clearing that mark strands it,
+    // because the sweep skips a row with no owner and `listPermissions` filters marked rows out
+    // before the presets are seeded. The permission exists, its collection exists, and Editor is
+    // still not granted it.
+    const handle = await bootWithBuilderCollection();
+    current = handle;
+
+    const seeder = handle.getService("permissionSeedService");
+    await seeder.seedAllCollectionPermissions();
+    await handle.adapter.executeQuery(
+      `UPDATE permissions SET owner = 'some-plugin', orphaned_at = 1
+         WHERE action = 'publish' AND resource = 'reports'`
+    );
+
+    await seeder.seedCustomPermissions([
+      declared({ action: "publish", resource: "reports" }),
+    ]);
+
+    const row = await permissionRow(handle, "publish", "reports");
+    expect(row?.owner).toBeNull();
+    expect(row?.orphaned_at).toBeNull();
   });
 
   it("is not fooled by a declaration that differs only in case", async () => {

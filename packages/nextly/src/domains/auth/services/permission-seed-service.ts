@@ -540,8 +540,15 @@ export class PermissionSeedService extends BaseService {
    * Ownership is what `role-presets.ts` reads to decide a permission is a plugin's, so a row left
    * attributed goes on being withheld from Editor however the declaration is treated now. Matched
    * case-insensitively, the way `ensurePermission` matches.
+   *
+   * `orphanedAt` is cleared with it, and has to be: the orphan sweep skips a row with no owner, so
+   * a permission marked while it was misattributed — declared, then absent for one boot, then
+   * declared again — would never be unmarked by anything, and `listPermissions` filters marked
+   * rows out before the presets are seeded. The permission would exist, and its collection would
+   * exist, and Editor would still not be granted it. This is the same reconciliation
+   * `ensurePermission` performs for a row it writes; a row withheld from it needs it too.
    */
-  private async clearPluginOwner(
+  private async returnPermissionToPresets(
     action: string,
     resource: string
   ): Promise<void> {
@@ -549,7 +556,7 @@ export class PermissionSeedService extends BaseService {
     try {
       await (this.db as RBACDatabaseInstance)
         .update(permissions)
-        .set({ owner: null })
+        .set({ owner: null, orphanedAt: null })
         .where(
           and(
             sql`LOWER(${permissions.action}) = LOWER(${action})`,
@@ -608,7 +615,7 @@ export class PermissionSeedService extends BaseService {
         // leaves an attribution alone while the declaration is still there. Withholding ownership
         // from here on would fix new installs and leave every upgraded one exactly as broken —
         // the Editor grant still missing, for the same reason.
-        await this.clearPluginOwner(perm.action, perm.resource);
+        await this.returnPermissionToPresets(perm.action, perm.resource);
         result.skipped++;
         continue;
       }
