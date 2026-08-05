@@ -16,6 +16,7 @@
  * machine-independent, and it fails on the regression itself rather than on a
  * measurement of it.
  */
+import { namespacedGlobalName } from "@nextlyhq/blocks-engine";
 import * as csstree from "css-tree";
 import { describe, expect, it } from "vitest";
 
@@ -95,21 +96,28 @@ describe("following nested rules stays linear in the nesting", () => {
 });
 
 describe("the bound is the one the origin scan already uses", () => {
-  it("reports a nesting it refuses to check, at the same depth", () => {
-    // Two bounds would let one pass reach a level the other reports as too deep
-    // to check — a rule rewritten inside a block nothing verified, or a block
-    // verified and then left holding a stale name.
-    const tooDeep = `@keyframes fade { from { opacity: 0 } } ${nested(
-      MAX_RULE_NESTING + 5
-    )
-      .split("} ")
-      .slice(1)
-      .join("} ")}`;
-    const out = sanitizeCustomCss(tooDeep, SCOPE);
-    // Whatever survives, nothing inside a rule too deep to check may still
-    // carry the bare name the definition no longer has.
-    if (out.css.includes("animation:")) {
-      expect(out.css).not.toMatch(/animation:\s*fade\b/);
-    }
+  it("rewrites a name nested right up to the bound", () => {
+    // Inside the bound, the name follows the rename like any other.
+    const out = sanitizeCustomCss(nested(MAX_RULE_NESTING - 1), SCOPE);
+    expect(out.css).not.toBe("");
+    expect(out.css).not.toMatch(/animation:\s*fade\b/);
+    expect(out.css).toContain(namespacedGlobalName("fade", SCOPE));
+  });
+
+  it("removes what it will not follow, rather than leaving a stale name", () => {
+    // Past the bound the origin scan cannot check the rule either, so it goes
+    // and says so. That is the outcome that matters: two bounds would let one
+    // pass reach a level the other reports as too deep, leaving a block either
+    // rewritten but unverified, or verified and holding a name that moved.
+    const out = sanitizeCustomCss(nested(MAX_RULE_NESTING + 5), SCOPE);
+
+    // The fixture has to be REAL CSS, asserted rather than assumed. An earlier
+    // version built it by string surgery, produced a stray `}`, and drove the
+    // sanitizer down its fatal-parse path — which returns an empty sheet, so
+    // the assertion below never ran and the test passed on nothing at all.
+    expect(out.css).toContain("@keyframes");
+
+    expect(out.warnings.map(warning => warning.code)).toContain("unchecked");
+    expect(out.css).not.toMatch(/animation:\s*fade\b/);
   });
 });
