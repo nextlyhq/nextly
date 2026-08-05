@@ -25,5 +25,9 @@
 
 Creating a Single from the Schema Builder now writes its table and its registry row as one
 operation, so an interrupted create leaves a record of what it was doing instead of a table nothing
-knows about. Re-running a create over schema it already produced now succeeds on MySQL, which
-previously reported a correct schema as a failed migration.
+knows about.
+
+On MySQL, retrying any Schema Builder migration that stopped part way now succeeds instead of
+reporting the already-correct schema as a failed migration. MySQL cannot express "create this index
+only if it is missing", so the retry previously failed the same way every time and left no way
+forward.
