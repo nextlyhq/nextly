@@ -1,0 +1,82 @@
+# Nextly Review Bot: automatic in-depth review on every push to a PR targeting main.
+# The reviewer is Claude Code driven by GLM through z.ai's Anthropic-compatible API;
+# the review protocol lives in .github/review-prompt.md so it can evolve without
+# touching this workflow.
+name: Nextly Review Bot
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches: [main]
+
+# A newer push supersedes an in-flight review of the same PR; cancelling keeps
+# one review per head SHA instead of a queue of stale rounds.
+concurrency:
+  group: nextly-review-bot-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+# contents stays read-only so a prompt-injected agent cannot push; the bot only
+# needs to post reviews and comments.
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  review:
+    # Drafts are skipped until ready_for_review; the same-repo guard makes fork
+    # PRs (which get no secrets on pull_request) skip cleanly instead of failing.
+    if: >
+      !github.event.pull_request.draft &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    # GLM thinking responses are slow; a deep multi-phase review needs headroom.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Full history: the review protocol distinguishes PR-introduced defects
+          # from pre-existing ones via git archaeology against main.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Run review agent
+        uses: anthropics/claude-code-action@9db594c7a0e82298c121c18b7f08aa1579ce7341 # v1.0.185
+        env:
+          # z.ai's Anthropic-compatible endpoint; the key goes in via
+          # anthropic_api_key below and is exported as ANTHROPIC_AUTH_TOKEN.
+          ANTHROPIC_BASE_URL: https://api.z.ai/api/anthropic
+          # Model tier overrides are how third-party providers select models.
+          ANTHROPIC_DEFAULT_OPUS_MODEL: glm-5.2
+          ANTHROPIC_DEFAULT_SONNET_MODEL: glm-5.2
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: glm-4.7
+          # z.ai-recommended CI settings: long single-response timeout and an
+          # explicit compact window (context detection is wrong for third-party
+          # providers).
+          API_TIMEOUT_MS: "3000000"
+          CLAUDE_CODE_AUTO_COMPACT_WINDOW: "1000000"
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+        with:
+          anthropic_api_key: ${{ secrets.ZAI_API_KEY }}
+          # Explicit token skips the Anthropic GitHub App / OIDC exchange, which
+          # is not needed with a third-party provider.
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          track_progress: true
+          prompt: |
+            Read the file .github/review-prompt.md in the checked-out repository
+            and execute it exactly, phase by phase.
+
+            Invocation context:
+            - Repository: ${{ github.repository }}
+            - PR number: ${{ github.event.pull_request.number }}
+            - Head SHA this run was triggered for: ${{ github.event.pull_request.head.sha }}
+            - Base branch: ${{ github.event.pull_request.base.ref }}
+
+            Post the review with the single gh api reviews call the prompt
+            specifies. Do not approve, request changes, merge, close, or push.
+          # Read-only bash allowlist plus Write for composing the review JSON
+          # payload; no Edit and no unrestricted Bash, so injected instructions
+          # in a diff cannot exfiltrate or modify anything.
+          claude_args: |
+            --allowedTools "Read,Grep,Glob,Write,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh api:*),Bash(git fetch:*),Bash(git show:*),Bash(git diff:*),Bash(git log:*),Bash(git merge-base:*),Bash(rg:*),Bash(ls:*)"
+            --max-turns 150
