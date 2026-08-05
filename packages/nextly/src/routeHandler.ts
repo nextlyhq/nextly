@@ -54,6 +54,7 @@ import {
   updateImageSize,
   deleteImageSize,
 } from "./api/image-sizes";
+import { mintPreviewLink, revokePreviewLinks } from "./api/preview-links";
 import { readOrGenerateRequestId, withRequestIdHeader } from "./api/request-id";
 // canonical respondX wire shapes (spec §5.1) instead of the
 // hand-rolled `{ data: <payload> }` envelope.
@@ -911,6 +912,15 @@ async function handleServiceRequest(
   // before they can read it.
   if (service === "webhooks") {
     return handleWebhookRequest(req, method, routeParams);
+  }
+
+  // ==================== PREVIEW LINKS DIRECT DISPATCH ====================
+  // Above the body read below, like the handlers beside it: these parse their
+  // own JSON, and a consumed stream would reach them empty.
+  if (service === "previewLinks") {
+    return method === "revokePreviewLinks"
+      ? revokePreviewLinks(req)
+      : mintPreviewLink(req);
   }
 
   // ==================== GENERAL SETTINGS DIRECT DISPATCH ====================
