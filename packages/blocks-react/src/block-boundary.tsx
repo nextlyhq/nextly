@@ -112,11 +112,16 @@ function withNodeAttributes(output: ReactNode, node: BlockNode): ReactNode {
   if (attributes) {
     for (const [name, value] of Object.entries(attributes)) {
       if (!isAllowedAttribute(name)) continue;
+      // Lowercased before use. HTML attribute names are ASCII case-insensitive,
+      // but React treats `ID` and `id` as different props — so a case variant
+      // would survive the allowlist and then be rendered ALONGSIDE the modelled
+      // `cssId`, leaving two id attributes on one element.
+      const key = name.toLowerCase();
       // The field is typed as strings and sanitized at write time, but a stored
       // document can hold anything; a non-string would be handed to React as a
       // prop value it never expected.
       if (typeof value !== "string") continue;
-      extra[name] = value;
+      extra[key] = value;
     }
   }
   // The modelled field wins over an attribute of the same name: `cssId` is what
@@ -252,7 +257,10 @@ export function BlockBoundary({
   // keeps its last-good props, which the current render would misread. The
   // placeholder is the honest answer and it comes before resolution, since a
   // stale node is stale whether or not its type is still registered.
-  if (node.migrationFailed) {
+  // `=== true`, not truthy. A stored `"false"` or `{}` is truthy and would drop
+  // public content that never failed anything; the repair pass normalises
+  // structure but leaves this control flag as written.
+  if (node.migrationFailed === true) {
     return (
       <BlockPlaceholder
         reason="migration-failed"

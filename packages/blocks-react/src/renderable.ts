@@ -142,21 +142,31 @@ const CONSUMER_TAG = "react.consumer";
 /** Suspense, whose `fallback` prop is rendered as well as its children. */
 const SUSPENSE_TYPE = Symbol.for("react.suspense");
 
+/** The React symbols that are element types in their own right. */
+const RENDERABLE_REACT_SYMBOLS: ReadonlySet<symbol> = new Set([
+  Symbol.for("react.fragment"),
+  Symbol.for("react.suspense"),
+  Symbol.for("react.suspense_list"),
+  Symbol.for("react.strict_mode"),
+  Symbol.for("react.profiler"),
+]);
+
 /**
- * Whether a symbol is one of React's own element types.
+ * Whether a symbol is one React accepts as an element type.
  *
- * Matched by DESCRIPTION prefix rather than against a list of known symbols, so
- * a built-in React adds later is covered without an edit — and rather than by
- * `typeof === "symbol"` alone, which accepted any foreign symbol:
- * `createElement(Symbol("x"))` passes `isValidElement` and React then refuses
- * it with "Element type is invalid".
+ * By IDENTITY, not by description. The two are not the same thing and the
+ * difference is exploitable in both directions: `Symbol("react.fragment")` is a
+ * different symbol that merely describes itself that way, and
+ * `Symbol.for("react.memo")` is genuinely React's yet is a component-wrapper
+ * tag rather than an element type — React answers both with "Element type is
+ * invalid".
+ *
+ * Enumerating means a built-in React adds later is refused until this list
+ * grows, and that is the right way round: refusing something valid shows up as
+ * a placeholder, accepting something invalid takes the page.
  */
 function isReactBuiltinSymbol(value: unknown): boolean {
-  return (
-    typeof value === "symbol" &&
-    typeof value.description === "string" &&
-    value.description.startsWith("react.")
-  );
+  return typeof value === "symbol" && RENDERABLE_REACT_SYMBOLS.has(value);
 }
 
 /** The `$$typeof` tag of a value, when it carries a React one. */
@@ -191,12 +201,12 @@ function rendersOwnChildren(element: unknown): boolean {
   const type = (element as { type?: unknown }).type;
   const tag = reactTag(type);
   if (tag !== null) return PROVIDER_TAGS.has(tag);
-  // A host element (`type` is a tag name) and every React built-in (`type` is a
-  // `react.*` symbol — fragment, Suspense, StrictMode, Profiler) render their
-  // children themselves. Matching the symbol KIND rather than listing the known
-  // ones means a built-in this module has not heard of is still covered, which
-  // is the opposite of the enumeration problem: being late to a new symbol
-  // would reopen the escape, while covering one early costs nothing.
+  // A host element (`type` is a tag name) and every React built-in (`type` is
+  // one of the element-type symbols — fragment, Suspense, StrictMode, Profiler)
+  // render their children themselves, so both are walked. The same list decides
+  // this and whether the type is renderable at all, which keeps the two answers
+  // from disagreeing: a symbol accepted as a type but not walked here would let
+  // an invalid child through one element higher.
   //
   // A custom component's `type` is a function, and a `memo`/`lazy`/context
   // wrapper's is an object; both receive children as an ordinary prop and own
@@ -229,6 +239,26 @@ function hostPropReason(element: unknown): string | null {
   if (style != null && typeof style !== "object") {
     return `a ${typeof style} \`style\` prop on <${type}>, where React requires an object`;
   }
+
+  // The other two host invariants React throws on rather than warns about, and
+  // both arrive the same way `style` does — from stored content read into JSX.
+  // `!= null` on both, matching React: it skips the prop entirely when it is
+  // absent OR null, so refusing a null here would reject markup React renders
+  // without complaint.
+  const html = (props as { dangerouslySetInnerHTML?: unknown })
+    .dangerouslySetInnerHTML;
+  if (html != null) {
+    if (typeof html !== "object" || !("__html" in html)) {
+      return `a \`dangerouslySetInnerHTML\` prop on <${type}> that is not an object carrying \`__html\``;
+    }
+    // Any non-null children, not just a rendered one: React throws on `false`
+    // here as readily as on a string, because it tests the prop rather than
+    // what the prop would render to.
+    if ((props as { children?: unknown }).children != null) {
+      return `both \`children\` and \`dangerouslySetInnerHTML\` on <${type}>, which React refuses`;
+    }
+  }
+
   return null;
 }
 
@@ -355,6 +385,11 @@ export function normalizeRenderable(
   let remaining = MAX_CHECKED_VALUES;
   let hasUnwrappedThenable = false;
   let wrappedCount = 0;
+  // Promises already substituted for an awaiting wrapper. If the output is
+  // refused later — `[Promise.reject(e), { bad: true }]` — those wrappers are
+  // discarded before React ever renders them, so nothing would await the
+  // promises the block already started.
+  const wrapped: PromiseLike<unknown>[] = [];
 
   const overBudget = () =>
     `more than ${MAX_CHECKED_VALUES} values, which is past the point this renderer will inspect`;
@@ -395,7 +430,7 @@ export function normalizeRenderable(
       // Marking it handled is not swallowing an error — the placeholder is
       // where the failure gets reported — it is declining to let a value this
       // renderer refused kill the server.
-      void Promise.resolve(current).catch(() => undefined);
+      markHandled(current);
       return "a promise inside JSX, which cannot be awaited under this block's containment";
     }
 
@@ -472,6 +507,7 @@ export function normalizeRenderable(
       }
       const node = wrap(current, wrappedCount);
       wrappedCount += 1;
+      wrapped.push(current);
       return { ok: true, node, hasUnwrappedThenable };
     }
 
@@ -518,9 +554,18 @@ export function normalizeRenderable(
     return { ok: true, node: items, hasUnwrappedThenable };
   };
 
+  const markHandled = (pending: PromiseLike<unknown>): void => {
+    void Promise.resolve(pending).catch(() => undefined);
+  };
+
   try {
-    return take(value);
+    const result = take(value);
+    // Only on refusal: an accepted output keeps its wrappers, and those await
+    // the promises under this block's containment.
+    if (!result.ok) wrapped.forEach(markHandled);
+    return result;
   } catch (error) {
+    wrapped.forEach(markHandled);
     // Reading an iterable can throw, and it would throw here rather than where
     // the block was called, which is outside the caller's try block.
     return {

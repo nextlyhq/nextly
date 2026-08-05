@@ -137,10 +137,28 @@ export function PageRenderer({
   // stylesheet can still be trusted.
   const prunedGatedNodes = visible !== doc;
 
+  // Recompiling after pruning must not lose what the stored artifact and the
+  // renderer knew. `scope` lives on the artifact rather than in the compile
+  // context, and the effective limits come from the prop — so passing the raw
+  // context would rebuild a scoped page unscoped, letting its rules reach
+  // another document rendered beside it, and would repair against default caps
+  // a caller had deliberately raised.
+  const effectiveLimits = limits ?? styleContext?.limits ?? DEFAULT_LIMITS;
+  const compileContext =
+    styleContext === undefined
+      ? undefined
+      : {
+          ...styleContext,
+          limits: effectiveLimits,
+          ...(styleContext.scope === undefined && styles?.scope !== undefined
+            ? { scope: styles.scope }
+            : {}),
+        };
+
   const { css, classes, scope } = resolvePageStyles(
     visible,
     styles,
-    styleContext,
+    compileContext,
     resolver,
     prunedGatedNodes
   );

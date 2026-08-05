@@ -1,4 +1,5 @@
 import {
+  StrictMode,
   Suspense,
   createContext,
   createElement,
@@ -8,6 +9,7 @@ import {
 import { renderToReadableStream } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  DEFAULT_LIMITS,
   DOCUMENT_FORMAT_VERSION,
   NODE_CLASS_PREFIX,
   blockTypeClassName,
@@ -1131,6 +1133,106 @@ describe("PageRenderer", () => {
       expect(html).toContain("first");
       expect(html).toContain("second");
     });
+
+    it("gives a repeated dom id to the first node that claims it", async () => {
+      // Two nodes can carry different node ids and the same `cssId`, and
+      // rendering both puts two `id` attributes in one page — which is what
+      // makes an anchor, a label's `for` and an `#id` selector ambiguous.
+      // Engine validation rejects the shape; the forgiving render path must not
+      // quietly reintroduce it.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", { props: { value: "first" }, cssId: "dup" }),
+            node("b", "test/text", { props: { value: "second" }, cssId: "dup" })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+        />
+      );
+
+      // The id is dropped, not the content: the later node's body is fine.
+      expect(html).toContain("first");
+      expect(html).toContain("second");
+      expect(html.match(/id="dup"/g)).toHaveLength(1);
+    });
+
+    it("drops a repeated dom id from a node that also has slots", async () => {
+      // The repaired copy is the one that has to reach the tree. Rebuilding a
+      // node's slots from the ORIGINAL would put the id back on exactly the
+      // nodes that can nest.
+      const box = defineBlock({
+        name: "test/dup-box",
+        version: 1,
+        description: "Renders one slot.",
+        example: { props: {} },
+        slots: { children: {} },
+        render: ({ className, renderSlot }) => (
+          <div className={className}>{renderSlot("children")}</div>
+        ),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", { props: { value: "first" }, cssId: "dup" }),
+            node("b", "test/dup-box", {
+              cssId: "dup",
+              slots: {
+                children: [
+                  node("c", "test/text", { props: { value: "nested" } }),
+                ],
+              },
+            })
+          )}
+          blocks={createBlockResolver([
+            box as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+        />
+      );
+
+      expect(html.match(/id="dup"/g)).toHaveLength(1);
+      expect(html).toContain("first");
+      expect(html).toContain("nested");
+    });
+
+    it("takes over a promise it wrapped when it refuses the output around it", async () => {
+      // Wrapping substitutes a component that awaits the promise; refusing the
+      // output discards that wrapper, so nothing is left listening to a promise
+      // the block already started. Under Node's default
+      // `--unhandled-rejections=throw` an unheard rejection ends the process.
+      //
+      // Asserted as the MECHANISM rather than the symptom: whether a rejection
+      // handler was attached is deterministic, while whether an unhandled
+      // rejection surfaces depends on timing.
+      let rejectionHandler: unknown = null;
+      const pending = {
+        then(
+          _resolve: (value: unknown) => void,
+          reject?: (reason: unknown) => void
+        ) {
+          rejectionHandler = reject ?? null;
+          reject?.(new Error("the block's own failure"));
+        },
+      };
+      const refused = defineBlock({
+        name: "test/refused-with-promise",
+        version: 1,
+        description: "Returns a promise beside a value that cannot render.",
+        example: { props: {} },
+        render: () => [pending, { not: "a node" }] as unknown as ReactElement,
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(node("a", "test/refused-with-promise"))}
+          blocks={createBlockResolver([refused as AnyBlockDefinition])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual(["invalid-output"]);
+      expect(typeof rejectionHandler).toBe("function");
+    });
   });
 
   describe("react built-ins and awaitables", () => {
@@ -1195,6 +1297,136 @@ describe("PageRenderer", () => {
 
       expect(placeholderReasons(html)).toEqual([]);
       expect(html).toContain("awaited");
+    });
+
+    it("refuses a symbol that only describes itself as one of React's", async () => {
+      // `Symbol("react.fragment")` is not `Symbol.for("react.fragment")`: it is
+      // a private symbol wearing the same description. It passes
+      // `isValidElement`, and React then answers it with "Element type is
+      // invalid" from inside its own render — so a description prefix is not
+      // something a type check can be built on.
+      const impostor = defineBlock({
+        name: "test/impostor-symbol",
+        version: 1,
+        description: "Builds an element from a look-alike symbol.",
+        example: { props: {} },
+        render: () =>
+          createElement(
+            Symbol("react.fragment") as unknown as string,
+            null,
+            "x"
+          ),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/impostor-symbol"),
+            node("b", "test/text", { props: { value: "survivor" } })
+          )}
+          blocks={createBlockResolver([
+            impostor as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual(["invalid-output"]);
+      expect(html).toContain("survivor");
+    });
+
+    it("refuses a React symbol that is not an element type", async () => {
+      // `react.memo` is genuinely React's own registered symbol, and it tags a
+      // component WRAPPER rather than naming an element type. React refuses it
+      // with the same message a foreign symbol gets, so belonging to React is
+      // not the property worth testing for.
+      const wrapperTag = defineBlock({
+        name: "test/wrapper-tag-symbol",
+        version: 1,
+        description: "Builds an element from a component-wrapper tag.",
+        example: { props: {} },
+        render: () =>
+          createElement(
+            Symbol.for("react.memo") as unknown as string,
+            null,
+            "x"
+          ),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/wrapper-tag-symbol"),
+            node("b", "test/text", { props: { value: "survivor" } })
+          )}
+          blocks={createBlockResolver([
+            wrapperTag as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual(["invalid-output"]);
+      expect(html).toContain("survivor");
+    });
+
+    it("walks the children of a built-in it accepts as a type", async () => {
+      // One list decides both whether a symbol names a renderable type and
+      // whether React renders that element's children. Were StrictMode absent
+      // from it the element would be accepted unwalked, and the invalid child
+      // would reach React one level higher.
+      const strict = defineBlock({
+        name: "test/strict-child",
+        version: 1,
+        description: "Puts a plain object inside StrictMode.",
+        example: { props: {} },
+        render: () => (
+          <StrictMode>
+            {{ not: "a node" } as unknown as ReactElement}
+          </StrictMode>
+        ),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/strict-child"),
+            node("b", "test/text", { props: { value: "survivor" } })
+          )}
+          blocks={createBlockResolver([
+            strict as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual(["invalid-output"]);
+      expect(html).toContain("survivor");
+    });
+
+    it("renders the ordinary use of that same built-in", async () => {
+      // Refusing the two cases above must not be paid for by refusing this one.
+      const strictOk = defineBlock({
+        name: "test/strict-ok",
+        version: 1,
+        description: "Puts a real element inside StrictMode.",
+        example: { props: {} },
+        render: () => (
+          <StrictMode>
+            <span>strict child</span>
+          </StrictMode>
+        ),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(node("a", "test/strict-ok"))}
+          blocks={createBlockResolver([strictOk as AnyBlockDefinition])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual([]);
+      expect(html).toContain("strict child");
     });
   });
 
@@ -1262,6 +1494,34 @@ describe("PageRenderer", () => {
       ]) {
         expect(html).not.toContain(forbidden);
       }
+    });
+
+    it("does not let a case variant shadow a modelled field", async () => {
+      // HTML attribute names are ASCII case-insensitive, but React treats `ID`
+      // and `id` as different props. Lowercasing only to CHECK the allowlist
+      // would admit `ID` under its stored spelling, and it would then be
+      // written beside the modelled `cssId` — two id attributes on one element,
+      // which is the ambiguity `cssId` exists to keep out.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", {
+              props: { value: "kept" },
+              cssId: "anchor",
+              attributes: { ID: "spoofed", TITLE: "shouted" },
+            })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+        />
+      );
+
+      expect(html).toContain("kept");
+      expect(html).toContain('id="anchor"');
+      expect(html).not.toContain("spoofed");
+      expect(html.match(/ id="/g)).toHaveLength(1);
+      // Lowercasing normalises rather than rejects: an allowed name in an
+      // unusual case still arrives, under its canonical spelling.
+      expect(html).toContain('title="shouted"');
     });
   });
 
@@ -1659,6 +1919,105 @@ describe("PageRenderer", () => {
       expect(placeholderReasons(html)).toEqual([]);
       expect(html).toContain("<li>item</li>");
     });
+
+    it("contains a dangerouslySetInnerHTML that is not { __html }", async () => {
+      // React requires that exact shape and throws otherwise, while writing the
+      // element — after this block's boundary has returned. A block reading a
+      // stored HTML string straight into the prop is how the wrong shape gets
+      // there.
+      const raw = defineBlock({
+        name: "test/raw-html-string",
+        version: 1,
+        description: "Sets inner HTML from a bare string.",
+        example: { props: {} },
+        render: () =>
+          createElement("div", { dangerouslySetInnerHTML: "<b>x</b>" }),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/raw-html-string"),
+            node("b", "test/text", { props: { value: "survivor" } })
+          )}
+          blocks={createBlockResolver([
+            raw as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual(["invalid-output"]);
+      expect(html).toContain("survivor");
+    });
+
+    it("contains children and dangerouslySetInnerHTML on one element", async () => {
+      // React refuses to be told an element's contents twice, and it tests the
+      // PROP rather than what the prop would render to — `false` fails it as
+      // readily as a string does.
+      const both = defineBlock({
+        name: "test/html-and-children",
+        version: 1,
+        description: "Sets inner HTML on an element that also has children.",
+        example: { props: {} },
+        render: () =>
+          createElement(
+            "div",
+            { dangerouslySetInnerHTML: { __html: "<b>x</b>" } },
+            "kid"
+          ),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/html-and-children"),
+            node("b", "test/text", { props: { value: "survivor" } })
+          )}
+          blocks={createBlockResolver([
+            both as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual(["invalid-output"]);
+      expect(html).toContain("survivor");
+    });
+
+    it("still renders the ordinary uses of dangerouslySetInnerHTML", async () => {
+      // React skips the prop entirely when it is absent or null, so neither may
+      // be refused here: a guard stricter than React's turns working blocks
+      // into placeholders, which is the cost this whole check has to stay
+      // under.
+      const ordinary = defineBlock({
+        name: "test/html-ordinary",
+        version: 1,
+        description: "Uses inner HTML the way React documents it.",
+        example: { props: {} },
+        render: () => (
+          <>
+            <div dangerouslySetInnerHTML={{ __html: "<b>raw</b>" }} />
+            <div
+              dangerouslySetInnerHTML={null as unknown as { __html: string }}
+            >
+              plain child
+            </div>
+          </>
+        ),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(node("a", "test/html-ordinary"))}
+          blocks={createBlockResolver([ordinary as AnyBlockDefinition])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual([]);
+      expect(html).toContain("<b>raw</b>");
+      expect(html).toContain("plain child");
+    });
   });
 
   describe("visibility", () => {
@@ -1865,6 +2224,115 @@ describe("PageRenderer", () => {
       );
 
       expect(html).not.toContain("nested vip");
+    });
+
+    it("recompiles under the scope the stored artifact was anchored to", async () => {
+      // The scope travels on the artifact rather than in the compile context,
+      // so a recompile that took only the context would rebuild a scoped page
+      // UNSCOPED — and its rules, no longer anchored to this document, would
+      // reach any other one rendered beside it.
+      const styled = defineBlock({
+        name: "test/scoped-base",
+        version: 1,
+        description: "Declares shared defaults for its type.",
+        example: { props: {} },
+        baseStyles: { base: { base: { color: "rebeccapurple" } } },
+        render: ({ className }) => <p className={className}>public</p>,
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", {
+              props: { value: "gated" },
+              visibility: {
+                conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+              },
+            }),
+            node("b", "test/scoped-base")
+          )}
+          blocks={createBlockResolver([
+            styled as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+          styles={{
+            css: ".stale{}",
+            classes: { a: "nx-a", b: "nx-b" },
+            scope: "nx-doc-a",
+          }}
+          styleContext={{ breakpoints: { viewport: [], container: [] } }}
+        />
+      );
+
+      expect(html).not.toContain("gated");
+      expect(html).toContain("public");
+      // The root must carry the scope, and the rebuilt selectors must be
+      // anchored under it — a root without it means every rule matches nothing,
+      // and rules without it match everything.
+      expect(html).toContain('class="nx-pb-page nx-doc-a"');
+      expect(html).toContain("rebeccapurple");
+      expect(html).toContain(".nx-doc-a");
+    });
+
+    it("recompiles against the limits the caller enforces", async () => {
+      // The compile has to be held to the same caps as the repair pass that ran
+      // just before it. A site that raised `maxDepth` for deeply nested layouts
+      // keeps those nodes through repair, and a compile still bounded by the
+      // default would emit no rule for the deepest of them — a page whose
+      // markup is complete and whose styling silently stops partway down.
+      const box = defineBlock({
+        name: "test/deep-box",
+        version: 1,
+        description: "Renders one slot.",
+        example: { props: {} },
+        slots: { children: {} },
+        render: ({ className, renderSlot }) => (
+          <div className={className}>{renderSlot("children")}</div>
+        ),
+      });
+      const leaf = defineBlock({
+        name: "test/deep-leaf",
+        version: 1,
+        description: "Declares defaults and sits below the default depth cap.",
+        example: { props: {} },
+        baseStyles: { base: { base: { color: "rebeccapurple" } } },
+        render: ({ className }) => <p className={className}>deep leaf</p>,
+      });
+
+      // Depth 13, one below a `maxDepth` the caller raised to hold it: the leaf
+      // is the only node of its type, so a rule for it appears only if the
+      // compile walked that far.
+      let nested = node("n13", "test/deep-leaf");
+      for (let depth = 12; depth >= 1; depth--) {
+        nested = node(`n${depth}`, "test/deep-box", {
+          slots: { children: [nested] },
+        });
+      }
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("gate", "test/text", {
+              props: { value: "gated" },
+              visibility: {
+                conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+              },
+            }),
+            nested
+          )}
+          blocks={createBlockResolver([
+            box as AnyBlockDefinition,
+            leaf as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+          limits={{ ...DEFAULT_LIMITS, maxDepth: 13 }}
+          styleContext={{ breakpoints: { viewport: [], container: [] } }}
+        />
+      );
+
+      expect(html).not.toContain("gated");
+      expect(html).toContain("deep leaf");
+      expect(html).toContain("rebeccapurple");
     });
   });
 
@@ -2332,6 +2800,45 @@ describe("PageRenderer", () => {
       );
 
       expect(html).toContain("via");
+    });
+
+    it("renders a node whose stored flag is not the boolean true", async () => {
+      // The flag is written by the migrator, but what comes back is whatever
+      // the database holds, and both `"false"` and `{}` are truthy. Reading it
+      // loosely takes down public content that never failed a migration —
+      // silently, since the placeholder says only that migration failed.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", {
+              props: { value: "never failed" },
+              migrationFailed: "false" as unknown as boolean,
+            })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual([]);
+      expect(html).toContain("never failed");
+    });
+
+    it("still replaces a node carrying the flag itself", async () => {
+      // The strictness above must not cost the case the flag exists for.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", {
+              props: { value: "stale props" },
+              migrationFailed: true,
+            })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual(["migration-failed"]);
+      expect(html).not.toContain("stale props");
     });
   });
 });

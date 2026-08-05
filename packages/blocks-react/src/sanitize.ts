@@ -40,6 +40,12 @@ export function sanitizeDocument(
   // is a wrong page rather than a missing one, and validation rejects the shape
   // anyway — so a repeat is dropped rather than rendered.
   const seenIds = new Set<string>();
+  // DOM ids, separately from node ids. Two nodes may legitimately carry
+  // different node ids and the same `cssId`, and rendering both puts duplicate
+  // `id` attributes in the page — which is what makes an anchor, a label's
+  // `for`, or an `#id` selector ambiguous. Engine validation rejects the shape;
+  // the forgiving render path must not quietly reintroduce it.
+  const seenDomIds = new Set<string>();
 
   const sanitizeNodes = (nodes: unknown, depth: number): BlockNode[] => {
     if (!Array.isArray(nodes)) {
@@ -99,15 +105,30 @@ export function sanitizeDocument(
       }
       seenIds.add(candidate.id);
 
-      const slots = candidate.slots;
+      const domId =
+        typeof candidate.cssId === "string" ? candidate.cssId : undefined;
+      let kept = candidate;
+      if (domId !== undefined) {
+        if (seenDomIds.has(domId)) {
+          // The first node to claim an id keeps it; the later one renders
+          // without one rather than being dropped, since its content is fine.
+          changed = true;
+          kept = { ...candidate };
+          delete kept.cssId;
+        } else {
+          seenDomIds.add(domId);
+        }
+      }
+
+      const slots = kept.slots;
       if (slots === undefined) {
-        result.push(candidate);
+        result.push(kept);
         continue;
       }
 
       if (typeof slots !== "object" || slots === null || Array.isArray(slots)) {
         changed = true;
-        const withoutSlots: BlockNode = { ...candidate };
+        const withoutSlots: BlockNode = { ...kept };
         delete withoutSlots.slots;
         result.push(withoutSlots);
         continue;
@@ -121,9 +142,7 @@ export function sanitizeDocument(
         nextSlots[name] = sanitized;
       }
 
-      result.push(
-        slotsChanged ? { ...candidate, slots: nextSlots } : candidate
-      );
+      result.push(slotsChanged ? { ...kept, slots: nextSlots } : kept);
     }
 
     return changed ? result : (nodes as BlockNode[]);
