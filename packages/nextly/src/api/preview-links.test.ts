@@ -12,8 +12,14 @@ vi.mock("./route-auth", () => ({
   requireRoutePermission: vi.fn(),
 }));
 
+const { findByID } = vi.hoisted(() => ({ findByID: vi.fn() }));
+
 vi.mock("../init", () => ({
-  getCachedNextly: vi.fn().mockResolvedValue(undefined),
+  getCachedNextly: vi.fn().mockResolvedValue({ findByID }),
+}));
+
+vi.mock("../services/lib/permissions", () => ({
+  resolveRoleSlugs: vi.fn().mockResolvedValue(["editor"]),
 }));
 
 vi.mock("../di", () => ({
@@ -57,6 +63,15 @@ async function json(response: Response): Promise<Record<string, unknown>> {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // The default: the caller can see the entry they named. Tests about the
+  // entry gate override this.
+  findByID.mockResolvedValue({ id: "7" });
+  (requireRouteCollectionAccess as ReturnType<typeof vi.fn>).mockResolvedValue({
+    userId: "u1",
+    permissions: [],
+    roles: [],
+    authMethod: "session",
+  });
   getGeneration.mockResolvedValue(0);
   revokeAll.mockResolvedValue(1);
   (container.get as ReturnType<typeof vi.fn>).mockReturnValue({
@@ -66,6 +81,33 @@ beforeEach(() => {
 });
 
 describe("mintPreviewLink", () => {
+  it("refuses an entry the caller cannot read, even inside a collection it may edit", async () => {
+    // The collection gate answers a coarser question than the token asks. A
+    // caller bounded by a row-level rule to their own documents passes it, so
+    // without a check on the ENTRY they could mint a working credential for
+    // someone else's draft — a read they cannot perform themselves.
+    findByID.mockResolvedValue(null);
+
+    const response = await mintPreviewLink(
+      post({ collection: "pages", entryId: "someone-elses-draft" })
+    );
+
+    expect(response.status).toBe(403);
+    // And the entry was judged as the CALLER, not as a trusted reader: an
+    // `overrideAccess: true` probe here would answer the wrong question.
+    expect(findByID).toHaveBeenCalledWith(
+      expect.objectContaining({
+        collection: "pages",
+        id: "someone-elses-draft",
+        overrideAccess: false,
+        user: expect.objectContaining({ id: "u1" }),
+      })
+    );
+    // No token is minted for a refused entry.
+    const body = await json(response);
+    expect(body.item).toBeUndefined();
+  });
+
   it("gates on update for the collection that was named", async () => {
     // Per collection, not a blanket permission: otherwise a caller who may
     // edit posts could mint a link into a collection they cannot read.
