@@ -192,7 +192,16 @@ function withoutDomId(node: BlockNode): BlockNode {
  * render path declining to reintroduce what a stored document may already hold.
  * Returns the ORIGINAL document when nothing collided.
  */
-export function dedupeAddresses(document: BlockDocument): BlockDocument {
+export function dedupeAddresses(
+  document: BlockDocument,
+  /**
+   * Whether a node will render its own markup. A node that resolves to a
+   * placeholder emits no `id`, so reserving one for it would strip the anchor
+   * off a healthy node in exchange for nothing. Defaults to assuming every node
+   * renders, which is the answer for a caller with no registry to ask.
+   */
+  rendersMarkup: (node: BlockNode) => boolean = () => true
+): BlockDocument {
   let changed = false;
   const seenIds = new Set<string>();
   const seenDomIds = new Set<string>();
@@ -207,7 +216,7 @@ export function dedupeAddresses(document: BlockDocument): BlockDocument {
       seenIds.add(node.id);
 
       let kept = node;
-      const domId = renderedDomId(node);
+      const domId = rendersMarkup(node) ? renderedDomId(node) : undefined;
       if (domId !== undefined) {
         if (seenDomIds.has(domId)) {
           // The first node to claim an id keeps it; the later one renders

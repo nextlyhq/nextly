@@ -152,11 +152,18 @@ function withNodeAttributes(output: ReactNode, node: BlockNode): ReactNode {
 function nodeRootReason(output: ReactNode, node: BlockNode): string | null {
   const hasCssId = typeof node.cssId === "string";
   const attributes = node.attributes;
+  // Counted by what would actually be WRITTEN, not by what is stored. The
+  // render path drops names outside the allowlist and non-string values, so a
+  // node whose only attributes are `style` or an `onClick` loses nothing by
+  // having no DOM root — refusing it would placeholder a working block over
+  // fields that were never going to appear.
   const hasAttributes =
     typeof attributes === "object" &&
     attributes !== null &&
     !Array.isArray(attributes) &&
-    Object.keys(attributes).length > 0;
+    Object.entries(attributes).some(
+      ([name, value]) => isAllowedAttribute(name) && typeof value === "string"
+    );
   if (!hasCssId && !hasAttributes) return null;
   const named = hasCssId ? "`cssId`" : "attributes";
   // A primitive or a list has no root at all, which loses the fields exactly as

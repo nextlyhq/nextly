@@ -1326,6 +1326,74 @@ describe("PageRenderer", () => {
       }
     });
 
+    it("does not reserve a dom id for a node that renders a placeholder", async () => {
+      // A node whose block is unknown, or whose migration failed, emits no `id`
+      // of its own — the placeholder carries markers, not the modelled field.
+      // Reserving one for it would strip the anchor off a healthy node in
+      // exchange for an id nothing was going to use.
+      for (const broken of [
+        node("a", "test/missing", { cssId: "anchor" }),
+        node("a", "test/text", {
+          props: { value: "stale" },
+          cssId: "anchor",
+          migrationFailed: true,
+        }),
+      ]) {
+        const html = await renderToHtml(
+          <PageRenderer
+            document={doc(
+              broken,
+              node("b", "test/text", {
+                props: { value: "healthy" },
+                cssId: "anchor",
+              })
+            )}
+            blocks={createBlockResolver([text as AnyBlockDefinition])}
+          />
+        );
+
+        expect(html).toContain("healthy");
+        expect(html).toContain('id="anchor"');
+      }
+    });
+
+    it("does not let attributes that never render force a placeholder", async () => {
+      // The refusal is about DOM fields being LOST. `style` and `onClick` are
+      // dropped by the allowlist whatever the root is, so a node carrying only
+      // those loses nothing by having no element — placeholdering it would take
+      // a working block over fields that were never going to appear.
+      const fragmentRoot = defineBlock({
+        name: "test/fragment-ignored-attrs",
+        version: 1,
+        description: "Returns a fragment.",
+        example: { props: {} },
+        render: () => (
+          <>
+            <span>one</span>
+            <span>two</span>
+          </>
+        ),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/fragment-ignored-attrs", {
+              attributes: {
+                style: "color:red",
+                onClick: "boom",
+                "data-n": 5 as unknown as string,
+              },
+            })
+          )}
+          blocks={createBlockResolver([fragmentRoot as AnyBlockDefinition])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual([]);
+      expect(html).toContain("one");
+    });
+
     it("keeps ids that differ only in case", async () => {
       // DOM ids are case-SENSITIVE even though attribute names are not, so
       // `#Hero` and `#hero` address different elements and folding them
@@ -1730,6 +1798,76 @@ describe("PageRenderer", () => {
       for (const body of ["wrapped", "forwarded", "provided", "dark"]) {
         expect(html).toContain(body);
       }
+    });
+
+    it("refuses a consumer whose context is not one", async () => {
+      // React reads through `_context` for the current value, so the key being
+      // present is not enough — `_context: null` throws while rendering.
+      const forged = defineBlock({
+        name: "test/forged-consumer",
+        version: 1,
+        description: "Builds a consumer with no context behind it.",
+        example: { props: {} },
+        render: () =>
+          createElement(
+            {
+              $$typeof: Symbol.for("react.consumer"),
+              _context: null,
+            } as unknown as string,
+            null,
+            () => null
+          ),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/forged-consumer"),
+            node("b", "test/text", { props: { value: "survivor" } })
+          )}
+          blocks={createBlockResolver([
+            forged as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual(["invalid-output"]);
+      expect(html).toContain("survivor");
+    });
+
+    it("refuses the pre-19 provider tag this package cannot see", async () => {
+      // The package peers React 19 only, where `react.provider` is no longer an
+      // element type React renders — so accepting it would admit a value that
+      // throws, for the sake of a version that cannot be installed.
+      const legacy = defineBlock({
+        name: "test/legacy-provider",
+        version: 1,
+        description: "Builds an element from the pre-19 provider tag.",
+        example: { props: {} },
+        render: () =>
+          createElement(
+            { $$typeof: Symbol.for("react.provider") } as unknown as string,
+            null,
+            "x"
+          ),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/legacy-provider"),
+            node("b", "test/text", { props: { value: "survivor" } })
+          )}
+          blocks={createBlockResolver([
+            legacy as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual(["invalid-output"]);
+      expect(html).toContain("survivor");
     });
 
     it("renders the ordinary use of that same built-in", async () => {

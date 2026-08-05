@@ -119,9 +119,11 @@ export function describeValue(value: unknown): string {
  * Element types whose children React renders itself even though the type is an
  * object rather than a symbol.
  *
- * A context provider is the case: React 19 uses the context object directly
- * (`react.context`) and earlier versions use `Ctx.Provider` (`react.provider`),
- * and React renders the children of both. Enumerated rather than accepting any
+ * A context provider is the case: React 19 tags both `Ctx` and `Ctx.Provider`
+ * as `react.context` and renders the children of both. The pre-19
+ * `react.provider` spelling is deliberately absent — this package peers React
+ * 19 only, where that tag is no longer an element type React can render, so
+ * accepting it would admit a value that throws. Enumerated rather than any
  * `react.*` tagged object, because `memo` and `lazy` are tagged the same way and
  * are wrappers around a COMPONENT — their children are an ordinary prop, so
  * inspecting them would reject valid render props. A consumer is excluded for
@@ -133,7 +135,6 @@ export function describeValue(value: unknown): string {
  */
 const PROVIDER_TAGS: ReadonlySet<symbol> = new Set([
   Symbol.for("react.context"),
-  Symbol.for("react.provider"),
 ]);
 
 /** The context consumer tag, whose single child must be a function. */
@@ -157,9 +158,8 @@ const RENDERABLE_REACT_SYMBOLS: ReadonlySet<symbol> = new Set([
 /**
  * The `$$typeof` tags that make an OBJECT a usable element type.
  *
- * The wrappers a component can be built out of, and the two spellings of a
- * context provider — React 19 tags `Ctx` and `Ctx.Provider` alike as
- * `react.context`, earlier versions used `react.provider`.
+ * The wrappers a component can be built out of, plus the context tag React 19
+ * gives both `Ctx` and `Ctx.Provider`.
  *
  * By identity and enumerated, for the same reason the symbol list is: a tag
  * whose description merely begins `react.` proves nothing. An object tagged
@@ -232,7 +232,16 @@ const ELEMENT_TYPE_SHAPE: ReadonlyMap<
     Symbol.for("react.lazy"),
     (type: object) => typeof (type as { _init?: unknown })._init === "function",
   ],
-  [Symbol.for("react.consumer"), (type: object) => "_context" in type],
+  [
+    Symbol.for("react.consumer"),
+    // The context itself, not just the key: React reads through it for the
+    // current value, so `{ $$typeof: consumer, _context: null }` carries the
+    // field and still throws while rendering.
+    (type: object) => {
+      const context = (type as { _context?: unknown })._context;
+      return typeof context === "object" && context !== null;
+    },
+  ],
 ]);
 
 /**

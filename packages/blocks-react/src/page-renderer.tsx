@@ -136,7 +136,14 @@ export function PageRenderer({
   // take that address from a visible node for nothing: the visible one would be
   // dropped or stripped of its anchor, and the node it collided with would then
   // be pruned anyway.
-  const visible = dedupeAddresses(pruned);
+  const visible = dedupeAddresses(pruned, node =>
+    // A node that will resolve to a placeholder emits no `id` of its own, so it
+    // must not reserve one: the healthy node it collided with would be stripped
+    // of an anchor that nothing else was going to use.
+    node.migrationFailed === true
+      ? false
+      : resolver.get(node.type) !== undefined
+  );
 
   // Whether the tree that renders is the tree the stored stylesheet was
   // compiled from. Each pass returns its input unchanged when it had nothing to
