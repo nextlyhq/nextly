@@ -4,6 +4,7 @@ import { fileURLToPath } from "url";
 import fs from "fs-extra";
 
 import { buildNextConfigTemplate } from "../generators/next-config";
+import { getAvailableTemplateNames } from "../lib/templates";
 import type { DatabaseConfig, ProjectApproach, ProjectType } from "../types";
 
 /**
@@ -25,23 +26,29 @@ export function projectUsesFormBuilder(projectType: ProjectType): boolean {
 export type NextlyDistTag = "latest" | "alpha";
 
 /**
- * Templates that render CMS content through `nextly/runtime` cache helpers
- * (`cachedFind` / `nextlyTags`) install `nextly` + `@nextlyhq/*` from the
- * `alpha` dist-tag rather than `latest`. Those helpers ship on the active
- * alpha channel, and during the alpha the conservative `latest` tag can lag
- * behind it — a content scaffold pinned to `latest` would then install a
- * `nextly` missing the helpers its pages import, and fail to build. Non-content
- * scaffolds (blank, plugin) stay on `latest`.
+ * Templates whose files are coupled to the current alpha train install
+ * `nextly` + `@nextlyhq/*` from the `alpha` dist-tag rather than `latest`.
+ * During the alpha the conservative `latest` tag can lag the train, and a
+ * scaffold pinned to it would pair current template code with older packages:
+ * - `blog` renders through `nextly/runtime` cache helpers (`cachedFind` /
+ *   `nextlyTags`) that only ship on the alpha channel.
+ * - `plugin` ships with the CLI itself (bundled) and exercises the current
+ *   `@nextlyhq/plugin-sdk/testing` harness and admin surface; older packages
+ *   fail its generated test and dev playground.
+ * Only `blank` stays on `latest` — its files use no train-coupled APIs.
  */
-const CONTENT_TEMPLATE_TYPES: ReadonlySet<ProjectType> = new Set(["blog"]);
+const ALPHA_CHANNEL_TEMPLATE_TYPES: ReadonlySet<ProjectType> = new Set([
+  "blog",
+  "plugin",
+]);
 
 /**
  * The npm dist-tag a scaffold of `projectType` installs `nextly` + `@nextlyhq/*`
- * from: content templates track `alpha` (see {@link CONTENT_TEMPLATE_TYPES}),
- * everything else tracks `latest`.
+ * from: train-coupled templates track `alpha` (see
+ * {@link ALPHA_CHANNEL_TEMPLATE_TYPES}), everything else tracks `latest`.
  */
 export function templateNextlyChannel(projectType: ProjectType): NextlyDistTag {
-  return CONTENT_TEMPLATE_TYPES.has(projectType) ? "alpha" : "latest";
+  return ALPHA_CHANNEL_TEMPLATE_TYPES.has(projectType) ? "alpha" : "latest";
 }
 
 // ============================================================
@@ -196,6 +203,50 @@ async function replacePlaceholders(
   }
 }
 
+/**
+ * Restore `.gitignore` files that the bundled templates carry under the
+ * publish-safe name `gitignore` (recursive).
+ *
+ * npm's packer (npm-packlist, used by both npm and pnpm pack) always strips
+ * `.gitignore` files from tarballs, so the CLI build renames them when
+ * copying templates into the package (see tsup.config.ts). Templates
+ * resolved from a GitHub download or --local-template still carry the
+ * dotted name, so this is a no-op for those sources.
+ */
+export async function restoreBundledGitignores(dir: string): Promise<void> {
+  const entries = await fs.readdir(dir, { withFileTypes: true });
+
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+
+    if (entry.isDirectory()) {
+      if (entry.name === "node_modules" || entry.name === ".git") continue;
+      await restoreBundledGitignores(fullPath);
+    } else if (entry.isFile() && entry.name === "gitignore") {
+      const target = path.join(dir, ".gitignore");
+      if (await fs.pathExists(target)) {
+        // Overlay scaffolds ("ignore" on a non-empty directory) can already
+        // have user ignore rules at the destination. A rename would replace
+        // them — silently un-ignoring whatever they covered — so append the
+        // template's rules instead (duplicate patterns are harmless to
+        // git), unless a previous scaffold already appended them.
+        const existing = await fs.readFile(target, "utf-8");
+        const templateRules = await fs.readFile(fullPath, "utf-8");
+        if (!existing.includes(templateRules)) {
+          await fs.writeFile(
+            target,
+            `${existing.trimEnd()}\n\n${templateRules}`,
+            "utf-8"
+          );
+        }
+        await fs.remove(fullPath);
+      } else {
+        await fs.rename(fullPath, target);
+      }
+    }
+  }
+}
+
 // ============================================================
 // Package.json Generation
 // ============================================================
@@ -268,7 +319,13 @@ async function fetchLatestVersion(
     if (!res.ok) return channel;
     const data = (await res.json()) as Record<string, string>;
     const version = data[channel];
-    return version ? `^${version}` : channel;
+    // The registry payload is untrusted input: only wrap a value that is a
+    // complete semver version — anything else would become an invalid
+    // install spec (e.g. "^not-a-version") in every generated package.json.
+    // The dist-tag name is itself a valid npm spec, so it stays the fallback.
+    return version && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)
+      ? `^${version}`
+      : channel;
   } catch {
     return channel;
   }
@@ -460,9 +517,16 @@ export async function generatePackageJson(
  */
 async function resolvePluginNextlyRange(useYalc: boolean): Promise<string> {
   if (useYalc) return ">=0.0.0";
-  const versions = await resolveNextlyVersions();
+  // Plugin scaffolds track the alpha train (see templateNextlyChannel), so
+  // the declared compat range comes from the same channel the devDeps
+  // install from. The registry value is wrapped as `^version` upstream
+  // without being parsed, so validate the COMPLETE caret range here — a
+  // malformed dist-tags payload (or a failed lookup, which yields the bare
+  // dist-tag name) must fall back to an open range, never leak into the
+  // plugin's declared compat range.
+  const versions = await resolveNextlyVersions(templateNextlyChannel("plugin"));
   const v = versions["nextly"];
-  return v && v !== "latest" ? v : ">=0.0.0";
+  return v && /^\^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(v) ? v : ">=0.0.0";
 }
 
 /**
@@ -474,27 +538,54 @@ async function generatePluginPackageJson(
   projectName: string,
   useYalc: boolean
 ): Promise<string> {
-  const versions = useYalc ? {} : await resolveNextlyVersions();
+  // Plugin scaffolds resolve the Nextly family from the alpha train: the
+  // template ships inside the CLI itself, so its generated test and dev
+  // playground exercise current plugin-sdk/admin APIs that the lagging
+  // `latest` tag may not have yet (see templateNextlyChannel).
+  const channel = templateNextlyChannel("plugin");
+  const versions = useYalc ? {} : await resolveNextlyVersions(channel);
   const runtimeVersions = await resolveRuntimeVersions();
-  const range = (pkg: string): string => versions[pkg] ?? "latest";
+  const range = (pkg: string): string => versions[pkg] ?? channel;
+
+  // peerDependencies must be a valid semver range: pnpm 11 rejects a
+  // dist-tag there (ERR_PNPM_INVALID_PEER_DEPENDENCY_SPECIFICATION) and
+  // then refuses to run ANY script in the scaffold, including `pnpm dev`.
+  // The dist-tag name can appear whenever a registry version lookup fails
+  // (offline, transient npm error) or under --use-yalc, so fall back to an
+  // open range instead. Dev dependencies keep the dist-tag — it is valid
+  // there and installs the channel's newest release.
+  const peerRange = (pkg: string): string => {
+    const v = range(pkg);
+    return v === channel ? ">=0.0.0" : v;
+  };
 
   const peerDependencies: Record<string, string> = {
-    nextly: range("nextly"),
-    "@nextlyhq/admin": range("@nextlyhq/admin"),
-    "@nextlyhq/plugin-sdk": range("@nextlyhq/plugin-sdk"),
+    nextly: peerRange("nextly"),
+    "@nextlyhq/admin": peerRange("@nextlyhq/admin"),
+    "@nextlyhq/plugin-sdk": peerRange("@nextlyhq/plugin-sdk"),
     react: PINNED_VERSIONS.react,
     "react-dom": PINNED_VERSIONS["react-dom"],
   };
 
   // devDeps cover: build (tsup/tsc), test (vitest), lint (eslint), AND the
   // embedded dev/ playground (next + nextly + admin + sqlite adapter).
+  // Under --use-yalc the Nextly-family entries are omitted entirely
+  // (mirroring the app scaffold): the installer yalc-adds them from the
+  // local store before the first install, so registry specs here would
+  // only race it into fetching published packages it is about to replace.
+  const nextlyDevDependencies: Record<string, string> = useYalc
+    ? {}
+    : {
+        nextly: range("nextly"),
+        "@nextlyhq/admin": range("@nextlyhq/admin"),
+        "@nextlyhq/ui": range("@nextlyhq/ui"),
+        "@nextlyhq/plugin-sdk": range("@nextlyhq/plugin-sdk"),
+        "@nextlyhq/adapter-drizzle": range("@nextlyhq/adapter-drizzle"),
+        "@nextlyhq/adapter-sqlite": range("@nextlyhq/adapter-sqlite"),
+      };
+
   const devDependencies: Record<string, string> = {
-    nextly: range("nextly"),
-    "@nextlyhq/admin": range("@nextlyhq/admin"),
-    "@nextlyhq/ui": range("@nextlyhq/ui"),
-    "@nextlyhq/plugin-sdk": range("@nextlyhq/plugin-sdk"),
-    "@nextlyhq/adapter-drizzle": range("@nextlyhq/adapter-drizzle"),
-    "@nextlyhq/adapter-sqlite": range("@nextlyhq/adapter-sqlite"),
+    ...nextlyDevDependencies,
     next: runtimeVersions.next,
     react: PINNED_VERSIONS.react,
     "react-dom": PINNED_VERSIONS["react-dom"],
@@ -575,6 +666,23 @@ export const NATIVE_BUILD_DEPENDENCIES = [
 ] as const;
 
 /**
+ * The Nextly-family packages a plugin scaffold links from the local yalc
+ * store under --use-yalc. Single source of truth shared by the installer
+ * (which runs `yalc add` for each) and the pnpm-workspace.yaml generator
+ * (which pins every nested resolution to the same local copies).
+ */
+export const PLUGIN_YALC_PACKAGES = [
+  "nextly",
+  "@nextlyhq/admin",
+  "@nextlyhq/ui",
+  "@nextlyhq/adapter-drizzle",
+  "@nextlyhq/adapter-postgres",
+  "@nextlyhq/adapter-mysql",
+  "@nextlyhq/adapter-sqlite",
+  "@nextlyhq/plugin-sdk",
+] as const;
+
+/**
  * Generate the `pnpm-workspace.yaml` for a scaffolded project.
  *
  * pnpm 10+ blocks dependency build scripts by default and the allowlist's
@@ -586,14 +694,38 @@ export const NATIVE_BUILD_DEPENDENCIES = [
  * Both keys are emitted so native deps compile on any pnpm 10.6+/11. pnpm 9
  * runs build scripts by default and ignores this file; npm/yarn ignore it too,
  * so it is safe to ship in every scaffold regardless of package manager.
+ *
+ * `yalcOverrides` (yalc scaffolds only) additionally emits an `overrides`
+ * map pinning each named package to its `file:.yalc/<name>` copy. Yalc
+ * rewrites `workspace:*` inter-package ranges to `*`, and semver `*` never
+ * matches prereleases — so without the pin, pnpm resolves the packages'
+ * NESTED copies of each other from the registry's last stable release
+ * (0.0.1), and the scaffold crashes on APIs that old code lacks. Overrides
+ * apply to every resolution in the tree, forcing one consistent local set.
  */
-export function generatePnpmWorkspaceYaml(): string {
+export function generatePnpmWorkspaceYaml(options?: {
+  yalcOverrides?: readonly string[];
+}): string {
   const allowBuilds = NATIVE_BUILD_DEPENDENCIES.map(
     dep => `  ${dep}: true`
   ).join("\n");
   const onlyBuilt = NATIVE_BUILD_DEPENDENCIES.map(dep => `  - ${dep}`).join(
     "\n"
   );
+
+  let overridesBlock = "";
+  if (options?.yalcOverrides && options.yalcOverrides.length > 0) {
+    const overrides = options.yalcOverrides
+      .map(pkg => `  "${pkg}": "file:.yalc/${pkg}"`)
+      .join("\n");
+    overridesBlock =
+      "\n# Pin every resolution (including nested ones) of the yalc-linked\n" +
+      "# packages to the local store. Yalc rewrites their workspace:* ranges\n" +
+      "# to *, which semver treats as stable-only — without this pin, pnpm\n" +
+      "# fetches ancient registry releases for the packages' internal copies\n" +
+      "# of each other and the mixed versions crash at runtime.\n" +
+      `overrides:\n${overrides}\n`;
+  }
 
   return (
     "# Allow native dependencies to run their build scripts. pnpm 10+ blocks\n" +
@@ -603,7 +735,8 @@ export function generatePnpmWorkspaceYaml(): string {
     "# pnpm 11+ reads `allowBuilds`; pnpm 10.6+ reads `onlyBuiltDependencies`.\n" +
     "# npm, yarn, and pnpm 9 ignore this file (they run build scripts by default).\n" +
     `allowBuilds:\n${allowBuilds}\n` +
-    `onlyBuiltDependencies:\n${onlyBuilt}\n`
+    `onlyBuiltDependencies:\n${onlyBuilt}\n` +
+    overridesBlock
   );
 }
 
@@ -704,8 +837,10 @@ export async function copyTemplate(
   }
 
   if (!(await fs.pathExists(typeDir))) {
+    // The registry supplies the template list so this message stays current
+    // as templates are added, instead of drifting like a hardcoded list.
     throw new Error(
-      `Template "${projectType}" not found at ${typeDir}. Available templates: blank, blog.`
+      `Template "${projectType}" not found at ${typeDir}. Available templates: ${getAvailableTemplateNames().join(", ")}.`
     );
   }
 
@@ -726,6 +861,11 @@ export async function copyTemplate(
       },
     });
   }
+
+  // Bundled templates carry .gitignore under the publish-safe name
+  // `gitignore` (npm pack strips the dotted form); give the scaffold its
+  // real ignore rules back.
+  await restoreBundledGitignores(targetDir);
 
   // Also copy template's nextly.config.ts if it exists at root (for blank template)
   const templateRootConfig = path.join(typeDir, "nextly.config.ts");
@@ -866,6 +1006,24 @@ async function copyPluginTemplate(opts: {
     },
   });
 
+  // Bundled templates carry .gitignore under the publish-safe name
+  // `gitignore` (npm pack strips the dotted form); give the scaffold its
+  // real ignore rules back. Without this, a plugin scaffolded from the
+  // published CLI has no ignore rules — and dev/.env (materialized below)
+  // would be committable.
+  await restoreBundledGitignores(targetDir);
+
+  // Materialize the dev playground env so `pnpm dev` boots with zero manual
+  // steps: without dev/.env the dialect defaults to postgresql and the
+  // instrumentation hook aborts asking for DATABASE_URL. `overwrite: false`
+  // preserves a user's own dev/.env when scaffolding over an existing dir.
+  const devEnvExample = path.join(targetDir, "dev", ".env.example");
+  if (await fs.pathExists(devEnvExample)) {
+    await fs.copy(devEnvExample, path.join(targetDir, "dev", ".env"), {
+      overwrite: false,
+    });
+  }
+
   // Generate the plugin package.json (database arg is unused for plugins).
   const packageJsonContent = await generatePackageJson(
     projectName,
@@ -883,10 +1041,14 @@ async function copyPluginTemplate(opts: {
   // pnpm 11 ignores the package.json `pnpm` field, and the embedded dev/
   // playground uses better-sqlite3 (native build) — so this file is what lets
   // `pnpm install` build it instead of aborting with ERR_PNPM_IGNORED_BUILDS.
-  // Harmless for npm/yarn/pnpm 9.
+  // Harmless for npm/yarn/pnpm 9. Yalc scaffolds additionally pin every
+  // nested resolution of the linked packages to the local store (see
+  // generatePnpmWorkspaceYaml).
   await fs.writeFile(
     path.join(targetDir, "pnpm-workspace.yaml"),
-    generatePnpmWorkspaceYaml(),
+    generatePnpmWorkspaceYaml(
+      useYalc ? { yalcOverrides: PLUGIN_YALC_PACKAGES } : undefined
+    ),
     "utf-8"
   );
 

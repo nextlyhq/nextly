@@ -11,7 +11,9 @@ pnpm dev      # runs the embedded /dev playground → open http://localhost:3000
 
 Your plugin lives in `src/`. The `dev/` folder is a minimal Nextly app on SQLite
 that registers this plugin so you can exercise it in a real admin with hot-reload.
-Editing files under `src/` reloads the playground. **`dev/` is never published.**
+It seeds `dev@nextly.local` / `DevPassword123!` and auto-logs-in on `/admin`
+(dev-only; auto-login is hard-blocked in production). Editing files under `src/`
+reloads the playground. **`dev/` is never published.**
 
 ## Test
 

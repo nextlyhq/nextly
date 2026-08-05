@@ -1,4 +1,4 @@
-import { cpSync, existsSync, rmSync } from "fs";
+import { cpSync, existsSync, readdirSync, renameSync, rmSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -10,6 +10,29 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Content templates (blog, etc.) are downloaded from GitHub at runtime.
 // `plugin` is bundled so plugins are scaffoldable offline (D44).
 const BUNDLED_TEMPLATES = ["base", "blank", "plugin"] as const;
+
+/**
+ * Rename every `.gitignore` in the copied tree to the publish-safe name
+ * `gitignore`. npm's packer (npm-packlist, used by npm and pnpm pack alike)
+ * always strips `.gitignore` files from tarballs, so a bundled template
+ * shipped with the dotted name silently loses its ignore rules in the
+ * published CLI — scaffolds would then happily commit node_modules, dist,
+ * and the generated dev/.env. The scaffolder renames it back at copy time
+ * (see restoreBundledGitignores in src/utils/template.ts).
+ */
+function renameGitignoresForPacking(dir: string): void {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      // A template dir may carry a local node_modules from testing the dev/
+      // playground in place; recursing into it is pure waste.
+      if (entry.name === "node_modules" || entry.name === ".git") continue;
+      renameGitignoresForPacking(full);
+    } else if (entry.name === ".gitignore") {
+      renameSync(full, path.join(dir, "gitignore"));
+    }
+  }
+}
 
 function copyBundledTemplates(): void {
   const monoRepoTemplates = path.resolve(__dirname, "../../templates");
@@ -38,6 +61,9 @@ function copyBundledTemplates(): void {
     }
 
     cpSync(src, target, { recursive: true });
+    // Publish-safe rename: a dotted .gitignore would be stripped from the
+    // npm tarball, so the bundled copy carries `gitignore` instead.
+    renameGitignoresForPacking(target);
   }
 
   console.log(`✓ Bundled templates copied: ${BUNDLED_TEMPLATES.join(", ")}`);

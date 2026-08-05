@@ -19,7 +19,11 @@ import {
   cleanupDownload,
   type TemplateSource,
 } from "./lib/download-template";
-import { templateHasApproaches, getDefaultApproach } from "./lib/templates";
+import {
+  templateHasApproaches,
+  getDefaultApproach,
+  shouldUseBundledTemplate,
+} from "./lib/templates";
 import { getApproachPromptOptions } from "./prompts/approach";
 import { DATABASE_CONFIGS, DATABASE_LABELS } from "./prompts/database";
 import {
@@ -37,9 +41,10 @@ import type {
   DatabaseConfig,
   DatabaseType,
   ProjectApproach,
+  ProjectInfo,
   ProjectType,
 } from "./types";
-import { detectProject } from "./utils/detect";
+import { detectPackageManager, detectProject } from "./utils/detect";
 import { emptyDirectory, isDirectoryNotEmpty } from "./utils/fs";
 import { copyTemplate } from "./utils/template";
 
@@ -100,7 +105,15 @@ export async function createNextly(
 
   const existingProject = await isExistingNextProject(cwd);
 
-  if (existingProject) {
+  // The plugin template always scaffolds a standalone package — it never
+  // installs into an existing app. Running it from inside a Next.js repo
+  // (a natural place to build a plugin for that app) must therefore skip
+  // the install-into-this-project flow, which ignores the directory
+  // argument entirely; plugin runs take the fresh-scaffold path below and
+  // a non-empty target is negotiated by the directory-conflict prompt.
+  const isPluginScaffold = options.projectType === "plugin";
+
+  if (existingProject && !isPluginScaffold) {
     p.log.success(`${pc.green("Next.js")} project detected`);
 
     if (!defaults) {
@@ -343,13 +356,17 @@ export async function createNextly(
 
     try {
       // Resolve template source (download from GitHub or use local path).
-      // For "blank" template without --local-template, we use the bundled
-      // fallback embedded in the CLI. For content templates (blog) we
-      // resolve via GitHub or a local path. --use-yalc also triggers
-      // resolution for the blank template so local-dev runs always pair
-      // yalc-linked packages with the live template rather than a
-      // potentially-stale bundled copy.
-      if (projectType !== "blank" || options.localTemplatePath || useYalc) {
+      // Bundled templates (blank, plugin) scaffold from the copy shipped
+      // inside the CLI package by default; content templates (blog) and any
+      // explicit source override (--local-template, --use-yalc, a non-main
+      // --branch) resolve live. See shouldUseBundledTemplate for the rules.
+      if (
+        !shouldUseBundledTemplate(projectType, {
+          localTemplatePath: options.localTemplatePath,
+          useYalc,
+          branch: options.branch,
+        })
+      ) {
         s.start("Resolving template...");
         templateSource = await resolveTemplateSource(projectType, {
           localTemplatePath: options.localTemplatePath,
@@ -420,8 +437,27 @@ export async function createNextly(
     const s = p.spinner();
     s.start("Detecting project...");
     try {
-      projectInfo = await detectProject(cwd);
-      s.stop(`Detected Next.js ${projectInfo.nextVersion || "unknown"}`);
+      if (projectType === "plugin") {
+        // A plugin scaffold is a publishable library, not a Next.js app: the
+        // library code lives at src/ and the Next app lives in dev/, so the
+        // app-shaped detection would reject it ("App Router not detected").
+        // Downstream only consumes packageManager for fresh scaffolds
+        // (install + next-steps), so detect that and describe the fixed
+        // plugin layout statically.
+        projectInfo = {
+          isNextJs: false,
+          isAppRouter: false,
+          hasTypescript: true,
+          packageManager: await detectPackageManager(cwd),
+          nextVersion: null,
+          srcDir: true,
+          appDir: "dev/src/app",
+        } satisfies ProjectInfo;
+        s.stop("Detected plugin package");
+      } else {
+        projectInfo = await detectProject(cwd);
+        s.stop(`Detected Next.js ${projectInfo.nextVersion || "unknown"}`);
+      }
     } catch (error) {
       s.stop("Detection failed");
       telemetry.capture("scaffold_failed", {
@@ -527,7 +563,7 @@ export async function createNextly(
     );
     lines.push("");
     lines.push(
-      `  Open ${pc.cyan("http://localhost:3000/admin")} — your plugin is registered.`
+      `  Open ${pc.cyan("http://localhost:3000/admin")} — auto-logged-in with your plugin registered.`
     );
     lines.push(
       `  Edit your plugin in ${pc.dim("src/")}; the ${pc.dim("dev/")} app is never published.`
