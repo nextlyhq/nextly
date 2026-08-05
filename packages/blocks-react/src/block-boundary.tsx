@@ -107,6 +107,10 @@ function withNodeAttributes(output: ReactNode, node: BlockNode): ReactNode {
     attributes !== undefined && Object.keys(attributes).length > 0;
   if (cssId === undefined && !hasAttributes) return output;
   if (!isValidElement(output)) return output;
+  // Only a host element has a DOM root to carry them. `nodeRootReason` has
+  // already refused the combination that would land here otherwise, so this is
+  // the invariant restated rather than a second policy.
+  if (typeof output.type !== "string") return output;
 
   const extra: Record<string, string> = {};
   if (attributes) {
@@ -129,6 +133,34 @@ function withNodeAttributes(output: ReactNode, node: BlockNode): ReactNode {
   if (cssId !== undefined) extra.id = cssId;
 
   return Object.keys(extra).length > 0 ? cloneElement(output, extra) : output;
+}
+
+/**
+ * Why a node's root-level fields cannot reach the element the block returned.
+ *
+ * `cssId` and `attributes` are DOM props and only a host element has a DOM root
+ * to put them on. A block whose root is a fragment, `StrictMode`, `Suspense` or
+ * `Activity` renders no element of its own, so React drops the props — without
+ * throwing, and in production without saying anything. What is lost is an
+ * anchor target, a `label for=`, an `#id` selector: navigation and styling that
+ * silently stop working, on a page that otherwise looks correct.
+ *
+ * So the combination is refused rather than half-applied. It is only reachable
+ * when the document actually asked for those fields, so an ordinary block
+ * returning a fragment is untouched.
+ */
+function nodeRootReason(output: ReactNode, node: BlockNode): string | null {
+  const hasCssId = typeof node.cssId === "string";
+  const attributes = node.attributes;
+  const hasAttributes =
+    typeof attributes === "object" &&
+    attributes !== null &&
+    !Array.isArray(attributes) &&
+    Object.keys(attributes).length > 0;
+  if (!hasCssId && !hasAttributes) return null;
+  if (!isValidElement(output)) return null;
+  if (typeof output.type === "string") return null;
+  return `a node carrying ${hasCssId ? "`cssId`" : "attributes"} whose block returned a wrapper rather than an element, so there is no DOM root to put them on`;
 }
 
 /**
@@ -174,6 +206,18 @@ function checkedOutput(
         type={node.type}
         id={node.id}
         detail={`Expected a React node, received ${result.reason}`}
+      />
+    );
+  }
+
+  const rootReason = isBlockRoot ? nodeRootReason(result.node, node) : null;
+  if (rootReason !== null) {
+    return (
+      <BlockPlaceholder
+        reason="invalid-output"
+        type={node.type}
+        id={node.id}
+        detail={rootReason}
       />
     );
   }

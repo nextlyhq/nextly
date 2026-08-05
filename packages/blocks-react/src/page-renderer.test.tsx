@@ -4,6 +4,7 @@ import {
   Suspense,
   createContext,
   createElement,
+  forwardRef,
   memo,
   type ReactElement,
 } from "react";
@@ -467,9 +468,18 @@ describe("PageRenderer", () => {
       expect(html).toContain("survivor");
     });
 
-    it("does not consume a generator passed as a JSX child", async () => {
-      // Checking a borrowed iterable would exhaust it and leave React nothing
-      // to render, so children are inspected without being read.
+    it("refuses a generator passed as a JSX child", async () => {
+      // A borrowed single-use iterator has no good outcome: reading it to check
+      // it exhausts it and leaves React nothing to render, and passing it
+      // through leaves the only pass over its values to React, after this
+      // boundary has returned. There, a yielded object throws uncontained and
+      // an endless generator hangs the WHOLE page — which is the containment
+      // guarantee failing outright rather than one block degrading.
+      //
+      // React documents iterators as children as unsupported for the same
+      // reason ("enumerating a generator mutates it") and points at
+      // `Array.from()` or a spread, so refusing agrees with React rather than
+      // being stricter than it. The refusal says so.
       const withGenerator = defineBlock({
         name: "test/generator-child",
         version: 1,
@@ -489,6 +499,40 @@ describe("PageRenderer", () => {
         <PageRenderer
           document={doc(node("a", "test/generator-child"))}
           blocks={createBlockResolver([withGenerator as AnyBlockDefinition])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual(["invalid-output"]);
+      // The yielded elements, specifically — the refusal text names the fix and
+      // says "first" itself.
+      expect(html).not.toContain("<span>first</span>");
+      expect(html).not.toContain("<span>second</span>");
+    });
+
+    it("renders the same values once they are an array", async () => {
+      // The fix the refusal names has to actually work, or refusing is just a
+      // dead end for the author.
+      const spread = defineBlock({
+        name: "test/generator-spread",
+        version: 1,
+        description: "Spreads a generator before putting it in its JSX.",
+        example: { props: {} },
+        render: ({ className }) => (
+          <div className={className}>
+            {[
+              ...(function* () {
+                yield <span key="a">first</span>;
+                yield <span key="b">second</span>;
+              })(),
+            ]}
+          </div>
+        ),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(node("a", "test/generator-spread"))}
+          blocks={createBlockResolver([spread as AnyBlockDefinition])}
         />
       );
 
@@ -1101,9 +1145,12 @@ describe("PageRenderer", () => {
       expect(html).toContain("survivor");
     });
 
-    it("does not drain an iterable that delegates to a generator", async () => {
-      // The wrapper's iterator is neither itself nor fresh, so a test based on
-      // identity alone would walk it and leave React nothing to render.
+    it("refuses an iterable that delegates to a generator", async () => {
+      // The wrapper's iterator is neither itself nor fresh, so an
+      // identity-based test would call it re-readable and walk it — draining
+      // the generator it delegates to and leaving React nothing. Asking twice
+      // classifies it single-use, which is what it behaves like, and a borrowed
+      // single-use iterator is refused.
       const delegating = defineBlock({
         name: "test/delegating",
         version: 1,
@@ -1130,9 +1177,11 @@ describe("PageRenderer", () => {
         />
       );
 
-      expect(placeholderReasons(html)).toEqual([]);
-      expect(html).toContain("first");
-      expect(html).toContain("second");
+      expect(placeholderReasons(html)).toEqual(["invalid-output"]);
+      // The yielded elements, specifically — the refusal text names the fix and
+      // says "first" itself.
+      expect(html).not.toContain("<span>first</span>");
+      expect(html).not.toContain("<span>second</span>");
     });
 
     it("gives a repeated dom id to the first node that claims it", async () => {
@@ -1551,6 +1600,90 @@ describe("PageRenderer", () => {
       }
     });
 
+    it("refuses a React-tagged object that carries nothing to render", async () => {
+      // A tag is not a wrapper. `{ $$typeof: Symbol.for("react.forward_ref") }`
+      // has the right tag and no `render`, and React answers it with "Cannot
+      // read properties of undefined" from inside its own render — a crash
+      // rather than the refusal an unknown element type gets, so the
+      // placeholder path is bypassed entirely.
+      for (const tag of [
+        "react.memo",
+        "react.forward_ref",
+        "react.lazy",
+        "react.consumer",
+      ]) {
+        const hollow = defineBlock({
+          name: `test/hollow-${tag}`,
+          version: 1,
+          description:
+            "Builds an element from a tag with no wrapper behind it.",
+          example: { props: {} },
+          render: () =>
+            createElement(
+              { $$typeof: Symbol.for(tag) } as unknown as string,
+              null,
+              "x"
+            ),
+        });
+
+        const html = await renderToHtml(
+          <PageRenderer
+            document={doc(
+              node("a", `test/hollow-${tag}`),
+              node("b", "test/text", { props: { value: "survivor" } })
+            )}
+            blocks={createBlockResolver([
+              hollow as AnyBlockDefinition,
+              text as AnyBlockDefinition,
+            ])}
+          />
+        );
+
+        expect(placeholderReasons(html)).toEqual(["invalid-output"]);
+        expect(html).toContain("survivor");
+      }
+    });
+
+    it("accepts-real-wrappers built by React's own factories", async () => {
+      // The shape check above names fields that are React internals, and this
+      // is what makes that safe: the real wrappers always carry them, so a
+      // rename fails HERE, loudly, in CI — instead of silently refusing valid
+      // blocks in production.
+      const Inner = (): ReactElement => <i>wrapped</i>;
+      const Memo = memo(Inner);
+      const Forwarded = forwardRef<HTMLElement>(() => <b>forwarded</b>);
+      const Ctx = createContext("light");
+
+      const wrappers = defineBlock({
+        name: "test/real-wrappers",
+        version: 1,
+        description: "Renders every object element type React can build.",
+        example: { props: {} },
+        render: () => (
+          <>
+            <Memo />
+            <Forwarded />
+            <Ctx.Provider value="dark">
+              <span>provided</span>
+              <Ctx.Consumer>{value => <em>{value}</em>}</Ctx.Consumer>
+            </Ctx.Provider>
+          </>
+        ),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(node("a", "test/real-wrappers"))}
+          blocks={createBlockResolver([wrappers as AnyBlockDefinition])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual([]);
+      for (const body of ["wrapped", "forwarded", "provided", "dark"]) {
+        expect(html).toContain(body);
+      }
+    });
+
     it("renders the ordinary use of that same built-in", async () => {
       // Refusing the two cases above must not be paid for by refusing this one.
       const strictOk = defineBlock({
@@ -1641,6 +1774,71 @@ describe("PageRenderer", () => {
       ]) {
         expect(html).not.toContain(forbidden);
       }
+    });
+
+    it("refuses a node whose block gives its fields no DOM root", async () => {
+      // `cssId` and `attributes` are DOM props, and a fragment root renders no
+      // element to put them on — React drops them without throwing, and in
+      // production without saying anything. What is lost is an anchor target, a
+      // `label for=`, an `#id` selector: navigation and styling that silently
+      // stop working on a page that otherwise looks right.
+      const fragmentRoot = defineBlock({
+        name: "test/fragment-root",
+        version: 1,
+        description: "Returns a fragment rather than an element.",
+        example: { props: {} },
+        render: () => (
+          <>
+            <span>one</span>
+            <span>two</span>
+          </>
+        ),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/fragment-root", { cssId: "anchor" }),
+            node("b", "test/text", { props: { value: "survivor" } })
+          )}
+          blocks={createBlockResolver([
+            fragmentRoot as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual(["invalid-output"]);
+      expect(html).not.toContain('id="anchor"');
+      expect(html).toContain("survivor");
+    });
+
+    it("leaves a wrapper root alone when the node asks for nothing", async () => {
+      // Only the combination is refused. A block returning a fragment is
+      // ordinary and must keep working.
+      const fragmentRoot = defineBlock({
+        name: "test/fragment-plain",
+        version: 1,
+        description: "Returns a fragment and is asked for no DOM fields.",
+        example: { props: {} },
+        render: () => (
+          <>
+            <span>one</span>
+            <span>two</span>
+          </>
+        ),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(node("a", "test/fragment-plain"))}
+          blocks={createBlockResolver([fragmentRoot as AnyBlockDefinition])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual([]);
+      expect(html).toContain("one");
+      expect(html).toContain("two");
     });
 
     it("does not let a case variant shadow a modelled field", async () => {
@@ -2175,6 +2373,73 @@ describe("PageRenderer", () => {
       }
     });
 
+    it("contains a textarea told its contents twice", async () => {
+      // `<textarea>` holds its text in a prop. React THROWS for these two, and
+      // only these two — a lone child merely warns and renders, so refusing it
+      // would take a page React was willing to serve.
+      const cases: Array<[string, () => ReactElement]> = [
+        [
+          "default-and-children",
+          () => createElement("textarea", { defaultValue: "x" }, "child"),
+        ],
+        ["two-children", () => createElement("textarea", null, "a", "b")],
+      ];
+
+      for (const [label, render] of cases) {
+        const block = defineBlock({
+          name: `test/textarea-${label}`,
+          version: 1,
+          description: "Gives a textarea its contents twice.",
+          example: { props: {} },
+          render,
+        });
+
+        const html = await renderToHtml(
+          <PageRenderer
+            document={doc(
+              node("a", `test/textarea-${label}`),
+              node("b", "test/text", { props: { value: "survivor" } })
+            )}
+            blocks={createBlockResolver([
+              block as AnyBlockDefinition,
+              text as AnyBlockDefinition,
+            ])}
+          />
+        );
+
+        expect(placeholderReasons(html)).toEqual(["invalid-output"]);
+        expect(html).toContain("survivor");
+      }
+    });
+
+    it("still renders the form controls React only warns about", async () => {
+      // A mismatched `value` on `<select multiple>` and a lone `<textarea>`
+      // child are warnings, not throws — React renders both. Refusing them
+      // would be stricter than React, which costs working blocks for nothing.
+      const forms = defineBlock({
+        name: "test/forms-warned",
+        version: 1,
+        description: "Uses the form shapes React warns about but renders.",
+        example: { props: {} },
+        render: () => (
+          <div>
+            {createElement("select", { multiple: true, defaultValue: "x" })}
+            {createElement("textarea", null, "lone child")}
+          </div>
+        ),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(node("a", "test/forms-warned"))}
+          blocks={createBlockResolver([forms as AnyBlockDefinition])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual([]);
+      expect(html).toContain("lone child");
+    });
+
     it("still renders a void element used correctly", async () => {
       // React skips a null `children` on a void tag exactly as it skips a null
       // `dangerouslySetInnerHTML`, so the guard has to stop where React's does.
@@ -2516,6 +2781,72 @@ describe("PageRenderer", () => {
       expect(html).not.toContain("gated body");
       expect(html).toContain("public body");
       expect(html).toContain('id="anchor"');
+    });
+
+    it("does not trust a stored sheet after any repair, not just gating", async () => {
+      // Gating is one of three ways the rendered tree stops matching the tree
+      // the sheet was compiled from. Shape repair drops a node whose identity
+      // is unreadable, and address repair drops a repeat — and with duplicate
+      // node ids the stale rules target the class the SURVIVING node now wears,
+      // so the wrong element gets styled and a dropped node's asset URLs still
+      // ship.
+      const repairs: Array<[string, BlockDocument]> = [
+        [
+          "shape",
+          {
+            formatVersion: DOCUMENT_FORMAT_VERSION,
+            kind: "page",
+            nodes: [
+              {
+                id: "a",
+                type: {},
+                version: 1,
+                props: {},
+              } as unknown as BlockNode,
+              node("b", "test/text", { props: { value: "survivor" } }),
+            ],
+          },
+        ],
+        [
+          "address",
+          doc(
+            node("a", "test/text", { props: { value: "survivor" } }),
+            node("a", "test/text", { props: { value: "repeat" } })
+          ),
+        ],
+      ];
+
+      for (const [label, document] of repairs) {
+        const html = await renderToHtml(
+          <PageRenderer
+            document={document}
+            blocks={createBlockResolver([text as AnyBlockDefinition])}
+            styles={{
+              css: ".nx-a { background-image: url(/dropped-asset.png) }",
+              classes: { a: "nx-a", b: "nx-b" },
+            }}
+          />
+        );
+
+        expect(html, label).toContain("survivor");
+        expect(html, label).not.toContain("dropped-asset.png");
+        expect(html, label).not.toContain("<style");
+      }
+    });
+
+    it("still trusts a stored sheet when nothing needed repairing", async () => {
+      // The common case must stay the cheap one: a sound document keeps its
+      // stored stylesheet and compiles nothing.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(node("a", "test/text", { props: { value: "body" } }))}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+          styles={{ css: ".nx-a { color: red }", classes: { a: "nx-a" } }}
+        />
+      );
+
+      expect(html).toContain("<style>.nx-a { color: red }</style>");
+      expect(html).toContain("nx-a");
     });
 
     it("recompiles under the scope the stored artifact was anchored to", async () => {

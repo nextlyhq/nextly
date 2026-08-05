@@ -194,11 +194,46 @@ function isReactBuiltinSymbol(value: unknown): boolean {
   return typeof value === "symbol" && RENDERABLE_REACT_SYMBOLS.has(value);
 }
 
+/**
+ * The field React dereferences for each object element type, where there is
+ * one.
+ *
+ * A tag alone is not a wrapper: `{ $$typeof: Symbol.for("react.forward_ref") }`
+ * carries the right tag and nothing to render, and React answers it with
+ * "Cannot read properties of undefined" from inside its own render — a crash
+ * rather than the refusal a bad element type gets. Verified per tag against
+ * React 19.2; a context object is genuinely renderable bare, so it has no
+ * entry here.
+ *
+ * These are React internals, which this module otherwise stays out of. The
+ * reason it is safe to name them is that the real wrappers are built by React's
+ * own factories and always carry them — so `accepts-real-wrappers` in the test
+ * suite fails loudly in CI if a rename ever makes this too strict, rather than
+ * silently refusing valid blocks in production.
+ */
+const ELEMENT_TYPE_SHAPE: ReadonlyMap<symbol, (type: object) => boolean> =
+  new Map([
+    [Symbol.for("react.memo"), (type: object) => "type" in type],
+    [
+      Symbol.for("react.forward_ref"),
+      (type: object) =>
+        typeof (type as { render?: unknown }).render === "function",
+    ],
+    [
+      Symbol.for("react.lazy"),
+      (type: object) =>
+        typeof (type as { _init?: unknown })._init === "function",
+    ],
+    [Symbol.for("react.consumer"), (type: object) => "_context" in type],
+  ]);
+
 /** The `$$typeof` tag of a value, when it is one React renders elements from. */
 function reactTag(value: unknown): symbol | null {
   if (typeof value !== "object" || value === null) return null;
   const tag = (value as { $$typeof?: unknown }).$$typeof;
-  return typeof tag === "symbol" && ELEMENT_TYPE_TAGS.has(tag) ? tag : null;
+  if (typeof tag !== "symbol" || !ELEMENT_TYPE_TAGS.has(tag)) return null;
+  const hasShape = ELEMENT_TYPE_SHAPE.get(tag);
+  return hasShape === undefined || hasShape(value) ? tag : null;
 }
 
 /**
@@ -318,6 +353,20 @@ function hostPropReason(element: unknown): string | null {
     }
     if (html != null) {
       return `a \`dangerouslySetInnerHTML\` prop on <${type}>, which is a void element and cannot have contents`;
+    }
+  }
+
+  // `<textarea>` holds its text in a prop, not in children, and React THROWS on
+  // the two shapes below rather than warning as it does for a lone child. The
+  // sibling `<select multiple>` rules are deliberately absent: React only warns
+  // for a mismatched `value`/`defaultValue` there and renders the element
+  // anyway, so refusing would take a page that React was willing to serve.
+  if (type === "textarea" && children != null) {
+    if ((props as { defaultValue?: unknown }).defaultValue != null) {
+      return "both `defaultValue` and children on <textarea>, which React refuses";
+    }
+    if (Array.isArray(children) && children.length > 1) {
+      return "more than one child on <textarea>, which can hold at most one";
     }
   }
 
@@ -527,10 +576,21 @@ export function normalizeRenderable(
     if (kind === "unopenable") {
       return "an iterable whose iterator could not be obtained";
     }
-    // Reading a single-use iterable would leave React nothing to render, so it
-    // is the one thing accepted unchecked. A re-readable collection has no such
-    // cost and is walked.
-    if (kind === "single-use") return null;
+    // A borrowed single-use iterator is refused rather than walked OR passed
+    // through. Walking it would consume it and leave React nothing to render;
+    // passing it through leaves the only pass over its values to React, after
+    // this boundary has returned — where a yielded object throws uncontained
+    // and an endless generator hangs the whole page render rather than one
+    // block. Nothing can be substituted here either, because the value sits
+    // inside an element the block already built.
+    //
+    // Refusing is also what React asks for: it warns that iterators as children
+    // are unsupported "because enumerating a generator mutates it", and points
+    // at `Array.from()` or a spread. A block that does either is accepted by
+    // the branch below.
+    if (kind === "single-use") {
+      return "a single-use iterator inside JSX, which React does not support as a child — spread it into an array first";
+    }
     for (const item of current) {
       const reason = inspect(item);
       if (reason !== null) return reason;

@@ -172,9 +172,9 @@ export function resolvePageStyles(
    * to carry its rules per node so a reader can drop the ones it prunes,
    * which is a change to what the compiler emits.
    */
-  prunedGatedNodes = false
+  repairedDocument = false
 ): PageStyles {
-  if (styles && !prunedGatedNodes)
+  if (styles && !repairedDocument)
     return normalizeStoredStyles(styles, document);
   if (styles && styleContext === undefined) {
     return { ...normalizeStoredStyles(styles, document), css: "" };

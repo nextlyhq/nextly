@@ -115,13 +115,11 @@ export function PageRenderer({
     );
   }
 
-  const { doc } = migrateDocument(
-    sanitizeDocument(
-      document,
-      limits ?? styleContext?.limits ?? DEFAULT_LIMITS
-    ),
-    migrationSourceFor(resolver)
+  const sanitized = sanitizeDocument(
+    document,
+    limits ?? styleContext?.limits ?? DEFAULT_LIMITS
   );
+  const { doc } = migrateDocument(sanitized, migrationSourceFor(resolver));
 
   // The scope comes from whichever input supplied the stylesheet, never from a
   // separate prop. Two inputs would have to agree, and when they did not the
@@ -132,10 +130,6 @@ export function PageRenderer({
   // render would withhold a gated node's HTML while still publishing its
   // scoped CSS, and with it whatever that CSS referenced.
   const pruned = pruneHiddenNodes(doc);
-  // `pruneHiddenNodes` returns the original document when nothing was gated, so
-  // identity is the signal — and it is exactly what decides whether a stored
-  // stylesheet can still be trusted.
-  const prunedGatedNodes = pruned !== doc;
 
   // Addresses are made unique LAST, over what will actually render. A gated node
   // never reaches the page, so letting it reserve a node id or a DOM id would
@@ -143,6 +137,18 @@ export function PageRenderer({
   // dropped or stripped of its anchor, and the node it collided with would then
   // be pruned anyway.
   const visible = dedupeAddresses(pruned);
+
+  // Whether the tree that renders is the tree the stored stylesheet was
+  // compiled from. Each pass returns its input unchanged when it had nothing to
+  // do, so identity is the signal — and gating is only one of three ways the
+  // answer can be no. Shape repair drops nodes whose identity fields are
+  // unreadable, and address repair drops a repeat and strips a duplicated
+  // `cssId`; in every case the stored sheet still carries rules for something
+  // that is no longer on the page, and with duplicate node ids those rules
+  // target the class the SURVIVING node now wears. So the sheet is recompiled
+  // where it can be and withheld where it cannot, for any of the three.
+  const repairedDocument =
+    sanitized !== document || pruned !== doc || visible !== pruned;
 
   // Recompiling after pruning must not lose what the stored artifact and the
   // renderer knew. `scope` lives on the artifact rather than in the compile
@@ -167,7 +173,7 @@ export function PageRenderer({
     styles,
     compileContext,
     resolver,
-    prunedGatedNodes
+    repairedDocument
   );
   const rootClassName = scope ? `${PAGE_ROOT_CLASS} ${scope}` : PAGE_ROOT_CLASS;
 
