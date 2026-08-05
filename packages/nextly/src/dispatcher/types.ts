@@ -24,6 +24,7 @@ export type ServiceType =
   | "apiKeys"
   | "webhooks"
   | "generalSettings"
+  | "previewLinks"
   | "imageSizes"
   | "dashboard"
   | "email"

@@ -1715,6 +1715,48 @@ function parseUserFieldRoutes(
   return null;
 }
 
+/**
+ * `POST /api/nextly/preview-links` mints a link for one entry, and
+ * `POST /api/nextly/preview-links/revoke` invalidates every link ever issued.
+ *
+ * Both are POSTs because both change something: minting issues a bearer
+ * credential and revoking moves the site's generation. Neither is safe to
+ * repeat from a browser's history or to prefetch, which is what a GET invites.
+ */
+function parsePreviewLinkRoutes(
+  id: string | undefined,
+  subresource: string | undefined,
+  httpMethod: string,
+  routeParams: Record<string, string>
+): ParsedRoute | null {
+  if (httpMethod !== "POST") return null;
+  // Anything deeper than the two known paths is refused rather than falling
+  // through to the nearest match. Ignoring the extra segments would make
+  // `/preview-links/revoke/anything` revoke every link on the site, which is
+  // the most destructive thing either of these endpoints does.
+  if (subresource !== undefined) return null;
+
+  if (id === "revoke") {
+    return {
+      service: "previewLinks",
+      operation: "create",
+      method: "revokePreviewLinks",
+      routeParams,
+    };
+  }
+
+  if (!id) {
+    return {
+      service: "previewLinks",
+      operation: "create",
+      method: "mintPreviewLink",
+      routeParams,
+    };
+  }
+
+  return null;
+}
+
 function parseApiKeyRoutes(
   id: string | undefined,
   httpMethod: string,
@@ -2294,6 +2336,17 @@ export function parseRestRoute(
   // Handle User Fields endpoints (custom user field definitions)
   if (resource === "user-fields") {
     const result = parseUserFieldRoutes(
+      id,
+      subresource,
+      httpMethod,
+      routeParams
+    );
+    if (result) return result;
+  }
+
+  // Handle preview link minting and revocation
+  if (resource === "preview-links") {
+    const result = parsePreviewLinkRoutes(
       id,
       subresource,
       httpMethod,
