@@ -360,18 +360,28 @@ const FAMILY_KEYWORD_NOT_A_NAME = new Set([
   "default",
 ]);
 
+// The five characters CSS calls whitespace. JavaScript's `\s` is a wider set —
+// it counts a vertical tab, and every non-breaking and exotic space — so using
+// it here accepts separators CSS does not: a family split by a vertical tab is
+// not a run of identifiers to a browser, which drops the declaration reading
+// it, and this grammar exists precisely to say so before the value is exported.
+const CSS_WS = "[ \\t\\r\\n\\f]";
 /** A run of identifiers, which is all an unquoted family item may be. */
-const IDENT_CHAR =
-  "(?:[A-Za-z0-9_\\-\\u00a0-\\uffff]|\\\\[0-9a-fA-F]{1,6}\\s?|\\\\.)";
+const IDENT_CHAR = `(?:[A-Za-z0-9_\\-\\u00a0-\\uffff]|\\\\[0-9a-fA-F]{1,6}${CSS_WS}?|\\\\.)`;
 // An identifier may open with one or two dashes — `--brand` is a family name a
 // site can legitimately have — and any run of whitespace separates one
 // identifier from the next. Both were narrower here than CSS allows, so valid
 // tokens were reported as ones the format cannot express.
-const IDENT_START =
-  "(?:(?:--?)?(?:[A-Za-z_\\u00a0-\\uffff]|\\\\[0-9a-fA-F]{1,6}\\s?|\\\\.))";
+const IDENT_START = `(?:(?:--?)?(?:[A-Za-z_\\u00a0-\\uffff]|\\\\[0-9a-fA-F]{1,6}${CSS_WS}?|\\\\.))`;
 const UNQUOTED_FAMILY = new RegExp(
-  `^${IDENT_START}${IDENT_CHAR}*(?:\\s+${IDENT_START}${IDENT_CHAR}*)*$`
+  `^${IDENT_START}${IDENT_CHAR}*(?:${CSS_WS}+${IDENT_START}${IDENT_CHAR}*)*$`
 );
+const CSS_WS_EDGES = new RegExp(`^${CSS_WS}+|${CSS_WS}+$`, "g");
+
+/** Strip the whitespace CSS recognises from both ends, and only that. */
+function trimCssWhitespace(text: string): string {
+  return text.replace(CSS_WS_EDGES, "");
+}
 
 /** One family from a list, how it was written, and whether CSS accepts it. */
 interface FamilyPart {
@@ -404,7 +414,12 @@ function finishPart(
   // The raw spelling is kept because the identifier-run check has to read what
   // was WRITTEN. `\\31 0px` is a legal identifier naming the family `10px`;
   // tested after decoding it looks like a dimension and a valid token is lost.
-  return { name, raw: raw.trim(), quoted, valid };
+  //
+  // Trimmed by the same whitespace set that separates identifiers within it.
+  // `String.trim` strips characters CSS does not treat as whitespace, so a
+  // family led by one would have it removed here and pass a check the browser
+  // fails.
+  return { name, raw: trimCssWhitespace(raw), quoted, valid };
 }
 
 /**

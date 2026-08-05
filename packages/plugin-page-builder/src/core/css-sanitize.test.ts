@@ -1382,6 +1382,34 @@ describe("custom CSS may not reach off this origin", () => {
       expect(out.css).toContain("var(--missing, italic)");
     });
 
+    it("leaves a line-height fallback out of the family slot", () => {
+      // The size precedes this function and the family list still does not
+      // start at it: the slash puts it in the line-height slot, where `normal`
+      // is the keyword. Quoting it into the private face leaves a line height
+      // no browser can read, and only when `--lh` is unset.
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: normal; src: url("/f.woff2") }
+         .x { font: 16px/var(--lh, normal) Arial }`,
+        SCOPE
+      );
+      expect(out.css).toContain(`font:16px/var(--lh, normal) Arial`);
+    });
+
+    it("reaches a family fallback that follows an earlier function", () => {
+      // One verdict for the declaration reads the leading `var()` as proof the
+      // size has not been given yet and leaves every later fallback alone —
+      // including the family one, which then asks for a name the definition no
+      // longer carries.
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: Brand; src: url("/f.woff2") }
+         .x { font: var(--style, italic) 16px var(--family, Brand) }`,
+        SCOPE
+      );
+      expect(out.css).toContain(`16px var(--family,"${ns("Brand")}")`);
+      // The style slot is still not a family list.
+      expect(out.css).toContain("var(--style, italic)");
+    });
+
     it("rewrites a fallback on an escaped custom property", () => {
       const out = sanitizeCustomCss(
         `@keyframes fade { from { opacity: 0 } }

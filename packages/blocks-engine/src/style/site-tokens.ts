@@ -346,6 +346,12 @@ export function checkTokenKind(
   // and `1\\25` decode to a unit reading `%`, but CSS sees an invalid dimension
   // and drops the declaration. Only the literal counts.
   const isPercentage = rawUnit === "%";
+  // `unitCategory` resolves the spelling itself, so it is handed the unit as
+  // written. Decoding first and passing the result resolves the escape twice,
+  // and `1\\5c s` — a dimension whose unit decodes to the two characters `\s`,
+  // which measures nothing — comes back reading `s` and passes as a duration
+  // the browser drops.
+  const measures = rawUnit === undefined ? undefined : unitCategory(rawUnit);
   const amount = measured === null ? undefined : Number.parseFloat(text);
   const isColor = parseColor(text) !== undefined;
 
@@ -370,7 +376,6 @@ export function checkTokenKind(
       // Judged by what the unit MEASURES rather than by a second list of length
       // units kept beside the one the value checker already has.
       if (isPercentage) return undefined;
-      const measures = unitCategory(unit);
       return measures === "length"
         ? undefined
         : `is measured in ${unit}, which is ${measures ?? "not a unit CSS knows"}, not a length`;
@@ -382,7 +387,7 @@ export function checkTokenKind(
       // is still a length, and `animation-duration: var(--site-time)` reading
       // it is a declaration the browser drops.
       if (unit === "" && amount === 0) return undefined;
-      return unitCategory(unit) === "time"
+      return measures === "time"
         ? undefined
         : `is measured in ${unit === "" ? "no unit" : unit}, not seconds or milliseconds`;
     }

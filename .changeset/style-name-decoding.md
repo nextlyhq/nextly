@@ -35,6 +35,11 @@ in a `var()` fallback — the branch that runs exactly when the variable is not
 set — now follows the rename, and so does the `-webkit-` prefixed animation
 shorthand.
 
+Inside a `font` shorthand each fallback is read against the slot its `var()`
+occupies rather than one verdict for the whole declaration. A fallback in the
+line-height slot is no longer mistaken for a family, and a family fallback that
+follows an earlier function is no longer skipped.
+
 Several spellings that CSS discards are no longer treated as usable. A bare
 `default` is the keyword rather than an animation name; a `@font-face` family
 descriptor written as a bare CSS-wide keyword is ignored, as the browser

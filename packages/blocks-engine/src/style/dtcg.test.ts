@@ -243,6 +243,41 @@ describe("export", () => {
     expect(document).toEqual({});
   });
 
+  it("reports a family run separated by whitespace only JavaScript knows", () => {
+    // A vertical tab is whitespace to `\s` and a delimiter to CSS, so `My\vFont`
+    // is not a run of identifiers and the browser drops the declaration reading
+    // it. Judged by the JavaScript set it exports as a font stack the site
+    // never rendered.
+    const { document } = tokensToDtcg(
+      tokens([
+        {
+          name: "f",
+          kind: "fontFamily",
+          values: { light: "My\u000bFont, serif" },
+        },
+      ])
+    );
+    expect(document).toEqual({});
+  });
+
+  it("still exports a family run separated by the whitespace CSS allows", () => {
+    // The other side of that rule: a form feed IS whitespace to CSS, so the run
+    // it separates is two identifiers and the token is expressible.
+    const { document } = tokensToDtcg(
+      tokens([
+        {
+          name: "f",
+          kind: "fontFamily",
+          values: { light: "My\u000cFont, serif" },
+        },
+      ])
+    );
+    expect((document.f as Record<string, unknown>)?.$value).toEqual([
+      "My\u000cFont",
+      "serif",
+    ]);
+  });
+
   it("still exports a quoted item that would be a keyword bare", () => {
     const { document } = tokensToDtcg(
       tokens([

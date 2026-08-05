@@ -285,6 +285,11 @@ describe("a value that cannot be its kind", () => {
     // `%` but CSS drops the declaration, so the check must not be reassured.
     ["dimension", "1\\%"],
     ["dimension", "1\\25"],
+    // The unit is resolved once. `1\\5c s` is a dimension whose unit decodes to
+    // the two characters `\s`, which measures nothing; decoded a second time on
+    // the way to the category it reads `s` and passes as a time.
+    ["duration", "1\\5c s"],
+    ["dimension", "1\\5c px"],
     // Malformed numeric text is not a colour either; tightening the
     // measurement pattern had moved this out of every branch.
     ["color", "1.px"],

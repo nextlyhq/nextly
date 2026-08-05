@@ -538,25 +538,24 @@ export function rewriteNameReferences(
       // substituted into this property and no other, so rewriting it against
       // both name spaces would let a font family be renamed inside an
       // `animation` — a name that meant nothing there, made to mean something.
-      // The `font` shorthand needs its slot resolved in the OUTER value. A
-      // fallback parsed on its own is just `Brand`, which carries no font size,
-      // so reading it as a whole shorthand finds no family list and leaves it
-      // alone — and `familyStartIndex` cannot answer either, because the
-      // `var()` holding the fallback is itself counted as a possible size.
       //
-      // What settles it is whether a REAL measurement precedes the function: in
-      // `font: 16px var(--missing, Brand)` the size is already given, so
-      // whatever follows is the family list.
-      const fallbackIsFamily =
-        property === "font-family" ||
-        (property === "font" && hasSizeBeforeFunction(value));
-      rewriteFallbackNames(value, css, parsed => {
-        if (fallbackIsFamily && map.fontFamilies.size > 0) {
-          rewriteFontFamilies(parsed, map.fontFamilies, 0);
-          return;
-        }
-        rewriteForProperty(parsed, property, map);
-      });
+      // The `font` shorthand holds several grammars at once, so it resolves
+      // each fallback against the slot its `var()` sits in rather than reading
+      // one verdict for the declaration. A fallback parsed on its own is just
+      // `Brand`, which carries no font size, so reading it as a whole shorthand
+      // finds no family list and leaves it alone.
+      if (property === "font") {
+        rewriteFontShorthandFallbacks(value, css, map);
+      } else {
+        const fallbackIsFamily = property === "font-family";
+        rewriteFallbackNames(value, css, parsed => {
+          if (fallbackIsFamily && map.fontFamilies.size > 0) {
+            rewriteFontFamilies(parsed, map.fontFamilies, 0);
+            return;
+          }
+          rewriteForProperty(parsed, property, map);
+        });
+      }
 
       rewriteForProperty(value, property, map);
     },
@@ -779,7 +778,7 @@ function rewriteCustomProperty(
  * only when a name actually moved.
  */
 function rewriteFallbackNames(
-  value: csstree.Value,
+  value: csstree.CssNode,
   css: CssTreeApi,
   apply: (parsed: csstree.Value) => void
 ): void {
@@ -805,28 +804,68 @@ function rewriteFallbackNames(
 }
 
 /**
- * Whether a `font` shorthand states its size before its first function.
+ * Rewrite each fallback in a `font` shorthand against the slot it sits in.
  *
- * The size is what separates the style/variant/weight tokens from the family
- * list, so a `var()` appearing after one sits in the family slot. Written as
- * its own question because `familyStartIndex` cannot answer it: that function
- * treats a function as a possible size, which is right for `font: clamp(…)
- * Brand` and wrong for the fallback case.
+ * The shorthand carries a style, a variant, a weight, a stretch, a size, a line
+ * height and a family list, so one verdict for the whole declaration is wrong in
+ * both directions. `font: 16px/var(--lh, normal) Arial` states its size before
+ * the function and still holds a line height inside it, and reading that
+ * fallback as a family quotes `normal` into a name the slot cannot take;
+ * `font: var(--style, italic) 16px var(--family, Brand)` opens with a function
+ * and still ends in a family list, which a single leading-size test never
+ * reaches.
+ *
+ * The size divides the shorthand here exactly as it divides the families
+ * themselves, and the slash marks the one position after it that is a line
+ * height rather than a family.
  */
-function hasSizeBeforeFunction(value: csstree.Value): boolean {
+function rewriteFontShorthandFallbacks(
+  value: csstree.Value,
+  css: CssTreeApi,
+  map: GlobalNameMap
+): void {
+  let sizeGiven = false;
+  let inLineHeight = false;
   for (const node of value.children.toArray()) {
-    if (node.type === "Function") return false;
-    if (
-      node.type === "Dimension" ||
-      node.type === "Percentage" ||
-      node.type === "Number" ||
-      (node.type === "Identifier" &&
-        FONT_SIZE_KEYWORDS.has(asciiLower(decodeIdentifier(node.name))))
-    ) {
-      return true;
+    if (node.type === "Operator" && node.value === "/") {
+      inLineHeight = true;
+      continue;
     }
+    if (node.type === "Function") {
+      const isFamilySlot = sizeGiven && !inLineHeight;
+      rewriteFallbackNames(node, css, parsed => {
+        if (isFamilySlot && map.fontFamilies.size > 0) {
+          rewriteFontFamilies(parsed, map.fontFamilies, 0);
+          return;
+        }
+        rewriteForProperty(parsed, "font", map);
+      });
+      // A function stands in for whatever its slot takes, and the shorthand
+      // REQUIRES a size, so one outside the line-height slot leaves the size
+      // accounted for and puts the family list after it. That reads a function
+      // in an earlier slot as the size too, which costs a family named after a
+      // variant or weight keyword; the trade buys `font: var(--size, 16px)
+      // var(--family, Brand)`, where nothing else can tell the family it is one.
+      if (!inLineHeight) sizeGiven = true;
+      inLineHeight = false;
+      continue;
+    }
+    // The line height is not a size, however much it looks like one: it follows
+    // a size the shorthand has already stated.
+    if (!inLineHeight && isFontSizeToken(node)) sizeGiven = true;
+    inLineHeight = false;
   }
-  return false;
+}
+
+/** Whether a token can be the size of a `font` shorthand. */
+function isFontSizeToken(node: csstree.CssNode): boolean {
+  return (
+    node.type === "Dimension" ||
+    node.type === "Percentage" ||
+    node.type === "Number" ||
+    (node.type === "Identifier" &&
+      FONT_SIZE_KEYWORDS.has(asciiLower(decodeIdentifier(node.name))))
+  );
 }
 
 /**
