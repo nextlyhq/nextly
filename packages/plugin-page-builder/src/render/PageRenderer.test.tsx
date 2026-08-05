@@ -3,7 +3,11 @@ import { describe, it, expect } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { createBlockRegistry } from "../core/registry";
-import { documentScopeClass, nodeClass } from "../core/style-compiler";
+import {
+  documentNodeClasses,
+  documentScopeClass,
+  nodeClass,
+} from "../core/style-compiler";
 import { makeNode } from "../core/tree";
 import type { BlockDefinition } from "../core/types";
 import { PageRenderer } from "./PageRenderer";
@@ -106,12 +110,12 @@ describe("PageRenderer", () => {
     expect(a).not.toContain(namespacedGlobalName("fade", scopeB));
   });
 
-  it("separates two documents whose ids collide in one 32-bit hash", () => {
-    // A real pair: `6542vktadvlet` and `a2j6g1pu0x2okx` both reduce to `r3it9l`
-    // under the single FNV round the per-node classes use. Sharing a scope puts
-    // two documents back to sharing their custom CSS, their token block and
-    // their namespaced `@keyframes` — the exact failure this class prevents,
-    // restored silently and only when both happen to render together.
+  it("gives a pair that collided under one 32-bit round two classes", () => {
+    // `6542vktadvlet` and `a2j6g1pu0x2okx` both reduced to `r3it9l` under the
+    // single FNV round the per-node classes used to run, so two unrelated nodes
+    // wore one class and each other's styles. The engine's digest is two lanes
+    // and 53 bits, and this pair is the evidence that the narrow one was
+    // reachable rather than theoretical.
     const first = {
       version: 1 as const,
       root: { ...makeNode("core/container", {}), id: "6542vktadvlet" },
@@ -120,8 +124,31 @@ describe("PageRenderer", () => {
       version: 1 as const,
       root: { ...makeNode("core/container", {}), id: "a2j6g1pu0x2okx" },
     };
-    expect(nodeClass(first.root.id)).toBe(nodeClass(second.root.id));
+    expect(nodeClass(first.root.id)).not.toBe(nodeClass(second.root.id));
+    // And the per-document scope still separates them, which is the boundary
+    // that has to hold whether or not the node classes happen to agree.
     expect(documentScopeClass(first)).not.toBe(documentScopeClass(second));
+  });
+
+  it("names a node in the markup from the map the stylesheet used", () => {
+    // The stylesheet and the markup are produced by two different functions
+    // from one document, and a disambiguating suffix only exists in the map. If
+    // the renderer derived the class itself instead of reading the map, the two
+    // would agree only while no two ids collide — and the collision is exactly
+    // when the agreement is load-bearing.
+    const inner = makeNode("core/heading", { text: "Hi" });
+    const root = makeNode("core/container", {}, undefined, {
+      default: [{ ...inner, style: { base: { backgroundColor: "#111" } } }],
+    });
+    const doc = { version: 1 as const, root };
+    const html = renderToStaticMarkup(
+      <PageRenderer document={doc} registry={registry()} />
+    );
+    const expected = documentNodeClasses(doc).get(inner.id);
+    expect(expected).toBeDefined();
+    // The class the markup carries, and the selector the stylesheet targets.
+    expect(html).toContain(`<h2 class="${expected}"`);
+    expect(html).toContain(`.${expected} {`);
   });
 
   it("scopes generated node selectors to the document too", () => {

@@ -64,10 +64,13 @@ function mergeRefs(...refs: (RefCb | undefined)[]): RefCb {
 function classFor(
   node: BlockNode,
   selected: boolean,
-  extra: (string | false | undefined)[] = []
+  extra: (string | false | undefined)[] = [],
+  // The document's map, so the preview markup carries the class the compiled
+  // stylesheet targets even where two node ids hash alike.
+  classes?: ReadonlyMap<string, string>
 ): string {
   return [
-    nodeClass(node.id),
+    classes?.get(node.id) ?? nodeClass(node.id),
     node.customClass,
     selected && "nx-pb-selected",
     ...extra,
@@ -144,10 +147,10 @@ function buildSlots(node: BlockNode): Record<string, ReactNode> {
 
 /** Root renderer — the page container, not itself draggable. */
 export function CanvasNode({ node }: { node: BlockNode }): ReactNode {
-  const { state, remotePatterns } = useEditor();
+  const { state, remotePatterns, nodeClasses } = useEditor();
   const def = defaultBlockRegistry.get(node.type);
   const selected = state.selectedId === node.id;
-  const className = classFor(node, selected);
+  const className = classFor(node, selected, [], nodeClasses);
 
   if (!def) {
     return (
@@ -196,7 +199,7 @@ function DraggableNode({
   /** When set (grid child), this element is also an "insert before" drop target. */
   dropBeforeIndex?: number;
 }): ReactNode {
-  const { state, remotePatterns } = useEditor();
+  const { state, remotePatterns, nodeClasses } = useEditor();
   const def = defaultBlockRegistry.get(node.type);
   const selected = state.selectedId === node.id;
 
@@ -232,11 +235,16 @@ function DraggableNode({
     },
   });
 
-  const className = classFor(node, selected, [
-    isDragging && "nx-pb-dragging",
-    before.isDropTarget && "nx-pb-drop-before",
-    append.isDropTarget && "nx-pb-drop-append",
-  ]);
+  const className = classFor(
+    node,
+    selected,
+    [
+      isDragging && "nx-pb-dragging",
+      before.isDropTarget && "nx-pb-drop-before",
+      append.isDropTarget && "nx-pb-drop-append",
+    ],
+    nodeClasses
+  );
 
   const ref = mergeRefs(dragRef, before.ref, grid ? append.ref : undefined);
 

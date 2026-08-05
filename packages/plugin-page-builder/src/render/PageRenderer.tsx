@@ -14,6 +14,7 @@ import {
   compileDocumentCss,
   compileDocumentMotionCss,
   compileTokensCss,
+  documentNodeClasses,
   documentScopeClass,
   type BreakpointDef,
   type RemotePatternInput,
@@ -70,11 +71,20 @@ export function PageRenderer({
   // it is what a host styles page-builder content with and is meant to match
   // every document.
   const scope = documentScopeClass(document);
+  // One map for the whole render: the stylesheet below and the markup beneath
+  // it must name each node identically, and a hash collision is only visible —
+  // and only resolvable the same way twice — from the whole id set at once.
+  const classes = documentNodeClasses(document);
   const css = [
     compileTokensCss(scope, tokens),
     compileDocumentMotionCss(document),
-    compileDocumentCss(document, { breakpoints, remotePatterns, scope }),
-    compileDocumentBlockCss(document),
+    compileDocumentCss(document, {
+      breakpoints,
+      remotePatterns,
+      scope,
+      classes,
+    }),
+    compileDocumentBlockCss(document, classes),
     // `.css` alone: the sanitizer also returns what it removed, and this path
     // renders rather than edits, so there is nowhere to show a warning. The
     // editor reads the same result and displays them.
@@ -99,6 +109,7 @@ export function PageRenderer({
         dataProvider={dataProvider}
         budget={{ n: DEFAULT_QUERY_BUDGET }}
         refs={refs}
+        classes={classes}
       />
     </div>
   );
