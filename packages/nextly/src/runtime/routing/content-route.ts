@@ -75,6 +75,55 @@ export interface ContentRouteConfig<TNode> {
    * collections.
    */
   status?: "published" | "draft" | "all";
+  /**
+   * Whether this request may see pending unpublished edits at THIS path.
+   *
+   * Almost always a function, because route config is captured once at module
+   * scope while whether a visitor is previewing is a per-request fact. It is
+   * asked for every path the route resolves, and is handed the collection and
+   * slug being resolved so the answer can be scoped to a document.
+   *
+   * **The argument is the point, not a convenience.** Next's draft mode is a
+   * single boolean for the whole host — `draftMode().isEnabled` says a visitor
+   * opened *a* valid preview link, never *which* document it was for. Answering
+   * from that alone turns a link scoped to one unpublished page into a key to
+   * every unpublished page in the configured collections for the life of the
+   * session, which is precisely what the preview token's scope exists to
+   * prevent. Compare it against what the token actually granted:
+   *
+   * ```ts
+   * draft: async ({ collection, slug }) => {
+   *   const scope = await readPreviewScope(previewConfig);
+   *   if (scope === null || scope.collection !== collection) return false;
+   *   if (slug !== (await slugOf(scope.collection, scope.entryId))) return false;
+   *   return { entryId: scope.entryId };
+   * }
+   * ```
+   *
+   * Name the entry rather than returning a bare `true`. A slug is not unique,
+   * so a boolean grants whichever row this route resolves the path to, which
+   * need not be the one the token was minted for; `{ entryId }` is checked
+   * against the document that was actually resolved.
+   *
+   * **Returning `true` is an authorization decision, not a display
+   * preference.** This route always resolves anonymously, and the working-draft
+   * overlay is gated on an update-capability probe an anonymous read can never
+   * pass — so a request this returns `true` for is read TRUSTED, exactly as
+   * Payload pairs `draft: isDraftMode` with `overrideAccess: isDraftMode`. Put
+   * the authorization here, never in a query parameter the visitor controls.
+   *
+   * A literal `true` is accepted for a route mounted behind the app's own auth,
+   * and means every visitor sees unpublished content at every path. It is
+   * almost never what a public site wants.
+   *
+   * `generateStaticParams` ignores this entirely — draft paths are never
+   * pre-rendered.
+   *
+   * @default false
+   */
+  draft?:
+    | boolean
+    | ((context: ResolvedContext) => DraftGrant | Promise<DraftGrant>);
   /** Relation depth for the resolved read (default `1`). */
   depth?: number;
   /** A booted Nextly instance (defaults to `getNextly()`). */
@@ -112,6 +161,20 @@ export interface ContentRouteConfig<TNode> {
    */
   staticParamsLimit?: number;
 }
+
+/**
+ * What a draft decision may answer.
+ *
+ * `true` grants the draft at this path unconditionally. `{ entryId }` grants it
+ * for ONE document, and the route discards the draft if the path resolved to a
+ * different one — which matters because a slug need not be unique: the resolver
+ * deliberately supports duplicates and settles them by sorting on `id`, so a
+ * token issued for one entry could otherwise reach another that shares its slug.
+ *
+ * A preview token names an entry, so `{ entryId: scope.entryId }` is the shape
+ * to return when one backs the decision.
+ */
+export type DraftGrant = boolean | { entryId: string };
 
 /** The optional-catch-all route arg: `{ params: Promise<{ slug?: string[] }> }`. */
 export interface ContentRouteArgs {
@@ -192,22 +255,79 @@ export function createContentRoute<TNode>(
 
   const getInstance = (): NextlyContentReader => config.nextly ?? getNextly();
 
+  /** Whether this request may see unpublished edits at one collection + slug. */
+  async function draftForThisPath(
+    context: ResolvedContext
+  ): Promise<DraftGrant> {
+    const decision = config.draft;
+    if (decision === undefined) return false;
+    return typeof decision === "function" ? decision(context) : decision;
+  }
+
+  /** Whether a grant covers the document the path actually resolved to. */
+  function grantCovers(grant: DraftGrant, entry: ContentEntry): boolean {
+    if (typeof grant === "boolean") return grant;
+    // Only a primitive id can be compared. An `afterRead` hook's return value
+    // REPLACES the document, so a collection that reshapes its public read can
+    // hand back a row whose id is absent or an object — and stringifying those
+    // yields `"undefined"` and `"[object Object]"`, values a grant could carry
+    // literally and thereby match a document it never named.
+    const id = entry.id;
+    if (typeof id !== "string" && typeof id !== "number") return false;
+    return String(id) === grant.entryId;
+  }
+
   /** Resolve the joined slug across the configured collections (first match wins). */
   async function resolve(
     slug: string
   ): Promise<{ entry: ContentEntry; context: ResolvedContext } | null> {
     for (const collection of collections) {
+      // Asked per collection, not once per request: the answer is scoped to a
+      // document, and the same slug can name a different document in each
+      // configured collection.
+      const grant = await draftForThisPath({ collection, slug });
+      const draft = grant !== false;
       const entry = await resolveContent(collection, slug, {
         nextly: config.nextly,
         slugField,
-        status,
+        // `status` is left to widen itself when a draft is asked for, so a
+        // route cannot end up previewing with only one of the two draft layers
+        // switched on.
+        ...(config.status ? { status: config.status } : {}),
+        draft,
         depth,
         tags: config.tags,
         revalidate: config.revalidate,
         cacheScope: config.cacheScope,
-        overrideAccess,
+        // A draft request reads trusted. The overlay is gated on an
+        // update-capability probe and this route resolves anonymously, so an
+        // enforced draft read could only ever return the published row — the
+        // silent no-op that makes preview look broken. The authorization that
+        // justifies this lives in the `draft` decision itself.
+        overrideAccess: overrideAccess || draft,
       });
-      if (entry) return { entry, context: { collection, slug } };
+      if (!entry) continue;
+      if (draft && !grantCovers(grant, entry)) {
+        // The grant named a different document. A slug need not be unique, so
+        // this is where a token for one entry would otherwise have opened
+        // another that happens to share its slug — read again with no draft
+        // rather than serving the one that was never granted.
+        const published = await resolveContent(collection, slug, {
+          nextly: config.nextly,
+          slugField,
+          ...(config.status ? { status: config.status } : {}),
+          depth,
+          tags: config.tags,
+          revalidate: config.revalidate,
+          cacheScope: config.cacheScope,
+          overrideAccess,
+        });
+        if (published) {
+          return { entry: published, context: { collection, slug } };
+        }
+        continue;
+      }
+      return { entry, context: { collection, slug } };
     }
     return null;
   }
