@@ -277,6 +277,18 @@ describe("export", () => {
     ]);
   });
 
+  it.each(["--brand, serif", "My  Font, serif"])(
+    "exports the valid unquoted family list %s",
+    css => {
+      // The check has to be CSS's grammar, not a stricter one: an identifier may
+      // open with dashes, and any run of whitespace separates two of them.
+      const { document } = tokensToDtcg(
+        tokens([{ name: "f", kind: "fontFamily", values: { light: css } }])
+      );
+      expect(document).not.toEqual({});
+    }
+  );
+
   it("carries another tool's extension data through untouched", () => {
     // "Tools that process design token files MUST preserve any extension data
     // they do not themselves understand."

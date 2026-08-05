@@ -291,7 +291,7 @@ const FONT_WEIGHT_KEYWORDS = new Set(["normal", "bold", "bolder", "lighter"]);
 const NUMERIC_LOOKING = /^[+-]?[.\d]/;
 
 const MEASUREMENT =
-  /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?((?:[a-zA-Z%]|\\[0-9a-fA-F]{1,6}\s?|\\.)*)$/;
+  /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?(%|(?:[a-zA-Z]|\\[0-9a-fA-F]{1,6}\s?|\\.)*)$/;
 
 /**
  * Why a value cannot be what its token says it is, when that is knowable.
@@ -327,16 +327,25 @@ export function checkTokenKind(
     (kind === "dimension" ||
       kind === "duration" ||
       kind === "number" ||
-      kind === "fontWeight")
+      kind === "fontWeight" ||
+      // A colour too. Tightening the measurement pattern moved `1.px` out of
+      // the colour branch below without putting it anywhere else, so it stopped
+      // being reported at all — the silence this branch exists to end.
+      kind === "color")
   ) {
-    return "is not a number CSS can read";
+    return kind === "color"
+      ? "opens like a number and is not one, so it is not a colour"
+      : "is not a number CSS can read";
   }
   // A unit is an identifier, so `1m\\73` IS `1ms`. Read raw, the check reaches
   // no verdict and stays silent about a value the browser drops.
+  const rawUnit = measured === null ? undefined : (measured[1] ?? "");
   const unit =
-    measured === null
-      ? undefined
-      : asciiLower(decodeIdentifier(measured[1] ?? ""));
+    rawUnit === undefined ? undefined : asciiLower(decodeIdentifier(rawUnit));
+  // A percentage is its own token and cannot be spelled with an escape: `1\\%`
+  // and `1\\25` decode to a unit reading `%`, but CSS sees an invalid dimension
+  // and drops the declaration. Only the literal counts.
+  const isPercentage = rawUnit === "%";
   const amount = measured === null ? undefined : Number.parseFloat(text);
   const isColor = parseColor(text) !== undefined;
 
@@ -360,7 +369,7 @@ export function checkTokenKind(
       // wrong quantity, and the browser drops the declaration that reads it.
       // Judged by what the unit MEASURES rather than by a second list of length
       // units kept beside the one the value checker already has.
-      if (unit === "%") return undefined;
+      if (isPercentage) return undefined;
       const measures = unitCategory(unit);
       return measures === "length"
         ? undefined

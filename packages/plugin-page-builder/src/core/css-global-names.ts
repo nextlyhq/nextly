@@ -519,7 +519,10 @@ export function rewriteNameReferences(
         // is not recognised as one by the parser, so its value arrives as an
         // ordinary `Value` rather than the usual `Raw`. It still holds a name
         // that `var()` will substitute, so it is read the same way.
-        if (value.type === "Value") rewriteHeldName(value, map);
+        if (value.type === "Value") {
+          rewriteHeldName(value, map);
+          rewriteFallbackNames(value, css, held => rewriteHeldName(held, map));
+        }
         return;
       }
 
@@ -535,9 +538,25 @@ export function rewriteNameReferences(
       // substituted into this property and no other, so rewriting it against
       // both name spaces would let a font family be renamed inside an
       // `animation` — a name that meant nothing there, made to mean something.
-      rewriteFallbackNames(value, css, parsed =>
-        rewriteForProperty(parsed, property, map)
-      );
+      // The `font` shorthand needs its slot resolved in the OUTER value. A
+      // fallback parsed on its own is just `Brand`, which carries no font size,
+      // so reading it as a whole shorthand finds no family list and leaves it
+      // alone — and `familyStartIndex` cannot answer either, because the
+      // `var()` holding the fallback is itself counted as a possible size.
+      //
+      // What settles it is whether a REAL measurement precedes the function: in
+      // `font: 16px var(--missing, Brand)` the size is already given, so
+      // whatever follows is the family list.
+      const fallbackIsFamily =
+        property === "font-family" ||
+        (property === "font" && hasSizeBeforeFunction(value));
+      rewriteFallbackNames(value, css, parsed => {
+        if (fallbackIsFamily && map.fontFamilies.size > 0) {
+          rewriteFontFamilies(parsed, map.fontFamilies, 0);
+          return;
+        }
+        rewriteForProperty(parsed, property, map);
+      });
 
       rewriteForProperty(value, property, map);
     },
@@ -774,10 +793,40 @@ function rewriteFallbackNames(
       if (parsed === undefined) return;
       const before = css.generate(parsed);
       apply(parsed);
+      // A fallback may hold a fallback: `var(--a, var(--b, fade))`. Applying the
+      // reader to the parsed text reaches the inner `var()` as a function and
+      // stops there, so the text inside it is followed by recursing — and both
+      // are unset together, which is when the innermost one is read.
+      rewriteFallbackNames(parsed, css, apply);
       const after = css.generate(parsed);
       if (after !== before) raw.value = after;
     },
   });
+}
+
+/**
+ * Whether a `font` shorthand states its size before its first function.
+ *
+ * The size is what separates the style/variant/weight tokens from the family
+ * list, so a `var()` appearing after one sits in the family slot. Written as
+ * its own question because `familyStartIndex` cannot answer it: that function
+ * treats a function as a possible size, which is right for `font: clamp(…)
+ * Brand` and wrong for the fallback case.
+ */
+function hasSizeBeforeFunction(value: csstree.Value): boolean {
+  for (const node of value.children.toArray()) {
+    if (node.type === "Function") return false;
+    if (
+      node.type === "Dimension" ||
+      node.type === "Percentage" ||
+      node.type === "Number" ||
+      (node.type === "Identifier" &&
+        FONT_SIZE_KEYWORDS.has(asciiLower(decodeIdentifier(node.name))))
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**

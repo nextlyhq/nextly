@@ -281,6 +281,13 @@ describe("a value that cannot be its kind", () => {
     // value the browser drops.
     ["dimension", "1.px"],
     ["dimension", "1m\\73"],
+    // A percentage is its own token: `1\\%` and `1\\25` decode to a unit reading
+    // `%` but CSS drops the declaration, so the check must not be reassured.
+    ["dimension", "1\\%"],
+    ["dimension", "1\\25"],
+    // Malformed numeric text is not a colour either; tightening the
+    // measurement pattern had moved this out of every branch.
+    ["color", "1.px"],
     // A zero with a unit is still that unit's quantity: `0px` is a length, and
     // only an UNITLESS zero is a time.
     ["duration", "0px"],

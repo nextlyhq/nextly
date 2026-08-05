@@ -363,10 +363,14 @@ const FAMILY_KEYWORD_NOT_A_NAME = new Set([
 /** A run of identifiers, which is all an unquoted family item may be. */
 const IDENT_CHAR =
   "(?:[A-Za-z0-9_\\-\\u00a0-\\uffff]|\\\\[0-9a-fA-F]{1,6}\\s?|\\\\.)";
+// An identifier may open with one or two dashes — `--brand` is a family name a
+// site can legitimately have — and any run of whitespace separates one
+// identifier from the next. Both were narrower here than CSS allows, so valid
+// tokens were reported as ones the format cannot express.
 const IDENT_START =
-  "(?:-?(?:[A-Za-z_\\u00a0-\\uffff]|\\\\[0-9a-fA-F]{1,6}\\s?|\\\\.))";
+  "(?:(?:--?)?(?:[A-Za-z_\\u00a0-\\uffff]|\\\\[0-9a-fA-F]{1,6}\\s?|\\\\.))";
 const UNQUOTED_FAMILY = new RegExp(
-  `^${IDENT_START}${IDENT_CHAR}*(?: ${IDENT_START}${IDENT_CHAR}*)*$`
+  `^${IDENT_START}${IDENT_CHAR}*(?:\\s+${IDENT_START}${IDENT_CHAR}*)*$`
 );
 
 /** One family from a list, how it was written, and whether CSS accepts it. */

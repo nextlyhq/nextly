@@ -1346,6 +1346,51 @@ describe("custom CSS may not reach off this origin", () => {
       expect(out.css).not.toMatch(/,\s*fade\)/);
     });
 
+    it("rewrites a fallback nested inside another fallback", () => {
+      // `var(--a, var(--b, fade))` is read when BOTH are unset, which is when
+      // the innermost name is the one that has to resolve.
+      const out = sanitizeCustomCss(
+        `@keyframes fade { from { opacity: 0 } } .x { animation: var(--a, var(--b, fade)) 1s }`,
+        SCOPE
+      );
+      expect(out.css).toContain(ns("fade"));
+      expect(out.css).not.toMatch(/,\s*fade\)/);
+    });
+
+    it("reads a font shorthand fallback as the family slot it occupies", () => {
+      // Parsed on its own the fallback is just `Brand` and carries no font
+      // size, so reading it as a whole shorthand finds no family list. Its slot
+      // is decided by where it sits in the outer value.
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: Brand; src: url("/f.woff2") }
+         .x { font: 16px var(--missing, Brand) }`,
+        SCOPE
+      );
+      // The DECLARATION, not the name: `@font-face` carries the namespaced name
+      // too, so a bare containment check passes on an unrewritten fallback.
+      expect(out.css).toContain(`font:16px var(--missing,"${ns("Brand")}")`);
+    });
+
+    it("leaves a font fallback before the size alone", () => {
+      // Before the size the slot is style/variant/weight, so a face named
+      // `italic` must not capture the `italic` of `font: var(--x, italic) 16px`.
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: italic; src: url("/f.woff2") }
+         .x { font: var(--missing, italic) 16px Arial }`,
+        SCOPE
+      );
+      expect(out.css).toContain("var(--missing, italic)");
+    });
+
+    it("rewrites a fallback on an escaped custom property", () => {
+      const out = sanitizeCustomCss(
+        `@keyframes fade { from { opacity: 0 } }
+         .x { \\2d\\2d anim: var(--missing, fade); animation: var(--anim) 1s }`,
+        SCOPE
+      );
+      expect(out.css).toContain(`anim:var(--missing,${ns("fade")})`);
+    });
+
     it("still refuses a remote url inside a keyframe step", () => {
       // The step blocks are ordinary declarations, so the origin policy has to
       // reach them — allowing the at-rule must not open a door beneath it.
