@@ -259,6 +259,24 @@ describe("export", () => {
     ]);
   });
 
+  it("exports a family whose identifier run is spelled with an escape", () => {
+    // `\\31 0px` is a legal identifier naming the family `10px`. Checked after
+    // decoding it looks like a dimension, and a valid token is lost.
+    const { document } = tokensToDtcg(
+      tokens([
+        {
+          name: "f",
+          kind: "fontFamily",
+          values: { light: "\\31 0px, serif" },
+        },
+      ])
+    );
+    expect((document.f as Record<string, unknown>)?.$value).toEqual([
+      "10px",
+      "serif",
+    ]);
+  });
+
   it("carries another tool's extension data through untouched", () => {
     // "Tools that process design token files MUST preserve any extension data
     // they do not themselves understand."
@@ -442,6 +460,23 @@ describe("import", () => {
       },
     });
     expect(read[0]?.values.light).toBe("#ff0000");
+  });
+
+  it("does not compare non-sRGB components to an sRGB hex", () => {
+    // In another space the components are not sRGB channels, so a file giving
+    // display-p3 components beside their converted sRGB fallback is valid and
+    // must import.
+    const { tokens: read } = dtcgToTokens({
+      c: {
+        $type: "color",
+        $value: {
+          colorSpace: "display-p3",
+          components: [1, 0, 0],
+          hex: "#fa0f00",
+        },
+      },
+    });
+    expect(read[0]?.values.light).toBe("#fa0f00");
   });
 
   it("skips a type it has no kind for, and says so", () => {

@@ -108,6 +108,21 @@ describe("parseColor", () => {
     });
   });
 
+  it("does not decode a channel, only the function name", () => {
+    // `rgb(\\32 55 0 0)` is not `rgb(255 0 0)`: an escaped channel is an
+    // identifier, not a number, so the browser drops the declaration. Decoding
+    // the whole value reports a colour that never renders — the one thing this
+    // function is arranged not to do.
+    expect(parseColor("rgb(\\32 55 0 0)")).toBeUndefined();
+    // The name may still carry escapes, which is what the decoding is for.
+    expect(parseColor("r\\67 b(255 0 0)")).toEqual({
+      r: 255,
+      g: 0,
+      b: 0,
+      a: 1,
+    });
+  });
+
   it("refuses what it cannot read rather than guessing", () => {
     // A figure computed from a misread colour is worse than none, because it
     // is a number somebody acts on.

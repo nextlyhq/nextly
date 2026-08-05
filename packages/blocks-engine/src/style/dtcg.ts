@@ -276,7 +276,7 @@ function familyToDtcg(css: string): string | string[] | undefined {
   // An unquoted item is a run of identifiers and nothing else. `10px, serif`
   // tokenizes as a dimension, so a browser drops any declaration reading the
   // token — exporting it as a family list shows a stack the site never used.
-  if (parts.some(part => !part.quoted && !UNQUOTED_FAMILY.test(part.name))) {
+  if (parts.some(part => !part.quoted && !UNQUOTED_FAMILY.test(part.raw))) {
     return undefined;
   }
   if (parts.some(part => !part.quoted && /[()]/.test(part.name))) {
@@ -300,6 +300,7 @@ function splitFamilyList(css: string): FamilyPart[] {
   let quoted = false;
   let strings = 0;
   let outsideQuotes = "";
+  let raw = "";
   let quote: string | undefined;
 
   for (let index = 0; index < css.length; index++) {
@@ -312,16 +313,19 @@ function splitFamilyList(css: string): FamilyPart[] {
       // standard value.
       const escape = readCssEscape(css, index);
       current += escape.text;
+      raw += css.slice(index, escape.next);
       index = escape.next - 1;
       continue;
     }
     if (quote !== undefined) {
+      raw += char;
       if (char === quote) quote = undefined;
       else current += char;
       continue;
     }
     if (char === '"' || char === "'") {
       quote = char;
+      raw += char;
       // A second string in one item is what makes `"Bad" "Name"` invalid, so
       // they are counted rather than merely noted.
       strings += 1;
@@ -329,8 +333,9 @@ function splitFamilyList(css: string): FamilyPart[] {
       continue;
     }
     if (char === ",") {
-      parts.push(finishPart(current, quoted, strings, outsideQuotes));
+      parts.push(finishPart(current, quoted, strings, outsideQuotes, raw));
       current = "";
+      raw = "";
       quoted = false;
       strings = 0;
       outsideQuotes = "";
@@ -338,8 +343,9 @@ function splitFamilyList(css: string): FamilyPart[] {
     }
     if (quote === undefined) outsideQuotes += char;
     current += char;
+    raw += char;
   }
-  parts.push(finishPart(current, quoted, strings, outsideQuotes));
+  parts.push(finishPart(current, quoted, strings, outsideQuotes, raw));
 
   return parts.filter(part => part.name !== "");
 }
@@ -355,12 +361,19 @@ const FAMILY_KEYWORD_NOT_A_NAME = new Set([
 ]);
 
 /** A run of identifiers, which is all an unquoted family item may be. */
-const UNQUOTED_FAMILY =
-  /^-?[A-Za-z_\u00a0-\uffff][A-Za-z0-9_\-\u00a0-\uffff]*(?: -?[A-Za-z_\u00a0-\uffff][A-Za-z0-9_\-\u00a0-\uffff]*)*$/;
+const IDENT_CHAR =
+  "(?:[A-Za-z0-9_\\-\\u00a0-\\uffff]|\\\\[0-9a-fA-F]{1,6}\\s?|\\\\.)";
+const IDENT_START =
+  "(?:-?(?:[A-Za-z_\\u00a0-\\uffff]|\\\\[0-9a-fA-F]{1,6}\\s?|\\\\.))";
+const UNQUOTED_FAMILY = new RegExp(
+  `^${IDENT_START}${IDENT_CHAR}*(?: ${IDENT_START}${IDENT_CHAR}*)*$`
+);
 
 /** One family from a list, how it was written, and whether CSS accepts it. */
 interface FamilyPart {
   name: string;
+  /** As written, before escapes were resolved. */
+  raw: string;
   quoted: boolean;
   valid: boolean;
 }
@@ -377,13 +390,17 @@ function finishPart(
   current: string,
   quoted: boolean,
   strings: number,
-  outsideQuotes: string
+  outsideQuotes: string,
+  raw: string
 ): FamilyPart {
   const name = current.trim();
   const valid = quoted
     ? strings === 1 && outsideQuotes.trim() === ""
     : strings === 0;
-  return { name, quoted, valid };
+  // The raw spelling is kept because the identifier-run check has to read what
+  // was WRITTEN. `\\31 0px` is a legal identifier naming the family `10px`;
+  // tested after decoding it looks like a dimension and a valid token is lost.
+  return { name, raw: raw.trim(), quoted, valid };
 }
 
 /**
@@ -696,7 +713,12 @@ function colorFromDtcg(value: unknown): string | undefined {
     // them. Where both are present and disagree — `components: [1, 0, 0]` with
     // `hex: "#000000"` — taking the hex imports black for a token that
     // describes red, so the file is refused rather than silently reinterpreted.
-    if (hexDisagreesWithComponents(value)) return undefined;
+    // Only where the components ARE sRGB channels. In another space they are
+    // not comparable to an sRGB hex, and a file supplying a converted fallback
+    // — display-p3 components beside their sRGB hex — is perfectly valid.
+    if (value.colorSpace === "srgb" && hexDisagreesWithComponents(value)) {
+      return undefined;
+    }
     if (alpha >= 1) return value.hex;
     const rgb = parseColor(value.hex);
     if (rgb !== undefined) return `rgb(${rgb.r} ${rgb.g} ${rgb.b} / ${alpha})`;

@@ -1321,6 +1321,31 @@ describe("custom CSS may not reach off this origin", () => {
       expect(out.css).toContain(`.x{font-family:"${ns("X")}"}`);
     });
 
+    it("reads a var() fallback with the grammar of its own property", () => {
+      // A fallback is substituted into THIS property and no other. Read against
+      // both name spaces, a font family is renamed inside an `animation` — a
+      // name that meant nothing there, made to mean something.
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: Brand; src: url("/f.woff2") }
+         .x { animation: var(--missing, Brand) 1s }`,
+        SCOPE
+      );
+      expect(out.css).toContain("var(--missing, Brand)");
+      expect(out.css).not.toContain(`var(--missing,"${ns("Brand")}")`);
+    });
+
+    it("rewrites a fallback held inside a custom property", () => {
+      // `--anim: var(--missing, fade)` breaks exactly when the INNER variable
+      // is absent, which is the case the fallback exists for.
+      const out = sanitizeCustomCss(
+        `@keyframes fade { from { opacity: 0 } }
+         .x { --anim: var(--missing, fade); animation: var(--anim) 1s }`,
+        SCOPE
+      );
+      expect(out.css).toContain(ns("fade"));
+      expect(out.css).not.toMatch(/,\s*fade\)/);
+    });
+
     it("still refuses a remote url inside a keyframe step", () => {
       // The step blocks are ordinary declarations, so the origin policy has to
       // reach them — allowing the at-rule must not open a door beneath it.

@@ -530,44 +530,16 @@ export function rewriteNameReferences(
       // `animation: var(--missing, fade)` renames the definition and leaves the
       // fallback asking for the old name, which is the branch that runs exactly
       // when the variable is not set.
-      rewriteFallbackNames(value, map, css);
+      //
+      // Read with the SAME reader the declaration itself gets. A fallback is
+      // substituted into this property and no other, so rewriting it against
+      // both name spaces would let a font family be renamed inside an
+      // `animation` — a name that meant nothing there, made to mean something.
+      rewriteFallbackNames(value, css, parsed =>
+        rewriteForProperty(parsed, property, map)
+      );
 
-      if (map.keyframes.size > 0) {
-        if (
-          property === "animation-name" ||
-          property === "-webkit-animation-name"
-        ) {
-          rewriteKeyframeNames(
-            value,
-            map.keyframes,
-            ANIMATION_NAME_KEYWORDS,
-            0
-          );
-        } else if (
-          property === "animation" ||
-          property === "-webkit-animation"
-        ) {
-          // The prefixed alias is the same shorthand. Rewriting one and not the
-          // other leaves the fallback declaration asking for a name the
-          // definition no longer has, which is the shape a browser relying on
-          // the alias actually renders.
-          rewriteKeyframeNames(value, map.keyframes, ANIMATION_KEYWORDS, 0);
-        }
-      }
-
-      if (map.fontFamilies.size > 0) {
-        if (property === "font-family") {
-          rewriteFontFamilies(value, map.fontFamilies, 0);
-        } else if (property === "font") {
-          // Everything before the font size is style, variant, weight or
-          // stretch. A stylesheet defining a family called `italic` must not
-          // turn the `italic` of `font: italic 16px Arial` into a family.
-          const start = familyStartIndex(value);
-          if (start !== undefined) {
-            rewriteFontFamilies(value, map.fontFamilies, start);
-          }
-        }
-      }
+      rewriteForProperty(value, property, map);
     },
   });
 }
@@ -768,6 +740,11 @@ function rewriteCustomProperty(
 
   const before = css.generate(parsed);
   rewriteHeldName(parsed, map);
+  // `--anim: var(--missing, fade)` holds a fallback of its own, and it breaks
+  // exactly when the inner variable is absent. Nothing here knows which
+  // property will read it, so both name spaces apply — the trade this whole
+  // path already documents.
+  rewriteFallbackNames(parsed, css, held => rewriteHeldName(held, map));
   const after = css.generate(parsed);
   // Written only when a name actually moved, so a value this had no business
   // touching is not silently reformatted by the generator on its way out.
@@ -784,8 +761,8 @@ function rewriteCustomProperty(
  */
 function rewriteFallbackNames(
   value: csstree.Value,
-  map: GlobalNameMap,
-  css: CssTreeApi
+  css: CssTreeApi,
+  apply: (parsed: csstree.Value) => void
 ): void {
   css.walk(value, {
     visit: "Raw",
@@ -796,11 +773,44 @@ function rewriteFallbackNames(
       const parsed = parseValue(text, css.parse);
       if (parsed === undefined) return;
       const before = css.generate(parsed);
-      rewriteHeldName(parsed, map);
+      apply(parsed);
       const after = css.generate(parsed);
       if (after !== before) raw.value = after;
     },
   });
+}
+
+/**
+ * Apply the reader a given property uses to a value.
+ *
+ * One place that says what each property reads, so a declaration and the
+ * fallback inside it cannot disagree about which name space they are in.
+ */
+function rewriteForProperty(
+  value: csstree.Value,
+  property: string,
+  map: GlobalNameMap
+): void {
+  if (map.keyframes.size > 0) {
+    if (
+      property === "animation-name" ||
+      property === "-webkit-animation-name"
+    ) {
+      rewriteKeyframeNames(value, map.keyframes, ANIMATION_NAME_KEYWORDS, 0);
+    } else if (property === "animation" || property === "-webkit-animation") {
+      rewriteKeyframeNames(value, map.keyframes, ANIMATION_KEYWORDS, 0);
+    }
+  }
+  if (map.fontFamilies.size > 0) {
+    if (property === "font-family") {
+      rewriteFontFamilies(value, map.fontFamilies, 0);
+    } else if (property === "font") {
+      const start = familyStartIndex(value);
+      if (start !== undefined) {
+        rewriteFontFamilies(value, map.fontFamilies, start);
+      }
+    }
+  }
 }
 
 /**
