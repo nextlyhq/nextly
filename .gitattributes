@@ -1,0 +1,20 @@
+# Source is text, even when a file contains a byte git reads as binary.
+#
+# Git decides binary-or-text by sniffing for a NUL, so one NUL anywhere in a
+# source file — a domain separator written as a raw character rather than the
+# `\0` escape, which is how this was found — makes the whole file undiffable and
+# invisible to grep. Reviews then show "Bin 16144 -> 18079 bytes" in place of the
+# change, and a code search for anything inside it returns nothing at all.
+#
+# `diff` is the attribute that settles it: a path it is set on is treated as
+# text however it is spelled. Deliberately not `text`, which is about end-of-line
+# normalisation and would rewrite line endings on checkout.
+*.ts diff
+*.tsx diff
+*.js diff
+*.jsx diff
+*.mjs diff
+*.cjs diff
+*.css diff
+*.json diff
+*.md diff
