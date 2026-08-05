@@ -276,6 +276,23 @@ describe("a value that cannot be its kind", () => {
     ["duration", "16px"],
     // A word `font-weight` does not take.
     ["fontWeight", "heavy"],
+    // `1.px` is not a CSS number followed by a unit, and `1m\\73` IS `1ms` — the
+    // pattern has to read both the way CSS does or it stays silent about a
+    // value the browser drops.
+    ["dimension", "1.px"],
+    ["dimension", "1m\\73"],
+    // A percentage is its own token: `1\\%` and `1\\25` decode to a unit reading
+    // `%` but CSS drops the declaration, so the check must not be reassured.
+    ["dimension", "1\\%"],
+    ["dimension", "1\\25"],
+    // The unit is resolved once. `1\\5c s` is a dimension whose unit decodes to
+    // the two characters `\s`, which measures nothing; decoded a second time on
+    // the way to the category it reads `s` and passes as a time.
+    ["duration", "1\\5c s"],
+    ["dimension", "1\\5c px"],
+    // Malformed numeric text is not a colour either; tightening the
+    // measurement pattern had moved this out of every branch.
+    ["color", "1.px"],
     // A zero with a unit is still that unit's quantity: `0px` is a length, and
     // only an UNITLESS zero is a time.
     ["duration", "0px"],

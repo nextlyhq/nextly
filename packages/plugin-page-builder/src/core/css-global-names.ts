@@ -66,6 +66,9 @@ import type * as csstree from "css-tree";
  * as Function nodes rather than identifiers, so they never reach the check.
  */
 const ANIMATION_KEYWORDS = new Set([
+  // `default` is excluded from `<custom-ident>` like the CSS-wide keywords, so
+  // a bare one never names a keyframes rule however the stylesheet spells it.
+  "default",
   "normal",
   "reverse",
   "alternate",
@@ -98,6 +101,7 @@ const ANIMATION_KEYWORDS = new Set([
  * longhand IS a keyframes name — that is what the property is for.
  */
 const ANIMATION_NAME_KEYWORDS = new Set([
+  "default",
   "none",
   "initial",
   "inherit",
@@ -121,6 +125,23 @@ const ANIMATION_NAME_KEYWORDS = new Set([
  * keyframes grammar excludes `none` on top of that. A rule named with one of
  * them is invalid and ignored, so it defines nothing to namespace.
  */
+/**
+ * Words a bare `@font-face` family descriptor may not be.
+ *
+ * The CSS-wide keywords and `default` are excluded from `<custom-ident>`, so a
+ * descriptor spelled with one is invalid and ignored. Unlike the reference
+ * side, the generic families are absent: `@font-face { font-family: serif }` is
+ * a legal, if unwise, face name.
+ */
+const FAMILY_RESERVED_NAMES = new Set([
+  "initial",
+  "inherit",
+  "unset",
+  "revert",
+  "revert-layer",
+  "default",
+]);
+
 const KEYFRAMES_RESERVED_NAMES = new Set([
   "none",
   "initial",
@@ -272,14 +293,25 @@ export function fontFaceHasSrc(node: csstree.Atrule): boolean {
  */
 function srcNamesAFile(value: csstree.CssNode): boolean {
   if (value.type !== "Value") return false;
-  return value.children
-    .toArray()
-    .some(
-      child =>
-        child.type === "Url" ||
-        (child.type === "Function" &&
-          decodeIdentifier(child.name).toLowerCase() === "local")
-    );
+  return value.children.toArray().some(child => sourceIsUsable(child));
+}
+
+/**
+ * Whether one `src` entry actually names something to load.
+ *
+ * The function NAME is not enough: `local()` with no argument is a malformed
+ * descriptor the browser discards, so a face built on it defines nothing — and
+ * recording its family points every reference at a private name no surviving
+ * rule provides.
+ */
+function sourceIsUsable(node: csstree.CssNode): boolean {
+  if (node.type === "Url") return node.value.trim() !== "";
+  if (node.type !== "Function") return false;
+  if (asciiLower(decodeIdentifier(node.name)) !== "local") return false;
+  // `local(<family-name>)` takes a string or a run of identifiers, which is the
+  // grammar a family descriptor takes.
+  const named = singleName({ type: "Value", children: node.children });
+  return named !== undefined && named.name.trim() !== "";
 }
 
 /**
@@ -402,6 +434,17 @@ export function namespaceDefinedNames(
         for (const declaration of declarations) {
           const original = singleName(declaration.value);
           if (original === undefined || original.name === "") continue;
+          // A bare CSS-wide keyword or `default` is not a `<custom-ident>`, so
+          // the descriptor is invalid and the browser keeps whichever earlier
+          // one was valid. Treating it as the effective family renames the good
+          // descriptor and leaves every reference on the old global name, so
+          // the face stops resolving. Quoted, it is a legal name.
+          if (
+            !original.quoted &&
+            FAMILY_RESERVED_NAMES.has(asciiLower(original.name))
+          ) {
+            continue;
+          }
           replaceValueWithString(
             declaration.value as csstree.Value,
             namespacedGlobalName(original.name, scopeClass)
@@ -464,40 +507,57 @@ export function rewriteNameReferences(
       // and the name is what the spelling denotes — `--f: "My Font"` holds the
       // family `My Font`, and matching the quotes along with it would find
       // nothing and leave the reference behind after the definition moved.
+      // `\\2d\\2d anim` IS `--anim` to a browser, and `property` is already
+      // decoded, so the dashed-name test reads what CSS reads rather than what
+      // was typed.
       if (property.startsWith("--")) {
-        if (value.type !== "Raw") return;
-        rewriteCustomProperty(value, map, css);
+        if (value.type === "Raw") {
+          rewriteCustomProperty(value, map, css);
+          return;
+        }
+        // A custom property spelled with escapes — `\\2d\\2d anim` IS `--anim` —
+        // is not recognised as one by the parser, so its value arrives as an
+        // ordinary `Value` rather than the usual `Raw`. It still holds a name
+        // that `var()` will substitute, so it is read the same way.
+        if (value.type === "Value") {
+          rewriteHeldName(value, map);
+          rewriteFallbackNames(value, css, held => rewriteHeldName(held, map));
+        }
         return;
       }
 
       if (value.type !== "Value") return;
 
-      if (map.keyframes.size > 0) {
-        if (property === "animation-name") {
-          rewriteKeyframeNames(
-            value,
-            map.keyframes,
-            ANIMATION_NAME_KEYWORDS,
-            0
-          );
-        } else if (property === "animation") {
-          rewriteKeyframeNames(value, map.keyframes, ANIMATION_KEYWORDS, 0);
-        }
+      // A `var()` fallback holds its text as a `Raw` inside the function, so the
+      // readers below — which walk the value's direct children — never see it.
+      // `animation: var(--missing, fade)` renames the definition and leaves the
+      // fallback asking for the old name, which is the branch that runs exactly
+      // when the variable is not set.
+      //
+      // Read with the SAME reader the declaration itself gets. A fallback is
+      // substituted into this property and no other, so rewriting it against
+      // both name spaces would let a font family be renamed inside an
+      // `animation` — a name that meant nothing there, made to mean something.
+      //
+      // The `font` shorthand holds several grammars at once, so it resolves
+      // each fallback against the slot its `var()` sits in rather than reading
+      // one verdict for the declaration. A fallback parsed on its own is just
+      // `Brand`, which carries no font size, so reading it as a whole shorthand
+      // finds no family list and leaves it alone.
+      if (property === "font") {
+        rewriteFontShorthandFallbacks(value, css, map);
+      } else {
+        const fallbackIsFamily = property === "font-family";
+        rewriteFallbackNames(value, css, parsed => {
+          if (fallbackIsFamily && map.fontFamilies.size > 0) {
+            rewriteFontFamilies(parsed, map.fontFamilies, 0);
+            return;
+          }
+          rewriteForProperty(parsed, property, map);
+        });
       }
 
-      if (map.fontFamilies.size > 0) {
-        if (property === "font-family") {
-          rewriteFontFamilies(value, map.fontFamilies, 0);
-        } else if (property === "font") {
-          // Everything before the font size is style, variant, weight or
-          // stretch. A stylesheet defining a family called `italic` must not
-          // turn the `italic` of `font: italic 16px Arial` into a family.
-          const start = familyStartIndex(value);
-          if (start !== undefined) {
-            rewriteFontFamilies(value, map.fontFamilies, start);
-          }
-        }
-      }
+      rewriteForProperty(value, property, map);
     },
   });
 }
@@ -697,6 +757,158 @@ function rewriteCustomProperty(
   if (parsed === undefined) return;
 
   const before = css.generate(parsed);
+  rewriteHeldName(parsed, map);
+  // `--anim: var(--missing, fade)` holds a fallback of its own, and it breaks
+  // exactly when the inner variable is absent. Nothing here knows which
+  // property will read it, so both name spaces apply — the trade this whole
+  // path already documents.
+  rewriteFallbackNames(parsed, css, held => rewriteHeldName(held, map));
+  const after = css.generate(parsed);
+  // Written only when a name actually moved, so a value this had no business
+  // touching is not silently reformatted by the generator on its way out.
+  if (after !== before) value.value = after;
+}
+
+/**
+ * Rewrite names written inside a `var()` fallback.
+ *
+ * The fallback is the second argument, and the parser keeps it as raw text
+ * because it may hold anything. It is read the same way a custom property's
+ * value is: parsed, run through the same positional readers, and written back
+ * only when a name actually moved.
+ */
+function rewriteFallbackNames(
+  value: csstree.CssNode,
+  css: CssTreeApi,
+  apply: (parsed: csstree.Value) => void
+): void {
+  css.walk(value, {
+    visit: "Raw",
+    enter(node: csstree.CssNode) {
+      const raw = node as csstree.Raw;
+      const text = raw.value.trim();
+      if (text === "") return;
+      const parsed = parseValue(text, css.parse);
+      if (parsed === undefined) return;
+      const before = css.generate(parsed);
+      apply(parsed);
+      // A fallback may hold a fallback: `var(--a, var(--b, fade))`. Applying the
+      // reader to the parsed text reaches the inner `var()` as a function and
+      // stops there, so the text inside it is followed by recursing — and both
+      // are unset together, which is when the innermost one is read.
+      rewriteFallbackNames(parsed, css, apply);
+      const after = css.generate(parsed);
+      if (after !== before) raw.value = after;
+    },
+  });
+}
+
+/**
+ * Rewrite each fallback in a `font` shorthand against the slot it sits in.
+ *
+ * The shorthand carries a style, a variant, a weight, a stretch, a size, a line
+ * height and a family list, so one verdict for the whole declaration is wrong in
+ * both directions. `font: 16px/var(--lh, normal) Arial` states its size before
+ * the function and still holds a line height inside it, and reading that
+ * fallback as a family quotes `normal` into a name the slot cannot take;
+ * `font: var(--style, italic) 16px var(--family, Brand)` opens with a function
+ * and still ends in a family list, which a single leading-size test never
+ * reaches.
+ *
+ * The size divides the shorthand here exactly as it divides the families
+ * themselves, and the slash marks the one position after it that is a line
+ * height rather than a family.
+ */
+function rewriteFontShorthandFallbacks(
+  value: csstree.Value,
+  css: CssTreeApi,
+  map: GlobalNameMap
+): void {
+  let sizeGiven = false;
+  let inLineHeight = false;
+  for (const node of value.children.toArray()) {
+    if (node.type === "Operator" && node.value === "/") {
+      inLineHeight = true;
+      continue;
+    }
+    if (node.type === "Function") {
+      const isFamilySlot = sizeGiven && !inLineHeight;
+      rewriteFallbackNames(node, css, parsed => {
+        if (isFamilySlot && map.fontFamilies.size > 0) {
+          rewriteFontFamilies(parsed, map.fontFamilies, 0);
+          return;
+        }
+        rewriteForProperty(parsed, "font", map);
+      });
+      // A function stands in for whatever its slot takes, and the shorthand
+      // REQUIRES a size, so one outside the line-height slot leaves the size
+      // accounted for and puts the family list after it. That reads a function
+      // in an earlier slot as the size too, which costs a family named after a
+      // variant or weight keyword; the trade buys `font: var(--size, 16px)
+      // var(--family, Brand)`, where nothing else can tell the family it is one.
+      if (!inLineHeight) sizeGiven = true;
+      inLineHeight = false;
+      continue;
+    }
+    // The line height is not a size, however much it looks like one: it follows
+    // a size the shorthand has already stated.
+    if (!inLineHeight && isFontSizeToken(node)) sizeGiven = true;
+    inLineHeight = false;
+  }
+}
+
+/** Whether a token can be the size of a `font` shorthand. */
+function isFontSizeToken(node: csstree.CssNode): boolean {
+  return (
+    node.type === "Dimension" ||
+    node.type === "Percentage" ||
+    node.type === "Number" ||
+    (node.type === "Identifier" &&
+      FONT_SIZE_KEYWORDS.has(asciiLower(decodeIdentifier(node.name))))
+  );
+}
+
+/**
+ * Apply the reader a given property uses to a value.
+ *
+ * One place that says what each property reads, so a declaration and the
+ * fallback inside it cannot disagree about which name space they are in.
+ */
+function rewriteForProperty(
+  value: csstree.Value,
+  property: string,
+  map: GlobalNameMap
+): void {
+  if (map.keyframes.size > 0) {
+    if (
+      property === "animation-name" ||
+      property === "-webkit-animation-name"
+    ) {
+      rewriteKeyframeNames(value, map.keyframes, ANIMATION_NAME_KEYWORDS, 0);
+    } else if (property === "animation" || property === "-webkit-animation") {
+      rewriteKeyframeNames(value, map.keyframes, ANIMATION_KEYWORDS, 0);
+    }
+  }
+  if (map.fontFamilies.size > 0) {
+    if (property === "font-family") {
+      rewriteFontFamilies(value, map.fontFamilies, 0);
+    } else if (property === "font") {
+      const start = familyStartIndex(value);
+      if (start !== undefined) {
+        rewriteFontFamilies(value, map.fontFamilies, start);
+      }
+    }
+  }
+}
+
+/**
+ * Rewrite the names a value holds for something else to substitute.
+ *
+ * The same positional readers the declarations use, which is what keeps `1s`
+ * and `ease` from being mistaken for names and what decides whether a family
+ * list starts at the first token or after a font size.
+ */
+function rewriteHeldName(parsed: csstree.Value, map: GlobalNameMap): void {
   if (map.keyframes.size > 0) {
     rewriteKeyframeNames(parsed, map.keyframes, ANIMATION_KEYWORDS, 0);
   }
@@ -711,10 +923,6 @@ function rewriteCustomProperty(
     const start = familyStartIndex(parsed) ?? 0;
     rewriteFontFamilies(parsed, map.fontFamilies, start);
   }
-  const after = css.generate(parsed);
-  // Written only when a name actually moved, so a value this had no business
-  // touching is not silently reformatted by the generator on its way out.
-  if (after !== before) value.value = after;
 }
 
 /**

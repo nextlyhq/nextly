@@ -261,6 +261,24 @@ function familyToDtcg(css: string): string | string[] | undefined {
   // this vendor's extension. Reported as unrepresentable instead, which is the
   // same answer a `clamp()` dimension already gets.
   if (parts.some(part => !part.valid)) return undefined;
+  // A bare CSS-wide keyword is not a family name: `font-family: inherit` takes
+  // the parent's font, so exporting `"inherit"` as a `$value` would describe a
+  // font by that name to any tool reading the standard value. Quoted, it IS a
+  // name somebody chose.
+  if (
+    parts.some(
+      part =>
+        !part.quoted && FAMILY_KEYWORD_NOT_A_NAME.has(part.name.toLowerCase())
+    )
+  ) {
+    return undefined;
+  }
+  // An unquoted item is a run of identifiers and nothing else. `10px, serif`
+  // tokenizes as a dimension, so a browser drops any declaration reading the
+  // token — exporting it as a family list shows a stack the site never used.
+  if (parts.some(part => !part.quoted && !UNQUOTED_FAMILY.test(part.raw))) {
+    return undefined;
+  }
   if (parts.some(part => !part.quoted && /[()]/.test(part.name))) {
     return undefined;
   }
@@ -282,6 +300,7 @@ function splitFamilyList(css: string): FamilyPart[] {
   let quoted = false;
   let strings = 0;
   let outsideQuotes = "";
+  let raw = "";
   let quote: string | undefined;
 
   for (let index = 0; index < css.length; index++) {
@@ -294,16 +313,19 @@ function splitFamilyList(css: string): FamilyPart[] {
       // standard value.
       const escape = readCssEscape(css, index);
       current += escape.text;
+      raw += css.slice(index, escape.next);
       index = escape.next - 1;
       continue;
     }
     if (quote !== undefined) {
+      raw += char;
       if (char === quote) quote = undefined;
       else current += char;
       continue;
     }
     if (char === '"' || char === "'") {
       quote = char;
+      raw += char;
       // A second string in one item is what makes `"Bad" "Name"` invalid, so
       // they are counted rather than merely noted.
       strings += 1;
@@ -311,8 +333,9 @@ function splitFamilyList(css: string): FamilyPart[] {
       continue;
     }
     if (char === ",") {
-      parts.push(finishPart(current, quoted, strings, outsideQuotes));
+      parts.push(finishPart(current, quoted, strings, outsideQuotes, raw));
       current = "";
+      raw = "";
       quoted = false;
       strings = 0;
       outsideQuotes = "";
@@ -320,15 +343,51 @@ function splitFamilyList(css: string): FamilyPart[] {
     }
     if (quote === undefined) outsideQuotes += char;
     current += char;
+    raw += char;
   }
-  parts.push(finishPart(current, quoted, strings, outsideQuotes));
+  parts.push(finishPart(current, quoted, strings, outsideQuotes, raw));
 
   return parts.filter(part => part.name !== "");
+}
+
+/** Words that are keywords rather than family names when written bare. */
+const FAMILY_KEYWORD_NOT_A_NAME = new Set([
+  "inherit",
+  "initial",
+  "unset",
+  "revert",
+  "revert-layer",
+  "default",
+]);
+
+// The five characters CSS calls whitespace. JavaScript's `\s` is a wider set —
+// it counts a vertical tab, and every non-breaking and exotic space — so using
+// it here accepts separators CSS does not: a family split by a vertical tab is
+// not a run of identifiers to a browser, which drops the declaration reading
+// it, and this grammar exists precisely to say so before the value is exported.
+const CSS_WS = "[ \\t\\r\\n\\f]";
+/** A run of identifiers, which is all an unquoted family item may be. */
+const IDENT_CHAR = `(?:[A-Za-z0-9_\\-\\u00a0-\\uffff]|\\\\[0-9a-fA-F]{1,6}${CSS_WS}?|\\\\.)`;
+// An identifier may open with one or two dashes — `--brand` is a family name a
+// site can legitimately have — and any run of whitespace separates one
+// identifier from the next. Both were narrower here than CSS allows, so valid
+// tokens were reported as ones the format cannot express.
+const IDENT_START = `(?:(?:--?)?(?:[A-Za-z_\\u00a0-\\uffff]|\\\\[0-9a-fA-F]{1,6}${CSS_WS}?|\\\\.))`;
+const UNQUOTED_FAMILY = new RegExp(
+  `^${IDENT_START}${IDENT_CHAR}*(?:${CSS_WS}+${IDENT_START}${IDENT_CHAR}*)*$`
+);
+const CSS_WS_EDGES = new RegExp(`^${CSS_WS}+|${CSS_WS}+$`, "g");
+
+/** Strip the whitespace CSS recognises from both ends, and only that. */
+function trimCssWhitespace(text: string): string {
+  return text.replace(CSS_WS_EDGES, "");
 }
 
 /** One family from a list, how it was written, and whether CSS accepts it. */
 interface FamilyPart {
   name: string;
+  /** As written, before escapes were resolved. */
+  raw: string;
   quoted: boolean;
   valid: boolean;
 }
@@ -345,13 +404,22 @@ function finishPart(
   current: string,
   quoted: boolean,
   strings: number,
-  outsideQuotes: string
+  outsideQuotes: string,
+  raw: string
 ): FamilyPart {
   const name = current.trim();
   const valid = quoted
     ? strings === 1 && outsideQuotes.trim() === ""
     : strings === 0;
-  return { name, quoted, valid };
+  // The raw spelling is kept because the identifier-run check has to read what
+  // was WRITTEN. `\\31 0px` is a legal identifier naming the family `10px`;
+  // tested after decoding it looks like a dimension and a valid token is lost.
+  //
+  // Trimmed by the same whitespace set that separates identifiers within it.
+  // `String.trim` strips characters CSS does not treat as whitespace, so a
+  // family led by one would have it removed here and pass a check the browser
+  // fails.
+  return { name, raw: trimCssWhitespace(raw), quoted, valid };
 }
 
 /**
@@ -660,6 +728,16 @@ function colorFromDtcg(value: unknown): string | undefined {
   }
   const alpha = typeof value.alpha === "number" ? value.alpha : 1;
   if (typeof value.hex === "string" && /^#[0-9a-f]{6}$/i.test(value.hex)) {
+    // The hex is a FALLBACK for the components beside it, not an alternative to
+    // them. Where both are present and disagree — `components: [1, 0, 0]` with
+    // `hex: "#000000"` — taking the hex imports black for a token that
+    // describes red, so the file is refused rather than silently reinterpreted.
+    // Only where the components ARE sRGB channels. In another space they are
+    // not comparable to an sRGB hex, and a file supplying a converted fallback
+    // — display-p3 components beside their sRGB hex — is perfectly valid.
+    if (value.colorSpace === "srgb" && hexDisagreesWithComponents(value)) {
+      return undefined;
+    }
     if (alpha >= 1) return value.hex;
     const rgb = parseColor(value.hex);
     if (rgb !== undefined) return `rgb(${rgb.r} ${rgb.g} ${rgb.b} / ${alpha})`;
@@ -682,6 +760,28 @@ function colorFromDtcg(value: unknown): string | undefined {
   }
   const [r, g, b] = channels.map(part => Math.round(part * 255));
   return alpha < 1 ? `rgb(${r} ${g} ${b} / ${alpha})` : `rgb(${r} ${g} ${b})`;
+}
+
+/**
+ * Whether a supplied `hex` describes a different colour from the components.
+ *
+ * Compared after rounding to the same 8-bit channels the hex can express, so a
+ * component that merely lost precision on the way to two digits still agrees.
+ */
+function hexDisagreesWithComponents(value: Record<string, unknown>): boolean {
+  const components = value.components;
+  if (!Array.isArray(components) || components.length !== 3) return false;
+  if (!components.every(part => typeof part === "number")) return false;
+  const fromHex = parseColor(String(value.hex));
+  if (fromHex === undefined) return false;
+  const channels = components.map(part =>
+    Math.round(Math.min(1, Math.max(0, part)) * 255)
+  );
+  return (
+    channels[0] !== fromHex.r ||
+    channels[1] !== fromHex.g ||
+    channels[2] !== fromHex.b
+  );
 }
 
 /* ------------------------------------------------------------------ shared */

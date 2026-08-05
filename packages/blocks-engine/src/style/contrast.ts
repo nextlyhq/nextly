@@ -28,6 +28,7 @@
  *
  * @module style/contrast
  */
+import { asciiLower, decodeIdentifier } from "./css-value";
 
 /** Straight sRGB channels, 0-255, plus alpha 0-1. */
 export interface Rgb {
@@ -51,6 +52,9 @@ export interface ContrastResult {
 
 const HEX_SHORT = /^#([0-9a-f])([0-9a-f])([0-9a-f])([0-9a-f])?$/i;
 const HEX_LONG = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})?$/i;
+// The function name is an identifier, so `r\\67 b(...)` IS `rgb(...)` to a
+// browser. Matched against the decoded text, or a colour that renders is
+// reported as one this cannot read.
 const RGB_FUNCTION = /^rgba?\(([^)]*)\)$/i;
 
 /**
@@ -89,8 +93,20 @@ export function parseColor(value: string): Rgb | undefined {
   const fn = RGB_FUNCTION.exec(text);
   if (fn) return parseRgbFunction(fn[1] ?? "");
 
-  return undefined;
+  // Only the function NAME may carry escapes. `r\\67 b(255 0 0)` is `rgb()` to a
+  // browser, but `rgb(\\32 55 0 0)` is not `rgb(255 0 0)` — an escaped channel
+  // is an identifier, not a number, and the declaration is dropped. Decoding
+  // the whole value would report a colour that never renders, which is the one
+  // thing this function is arranged not to do.
+  const named = NAMED_FUNCTION.exec(text);
+  if (named === null) return undefined;
+  const name = asciiLower(decodeIdentifier(named[1] ?? ""));
+  if (name !== "rgb" && name !== "rgba") return undefined;
+  return parseRgbFunction(named[2] ?? "");
 }
+
+/** Any function call, split into its name and its arguments as written. */
+const NAMED_FUNCTION = /^([^(]+)\(([^)]*)\)$/;
 
 /**
  * The inside of an `rgb()`, in either syntax CSS actually has.
