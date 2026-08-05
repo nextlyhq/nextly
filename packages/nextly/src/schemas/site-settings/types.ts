@@ -34,15 +34,26 @@ export interface GeneralSettingsRecord {
   customSidebarGroups: string | null;
   /** JSON object mapping plugin slugs to their sidebar placement group overrides. */
   pluginPlacements: string | null;
+  /**
+   * Revocation generation for preview links — the generation every preview
+   * token records and is verified against. Incrementing it invalidates every
+   * link ever issued. Monotonic: it only ever moves forward.
+   */
+  previewTokenGeneration: number;
   /** When the settings were last updated. */
   updatedAt: Date;
 }
 
 /**
  * Fields that can be updated via the settings form.
- * Excludes immutable `id` and auto-managed `updatedAt`.
+ *
+ * Excludes immutable `id` and auto-managed `updatedAt`, and
+ * `previewTokenGeneration`, which is a revocation counter rather than a
+ * setting: it must only ever be incremented by an explicit revoke, because
+ * writing a lower value would re-validate every preview link that revoke had
+ * already invalidated.
  */
 export type GeneralSettingsUpdate = Omit<
   GeneralSettingsRecord,
-  "id" | "updatedAt"
+  "id" | "updatedAt" | "previewTokenGeneration"
 >;
