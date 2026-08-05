@@ -26,17 +26,3 @@ export function permissionCollisionError(
     logContext: { reason, action, resource, owners },
   });
 }
-
-/**
- * Whether an error is a permission collision, for a caller deciding what to let through.
- *
- * Asked here rather than by comparing a code string at the catch site: the boot path forgives
- * failures that mean "the tables are not there yet", and a configuration collision must not be
- * forgiven with them. Two places comparing the same literal is how the thrower and the catcher
- * drift apart.
- */
-export function isPermissionCollision(error: unknown): boolean {
-  return (
-    error instanceof NextlyError && error.code === "NEXTLY_PERMISSION_COLLISION"
-  );
-}

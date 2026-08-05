@@ -23,4 +23,4 @@
 "@nextlyhq/tsconfig": patch
 ---
 
-Do not let a plugin take ownership of a permission the built-in seeder owns. Permission reservation decided what an entity was from the config alone, so a collection created in the Schema Builder — which exists only in the database — was invisible to it, and a plugin declaring a permission on that slug acquired the row. The role presets read ownership to decide what Editor is granted, so the permission silently stopped being granted and became eligible for the orphan sweep when the plugin was removed.
+Do not let a plugin take ownership of the publish permission for a collection created in the Schema Builder. Permission reservation decided what an entity was from the config alone, so a Builder collection — which exists only in the database — was invisible to it. The role presets read ownership to decide what Editor is granted, so the permission silently stopped being granted and became eligible for the orphan sweep when the plugin was removed.

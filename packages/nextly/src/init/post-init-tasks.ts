@@ -13,12 +13,7 @@ import {
   TIMESTAMP_REPAIR_META_KEY,
 } from "../database/repair-sqlite-timestamps";
 import { seedRolePresets } from "../database/seeders/role-presets";
-import {
-  getService,
-  isServicesRegistered,
-  shutdownServices,
-} from "../di/register";
-import { isPermissionCollision } from "../plugins/permission-error";
+import { getService } from "../di/register";
 import { collectCustomPermissions } from "../plugins/permissions/collect-permissions";
 import { collectRoles } from "../plugins/roles/collect-roles";
 import { seedPluginRoles } from "../plugins/roles/seed-roles";
@@ -118,12 +113,9 @@ export async function runPostInitTasks(): Promise<void> {
     if (allNewIds.length > 0) {
       await permissionSeedService.assignNewPermissionsToSuperAdmin(allNewIds);
     }
-  } catch (error) {
-    // Forgiving on purpose: the permissions table may genuinely not exist yet (migrations not
-    // run), or the service may not be registered. A permission collision is not that — it is a
-    // configuration error, and swallowing it here would let boot continue with a plugin sharing
-    // a content permission, which is the thing refusing it was meant to prevent.
-    if (isPermissionCollision(error)) throw error;
+  } catch {
+    // Silently skip — permissions table may not exist yet (migrations not run),
+    // or permissionSeedService may not be registered
   }
 
   // Bring the preset roles in line with the permissions that now exist. Runs
@@ -181,33 +173,5 @@ export async function runPostInitTasks(): Promise<void> {
     // Silently skip — meta or the adapter may not be registered, or the tables
     // may not exist yet. A failed repair must never stop the app booting; the
     // marker stays unset, so the next boot tries again.
-  }
-}
-
-/**
- * Refuse a plugin permission that collides with one the built-in seeder owns.
- *
- * Its own entry point because the seeding it belongs to runs in the background, and because the
- * route-handler cold start seeds permissions without ever collecting the custom ones — so a check
- * living inside either path alone would be skipped by the other.
- *
- * Forgiving about everything except the collision: on a fresh database the tables may not exist
- * yet, which is not a configuration error and must not stop boot.
- */
-export async function assertNoReservedPermissionCollisions(): Promise<void> {
-  try {
-    const permissionSeedService = getService("permissionSeedService");
-    const config = getService("config");
-    await permissionSeedService.assertNoReservedCollisions(
-      collectCustomPermissions(config, config.plugins ?? [])
-    );
-  } catch (error) {
-    if (!isPermissionCollision(error)) return;
-    // Boot is being refused, and the container has already been marked registered by the caller.
-    // Left that way, the next `getNextly()` or request sees services registered, skips the
-    // initializer that raised this, and serves against the very collision just rejected — so the
-    // refusal has to take the registration down with it, and repeat on the next attempt.
-    if (isServicesRegistered()) await shutdownServices();
-    throw error;
   }
 }

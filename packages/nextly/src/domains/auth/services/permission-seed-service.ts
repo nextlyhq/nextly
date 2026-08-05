@@ -3,7 +3,6 @@ import { sql, eq } from "drizzle-orm";
 
 import type { RBACDatabaseInstance } from "@nextly/types/rbac-operations";
 
-import { permissionCollisionError } from "../../../plugins/permission-error";
 import type { CollectedPermission } from "../../../plugins/permissions/collect-permissions";
 import { ADOPTED_LIFECYCLE_ACTIONS } from "../../../plugins/permissions/collect-permissions";
 import { SYSTEM_RESOURCES, permissionSlug } from "../../../schemas/_zod/rbac";
@@ -535,35 +534,6 @@ export class PermissionSeedService extends BaseService {
    * `(action, resource)` unique index + `ensurePermission` make re-seeding a
    * no-op. New IDs are returned for super-admin assignment by the caller.
    */
-  /**
-   * Refuse a declared permission the built-in seeder owns, before anything is written.
-   *
-   * Separate from seeding because the two run on different schedules. Seeding is deliberately
-   * fired without waiting — every task in it is idempotent and additive — while a collision is a
-   * configuration error the app must not serve requests with. Awaiting this alone keeps boot
-   * deterministic about the thing that matters without making it wait for the rest.
-   *
-   * Also the reason it is a method rather than a step inside `seedCustomPermissions`: the
-   * route-handler cold start seeds system, collection and single permissions and never the custom
-   * ones, so a check living only in that path would never run there.
-   */
-  async assertNoReservedCollisions(
-    perms: CollectedPermission[]
-  ): Promise<void> {
-    const builtIn = await this.builtInOwnedPermissions();
-    for (const perm of perms) {
-      const key = `${perm.action.toLowerCase()}:${perm.resource.toLowerCase()}`;
-      if (!builtIn.has(key)) continue;
-      if (ADOPTED_LIFECYCLE_ACTIONS.has(perm.action.toLowerCase())) continue;
-      throw permissionCollisionError(
-        perm.action,
-        perm.resource,
-        [perm.owner],
-        "crud-permission-reserved"
-      );
-    }
-  }
-
   async seedCustomPermissions(
     perms: CollectedPermission[]
   ): Promise<SeedResult> {
@@ -588,34 +558,25 @@ export class PermissionSeedService extends BaseService {
       // `LOWER(action) = LOWER(action)`. An exact-match guard here is bypassed by a declaration
       // that differs only in case — `{ action: "Publish", resource: "Reports" }` walks straight
       // past it and then patches the seeded `publish/reports` row anyway.
+      //
+      // Only the ADOPTED LIFECYCLE actions are held back, which is the same line the collector
+      // draws for entities it can see. That is also the whole of the reported bug: a plugin
+      // declaring `publish` on a Builder collection took ownership of the row, the Editor preset
+      // grants on `!isSystem && !isPlugin`, and the permission quietly stopped being granted.
+      //
+      // A CRUD collision is deliberately left as it is. Withholding ownership there would leave
+      // the row unowned and therefore granted to Editor — reaching a plugin route guarded by
+      // `delete-reports` that today is protected precisely because the plugin owns it. Refusing
+      // it outright is the right answer and is a larger change than this one: it has to run on
+      // every boot entry point, before anything is served. Filed separately.
       if (
+        ADOPTED_LIFECYCLE_ACTIONS.has(perm.action.toLowerCase()) &&
         builtIn.has(
           `${perm.action.toLowerCase()}:${perm.resource.toLowerCase()}`
         )
       ) {
-        // Only the publish lifecycle is ADOPTED. The collector draws the same line for entities
-        // it can see: a lifecycle action on an entity is redundant with what the seeder emits and
-        // is dropped, while a CRUD action on one is a collision and is refused.
-        //
-        // Silently reusing a content permission for a plugin's own is worse than it looks. A
-        // route guarded by `delete-reports` would share the row the Editor preset grants, so the
-        // preset quietly opens plugin functionality the plugin meant to be granted separately.
-        if (ADOPTED_LIFECYCLE_ACTIONS.has(perm.action.toLowerCase())) {
-          result.skipped++;
-          continue;
-        }
-        // Thrown, not counted. A soft seed error is invisible: the boot path does not read
-        // `errors`, presets sync from the still-unowned content row, and a plugin route enforcing
-        // `requiredPermission: "delete-reports"` goes on sharing it — so a role granted the
-        // content permission reaches plugin functionality that was meant to be granted
-        // separately. The same error the collector raises for an entity it CAN see, so both
-        // paths refuse a reserved CRUD permission identically.
-        throw permissionCollisionError(
-          perm.action,
-          perm.resource,
-          [perm.owner],
-          "crud-permission-reserved"
-        );
+        result.skipped++;
+        continue;
       }
       try {
         const ensured = await this.permissionService.ensurePermission(

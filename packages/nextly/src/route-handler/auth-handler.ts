@@ -12,7 +12,6 @@ import { routeAuthRequest } from "../auth/handlers/router";
 import type { SanitizedNextlyConfig } from "../collections/config/define-config";
 import { isServicesRegistered, registerServices, getService } from "../di";
 import type { NextlyServiceConfig } from "../di/register";
-import { assertNoReservedPermissionCollisions } from "../init/post-init-tasks";
 import { ensureHmrListener } from "../runtime/hmr-listener";
 import { getImageProcessor } from "../storage/image-processor";
 
@@ -261,14 +260,6 @@ export async function ensureServicesInitialized(): Promise<void> {
         },
       });
     }
-
-    // The same refusal the main boot path makes. This cold start seeds permissions and never
-    // collects the custom ones, so without it an app reaching the engine only through
-    // `createDynamicHandlers` boots straight past a plugin sharing a content permission.
-    //
-    // After the migrations, not before: on an unmigrated database `dynamic_collections` may not
-    // exist yet, and a check that cannot read it finds no collision and is never retried.
-    await assertNoReservedPermissionCollisions();
 
     // Open the HMR listener so live edits to nextly.config.ts during a
     // running dev session reach reloadNextlyConfig(). Without this, only
