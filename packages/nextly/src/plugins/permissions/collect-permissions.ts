@@ -50,7 +50,7 @@ const SINGLE_ACTIONS = new Set(["read", "update"]);
 // `owner`, and `markOrphanedPermissions` only considers owned rows. Letting the
 // declaration through would put a permission the seeder depends on at risk of
 // being swept the day the plugin is removed.
-const ADOPTED_LIFECYCLE_ACTIONS = new Set(["publish", "unpublish"]);
+export const ADOPTED_LIFECYCLE_ACTIONS = new Set(["publish", "unpublish"]);
 
 /**
  * The parts of a config a permission collector reads.

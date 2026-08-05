@@ -26,6 +26,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 
+import type { CollectedPermission } from "../../../plugins/permissions/collect-permissions";
 import { SYSTEM_PERMISSIONS } from "./permission-seed-service";
 import { SYSTEM_RESOURCES } from "../../../schemas/_zod/rbac";
 import { RESERVED_SLUGS } from "../../../shared/sql-reserved";
@@ -168,20 +169,40 @@ describe("a plugin declaring a permission on a Builder entity", () => {
    * silently stops being granted, and becomes eligible for the orphan sweep the
    * day the plugin is removed.
    */
-  async function ownerOf(
+  async function permissionRow(
     handle: TestNextly,
     action: string,
     resource: string
-  ): Promise<string | null | undefined> {
+  ): Promise<{ owner: string | null } | undefined> {
     const rows = (await handle.adapter.executeQuery(
       `SELECT owner FROM permissions WHERE action = '${action}' AND resource = '${resource}'`
     )) as unknown as Array<{ owner: string | null }>;
-    return rows[0] ? rows[0].owner : undefined;
+    return rows[0];
   }
 
-  it("leaves the permission unowned, so presets still grant it", async () => {
+  /**
+   * The shape the collector produces, built in full rather than cast.
+   *
+   * `group` and `danger` are required on `CollectedPermission` and are what the seeder passes to
+   * `ensurePermission`, so a partial object silenced with a cast would stop exercising the path
+   * production takes the moment either began to matter.
+   */
+  function declared(
+    overrides: Pick<CollectedPermission, "action" | "resource"> &
+      Partial<CollectedPermission>
+  ): CollectedPermission {
+    return {
+      slug: `${overrides.action}-${overrides.resource}`,
+      name: `${overrides.action} ${overrides.resource}`,
+      owner: "some-plugin",
+      group: "Plugin",
+      danger: false,
+      ...overrides,
+    };
+  }
+
+  async function bootWithBuilderCollection(): Promise<TestNextly> {
     const handle = await bootWithCoreTables();
-    current = handle;
     await handle.adapter.executeQuery(
       // Every NOT NULL column, so the row is one the registry would accept. The seeder reads
       // only `slug`, but a partial insert fails before it gets there.
@@ -190,20 +211,60 @@ describe("a plugin declaring a permission on a Builder entity", () => {
           source, locked, schema_hash, schema_version, migration_status, created_at, updated_at)
        VALUES ('dc1', 'reports', '{}', 'reports', '[]', 1, 0, 0, 'ui', 0, 'h1', 1, 'applied', 0, 0)`
     );
+    return handle;
+  }
+
+  it("leaves the permission unowned, so presets still grant it", async () => {
+    const handle = await bootWithBuilderCollection();
+    current = handle;
 
     const seeder = handle.getService("permissionSeedService");
     await seeder.seedAllCollectionPermissions();
     await seeder.seedCustomPermissions([
-      {
-        action: "publish",
-        resource: "reports",
-        slug: "publish-reports",
-        name: "Publish Reports",
-        owner: "some-plugin",
-      },
-    ] as never);
+      declared({ action: "publish", resource: "reports" }),
+    ]);
 
-    expect(await ownerOf(handle, "publish", "reports")).toBeFalsy();
+    // The row has to EXIST and be unowned. Asserting only that the owner is falsy also passes
+    // when the built-in seeding never ran, which is the state where there is no permission for
+    // the preset to grant at all — the opposite of what this protects.
+    const row = await permissionRow(handle, "publish", "reports");
+    expect(row).toBeDefined();
+    expect(row?.owner).toBeNull();
+  });
+
+  it("is not fooled by a declaration that differs only in case", async () => {
+    // `ensurePermission` finds an existing row with `LOWER(action) = LOWER(action)`, so an exact
+    // comparison here is walked straight past and the owner is patched anyway.
+    const handle = await bootWithBuilderCollection();
+    current = handle;
+
+    const seeder = handle.getService("permissionSeedService");
+    await seeder.seedAllCollectionPermissions();
+    await seeder.seedCustomPermissions([
+      declared({ action: "Publish", resource: "Reports" }),
+    ]);
+
+    const row = await permissionRow(handle, "publish", "reports");
+    expect(row).toBeDefined();
+    expect(row?.owner).toBeNull();
+  });
+
+  it("refuses a CRUD collision rather than quietly sharing the content permission", async () => {
+    // Only the publish lifecycle is adopted. A route guarded by `delete-reports` would otherwise
+    // share the row the Editor preset grants, opening plugin functionality the plugin meant to be
+    // granted separately.
+    const handle = await bootWithBuilderCollection();
+    current = handle;
+
+    const seeder = handle.getService("permissionSeedService");
+    await seeder.seedAllCollectionPermissions();
+    const result = await seeder.seedCustomPermissions([
+      declared({ action: "delete", resource: "reports" }),
+    ]);
+
+    expect(result.errors).toBe(1);
+    const row = await permissionRow(handle, "delete", "reports");
+    expect(row?.owner).toBeNull();
   });
 
   it("still lets a plugin own a permission on a resource that is not an entity", async () => {
@@ -212,15 +273,10 @@ describe("a plugin declaring a permission on a Builder entity", () => {
 
     const seeder = handle.getService("permissionSeedService");
     await seeder.seedCustomPermissions([
-      {
-        action: "run",
-        resource: "imports",
-        slug: "run-imports",
-        name: "Run Imports",
-        owner: "some-plugin",
-      },
-    ] as never);
+      declared({ action: "run", resource: "imports" }),
+    ]);
 
-    expect(await ownerOf(handle, "run", "imports")).toBe("some-plugin");
+    const row = await permissionRow(handle, "run", "imports");
+    expect(row?.owner).toBe("some-plugin");
   });
 });

@@ -4,6 +4,7 @@ import { sql, eq } from "drizzle-orm";
 import type { RBACDatabaseInstance } from "@nextly/types/rbac-operations";
 
 import type { CollectedPermission } from "../../../plugins/permissions/collect-permissions";
+import { ADOPTED_LIFECYCLE_ACTIONS } from "../../../plugins/permissions/collect-permissions";
 import { SYSTEM_RESOURCES, permissionSlug } from "../../../schemas/_zod/rbac";
 import { BaseService } from "../../../services/base-service";
 import type { Logger } from "../../../services/shared";
@@ -553,8 +554,30 @@ export class PermissionSeedService extends BaseService {
       //
       // Decided here rather than at collection time because this is the layer that knows: the
       // list below is read from the database, which the pure collector deliberately cannot touch.
-      if (builtIn.has(`${perm.action}:${perm.resource}`)) {
-        result.skipped++;
+      // Compared in lower case, because `ensurePermission` matches an existing row with
+      // `LOWER(action) = LOWER(action)`. An exact-match guard here is bypassed by a declaration
+      // that differs only in case — `{ action: "Publish", resource: "Reports" }` walks straight
+      // past it and then patches the seeded `publish/reports` row anyway.
+      if (
+        builtIn.has(
+          `${perm.action.toLowerCase()}:${perm.resource.toLowerCase()}`
+        )
+      ) {
+        // Only the publish lifecycle is ADOPTED. The collector draws the same line for entities
+        // it can see: a lifecycle action on an entity is redundant with what the seeder emits and
+        // is dropped, while a CRUD action on one is a collision and is refused.
+        //
+        // Silently reusing a content permission for a plugin's own is worse than it looks. A
+        // route guarded by `delete-reports` would share the row the Editor preset grants, so the
+        // preset quietly opens plugin functionality the plugin meant to be granted separately.
+        if (ADOPTED_LIFECYCLE_ACTIONS.has(perm.action.toLowerCase())) {
+          result.skipped++;
+          continue;
+        }
+        result.errors++;
+        this.logger.error(
+          `Permission "${perm.slug}" declared by "${perm.owner}" is already the content permission for "${perm.resource}", so it was not attached. Declare it on a resource of the plugin's own.`
+        );
         continue;
       }
       try {
@@ -1000,14 +1023,15 @@ export class PermissionSeedService extends BaseService {
   private async builtInOwnedPermissions(): Promise<Set<string>> {
     const owned = new Set<string>();
     try {
+      // Keyed in lower case, matching how `ensurePermission` finds an existing row.
       for (const slug of await this.getAllCollectionSlugs()) {
         for (const action of COLLECTION_SEEDED_ACTIONS) {
-          owned.add(`${action}:${slug}`);
+          owned.add(`${action}:${slug.toLowerCase()}`);
         }
       }
       for (const slug of await this.getAllSingleSlugs()) {
         for (const action of SINGLE_SEEDED_ACTIONS) {
-          owned.add(`${action}:${slug}`);
+          owned.add(`${action}:${slug.toLowerCase()}`);
         }
       }
     } catch {
