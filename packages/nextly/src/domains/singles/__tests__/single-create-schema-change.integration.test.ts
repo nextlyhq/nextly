@@ -117,6 +117,45 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(await current.adapter.tableExists(`${table}_locales`)).toBe(true);
     });
 
+    /**
+     * 🔴 The generator VALIDATES as well as renders, so a rejected create must leave nothing.
+     *
+     * A required relationship declaring `onDelete: "set null"` is refused: no database can null a
+     * reference the column forbids. That refusal comes from `generateMigrationSQL`, which means it
+     * happens on the same path that writes the table — so if the registry row were persisted
+     * first, this request would strand a `pending` Single with its permissions seeded, and the
+     * corrected retry would collide with the slug it had just created instead of succeeding.
+     */
+    it("leaves no row behind when the generator rejects the fields", async () => {
+      current = await createTestNextly({ dialect });
+
+      const rejected = {
+        slug: `${plain}_bad`,
+        label: "Bad",
+        fields: [
+          // `target` is the key the generator's relationship branch reads; the referenced
+          // collection need not exist, because the refusal happens while the DDL is still being
+          // rendered and no statement is ever run.
+          {
+            name: "author",
+            type: "relationship",
+            required: true,
+            options: { target: "authors", onDelete: "set null" },
+          },
+        ],
+      };
+
+      await expect(
+        dispatchSingles("createSingle", {}, rejected)
+      ).rejects.toThrow();
+
+      // Nothing persisted, so the corrected retry is a fresh create rather than a slug collision.
+      expect(await registryRow(current, rejected.slug)).toBeUndefined();
+      expect(await current.adapter.tableExists(`single_${rejected.slug}`)).toBe(
+        false
+      );
+    });
+
     it("re-applies over a table it already created", async () => {
       current = await createTestNextly({ dialect });
 
@@ -142,6 +181,51 @@ for (const dialect of getConfiguredTestDialects()) {
       const row = await registryRow(current, plain);
       expect(row?.migrationStatus).toBe("applied");
       expect(await current.adapter.tableExists(`single_${plain}`)).toBe(true);
+    });
+
+    /**
+     * 🔴 The dangerous half of tolerating a re-run: the table is there, but it is the WRONG table.
+     *
+     * `CREATE TABLE IF NOT EXISTS` no-ops against an existing table on every dialect, and the
+     * index statements that follow are tolerated as already-applied, so a repair over an orphan
+     * left by an earlier create emits no error even when the field set has changed. Existence
+     * alone would record a schema the database does not have, and every later read would address
+     * columns that are not there. So "applied" has to mean the columns are present, not merely
+     * that something of that name is.
+     */
+    it("refuses to call it applied when an existing table lacks the new columns", async () => {
+      current = await createTestNextly({ dialect });
+
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: plain,
+          label: "Plain",
+          fields: [{ name: "body", type: "text" }],
+        }
+      );
+
+      // The orphan state: the table survives, the row describing it does not.
+      const registry = current.getService("singleRegistryService");
+      await registry.deleteSingle(plain, { force: true });
+
+      // The same slug, now asking for a column the surviving table does not have.
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: plain,
+          label: "Plain",
+          fields: [
+            { name: "body", type: "text" },
+            { name: "subtitle", type: "text" },
+          ],
+        }
+      );
+
+      const row = await registryRow(current, plain);
+      expect(row?.migrationStatus).toBe("failed");
     });
   });
 }

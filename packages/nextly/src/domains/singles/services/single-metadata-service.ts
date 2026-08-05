@@ -51,7 +51,9 @@ import type {
   SingleMigrationStatus,
 } from "../../../schemas/dynamic-singles/types";
 import type { Logger } from "../../../shared/types";
+import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import { applyMigrationStatements } from "../../schema/services/apply-migration-statements";
+import { columnsDeclaredBy } from "../../schema/services/field-column-descriptor";
 
 import type { SingleRegistryService } from "./single-registry-service";
 
@@ -83,6 +85,21 @@ export type CreateSingleInput = Omit<DynamicSingleInsert, "migrationStatus">;
 export interface CreateSingleResult {
   record: DynamicSingleRecord;
   migrationStatus: SingleMigrationStatus;
+}
+
+/**
+ * The rendered DDL plus what the table must look like once it has run.
+ *
+ * Produced before anything is persisted, so the generator's own validation rejects a bad request
+ * while there is still nothing to clean up.
+ */
+interface CreateDdlPlan {
+  migrationSQL: string;
+  /** Columns the main table must carry afterwards. Translatable ones live on the companion. */
+  expectedColumns: ReadonlySet<string>;
+  fields: FieldDefinition[];
+  isLocalized: boolean;
+  hasStatus: boolean;
 }
 
 /**
@@ -128,6 +145,15 @@ export class SingleMetadataService {
    * table name. Rejecting after this point would leave a `pending` row behind.
    */
   async createSingle(input: CreateSingleInput): Promise<CreateSingleResult> {
+    // 0. PLAN, and deliberately BEFORE the intent write.
+    //
+    // 🔴 The generator is a validator as well as a renderer: a required relationship declaring
+    // `onDelete: "set null"` is refused there, because no database can null a reference the column
+    // forbids. Generating after the row was written would let that rejection strand a `pending`
+    // Single with its permissions seeded, and the corrected retry would then collide with the slug
+    // it had just created. Nothing is persisted until this has succeeded.
+    const plan = await this.planCreate(input);
+
     // 1. INTENT. Durable before anything is touched, so an interruption from here on leaves a row
     // that `getPendingMigrations()` can find and finish.
     const record = await this.registry.registerSingle({
@@ -136,7 +162,7 @@ export class SingleMetadataService {
     });
 
     // 2. APPLY.
-    const migrationStatus = await this.applyCreateDdl(input);
+    const migrationStatus = await this.applyCreateDdl(input, plan);
 
     // 3. CONFIRM. Recorded against the row written in step 1.
     await this.registry.updateMigrationStatus(input.slug, migrationStatus);
@@ -148,15 +174,13 @@ export class SingleMetadataService {
   }
 
   /**
-   * Generate and run the create DDL, reporting how far it got.
+   * Render the DDL and work out what the table must look like once it has run.
    *
-   * Never throws: a schema change that fails is recorded rather than raised, so the caller still
-   * has a row describing what was attempted. That is the same choice the request handler made
-   * before this service existed, and it is what makes the state repairable instead of lost.
+   * Separated from the apply because the two have opposite contracts: this one is allowed to
+   * REJECT the request and must do so before anything is persisted, while the apply must never
+   * throw so a failure is still recorded against a row.
    */
-  private async applyCreateDdl(
-    input: CreateSingleInput
-  ): Promise<SingleMigrationStatus> {
+  private async planCreate(input: CreateSingleInput): Promise<CreateDdlPlan> {
     const isLocalized = input.localized === true;
     const hasStatus = input.status === true;
     const fields = input.fields as unknown as FieldDefinition[];
@@ -172,12 +196,44 @@ export class SingleMetadataService {
       input.tableName,
       fields,
       // i18n: translatable columns are omitted from the main table when localized — they live in
-      // the companion `<table>_locales`, provisioned below. `isSingle` skips the slug column and
-      // adds `updated_at`; `hasStatus` adds the column the runtime schema expects when the user
+      // the companion `<table>_locales`, provisioned separately. `isSingle` skips the slug column
+      // and adds `updated_at`; `hasStatus` adds the column the runtime schema expects when the user
       // opted into Draft/Published.
       { isSingle: true, hasStatus, localized: isLocalized }
     );
 
+    // What the main table must carry afterwards, so "applied" can be checked rather than assumed.
+    // Translatable columns are excluded for a localized single: they belong to the companion, and
+    // demanding them on main would fail every localized create.
+    const translatable = new Set(
+      resolveLocalizedFieldNames(
+        input.fields as unknown as Parameters<
+          typeof resolveLocalizedFieldNames
+        >[0],
+        isLocalized
+      )
+    );
+    const expectedColumns = columnsDeclaredBy(
+      (input.fields as unknown as { name?: unknown }[]).filter(
+        f => typeof f.name !== "string" || !translatable.has(f.name)
+      )
+    );
+
+    return { migrationSQL, expectedColumns, fields, isLocalized, hasStatus };
+  }
+
+  /**
+   * Run the create DDL, reporting how far it got.
+   *
+   * Never throws: a schema change that fails is recorded rather than raised, so the caller still
+   * has a row describing what was attempted. That is the same choice the request handler made
+   * before this service existed, and it is what makes the state repairable instead of lost.
+   */
+  private async applyCreateDdl(
+    input: CreateSingleInput,
+    plan: CreateDdlPlan
+  ): Promise<SingleMigrationStatus> {
+    const { migrationSQL, fields, isLocalized, hasStatus } = plan;
     const adapter = this.adapter;
     if (!adapter) {
       this.logger.warn(
@@ -203,6 +259,28 @@ export class SingleMetadataService {
     if (!(await adapter.tableExists(input.tableName))) {
       this.logger.error(
         `[Singles] Table "${input.tableName}" was not created after migration`
+      );
+      return "failed";
+    }
+
+    // 🔴 And that it is the table that was asked for.
+    //
+    // `CREATE TABLE IF NOT EXISTS` is a no-op against a table that already exists, on every
+    // dialect, and the index statements that follow are tolerated as already-applied. So a repair
+    // run over an ORPHANED table left by an earlier create — one whose registry row is gone, which
+    // is exactly the state this service exists to make recoverable — emits no error at all even
+    // when the field set has changed in the meantime. Existence alone would then record a schema
+    // the database does not have, and every later read would address columns that are not there.
+    const missing = await this.columnsMissingFrom(
+      adapter,
+      input.tableName,
+      plan.expectedColumns
+    );
+    if (missing.length > 0) {
+      this.logger.error(
+        `[Singles] Table "${input.tableName}" exists but is missing ${missing.join(
+          ", "
+        )}; a table of that name was already there and does not match this schema`
       );
       return "failed";
     }
@@ -246,6 +324,48 @@ export class SingleMetadataService {
     }
 
     return "applied";
+  }
+
+  /**
+   * Which of the expected columns the live table does not have.
+   *
+   * Introspection rather than a per-column probe: one round trip, and it goes through the same
+   * snapshot reader the schema diff uses, so this cannot disagree with the pipeline about what a
+   * column is called. An introspection that itself fails reports nothing missing — a check that
+   * cannot run must not invent a failure for a migration that reported success.
+   */
+  private async columnsMissingFrom(
+    adapter: DrizzleAdapter,
+    tableName: string,
+    expected: ReadonlySet<string>
+  ): Promise<string[]> {
+    if (expected.size === 0) return [];
+    try {
+      const { introspectLiveSnapshot } = await import(
+        "../../schema/pipeline/diff/introspect-live"
+      );
+      const snapshot = await introspectLiveSnapshot(
+        adapter.getDrizzle(),
+        adapter.getCapabilities().dialect,
+        [tableName]
+      );
+      const live = new Set(
+        snapshot.tables
+          .find(t => t.name === tableName)
+          ?.columns.map(c => c.name) ?? []
+      );
+      // Nothing came back for the table at all: that is the introspection failing to see it, not
+      // the table being empty of columns, and `tableExists` has already answered that question.
+      if (live.size === 0) return [];
+      return [...expected].filter(column => !live.has(column));
+    } catch (error) {
+      this.logger.warn(
+        `[Singles] Could not introspect "${tableName}" to verify its columns: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+      return [];
+    }
   }
 
   /**
