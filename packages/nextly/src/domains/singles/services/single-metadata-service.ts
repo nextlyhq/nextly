@@ -44,7 +44,6 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
-import { NextlyError } from "../../../errors";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type {
   DynamicSingleInsert,
@@ -52,9 +51,7 @@ import type {
   SingleMigrationStatus,
 } from "../../../schemas/dynamic-singles/types";
 import type { Logger } from "../../../shared/types";
-import type { TableSpec } from "../../schema/pipeline/diff/types";
 import { applyMigrationStatements } from "../../schema/services/apply-migration-statements";
-import { shapeMismatches } from "../../schema/services/verify-applied-shape";
 
 import type { SingleRegistryService } from "./single-registry-service";
 
@@ -96,8 +93,6 @@ export interface CreateSingleResult {
  */
 interface CreateDdlPlan {
   migrationSQL: string;
-  /** What the main table must look like afterwards, columns and types both. */
-  desiredTable: TableSpec;
   fields: FieldDefinition[];
   isLocalized: boolean;
   hasStatus: boolean;
@@ -146,101 +141,28 @@ export class SingleMetadataService {
    * table name. Rejecting after this point would leave a `pending` row behind.
    */
   async createSingle(input: CreateSingleInput): Promise<CreateSingleResult> {
-    // 0. PLAN, and deliberately BEFORE the intent write.
-    //
-    // 🔴 The generator is a validator as well as a renderer: a required relationship declaring
-    // `onDelete: "set null"` is refused there, because no database can null a reference the column
-    // forbids. Generating after the row was written would let that rejection strand a `pending`
-    // Single with its permissions seeded, and the corrected retry would then collide with the slug
-    // it had just created. Nothing is persisted until this has succeeded.
+    // 1. PLAN, before anything is persisted or executed. The generator is a validator as well as a
+    // renderer, so a request it refuses leaves nothing behind at all — no row, no table — and the
+    // corrected retry is a fresh create rather than a collision with its own wreckage.
     const plan = await this.planCreate(input);
 
-    // 1. INTENT. Durable before anything is touched, so an interruption from here on leaves a row
-    // that `getPendingMigrations()` can find and finish.
-    //
-    // 🔴 Which is only worth writing if something can finish it. An unfinished attempt owns the
-    // slug, so without this the write-ahead row is not a recovery aid but a permanent blocker: the
-    // retry is refused as a duplicate and the user has no way forward short of editing the registry
-    // by hand. That would be strictly worse than the orphan table intent-first exists to prevent —
-    // an orphan at least left the slug free.
-    const record = await this.adoptOrRegister(input);
-
-    // 2. APPLY. Idempotent, so it can run over whatever the interrupted attempt managed to create.
+    // 2. APPLY. Never throws; a failure is reported as a status so the row can still record it.
     const migrationStatus = await this.applyCreateDdl(input, plan);
 
-    // 3. CONFIRM. Recorded against the row written in step 1.
-    await this.registry.updateMigrationStatus(input.slug, migrationStatus);
-
-    // The row as it now stands. `migrationStatus` is the only field of it a caller reads that the
-    // confirm write changed, so it is carried over rather than re-fetched; returning the step-1
-    // copy unchanged would report every applied create as still pending.
-    return { record: { ...record, migrationStatus }, migrationStatus };
-  }
-
-  /**
-   * Write the intent, taking over an unfinished attempt at the same Single rather than colliding
-   * with it.
-   *
-   * A row that is not `applied` describes an operation that never reported success, so a create
-   * naming the same slug is a retry of it. The row is re-stated from THIS request — a corrected
-   * retry usually differs from the attempt that failed, and confirming the old field set while
-   * applying the new DDL would leave the registry describing a table nobody asked for.
-   *
-   * An `applied` Single is left alone: that is a genuine duplicate and belongs to whoever holds it.
-   */
-  private async adoptOrRegister(
-    input: CreateSingleInput
-  ): Promise<DynamicSingleRecord> {
-    const existing = await this.registry.getSingleBySlug(input.slug);
-    if (!existing || existing.migrationStatus === "applied") {
-      return this.registry.registerSingle({
-        ...input,
-        migrationStatus: "pending",
-      });
-    }
-
-    // 🔴 Only `failed` is adopted, and only by CLAIMING it, which are two separate points.
+    // 3. RECORD, with the outcome already known.
     //
-    // WHICH state: `failed` is a FINISHED attempt — it recorded its own outcome, so nothing is
-    // still running against this slug. `pending` cannot say that; it is equally the state of a
-    // create in flight right now, and taking that over would overwrite its row with a second
-    // payload while its DDL is still building the first schema.
-    //
-    // HOW: reading `failed` and then writing is not enough. Two retries can both read it before
-    // either writes, and both would then run DDL against one slug. The claim puts the status in the
-    // WHERE clause so the database picks the winner — and it cannot go through `updateSingle`,
-    // which writes `migration_status` only when the field hash or status flag changes and so would
-    // leave the commonest retry of all, the same payload again, looking unclaimed for the whole
-    // time its DDL was running.
-    //
-    // Serialising `pending` as well is the migration lock this relocation exists to unblock. This
-    // claim is not a substitute for it; it is the narrower guarantee available without one.
-    if (existing.migrationStatus !== "failed") {
-      throw NextlyError.conflict({
-        logContext: {
-          reason: "single-create-in-flight",
-          slug: input.slug,
-          migrationStatus: existing.migrationStatus,
-          hint: "A create for this slug has not recorded an outcome yet. Retry once it has.",
-        },
-      });
-    }
-
-    if (!(await this.registry.claimFailedForRetry(input.slug))) {
-      throw NextlyError.conflict({
-        logContext: {
-          reason: "single-create-claimed-elsewhere",
-          slug: input.slug,
-          hint: "Another retry took over this failed create first.",
-        },
-      });
-    }
-
-    this.logger.info(`[Singles] Resuming a failed create for "${input.slug}"`);
-    return this.registry.updateSingle(input.slug, {
+    // 🔴 Deliberately last, which is where the request handler had it. Writing the intent FIRST
+    // would be better — a crash between the two leaves a table nothing has any record of — but only
+    // once something exists that can finish an interrupted attempt. Without that, the half-written
+    // row owns the slug and refuses every retry, which is a worse state than the orphan it
+    // prevents. That recovery half is the migration lock this relocation exists to unblock, and the
+    // ordering changes with it rather than before it.
+    const record = await this.registry.registerSingle({
       ...input,
-      migrationStatus: "pending",
+      migrationStatus,
     });
+
+    return { record, migrationStatus };
   }
 
   /**
@@ -272,22 +194,7 @@ export class SingleMetadataService {
       { isSingle: true, hasStatus, localized: isLocalized }
     );
 
-    // What the main table must look like afterwards, so "applied" can be checked rather than
-    // assumed. Built by the same builder the schema diff compares against, which is what makes it
-    // account for the system lifecycle columns (they come from OPTIONS, not from the field list),
-    // omit translatable columns (they belong to the companion), and resolve a widthless text field
-    // the way the Schema Builder's own creator does.
-    const { buildDesiredTableFromFields } = await import(
-      "../../schema/pipeline/diff/build-from-fields"
-    );
-    const desiredTable = buildDesiredTableFromFields(
-      input.tableName,
-      fields,
-      this.dialect ?? "postgresql",
-      { hasStatus, localized: isLocalized, builtBy: "collection" }
-    );
-
-    return { migrationSQL, desiredTable, fields, isLocalized, hasStatus };
+    return { migrationSQL, fields, isLocalized, hasStatus };
   }
 
   /**
@@ -327,29 +234,6 @@ export class SingleMetadataService {
     if (!(await adapter.tableExists(input.tableName))) {
       this.logger.error(
         `[Singles] Table "${input.tableName}" was not created after migration`
-      );
-      return "failed";
-    }
-
-    // 🔴 And that it is the table that was asked for, columns AND types.
-    //
-    // `CREATE TABLE IF NOT EXISTS` is a no-op against a table that already exists, on every
-    // dialect, and the index statements that follow are tolerated as already-applied. So a repair
-    // run over an ORPHANED table left by an earlier create — one whose registry row is gone, which
-    // is exactly the state this service exists to make recoverable — emits no error at all even
-    // when the field set, the Draft/Published option or a field's TYPE has changed in between.
-    // Existence alone would then record a schema the database does not have.
-    const mismatches = await shapeMismatches(
-      adapter,
-      adapter.getCapabilities().dialect,
-      input.tableName,
-      plan.desiredTable
-    );
-    if (mismatches.length > 0) {
-      this.logger.error(
-        `[Singles] Table "${input.tableName}" does not match this schema: ${mismatches.join(
-          "; "
-        )}`
       );
       return "failed";
     }

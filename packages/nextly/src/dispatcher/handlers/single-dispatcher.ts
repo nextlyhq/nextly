@@ -44,7 +44,6 @@ import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
-import { buildDesiredTableFromFields } from "../../domains/schema/pipeline/diff/build-from-fields";
 import {
   readForeignKeyColumns,
   readIndexNames,
@@ -70,7 +69,6 @@ import { columnsDeclaredBy } from "../../domains/schema/services/field-column-de
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
-import { shapeMismatches } from "../../domains/schema/services/verify-applied-shape";
 import { reconcileSingleCompanion } from "../../domains/singles/services/reconcile-single-companion";
 import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
 import type { SingleEntryService } from "../../domains/singles/services/single-entry-service";
@@ -466,13 +464,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       const owner = (await svc.registry.getAllSingles()).find(
         s => s.tableName === tableName
       );
-      // 🔴 Except when the owner is an unfinished attempt at THIS single. A create writes its
-      // intent before touching the database, so an interrupted one leaves a row that still owns
-      // the name. Refusing here would make that row a permanent blocker rather than the recovery
-      // aid it is meant to be — the service adopts it and re-runs the idempotent DDL instead.
-      const ownerIsUnfinishedRetry =
-        owner?.slug === b.slug && owner?.migrationStatus !== "applied";
-      if (owner && !ownerIsUnfinishedRetry) {
+      if (owner) {
         throw NextlyError.duplicate({
           logContext: {
             reason: "single-table-conflict",
@@ -1030,35 +1022,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             }
 
             const tableExistsAfter = await adapter.tableExists(tableName);
-            // 🔴 Existence is not enough now that a re-run is tolerated. Retrying an ALTER that
-            // already added a column swallows the duplicate-column error, so a retry whose field
-            // set changed shape in between would record the NEW description over the OLD physical
-            // column. Compared through the same builder the schema diff uses, so this cannot
-            // disagree with the pipeline about a column's type.
-            const shapeProblems = tableExistsAfter
-              ? await shapeMismatches(
-                  adapter,
-                  adapter.getCapabilities().dialect,
-                  tableName,
-                  buildDesiredTableFromFields(
-                    tableName,
-                    normalizedNewFields,
-                    adapter.getCapabilities().dialect,
-                    {
-                      hasStatus,
-                      localized: isLocalized,
-                      // A single's table comes from the same builder as a collection's.
-                      builtBy: "collection",
-                    }
-                  )
-                )
-              : [];
-            if (shapeProblems.length > 0) {
-              migrationStatus = "failed";
-              console.error(
-                `[Singles] Table "${tableName}" does not match this schema after the update: ${shapeProblems.join("; ")}`
-              );
-            } else if (tableExistsAfter) {
+            if (tableExistsAfter) {
               migrationStatus = "applied";
 
               // Re-register runtime schema with updated fields.
