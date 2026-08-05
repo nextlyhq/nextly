@@ -51,9 +51,9 @@ import type {
   SingleMigrationStatus,
 } from "../../../schemas/dynamic-singles/types";
 import type { Logger } from "../../../shared/types";
-import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
+import type { TableSpec } from "../../schema/pipeline/diff/types";
 import { applyMigrationStatements } from "../../schema/services/apply-migration-statements";
-import { columnsDeclaredBy } from "../../schema/services/field-column-descriptor";
+import { shapeMismatches } from "../../schema/services/verify-applied-shape";
 
 import type { SingleRegistryService } from "./single-registry-service";
 
@@ -95,8 +95,8 @@ export interface CreateSingleResult {
  */
 interface CreateDdlPlan {
   migrationSQL: string;
-  /** Columns the main table must carry afterwards. Translatable ones live on the companion. */
-  expectedColumns: ReadonlySet<string>;
+  /** What the main table must look like afterwards, columns and types both. */
+  desiredTable: TableSpec;
   fields: FieldDefinition[];
   isLocalized: boolean;
   hasStatus: boolean;
@@ -202,24 +202,22 @@ export class SingleMetadataService {
       { isSingle: true, hasStatus, localized: isLocalized }
     );
 
-    // What the main table must carry afterwards, so "applied" can be checked rather than assumed.
-    // Translatable columns are excluded for a localized single: they belong to the companion, and
-    // demanding them on main would fail every localized create.
-    const translatable = new Set(
-      resolveLocalizedFieldNames(
-        input.fields as unknown as Parameters<
-          typeof resolveLocalizedFieldNames
-        >[0],
-        isLocalized
-      )
+    // What the main table must look like afterwards, so "applied" can be checked rather than
+    // assumed. Built by the same builder the schema diff compares against, which is what makes it
+    // account for the system lifecycle columns (they come from OPTIONS, not from the field list),
+    // omit translatable columns (they belong to the companion), and resolve a widthless text field
+    // the way the Schema Builder's own creator does.
+    const { buildDesiredTableFromFields } = await import(
+      "../../schema/pipeline/diff/build-from-fields"
     );
-    const expectedColumns = columnsDeclaredBy(
-      (input.fields as unknown as { name?: unknown }[]).filter(
-        f => typeof f.name !== "string" || !translatable.has(f.name)
-      )
+    const desiredTable = buildDesiredTableFromFields(
+      input.tableName,
+      fields,
+      this.dialect ?? "postgresql",
+      { hasStatus, localized: isLocalized, builtBy: "collection" }
     );
 
-    return { migrationSQL, expectedColumns, fields, isLocalized, hasStatus };
+    return { migrationSQL, desiredTable, fields, isLocalized, hasStatus };
   }
 
   /**
@@ -263,24 +261,25 @@ export class SingleMetadataService {
       return "failed";
     }
 
-    // 🔴 And that it is the table that was asked for.
+    // 🔴 And that it is the table that was asked for, columns AND types.
     //
     // `CREATE TABLE IF NOT EXISTS` is a no-op against a table that already exists, on every
     // dialect, and the index statements that follow are tolerated as already-applied. So a repair
     // run over an ORPHANED table left by an earlier create — one whose registry row is gone, which
     // is exactly the state this service exists to make recoverable — emits no error at all even
-    // when the field set has changed in the meantime. Existence alone would then record a schema
-    // the database does not have, and every later read would address columns that are not there.
-    const missing = await this.columnsMissingFrom(
+    // when the field set, the Draft/Published option or a field's TYPE has changed in between.
+    // Existence alone would then record a schema the database does not have.
+    const mismatches = await shapeMismatches(
       adapter,
+      adapter.getCapabilities().dialect,
       input.tableName,
-      plan.expectedColumns
+      plan.desiredTable
     );
-    if (missing.length > 0) {
+    if (mismatches.length > 0) {
       this.logger.error(
-        `[Singles] Table "${input.tableName}" exists but is missing ${missing.join(
-          ", "
-        )}; a table of that name was already there and does not match this schema`
+        `[Singles] Table "${input.tableName}" does not match this schema: ${mismatches.join(
+          "; "
+        )}`
       );
       return "failed";
     }
@@ -324,48 +323,6 @@ export class SingleMetadataService {
     }
 
     return "applied";
-  }
-
-  /**
-   * Which of the expected columns the live table does not have.
-   *
-   * Introspection rather than a per-column probe: one round trip, and it goes through the same
-   * snapshot reader the schema diff uses, so this cannot disagree with the pipeline about what a
-   * column is called. An introspection that itself fails reports nothing missing — a check that
-   * cannot run must not invent a failure for a migration that reported success.
-   */
-  private async columnsMissingFrom(
-    adapter: DrizzleAdapter,
-    tableName: string,
-    expected: ReadonlySet<string>
-  ): Promise<string[]> {
-    if (expected.size === 0) return [];
-    try {
-      const { introspectLiveSnapshot } = await import(
-        "../../schema/pipeline/diff/introspect-live"
-      );
-      const snapshot = await introspectLiveSnapshot(
-        adapter.getDrizzle(),
-        adapter.getCapabilities().dialect,
-        [tableName]
-      );
-      const live = new Set(
-        snapshot.tables
-          .find(t => t.name === tableName)
-          ?.columns.map(c => c.name) ?? []
-      );
-      // Nothing came back for the table at all: that is the introspection failing to see it, not
-      // the table being empty of columns, and `tableExists` has already answered that question.
-      if (live.size === 0) return [];
-      return [...expected].filter(column => !live.has(column));
-    } catch (error) {
-      this.logger.warn(
-        `[Singles] Could not introspect "${tableName}" to verify its columns: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
-      return [];
-    }
   }
 
   /**

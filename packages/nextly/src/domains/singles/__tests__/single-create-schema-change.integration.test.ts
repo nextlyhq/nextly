@@ -265,5 +265,76 @@ for (const dialect of getConfiguredTestDialects()) {
       const row = await registryRow(current, plain);
       expect(row?.migrationStatus).toBe("failed");
     });
+
+    /**
+     * 🔴 The lifecycle columns come from create OPTIONS, not from the field list.
+     *
+     * A check derived from the fields alone passes here while `status` is absent, and the runtime
+     * schema then writes a Draft/Published column the table does not have. Caught only because the
+     * desired shape is built by the same builder the schema diff uses, which injects the system
+     * columns the options ask for.
+     */
+    it("refuses when the existing table lacks the lifecycle column now asked for", async () => {
+      current = await createTestNextly({ dialect });
+
+      const fields = [{ name: "body", type: "text" }];
+      await dispatchSingles(
+        "createSingle",
+        {},
+        { slug: plain, label: "Plain", fields }
+      );
+
+      const registry = current.getService("singleRegistryService");
+      await registry.deleteSingle(plain, { force: true });
+
+      // Same fields, but Draft/Published now switched on. The table is untouched by the re-run.
+      await dispatchSingles(
+        "createSingle",
+        {},
+        { slug: plain, label: "Plain", fields, status: true }
+      );
+
+      expect((await registryRow(current, plain))?.migrationStatus).toBe(
+        "failed"
+      );
+    });
+
+    /**
+     * 🔴 Same column NAMES, different types — which a presence check cannot see.
+     *
+     * The physical column stays whatever the first create made it, while the registry and the
+     * runtime schema would describe the new type. Compared through the diff engine's own
+     * `normalizeType`, so this is the pipeline's notion of "same type", not a second one.
+     */
+    it("refuses when an existing column has a different type", async () => {
+      current = await createTestNextly({ dialect });
+
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: plain,
+          label: "Plain",
+          fields: [{ name: "views", type: "text" }],
+        }
+      );
+
+      const registry = current.getService("singleRegistryService");
+      await registry.deleteSingle(plain, { force: true });
+
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: plain,
+          label: "Plain",
+          fields: [{ name: "views", type: "number" }],
+        }
+      );
+
+      expect((await registryRow(current, plain))?.migrationStatus).toBe(
+        "failed"
+      );
+    });
   });
 }

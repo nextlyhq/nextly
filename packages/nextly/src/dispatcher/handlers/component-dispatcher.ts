@@ -36,6 +36,7 @@ import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
+import { buildDesiredTableFromComponentFields } from "../../domains/schema/pipeline/diff/build-from-fields";
 import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanup/executor";
 import { previewDesiredSchema } from "../../domains/schema/pipeline/preview";
 import {
@@ -58,6 +59,7 @@ import {
 import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
+import { shapeMismatches } from "../../domains/schema/services/verify-applied-shape";
 import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { NextlyError } from "../../errors";
 import { getProductionNotifier } from "../../runtime/notifications/index";
@@ -411,7 +413,34 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
           await applyMigrationStatements(diAdapter, migrationSQL);
 
           const tableExists = await diAdapter.tableExists(tableName);
-          if (tableExists) {
+          // 🔴 Existence is not enough now that a re-run is tolerated. `CREATE TABLE IF NOT
+          // EXISTS` no-ops against a field group's table left by an earlier attempt whose
+          // registry row is gone, and the index statements after it are tolerated, so a repair
+          // with a changed field set emits no error at all. Compared through the same builder
+          // the schema diff uses, so this cannot disagree with the pipeline about a column's
+          // name or its type.
+          const mismatches = tableExists
+            ? await shapeMismatches(
+                diAdapter,
+                dialect,
+                tableName,
+                buildDesiredTableFromComponentFields(
+                  tableName,
+                  b.fields as unknown as FieldDefinition[],
+                  dialect,
+                  // A field group's table is made by the field-group creator, which reads a text
+                  // field's width from a different key than the collection creator does — so the
+                  // desired column shape depends on saying which builder made it.
+                  { localized: isLocalized, builtBy: "fieldGroup" }
+                )
+              )
+            : [];
+          if (mismatches.length > 0) {
+            migrationStatus = "failed";
+            console.error(
+              `[Components] Table "${tableName}" does not match this schema: ${mismatches.join("; ")}`
+            );
+          } else if (tableExists) {
             migrationStatus = "applied";
             registerComponentRuntimeSchema(
               diAdapter,
