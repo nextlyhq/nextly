@@ -722,6 +722,18 @@ describe("a shorthand carrying two components", () => {
     expect(found?.value).toBe("8px");
   });
 
+  it("does not split inside a function, where the space is part of one value", () => {
+    // `calc(1rem + 2px) 8px` is two components. Split on raw whitespace it reads as four, and the
+    // column longhand is answered with `"+"`.
+    const found = resolveStyle("columnGap", "base", "desktop", {
+      classes: [
+        namedClass("card", 0, at("desktop", { gap: "calc(1rem + 2px) 8px" })),
+      ],
+    });
+
+    expect(found?.value).toBe("8px");
+  });
+
   it("leaves a single-component shorthand alone, since it applies to both", () => {
     const found = resolveStyle("rowGap", "base", "desktop", {
       classes: [namedClass("card", 0, at("desktop", { gap: "16px" }))],

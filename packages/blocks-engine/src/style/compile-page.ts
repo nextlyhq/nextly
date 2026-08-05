@@ -400,10 +400,16 @@ function scopeSelector(
  * few entries later anyway.
  */
 function boundedKeys(record: Record<string, unknown>): string[] {
-  const keys = Object.keys(record);
-  return (
-    keys.length > MAX_SCANNED_KEYS ? keys.slice(0, MAX_SCANNED_KEYS) : keys
-  ).sort();
+  // Read with an early break rather than through `Object.keys`, which materialises every key
+  // before anything can slice it — so a corrupt settings record still allocated an array its own
+  // size on every compile, ahead of the cap that was supposed to bound it.
+  const keys: string[] = [];
+  for (const key in record) {
+    if (!Object.hasOwn(record, key)) continue;
+    keys.push(key);
+    if (keys.length >= MAX_SCANNED_KEYS) break;
+  }
+  return keys.sort();
 }
 
 /** How many keys of one stored record are read before the walk gives up. */
@@ -1156,14 +1162,19 @@ export function compilePageCss(
       // Deduped on the RAW id. `describeValue` truncates, so two distinct ids sharing a long
       // prefix collapse to one key and the second reference goes unreported — a separate class,
       // needing a separate repair, silently accounted for by the first.
+      // The raw id is the dedupe KEY, because `describeValue` truncates and would collapse two
+      // distinct references into one report. The message still uses the described form: an
+      // unvalidated document can carry an enormous id, and the allowance charges paths rather
+      // than message text, so interpolating the raw one returns a diagnostic its size.
       const key = typeof id === "string" ? id : describeValue(id);
       if (reportedMissingClasses.has(key)) continue;
       reportedMissingClasses.add(key);
+      const described = describeValue(id);
       pushBoundedWarning(warningAllowance, warnings, {
         path: pointer(path, "classes"),
         code: "unknown-class",
         severity: "warning",
-        message: `This node lists the class ${key}, which the site library does not define, so it was not applied.`,
+        message: `This node lists the class ${described}, which the site library does not define, so it was not applied.`,
         suggestion: "Remove the reference, or add the class to the library.",
       });
     }

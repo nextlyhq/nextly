@@ -421,6 +421,31 @@ function compilerWroteKeys(values: Record<string, unknown>): Set<string> {
 const STATES_REACHING_ANCESTORS = new Set(["hover", "active"]);
 
 /**
+ * A shorthand's components, split on the whitespace BETWEEN them.
+ *
+ * Not every space separates components: `calc(1rem + 2px) 8px` is two values, and a plain split
+ * reads it as four — answering a longhand with `"+"`. Depth is tracked so whitespace inside a
+ * function belongs to the value that opened it.
+ */
+function topLevelParts(value: string): string[] {
+  const parts: string[] = [];
+  let current = "";
+  let depth = 0;
+  for (const character of value.trim()) {
+    if (character === "(") depth += 1;
+    else if (character === ")") depth = Math.max(0, depth - 1);
+    if (depth === 0 && /\s/.test(character)) {
+      if (current !== "") parts.push(current);
+      current = "";
+      continue;
+    }
+    current += character;
+  }
+  if (current !== "") parts.push(current);
+  return parts;
+}
+
+/**
  * The part of a shorthand that belongs to a longhand asking for it.
  *
  * `gap: "4px 8px"` is row 4px and column 8px, so answering `columnGap` with the whole string
@@ -435,7 +460,7 @@ function shorthandComponent(
   value: StyleValue
 ): StyleValue {
   if (typeof value !== "string") return value;
-  const parts = value.trim().split(/\s+/);
+  const parts = topLevelParts(value);
   if (parts.length < 2) return value;
   const [shorthandCss] = cssPropertiesForField(candidate, []);
   const [wantedCss] = cssPropertiesForField(property, []);
