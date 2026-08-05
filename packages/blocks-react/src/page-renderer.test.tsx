@@ -1450,6 +1450,43 @@ describe("PageRenderer", () => {
   });
 
   describe("visibility", () => {
+    it("keeps a gated node's styles out of the page too", async () => {
+      // The tree is read twice — once for HTML, once for the stylesheet. If only
+      // the render is filtered, a gated node's markup is withheld while its
+      // scoped CSS still ships, announcing whatever that CSS referenced.
+      const styled = defineBlock({
+        name: "test/gated-styles",
+        version: 1,
+        description: "A block whose instance carries styles.",
+        example: { props: {} },
+        render: ({ className }) => <p className={className}>gated body</p>,
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/gated-styles", {
+              styles: { base: { base: { color: "rebeccapurple" } } },
+              visibility: {
+                conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+              },
+            }),
+            node("b", "test/text", { props: { value: "public body" } })
+          )}
+          blocks={createBlockResolver([
+            styled as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+          styleContext={{ breakpoints: { viewport: [], container: [] } }}
+        />
+      );
+
+      expect(html).not.toContain("gated body");
+      // The value the gated node carried must not appear in the stylesheet.
+      expect(html).not.toContain("rebeccapurple");
+      expect(html).toContain("public body");
+    });
+
     it("omits a node gated behind conditions nothing can evaluate", async () => {
       // The format says conditionally hidden nodes are OMITTED from server
       // output, and no evaluator exists yet. Showing everyone what was meant
@@ -1899,6 +1936,32 @@ describe("PageRenderer", () => {
 
       expect(html).toContain("teal");
       expect(html).not.toContain("rebeccapurple");
+    });
+
+    it("renders unstyled rather than not at all when the artifact is broken", async () => {
+      // The artifact is a database record and can predate the current shape.
+      // The class lookup runs while assembling a block's arguments, before the
+      // try/catch around its render, so a missing map would throw in the page
+      // component where no block boundary can contain it.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(node("a", "test/text", { props: { value: "kept" } }))}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+          styles={
+            { css: ".x{}", classes: undefined } as unknown as {
+              css: string;
+              classes: Record<string, string>;
+            }
+          }
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual([]);
+      expect(html).toContain("kept");
+      // A sheet written against classes nobody carries would match nothing, so
+      // it goes with them.
+      expect(html).not.toContain("<style");
+      expect(html).toMatch(bothClasses("test/text"));
     });
 
     it("emits no style element when there is no css", async () => {

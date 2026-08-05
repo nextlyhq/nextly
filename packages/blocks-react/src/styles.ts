@@ -104,13 +104,46 @@ function documentNodeIds(document: BlockDocument): string[] {
  *    collision handling that makes two ids hashing alike distinguishable is the
  *    same in all three paths rather than reinvented in the cheapest one.
  */
+/**
+ * A stored artifact made safe to render against.
+ *
+ * The artifact is a database record, so it can predate the current shape or
+ * have been written by an older version, and neither half can be taken on
+ * trust. A missing `classes` map is the dangerous one: the class lookup happens
+ * while assembling a block's arguments, BEFORE the try/catch around its render,
+ * so one bad stylesheet row would throw in the page component where no block
+ * boundary can contain it.
+ *
+ * Repairs rather than refuses. Classes are recomputed from the document by the
+ * same helper the compiler uses, so a document with a broken artifact renders
+ * unstyled instead of not at all — and the CSS is dropped with them, since a
+ * stylesheet written against classes nobody now carries would match nothing.
+ */
+function normalizeStoredStyles(
+  styles: PageStyles,
+  document: BlockDocument
+): PageStyles {
+  const classesUsable =
+    typeof styles.classes === "object" &&
+    styles.classes !== null &&
+    !Array.isArray(styles.classes);
+  if (classesUsable) {
+    return typeof styles.css === "string" ? styles : { ...styles, css: "" };
+  }
+  return {
+    css: "",
+    classes: Object.fromEntries(nodeClassNames(documentNodeIds(document))),
+    ...(styles.scope === undefined ? {} : { scope: styles.scope }),
+  };
+}
+
 export function resolvePageStyles(
   document: BlockDocument,
   styles: PageStyles | undefined,
   styleContext: StyleCompileContext | undefined,
   blocks: BlockResolver
 ): PageStyles {
-  if (styles) return styles;
+  if (styles) return normalizeStoredStyles(styles, document);
   if (styleContext) {
     const context: StyleCompileContext =
       styleContext.blockBases === undefined

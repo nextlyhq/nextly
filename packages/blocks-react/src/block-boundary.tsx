@@ -5,6 +5,7 @@ import type { PageContext } from "./context";
 import { BlockPlaceholder } from "./placeholder";
 import { describeThrown, isThenable, normalizeRenderable } from "./renderable";
 import type { BlockResolver } from "./resolver";
+import { isUnconditional } from "./visibility";
 
 /** What a render needs to turn one node into output. */
 export interface BlockBoundaryProps {
@@ -335,38 +336,6 @@ export function BlockBoundary({
       />
     </Suspense>
   );
-}
-
-/**
- * Whether a node is shown regardless of the entry it renders against.
- *
- * The document format is explicit that conditionally hidden nodes are OMITTED
- * from server output rather than hidden with CSS, so a node carrying conditions
- * must not reach the page unless something has decided they hold. Nothing here
- * can decide that: a `Condition` is `{ field, op, value }` with `op` an open
- * string, and the engine defines no evaluator for it.
- *
- * So this fails CLOSED. Conditions gate personalised and status-restricted
- * content, and showing everyone what was meant for some of them is the failure
- * that cannot be taken back; content missing from a page is visible and
- * reportable. When the evaluator arrives this becomes a call into it.
- */
-function isUnconditional(node: BlockNode): boolean {
-  const groups = node.visibility?.conditions;
-  if (groups === undefined || groups === null) return true;
-  // Malformed shapes stay hidden: a flat list of predicates from an older
-  // writer, an object, a string — each is still an author saying this node is
-  // restricted, and a shape this renderer cannot read is the last thing to
-  // resolve in favour of showing it.
-  if (!Array.isArray(groups)) return false;
-
-  // No groups at all is no restriction. Neither is a group with no predicates:
-  // the storage is OR-of-AND, and an AND of nothing is satisfied, so a node
-  // whose only group was emptied by removing its last predicate is visible
-  // again. Treating that as a gate would drop public content until the array
-  // itself was rewritten.
-  if (groups.length === 0) return true;
-  return groups.some(group => Array.isArray(group) && group.length === 0);
 }
 
 export interface BlockListProps {

@@ -23,6 +23,7 @@ import {
   styleTextForInjection,
   type PageStyles,
 } from "./styles";
+import { pruneHiddenNodes } from "./visibility";
 
 export interface PageRendererProps {
   /** The stored document to render. */
@@ -126,8 +127,14 @@ export function PageRenderer({
   // separate prop. Two inputs would have to agree, and when they did not the
   // root would carry a class the selectors never mention, so every compiled
   // rule would match nothing while both inputs looked correct on their own.
+  // Gated nodes leave the tree BEFORE styles are resolved, so the stylesheet
+  // and the markup are compiled from the same document. Filtering only the
+  // render would withhold a gated node's HTML while still publishing its
+  // scoped CSS, and with it whatever that CSS referenced.
+  const visible = pruneHiddenNodes(doc);
+
   const { css, classes, scope } = resolvePageStyles(
-    doc,
+    visible,
     styles,
     styleContext,
     resolver
@@ -146,7 +153,7 @@ export function PageRenderer({
         />
       ) : null}
       <BlockList
-        nodes={doc.nodes}
+        nodes={visible.nodes}
         context={pageContext}
         blocks={resolver}
         classes={classes}
