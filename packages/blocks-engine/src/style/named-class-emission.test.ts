@@ -1008,3 +1008,24 @@ describe("a stored class library with holes in it", () => {
     expect(paths).toEqual(["/classes/0", "/classes/1"]);
   });
 });
+
+describe("one class object supplied in two library slots", () => {
+  it("reports the slot that was dropped", () => {
+    // A caller can build its library by reference, so the same object reaches two slots. Only the
+    // first is written; asking whether the ENTRY was written answers yes for the second too, and
+    // the slot an editor has to repair is never named.
+    const { warnings } = compile(doc({}), [card, card]);
+
+    const duplicate = warnings.find(
+      w => w.code === "duplicate-class-id" || w.code === "duplicate-class-name"
+    );
+    expect(duplicate).toBeDefined();
+    expect(duplicate?.path).toBe("/classes/1");
+  });
+
+  it("still writes the class once", () => {
+    const { css } = compile(doc({ classes: ["c1"] }), [card, card]);
+
+    expect(css.split(".nx-c-card").length - 1).toBe(1);
+  });
+});
