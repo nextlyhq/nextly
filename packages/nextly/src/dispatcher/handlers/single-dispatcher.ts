@@ -542,10 +542,20 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
 
       // Migration status drives the toast copy so admins see "table
       // applied" vs "run migrations" without an extra round-trip.
+      // 🔴 Three outcomes, not two. `failed` used to be rare enough to hide behind the pending
+      // wording; the shape verification makes it a routine answer, and "run migrations" is then
+      // advice that cannot work — no migration repairs a table whose columns do not match. Telling
+      // an admin their Single was created when it cannot be read is the worst of the three.
+      //
+      // Still 201, and still carrying the row: the Single WAS registered, `migrationStatus` rides
+      // in the body for a client that branches on it, and keeping the record is what makes the
+      // retry a resume rather than a duplicate.
       const message =
         migrationStatus === "applied"
           ? `Single "${b.slug}" created and table applied!`
-          : `Single "${b.slug}" created. Run migrations to apply the table.`;
+          : migrationStatus === "failed"
+            ? `Single "${b.slug}" was created but its table could not be applied. It cannot be read until the schema change succeeds.`
+            : `Single "${b.slug}" created. Run migrations to apply the table.`;
       return respondMutation(message, single, { status: 201 });
     },
   },

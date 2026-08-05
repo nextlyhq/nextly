@@ -184,6 +184,97 @@ for (const dialect of getConfiguredTestDialects()) {
     });
 
     /**
+     * 🔴 A removed REQUIRED field leaves a NOT NULL column the schema no longer declares.
+     *
+     * The re-run no-ops rather than dropping anything, so writes that omit the removed field now
+     * fail its constraint — the Builder considers them valid and the database does not. Only a
+     * desired-side walk would miss this, because the column is not in the desired set at all.
+     */
+    it("refuses when a removed required column is still enforced", async () => {
+      current = await createTestNextly({ dialect });
+
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: plain,
+          label: "Plain",
+          fields: [
+            { name: "body", type: "text" },
+            { name: "subtitle", type: "text", required: true },
+          ],
+        }
+      );
+
+      const registry = current.getService("singleRegistryService");
+      await registry.deleteSingle(plain, { force: true });
+
+      // `subtitle` is gone from the schema, but its NOT NULL column survives on the table.
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: plain,
+          label: "Plain",
+          fields: [{ name: "body", type: "text" }],
+        }
+      );
+
+      expect((await registryRow(current, plain))?.migrationStatus).toBe(
+        "failed"
+      );
+    });
+
+    /**
+     * 🔴 A dropped `unique` leaves the constraint in place, so writes the Builder now allows still
+     * collide with it. Indexes are compared in BOTH directions for that reason: the missing one is
+     * a create that did not finish, the stale one is a repair that did not converge.
+     */
+    // 🔴 PostgreSQL only, and both exclusions are measured rather than assumed.
+    //
+    // SQLite backs a UNIQUE column with an auto-created `sqlite_autoindex_*`, and the snapshot
+    // reader filters those out on purpose (`introspect-live.ts:331`), so a stale unique constraint
+    // is invisible to any comparison built on that snapshot.
+    //
+    // MySQL cannot index a TEXT column without a prefix length, so a unique TEXT field produces no
+    // index in the desired spec OR on the table — measured: both sides carry only the system
+    // `_slug` and `_created_at` indexes. The scenario is unreachable there with a text field rather
+    // than undetected, which is a different statement and the honest one.
+    it.skipIf(dialect !== "postgresql")(
+      "refuses when a dropped unique index is still on the table",
+      async () => {
+        current = await createTestNextly({ dialect });
+
+        await dispatchSingles(
+          "createSingle",
+          {},
+          {
+            slug: plain,
+            label: "Plain",
+            fields: [{ name: "code", type: "text", unique: true }],
+          }
+        );
+
+        const registry = current.getService("singleRegistryService");
+        await registry.deleteSingle(plain, { force: true });
+
+        await dispatchSingles(
+          "createSingle",
+          {},
+          {
+            slug: plain,
+            label: "Plain",
+            fields: [{ name: "code", type: "text" }],
+          }
+        );
+
+        expect((await registryRow(current, plain))?.migrationStatus).toBe(
+          "failed"
+        );
+      }
+    );
+
+    /**
      * 🔴 Nullability is part of the shape, not a detail of it.
      *
      * A column the Builder now calls optional while the database still has it NOT NULL accepts

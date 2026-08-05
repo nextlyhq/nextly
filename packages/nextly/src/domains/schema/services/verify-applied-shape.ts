@@ -118,5 +118,41 @@ export async function shapeMismatches(
       );
     }
   }
+  // 🔴 What the table has and the schema no longer wants, which a desired-side walk cannot see.
+  //
+  // A repair that REMOVES a field leaves its column in place, because the re-run no-ops rather
+  // than dropping anything. If that column was required, writes that omit the removed field now
+  // fail its NOT NULL constraint — the Builder considers them valid and the database does not.
+  // Only NOT NULL columns are reported: a leftover nullable column accepts every write and is a
+  // tidiness question rather than a correctness one, and reporting it would fail repairs that are
+  // functionally complete.
+  const wanted = new Set(desired.columns.map(column => column.name));
+  for (const column of live.columns) {
+    if (!wanted.has(column.name) && !column.nullable) {
+      problems.push(
+        `${column.name} is still NOT NULL but is no longer declared`
+      );
+    }
+  }
+
+  // The same asymmetry for indexes, where the stale one is what bites: a unique constraint the
+  // schema has dropped is not removed by a re-run, so writes the Builder now considers valid still
+  // collide with it. `undefined` means the snapshot tracks no index data at all, which is not the
+  // same as tracking none — comparing then would report every index as stale.
+  if (desired.indexes !== undefined && live.indexes !== undefined) {
+    const wantedIndexes = new Set(desired.indexes.map(index => index.name));
+    const liveIndexes = new Set(live.indexes.map(index => index.name));
+    for (const index of desired.indexes) {
+      if (!liveIndexes.has(index.name)) {
+        problems.push(`index ${index.name} is missing`);
+      }
+    }
+    for (const index of live.indexes) {
+      if (!wantedIndexes.has(index.name)) {
+        problems.push(`index ${index.name} is no longer declared`);
+      }
+    }
+  }
+
   return problems;
 }
