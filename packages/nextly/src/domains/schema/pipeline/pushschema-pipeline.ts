@@ -1161,10 +1161,21 @@ export class PushSchemaPipeline {
             .map(t => t.toLowerCase())
             .filter(t => !lockedForThisApply.has(t))
         );
-        const unlocked = filterUnsafeStatements(
-          emittedStatements,
-          desiredTableNames
-        );
+        // Only drizzle-kit's output goes through the orphan filter. That
+        // filter answers "did the kit propose dropping something we never
+        // asked about?", and it identifies an index's owner from the
+        // suffix-style names the kit produces (`<table>_<col>_idx`). Nextly's
+        // own indexes are named `idx_<table>_<col>` / `uq_<table>_<col>`, for
+        // which that inference finds no owner and the drop is blocked — so
+        // running it over the fast path's statements would silently discard a
+        // `drop_index` this pipeline's own diff planned and the apply would
+        // report success with the index still in place. Fast-path SQL is
+        // emitted from those approved operations, so there is no orphan to
+        // find; the destructive scan and the lock filter below still apply to
+        // both routes.
+        const unlocked = useFastPath
+          ? emittedStatements
+          : filterUnsafeStatements(emittedStatements, desiredTableNames);
         // Op-level lock filtering covers what this pipeline decided to do, but
         // drizzle-kit re-derives drift from the full desired schema, so on the
         // kit path it can still emit DDL for a locked table. Scope reduction

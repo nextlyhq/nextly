@@ -135,7 +135,13 @@ export const schemaApi = {
     fields: unknown[],
     schemaVersion: number,
     resolutions?: Record<string, FieldResolution>,
-    renameResolutions?: SchemaRenameResolution[]
+    renameResolutions?: SchemaRenameResolution[],
+    // i18n: the current Internationalization toggle (mirrors
+    // singleApi.applySchemaChanges), so an apply that flips i18n AND changes
+    // fields provisions the companion in the same request instead of diffing
+    // against the registry flag as it was before the save. Undefined leaves
+    // the persisted value untouched.
+    localized?: boolean
   ): Promise<SchemaApplyResponse> => {
     const result = await protectedApi.post<
       ActionResponse<{ newSchemaVersion: number; toastSummary?: string }>
@@ -145,6 +151,7 @@ export const schemaApi = {
       schemaVersion,
       resolutions,
       renameResolutions,
+      ...(localized !== undefined ? { localized } : {}),
     });
     return {
       success: true,

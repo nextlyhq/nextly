@@ -113,7 +113,11 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
       adapter,
       logger,
       // i18n: the default locale seeds/restores the companion on a localization toggle.
-      ctx.config.localization?.defaultLocale
+      ctx.config.localization?.defaultLocale,
+      // The config being registered right now is the authority for this
+      // service; reading it back out of the container would depend on the
+      // registration order within this same function.
+      ctx.config.localization != null
     );
 
     const metadataService = new CollectionMetadataService(

@@ -230,12 +230,25 @@ export function stripKitDropsOfDeclaredIndexes(
   // unambiguous exactly because the name is unique in that scope.
   const declaredNames = new Set<string>();
   const declaredQualified = new Set<string>();
+  const declare = (tableName: string, indexName: string): void => {
+    declaredNames.add(indexName.toLowerCase());
+    declaredQualified.add(
+      `${tableName.toLowerCase()}.${indexName.toLowerCase()}`
+    );
+  };
   for (const table of desired.tables) {
     for (const index of table.indexes ?? []) {
-      declaredNames.add(index.name.toLowerCase());
-      declaredQualified.add(
-        `${table.name.toLowerCase()}.${index.name.toLowerCase()}`
-      );
+      declare(table.name, index.name);
+    }
+    // A primary key is declared on the COLUMN, never in `indexes`, but
+    // PostgreSQL materialises it as an index named `<table>_pkey` and the kit
+    // has been observed emitting a drop for exactly that. The ownership
+    // filter would allow it — the owner table is in the desired schema — and
+    // executing it fails on the dependent constraint. Declaring the
+    // convention name here is what puts a primary key under the same
+    // protection as the indexes beside it.
+    if (desired.tables.length > 0 && table.columns?.some(c => c.primaryKey)) {
+      declare(table.name, `${table.name}_pkey`);
     }
   }
   if (declaredNames.size === 0) {
@@ -268,6 +281,7 @@ interface NextlySnapshotLike {
   tables: ReadonlyArray<{
     name: string;
     indexes?: ReadonlyArray<{ name: string }>;
+    columns?: ReadonlyArray<{ primaryKey?: boolean }>;
   }>;
 }
 

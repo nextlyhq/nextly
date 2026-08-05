@@ -11,7 +11,6 @@ import { buildAuthRouterDeps } from "../auth/handlers/deps-bridge";
 import { routeAuthRequest } from "../auth/handlers/router";
 import type { SanitizedNextlyConfig } from "../collections/config/define-config";
 import {
-  container,
   isServicesRegistered,
   registerServices,
   getService,
@@ -48,24 +47,37 @@ export function getHandlerConfig(): SanitizedNextlyConfig | null {
 }
 
 /**
- * Whether the stored config's `localization` block differs from the one the
- * registered services were built with. Compared as JSON: both sides are the
- * normalized `SanitizedLocalizationConfig` shape (stable key order from
- * `normalizeLocalization`), and an absent block normalizes to `null` so
- * ADDING or REMOVING localization both count as a change.
+ * The `localization` block, as it stood in the ROUTE config when services
+ * were last known to match it. Null until the first observation.
+ */
+let _registeredLocalization: string | null = null;
+
+/** The comparable form of a config's localization block. */
+function localizationKey(config: SanitizedNextlyConfig | null): string {
+  return JSON.stringify(config?.localization ?? null);
+}
+
+/**
+ * Whether the stored config's `localization` block has moved since services
+ * were registered from it.
+ *
+ * Compared against the route config's OWN previous value rather than the
+ * container's: what `registerServices` stores is the plugin-transformed
+ * config, so an app whose plugin supplies or normalizes `localization` would
+ * show a difference that re-registering can never remove — every request
+ * would tear the services down and rebuild the adapter, forever.
+ *
+ * A registration this module did not make (an `instrumentation.ts` boot) has
+ * no recorded value, so the first observation adopts the current block as the
+ * baseline instead of forcing a rebuild; a later edit still moves it.
  */
 function localizationBlockChanged(stored: SanitizedNextlyConfig): boolean {
-  try {
-    if (!container.has("config")) return false;
-    const registered = container.get<NextlyServiceConfig>("config");
-    return (
-      JSON.stringify(registered.localization ?? null) !==
-      JSON.stringify(stored.localization ?? null)
-    );
-  } catch {
-    // Container unavailable — nothing registered to be stale.
+  const current = localizationKey(stored);
+  if (_registeredLocalization === null) {
+    _registeredLocalization = current;
     return false;
   }
+  return _registeredLocalization !== current;
 }
 
 // Test seam: the staleness decision is the behavioral contract of the
@@ -238,6 +250,9 @@ async function initializeServicesOnce(): Promise<void> {
     }
 
     await registerServices(serviceConfig as unknown as NextlyServiceConfig);
+    // Services now match the block this config was registered from, so that
+    // is the value a later request compares against.
+    _registeredLocalization = localizationKey(nextlyConfig);
 
     // Seed built-in email templates (password-reset, welcome, etc.)
     // This mirrors init.ts runPostInitTasks() so external apps using

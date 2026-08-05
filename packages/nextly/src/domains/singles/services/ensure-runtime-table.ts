@@ -26,14 +26,6 @@
  *   main and companion together. This is what keeps a localization,
  *   Draft/Published, or field-set change made by ANOTHER worker from being
  *   served through a table whose columns no longer match the physical one.
- * - **Foreign registration, but the row says localized and no companion is
- *   registered** — refresh it. Main and companion are always registered
- *   together, so a missing companion proves that registration was made
- *   before localization was enabled, and its main table still declares the
- *   translatable columns the enable moved away. This is the one case where
- *   the row is provably newer, so adopting would serve reads that select
- *   columns the physical table no longer has.
- *
  * The baseline recorded in the second case is what makes the third work for
  * foreign registrations too: the first touch adopts them, and any LATER row
  * change is still caught.
@@ -145,16 +137,16 @@ export function ensureSingleRuntimeTable(
     // change since then is ours to act on. No record means the registration
     // came from boot / create-time / the reconcile, which own it.
     const rowMovedSinceOurs = recorded !== undefined && recorded !== signature;
-    // The one case where a foreign registration is provably behind the row
-    // rather than possibly ahead of it: the row says localized, yet nothing
-    // registered a companion. Those two are always registered together, so
-    // whoever registered the main table did it before localization was
-    // enabled — and that main table still declares the translatable columns
-    // the enable moved to the companion, which every read would then select.
-    // Refreshing it here is not the authority flip the adopt-rule prevents:
-    // the row is the only side with newer information.
-    const foreignPredatesLocalization =
-      recorded === undefined && companionMissing;
+    // An unregistered companion is NOT evidence that a foreign registration
+    // predates the localization enable, however much it looks like it: the
+    // supported pre-migration window presents identically — the row says
+    // localized, no companion exists, and the translatable columns are still
+    // on the main table, where reads and writes are meant to keep finding
+    // them until `nextly migrate` moves them. Re-deriving the main table as
+    // localized there drops those columns from the runtime shape and the
+    // write silently loses them. Telling the two apart needs to know whether
+    // the companion physically exists, which this synchronous helper cannot
+    // ask; the adopt rule is correct for both until it can.
 
     if (!mainMissing && !companionMissing && !rowMovedSinceOurs) {
       // Either up to date, or a foreign registration on first touch: adopt
@@ -163,7 +155,7 @@ export function ensureSingleRuntimeTable(
       return;
     }
 
-    if (mainMissing || rowMovedSinceOurs || foreignPredatesLocalization) {
+    if (mainMissing || rowMovedSinceOurs) {
       // Same generator + flags as the boot registration, so the lazily
       // registered table matches the physical one (a localized single's
       // main table omits its translatable columns — they live in the

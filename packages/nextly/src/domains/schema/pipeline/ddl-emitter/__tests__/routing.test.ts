@@ -131,4 +131,26 @@ describe("canEmitWithoutDrizzleKit", () => {
     expect(canEmitWithoutDrizzleKit([], "mysql")).toBe(true);
     expect(canEmitWithoutDrizzleKit([], "sqlite")).toBe(true);
   });
+
+  it("sends a standalone add_index to drizzle-kit on MySQL only", () => {
+    // MySQL needs a key length to index a TEXT column, and an add_index op
+    // carries column NAMES with no types — so that apply belongs to the kit,
+    // which introspects them. SQLite indexes the whole value and is fine.
+    const addIndex: Operation = {
+      type: "add_index",
+      tableName: "dc_notes",
+      index: { name: "idx_dc_notes_body", columns: ["body"], unique: false },
+    };
+    expect(canEmitWithoutDrizzleKit([addIndex], "mysql")).toBe(false);
+    expect(canEmitWithoutDrizzleKit([addIndex], "sqlite")).toBe(true);
+    // An add_table brings its own columns, so MySQL keeps that one.
+    const addTable: Operation = {
+      type: "add_table",
+      table: {
+        name: "dc_notes",
+        columns: [{ name: "id", type: "varchar(36)", nullable: false }],
+      },
+    };
+    expect(canEmitWithoutDrizzleKit([addTable], "mysql")).toBe(true);
+  });
 });

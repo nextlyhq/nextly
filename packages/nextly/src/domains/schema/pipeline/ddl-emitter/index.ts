@@ -71,7 +71,17 @@ export function canEmitWithoutDrizzleKit(
   if (dialect === "postgresql") {
     return ops.every(op => FAST_PATH_OP_TYPES.has(op.type));
   }
-  return ops.every(op => ADDITIVE_FAST_PATH_OP_TYPES.has(op.type));
+  return ops.every(op => {
+    if (!ADDITIVE_FAST_PATH_OP_TYPES.has(op.type)) return false;
+    // MySQL refuses to index a TEXT/BLOB column without a key length, and a
+    // standalone `add_index` op carries only column NAMES — nothing says
+    // whether one of them is text-backed. An `add_table` brings its own
+    // column list, so the emitter can spell the prefix there; on its own, the
+    // apply goes to drizzle-kit, which introspects the types itself. Emitting
+    // a bare `(col)` here instead would abort the apply and keep failing
+    // identically on every retry.
+    return !(dialect === "mysql" && op.type === "add_index");
+  });
 }
 
 /**

@@ -96,6 +96,44 @@ describe("emitAdditiveDdl — add_table", () => {
     );
   });
 
+  it("mysql: indexes a TEXT column by prefix, which MySQL requires", () => {
+    // MySQL rejects `CREATE INDEX ... (col)` on a TEXT/BLOB column outright,
+    // so the DDL has to name a key length. The table's own columns are what
+    // make that knowable here.
+    const textIndexed: Operation = {
+      type: "add_table",
+      table: {
+        name: "dc_notes",
+        columns: [
+          {
+            name: "id",
+            type: "varchar(36)",
+            nullable: false,
+            primaryKey: true,
+          },
+          { name: "body", type: "text", nullable: true },
+          { name: "code", type: "varchar(64)", nullable: true },
+        ],
+        indexes: [
+          { name: "idx_dc_notes_body", columns: ["body"], unique: false },
+          { name: "idx_dc_notes_code", columns: ["code"], unique: false },
+        ],
+      },
+    };
+    const stmts = emitAdditiveDdl(textIndexed, "mysql");
+    expect(stmts).toContain(
+      "CREATE INDEX `idx_dc_notes_body` ON `dc_notes` (`body`(191))"
+    );
+    // A sized column needs no prefix and must not get one.
+    expect(stmts).toContain(
+      "CREATE INDEX `idx_dc_notes_code` ON `dc_notes` (`code`)"
+    );
+    // SQLite indexes the whole value on every type.
+    expect(emitAdditiveDdl(textIndexed, "sqlite")).toContain(
+      `CREATE INDEX IF NOT EXISTS "idx_dc_notes_body" ON "dc_notes" ("body")`
+    );
+  });
+
   it("takes the primary key from the spec flag, not the column name", () => {
     // A key named something other than `id` still gets PRIMARY KEY, and a
     // non-key column named `id` does not become one.

@@ -102,33 +102,23 @@ describe("ensureSingleRuntimeTable", () => {
     expect(tables.get("single_test_page")).not.toBe(sentinel);
   });
 
-  it("refreshes a foreign main table too when its companion is missing", () => {
-    // A localized row with no registered companion proves the foreign
-    // registration predates the localization enable — the two are always
-    // registered together. That main table still declares the translatable
-    // columns the enable moved to the companion, so adopting it would serve
-    // reads that select columns the physical table no longer has. This is
-    // the one case where the row is provably newer than the registration.
+  it("backfills only the missing companion, leaving a foreign main table", () => {
+    // A localized row whose companion is not registered does NOT prove the
+    // foreign registration predates the enable: the supported pre-migration
+    // window looks exactly the same, and there the translatable columns are
+    // still on the main table and must stay reachable. Re-deriving main as
+    // localized would drop them from the runtime shape and lose the write,
+    // so the foreign registration is adopted and only the companion added.
     const sentinel = { already: true };
     const { adapter, registered, tables } = makeAdapter({
       single_test_page: sentinel,
     });
     ensureSingleRuntimeTable(adapter, localizedMeta);
-    expect(registered).toEqual([
-      "single_test_page",
-      "single_test_page_locales",
-    ]);
-    expect(tables.get("single_test_page")).not.toBe(sentinel);
-    // ...and the refreshed table is the localized shape (no translatable
-    // column on main).
-    const main = tables.get("single_test_page") as Record<string, unknown>;
-    expect(main.title).toBeUndefined();
-    expect(main.views).toBeTruthy();
+    expect(registered).toEqual(["single_test_page_locales"]);
+    expect(tables.get("single_test_page")).toBe(sentinel);
   });
 
   it("still adopts a foreign NON-localized registration untouched", () => {
-    // Without localization there is no companion to be missing, so the
-    // adopt-rule applies in full and boot keeps its registration.
     const sentinel = { already: true };
     const { adapter, registered, tables } = makeAdapter({
       single_test_page: sentinel,

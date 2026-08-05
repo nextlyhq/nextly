@@ -139,6 +139,28 @@ describe("stripKitDropsOfDeclaredIndexes", () => {
     expect(out.strippedCount).toBe(1);
   });
 
+  it("protects a primary key's index, which lives on the column not in indexes", () => {
+    // PostgreSQL materialises a PK as `<table>_pkey`, and the kit has been
+    // observed dropping it after a metadata-only change. It is declared on
+    // `columns[].primaryKey`, so it never reaches `indexes` and would sail
+    // past a guard that only reads that list.
+    const withPk = {
+      tables: [
+        {
+          name: "dc_posts",
+          columns: [{ primaryKey: true }],
+          indexes: [{ name: "idx_dc_posts_slug" }],
+        },
+      ],
+    };
+    const out = stripKitDropsOfDeclaredIndexes(
+      ['DROP INDEX IF EXISTS "dc_posts_pkey"'],
+      withPk
+    );
+    expect(out.kept).toEqual([]);
+    expect(out.strippedCount).toBe(1);
+  });
+
   it("pinned-fail-safe: an unparseable drop is KEPT, never silently stripped", () => {
     // An identifier holding characters outside [A-Za-z0-9_] does not match
     // the pattern. Keeping it hands the statement to the drop-guard rather

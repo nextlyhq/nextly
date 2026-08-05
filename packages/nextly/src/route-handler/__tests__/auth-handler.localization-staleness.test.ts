@@ -1,13 +1,22 @@
 // The dev-only staleness decision behind ensureServicesInitialized's
-// re-registration: services capture `localization` at construction, so the
-// registered block must be compared against the one the route module last
-// stored — adding, removing, or editing the block all count as changes;
-// anything else (or no registered config at all) does not.
+// re-registration: services capture `localization` at construction, so a
+// later edit to that block has to be noticed.
+//
+// The comparison is against the ROUTE config's own previous value, not the
+// container's. `registerServices` stores the plugin-TRANSFORMED config, so an
+// app whose plugin supplies or normalizes `localization` would show a
+// permanent difference there and rebuild its services on every request. The
+// first observation therefore adopts whatever is stored as the baseline, and
+// only a move away from that baseline counts.
+//
+// Written as one ordered walk because the baseline is module state that the
+// real flow advances at registration time, which a unit test cannot perform:
+// splitting these into separate cases would assert against whatever the
+// previous case happened to leave behind.
 
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import type { SanitizedNextlyConfig } from "../../collections/config/define-config";
-import { container } from "../../di";
 import { _localizationBlockChangedForTest } from "../auth-handler";
 
 const LOCALIZATION = {
@@ -16,61 +25,39 @@ const LOCALIZATION = {
   fallback: true,
 };
 
-function registerConfig(localization: unknown): void {
-  container.registerSingleton("config", () => ({ localization }));
-}
-
 function storedWith(localization: unknown): SanitizedNextlyConfig {
   return { localization } as SanitizedNextlyConfig;
 }
 
-afterEach(() => {
-  container.clear();
-});
-
 describe("localization staleness decision", () => {
-  it("is false when no config is registered (cold boot handles it)", () => {
-    expect(_localizationBlockChangedForTest(storedWith(LOCALIZATION))).toBe(
-      false
-    );
-  });
+  it("adopts what it first sees, then reports only moves away from it", () => {
+    const changed = _localizationBlockChangedForTest;
 
-  it("is false when the stored block equals the registered one", () => {
-    registerConfig(LOCALIZATION);
-    expect(_localizationBlockChangedForTest(storedWith(LOCALIZATION))).toBe(
-      false
-    );
-  });
+    // 1. Nothing recorded yet. A registration this module did not make (an
+    //    instrumentation boot) must not be torn down on the first request.
+    expect(changed(storedWith(LOCALIZATION))).toBe(false);
 
-  it("is true when localization was ADDED after registration", () => {
-    registerConfig(undefined);
-    expect(_localizationBlockChangedForTest(storedWith(LOCALIZATION))).toBe(
-      true
-    );
-  });
+    // 2. Asked repeatedly with the same block, it stays quiet — this is the
+    //    property a comparison against the transformed config cannot hold.
+    expect(changed(storedWith(LOCALIZATION))).toBe(false);
+    expect(changed(storedWith(LOCALIZATION))).toBe(false);
 
-  it("is true when localization was REMOVED after registration", () => {
-    registerConfig(LOCALIZATION);
-    expect(_localizationBlockChangedForTest(storedWith(undefined))).toBe(true);
-  });
+    // 3. The block moves: the locale set widens.
+    const widened = {
+      ...LOCALIZATION,
+      locales: [
+        ...LOCALIZATION.locales,
+        { code: "de", label: "German", rtl: false, fallbackLocale: [] },
+      ],
+    };
+    expect(changed(storedWith(widened))).toBe(true);
 
-  it("is true when the locale set changed", () => {
-    registerConfig(LOCALIZATION);
-    expect(
-      _localizationBlockChangedForTest(
-        storedWith({
-          ...LOCALIZATION,
-          locales: [
-            ...LOCALIZATION.locales,
-            { code: "de", label: "German", rtl: false, fallbackLocale: [] },
-          ],
-        })
-      )
-    ).toBe(true);
-  });
+    // 4. Removing the block entirely is a change too, not an absence to
+    //    ignore — the baseline is still the adopted one until a
+    //    re-registration records a new value.
+    expect(changed(storedWith(undefined))).toBe(true);
 
-  it("is false when both sides have no localization", () => {
-    registerConfig(undefined);
-    expect(_localizationBlockChangedForTest(storedWith(undefined))).toBe(false);
+    // 5. Back to the adopted block: nothing to do.
+    expect(changed(storedWith(LOCALIZATION))).toBe(false);
   });
 });

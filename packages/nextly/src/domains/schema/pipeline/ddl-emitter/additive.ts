@@ -45,9 +45,24 @@ function quote(identifier: string, dialect: AdditiveDialect): string {
 function createIndexStatement(
   tableName: string,
   index: IndexSpec,
-  dialect: AdditiveDialect
+  dialect: AdditiveDialect,
+  // Column types, when the caller knows them (an `add_table` carries its own
+  // column list). MySQL refuses to index a TEXT/BLOB column without a key
+  // length, so those are indexed by prefix — 191 characters, the same bound
+  // the Builder's DDL uses: the longest prefix that fits InnoDB's 767-byte
+  // index limit under utf8mb4 on every row format. Absent types mean the
+  // caller could not know them, and routing keeps such an apply away from
+  // this emitter on MySQL rather than guessing.
+  columnTypes?: ReadonlyMap<string, string>
 ): string {
-  const cols = index.columns.map(c => quote(c, dialect)).join(", ");
+  const cols = index.columns
+    .map(c => {
+      const quoted = quote(c, dialect);
+      if (dialect !== "mysql") return quoted;
+      const type = columnTypes?.get(c);
+      return type && /\b(text|blob)\b/i.test(type) ? `${quoted}(191)` : quoted;
+    })
+    .join(", ");
   const ifNotExists = dialect === "sqlite" ? "IF NOT EXISTS " : "";
   return (
     `CREATE ${index.unique ? "UNIQUE " : ""}INDEX ${ifNotExists}` +
@@ -169,12 +184,16 @@ export function emitAdditiveDdl(
         createTableColumn(c, dialect, c.name === pkName)
       );
       const createTable = `CREATE TABLE ${quote(op.table.name, dialect)} (\n  ${cols.join(",\n  ")}\n)`;
+      // The table's own columns answer MySQL's key-length question for its
+      // indexes; a standalone add_index has no such list, which is why
+      // routing keeps those off this emitter there.
+      const columnTypes = new Map(op.table.columns.map(c => [c.name, c.type]));
       // Render the table's tracked indexes; fall back to the canonical
       // slug/created_at pair when the snapshot predates index tracking.
       const indexStmts =
         op.table.indexes !== undefined
           ? op.table.indexes.map(i =>
-              createIndexStatement(op.table.name, i, dialect)
+              createIndexStatement(op.table.name, i, dialect, columnTypes)
             )
           : createTableCanonicalIndexes(op.table, dialect);
       return [createTable, ...indexStmts];

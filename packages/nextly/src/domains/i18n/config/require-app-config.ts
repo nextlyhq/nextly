@@ -46,9 +46,17 @@ export function isAppLocalizationConfigured(): boolean {
  */
 export function assertLocalizationConfigured(
   entity: "collection" | "single" | "component",
-  slug: string
+  slug: string,
+  /**
+   * Whether the CALLER was handed a localization config, when it knows.
+   * Services can be constructed directly with one — `CollectionsHandler`
+   * takes it as a constructor argument — and such an instance is fully able
+   * to serve localized entities whether or not anything was registered in
+   * DI. Only when this is undefined does the container decide.
+   */
+  configured?: boolean
 ): void {
-  if (isAppLocalizationConfigured()) return;
+  if (configured ?? isAppLocalizationConfigured()) return;
   throw NextlyError.validation({
     errors: [
       {

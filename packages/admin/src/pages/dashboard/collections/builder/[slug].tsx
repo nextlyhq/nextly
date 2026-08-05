@@ -304,7 +304,10 @@ export default function CollectionBuilderEditPage({
           fieldDefinitions,
           schemaVersion,
           resolutions,
-          renameResolutions
+          renameResolutions,
+          // i18n: carry the current toggle so a simultaneous i18n flip + field change provisions
+          // the companion in the same apply.
+          settings?.i18n === true
         );
         if (result.success) {
           const collectionLabel = settings?.singularName?.trim() || slug;

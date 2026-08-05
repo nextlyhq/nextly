@@ -91,7 +91,20 @@ export class CollectionsHandler {
     auditRetention?: ResolvedAuditRetentionConfig
   ) {
     this.logger = logger;
-    this.collectionService = new DynamicCollectionService(adapter, logger);
+    // i18n: this handler is constructible outside DI and takes the
+    // localization config itself, so hand the service that config's own
+    // answers rather than letting it consult a container this instance may
+    // never have registered against.
+    this.collectionService = new DynamicCollectionService(
+      adapter,
+      logger,
+      this.localization?.defaultLocale,
+      // Affirmative only. `NextlyServices` builds this handler lazily with no
+      // localization argument even in apps that registered one, so passing an
+      // explicit `false` here would tell that instance localization is
+      // unconfigured when the container knows better; undefined lets DI answer.
+      this.localization != null ? true : undefined
+    );
 
     // Built here because this is where the resolved policy arrives, but handed
     // to the entry service, which is the seam every write path runs through.

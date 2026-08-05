@@ -143,10 +143,24 @@ export class DynamicCollectionService extends BaseService {
    * config; defaults to "en" for setups without localization (where transitions never run).
    */
   private readonly defaultLocale: string;
+  /**
+   * i18n: whether the constructing caller holds a localization config, when it
+   * knows. `CollectionsHandler` takes one as a constructor argument and can be
+   * built outside DI, so that instance must not be told localization is
+   * unconfigured by a container it never used. Undefined defers to DI, which is
+   * the registered-services path every dispatcher request takes.
+   */
+  private readonly localizationConfigured?: boolean;
 
-  constructor(adapter: DrizzleAdapter, logger: Logger, defaultLocale = "en") {
+  constructor(
+    adapter: DrizzleAdapter,
+    logger: Logger,
+    defaultLocale = "en",
+    localizationConfigured?: boolean
+  ) {
     super(adapter, logger);
     this.defaultLocale = defaultLocale;
+    this.localizationConfigured = localizationConfigured;
 
     this.validationService = new DynamicCollectionValidationService();
     this.schemaService = new DynamicCollectionSchemaService(
@@ -290,7 +304,11 @@ export class DynamicCollectionService extends BaseService {
     // the tables into a shape the runtime cannot write to (every entry
     // create then 500s). Reject up front with an actionable message.
     if (data.localized === true) {
-      assertLocalizationConfigured("collection", normalizedName);
+      assertLocalizationConfigured(
+        "collection",
+        normalizedName,
+        this.localizationConfigured
+      );
     }
 
     const exists = await this.registryService.collectionExists(normalizedName);
@@ -728,7 +746,11 @@ export class DynamicCollectionService extends BaseService {
     // Only the false→true transition is gated: an already-localized
     // collection keeps saving, and disabling is always allowed.
     if (!collectionWasLocalized && collectionIsLocalized) {
-      assertLocalizationConfigured("collection", collectionName);
+      assertLocalizationConfigured(
+        "collection",
+        collectionName,
+        this.localizationConfigured
+      );
     }
     const reservedForFields = [
       "id",
