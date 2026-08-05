@@ -123,10 +123,21 @@ function normalizeStoredStyles(
   styles: PageStyles,
   document: BlockDocument
 ): PageStyles {
+  // Usable means more than "is an object". A stylesheet whose map is empty,
+  // missing a node, or holding a non-string value leaves that node with only
+  // its block-type class while the stale CSS still ships — every node-specific
+  // selector matching nothing, and no error to say why. `{}` is the exact
+  // result of `JSON.stringify` on a `Map`, so it is the shape most likely to
+  // arrive.
+  const map: unknown = styles.classes;
   const classesUsable =
-    typeof styles.classes === "object" &&
-    styles.classes !== null &&
-    !Array.isArray(styles.classes);
+    typeof map === "object" &&
+    map !== null &&
+    !Array.isArray(map) &&
+    documentNodeIds(document).every(id => {
+      const value = (map as Record<string, unknown>)[id];
+      return typeof value === "string" && value.length > 0;
+    });
   if (classesUsable) {
     return typeof styles.css === "string" ? styles : { ...styles, css: "" };
   }

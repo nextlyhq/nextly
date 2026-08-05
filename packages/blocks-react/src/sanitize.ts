@@ -35,6 +35,11 @@ export function sanitizeDocument(
 ): BlockDocument {
   let changed = false;
   let remaining = limits.maxNodes;
+  // Ids are the document's only addressing mechanism and the renderer's React
+  // keys. A duplicate makes React reuse one block's instance for another, which
+  // is a wrong page rather than a missing one, and validation rejects the shape
+  // anyway — so a repeat is dropped rather than rendered.
+  const seenIds = new Set<string>();
 
   const sanitizeNodes = (nodes: unknown, depth: number): BlockNode[] => {
     if (!Array.isArray(nodes)) {
@@ -87,6 +92,13 @@ export function sanitizeDocument(
         changed = true;
         continue;
       }
+
+      if (seenIds.has(candidate.id)) {
+        changed = true;
+        continue;
+      }
+      seenIds.add(candidate.id);
+
       const slots = candidate.slots;
       if (slots === undefined) {
         result.push(candidate);

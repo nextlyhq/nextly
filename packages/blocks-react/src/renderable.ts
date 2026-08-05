@@ -136,6 +136,29 @@ const PROVIDER_TAGS: ReadonlySet<string> = new Set([
   "react.provider",
 ]);
 
+/** The context consumer tag, whose single child must be a function. */
+const CONSUMER_TAG = "react.consumer";
+
+/** Suspense, whose `fallback` prop is rendered as well as its children. */
+const SUSPENSE_TYPE = Symbol.for("react.suspense");
+
+/**
+ * Whether a symbol is one of React's own element types.
+ *
+ * Matched by DESCRIPTION prefix rather than against a list of known symbols, so
+ * a built-in React adds later is covered without an edit — and rather than by
+ * `typeof === "symbol"` alone, which accepted any foreign symbol:
+ * `createElement(Symbol("x"))` passes `isValidElement` and React then refuses
+ * it with "Element type is invalid".
+ */
+function isReactBuiltinSymbol(value: unknown): boolean {
+  return (
+    typeof value === "symbol" &&
+    typeof value.description === "string" &&
+    value.description.startsWith("react.")
+  );
+}
+
 /** The `$$typeof` tag of a value, when it carries a React one. */
 function reactTag(value: unknown): string | null {
   if (typeof value !== "object" || value === null) return null;
@@ -159,7 +182,8 @@ function reactTag(value: unknown): string | null {
 function isRenderableElementType(type: unknown): boolean {
   if (typeof type === "string") return type.length > 0;
   // A component, and every React built-in (fragment, Suspense, StrictMode).
-  if (typeof type === "function" || typeof type === "symbol") return true;
+  if (typeof type === "function") return true;
+  if (isReactBuiltinSymbol(type)) return true;
   return reactTag(type) !== null;
 }
 
@@ -177,7 +201,7 @@ function rendersOwnChildren(element: unknown): boolean {
   // A custom component's `type` is a function, and a `memo`/`lazy`/context
   // wrapper's is an object; both receive children as an ordinary prop and own
   // what they mean, so neither is walked.
-  return typeof type === "string" || typeof type === "symbol";
+  return typeof type === "string" || isReactBuiltinSymbol(type);
 }
 
 /**
@@ -250,6 +274,40 @@ function classifyIterable(value: Iterable<unknown>): IterableKind {
     // throw lands inside React's render instead of becoming a placeholder.
     return "unopenable";
   }
+}
+
+/** A Suspense element's fallback, which React renders as surely as its children. */
+function suspenseFallbackOf(element: unknown): unknown {
+  const type = (element as { type?: unknown }).type;
+  if (type !== SUSPENSE_TYPE) return undefined;
+  const props = (element as { props?: unknown }).props;
+  if (typeof props !== "object" || props === null) return undefined;
+  return (props as { fallback?: unknown }).fallback;
+}
+
+/**
+ * What is wrong with an element itself, before its children are considered.
+ *
+ * Shared by both walks so the owned and borrowed paths cannot drift on what
+ * makes an element unusable.
+ */
+function elementShapeReason(element: unknown): string | null {
+  const type = (element as { type?: unknown }).type;
+  if (!isRenderableElementType(type)) {
+    return "an element whose type React cannot render";
+  }
+
+  // A consumer takes exactly one child and calls it. React answers anything
+  // else with "render is not a function", raised while it renders rather than
+  // while this walk runs. Checked by shape and never invoked: calling an
+  // author's function here would run it outside the render it belongs to.
+  if (reactTag(type) === CONSUMER_TAG) {
+    return typeof childrenOf(element) === "function"
+      ? null
+      : "a context consumer whose child is not a function";
+  }
+
+  return hostPropReason(element);
 }
 
 /**
@@ -325,19 +383,25 @@ export function normalizeRenderable(
     if (type !== "object" && type !== "function") return describeValue(current);
 
     if (isThenable(current)) {
-      // Nothing can be substituted inside an element that already exists, so
-      // this one passes through and the caller is told a boundary is needed.
-      hasUnwrappedThenable = true;
-      return null;
+      // Nothing can be substituted inside an element that already exists, and
+      // Suspense resolves a promise child without containing one that rejects
+      // or resolves to something unrenderable. Passing it through would put
+      // that failure inside React's render, past this block's boundary — so it
+      // is refused. A block wanting an async child returns the promise itself,
+      // or puts it inside a component it owns.
+      return "a promise inside JSX, which cannot be awaited under this block's containment";
     }
 
     if (isValidElement(current)) {
-      if (!isRenderableElementType((current as { type?: unknown }).type)) {
-        return "an element whose type React cannot render";
-      }
-      const propReason = hostPropReason(current);
-      if (propReason !== null) return propReason;
-      return rendersOwnChildren(current) ? inspect(childrenOf(current)) : null;
+      const elementReason = elementShapeReason(current);
+      if (elementReason !== null) return elementReason;
+      if (!rendersOwnChildren(current)) return null;
+      // A Suspense fallback is rendered by React as surely as its children are,
+      // just later, so an unrenderable one fails at the first suspension —
+      // outside anything this package can catch.
+      const fallbackReason = inspect(suspenseFallbackOf(current));
+      if (fallbackReason !== null) return fallbackReason;
+      return inspect(childrenOf(current));
     }
     if (type === "function") return describeValue(current);
 
@@ -405,17 +469,13 @@ export function normalizeRenderable(
     }
 
     if (isValidElement(current)) {
-      if (!isRenderableElementType((current as { type?: unknown }).type)) {
-        return {
-          ok: false,
-          reason: "an element whose type React cannot render",
-        };
+      const elementReason = elementShapeReason(current);
+      if (elementReason !== null) return { ok: false, reason: elementReason };
+      if (!rendersOwnChildren(current)) {
+        return { ok: true, node: current as ReactNode, hasUnwrappedThenable };
       }
-      const propReason = hostPropReason(current);
-      if (propReason !== null) return { ok: false, reason: propReason };
-      const reason = rendersOwnChildren(current)
-        ? inspect(childrenOf(current))
-        : null;
+      const reason =
+        inspect(suspenseFallbackOf(current)) ?? inspect(childrenOf(current));
       return reason === null
         ? { ok: true, node: current as ReactNode, hasUnwrappedThenable }
         : { ok: false, reason };

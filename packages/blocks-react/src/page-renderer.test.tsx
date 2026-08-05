@@ -1358,6 +1358,186 @@ describe("PageRenderer", () => {
     });
   });
 
+  describe("element shapes React refuses, part 2", () => {
+    it("refuses an element type that is a foreign symbol", async () => {
+      const foreign = defineBlock({
+        name: "test/foreign-symbol",
+        version: 1,
+        description: "Builds an element from a symbol that is not React's.",
+        example: { props: {} },
+        render: () =>
+          createElement(Symbol("not-react") as unknown as string, null, "x"),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/foreign-symbol"),
+            node("b", "test/text", { props: { value: "survivor" } })
+          )}
+          blocks={createBlockResolver([
+            foreign as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual(["invalid-output"]);
+      expect(html).toContain("survivor");
+    });
+
+    it("refuses a context consumer whose child is not a function", async () => {
+      const Theme = createContext("light");
+      const consumer = defineBlock({
+        name: "test/consumer-child",
+        version: 1,
+        description: "Gives a consumer an object child.",
+        example: { props: {} },
+        render: () => (
+          <Theme.Consumer>
+            {
+              { not: "a function" } as unknown as (
+                value: string
+              ) => ReactElement
+            }
+          </Theme.Consumer>
+        ),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/consumer-child"),
+            node("b", "test/text", { props: { value: "survivor" } })
+          )}
+          blocks={createBlockResolver([
+            consumer as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual(["invalid-output"]);
+      expect(html).toContain("survivor");
+    });
+
+    it("still renders a consumer given a proper function child", async () => {
+      const Theme = createContext("light");
+      const consumer = defineBlock({
+        name: "test/consumer-ok",
+        version: 1,
+        description: "Gives a consumer a function child.",
+        example: { props: {} },
+        render: () => (
+          <Theme.Consumer>{value => <span>{value}</span>}</Theme.Consumer>
+        ),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(node("a", "test/consumer-ok"))}
+          blocks={createBlockResolver([consumer as AnyBlockDefinition])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual([]);
+      expect(html).toContain("light");
+    });
+
+    it("refuses an unrenderable Suspense fallback", async () => {
+      const bad = defineBlock({
+        name: "test/bad-fallback",
+        version: 1,
+        description: "Gives Suspense an object fallback.",
+        example: { props: {} },
+        render: () => (
+          <Suspense fallback={{ bad: true } as unknown as ReactElement}>
+            <span>content</span>
+          </Suspense>
+        ),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/bad-fallback"),
+            node("b", "test/text", { props: { value: "survivor" } })
+          )}
+          blocks={createBlockResolver([
+            bad as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual(["invalid-output"]);
+      expect(html).toContain("survivor");
+    });
+
+    it("refuses a promise buried inside JSX it does not own", async () => {
+      const buried = defineBlock({
+        name: "test/buried-promise",
+        version: 1,
+        description: "Puts a rejecting promise inside its JSX.",
+        example: { props: {} },
+        render: ({ className }) => (
+          <div className={className}>
+            {Promise.reject(new Error("boom")) as unknown as ReactElement}
+          </div>
+        ),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/buried-promise"),
+            node("b", "test/text", { props: { value: "survivor" } })
+          )}
+          blocks={createBlockResolver([
+            buried as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual(["invalid-output"]);
+      expect(html).toContain("survivor");
+    });
+  });
+
+  describe("addressing a stored document cannot survive", () => {
+    it("drops a node repeating an id already seen", async () => {
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("dup", "test/text", { props: { value: "first" } }),
+            node("dup", "test/text", { props: { value: "second" } }),
+            node("c", "test/text", { props: { value: "third" } })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+        />
+      );
+
+      expect(html).toContain("first");
+      expect(html).not.toContain("second");
+      expect(html).toContain("third");
+    });
+
+    it("repairs a class map that does not cover every node", async () => {
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(node("a", "test/text", { props: { value: "kept" } }))}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+          styles={{ css: ".nx-stale { color: red }", classes: {} }}
+        />
+      );
+
+      expect(html).toContain("kept");
+      expect(html).not.toContain("nx-stale");
+      expect(html).toMatch(bothClasses("test/text"));
+    });
+  });
+
   describe("element shapes React refuses", () => {
     it("contains an element whose type React cannot render", async () => {
       // `createElement(props.as)` with `as` stored as a number produces a valid
