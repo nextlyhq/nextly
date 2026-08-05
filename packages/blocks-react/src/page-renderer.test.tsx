@@ -1,4 +1,4 @@
-import { memo, type ReactElement } from "react";
+import { Suspense, memo, type ReactElement } from "react";
 import { renderToReadableStream } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -1127,6 +1127,138 @@ describe("PageRenderer", () => {
     });
   });
 
+  describe("react built-ins and awaitables", () => {
+    it("contains an invalid child inside a React-owned wrapper", async () => {
+      // React renders a Suspense or StrictMode child itself, exactly as it does
+      // a host element's, so skipping the walk there left the same escape open
+      // one element higher.
+      const wrapped = defineBlock({
+        name: "test/wrapper-child",
+        version: 1,
+        description: "Puts a plain object inside a Suspense wrapper.",
+        example: { props: {} },
+        render: () => (
+          <Suspense fallback={null}>
+            {{ not: "a node" } as unknown as ReactElement}
+          </Suspense>
+        ),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/wrapper-child"),
+            node("b", "test/text", { props: { value: "survivor" } })
+          )}
+          blocks={createBlockResolver([
+            wrapped as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual(["invalid-output"]);
+      expect(html).toContain("survivor");
+    });
+
+    it("awaits a callable thenable", async () => {
+      // `await` looks for a `then` method, not for a particular typeof, so a
+      // library's callable promise-like is legitimate async output.
+      const callable = defineBlock({
+        name: "test/callable-thenable",
+        version: 1,
+        description: "Returns a function carrying a then method.",
+        example: { props: {} },
+        render: () => {
+          const thenable = () => undefined;
+          Object.assign(thenable, {
+            then: (resolve: (value: ReactElement) => void) => {
+              resolve(<span>awaited</span>);
+            },
+          });
+          return thenable;
+        },
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(node("a", "test/callable-thenable"))}
+          blocks={createBlockResolver([callable as AnyBlockDefinition])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual([]);
+      expect(html).toContain("awaited");
+    });
+  });
+
+  describe("attribute safety", () => {
+    it("passes through only inert author attributes", async () => {
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", {
+              props: { value: "kept" },
+              cssId: "anchor",
+              attributes: {
+                "data-track": "hero",
+                "aria-label": "A section",
+                role: "region",
+                title: "Tooltip",
+                lang: "en",
+              },
+            })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+        />
+      );
+
+      expect(html).toContain('id="anchor"');
+      expect(html).toContain('data-track="hero"');
+      expect(html).toContain('aria-label="A section"');
+      expect(html).toContain('role="region"');
+      expect(html).toContain('title="Tooltip"');
+      expect(html).toContain('lang="en"');
+    });
+
+    it("refuses attributes that fetch, navigate or inject", async () => {
+      // The engine rejects `on*` and leaves this list to the renderer, so an
+      // allowlist is the only thing standing between stored content and an
+      // attribute with reach.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", {
+              props: { value: "kept" },
+              attributes: {
+                srcDoc: "<script>alert(1)</script>",
+                href: "javascript:alert(1)",
+                formAction: "https://evil.example",
+                src: "https://evil.example/x.png",
+                target: "_blank",
+                style: "color: red",
+              },
+            })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+        />
+      );
+
+      expect(html).toContain("kept");
+      for (const forbidden of [
+        "srcDoc",
+        "srcdoc",
+        "javascript:alert",
+        "formAction",
+        "formaction",
+        "evil.example",
+        "_blank",
+      ]) {
+        expect(html).not.toContain(forbidden);
+      }
+    });
+  });
+
   describe("visibility", () => {
     it("omits a node gated behind conditions nothing can evaluate", async () => {
       // The format says conditionally hidden nodes are OMITTED from server
@@ -1167,6 +1299,25 @@ describe("PageRenderer", () => {
       );
 
       expect(html).toContain("ungated");
+    });
+
+    it("shows a node whose only condition group is empty", async () => {
+      // Storage is OR-of-AND, and an AND of nothing is satisfied. A group left
+      // empty by removing its last predicate is not a gate, and treating it as
+      // one would drop public content until the array itself was rewritten.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", {
+              props: { value: "ungated again" },
+              visibility: { conditions: [[]] },
+            })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+        />
+      );
+
+      expect(html).toContain("ungated again");
     });
 
     it("omits a gated node inside a slot too", async () => {

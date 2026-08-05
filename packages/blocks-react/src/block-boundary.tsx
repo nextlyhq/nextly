@@ -48,22 +48,35 @@ function slotNodes(node: BlockNode, name: string): BlockNode[] {
 }
 
 /**
- * React props that are never author data, whatever a stored attribute says.
+ * Inert global attributes an author may set on a block's root element.
  *
- * `attributes` is sanitized at write time and typed as strings, but these keys
- * change how React interprets an element rather than what it renders: `key` and
- * `ref` are consumed by React, `children` and `dangerouslySetInnerHTML` would
- * replace the block's own content, and `className`/`style` are decided
- * elsewhere in this file.
+ * An ALLOWLIST, not a list of things to refuse. The engine's validator rejects
+ * `on*` handlers and says in as many words that the render-safe list belongs to
+ * the renderer — so this is the only place it exists, and a list of refusals
+ * could never keep up. `srcDoc` injects a document, `href`/`formAction`/`action`
+ * choose a destination, `src` and `poster` fetch, `style` and `class` restyle,
+ * and the next attribute with reach ships in some future browser without anyone
+ * here noticing.
+ *
+ * These four carry no behaviour: they name, describe or orient an element.
+ * `id` arrives separately through the modelled `cssId` field.
  */
-const RESERVED_ATTRIBUTE_NAMES = new Set([
-  "key",
-  "ref",
-  "children",
-  "dangerouslySetInnerHTML",
-  "className",
-  "style",
-]);
+const ALLOWED_ATTRIBUTE_NAMES = new Set(["id", "title", "lang", "dir"]);
+
+/**
+ * Whether an author-supplied attribute may reach the DOM.
+ *
+ * `data-*` and `aria-*` are open by prefix: both are namespaces defined to carry
+ * author data and accessibility semantics, neither can name a destination or
+ * execute anything, and closing them would defeat the feature the field exists
+ * for. `role` is the ARIA sibling of `aria-*` and belongs with them.
+ */
+function isAllowedAttribute(name: string): boolean {
+  const lower = name.toLowerCase();
+  if (lower === "role") return true;
+  if (lower.startsWith("data-") || lower.startsWith("aria-")) return true;
+  return ALLOWED_ATTRIBUTE_NAMES.has(lower);
+}
 
 /**
  * Applies the node's root-level HTML fields to what the block rendered.
@@ -97,7 +110,7 @@ function withNodeAttributes(output: ReactNode, node: BlockNode): ReactNode {
   const extra: Record<string, string> = {};
   if (attributes) {
     for (const [name, value] of Object.entries(attributes)) {
-      if (RESERVED_ATTRIBUTE_NAMES.has(name)) continue;
+      if (!isAllowedAttribute(name)) continue;
       // The field is typed as strings and sanitized at write time, but a stored
       // document can hold anything; a non-string would be handed to React as a
       // prop value it never expected.
@@ -341,12 +354,19 @@ export function BlockBoundary({
 function isUnconditional(node: BlockNode): boolean {
   const groups = node.visibility?.conditions;
   if (groups === undefined || groups === null) return true;
-  // Only an EMPTY list means ungated. A malformed value — a flat list of
-  // predicates from an older writer, an object, a string — is still an author
-  // saying this node is restricted, and a shape this renderer does not
-  // recognise is the last thing to resolve in favour of showing it.
-  if (Array.isArray(groups)) return groups.length === 0;
-  return false;
+  // Malformed shapes stay hidden: a flat list of predicates from an older
+  // writer, an object, a string — each is still an author saying this node is
+  // restricted, and a shape this renderer cannot read is the last thing to
+  // resolve in favour of showing it.
+  if (!Array.isArray(groups)) return false;
+
+  // No groups at all is no restriction. Neither is a group with no predicates:
+  // the storage is OR-of-AND, and an AND of nothing is satisfied, so a node
+  // whose only group was emptied by removing its last predicate is visible
+  // again. Treating that as a gate would drop public content until the array
+  // itself was rewritten.
+  if (groups.length === 0) return true;
+  return groups.some(group => Array.isArray(group) && group.length === 0);
 }
 
 export interface BlockListProps {

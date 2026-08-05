@@ -8,9 +8,6 @@ import { isValidElement, type ReactNode } from "react";
  */
 const MAX_CHECKED_VALUES = 10_000;
 
-/** Elements whose children React renders itself, rather than handing them on. */
-const FRAGMENT_TYPE = Symbol.for("react.fragment");
-
 /** A block's output, checked and in a form React can render. */
 export type NormalizedOutput =
   | {
@@ -57,7 +54,12 @@ export interface NormalizeOptions {
  * path that refuses it rather than raising out of a predicate.
  */
 export function isThenable(value: unknown): value is PromiseLike<unknown> {
-  if (typeof value !== "object" || value === null) return false;
+  // A function carrying `then` is awaitable — `await` looks for the method, not
+  // for a particular typeof. Excluding functions here sent a library's callable
+  // promise-like down the reject-a-function path instead of awaiting it.
+  const type = typeof value;
+  if ((type !== "object" && type !== "function") || value === null)
+    return false;
   try {
     return typeof (value as PromiseLike<unknown>).then === "function";
   } catch {
@@ -115,7 +117,17 @@ export function describeValue(value: unknown): string {
  */
 function rendersOwnChildren(element: unknown): boolean {
   const type = (element as { type?: unknown }).type;
-  return typeof type === "string" || type === FRAGMENT_TYPE;
+  // A host element (`type` is a tag name) and every React built-in (`type` is a
+  // `react.*` symbol — fragment, Suspense, StrictMode, Profiler) render their
+  // children themselves. Matching the symbol KIND rather than listing the known
+  // ones means a built-in this module has not heard of is still covered, which
+  // is the opposite of the enumeration problem: being late to a new symbol
+  // would reopen the escape, while covering one early costs nothing.
+  //
+  // A custom component's `type` is a function, and a `memo`/`lazy`/context
+  // wrapper's is an object; both receive children as an ordinary prop and own
+  // what they mean, so neither is walked.
+  return typeof type === "string" || typeof type === "symbol";
 }
 
 /**
