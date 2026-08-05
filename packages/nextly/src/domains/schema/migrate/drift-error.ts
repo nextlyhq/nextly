@@ -35,6 +35,19 @@ export interface MigrationDriftArgs {
   unadoptedDatabase?: boolean;
 }
 
+/**
+ * Where the snapshot paired with a migration lives.
+ *
+ * Derived from the `.sql` path rather than passed in, so the two can never
+ * name different migrations. `snapshot-io` writes them as
+ * `<dir>/<name>.sql` and `<dir>/meta/<name>.snapshot.json`.
+ */
+function snapshotPathFor(file: string, migration: string): string {
+  const dir = file.slice(0, Math.max(0, file.lastIndexOf("/")));
+  const metaDir = dir === "" ? "meta" : `${dir}/meta`;
+  return `${metaDir}/${migration}.snapshot.json`;
+}
+
 export function migrationDriftError(args: MigrationDriftArgs): NextlyError {
   const lines = args.driftItems
     .map(d => `    ${d.kind} ${d.detail}`)
@@ -54,16 +67,25 @@ export function migrationDriftError(args: MigrationDriftArgs): NextlyError {
         "  divergent teammate state).",
       ];
 
-  // One command, not a menu. All three generic recoveries fail on an unadopted
+  // One recovery, not a menu. All three generic ones fail on an unadopted
   // database, so listing them would cost three attempts before the real answer.
+  //
+  // The order matters and is the opposite of the obvious one. This migration
+  // was written with a snapshot beside it, and `migrate:baseline` refuses a
+  // project that already has one — so baselining first reports "already
+  // baselined" and nothing happens. Both files have to go first, and deleting
+  // only the `.sql` leaves the snapshot behind to do the same thing.
   const recovery = args.unadoptedDatabase
     ? [
-        "  Recovery — record what the database already has, once:",
+        "  Recovery — this migration cannot be applied and has to go first.",
+        "  Remove it and its snapshot:",
+        `          rm ${args.file} ${snapshotPathFor(args.file, args.migration)}`,
+        "",
+        "  Record what the database already has, once:",
         "          pnpm nextly migrate:baseline",
         "",
-        "  Then delete this migration and re-create it; it will contain only",
-        "  what actually changed:",
-        `          rm ${args.file} && pnpm nextly migrate:create --name ${args.migration.replace(/^\d+_/, "")}`,
+        "  Then re-create the migration; it will contain only what changed:",
+        `          pnpm nextly migrate:create --name ${args.migration.replace(/^\d+_/, "")}`,
       ]
     : [
         "  Recovery (pick one):",

@@ -30,7 +30,7 @@ import { diffSnapshots } from "../pipeline/diff/diff";
 import type { NextlySchemaSnapshot, Operation } from "../pipeline/diff/types";
 
 /** The snapshot a first migration is diffed against when none exists. */
-const EMPTY_SNAPSHOT: NextlySchemaSnapshot = { tables: [] };
+export const EMPTY_SNAPSHOT: NextlySchemaSnapshot = { tables: [] };
 
 /**
  * What a baseline run should do, decided before anything is written.
@@ -43,6 +43,18 @@ export type BaselinePlan =
       /** A snapshot already exists, so the history has a starting point. */
       kind: "already-baselined";
       snapshotName: string;
+    }
+  | {
+      /**
+       * Migration files exist without a snapshot between them and an origin.
+       *
+       * A `--blank` migration carries hand-written SQL and no snapshot, so the
+       * snapshot check alone reads such a project as never baselined. Appending
+       * an origin AFTER those files means a fresh database replays them first,
+       * against tables the baseline has not created yet.
+       */
+      kind: "history-not-empty";
+      filename: string;
     }
   | {
       /** No managed tables, so there is nothing to adopt. */
@@ -67,6 +79,14 @@ export interface PlanBaselineArgs {
    * origins in the same history.
    */
   latestSnapshotName?: string;
+  /**
+   * Any migration `.sql` already on disk, when the project has one.
+   *
+   * Checked separately from the snapshot because the two can disagree: a
+   * `--blank` migration is written with no snapshot beside it, so a project
+   * carrying only those has a real history and no starting point.
+   */
+  existingMigrationFile?: string;
 }
 
 /**
@@ -80,6 +100,13 @@ export interface PlanBaselineArgs {
 export function planBaseline(args: PlanBaselineArgs): BaselinePlan {
   if (args.latestSnapshotName !== undefined) {
     return { kind: "already-baselined", snapshotName: args.latestSnapshotName };
+  }
+
+  // Ordered after the snapshot check so a normal project keeps the message
+  // that names its origin, and before the empty check because a history with
+  // files in it is a refusal whatever the database looks like.
+  if (args.existingMigrationFile !== undefined) {
+    return { kind: "history-not-empty", filename: args.existingMigrationFile };
   }
 
   if (args.live.tables.length === 0) {

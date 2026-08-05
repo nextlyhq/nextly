@@ -23,15 +23,19 @@
  *
  * @module cli/commands/migrate-baseline
  */
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import type { Command } from "commander";
 
+import { getSchemaEventsDdl } from "../../domains/schema/events/schema-events-ddl";
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
-import { planBaseline } from "../../domains/schema/migrate/baseline";
+import {
+  EMPTY_SNAPSHOT,
+  planBaseline,
+} from "../../domains/schema/migrate/baseline";
 import {
   formatMigrationFile,
   formatTimestamp,
@@ -41,9 +45,14 @@ import {
   loadLatestSnapshot,
   writeSnapshot,
 } from "../../domains/schema/migrate-create/snapshot-io";
+import { diffSnapshots } from "../../domains/schema/pipeline/diff/diff";
 import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
-import { isSnapshotComparableTable } from "../../domains/schema/pipeline/managed-tables";
+import {
+  isCompanionTable,
+  isManagedTable,
+  isSnapshotComparableTable,
+} from "../../domains/schema/pipeline/managed-tables";
 import { generateSQL } from "../../domains/schema/pipeline/sql-templates/index";
 import { describeError, NextlyError } from "../../errors/index";
 import { createContext, type CommandContext } from "../program";
@@ -68,13 +77,36 @@ interface BaselineOptions {
 /** The migration name used when the operator supplies none. */
 const DEFAULT_BASELINE_NAME = "baseline";
 
-async function safeListTables(adapter: CLIDatabaseAdapter): Promise<string[]> {
+/**
+ * The tables in the database, as the source of truth for what to adopt.
+ *
+ * Deliberately not guarded. Elsewhere an unreadable table list degrades to an
+ * empty scope and the command still does something useful; here it IS the
+ * command, and an empty list is indistinguishable from a database with nothing
+ * in it. A permissions error swallowed into `[]` would report "nothing to
+ * adopt" and leave the operator believing their schema was already recorded.
+ */
+async function listManagedTables(
+  adapter: CLIDatabaseAdapter
+): Promise<string[]> {
+  return (adapter as unknown as { listTables: () => Promise<string[]> })
+    .listTables()
+    .then(names => names.filter(isManagedTable));
+}
+
+/**
+ * The migration files already on disk, earliest first.
+ *
+ * A missing directory is a project that has never generated one, which is the
+ * normal state for everything this command exists to adopt.
+ */
+async function listMigrationFiles(migrationsDir: string): Promise<string[]> {
   try {
-    return await (
-      adapter as unknown as { listTables: () => Promise<string[]> }
-    ).listTables();
-  } catch {
-    return [];
+    const entries = await readdir(migrationsDir);
+    return entries.filter(f => f.endsWith(".sql")).sort();
+  } catch (err) {
+    if ((err as { code?: string }).code === "ENOENT") return [];
+    throw err;
   }
 }
 
@@ -100,6 +132,7 @@ export interface BaselineCoreDeps {
 
 export type BaselineCoreResult =
   | { kind: "already-baselined"; snapshotName: string }
+  | { kind: "history-not-empty"; filename: string }
   | { kind: "empty-database" }
   | {
       kind: "baselined";
@@ -130,20 +163,29 @@ export async function baselineCore(
     dialect,
     async () => {
       const latest = await loadLatestSnapshot(metaDir);
+      const existingMigrations = await listMigrationFiles(migrationsDir);
 
-      // Only tables the migration history is responsible for. A companion is
-      // excluded for the same reason it is excluded from drift: it is derived,
-      // and adopting it as a first-class table would make the next diff want to
-      // drop it.
-      const tableNames = (await safeListTables(adapter)).filter(
-        isSnapshotComparableTable
-      );
-      const live = await introspectLiveSnapshot(db, dialect, tableNames);
+      const managed = await listManagedTables(adapter);
+      // A companion is excluded from the SNAPSHOT for the same reason drift
+      // excludes it: it is derived, never declared by config, and adopting it
+      // as a first-class table would make the next diff want to drop it. It is
+      // NOT excluded from the SQL — see below.
+      const snapshotTables = managed.filter(isSnapshotComparableTable);
+      const companionTables = managed.filter(isCompanionTable);
 
-      const plan = planBaseline({ live, latestSnapshotName: latest?.filename });
+      const live = await introspectLiveSnapshot(db, dialect, snapshotTables);
+
+      const plan = planBaseline({
+        live,
+        latestSnapshotName: latest?.filename,
+        existingMigrationFile: existingMigrations[0],
+      });
 
       if (plan.kind === "already-baselined") {
         return { kind: "already-baselined", snapshotName: plan.snapshotName };
+      }
+      if (plan.kind === "history-not-empty") {
+        return { kind: "history-not-empty", filename: plan.filename };
       }
       if (plan.kind === "empty-database") {
         return { kind: "empty-database" };
@@ -157,7 +199,25 @@ export async function baselineCore(
       // against THIS database — it is recorded as applied below — but it is
       // what lets a new environment, CI, or `migrate:fresh` build the same
       // schema from the history alone.
-      const sqlStatements = plan.operations.map(op => generateSQL(op, dialect));
+      //
+      // Companions are part of that even though they are not part of the
+      // snapshot. `migrate:create` emits one only when it can see the
+      // transition in the previous snapshot: after a baseline the main table
+      // is recorded already missing its translatable columns, which reads as
+      // "already localized, the companion exists" and emits nothing. So if the
+      // baseline does not carry them, no file ever will, and a fresh
+      // environment gets main tables with nowhere to put translations.
+      const companionLive =
+        companionTables.length > 0
+          ? await introspectLiveSnapshot(db, dialect, companionTables)
+          : { tables: [] };
+      const companionOperations = diffSnapshots(EMPTY_SNAPSHOT, companionLive);
+
+      // Companions carry a foreign key to their main table, so every main
+      // table has to exist before any of them runs.
+      const sqlStatements = [...plan.operations, ...companionOperations].map(
+        op => generateSQL(op, dialect)
+      );
       const sqlContent = formatMigrationFile({
         name,
         dialect,
@@ -181,6 +241,16 @@ export async function baselineCore(
         plan.snapshot,
         sqlContent
       );
+
+      // The ledger is bootstrapped out of band by `migrate`, which has never
+      // run on a database managed by `db:sync` — so this command is the first
+      // thing that ever writes to it and has to create it. Without this the
+      // insert below throws AFTER the migration and snapshot are on disk,
+      // leaving files that look committed and will be replayed against the
+      // database they were taken from.
+      for (const stmt of getSchemaEventsDdl(dialect)) {
+        await (adapter as unknown as DrizzleAdapter).executeQuery(stmt);
+      }
 
       // Recorded as applied without executing: the tables it describes are
       // already standing. Doing this in the same command is the point — the
@@ -277,6 +347,20 @@ export async function runMigrateBaseline(
       return;
     }
 
+    if (result.kind === "history-not-empty") {
+      logger.info(
+        `This project already has migrations (${result.filename}), but no starting point.`
+      );
+      logger.info(
+        "Adopting now would put the baseline after them, and a fresh database would"
+      );
+      logger.info(
+        "replay them against tables it has not created yet. Move them aside, baseline,"
+      );
+      logger.info("then re-apply what they did as a new migration.");
+      return;
+    }
+
     if (result.kind === "empty-database") {
       logger.info("No managed tables found, so there is nothing to adopt.");
       logger.info(
@@ -323,6 +407,11 @@ export function registerMigrateBaselineCommand(program: Command): void {
         await runMigrateBaseline(
           {
             ...opts,
+            // `nextly --config <path> migrate:baseline` is the documented
+            // global form, and it puts the path only on the parent. Taking the
+            // subcommand's alone would silently load the default config and
+            // write the baseline against a different `migrationsDir`.
+            config: opts.config ?? globalOpts.config,
             verbose: globalOpts.verbose,
             quiet: globalOpts.quiet,
             cwd: globalOpts.cwd,

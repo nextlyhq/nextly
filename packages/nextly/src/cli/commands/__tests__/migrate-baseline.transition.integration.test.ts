@@ -26,7 +26,7 @@ import { randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 import { Pool } from "pg";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -36,13 +36,14 @@ import { getDialectTables } from "../../../database/index";
 import { createAdapter } from "../../../database/factory";
 import { SchemaRegistry } from "../../../database/schema-registry";
 import { getSchemaEventsDdl } from "../../../domains/schema/events/schema-events-ddl";
+import { SchemaEventsRepository } from "../../../domains/schema/events/schema-events-repository";
 import { clearCachedSnapshot } from "../../../init/schema-snapshot-cache";
 import { toMinimalEntities } from "../../../domains/schema/migrate-create/config-entities";
 import { generateMigration } from "../../../domains/schema/migrate-create/generate";
 import { resolveCollectionTableName } from "../../../domains/schema/utils/resolve-table-name";
 import { createLogger } from "../../utils/logger";
 import { baselineCore } from "../migrate-baseline";
-import { syncCollections } from "../dev-build";
+import { ensureLocalizedCompanions, syncCollections } from "../dev-build";
 import { ensureCoreTables } from "../dev-server";
 import {
   parseSqlSections,
@@ -76,6 +77,20 @@ const configV2 = defineConfig({
     defineCollection({
       slug: SLUG,
       fields: [text({ name: "title" }), text({ name: "subtitle" })],
+    }),
+  ],
+});
+
+/** A localized collection, whose translations live in a companion table. */
+const LOCALIZED_SLUG = `baseline_loc_${RUN_ID}`;
+const LOCALIZED_TABLE = resolveCollectionTableName(LOCALIZED_SLUG);
+const localizedConfig = defineConfig({
+  localization: { locales: ["en", "es"], defaultLocale: "en" },
+  collections: [
+    defineCollection({
+      slug: LOCALIZED_SLUG,
+      localized: true,
+      fields: [text({ name: "title", localized: true })],
     }),
   ],
 });
@@ -166,18 +181,26 @@ async function runDbSync(h: Harness, config: LoadConfigResult["config"]) {
 
   const options = { cwd: "", autoSync: true } as ResolvedDevOptions;
   await ensureCoreTables(h.adapter, options, context);
-  // The ledger is bootstrapped out of band by `migrate` Phase 1, which has not
-  // run yet at this point in a db:sync project's life.
-  for (const stmt of getSchemaEventsDdl(h.dialect)) {
-    await drizzleAdapter.executeQuery(stmt);
-  }
-
+  // The real command's order: the transition copy runs BEFORE the pushes,
+  // while an entity gaining localization still has the translatable columns on
+  // its main table for the copy to read, and the companion creation after.
+  await ensureLocalizedCompanions(config, h.adapter, context, "beforeApply");
   await syncCollections(
     { config } as LoadConfigResult,
     h.adapter,
     options,
     context
   );
+  await ensureLocalizedCompanions(config, h.adapter, context);
+
+  // Removed LAST, after the push pipeline has run: `ensureCoreTables` declares
+  // the ledger among the core schema and a push recreates it, so dropping it
+  // earlier would not leave the database in the state this is modelling. A
+  // db:sync project has never run `migrate`, which is what bootstraps the
+  // ledger, so `migrate:baseline` is the first thing that writes to it and has
+  // to create it. Creating it in the harness would supply the precondition the
+  // command is responsible for.
+  await dropLedger(h);
 }
 
 /** `migrate:create`, given a config, exactly as the CLI composes its arguments. */
@@ -197,6 +220,47 @@ async function runMigrateCreate(
     components: [],
     nonInteractive: true,
   });
+}
+
+/**
+ * Remove the migration ledger, putting the database in the state a db:sync
+ * project is really in: core tables present, nothing having ever migrated.
+ *
+ * `ensureCoreTables` declares the ledger among the core schema, so a fresh
+ * push creates it. A database that predates that declaration does not have it,
+ * and that is the case where a baseline that assumes the table would fail
+ * after writing its files.
+ */
+async function dropLedger(h: Harness): Promise<void> {
+  await (h.adapter as unknown as DrizzleAdapter).executeQuery(
+    "DROP TABLE IF EXISTS nextly_schema_events"
+  );
+}
+
+/**
+ * What `migrate` Phase 1 does before it applies anything.
+ *
+ * `runFileMigrations` is Phase 2 alone, so a test driving it directly has to
+ * stand in for Phase 1. Only the tests that reach `migrate` WITHOUT baselining
+ * first need it — after a baseline the ledger is already there, because
+ * creating it is part of adopting.
+ */
+async function bootstrapLedger(h: Harness): Promise<void> {
+  for (const stmt of getSchemaEventsDdl(h.dialect)) {
+    await (h.adapter as unknown as DrizzleAdapter).executeQuery(stmt);
+  }
+}
+
+/** Whether a table exists, probed the way the write path probes it. */
+async function tableExists(h: Harness, name: string): Promise<boolean> {
+  try {
+    await (h.adapter as unknown as DrizzleAdapter).executeQuery(
+      `SELECT 1 FROM "${name}" LIMIT 0`
+    );
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Whether the live table has a column, asked the way the drift engine asks. */
@@ -252,6 +316,7 @@ function runSuite(dialect: SupportedDialect): void {
     // baseline the file assumes nor the target it describes. All three
     // recoveries the drift error offers fail from here, which is what leaves
     // the operator stuck.
+    await bootstrapLedger(h);
     await expect(
       runFileMigrations({
         adapter: h.adapter,
@@ -278,6 +343,16 @@ function runSuite(dialect: SupportedDialect): void {
     expect(adopted.kind).toBe("baselined");
     if (adopted.kind !== "baselined") throw new Error("expected a baseline");
     expect(adopted.tableCount).toBe(1);
+
+    // Adopting created the ledger it recorded itself into. A database managed
+    // by `db:sync` has never run `migrate`, which is what normally bootstraps
+    // it, so a command that assumed the table would throw here — after both
+    // files were already on disk.
+    const recorded = await new SchemaEventsRepository(
+      h.db,
+      h.dialect
+    ).listFileApplies();
+    expect(recorded.map(r => r.filename)).toContain(basename(adopted.sqlPath));
 
     const result = await runMigrateCreate(h, configV2, "add_subtitle");
     expect(result).not.toBeNull();
@@ -328,6 +403,43 @@ function runSuite(dialect: SupportedDialect): void {
     // The column the baseline adopted is still there: adopting recorded the
     // schema, it did not rebuild it.
     expect(await hasColumn(h, "title")).toBe(true);
+  });
+
+  it("carries a localized companion into the baseline SQL, but not the snapshot", async () => {
+    // The split is the point. A companion is derived, never declared by
+    // config, so recording it in the SNAPSHOT would make the next diff want to
+    // drop it. It still has to be in the SQL: `migrate:create` emits a
+    // companion only while the previous snapshot shows the translatable
+    // columns on the main table, and after a baseline that table is recorded
+    // already without them — which reads as "already localized, the companion
+    // exists" and emits nothing. So if the baseline does not carry it, no file
+    // ever will, and a fresh environment gets a main table with nowhere to put
+    // translations.
+    await runDbSync(h, localizedConfig);
+    expect(await tableExists(h, `${LOCALIZED_TABLE}_locales`)).toBe(true);
+
+    const adopted = await baselineCore({
+      adapter: h.adapter,
+      db: h.db,
+      dialect: h.dialect,
+      migrationsDir: h.migrationsDir,
+      logger,
+    });
+    if (adopted.kind !== "baselined") throw new Error("expected a baseline");
+
+    const up = splitSqlStatements(
+      parseSqlSections(await readFile(adopted.sqlPath, "utf-8")).upSql
+    );
+    expect(
+      up.filter(st => st.includes(`${LOCALIZED_TABLE}_locales`))
+    ).not.toEqual([]);
+
+    const recorded = JSON.parse(
+      await readFile(adopted.snapshotPath, "utf-8")
+    ) as { snapshot: { tables: { name: string }[] } };
+    const names = recorded.snapshot.tables.map(t => t.name);
+    expect(names).toContain(LOCALIZED_TABLE);
+    expect(names).not.toContain(`${LOCALIZED_TABLE}_locales`);
   });
 
   it("refuses to give a project that already migrated a second starting point", async () => {

@@ -65,6 +65,47 @@ describe("planBaseline", () => {
     });
   });
 
+  it("refuses a history whose files carry no snapshot", () => {
+    // `migrate:create --blank` writes hand-authored SQL with no snapshot
+    // beside it, so the snapshot check alone reads such a project as never
+    // baselined. Appending an origin after those files means a fresh database
+    // replays them against tables the baseline has not created yet.
+    expect(
+      planBaseline({
+        live: snapshot("dc_posts"),
+        existingMigrationFile: "20260101000000_custom.sql",
+      })
+    ).toEqual({
+      kind: "history-not-empty",
+      filename: "20260101000000_custom.sql",
+    });
+  });
+
+  it("names the origin rather than the files when both are present", () => {
+    // An ordinary migrated project has both. The snapshot is the more useful
+    // thing to name, because it is what the operator can point at to see the
+    // history really does have a starting point.
+    const plan = planBaseline({
+      live: snapshot("dc_posts"),
+      latestSnapshotName: "20260101000000_init.snapshot.json",
+      existingMigrationFile: "20260101000000_init.sql",
+    });
+
+    expect(plan.kind).toBe("already-baselined");
+  });
+
+  it("refuses a snapshot-less history even on an empty database", () => {
+    // Both refusals apply; the files are the damaging one. Reporting "nothing
+    // to adopt" would send the operator to `migrate:create`, appending yet
+    // another file to a history that still has no origin.
+    expect(
+      planBaseline({
+        live: snapshot(),
+        existingMigrationFile: "20260101000000_custom.sql",
+      }).kind
+    ).toBe("history-not-empty");
+  });
+
   it("prefers the already-baselined answer over the empty one", () => {
     // Both conditions can hold at once — a migrated project whose database has
     // been dropped. The history is the fact that matters: writing a second
@@ -139,11 +180,21 @@ describe("the drift error an unadopted database produces", () => {
     // The menu is gone, not merely reordered.
     expect(error.publicMessage).not.toContain("[A]");
     expect(error.publicMessage).not.toContain("migrate:resolve --applied");
-    // And the recovery names the file to remove, so the stuck migration does
-    // not survive to be re-applied after the baseline lands.
+    // The recovery names BOTH files, and removes them BEFORE baselining.
+    // This migration was written with a snapshot beside it, and
+    // `migrate:baseline` refuses a project that has one — so baselining first
+    // reports "already baselined" and the documented recovery cannot work.
+    // Deleting only the `.sql` leaves the snapshot to do the same thing.
     expect(error.publicMessage).toContain(
       "migrations/20260805120000_add_localization.sql"
     );
+    expect(error.publicMessage).toContain(
+      "migrations/meta/20260805120000_add_localization.snapshot.json"
+    );
+    const removeAt = error.publicMessage.indexOf("rm ");
+    const baselineAt = error.publicMessage.indexOf("migrate:baseline");
+    expect(removeAt).toBeGreaterThanOrEqual(0);
+    expect(removeAt).toBeLessThan(baselineAt);
   });
 
   it("keeps the generic recoveries for real drift", () => {
