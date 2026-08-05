@@ -1,0 +1,271 @@
+/**
+ * The stylesheet a whole site shares.
+ *
+ * Two properties carry it. The bytes must be identical to what a page would have inlined for the
+ * same tiers — otherwise a site that shares and a page that inlines render differently — and the
+ * hash must name exactly those bytes, so a change that alters nothing invalidates nothing and a
+ * change that alters anything cannot be missed.
+ */
+import { describe, expect, it } from "vitest";
+
+import type { NodeStyles } from "../document";
+import { FIXTURE_BREAKPOINTS } from "../validation.fixtures";
+
+import { compilePageCss } from "./compile-page";
+import type { NamedClass } from "./named-class";
+import { compileSiteSheet } from "./site-sheet";
+
+const styles = (values: Record<string, unknown>): NodeStyles =>
+  ({ base: { base: values } }) as unknown as NodeStyles;
+
+const card: NamedClass = {
+  id: "c1",
+  slug: "card",
+  orderIndex: 0,
+  styles: styles({ color: "blue" }),
+};
+
+const sheet = (over: Record<string, unknown> = {}) =>
+  compileSiteSheet({
+    breakpoints: FIXTURE_BREAKPOINTS,
+    classes: [card],
+    blockBases: { "core/box": styles({ color: "green" }) },
+    ...over,
+  });
+
+describe("what the shared sheet carries", () => {
+  it("emits every block type's default, not only the ones a page uses", () => {
+    // The difference from a page compile, and the reason this cannot just call it with the real
+    // document: a site sheet is shared, so it carries defaults for types this page never used.
+    const { css } = sheet({
+      blockBases: {
+        "core/box": styles({ color: "green" }),
+        "core/text": styles({ color: "black" }),
+      },
+    });
+
+    expect(css).toContain("color: green");
+    expect(css).toContain("color: black");
+  });
+
+  it("emits the named classes", () => {
+    expect(sheet().css).toContain(".nx-c-card");
+  });
+
+  it("emits tokens on the document root, not the page root", () => {
+    // A custom property is read by everything that inherits it, including markup this compiler
+    // never wrote. Scoped to the page root it would be unreadable outside a compiled page.
+    const { css } = sheet({
+      tokens: {
+        tokens: [
+          {
+            name: "color.primary",
+            kind: "color" as const,
+            values: { light: "#123456" },
+          },
+        ],
+      },
+    });
+
+    expect(css).toContain(":root");
+    expect(css).toContain("#123456");
+  });
+
+  it("emits self-hosted font faces", () => {
+    const { css } = sheet({
+      fonts: [{ family: "Inter", src: [{ url: "/fonts/inter.woff2" }] }],
+    });
+
+    expect(css).toContain("@font-face");
+    expect(css).toContain("Inter");
+  });
+
+  it("carries no node-level styling, which belongs to a page", () => {
+    // The synthetic nodes exist only to make each type present. If one of them ever contributed a
+    // rule, the shared sheet would carry a page's content.
+    expect(sheet().css).not.toContain("site-sheet-");
+  });
+});
+
+describe("the bytes agree with what a page would have inlined", () => {
+  it("emits the class tier exactly as the page compiler does", () => {
+    // The guarantee that lets a site share these tiers instead of every page repeating them. It
+    // holds because the same emitter produces both, and this is what would catch a second one.
+    const shared = compileSiteSheet({
+      breakpoints: FIXTURE_BREAKPOINTS,
+      classes: [card],
+      blockBases: {},
+    });
+    const asAPageWouldEmitIt = compilePageCss(
+      {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [{ id: "n1", type: "core/box", version: 1, props: {} }],
+      } as never,
+      {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        namedClasses: [card],
+        blockBases: {},
+      } as never
+    );
+
+    expect(shared.css).toBe(asAPageWouldEmitIt.css);
+  });
+});
+
+describe("the name the sheet is addressed by", () => {
+  it("is the same for the same input, compiled twice", () => {
+    expect(sheet().contentHash).toBe(sheet().contentHash);
+  });
+
+  it("is the same when an input is reordered but the output is not", () => {
+    // Addressing the BYTES rather than the inputs: a reorder the emitter normalizes away must not
+    // invalidate a cached sheet.
+    const a = sheet({
+      blockBases: {
+        "core/box": styles({ color: "green" }),
+        "core/text": styles({ color: "black" }),
+      },
+    });
+    const b = sheet({
+      blockBases: {
+        "core/text": styles({ color: "black" }),
+        "core/box": styles({ color: "green" }),
+      },
+    });
+
+    expect(b.css).toBe(a.css);
+    expect(b.contentHash).toBe(a.contentHash);
+  });
+
+  it("changes when a single declaration changes", () => {
+    const before = sheet();
+    const after = sheet({
+      blockBases: { "core/box": styles({ color: "red" }) },
+    });
+
+    expect(after.css).not.toBe(before.css);
+    expect(after.contentHash).not.toBe(before.contentHash);
+  });
+
+  it("names an empty sheet without failing", () => {
+    const empty = compileSiteSheet({ breakpoints: FIXTURE_BREAKPOINTS });
+
+    expect(empty.css).toBe("");
+    expect(empty.contentHash.length).toBeGreaterThan(0);
+  });
+});
+
+describe("what the sheet declines to write", () => {
+  it("reports a token with no values rather than failing the whole sheet", () => {
+    // Site tokens are one settings row read on every page render, and they arrive whether or not
+    // anything validated them. Reading through a missing field threw, so one corrupt row took
+    // down every page on the site instead of costing that one token.
+    const run = () =>
+      sheet({
+        tokens: {
+          tokens: [
+            { name: "color.primary", kind: "color" as const },
+            {
+              name: "color.ok",
+              kind: "color" as const,
+              values: { light: "#00ff00" },
+            },
+          ],
+        },
+      });
+
+    expect(run).not.toThrow();
+    expect(run().css).toContain("#00ff00");
+    expect(run().warnings.length).toBeGreaterThan(0);
+  });
+
+  it("declares and references a token under the same prefix", () => {
+    // The two halves read the prefix from different places. Set one and not the other and the
+    // sheet declares `--site-color-primary` while the page asks for `var(--brand-color-primary)`:
+    // nothing errors, the reference resolves to nothing, and the colour silently does not apply.
+    const { css } = compileSiteSheet({
+      breakpoints: FIXTURE_BREAKPOINTS,
+      tokenPrefix: "--brand-",
+      tokens: {
+        tokens: [
+          {
+            name: "color.primary",
+            kind: "color" as const,
+            values: { light: "#123456" },
+          },
+        ],
+      },
+      blockBases: {
+        "core/box": {
+          base: { base: { color: { $token: "color.primary" } } },
+        } as unknown as NodeStyles,
+      },
+    });
+
+    expect(css).toContain("--brand-color-primary:#123456");
+    expect(css).toContain("var(--brand-color-primary)");
+    expect(css).not.toContain("--site-color-primary");
+  });
+
+  it("takes the prefix from the token set when no override is given", () => {
+    const { css } = compileSiteSheet({
+      breakpoints: FIXTURE_BREAKPOINTS,
+      tokens: {
+        prefix: "--brand-",
+        tokens: [
+          {
+            name: "color.primary",
+            kind: "color" as const,
+            values: { light: "#123456" },
+          },
+        ],
+      },
+      blockBases: {
+        "core/box": {
+          base: { base: { color: { $token: "color.primary" } } },
+        } as unknown as NodeStyles,
+      },
+    });
+
+    expect(css).toContain("--brand-color-primary:#123456");
+    expect(css).toContain("var(--brand-color-primary)");
+  });
+
+  it("refuses a token with no light value rather than writing undefined", () => {
+    // `light` is what a reader with no mode set resolves, so a token without one has no value at
+    // all. Accepted, it reached the sheet as the literal text `undefined` and warned about
+    // nothing.
+    const { css, warnings } = sheet({
+      tokens: {
+        tokens: [
+          { name: "color.a", kind: "color" as const, values: {} as never },
+          {
+            name: "color.b",
+            kind: "color" as const,
+            values: { dark: "#000000" } as never,
+          },
+        ],
+      },
+    });
+
+    expect(css).not.toContain("undefined");
+    expect(warnings.length).toBe(2);
+  });
+
+  it("reports a font it refused rather than emitting it", () => {
+    // Remote font sources are refused for privacy; the caller has to be told, or a missing
+    // typeface has no explanation anywhere.
+    const { css, warnings } = sheet({
+      fonts: [
+        {
+          family: "Remote",
+          src: [{ url: "https://fonts.example.com/a.woff2" }],
+        },
+      ],
+    });
+
+    expect(css).not.toContain("fonts.example.com");
+    expect(warnings.length).toBeGreaterThan(0);
+  });
+});

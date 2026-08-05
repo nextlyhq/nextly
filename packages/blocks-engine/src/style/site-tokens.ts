@@ -25,6 +25,7 @@
  *
  * @module style/site-tokens
  */
+import { isPlainRecord } from "../plain-record";
 import type { ValidationIssue } from "../validation";
 
 import type { TokenKind } from "./catalog-types";
@@ -620,6 +621,21 @@ export function emitTokenBlocks(
       issues.push(
         tokenIssue(
           `"${token.name}" is not a token name, so it was not written. A name is dot-separated words of letters, digits and dashes, like "color.primary".`
+        )
+      );
+      continue;
+    }
+    // A token with no values record at all. Site tokens are one settings row read on every page
+    // render and reach here whether or not anything validated them, so a missing field has to
+    // cost the token rather than the render: reading through it throws, and one corrupt row would
+    // take down every page on the site.
+    if (
+      !isPlainRecord(token.values) ||
+      typeof token.values.light !== "string"
+    ) {
+      issues.push(
+        tokenIssue(
+          `"${token.name}" has no light value, so it was not written. Every token needs one: it is what a reader with no mode set resolves.`
         )
       );
       continue;
