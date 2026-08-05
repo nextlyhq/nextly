@@ -33,6 +33,7 @@
 
 import { randomUUID } from "crypto";
 
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { getColumns } from "drizzle-orm";
 
 import { getDialectTables } from "../../database/index";
@@ -41,6 +42,11 @@ import { NextlyError } from "../../errors/nextly-error";
 import { getNextlyLogger } from "../../observability/logger";
 
 import { isAuditReason } from "./audit-reasons";
+import {
+  insertErasureAware,
+  type ErasureAwareDb,
+  type ErasureAwareInsert,
+} from "./erasure-aware-insert";
 
 export type AuditEventKind =
   | "csrf-failed"
@@ -319,14 +325,31 @@ export const NULL_AUDIT_LOG_WRITER: AuditLogWriter = {
  * undefined rather than guessing, because the caller must not fall back to the
  * environment: that is the coupling this exists to remove.
  */
-function adapterDialect(adapter: unknown): string | undefined {
+/** The dialects a row can be built for; anything else is not one we support. */
+const SUPPORTED_DIALECTS: readonly SupportedDialect[] = [
+  "postgresql",
+  "mysql",
+  "sqlite",
+];
+
+function isSupportedDialect(value: unknown): value is SupportedDialect {
+  return (
+    typeof value === "string" &&
+    (SUPPORTED_DIALECTS as readonly string[]).includes(value)
+  );
+}
+
+function adapterDialect(adapter: unknown): SupportedDialect | undefined {
   const candidate = adapter as {
     dialect?: unknown;
     getCapabilities?: () => { dialect?: unknown } | undefined;
   };
-  if (typeof candidate?.dialect === "string") return candidate.dialect;
+  // Narrowed against the supported set rather than accepted as any string: the
+  // row shape and the erasure decision are both chosen from this, so a value
+  // that is merely string-typed would pick a branch by accident.
+  if (isSupportedDialect(candidate?.dialect)) return candidate.dialect;
   const fromCapabilities = candidate?.getCapabilities?.()?.dialect;
-  return typeof fromCapabilities === "string" ? fromCapabilities : undefined;
+  return isSupportedDialect(fromCapabilities) ? fromCapabilities : undefined;
 }
 
 /**
@@ -401,6 +424,11 @@ function offersRetention(
   );
 }
 
+/** The write surface plus the transaction the lock has to be held inside. */
+interface TransactionalErasureDb extends ErasureAwareDb {
+  transaction<T>(work: (tx: ErasureAwareDb) => Promise<T>): Promise<T>;
+}
+
 export function buildAuditLogWriter(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   getService: (name: string) => any
@@ -429,21 +457,51 @@ export function buildAuditLogWriter(
         }
         const schema = getDialectTables(dialect);
         const table = (schema as { auditLog?: unknown }).auditLog;
-        if (!table) {
+        // The accounts table the attribution is checked against. Absent on the
+        // same older schema bundles that lack `auditLog`, and the erasure
+        // decision cannot be made without it.
+        const usersTable = (schema as { users?: unknown }).users;
+        if (!table || !usersTable) {
           // Dialect tables may not include auditLog if the consumer is
           // running against an older schema bundle. Don't throw.
           return;
         }
-        await db.insert(table).values({
-          id: randomUUID(),
-          kind: event.kind,
-          actorUserId: event.actorUserId ?? null,
-          targetUserId: event.targetUserId ?? null,
-          ipAddress: event.ipAddress ?? null,
-          userAgent: event.userAgent ?? null,
-          metadata: encodeMetadata(table, event.metadata),
-          createdAt: new Date(),
-        });
+        // The address and the client NAME the person, so they are decided by
+        // the write rather than stored unconditionally. An attributed event
+        // that resolves its actor before a deletion but lands after both that
+        // deletion and its post-commit sweep would otherwise keep the deleted
+        // person's identifiers permanently — the account they belong to no
+        // longer exists for any later erasure to key on. Unattributed events
+        // (a failed sign-in for an address owning no account) name nobody and
+        // are stored as they are.
+        const write = (executor: ErasureAwareDb): Promise<void> =>
+          insertErasureAware(executor, dialect, {
+            table: table as ErasureAwareInsert["table"],
+            users: usersTable as ErasureAwareInsert["users"],
+            row: {
+              id: randomUUID(),
+              kind: event.kind,
+              actorUserId: event.actorUserId ?? null,
+              targetUserId: event.targetUserId ?? null,
+              metadata: encodeMetadata(table, event.metadata),
+              createdAt: new Date(),
+            },
+            identity: {
+              ipAddress: event.ipAddress ?? null,
+              userAgent: event.userAgent ?? null,
+            },
+            actorUserId: event.actorUserId ?? null,
+          });
+
+        // The lock the decision rests on is only worth anything inside a
+        // transaction, and this writer owns none. SQLite takes no lock and its
+        // `BEGIN IMMEDIATE` would throw whenever another transaction is open,
+        // which here would become a silently missing audit entry.
+        if (dialect === "sqlite" || event.actorUserId == null) {
+          await write(db as ErasureAwareDb);
+        } else {
+          await (db as TransactionalErasureDb).transaction(tx => write(tx));
+        }
 
         // Offer a retention pass, for the same reason content writes do: there
         // is no scheduler to hang one off. Every other trigger is a content

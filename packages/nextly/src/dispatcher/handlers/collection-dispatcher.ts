@@ -1278,6 +1278,7 @@ const COLLECTIONS_METHODS: Record<
       const result = await svc.publishAllLocales({
         collectionName: p.collectionName,
         entryId: p.entryId,
+        actor: readAuthenticatedActor(p),
         userId: p._authenticatedUserId
           ? String(p._authenticatedUserId)
           : undefined,
