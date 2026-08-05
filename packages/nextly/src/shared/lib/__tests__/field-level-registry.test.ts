@@ -10,8 +10,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // rule's permission check is driven by the test rather than by a database, and
 // so the number of LOOKUPS is observable — the resolver promises to make one
 // per call however many rules ask.
-const listEffectivePermissions = vi.fn(async () => [] as string[]);
-const listRoleSlugsForUser = vi.fn(async () => [] as string[]);
+const listEffectivePermissions = vi.fn(
+  async (_userId: string) => [] as string[]
+);
+const listRoleSlugsForUser = vi.fn(async (_userId: string) => [] as string[]);
 vi.mock("../../../services/lib/permissions", () => ({
   listEffectivePermissions: (userId: string) =>
     listEffectivePermissions(userId),
