@@ -240,6 +240,31 @@ describe("import", () => {
     expect(read[0]?.values.light).toBe("rgb(255 0 0)");
   });
 
+  it("writes an imported family name as CSS that means the same name", () => {
+    // A DTCG family value is a NAME, not CSS. `ACME,Inc` unquoted is two
+    // fallback families rather than the one the file described, and a name
+    // holding a quote produces a declaration that does not parse.
+    const read = (value: unknown): string | undefined =>
+      dtcgToTokens({ f: { $type: "fontFamily", $value: value } }).tokens[0]
+        ?.values.light;
+
+    expect(read("ACME,Inc")).toBe('"ACME,Inc"');
+    expect(read('say "hi"')).toBe('"say \\"hi\\""');
+    expect(read(["ACME, Inc", "serif"])).toBe('"ACME, Inc", serif');
+  });
+
+  it("leaves a family name that needs no quotes unquoted", () => {
+    // Generic families mean the generic only while bare: quoting `serif` asks
+    // for a font actually installed under that name and loses the fallback.
+    const read = (value: unknown): string | undefined =>
+      dtcgToTokens({ f: { $type: "fontFamily", $value: value } }).tokens[0]
+        ?.values.light;
+
+    expect(read("serif")).toBe("serif");
+    expect(read("system-ui")).toBe("system-ui");
+    expect(read("My Font")).toBe("My Font");
+  });
+
   it("skips a type it has no kind for, and says so", () => {
     const { tokens: read, issues } = dtcgToTokens({
       curve: { $type: "cubicBezier", $value: [0, 0, 1, 1] },

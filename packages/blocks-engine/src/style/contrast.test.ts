@@ -57,6 +57,28 @@ describe("parseColor", () => {
     expect(parseColor("rgba(0,0,0,.25)")?.a).toBeCloseTo(0.25, 5);
   });
 
+  it("refuses an alpha that CSS would not accept", () => {
+    // The two rgb() syntaxes are separate grammars. The space-separated form
+    // takes its alpha only after a slash, so `rgb(0 0 0 0.5)` is invalid and a
+    // browser drops the declaration outright. Reporting a ratio for it would
+    // tell an author an unusable colour passes contrast.
+    expect(parseColor("rgb(0 0 0 0.5)")).toBeUndefined();
+    expect(checkContrast("rgb(0 0 0 0.5)", "#fff")).toBeUndefined();
+    // Nor may the two syntaxes be mixed.
+    expect(parseColor("rgb(0, 0, 0 / 0.5)")).toBeUndefined();
+    // A component is a whole number, not a prefix of one.
+    expect(parseColor("rgb(0 0 0abc)")).toBeUndefined();
+    expect(parseColor("rgb(0, 0, 0 0.5)")).toBeUndefined();
+  });
+
+  it("still reads both forms CSS does accept", () => {
+    // The tightening above has to stay a tightening.
+    expect(parseColor("rgb(0 0 0 / 0.5)")?.a).toBeCloseTo(0.5, 5);
+    expect(parseColor("rgba(0, 0, 0, 0.5)")?.a).toBeCloseTo(0.5, 5);
+    expect(parseColor("rgb(0 0 0)")?.a).toBe(1);
+    expect(parseColor("rgb(0, 0, 0)")?.a).toBe(1);
+  });
+
   it("refuses what it cannot read rather than guessing", () => {
     // A figure computed from a misread colour is worse than none, because it
     // is a number somebody acts on.

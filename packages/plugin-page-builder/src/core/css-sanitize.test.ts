@@ -894,6 +894,57 @@ describe("custom CSS may not reach off this origin", () => {
       expect(out.css).toContain(`font:clamp(1rem,2vw,2rem)"${ns("Brand")}"`);
     });
 
+    it("follows a name inside a shorthand fragment held by a custom property", () => {
+      // `--anim: fade 1s ease` read by `animation: var(--anim)` is the ordinary
+      // way to write one. Matching only a value that is exactly one name leaves
+      // the fragment holding the old bare `fade`, and after substitution the
+      // browser looks for a keyframes rule that no longer exists.
+      const out = sanitizeCustomCss(
+        `@keyframes fade { from { opacity: 0 } }
+         .a { --anim: fade 1s ease; animation: var(--anim) }`,
+        SCOPE
+      );
+      expect(out.css).toContain(`--anim:${ns("fade")} 1s ease`);
+    });
+
+    it("leaves the other tokens of that fragment alone", () => {
+      // The same positional reader the `animation` declaration uses, so a
+      // stylesheet defining `@keyframes ease` does not turn the timing function
+      // of an unrelated custom property into a name.
+      const out = sanitizeCustomCss(
+        `@keyframes ease { from { opacity: 0 } }
+         .a { --anim: fade 1s ease }`,
+        SCOPE
+      );
+      // Byte for byte, including its spacing: a value nothing moved is not
+      // written back at all, so the generator never reformats it.
+      expect(out.css).toContain("--anim: fade 1s ease");
+      // Named exactly: `ns("ease")` alone appears in the renamed `@keyframes`
+      // definition too, so a bare containment check would pass regardless.
+      expect(out.css).not.toContain(`--anim: fade 1s ${ns("ease")}`);
+    });
+
+    it("does not rewrite a custom property holding no name it defined", () => {
+      const out = sanitizeCustomCss(
+        `@keyframes fade { from { opacity: 0 } } .a { --gap: 1px solid red }`,
+        SCOPE
+      );
+      expect(out.css).toContain("--gap: 1px solid red");
+    });
+
+    it("finds the size when a function follows the family list", () => {
+      // A comma only appears in the family list, so the size is before the
+      // first one. Searching the whole value picks the trailing `var()` as the
+      // size, which leaves no family range and `Brand` pointing at a name the
+      // definition no longer carries.
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: Brand; src: url("/f.woff2") }
+         .a { font: 16px Brand, var(--fallback) }`,
+        SCOPE
+      );
+      expect(out.css).toContain(`font:16px"${ns("Brand")}",var(--fallback)`);
+    });
+
     it("still refuses a remote url inside a keyframe step", () => {
       // The step blocks are ordinary declarations, so the origin policy has to
       // reach them — allowing the at-rule must not open a door beneath it.

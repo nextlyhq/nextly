@@ -514,8 +514,13 @@ export function sanitizeCustomCss(
   // Namespace what the author defined, and point their own references at it.
   // AFTER the declaration walk, so a `@font-face` whose only `src` reached off
   // this origin has already lost it and can be recognised as unusable below.
-  const definedNames = namespaceDefinedNames(ast, scopeClass, csstree.walk);
-  rewriteNameReferences(ast, definedNames, csstree.walk, csstree.parse);
+  const cssTree = {
+    walk: csstree.walk,
+    parse: csstree.parse,
+    generate: csstree.generate,
+  };
+  const definedNames = namespaceDefinedNames(ast, scopeClass, cssTree);
+  rewriteNameReferences(ast, definedNames, cssTree);
 
   // A `@font-face` with no `src` left declares a family that can never load,
   // and CSS resolves it to nothing rather than falling back — so text asking

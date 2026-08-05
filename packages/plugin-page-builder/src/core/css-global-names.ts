@@ -196,6 +196,19 @@ export function fontFaceHasSrc(node: csstree.Atrule): boolean {
     );
 }
 
+/**
+ * The css-tree entry points this module needs, passed in rather than imported.
+ *
+ * The parser is the sanitizer's, so there is one parse of one stylesheet and
+ * this works on the tree that produced it — a second import would be a second
+ * parser instance with its own lexer state.
+ */
+export interface CssTreeApi {
+  walk: typeof csstree.walk;
+  parse: typeof csstree.parse;
+  generate: typeof csstree.generate;
+}
+
 /** A name a value denotes, and whether it was written as a quoted string. */
 interface SingleName {
   name: string;
@@ -247,11 +260,11 @@ function singleName(value: csstree.CssNode): SingleName | undefined {
 export function namespaceDefinedNames(
   ast: csstree.CssNode,
   scopeClass: string,
-  walk: typeof csstree.walk
+  css: CssTreeApi
 ): GlobalNameMap {
   const map = emptyGlobalNameMap();
 
-  walk(ast, {
+  css.walk(ast, {
     visit: "Atrule",
     enter(node: csstree.CssNode) {
       const atrule = node as csstree.Atrule;
@@ -314,12 +327,11 @@ export function namespaceDefinedNames(
 export function rewriteNameReferences(
   ast: csstree.CssNode,
   map: GlobalNameMap,
-  walk: typeof csstree.walk,
-  parse: typeof csstree.parse
+  css: CssTreeApi
 ): void {
   if (map.keyframes.size === 0 && map.fontFamilies.size === 0) return;
 
-  walk(ast, {
+  css.walk(ast, {
     visit: "Declaration",
     enter(node: csstree.CssNode) {
       // The `font-family` inside a `@font-face` is the DEFINITION, renamed
@@ -348,17 +360,7 @@ export function rewriteNameReferences(
       // nothing and leave the reference behind after the definition moved.
       if (property.startsWith("--")) {
         if (value.type !== "Raw") return;
-        const held = parseSingleName(value.value, parse);
-        if (held === undefined) return;
-        const keyframe = map.keyframes.get(held.name);
-        if (keyframe !== undefined) {
-          value.value = writtenName(keyframe, held.quoted);
-          return;
-        }
-        const family = map.fontFamilies.get(held.name.toLowerCase());
-        if (family !== undefined) {
-          value.value = writtenName(family, held.quoted);
-        }
+        rewriteCustomProperty(value, map, css);
         return;
       }
 
@@ -415,8 +417,17 @@ export function rewriteNameReferences(
  */
 function familyStartIndex(value: csstree.Value): number | undefined {
   const nodes = value.children.toArray();
+  // A comma only ever appears in the family list, so the size is somewhere
+  // before the first one. Without that bound the search runs into the families
+  // themselves, and `font: 16px Brand, var(--fallback)` picks the `var()` as
+  // its size — leaving no family range at all and `Brand` unrewritten.
+  const firstComma = nodes.findIndex(
+    node => node.type === "Operator" && node.value === ","
+  );
+  const head = firstComma === -1 ? nodes : nodes.slice(0, firstComma);
+
   const measured = lastIndexWhere(
-    nodes,
+    head,
     node =>
       node.type === "Dimension" ||
       node.type === "Percentage" ||
@@ -428,7 +439,7 @@ function familyStartIndex(value: csstree.Value): number | undefined {
     measured !== -1
       ? measured
       : lastIndexWhere(
-          nodes,
+          head,
           node =>
             node.type === "Identifier" &&
             FONT_SIZE_KEYWORDS.has(decodeIdentifier(node.name).toLowerCase())
@@ -538,22 +549,71 @@ function rewriteFontFamilies(
 }
 
 /**
- * The one name a custom property's raw text holds, or `undefined`.
+ * Follow this stylesheet's renamed names into a custom property.
  *
  * A custom property's value is not parsed by the stylesheet parser — it may
- * hold any token sequence — so it is parsed here, as a value, to read what it
- * would mean once `var()` puts it somewhere. Anything the value grammar cannot
- * read is left alone: a property holding a whole declaration list, or nothing,
- * is not a name however it is squinted at.
+ * hold any token sequence — and where it ends up is decided by a `var()` this
+ * cannot see. So the value is parsed here, as a value, and read for what it
+ * would mean once something substitutes it.
+ *
+ * Two shapes are followed. A value that is exactly one name is matched whole
+ * and written back in the form it arrived in, quotes included. A value that is
+ * longer may still be a fragment of a shorthand — `--anim: fade 1s ease` read
+ * by `animation: var(--anim)` is the ordinary way to write one — so the same
+ * positional readers the declarations use are run over it, which is what keeps
+ * `ease` and `1s` from being mistaken for names.
+ *
+ * The trade is the one this whole path already makes: a custom property holding
+ * a defined name as literal text comes back namespaced. Against it is a
+ * definition renamed out from under every `var()` that referenced it, which
+ * breaks silently and leaves nothing in the output to diagnose.
  */
-function parseSingleName(
-  raw: string,
+function rewriteCustomProperty(
+  value: csstree.Raw,
+  map: GlobalNameMap,
+  css: CssTreeApi
+): void {
+  const text = value.value.trim();
+  if (text === "") return;
+
+  const parsed = parseValue(text, css.parse);
+  if (parsed === undefined) return;
+
+  const held = singleName(parsed);
+  if (held !== undefined) {
+    const keyframe = map.keyframes.get(held.name);
+    if (keyframe !== undefined) {
+      value.value = writtenName(keyframe, held.quoted);
+      return;
+    }
+    const family = map.fontFamilies.get(held.name.toLowerCase());
+    if (family !== undefined) {
+      value.value = writtenName(family, held.quoted);
+    }
+    return;
+  }
+
+  const before = css.generate(parsed);
+  if (map.keyframes.size > 0) {
+    rewriteKeyframeNames(parsed, map.keyframes, ANIMATION_KEYWORDS, 0);
+  }
+  if (map.fontFamilies.size > 0) {
+    rewriteFontFamilies(parsed, map.fontFamilies, 0);
+  }
+  const after = css.generate(parsed);
+  // Written only when a name actually moved, so a value this had no business
+  // touching is not silently reformatted by the generator on its way out.
+  if (after !== before) value.value = after;
+}
+
+/** A raw value parsed as a CSS value, or `undefined` if it is not one. */
+function parseValue(
+  text: string,
   parse: typeof csstree.parse
-): SingleName | undefined {
-  const text = raw.trim();
-  if (text === "") return undefined;
+): csstree.Value | undefined {
   try {
-    return singleName(parse(text, { context: "value" }));
+    const node = parse(text, { context: "value" });
+    return node.type === "Value" ? node : undefined;
   } catch {
     return undefined;
   }

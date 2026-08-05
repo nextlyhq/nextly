@@ -462,11 +462,12 @@ function fromDtcgValue(value: unknown, kind: TokenKind): string | undefined {
       return `${amount}${unit}`;
     }
     case "fontFamily":
-      if (typeof value === "string") return value;
+      // A DTCG family value is a NAME, not CSS. `ACME,Inc` is one family in the
+      // file and two the moment it is written into a stylesheet unquoted, and a
+      // name holding a quote produces CSS that does not parse at all.
+      if (typeof value === "string") return cssFamilyName(value);
       if (Array.isArray(value) && value.every(v => typeof v === "string")) {
-        return value
-          .map(part => (/\s/.test(part) ? `"${part}"` : part))
-          .join(", ");
+        return value.map(cssFamilyName).join(", ");
       }
       return undefined;
     case "fontWeight":
@@ -516,6 +517,43 @@ function colorFromDtcg(value: unknown): string | undefined {
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+
+/**
+ * A family name written so CSS reads back the name the file gave.
+ *
+ * `<family-name>` is a string or a run of identifiers, so a name that already
+ * IS such a run is left bare — which matters beyond tidiness, because the
+ * generic families (`serif`, `system-ui`, `monospace`) mean the generic only
+ * while unquoted. Quoting `serif` would ask for a font actually installed under
+ * that name and lose the fallback the file was describing.
+ *
+ * Everything else is quoted and escaped: a comma would otherwise split one
+ * family into two, and a quote would end the string and leave the rest of the
+ * declaration to be read as CSS.
+ */
+function cssFamilyName(name: string): string {
+  const text = name.trim();
+  if (SAFE_FAMILY_IDENTS.test(text)) return text;
+
+  let escaped = "";
+  for (const char of text) {
+    const code = char.codePointAt(0) ?? 0;
+    if (char === "\\" || char === '"') {
+      escaped += `\\${char}`;
+    } else if (code < 0x20 || code === 0x7f) {
+      // A raw control character cannot appear in a CSS string. The hex escape
+      // can, and the trailing space is what ends the escape.
+      escaped += `\\${code.toString(16)} `;
+    } else {
+      escaped += char;
+    }
+  }
+  return `"${escaped}"`;
+}
+
+/** A run of identifiers, which is the one family spelling needing no quotes. */
+const SAFE_FAMILY_IDENTS =
+  /^[A-Za-z_][A-Za-z0-9_-]*(?: [A-Za-z_][A-Za-z0-9_-]*)*$/;
 
 function toHex(rgb: { r: number; g: number; b: number }): string {
   const part = (value: number): string =>

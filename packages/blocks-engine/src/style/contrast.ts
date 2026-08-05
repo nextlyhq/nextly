@@ -87,36 +87,86 @@ export function parseColor(value: string): Rgb | undefined {
   }
 
   const fn = RGB_FUNCTION.exec(text);
-  if (fn) {
-    // Both syntaxes: `rgb(0, 0, 0)` and `rgb(0 0 0 / 50%)`.
-    const parts = (fn[1] ?? "")
-      .replace(/\//g, " ")
-      .split(/[\s,]+/)
-      .filter(part => part !== "");
-    if (parts.length < 3 || parts.length > 4) return undefined;
-    const channels = parts.slice(0, 3).map(part => channel(part));
-    if (channels.some(value => value === undefined)) return undefined;
-    const alpha = parts[3] === undefined ? 1 : alphaOf(parts[3]);
-    if (alpha === undefined) return undefined;
-    const [r, g, b] = channels as [number, number, number];
-    return { r, g, b, a: alpha };
-  }
+  if (fn) return parseRgbFunction(fn[1] ?? "");
 
   return undefined;
 }
 
+/**
+ * The inside of an `rgb()`, in either syntax CSS actually has.
+ *
+ * They are two grammars, not one with optional punctuation. The legacy form
+ * separates every component with commas — `rgb(0, 0, 0)`, `rgba(0, 0, 0, .5)` —
+ * and the modern form separates channels with spaces and takes its alpha only
+ * after a slash: `rgb(0 0 0 / 50%)`. Neither permits the other's punctuation.
+ *
+ * Read as one loose grammar, `rgb(0 0 0 0.5)` looks like a colour with an
+ * alpha. It is not: a browser drops that declaration entirely. Accepting it
+ * here would let the editor tell an author that an unusable colour passes
+ * contrast — which is worse than the `undefined` this returns for everything
+ * else it cannot honestly judge.
+ */
+function parseRgbFunction(body: string): Rgb | undefined {
+  const slash = body.indexOf("/");
+  const commas = body.includes(",");
+  // The two syntaxes cannot be mixed, so a value carrying both punctuations is
+  // not a colour in either of them.
+  if (slash !== -1 && commas) return undefined;
+
+  let channelText = body;
+  let alphaText: string | undefined;
+  if (slash !== -1) {
+    channelText = body.slice(0, slash);
+    alphaText = body.slice(slash + 1).trim();
+    if (alphaText === "" || alphaText.includes("/")) return undefined;
+  }
+
+  const parts = channelText
+    .split(commas ? "," : /\s+/)
+    .map(part => part.trim())
+    .filter(part => part !== "");
+
+  if (commas) {
+    // The legacy form carries its alpha as a fourth comma-separated component.
+    if (parts.length === 4) alphaText = parts[3];
+    else if (parts.length !== 3) return undefined;
+  } else if (parts.length !== 3) {
+    return undefined;
+  }
+
+  const channels = parts.slice(0, 3).map(part => channel(part));
+  if (channels.some(value => value === undefined)) return undefined;
+  const alpha = alphaText === undefined ? 1 : alphaOf(alphaText);
+  if (alpha === undefined) return undefined;
+  const [r, g, b] = channels as [number, number, number];
+  return { r, g, b, a: alpha };
+}
+
+/**
+ * One numeric component, with its percentage sign if it has one.
+ *
+ * Matched rather than parsed, because `Number.parseFloat` reads a prefix and
+ * stops: it turns `0 0.5` into `0` and `12abc` into `12`, so a malformed
+ * component would be accepted as whatever number happened to start it.
+ */
+const NUMERIC_COMPONENT = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(%?)$/;
+
 /** One `rgb()` channel, as 0-255, from either a number or a percentage. */
 function channel(part: string): number | undefined {
-  const percent = part.endsWith("%");
-  const raw = Number.parseFloat(percent ? part.slice(0, -1) : part);
+  const match = NUMERIC_COMPONENT.exec(part);
+  if (!match) return undefined;
+  const percent = match[1] === "%";
+  const raw = Number.parseFloat(part);
   if (!Number.isFinite(raw)) return undefined;
   return clamp(percent ? (raw / 100) * 255 : raw, 0, 255);
 }
 
 /** An alpha component, as 0-1, from either a number or a percentage. */
 function alphaOf(part: string): number | undefined {
-  const percent = part.endsWith("%");
-  const raw = Number.parseFloat(percent ? part.slice(0, -1) : part);
+  const match = NUMERIC_COMPONENT.exec(part);
+  if (!match) return undefined;
+  const percent = match[1] === "%";
+  const raw = Number.parseFloat(part);
   if (!Number.isFinite(raw)) return undefined;
   return clamp(percent ? raw / 100 : raw, 0, 1);
 }
