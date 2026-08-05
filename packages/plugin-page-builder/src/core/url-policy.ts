@@ -1,3 +1,4 @@
+import { asciiLower, decodeIdentifier } from "@nextlyhq/blocks-engine";
 import * as csstree from "css-tree";
 import picomatch from "picomatch";
 
@@ -45,6 +46,19 @@ export const TEXT_ARGUMENT_FUNCTIONS = new Set([
  * `attr()` fallback becomes depends entirely on where it sits, so it inherits
  * the position rather than defining one.
  */
+/**
+ * A function name as CSS reads it: escapes decoded, then ASCII-folded.
+ *
+ * css-tree keeps the spelling it was given, so `a\\74tr(...)` arrives as the
+ * name `a\\74tr` while a browser reads it as `attr()`. Folding without decoding
+ * first leaves it unrecognised — recorded as an ordinary function, never
+ * matched against the substitution set, and never caught by the attr guard that
+ * exists because an `attr()` in a URL position has no literal to inspect.
+ */
+export function functionName(raw: string): string {
+  return asciiLower(decodeIdentifier(raw));
+}
+
 export const SUBSTITUTION_FUNCTIONS = new Set(["var", "env", "attr"]);
 
 /**
@@ -73,7 +87,7 @@ export function attrFetchesFromDom(
   node: csstree.CssNode,
   position: readonly string[]
 ): boolean {
-  if (node.type !== "Function" || node.name.toLowerCase() !== "attr")
+  if (node.type !== "Function" || functionName(node.name) !== "attr")
     return false;
   const enclosing = position[position.length - 1];
   return enclosing !== undefined && !TEXT_ARGUMENT_FUNCTIONS.has(enclosing);
@@ -136,7 +150,7 @@ export function fetchableValues(
   let attrInFetchPosition = false;
   csstree.walk(value, {
     enter(node: csstree.CssNode) {
-      if (node.type === "Function") functions.push(node.name.toLowerCase());
+      if (node.type === "Function") functions.push(functionName(node.name));
       // The nearest enclosing function that actually decides what a string is;
       // substitutions stand in for a value and decide nothing, so the position
       // they sit in is the one that counts.
@@ -148,7 +162,7 @@ export function fetchableValues(
       // time, so this is a request whose destination the scan cannot see.
       if (
         node.type === "Function" &&
-        node.name.toLowerCase() === "attr" &&
+        functionName(node.name) === "attr" &&
         (anyPositionFetches || attrFetchesFromDom(node, position))
       )
         attrInFetchPosition = true;

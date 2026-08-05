@@ -1,3 +1,8 @@
+import {
+  escapeIdentifier,
+  findUnnamespacedGlobals,
+  namespacedGlobalName,
+} from "@nextlyhq/blocks-engine";
 import { describe, it, expect } from "vitest";
 
 import {
@@ -157,6 +162,15 @@ describe("sanitizeBlockCss", () => {
       "nx-pb-abc"
     );
     expect(out).not.toContain("javascript");
+  });
+
+  it("keeps a bare selector inside its own block", () => {
+    // The boundary a block's custom CSS needs is the NODE, and it cannot be
+    // traded for a wider one: anchored to a document instead, `p { color: red }`
+    // emits `.<document> p` and restyles every matching element in every other
+    // block on the page.
+    const out = cleanBlock("p { color: red }", "nx-pb-abc");
+    expect(out).toBe(".nx-pb-abc p{color:red}");
   });
 
   it("does not double-scope a selector already prefixed with the block class", () => {
@@ -612,6 +626,630 @@ describe("custom CSS may not reach off this origin", () => {
     expect(out.css).not.toContain("@import");
     expect(out.warnings.map(w => w.code)).toContain("unsupported-at-rule");
     expect(out.warnings[0]?.message).toContain("@import");
+    // Naming what IS allowed, so the refusal is actionable rather than a wall.
+    expect(out.warnings[0]?.message).toContain("@keyframes");
+  });
+
+  describe("document-global names", () => {
+    const ns = (name: string): string => namespacedGlobalName(name, SCOPE);
+
+    it("keeps @keyframes, under a name that cannot collide", () => {
+      const out = sanitizeCustomCss(
+        `@keyframes fade { from { opacity: 0 } to { opacity: 1 } }`,
+        SCOPE
+      );
+      expect(out.warnings).toEqual([]);
+      expect(out.css).toContain(`@keyframes ${ns("fade")}`);
+      // The bare name must be gone: a document and its host that both define
+      // `fade` do not get one each, the later definition wins for both.
+      expect(out.css).not.toMatch(/@keyframes\s+fade\b/);
+    });
+
+    it("points the author's own animation at the renamed keyframes", () => {
+      const out = sanitizeCustomCss(
+        `@keyframes fade { from { opacity: 0 } } .a { animation: fade 1s ease-in-out infinite }`,
+        SCOPE
+      );
+      expect(out.css).toContain(
+        `animation:${ns("fade")} 1s ease-in-out infinite`
+      );
+    });
+
+    it("leaves a name the stylesheet did not define exactly as written", () => {
+      // Deciding which ident in the shorthand is the NAME needs the grammar;
+      // matching against what this stylesheet defined needs none. It also
+      // keeps custom CSS able to use an animation the page itself provides.
+      // A definition IS present, so the rewrite pass runs — otherwise this
+      // asserts nothing about the guard, only that nothing happened at all.
+      const out = sanitizeCustomCss(
+        `@keyframes mine { from { opacity: 0 } } .a { animation: nx-fade-in 1s ease-in-out }`,
+        SCOPE
+      );
+      expect(out.css).toContain("animation:nx-fade-in 1s ease-in-out");
+    });
+
+    it("keeps @font-face, under a family that cannot take over the host's", () => {
+      // The sharp case: family names match case-insensitively, so redefining
+      // `Inter` from inside a scoped region would restyle the whole site.
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: Inter; src: url("/f.woff2") } .a { font-family: Inter, sans-serif }`,
+        SCOPE
+      );
+      expect(out.css).not.toMatch(/font-family:\s*Inter\b/i);
+      expect(out.css).toContain(ns("Inter"));
+      // …and the author's own reference still resolves to their font.
+      expect(out.css).toContain("sans-serif");
+    });
+
+    it("matches a family reference without regard to case, as CSS does", () => {
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: "My Font"; src: url("/f.woff2") } .a { font-family: my font }`,
+        SCOPE
+      );
+      // Declared "My Font", referenced `my font`: one family to CSS, so one
+      // rewrite. A case-sensitive map would leave the reference dangling.
+      expect(out.css.match(new RegExp(ns("My Font"), "g"))?.length).toBe(2);
+    });
+
+    it("drops a @font-face left with no font this site can load", () => {
+      // The remote `src` goes to the origin policy; what is left declares a
+      // family that resolves to nothing, and CSS does NOT fall back to the
+      // next family when a face fails to load — it renders the default.
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: X; src: url("https://fonts.example/f.woff2") }`,
+        SCOPE
+      );
+      expect(out.css).not.toContain("@font-face");
+      const message = out.warnings.map(w => w.message).join(" ");
+      expect(message).toContain("upload the font file");
+    });
+
+    it("does not scope a keyframe step, which selects no element", () => {
+      // `from`, `to` and `50%` are positions in an animation, not selectors.
+      // Prefixed, they become `.scope from`, which matches nothing — and the
+      // animation stops running with no warning anywhere.
+      const out = sanitizeCustomCss(
+        `@keyframes fade { from { opacity: 0 } 50% { opacity: .5 } to { opacity: 1 } }`,
+        SCOPE
+      );
+      expect(out.css).not.toContain(`${SCOPE} from`);
+      expect(out.css).toContain("from{opacity:0}");
+      expect(out.css).toContain("50%{opacity:.5}");
+    });
+
+    it("leaves nothing the isolation invariant would call un-namespaced", () => {
+      // The check the compiler's own output answers to, pointed at this
+      // output. It is why the namespacing helper is shared rather than
+      // reimplemented: two spellings of "namespaced" would let this pass while
+      // the browser still resolved the name globally.
+      const out = sanitizeCustomCss(
+        `@keyframes fade { from { opacity: 0 } }
+         @font-face { font-family: Inter; src: url("/f.woff2") }
+         .a { animation: fade 1s; font-family: Inter }`,
+        SCOPE
+      );
+      // Both at-rules must actually be there: a check that the output holds
+      // no un-namespaced global is satisfied just as well by an output holding
+      // no global, which is what refusing them again would produce.
+      expect(out.css).toContain("@keyframes");
+      expect(out.css).toContain("@font-face");
+      expect(findUnnamespacedGlobals(out.css, SCOPE)).toEqual([]);
+    });
+
+    it("namespaces every font-family descriptor, not only the first", () => {
+      // CSS applies the LAST valid `font-family` in a `@font-face`, so
+      // namespacing the first leaves the effective family bare — the whole
+      // collision, still open, behind a decoy that looks handled.
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: decoy; font-family: Inter; src: url("/f.woff2") }`,
+        SCOPE
+      );
+      expect(out.css).not.toMatch(/font-family:\s*["']?Inter["']?/i);
+      expect(out.css).toContain(ns("Inter"));
+    });
+
+    it("reads an escaped descriptor as the property it is", () => {
+      // `font\2d family` IS `font-family` to a browser, so a raw comparison is
+      // one an author can write straight past — and the family stays global.
+      const out = sanitizeCustomCss(
+        `@font-face { font\\2d family: Inter; src: url("/f.woff2") }`,
+        SCOPE
+      );
+      expect(out.css).not.toMatch(/:\s*Inter\b/i);
+      expect(out.css).toContain(ns("Inter"));
+    });
+
+    it("reads an escaped keyframes name as the name it is", () => {
+      // `@keyframes \66 ade` is named `fade`, so a plain `animation: fade`
+      // reference has to find it after the rename.
+      const out = sanitizeCustomCss(
+        `@keyframes \\66 ade { from { opacity: 0 } } .a { animation: fade 1s }`,
+        SCOPE
+      );
+      expect(out.css).toContain(`animation:${ns("fade")} 1s`);
+      expect(out.css).toContain(`@keyframes ${ns("fade")}`);
+    });
+
+    it("rewrites a quoted keyframes reference too", () => {
+      // `<keyframes-name>` is a custom-ident OR a string, so both spellings
+      // have to follow the rename.
+      const out = sanitizeCustomCss(
+        `@keyframes "fade" { from { opacity: 0 } } .a { animation-name: "fade" }`,
+        SCOPE
+      );
+      expect(out.css).toContain(`animation-name:"${ns("fade")}"`);
+    });
+
+    it("leaves an animation keyword alone even when it names a keyframes rule", () => {
+      // A stylesheet may define `@keyframes infinite`; the `infinite` in
+      // `animation: pulse 1s infinite` is still the iteration count, and
+      // renaming it changes what the declaration says.
+      const out = sanitizeCustomCss(
+        `@keyframes infinite { from { opacity: 0 } } .a { animation: pulse 1s infinite }`,
+        SCOPE
+      );
+      expect(out.css).toContain("animation:pulse 1s infinite");
+    });
+
+    it("leaves the font shorthand's style keyword alone", () => {
+      // Everything before the font size is style, variant, weight or stretch.
+      // A family called `italic` must not swallow the `italic` of
+      // `font: italic 16px Arial`.
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: italic; src: url("/f.woff2") } .a { font: italic 16px Arial }`,
+        SCOPE
+      );
+      expect(out.css).toContain("font:italic 16px Arial");
+    });
+
+    it("still rewrites the family that follows the size", () => {
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: Brand; src: url("/f.woff2") } .a { font: italic 16px/1.5 Brand, serif }`,
+        SCOPE
+      );
+      expect(out.css).toContain(`16px/1.5"${ns("Brand")}",serif`);
+    });
+
+    it("follows a name through a custom property", () => {
+      // `--anim: fade` only becomes a reference after `var()` substitution, so
+      // nothing here can see the use — but leaving it makes the definition
+      // rename break the animation with no trace in the output.
+      const out = sanitizeCustomCss(
+        `@keyframes fade { from { opacity: 0 } } .a { --anim: fade; animation: var(--anim) 1s }`,
+        SCOPE
+      );
+      expect(out.css).toContain(`--anim:${ns("fade")}`);
+    });
+
+    it("follows a family through a custom property too", () => {
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: Brand; src: url("/f.woff2") } .a { --f: Brand; font-family: var(--f) }`,
+        SCOPE
+      );
+      // Quoted, because the family rewriter writes a name as one string — the
+      // same node the declaration path emits. A custom property holding a name
+      // is read by exactly those readers now, with no shorter path of its own.
+      expect(out.css).toContain(`--f:"${ns("Brand")}"`);
+    });
+
+    it("follows a quoted family through a custom property", () => {
+      // The property holds the family `My Font`; the quotes are how it is
+      // spelled, not part of the name. Matching the spelling finds nothing and
+      // leaves the reference pointing at a family the rename took away.
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: "My Font"; src: url("/f.woff2") }
+         .a { --f: "My Font"; font-family: var(--f) }`,
+        SCOPE
+      );
+      expect(out.css).toContain(`--f:"${ns("My Font")}"`);
+    });
+
+    it("ignores a font-family descriptor CSS itself would ignore", () => {
+      // The descriptor is `<string> | <custom-ident>+`, so `"Bad" "Name"` is
+      // not a family name and the browser keeps `Good`. Reading it as one
+      // records a family the page never uses and leaves the one it does use
+      // holding its global name.
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: Good; font-family: "Bad" "Name"; src: url("/f.woff2") }
+         .a { font-family: Good }`,
+        SCOPE
+      );
+      expect(out.css).toContain(`font-family:"${ns("Good")}"`);
+      expect(out.css).not.toMatch(/font-family:\s*Good\b/);
+    });
+
+    it("rewrites a quoted keyframes name that is spelled like a keyword", () => {
+      // `@keyframes "none"` is a real animation and `animation-name: "none"`
+      // references it, while the bare `none` is the keyword that cancels one.
+      // The quotes are the only thing telling them apart.
+      const out = sanitizeCustomCss(
+        `@keyframes "none" { from { opacity: 0 } } .a { animation-name: "none" }`,
+        SCOPE
+      );
+      expect(out.css).toContain(`animation-name:"${ns("none")}"`);
+    });
+
+    it("finds the family after a font size that is a word", () => {
+      // `font: italic small Brand` has no measurement in it, and a shorthand
+      // read as sizeless never reaches its family list.
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: Brand; src: url("/f.woff2") } .a { font: italic small Brand }`,
+        SCOPE
+      );
+      // The whole declaration, not just the name: the `@font-face` in the same
+      // output holds that name too, so a bare containment check passes while
+      // the reference this is about is left exactly as it was.
+      expect(out.css).toContain(`font:italic small"${ns("Brand")}"`);
+    });
+
+    it("reads the size past a font-stretch percentage", () => {
+      // `font-stretch` takes a percentage, so the FIRST measurement here is the
+      // stretch, not the size. Reading it as the size puts the family list one
+      // token early, and the `normal` line-height then joins the run in front
+      // of `Brand` — the pair matches no family and the reference is left
+      // behind. The word line-height is what makes it observable: a numeric one
+      // is skipped as an unnamed node and the family still matches by luck.
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: Brand; src: url("/f.woff2") } .a { font: 87.5% 16px/normal Brand }`,
+        SCOPE
+      );
+      expect(out.css).toContain(`font:87.5% 16px/normal"${ns("Brand")}"`);
+    });
+
+    it("finds the family after a computed font size", () => {
+      // `clamp()` is a size like any other, and a shorthand whose size is a
+      // function has to reach its family list the same way.
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: Brand; src: url("/f.woff2") }
+         .a { font: clamp(1rem, 2vw, 2rem) Brand }`,
+        SCOPE
+      );
+      expect(out.css).toContain(`font:clamp(1rem,2vw,2rem)"${ns("Brand")}"`);
+    });
+
+    it("follows a name inside a shorthand fragment held by a custom property", () => {
+      // `--anim: fade 1s ease` read by `animation: var(--anim)` is the ordinary
+      // way to write one. Matching only a value that is exactly one name leaves
+      // the fragment holding the old bare `fade`, and after substitution the
+      // browser looks for a keyframes rule that no longer exists.
+      const out = sanitizeCustomCss(
+        `@keyframes fade { from { opacity: 0 } }
+         .a { --anim: fade 1s ease; animation: var(--anim) }`,
+        SCOPE
+      );
+      expect(out.css).toContain(`--anim:${ns("fade")} 1s ease`);
+    });
+
+    it("leaves the other tokens of that fragment alone", () => {
+      // The same positional reader the `animation` declaration uses, so a
+      // stylesheet defining `@keyframes ease` does not turn the timing function
+      // of an unrelated custom property into a name.
+      const out = sanitizeCustomCss(
+        `@keyframes ease { from { opacity: 0 } }
+         .a { --anim: fade 1s ease }`,
+        SCOPE
+      );
+      // Byte for byte, including its spacing: a value nothing moved is not
+      // written back at all, so the generator never reformats it.
+      expect(out.css).toContain("--anim: fade 1s ease");
+      // Named exactly: `ns("ease")` alone appears in the renamed `@keyframes`
+      // definition too, so a bare containment check would pass regardless.
+      expect(out.css).not.toContain(`--anim: fade 1s ${ns("ease")}`);
+    });
+
+    it("does not rewrite a custom property holding no name it defined", () => {
+      const out = sanitizeCustomCss(
+        `@keyframes fade { from { opacity: 0 } } .a { --gap: 1px solid red }`,
+        SCOPE
+      );
+      expect(out.css).toContain("--gap: 1px solid red");
+    });
+
+    it("finds the size when a function follows the family list", () => {
+      // A comma only appears in the family list, so the size is before the
+      // first one. Searching the whole value picks the trailing `var()` as the
+      // size, which leaves no family range and `Brand` pointing at a name the
+      // definition no longer carries.
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: Brand; src: url("/f.woff2") }
+         .a { font: 16px Brand, var(--fallback) }`,
+        SCOPE
+      );
+      expect(out.css).toContain(`font:16px"${ns("Brand")}",var(--fallback)`);
+    });
+
+    it("reads a fragment as a font shorthand when it carries a size", () => {
+      // `--font: italic 16px Arial` can only be the `font` shorthand, so the
+      // family list starts after the size. Rewriting from the first token turns
+      // the style keyword into the private face and the declaration stops
+      // meaning italic Arial at all.
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: italic; src: url("/f.woff2") }
+         .a { --font: italic 16px Arial; font: var(--font) }`,
+        SCOPE
+      );
+      expect(out.css).toContain("--font: italic 16px Arial");
+    });
+
+    it("keeps a family-list fragment working", () => {
+      // The other side of that rule: a fragment with no size is not the `font`
+      // shorthand, so it is read as a family list from the start.
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: Brand; src: url("/f.woff2") }
+         .a { --stack: Brand, serif; font-family: var(--stack) }`,
+        SCOPE
+      );
+      expect(out.css).toContain(`--stack:"${ns("Brand")}",serif`);
+    });
+
+    it("emits a renamed identifier CSS can read back", () => {
+      // `@keyframes a\\ b` is named `a b`, and the name is compared decoded — so
+      // it has to be escaped again on the way out. Written bare it is two
+      // tokens, the rule is invalid, and the animation resolves to nothing.
+      const out = sanitizeCustomCss(
+        `@keyframes a\\ b { from { opacity: 0 } } .a { animation: a\\ b 1s }`,
+        SCOPE
+      );
+      const emitted = escapeIdentifier(ns("a b"));
+      expect(emitted).toContain("\\ ");
+      expect(out.css).toContain(`@keyframes ${emitted}{`);
+      expect(out.css).toContain(`animation:${emitted} 1s`);
+    });
+
+    it("leaves a generic family alone when a face is named after one", () => {
+      // A face may be called `"serif"`, and CSS keeps it apart from the generic
+      // by the quotes. Rewriting the bare keyword would replace the reader's
+      // own serif font with the author's private face.
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: "serif"; src: url("/f.woff2") }
+         .a { font-family: serif }`,
+        SCOPE
+      );
+      expect(out.css).toContain(".a{font-family:serif}");
+    });
+
+    it("still rewrites that face when it is referenced as a name", () => {
+      // The keyword skip must not swallow the real reference: quoted, it is a
+      // family name and has to follow the rename.
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: "serif"; src: url("/f.woff2") }
+         .a { font-family: "serif" }`,
+        SCOPE
+      );
+      expect(out.css).toContain(`.a{font-family:"${ns("serif")}"}`);
+    });
+
+    it("leaves references alone when the face it named was removed", () => {
+      // The face loses its only `src` to the origin policy and is dropped, so
+      // nothing defines the private name. `X` may well be an installed font, and
+      // rewriting the reference would turn a working fallback into a missing
+      // name.
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: X; src: url("https://evil.example/f.woff2") }
+         .a { font-family: X, serif }`,
+        SCOPE
+      );
+      expect(out.css).toContain(".a{font-family:X,serif}");
+      expect(out.css).not.toContain("@font-face");
+    });
+
+    it("follows a renamed name into a nested rule", () => {
+      // A nested rule is `Raw` to this parser, so the declaration walk never
+      // sees inside it. Left alone, the definition is renamed while the
+      // reference still asks for `fade` — the animation resolves to nothing and
+      // nothing in the output says why.
+      const out = sanitizeCustomCss(
+        `@keyframes fade { from { opacity: 0 } } .a { .b { animation: fade 1s } }`,
+        SCOPE
+      );
+      expect(out.css).toContain(`animation:${ns("fade")} 1s`);
+      expect(out.css).not.toMatch(/animation:\s*fade\b/);
+    });
+
+    it("follows a renamed family into a nested rule too", () => {
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: Brand; src: url("/f.woff2") }
+         .a { .b { font-family: Brand, serif } }`,
+        SCOPE
+      );
+      expect(out.css).toContain(`"${ns("Brand")}",serif`);
+    });
+
+    it("reaches a name nested more than one level down", () => {
+      const out = sanitizeCustomCss(
+        `@keyframes fade { from { opacity: 0 } } .a { .b { .c { animation: fade 1s } } }`,
+        SCOPE
+      );
+      expect(out.css).toContain(`animation:${ns("fade")} 1s`);
+    });
+
+    it("leaves an animation keyword in a custom property alone", () => {
+      // `--anim: none` is the keyword that cancels an animation, even where the
+      // stylesheet defines `@keyframes "none"` — quotes are what tell a name
+      // from a keyword, and a bare one is the keyword wherever it sits.
+      const out = sanitizeCustomCss(
+        `@keyframes "none" { from { opacity: 0 } }
+         .x { --anim: none; animation-name: var(--anim) }`,
+        SCOPE
+      );
+      expect(out.css).toContain("--anim: none");
+      expect(out.css).not.toContain(`--anim: ${ns("none")}`);
+    });
+
+    it("leaves a generic family in a custom property alone", () => {
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: "serif"; src: url("/f.woff2") }
+         .x { --f: serif; font-family: var(--f) }`,
+        SCOPE
+      );
+      expect(out.css).toContain("--f: serif");
+    });
+
+    it("escapes a renamed name written into a custom property", () => {
+      // The same rule as the identifier written onto an AST node: the name was
+      // compared decoded, so `a b` has to go back out escaped or `var()`
+      // substitutes two tokens where the definition has one.
+      const out = sanitizeCustomCss(
+        `@keyframes a\\ b { from { opacity: 0 } }
+         .x { --anim: a\\ b; animation: var(--anim) 1s }`,
+        SCOPE
+      );
+      expect(out.css).toContain(`--anim:${escapeIdentifier(ns("a b"))}`);
+    });
+
+    it("ignores a keyframes rule whose prelude is not just a name", () => {
+      // `@keyframes fade 1` is malformed and a browser ignores the whole rule.
+      // Renaming its first token records a name defined only by a rule nothing
+      // applies, and points every reference at that — so an animation the host
+      // page provides would stop resolving.
+      const out = sanitizeCustomCss(
+        `@keyframes fade 1 { from { opacity: 0 } } .x { animation: fade 1s }`,
+        SCOPE
+      );
+      expect(out.css).toContain("animation:fade 1s");
+      expect(out.css).not.toContain(ns("fade"));
+    });
+
+    it("ignores a keyframes rule named with a reserved word", () => {
+      // `<keyframes-name>` is `<custom-ident> | <string>`, and a custom-ident
+      // excludes `none`. `@keyframes none` is therefore invalid and ignored, so
+      // renaming it would turn an invalid rule into a valid private one and
+      // start an animation the source CSS never defined.
+      const out = sanitizeCustomCss(
+        `@keyframes none { from { opacity: 0 } } .x { animation-name: "none" }`,
+        SCOPE
+      );
+      expect(out.css).toContain(`animation-name:"none"`);
+      expect(out.css).not.toContain(ns("none"));
+    });
+
+    it("leaves an invalid mixed family reference alone", () => {
+      // `"My" Font` is a string beside an identifier, which is not a family
+      // item — the browser drops the whole declaration. Joining the run would
+      // make the private face apply exactly where the author's CSS applied
+      // nothing.
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: "My Font"; src: url("/f.woff2") }
+         .a { font-family: "My" Font, serif }`,
+        SCOPE
+      );
+      expect(out.css).not.toContain(`.a{font-family:"${ns("My Font")}"`);
+    });
+
+    it("drops a face whose src names nothing to load", () => {
+      // Presence is not usability: the browser reads `src: garbage` and
+      // discards it, so no face is defined. Recording the family anyway points
+      // every reference at a private name nothing defines — and `X` may be a
+      // font the reader already has.
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: X; src: garbage } .a { font-family: X, serif }`,
+        SCOPE
+      );
+      expect(out.css).toContain(".a{font-family:X,serif}");
+      expect(out.css).not.toContain("@font-face");
+    });
+
+    it("still keeps a face whose src is a local() source", () => {
+      // The refusal has to be about usability, not about `url()` specifically.
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: X; src: local("X") } .a { font-family: X }`,
+        SCOPE
+      );
+      expect(out.css).toContain("@font-face");
+      expect(out.css).toContain(`.a{font-family:"${ns("X")}"}`);
+    });
+
+    it("folds an at-rule name the way CSS does, not the way JavaScript does", () => {
+      // U+212A KELVIN SIGN lowercases to "k" in JavaScript and is its own
+      // character to CSS, so `@\u212Aeyframes` is an at-rule no browser knows.
+      // Folded with `toLowerCase` it enters the allowlist, gets renamed into a
+      // valid private rule, and every reference is pointed at it — taking an
+      // animation the host page provides and making it resolve to nothing.
+      const kelvin = String.fromCodePoint(0x212a);
+      const out = sanitizeCustomCss(
+        `@${kelvin}eyframes fade { from { opacity: 0 } } .x { animation: fade 1s }`,
+        SCOPE
+      );
+      expect(out.css).not.toContain("eyframes");
+      expect(out.css).toContain("animation:fade 1s");
+      expect(out.css).not.toContain(ns("fade"));
+    });
+
+    it("still recognises an at-rule spelled with ASCII capitals", () => {
+      // The folding has to stay folding: `@Keyframes` IS `@keyframes` to CSS.
+      const out = sanitizeCustomCss(
+        `@Keyframes fade { from { opacity: 0 } } .x { animation: fade 1s }`,
+        SCOPE
+      );
+      expect(out.css).toContain(`animation:${ns("fade")} 1s`);
+    });
+
+    it("keeps the self-hosted source when a font src also names a remote one", () => {
+      // A `src` is a LIST of places to try. Removing the declaration because
+      // one entry is remote takes the uploaded font with it, and the face then
+      // loses its only source and is dropped entirely.
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: Brand; src: url("/brand.woff2"), url("https://fonts.example/b.woff2") }
+         .a { font-family: Brand }`,
+        SCOPE
+      );
+      expect(out.css).toContain("src:url(/brand.woff2)");
+      expect(out.css).not.toContain("fonts.example");
+      expect(out.css).toContain(`.a{font-family:"${ns("Brand")}"}`);
+      expect(out.warnings.map(w => w.code)).toContain("remote-url");
+    });
+
+    it("rejoins the list when a source is dropped from the middle", () => {
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: Brand; src: local("Brand"), url("https://x.example/b.woff2"), url("/b.woff2") }`,
+        SCOPE
+      );
+      expect(out.css).toContain('src:local("Brand"),url(/b.woff2)');
+    });
+
+    it("still drops a face whose only source is remote", () => {
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: Brand; src: url("https://fonts.example/b.woff2") } .a { font-family: Brand }`,
+        SCOPE
+      );
+      expect(out.css).not.toContain("@font-face");
+      expect(out.css).toContain(".a{font-family:Brand}");
+    });
+
+    it("rewrites a declaration written beside a nested rule", () => {
+      // Re-parsed, `.a { .b {} animation: fade 1s }` is one rule and then a
+      // `Raw` holding the trailing declaration, which the declaration walk
+      // never sees.
+      const out = sanitizeCustomCss(
+        `@keyframes fade { from { opacity: 0 } } .a { .b{color:red} animation: fade 1s }`,
+        SCOPE
+      );
+      expect(out.css).toContain(`animation:${ns("fade")} 1s`);
+      expect(out.css).not.toMatch(/animation:\s*fade\b/);
+    });
+
+    it("reads an escaped attr() in a fetch position as the function it is", () => {
+      // css-tree keeps the spelling it was given, so `a\\74tr(...)` arrives named
+      // `a\\74tr` while a browser reads it as `attr()`. Undecoded it is recorded
+      // as an ordinary function and never reaches the attr guard — which exists
+      // because an `attr()` in a URL position has no literal to inspect.
+      const out = sanitizeCustomCss(
+        `.a { background: image-set(a\\74tr(data-probe) 1x) }`,
+        SCOPE
+      );
+      expect(out.css).not.toContain("data-probe");
+    });
+
+    it("still refuses a remote url inside a keyframe step", () => {
+      // The step blocks are ordinary declarations, so the origin policy has to
+      // reach them — allowing the at-rule must not open a door beneath it.
+      const out = sanitizeCustomCss(
+        `@keyframes x { from { background: url("https://evil.example/a.png") } }`,
+        SCOPE
+      );
+      expect(out.css).not.toContain("evil.example");
+      expect(out.warnings.map(w => w.code)).toContain("remote-url");
+    });
   });
 
   it("does not repeat one message for every rule that trips it", () => {

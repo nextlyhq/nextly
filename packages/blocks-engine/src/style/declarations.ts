@@ -66,8 +66,29 @@ export interface CompiledDeclarations {
  */
 const TOKEN_NAME_RE = /^[a-z0-9]+(?:[-.][a-z0-9]+)*$/;
 
+/**
+ * Whether a name may be written as a token, on either side of the reference.
+ *
+ * One grammar for the table and for the `$token` that reads it. Two would
+ * disagree the moment either moved, and the disagreement has no symptom to
+ * follow: a table accepting `Color.Primary` while a reference refuses it leaves
+ * a token that exists, resolves to nothing, and reports no reason.
+ */
+export function isTokenName(name: string): boolean {
+  return TOKEN_NAME_RE.test(name);
+}
+
 /** The default custom-property prefix for site tokens. */
 export const DEFAULT_TOKEN_PREFIX = "--site-";
+
+/**
+ * Prefixes no site may write tokens under.
+ *
+ * `--nx-` is the admin's own namespace and `--tw-` is Tailwind's internals.
+ * Either would let a site's token restyle surfaces the site does not own — the
+ * admin panel around the editor, or the utility classes in a host's markup.
+ */
+const RESERVED_TOKEN_PREFIXES = ["--nx-", "--tw-"] as const;
 
 /**
  * The shape a custom-property prefix may take.
@@ -89,11 +110,26 @@ export function safeTokenPrefix(prefix: string | undefined): {
   warning?: string;
 } {
   if (prefix === undefined) return { prefix: DEFAULT_TOKEN_PREFIX };
-  if (TOKEN_PREFIX_RE.test(prefix)) return { prefix };
-  return {
-    prefix: DEFAULT_TOKEN_PREFIX,
-    warning: `"${describeValue(prefix)}" is not a custom-property prefix, so design tokens were written under "${DEFAULT_TOKEN_PREFIX}" instead.`,
-  };
+  if (!TOKEN_PREFIX_RE.test(prefix)) {
+    return {
+      prefix: DEFAULT_TOKEN_PREFIX,
+      warning: `"${describeValue(prefix)}" is not a custom-property prefix, so design tokens were written under "${DEFAULT_TOKEN_PREFIX}" instead. A prefix starts with "--" and holds only lowercase letters, digits and dashes.`,
+    };
+  }
+  // Refused here rather than where the tokens are written, because a prefix
+  // refused on one side and accepted on the other is worse than either verdict:
+  // the definitions land under the fallback while every reference still reads
+  // the reserved one, and the tokens resolve to nothing at all.
+  const reserved = RESERVED_TOKEN_PREFIXES.find(value =>
+    prefix.startsWith(value)
+  );
+  if (reserved !== undefined) {
+    return {
+      prefix: DEFAULT_TOKEN_PREFIX,
+      warning: `"${describeValue(prefix)}" starts with "${reserved}", which is reserved, so design tokens were written under "${DEFAULT_TOKEN_PREFIX}" instead. Tokens under that prefix would change the ${reserved === "--nx-" ? "admin interface" : "Tailwind internals"} as well as this site.`,
+    };
+  }
+  return { prefix };
 }
 
 function warning(path: string, message: string): ValidationIssue {
@@ -159,7 +195,7 @@ function scalarText(
 ): string | undefined {
   if (isTokenRef(value)) {
     const name = value.$token;
-    if (!TOKEN_NAME_RE.test(name)) {
+    if (!isTokenName(name)) {
       pushBoundedWarning(
         walk.allowance,
         walk.warnings,

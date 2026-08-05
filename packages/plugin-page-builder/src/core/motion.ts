@@ -43,12 +43,19 @@ function safeTime(v: string | undefined, fallback: string): string {
   return v && TIME_RE.test(v) ? v : fallback;
 }
 
-/** Compile a node's entrance animation to a CSS rule (empty when none/invalid). */
-export function compileMotionCss(node: BlockNode, cls: string): string {
+/**
+ * Compile a node's entrance animation to a CSS rule (empty when none/invalid).
+ *
+ * Takes the node's full SELECTOR rather than its class, because the caller may
+ * have put a document scope in front of it. Two documents can hold the same
+ * node id — one reusable block rendered in both — and a bare node class would
+ * let the later stylesheet animate the other document's matching block.
+ */
+export function compileMotionCss(node: BlockNode, selector: string): string {
   const m = node.motion;
   if (!m || !m.entrance || m.entrance === "none") return "";
   if (!MOTION_ANIMATIONS.includes(m.entrance)) return "";
   const dur = safeTime(m.duration, "600ms");
   const delay = safeTime(m.delay, "0ms");
-  return `@media (prefers-reduced-motion: no-preference) { .${cls} { animation: nx-${m.entrance} ${dur} ease ${delay} both; } }`;
+  return `@media (prefers-reduced-motion: no-preference) { ${selector} { animation: nx-${m.entrance} ${dur} ease ${delay} both; } }`;
 }

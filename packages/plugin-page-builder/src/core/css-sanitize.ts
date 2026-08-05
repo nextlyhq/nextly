@@ -11,11 +11,18 @@
  * explanation is the thing authors file bugs about, and the editor has nowhere
  * to say "your Google Fonts import went and here is why" unless this says so.
  */
+import { asciiLower, decodeIdentifier } from "@nextlyhq/blocks-engine";
 import * as csstree from "css-tree";
 import type { CssNode, List, ListItem, Rule } from "css-tree";
 
 import {
+  fontFaceHasSrc,
+  namespaceDefinedNames,
+  rewriteNameReferences,
+} from "./css-global-names";
+import {
   attrFetchesFromDom,
+  functionName,
   isRemoteUrl,
   MAX_VALUE_NESTING,
   SUBSTITUTION_FUNCTIONS,
@@ -144,13 +151,13 @@ function remoteUrlInValue(
   const raws: { text: string; position: string[] }[] = [];
   csstree.walk(value, {
     enter(node: csstree.CssNode) {
-      if (node.type === "Function") functions.push(node.name.toLowerCase());
+      if (node.type === "Function") functions.push(functionName(node.name));
       if (found !== undefined) return;
       // A custom property can land anywhere, so there every `attr()` is a
       // potential fetch; elsewhere the enclosing function decides.
       if (
         node.type === "Function" &&
-        node.name.toLowerCase() === "attr" &&
+        functionName(node.name) === "attr" &&
         (anyPositionIsUrl ||
           attrFetchesFromDom(node, positionOf(functions, outerPosition)))
       ) {
@@ -290,6 +297,57 @@ function remoteUrlInRawDeclarations(text: string): {
   return { read, finding };
 }
 
+/**
+ * Remove the sources in a `src` descriptor that reach off this origin.
+ *
+ * Returns whether at least one usable source survived. A descriptor is a
+ * comma-separated list, so each entry is judged on its own and the declaration
+ * is only lost when nothing in it can be loaded.
+ */
+function dropRemoteSources(decl: csstree.Declaration): boolean {
+  const value = decl.value;
+  if (value.type !== "Value") return false;
+
+  // Split into comma-separated entries, keeping the list items so the survivors
+  // can be reassembled in place.
+  const entries: ListItem<CssNode>[][] = [[]];
+  const commas: ListItem<CssNode>[] = [];
+  value.children.forEach((child: CssNode, item: ListItem<CssNode>) => {
+    if (child.type === "Operator" && child.value === ",") {
+      commas.push(item);
+      entries.push([]);
+      return;
+    }
+    entries[entries.length - 1]?.push(item);
+  });
+
+  const keep: ListItem<CssNode>[][] = [];
+  const drop: ListItem<CssNode>[] = [];
+  for (const entry of entries) {
+    if (entry.length === 0) continue;
+    const usable = entry.every(
+      item => remoteUrlInValue(item.data, 0, [], false) === undefined
+    );
+    if (usable) keep.push(entry);
+    else drop.push(...entry);
+  }
+
+  if (keep.length === 0) return false;
+
+  for (const item of drop) value.children.remove(item);
+  // Every separator is removed and the survivors re-joined, so a dropped entry
+  // cannot leave a dangling or doubled comma behind.
+  for (const item of commas) value.children.remove(item);
+  keep.forEach((entry, index) => {
+    if (index === 0) return;
+    const first = entry[0];
+    if (first !== undefined) {
+      value.children.insertData({ type: "Operator", value: "," }, first);
+    }
+  });
+  return true;
+}
+
 function remoteUrlInRawRule(
   text: string,
   depth: number
@@ -370,6 +428,37 @@ function escapeMarkupSequences(css: string): string {
   return css.replaceAll("</", "\\3c /").replaceAll("<!", "\\3c !");
 }
 
+/**
+ * The at-rules custom CSS may contain.
+ *
+ * `@media` and `@supports` wrap ordinary rules, so everything inside them is
+ * already reached by the scoping and by the checks below. `@keyframes` and
+ * `@font-face` are here on a condition rather than outright: each defines a
+ * name CSS resolves for the whole document, so they are only safe once those
+ * names carry the scope's namespace.
+ *
+ * Everything else is refused, and the list is short on purpose. `@import`
+ * fetches a stylesheet this cannot see inside, `@layer` reorders the host's
+ * cascade, `@page` reaches the printed document — none of them are things a
+ * region of somebody's page should be able to do.
+ */
+const SUPPORTED_AT_RULES = new Set([
+  "media",
+  "supports",
+  "keyframes",
+  "font-face",
+]);
+
+/** The same list as prose, so a refusal can say what IS allowed. */
+const SUPPORTED_AT_RULE_LIST = "@media, @supports, @keyframes and @font-face";
+
+/** Whether the walker is currently inside a `@keyframes` block. */
+function insideKeyframes(atrule: csstree.Atrule | null): boolean {
+  return (
+    atrule !== null && asciiLower(decodeIdentifier(atrule.name)) === "keyframes"
+  );
+}
+
 export function sanitizeCustomCss(
   css: string,
   scopeClass: string
@@ -407,15 +496,26 @@ export function sanitizeCustomCss(
     };
   }
 
-  // Drop at-rules other than @media / @supports.
+  // Drop at-rules this cannot support. The four that survive split in two:
+  // `@media` and `@supports` wrap ordinary rules, which the scoping and the
+  // checks below already reach; `@keyframes` and `@font-face` define a
+  // document-global NAME, and are allowed only because those names are
+  // namespaced further down — see `core/css-global-names`.
   csstree.walk(ast, {
     visit: "Atrule",
     enter(node: CssNode, item: ListItem<CssNode>, list: List<CssNode>) {
-      const name = (node as csstree.Atrule).name.toLowerCase();
-      if (name === "media" || name === "supports") return;
+      // Decoded first: `@\6d edia` IS `@media` to a browser, so a raw
+      // comparison is one an author can write straight past.
+      // ASCII folding, because that is what CSS applies to a keyword. U+212A
+      // KELVIN SIGN lowercases to "k" in JavaScript and is its own character to
+      // CSS, so `@\u212Aeyframes` would enter the allowlist here and then be
+      // renamed into a valid private rule — turning an at-rule the browser
+      // ignores into one that shadows an animation the host page provides.
+      const name = asciiLower(decodeIdentifier((node as csstree.Atrule).name));
+      if (SUPPORTED_AT_RULES.has(name)) return;
       warn(
         "unsupported-at-rule",
-        `"@${name}" is not allowed in custom CSS, so that rule was removed. Only @media and @supports are supported here.`
+        `"@${name}" is not allowed in custom CSS, so that rule was removed. You can use ${SUPPORTED_AT_RULE_LIST} here.`
       );
       list.remove(item);
     },
@@ -430,6 +530,23 @@ export function sanitizeCustomCss(
       if (!list || !item) return;
       const finding = firstRemoteUrl(decl);
       if (finding !== undefined) {
+        // A `src` descriptor is a LIST of places to try, and the whole point of
+        // the list is that some of them fail. Removing the declaration because
+        // one entry is remote takes the self-hosted font with it, and the face
+        // then loses its only source and is dropped — so an author who added a
+        // remote fallback to a font they uploaded correctly loses the upload.
+        // Dropping just the offending entry keeps what the author is allowed to
+        // load, and the warning still says the remote one went.
+        if (
+          asciiLower(decodeIdentifier(decl.property)) === "src" &&
+          dropRemoteSources(decl)
+        ) {
+          warn(
+            "remote-url",
+            `A font source in "${decl.property}" is not on this site, so that source was removed and the others kept. Custom CSS may only load fonts from this site's own origin.`
+          );
+          return;
+        }
         if (finding.kind === "remote") {
           warn(
             "remote-url",
@@ -464,6 +581,44 @@ export function sanitizeCustomCss(
       }
     },
   });
+
+  // A `@font-face` with no `src` left declares a family that can never load,
+  // and CSS resolves it to nothing rather than falling back — so text asking
+  // for that family renders in the browser's default instead of the author's
+  // next choice. Dropping the rule restores the fallback and says why.
+  //
+  // BEFORE the names are namespaced, and that order is the whole point. A face
+  // whose only `src` reached off this origin has just lost it above; if its
+  // family were recorded first, every reference to that family would be
+  // rewritten to a private name no surviving rule defines. For a family the
+  // author never owned — an installed font, or one the host provides — that
+  // turns a working fallback list into a missing name.
+  csstree.walk(ast, {
+    visit: "Atrule",
+    enter(node: CssNode, item: ListItem<CssNode>, list: List<CssNode>) {
+      const atrule = node as csstree.Atrule;
+      if (asciiLower(decodeIdentifier(atrule.name)) !== "font-face") return;
+      if (fontFaceHasSrc(atrule)) return;
+      warn(
+        "unsupported-at-rule",
+        "A @font-face rule was removed because it has no font file this site can load. Custom CSS may only load fonts from this site's own origin, so upload the font file and point `src` at a path on this site."
+      );
+      list.remove(item);
+    },
+  });
+
+  // Namespace what the author defined, and point their own references at it.
+  const cssTree = {
+    walk: csstree.walk,
+    parse: csstree.parse,
+    generate: csstree.generate,
+  };
+  const definedNames = namespaceDefinedNames(ast, scopeClass, cssTree);
+  // The same bound the origin scan follows nested rules with, passed in rather
+  // than restated there: both walk the same nesting for the same reason, and
+  // two numbers would let one of them reach a level the other reports as too
+  // deep to check.
+  rewriteNameReferences(ast, definedNames, cssTree, MAX_RULE_NESTING);
 
   // A nested rule is a `Raw` child of its parent's block in css-tree 2.3, not a
   // Declaration, so the declaration walk above never sees inside it and
@@ -529,6 +684,13 @@ export function sanitizeCustomCss(
   csstree.walk(ast, {
     visit: "Rule",
     enter(node: Rule) {
+      // A `@keyframes` step is parsed as a Rule with a SelectorList prelude,
+      // but `from`, `to` and `50%` select no elements — they are positions in
+      // the animation. Prefixing one produces `.scope from`, which matches
+      // nothing, so the whole animation silently stops running. Scoping is
+      // also unnecessary here: a step can only ever apply to whatever the
+      // animation is attached to, and that selector is scoped already.
+      if (insideKeyframes(this.atrule)) return;
       if (node.prelude.type !== "SelectorList") return;
       for (const sel of node.prelude.children) {
         if (sel.type !== "Selector") continue;
@@ -560,5 +722,10 @@ export function sanitizeBlockCss(
   if (!css) return { css: "", warnings: [] };
   // Replace the `selector` keyword (word-boundary, not part of .foo-selector).
   const withScope = css.replace(/(^|[^\w.#-])selector\b/g, `$1.${scopeClass}`);
+  // The NODE class, and only it. Anchoring to a document scope instead would
+  // swap one boundary for the other rather than nesting them: `p { color: red }`
+  // would emit `.<document> p` and restyle every matching element in every other
+  // block. Separating two documents that hold the same node id is the node
+  // class's own job, not this one's.
   return sanitizeCustomCss(withScope, scopeClass);
 }
