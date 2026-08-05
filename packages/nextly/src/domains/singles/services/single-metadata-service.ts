@@ -44,6 +44,7 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { NextlyError } from "../../../errors";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type {
   DynamicSingleInsert,
@@ -198,9 +199,30 @@ export class SingleMetadataService {
       });
     }
 
-    this.logger.info(
-      `[Singles] Resuming an unfinished create for "${input.slug}" (was ${existing.migrationStatus})`
-    );
+    // 🔴 Only `failed` is adopted, and the distinction is about concurrency rather than tidiness.
+    //
+    // `failed` is a FINISHED attempt: it recorded its own outcome, so nothing is still running
+    // against this slug and taking it over is safe. `pending` cannot say that — it is equally the
+    // state of a create that is in flight RIGHT NOW, and adopting one would overwrite its row with
+    // a second payload while its DDL is still building the first schema, after which the original
+    // confirms `applied` against a description that is no longer its own.
+    //
+    // Serialising the slug is what would make `pending` adoptable, and that is the migration lock
+    // this relocation exists to unblock: it needs the table change and the registry write inside
+    // one method, which is what this service now provides. Inventing a second, timestamp-based
+    // exclusion here would leave the codebase with two of them.
+    if (existing.migrationStatus !== "failed") {
+      throw NextlyError.conflict({
+        logContext: {
+          reason: "single-create-in-flight",
+          slug: input.slug,
+          migrationStatus: existing.migrationStatus,
+          hint: "A create for this slug has not recorded an outcome yet. Retry once it has.",
+        },
+      });
+    }
+
+    this.logger.info(`[Singles] Resuming a failed create for "${input.slug}"`);
     return this.registry.updateSingle(input.slug, {
       ...input,
       migrationStatus: "pending",

@@ -184,6 +184,32 @@ for (const dialect of getConfiguredTestDialects()) {
     });
 
     /**
+     * 🔴 The other half of adoption: a create still in flight must NOT be taken over.
+     *
+     * `pending` is indistinguishable from "running right now". Adopting one would overwrite its
+     * row with a second payload while its DDL is still building the first schema, after which the
+     * original confirms `applied` against a description that is no longer its own. Refusing keeps
+     * the two requests from interleaving; serialising them properly is the migration lock's job.
+     */
+    it("refuses to take over a create that has not recorded an outcome", async () => {
+      current = await createTestNextly({ dialect });
+
+      const payload = {
+        slug: plain,
+        label: "Plain",
+        fields: [{ name: "body", type: "text" }],
+      };
+      await dispatchSingles("createSingle", {}, payload);
+
+      const registry = current.getService("singleRegistryService");
+      await registry.updateMigrationStatus(plain, "pending");
+
+      await expect(
+        dispatchSingles("createSingle", {}, payload)
+      ).rejects.toThrow();
+    });
+
+    /**
      * 🔴 A removed REQUIRED field leaves a NOT NULL column the schema no longer declares.
      *
      * The re-run no-ops rather than dropping anything, so writes that omit the removed field now
@@ -405,7 +431,7 @@ for (const dialect of getConfiguredTestDialects()) {
      * editing the registry by hand — strictly worse than the orphan table this ordering prevents,
      * because an orphan at least left the slug free.
      */
-    it("resumes a create whose outcome was never recorded", async () => {
+    it("resumes a create that recorded a failure", async () => {
       current = await createTestNextly({ dialect });
 
       const payload = {
@@ -416,12 +442,14 @@ for (const dialect of getConfiguredTestDialects()) {
 
       await dispatchSingles("createSingle", {}, payload);
 
-      // The interrupted state: the row is there and still says `pending`, because the process
-      // stopped between writing the intent and recording the result.
+      // The state that is safe to take over: the attempt RECORDED its own failure, so nothing is
+      // still running against this slug. A `pending` row is deliberately NOT adopted — it is
+      // equally the state of a create that is in flight right now, and serialising that is the
+      // migration lock's job rather than a second mechanism here.
       const registry = current.getService("singleRegistryService");
-      await registry.updateMigrationStatus(plain, "pending");
+      await registry.updateMigrationStatus(plain, "failed");
       expect((await registryRow(current, plain))?.migrationStatus).toBe(
-        "pending"
+        "failed"
       );
 
       // The retry a user would make. It has to succeed rather than collide with its own leftovers.
