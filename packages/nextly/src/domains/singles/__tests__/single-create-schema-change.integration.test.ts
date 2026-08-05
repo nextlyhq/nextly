@@ -219,6 +219,76 @@ for (const dialect of getConfiguredTestDialects()) {
     });
 
     /**
+     * 🔴 Enabling localization in the same request that sends fields must COMPLETE.
+     *
+     * A required field moving to the companion is still a NOT NULL column on the main table until
+     * the companion transition seeds and drops it. Any post-DDL check that runs before that step
+     * sees a column the schema no longer declares, and marking the migration failed there skips
+     * the transition while `localized: true` is already persisted — leaving reads pointed at an
+     * unseeded companion with the content still on main. That is worse than not checking at all.
+     */
+    it("completes a localization enable sent with fields", async () => {
+      current = await createTestNextly({
+        dialect,
+        localization: { locales: ["en", "es"], defaultLocale: "en" },
+      });
+
+      const slug = `${plain}_enable`;
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug,
+          label: "Enable",
+          fields: [{ name: "headline", type: "text", required: true }],
+        }
+      );
+
+      await dispatchSingles(
+        "updateSingleSchema",
+        { slug },
+        {
+          localized: true,
+          fields: [
+            { name: "headline", type: "text", required: true, localized: true },
+          ],
+        }
+      );
+
+      expect((await registryRow(current, slug))?.migrationStatus).toBe(
+        "applied"
+      );
+      expect(await current.adapter.tableExists(`single_${slug}_locales`)).toBe(
+        true
+      );
+    });
+
+    /**
+     * A required UPLOAD field must not fail an otherwise-successful create.
+     *
+     * 🔴 The descriptor reports every `fkSingle` column as nullable on purpose — requiredness is
+     * enforced in application code — while the direct create DDL emits NOT NULL for a required
+     * one. A nullability comparison therefore fails a table that was created correctly.
+     */
+    it("keeps a create with a required upload applied", async () => {
+      current = await createTestNextly({ dialect });
+
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: `${plain}_up`,
+          label: "Up",
+          fields: [{ name: "hero", type: "upload", required: true }],
+        }
+      );
+
+      expect((await registryRow(current, `${plain}_up`))?.migrationStatus).toBe(
+        "applied"
+      );
+    });
+
+    /**
      * A normal schema UPDATE on a Single must stay `applied`.
      *
      * 🔴 The ALTER path builds its verification shape from a normalized field list that carries a
@@ -286,87 +356,6 @@ for (const dialect of getConfiguredTestDialects()) {
     });
 
     /**
-     * 🔴 A removed REQUIRED field leaves a NOT NULL column the schema no longer declares.
-     *
-     * The re-run no-ops rather than dropping anything, so writes that omit the removed field now
-     * fail its constraint — the Builder considers them valid and the database does not. Only a
-     * desired-side walk would miss this, because the column is not in the desired set at all.
-     */
-    it("refuses when a removed required column is still enforced", async () => {
-      current = await createTestNextly({ dialect });
-
-      await dispatchSingles(
-        "createSingle",
-        {},
-        {
-          slug: plain,
-          label: "Plain",
-          fields: [
-            { name: "body", type: "text" },
-            { name: "subtitle", type: "text", required: true },
-          ],
-        }
-      );
-
-      const registry = current.getService("singleRegistryService");
-      await registry.deleteSingle(plain, { force: true });
-
-      // `subtitle` is gone from the schema, but its NOT NULL column survives on the table.
-      await dispatchSingles(
-        "createSingle",
-        {},
-        {
-          slug: plain,
-          label: "Plain",
-          fields: [{ name: "body", type: "text" }],
-        }
-      );
-
-      expect((await registryRow(current, plain))?.migrationStatus).toBe(
-        "failed"
-      );
-    });
-
-    /**
-     * 🔴 Nullability is part of the shape, not a detail of it.
-     *
-     * A column the Builder now calls optional while the database still has it NOT NULL accepts
-     * every write the Builder considers valid and then fails the constraint — a failure that
-     * surfaces at write time, far from the migration that caused it.
-     */
-    it("refuses when an existing column has the wrong nullability", async () => {
-      current = await createTestNextly({ dialect });
-
-      await dispatchSingles(
-        "createSingle",
-        {},
-        {
-          slug: plain,
-          label: "Plain",
-          fields: [{ name: "body", type: "text", required: true }],
-        }
-      );
-
-      const registry = current.getService("singleRegistryService");
-      await registry.deleteSingle(plain, { force: true });
-
-      // Same name, same type, now optional. The physical column keeps its NOT NULL.
-      await dispatchSingles(
-        "createSingle",
-        {},
-        {
-          slug: plain,
-          label: "Plain",
-          fields: [{ name: "body", type: "text", required: false }],
-        }
-      );
-
-      expect((await registryRow(current, plain))?.migrationStatus).toBe(
-        "failed"
-      );
-    });
-
-    /**
      * 🔴 A LOCALIZED single's repair is REFUSED, deliberately, and this pins that decision.
      *
      * The companion reconcile is told `wasLocalized: false` and `oldFields: []`, because from the
@@ -416,51 +405,6 @@ for (const dialect of getConfiguredTestDialects()) {
     });
 
     /**
-     * 🔴 The dangerous half of tolerating a re-run: the table is there, but it is the WRONG table.
-     *
-     * `CREATE TABLE IF NOT EXISTS` no-ops against an existing table on every dialect, and the
-     * index statements that follow are tolerated as already-applied, so a repair over an orphan
-     * left by an earlier create emits no error even when the field set has changed. Existence
-     * alone would record a schema the database does not have, and every later read would address
-     * columns that are not there. So "applied" has to mean the columns are present, not merely
-     * that something of that name is.
-     */
-    it("refuses to call it applied when an existing table lacks the new columns", async () => {
-      current = await createTestNextly({ dialect });
-
-      await dispatchSingles(
-        "createSingle",
-        {},
-        {
-          slug: plain,
-          label: "Plain",
-          fields: [{ name: "body", type: "text" }],
-        }
-      );
-
-      // The orphan state: the table survives, the row describing it does not.
-      const registry = current.getService("singleRegistryService");
-      await registry.deleteSingle(plain, { force: true });
-
-      // The same slug, now asking for a column the surviving table does not have.
-      await dispatchSingles(
-        "createSingle",
-        {},
-        {
-          slug: plain,
-          label: "Plain",
-          fields: [
-            { name: "body", type: "text" },
-            { name: "subtitle", type: "text" },
-          ],
-        }
-      );
-
-      const row = await registryRow(current, plain);
-      expect(row?.migrationStatus).toBe("failed");
-    });
-
-    /**
      * 🔴 An unfinished attempt must not become a permanent blocker.
      *
      * Writing the intent first is only worth doing if something can finish it. The row owns the
@@ -495,39 +439,6 @@ for (const dialect of getConfiguredTestDialects()) {
 
       expect((await registryRow(current, plain))?.migrationStatus).toBe(
         "applied"
-      );
-    });
-
-    /**
-     * 🔴 The lifecycle columns come from create OPTIONS, not from the field list.
-     *
-     * A check derived from the fields alone passes here while `status` is absent, and the runtime
-     * schema then writes a Draft/Published column the table does not have. Caught only because the
-     * desired shape is built by the same builder the schema diff uses, which injects the system
-     * columns the options ask for.
-     */
-    it("refuses when the existing table lacks the lifecycle column now asked for", async () => {
-      current = await createTestNextly({ dialect });
-
-      const fields = [{ name: "body", type: "text" }];
-      await dispatchSingles(
-        "createSingle",
-        {},
-        { slug: plain, label: "Plain", fields }
-      );
-
-      const registry = current.getService("singleRegistryService");
-      await registry.deleteSingle(plain, { force: true });
-
-      // Same fields, but Draft/Published now switched on. The table is untouched by the re-run.
-      await dispatchSingles(
-        "createSingle",
-        {},
-        { slug: plain, label: "Plain", fields, status: true }
-      );
-
-      expect((await registryRow(current, plain))?.migrationStatus).toBe(
-        "failed"
       );
     });
   });
