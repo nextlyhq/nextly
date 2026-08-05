@@ -149,5 +149,18 @@ export async function reconcileFile(
 
   // DRIFT — live matches neither baseline nor target.
   const driftItems = diffSnapshots(before, live).map(toDriftItem);
-  throw migrationDriftError({ migration, file: file.path, driftItems });
+  // Adoption, not drift: this migration expected to start from an empty schema
+  // and every difference is a table that is simply already there. Derived from
+  // what is already in hand rather than from a journal read, so the diagnosis
+  // costs nothing on the path that reports a failure.
+  const looksUnadopted =
+    before.tables.length === 0 &&
+    driftItems.length > 0 &&
+    driftItems.every(item => item.kind === "+");
+  throw migrationDriftError({
+    migration,
+    file: file.path,
+    driftItems,
+    looksUnadopted,
+  });
 }

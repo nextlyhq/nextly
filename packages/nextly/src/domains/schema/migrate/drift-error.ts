@@ -21,12 +21,60 @@ export interface MigrationDriftArgs {
   /** Repo-relative path to the .sql file. */
   file: string;
   driftItems: DriftItem[];
+  /**
+   * The database holds a schema migrations have never been told about — this
+   * migration expected to start from nothing and found tables already there,
+   * with every difference being one of them.
+   *
+   * Worth naming separately because the generic advice is actively wrong for
+   * it: none of the three recoveries below can succeed on an un-adopted
+   * database, so offering them leaves the operator trying each in turn and
+   * getting a different refusal from each.
+   */
+  looksUnadopted?: boolean;
 }
 
 export function migrationDriftError(args: MigrationDriftArgs): NextlyError {
   const lines = args.driftItems
     .map(d => `    ${d.kind} ${d.detail}`)
     .join("\n");
+
+  if (args.looksUnadopted) {
+    return new NextlyError({
+      code: "NEXTLY_MIGRATION_DRIFT",
+      statusCode: 409,
+      publicMessage: [
+        "Migration cannot be applied: this database is not managed by migrations yet",
+        "",
+        `  Migration:  ${args.migration}`,
+        `  File:       ${args.file}`,
+        "",
+        "  Every difference below is a table that EXISTS in your database but",
+        "  that migrations have no record of. That is what a project built with",
+        "  `db:sync` looks like: the schema is real, it simply has no starting",
+        "  snapshot to measure changes against.",
+        "",
+        `  Tables already present (${args.driftItems.length}):`,
+        lines,
+        "",
+        "  Fix — adopt the database, then create your migration again:",
+        "        pnpm nextly migrate:baseline",
+        `        pnpm nextly migrate:create --name ${args.migration}`,
+        "        pnpm nextly migrate",
+        "",
+        "  Baselining records the schema you already have as the starting",
+        "  point. It changes nothing in the database.",
+        "",
+        "  Details: https://docs.nextlyhq.com/guides/migration-drift",
+      ].join("\n"),
+      logContext: {
+        migration: args.migration,
+        file: args.file,
+        driftCount: args.driftItems.length,
+        unadopted: true,
+      },
+    });
+  }
 
   const publicMessage = [
     "Migration cannot be applied: schema drift detected",
