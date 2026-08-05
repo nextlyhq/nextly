@@ -157,6 +157,12 @@ export {
   // name to compare it has to escape it again before writing it back, or a name
   // holding a space or a quote is emitted as tokens the parser reads apart.
   escapeIdentifier,
+  // ASCII-only case folding, which is what CSS applies to keywords. JavaScript's
+  // `toLowerCase` folds more than that: U+212A KELVIN SIGN becomes "k", so
+  // `@\u212Aeyframes` reads as `@keyframes` to a check using it and as an unknown
+  // at-rule to a browser. Public because every surface deciding what a keyword
+  // IS has to fold it the same way.
+  asciiLower,
 } from "./style/css-value";
 export type { CssValueRejection } from "./style/css-value";
 export {

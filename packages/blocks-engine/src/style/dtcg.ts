@@ -47,7 +47,7 @@ import type { TokenKind } from "./catalog-types";
 // colour from the one the site renders.
 import { parseColor } from "./contrast";
 import type { Rgb } from "./contrast";
-import { checkCssValue } from "./css-value";
+import { asciiLower, checkCssValue, decodeIdentifier } from "./css-value";
 import type { SiteToken, SiteTokenSet } from "./site-tokens";
 import { isTokenName, tokenValueFetches } from "./site-tokens";
 
@@ -228,7 +228,10 @@ function measureToDtcg(
   const match = CSS_MEASURE.exec(css);
   if (!match) return undefined;
   const value = Number.parseFloat(match[1] ?? "");
-  const unit = (match[2] ?? "").toLowerCase();
+  // A unit is an identifier, so a browser reads `1r\\65m` as `1rem`. Comparing
+  // the raw text against the allowed units reports a good measurement as one
+  // the format cannot express.
+  const unit = asciiLower(decodeIdentifier(match[2] ?? ""));
   if (!Number.isFinite(value) || !units.includes(unit)) return undefined;
   return { value, unit };
 }
@@ -361,7 +364,10 @@ function finishPart(
  * format. The exact text is kept in the extension either way, so the round trip
  * stays byte for byte.
  */
-const CSS_NUMBER_SOURCE = "[+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?";
+// A decimal point is consumed only when a digit follows it: CSS reads `1.` as a
+// number and then a delimiter, not as the number `1`. Accepting it let `1.px`
+// split into `1` + `px` and export as a dimension the browser would drop.
+const CSS_NUMBER_SOURCE = "[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:[eE][+-]?\\d+)?";
 const CSS_NUMBER = new RegExp(`^${CSS_NUMBER_SOURCE}$`);
 
 /**
@@ -372,7 +378,9 @@ const CSS_NUMBER = new RegExp(`^${CSS_NUMBER_SOURCE}$`);
  * disagree — a token exporting as `1e3` while `1e3px` is reported as something
  * the format cannot express.
  */
-const CSS_MEASURE = new RegExp(`^(${CSS_NUMBER_SOURCE})([a-zA-Z]+)$`);
+const CSS_MEASURE = new RegExp(
+  `^(${CSS_NUMBER_SOURCE})((?:[a-zA-Z]|\\\\[0-9a-fA-F]{1,6}\\s?|\\\\.)+)$`
+);
 
 /** A number token as the format stores it: a JSON number. */
 function numberToDtcg(css: string): number | undefined {
@@ -446,6 +454,19 @@ function readToken(
   inherited: string | undefined,
   issues: ValidationIssue[]
 ): SiteToken | undefined {
+  // Each segment on its own first. The format forbids `.` in a name, so a key
+  // spelled `"color.primary"` is malformed — joined into the dot path it is
+  // indistinguishable from the nested `color` -> `primary` it would collide
+  // with, and the next export would rewrite it into exactly those groups.
+  const malformed = path.find(segment => /[.{}]/.test(segment));
+  if (malformed !== undefined) {
+    issues.push(
+      issue(
+        `"${malformed}" is not a usable name in a design-token file: a name may not contain ".", "{" or "}". It was skipped.`
+      )
+    );
+    return undefined;
+  }
   const name = path.join(".");
   if (!isTokenName(name)) {
     issues.push(
@@ -625,17 +646,31 @@ function colorFromDtcg(value: unknown): string | undefined {
   // colour WITHOUT it. Taking the hex on its own therefore imports a
   // half-transparent colour as an opaque one — a value that renders, looks
   // deliberate, and is not the colour the file described.
-  const alpha =
-    typeof value.alpha === "number" ? Math.min(1, Math.max(0, value.alpha)) : 1;
+  // Validated rather than clamped, for the same reason the components are: an
+  // alpha of 2 or -0.5 is not an alpha, and folding it to 1 or 0 imports a
+  // colour the file did not describe.
+  if (
+    value.alpha !== undefined &&
+    (typeof value.alpha !== "number" ||
+      !Number.isFinite(value.alpha) ||
+      value.alpha < 0 ||
+      value.alpha > 1)
+  ) {
+    return undefined;
+  }
+  const alpha = typeof value.alpha === "number" ? value.alpha : 1;
   if (typeof value.hex === "string" && /^#[0-9a-f]{6}$/i.test(value.hex)) {
     if (alpha >= 1) return value.hex;
     const rgb = parseColor(value.hex);
     if (rgb !== undefined) return `rgb(${rgb.r} ${rgb.g} ${rgb.b} / ${alpha})`;
   }
   const components = value.components;
-  if (!Array.isArray(components) || components.length < 3) return undefined;
+  // Exactly three. sRGB has three channels and alpha is a member of its own, so
+  // a fourth entry means the value was not written as the format describes —
+  // dropping it silently would import a colour nobody wrote.
+  if (!Array.isArray(components) || components.length !== 3) return undefined;
   if (value.colorSpace !== "srgb") return undefined;
-  const channels = components.slice(0, 3);
+  const channels = components;
   if (!channels.every(part => typeof part === "number")) return undefined;
   // Refused rather than clamped. A component outside 0-1 is not an sRGB
   // channel, and folding `[2, 0, 0]` down to red stores a colour the file did

@@ -102,6 +102,35 @@ describe("a token value may not fetch", () => {
     expect(issues[0]?.message).toContain("load a file");
   });
 
+  it.each([
+    '"https://evil.example/a.png"',
+    "https://evil.example/a.png",
+    "//evil.example/a.png",
+    "data:image/svg+xml,<svg/>",
+  ])("refuses the remote destination %s written as text", value => {
+    // The FUNCTION need not be in the token. A token holding just the string is
+    // inert until custom CSS writes `background-image: image-set(var(--site-x)
+    // 1x)` — and that declaration has no URL in it for the origin policy to
+    // inspect, only a substitution. The two halves are written in different
+    // places by different people, which is why neither can be judged alone.
+    expect(tokenValueFetches(value)).toBe(true);
+    const { css } = emitTokenBlocks(
+      { tokens: [{ name: "x", kind: "custom", values: { light: value } }] },
+      SCOPE
+    );
+    expect(css).toBe("");
+  });
+
+  it.each(["/logo.svg", '"/logo.svg"', "#2563eb", "1rem", '"My Font", serif'])(
+    "still writes the same-origin or ordinary value %s",
+    value => {
+      // Refusing remote destinations must not refuse a path on this site: it
+      // resolves against the page's own origin and needs no allowlisting, which
+      // is the line a font file is already held to.
+      expect(tokenValueFetches(value)).toBe(false);
+    }
+  );
+
   it("reads an escaped spelling as the function it is", () => {
     // `\\75 rl(` IS `url(` to a browser, so a check against the raw text is one
     // an author writes straight past. Asserted on the check itself rather than
@@ -247,6 +276,10 @@ describe("a value that cannot be its kind", () => {
     ["duration", "16px"],
     // A word `font-weight` does not take.
     ["fontWeight", "heavy"],
+    // A zero with a unit is still that unit's quantity: `0px` is a length, and
+    // only an UNITLESS zero is a time.
+    ["duration", "0px"],
+    ["duration", "0deg"],
     ["number", "1e3px"],
     ["fontWeight", "2e3"],
   ] as const)("names what is wrong with %s value %s", (kind, value) => {
