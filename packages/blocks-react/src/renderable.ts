@@ -389,6 +389,13 @@ export function normalizeRenderable(
       // that failure inside React's render, past this block's boundary — so it
       // is refused. A block wanting an async child returns the promise itself,
       // or puts it inside a component it owns.
+      // Refusing to render it does not make it go away: the block already
+      // started this promise, and a rejection nobody is listening for takes
+      // down the process under Node's default `--unhandled-rejections=throw`.
+      // Marking it handled is not swallowing an error — the placeholder is
+      // where the failure gets reported — it is declining to let a value this
+      // renderer refused kill the server.
+      void Promise.resolve(current).catch(() => undefined);
       return "a promise inside JSX, which cannot be awaited under this block's containment";
     }
 

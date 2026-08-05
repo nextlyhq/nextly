@@ -1474,6 +1474,38 @@ describe("PageRenderer", () => {
       expect(html).toContain("survivor");
     });
 
+    it("marks a refused promise handled so it cannot crash the process", async () => {
+      // Refusing to render it does not make it go away. The block already
+      // started this promise, and under Node's default
+      // `--unhandled-rejections=throw` a rejection nobody listens for takes the
+      // server down — which would be worse than the escape the refusal closes.
+      let rejectionHandlerAttached = false;
+      const watched = {
+        then(_onFulfilled: unknown, onRejected: unknown) {
+          if (typeof onRejected === "function") rejectionHandlerAttached = true;
+        },
+      };
+      const watchedBlock = defineBlock({
+        name: "test/watched-promise",
+        version: 1,
+        description: "Puts a watched thenable inside its JSX.",
+        example: { props: {} },
+        render: ({ className }) => (
+          <div className={className}>{watched as unknown as ReactElement}</div>
+        ),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(node("a", "test/watched-promise"))}
+          blocks={createBlockResolver([watchedBlock as AnyBlockDefinition])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual(["invalid-output"]);
+      expect(rejectionHandlerAttached).toBe(true);
+    });
+
     it("refuses a promise buried inside JSX it does not own", async () => {
       const buried = defineBlock({
         name: "test/buried-promise",
