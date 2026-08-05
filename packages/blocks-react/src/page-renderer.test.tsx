@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_LIMITS,
   DOCUMENT_FORMAT_VERSION,
+  nodeClassNames,
   NODE_CLASS_PREFIX,
   blockTypeClassName,
   defineBlock,
@@ -3868,6 +3869,274 @@ describe("PageRenderer", () => {
 
       expect(placeholderReasons(html)).toEqual(["migration-failed"]);
       expect(html).not.toContain("stale props");
+    });
+  });
+
+  describe("hostile stored input", () => {
+    it("refuses a document envelope that is not an object", async () => {
+      // The envelope is database input too, and it is read before any of the
+      // repair passes. `null` throws on the first property access, inside the
+      // page component, where no block boundary exists to contain it.
+      for (const stored of [null, undefined, 42, "a page", []]) {
+        const html = await renderToHtml(
+          <PageRenderer
+            document={stored as unknown as BlockDocument}
+            blocks={createBlockResolver([text as AnyBlockDefinition])}
+          />
+        );
+
+        expect(placeholderReasons(html)).toEqual(["unsupported-format"]);
+      }
+    });
+
+    it("reserves the id the attribute bag will actually render", async () => {
+      // The render path lowercases each attribute name into one bag, so the
+      // LAST string case-variant is what reaches the DOM. Reserving the first
+      // would hold an id the page never uses while letting the one it does use
+      // collide with a later node.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", {
+              props: { value: "first" },
+              attributes: { id: "old", ID: "hero" },
+            }),
+            node("b", "test/text", {
+              props: { value: "second" },
+              cssId: "hero",
+            })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+        />
+      );
+
+      // `hero` is claimed by the first node's rendered attribute, so the second
+      // renders without it. Exactly one `id="hero"` reaches the page.
+      expect(html.match(/id="hero"/g)).toHaveLength(1);
+      expect(html).not.toContain('id="old"');
+      expect(html).toContain("second");
+    });
+
+    it("does not let a version-ahead node reserve a DOM id", async () => {
+      // A node stored ahead of its definition renders a placeholder, which
+      // emits no modelled id — so reserving one would strip the anchor off a
+      // healthy node for nothing.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", { version: 9, cssId: "hero" }),
+            node("b", "test/text", {
+              props: { value: "healthy" },
+              cssId: "hero",
+            })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual(["version-ahead"]);
+      expect(html).toContain('id="hero"');
+      expect(html).toContain("healthy");
+    });
+
+    it("refuses inner HTML React cannot convert to a string", async () => {
+      // React stringifies `__html` while serializing, after this boundary has
+      // returned, so a value that cannot be coerced throws uncontained.
+      const hostile = defineBlock({
+        name: "test/hostile-html",
+        version: 1,
+        description: "Returns an uncoercible __html value.",
+        example: { props: {} },
+        defaultProps: {},
+        render: () => (
+          <div
+            dangerouslySetInnerHTML={
+              { __html: { toString: null, valueOf: null } } as unknown as {
+                __html: string;
+              }
+            }
+          />
+        ),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(node("a", "test/hostile-html"))}
+          blocks={createBlockResolver([hostile as AnyBlockDefinition])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual(["invalid-output"]);
+    });
+
+    it("refuses a lazy wrapper that only impersonates the shape", async () => {
+      // What a lazy resolves to cannot be checked without calling `_init`, but
+      // React's own `lazy()` always sets `_payload` — so an object missing it is
+      // an impersonation, and one that resolves to a non-component throws
+      // "Element type is invalid" from inside React's render.
+      const forged = defineBlock({
+        name: "test/forged-lazy",
+        version: 1,
+        description: "Returns an object impersonating React.lazy.",
+        example: { props: {} },
+        defaultProps: {},
+        render: () =>
+          createElement({
+            $$typeof: Symbol.for("react.lazy"),
+            _init: () => 42,
+          } as unknown as Parameters<typeof createElement>[0]),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(node("a", "test/forged-lazy"))}
+          blocks={createBlockResolver([forged as AnyBlockDefinition])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual(["invalid-output"]);
+    });
+
+    it("marks a rejecting child of an element refused for its own shape", async () => {
+      // The element is judged by its own shape BEFORE its children are looked
+      // at, so refusing it returns before anything descends. A promise the
+      // block already started would be left with no handler, and Node's default
+      // `--unhandled-rejections=throw` turns that into a process exit: worse
+      // than the escape the refusal closed.
+      let handlerAttached = false;
+      const rejecting: PromiseLike<never> = {
+        then(_resolve, reject) {
+          if (typeof reject === "function") handlerAttached = true;
+          return rejecting as never;
+        },
+      };
+
+      const voidWithPromise = defineBlock({
+        name: "test/void-with-promise",
+        version: 1,
+        description: "Puts a rejecting promise inside a void element.",
+        example: { props: {} },
+        defaultProps: {},
+        // `<br>` is a void element and cannot have contents, so the element is
+        // refused for its own shape and its child is never inspected.
+        render: () => createElement("br", null, rejecting as unknown as string),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(node("a", "test/void-with-promise"))}
+          blocks={createBlockResolver([voidWithPromise as AnyBlockDefinition])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual(["invalid-output"]);
+      expect(handlerAttached).toBe(true);
+    });
+
+    it("refuses inner HTML whose Symbol.toPrimitive is not callable", async () => {
+      // Coercion consults `Symbol.toPrimitive` BEFORE `toString`/`valueOf`, so
+      // an object carrying a non-callable one throws even though both of the
+      // others are inherited and callable.
+      const hostile = defineBlock({
+        name: "test/bad-to-primitive",
+        version: 1,
+        description: "Returns __html with a non-callable Symbol.toPrimitive.",
+        example: { props: {} },
+        defaultProps: {},
+        render: () => (
+          <div
+            dangerouslySetInnerHTML={
+              { __html: { [Symbol.toPrimitive]: 1 } } as unknown as {
+                __html: string;
+              }
+            }
+          />
+        ),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(node("a", "test/bad-to-primitive"))}
+          blocks={createBlockResolver([hostile as AnyBlockDefinition])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual(["invalid-output"]);
+    });
+
+    it("abandons an endless child rather than sweeping it forever", async () => {
+      // The refusal sweep marks promises inside a subtree nothing will render.
+      // Its budget makes each recursive call return, but the loop that FEEDS it
+      // must stop pulling too, or an endless generator child spins here instead
+      // of being abandoned.
+      const endless = defineBlock({
+        name: "test/endless-child",
+        version: 1,
+        description: "Puts an endless generator inside a void element.",
+        example: { props: {} },
+        defaultProps: {},
+        render: () => {
+          function* forever(): Generator<string> {
+            while (true) yield "x";
+          }
+          // `<br>` is void, so the element is refused for its own shape and the
+          // sweep is what walks this child.
+          return createElement("br", null, forever() as unknown as string);
+        },
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(node("a", "test/endless-child"))}
+          blocks={createBlockResolver([endless as AnyBlockDefinition])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual(["invalid-output"]);
+    });
+
+    it("does not trust a stored stylesheet when a node becomes a placeholder", async () => {
+      // A knowable placeholder emits only a hidden marker, so a sheet compiled
+      // for the markup it WOULD have rendered ships rules for content that is
+      // not on the page. Identity alone misses it: the node is skipped by the
+      // address predicate, so with nothing else to repair the tree comes back
+      // unchanged and the stale sheet would be trusted.
+      const ahead = doc(
+        node("a", "test/text", { version: 9, props: { value: "ahead" } })
+      );
+      // The map has to cover every node id or the stored sheet is discarded for
+      // an unrelated reason, and the assertion below would hold either way.
+      const stored = {
+        css: ".nx-stale{color:red}",
+        classes: Object.fromEntries(nodeClassNames(["a"])),
+      };
+      // The fixture is only meaningful if this sheet WOULD otherwise be
+      // trusted, so pin that: a healthy document ships it.
+      const healthyDoc = doc(
+        node("a", "test/text", { props: { value: "fine" } })
+      );
+      const healthy = await renderToHtml(
+        <PageRenderer
+          document={healthyDoc}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+          styles={{
+            css: ".nx-stale{color:red}",
+            classes: Object.fromEntries(nodeClassNames(["a"])),
+          }}
+        />
+      );
+      expect(healthy).toContain("nx-stale");
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={ahead}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+          styles={stored}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual(["version-ahead"]);
+      expect(html).not.toContain("nx-stale");
     });
   });
 });
