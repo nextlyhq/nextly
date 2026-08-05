@@ -56,7 +56,6 @@ import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detect
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import { isIdempotencyError } from "../../domains/schema/pipeline/sql-statement-utils";
 import type { DesiredCollection } from "../../domains/schema/pipeline/types";
-import { applyStatements } from "../../domains/schema/services/apply-migration-statements";
 import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
@@ -852,10 +851,12 @@ const COLLECTIONS_METHODS: Record<
               }
             }
           }
-          // Tolerant for the same reason the main table is: an apply re-run over a companion that
-          // already carries these columns asks to ADD them again, and those statements carry no
-          // `IF NOT EXISTS` on any dialect. The matcher still refuses a duplicate ROW.
-          await applyStatements(adapter, plan.statements);
+          // 🔴 STRICT on purpose, matching the other two companion paths: tolerating a re-run
+          // would make a half-finished localization ENABLE look like success, because the planner
+          // cannot tell that state from an orphan repair. A loud failure is the safer outcome.
+          for (const stmt of plan.statements) {
+            await adapter.executeQuery(stmt);
+          }
 
           // The transition record describes a companion that no longer exists, so it stops being true
           // the moment the disable succeeds. Left behind, it would refuse the next enable's real

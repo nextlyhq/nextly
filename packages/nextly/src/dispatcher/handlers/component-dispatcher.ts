@@ -52,10 +52,7 @@ import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detect
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import { isIdempotencyError } from "../../domains/schema/pipeline/sql-statement-utils";
 import type { DesiredFieldGroup } from "../../domains/schema/pipeline/types";
-import {
-  applyMigrationStatements,
-  applyStatements,
-} from "../../domains/schema/services/apply-migration-statements";
+import { applyMigrationStatements } from "../../domains/schema/services/apply-migration-statements";
 import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
@@ -286,10 +283,21 @@ async function reconcileComponentCompanion(args: {
       }
     }
   }
-  // Tolerant for the same reason the main table is: a create that meets a companion already left
-  // by an earlier attempt asks to ADD columns that are there, and those statements carry no
-  // `IF NOT EXISTS` on any dialect. The matcher still refuses a duplicate ROW.
-  await applyStatements(adapter, plan.statements);
+  // 🔴 STRICT on purpose: the companion does NOT tolerate a re-run.
+  //
+  // Tolerating it would make a half-finished localization ENABLE look like success. Interrupted
+  // after the companion is created but before the seed and the main-column drops, the retry is
+  // indistinguishable from an orphan repair — the planner cannot tell them apart, because the
+  // signal that separates them (`existingMainColumns`) is consumed only on the disable path — so
+  // the duplicate columns would be swallowed and the entity recorded as localized while its
+  // default-locale content is still stranded on the main table.
+  //
+  // A loud failure is the worse experience and the safer outcome. It costs the repair of a
+  // localized entity whose create half-failed; it prevents silently reporting a migration that did
+  // not happen.
+  for (const stmt of plan.statements) {
+    await adapter.executeQuery(stmt);
+  }
 
   // The transition record describes a companion that no longer exists, so it stops being true
   // the moment the disable succeeds. Left behind, it would refuse the next enable's real

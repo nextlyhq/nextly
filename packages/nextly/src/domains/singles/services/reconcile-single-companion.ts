@@ -35,7 +35,6 @@ import {
 } from "../../i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../../i18n/runtime/companion-registration";
 import { isIdempotencyError } from "../../schema/pipeline/sql-statement-utils";
-import { applyStatements } from "../../schema/services/apply-migration-statements";
 
 /** Everything the companion reconcile needs about the save that triggered it. */
 export interface ReconcileSingleCompanionArgs {
@@ -135,14 +134,21 @@ export async function reconcileSingleCompanion(
       }
     }
   }
-  // 🔴 Tolerant, because a create can meet a companion that is already there.
+  // 🔴 STRICT on purpose: the companion does NOT tolerate a re-run.
   //
-  // Repairing an orphan — main and companion present, the registry row gone — reaches here as a
-  // brand-new localized single, since that is all the registry can say: `wasLocalized: false` and
-  // no old fields. The plan then asks to ADD every translatable column, and those statements carry
-  // no `IF NOT EXISTS` on ANY dialect, so the repair failed everywhere rather than only on MySQL.
-  // The same rule the main table gets, from the same matcher, which still refuses a duplicate ROW.
-  await applyStatements(adapter, plan.statements);
+  // Tolerating it would make a half-finished localization ENABLE look like success. Interrupted
+  // after the companion is created but before the seed and the main-column drops, the retry is
+  // indistinguishable from an orphan repair — the planner cannot tell them apart, because the
+  // signal that separates them (`existingMainColumns`) is consumed only on the disable path — so
+  // the duplicate columns would be swallowed and the entity recorded as localized while its
+  // default-locale content is still stranded on the main table.
+  //
+  // A loud failure is the worse experience and the safer outcome. It costs the repair of a
+  // localized entity whose create half-failed; it prevents silently reporting a migration that did
+  // not happen.
+  for (const stmt of plan.statements) {
+    await adapter.executeQuery(stmt);
+  }
 
   // The transition record describes a companion that no longer exists, so it stops being true the
   // moment the disable succeeds. Left behind, it would refuse the next enable's real source locale

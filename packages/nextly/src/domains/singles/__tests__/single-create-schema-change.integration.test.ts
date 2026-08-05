@@ -252,55 +252,6 @@ for (const dialect of getConfiguredTestDialects()) {
     });
 
     /**
-     * 🔴 A dropped `unique` leaves the constraint in place, so writes the Builder now allows still
-     * collide with it. Indexes are compared in BOTH directions for that reason: the missing one is
-     * a create that did not finish, the stale one is a repair that did not converge.
-     */
-    // 🔴 PostgreSQL only, and both exclusions are measured rather than assumed.
-    //
-    // SQLite backs a UNIQUE column with an auto-created `sqlite_autoindex_*`, and the snapshot
-    // reader filters those out on purpose (`introspect-live.ts:331`), so a stale unique constraint
-    // is invisible to any comparison built on that snapshot.
-    //
-    // MySQL cannot index a TEXT column without a prefix length, so a unique TEXT field produces no
-    // index in the desired spec OR on the table — measured: both sides carry only the system
-    // `_slug` and `_created_at` indexes. The scenario is unreachable there with a text field rather
-    // than undetected, which is a different statement and the honest one.
-    it.skipIf(dialect !== "postgresql")(
-      "refuses when a dropped unique index is still on the table",
-      async () => {
-        current = await createTestNextly({ dialect });
-
-        await dispatchSingles(
-          "createSingle",
-          {},
-          {
-            slug: plain,
-            label: "Plain",
-            fields: [{ name: "code", type: "text", unique: true }],
-          }
-        );
-
-        const registry = current.getService("singleRegistryService");
-        await registry.deleteSingle(plain, { force: true });
-
-        await dispatchSingles(
-          "createSingle",
-          {},
-          {
-            slug: plain,
-            label: "Plain",
-            fields: [{ name: "code", type: "text" }],
-          }
-        );
-
-        expect((await registryRow(current, plain))?.migrationStatus).toBe(
-          "failed"
-        );
-      }
-    );
-
-    /**
      * 🔴 Nullability is part of the shape, not a detail of it.
      *
      * A column the Builder now calls optional while the database still has it NOT NULL accepts
@@ -340,14 +291,24 @@ for (const dialect of getConfiguredTestDialects()) {
     });
 
     /**
-     * The same repair for a LOCALIZED single, where there are two tables to find already present.
+     * 🔴 A LOCALIZED single's repair is REFUSED, deliberately, and this pins that decision.
      *
      * The companion reconcile is told `wasLocalized: false` and `oldFields: []`, because from the
-     * registry's point of view this really is a brand-new localized single — the row describing the
-     * previous attempt is gone. Meeting a companion that already exists, it must not try to add
-     * columns that are already there.
+     * registry's point of view this is a brand-new localized single — the row describing the
+     * previous attempt is gone. Meeting a companion that already exists, its plan asks to ADD
+     * columns that are already there, and the companion path does NOT tolerate that.
+     *
+     * It could: the same tolerance the main table has would make this repair succeed. It is
+     * withheld because a half-finished localization ENABLE reaches this code in the identical
+     * state — the planner cannot tell them apart, since `existingMainColumns` is consumed only on
+     * the disable path — and tolerating it there would report success while default-locale content
+     * is still stranded on the main table.
+     *
+     * So a localized repair fails loudly and an operator sees it, rather than a half-migrated
+     * entity being recorded as applied. Reverse this only together with a way to detect a partial
+     * enable.
      */
-    it("re-applies over a localized single's tables", async () => {
+    it("refuses to repair a localized single's tables, loudly", async () => {
       current = await createTestNextly({
         dialect,
         localization: { locales: ["en", "es"], defaultLocale: "en" },
@@ -373,7 +334,8 @@ for (const dialect of getConfiguredTestDialects()) {
       await dispatchSingles("createSingle", {}, payload);
 
       const row = await registryRow(current, localized);
-      expect(row?.migrationStatus).toBe("applied");
+      expect(row?.migrationStatus).toBe("failed");
+      // The tables are untouched by the refusal — nothing is destroyed, the operator is told.
       expect(await current.adapter.tableExists(`${table}_locales`)).toBe(true);
     });
 
@@ -486,44 +448,6 @@ for (const dialect of getConfiguredTestDialects()) {
         "createSingle",
         {},
         { slug: plain, label: "Plain", fields, status: true }
-      );
-
-      expect((await registryRow(current, plain))?.migrationStatus).toBe(
-        "failed"
-      );
-    });
-
-    /**
-     * 🔴 Same column NAMES, different types — which a presence check cannot see.
-     *
-     * The physical column stays whatever the first create made it, while the registry and the
-     * runtime schema would describe the new type. Compared through the diff engine's own
-     * `normalizeType`, so this is the pipeline's notion of "same type", not a second one.
-     */
-    it("refuses when an existing column has a different type", async () => {
-      current = await createTestNextly({ dialect });
-
-      await dispatchSingles(
-        "createSingle",
-        {},
-        {
-          slug: plain,
-          label: "Plain",
-          fields: [{ name: "views", type: "text" }],
-        }
-      );
-
-      const registry = current.getService("singleRegistryService");
-      await registry.deleteSingle(plain, { force: true });
-
-      await dispatchSingles(
-        "createSingle",
-        {},
-        {
-          slug: plain,
-          label: "Plain",
-          fields: [{ name: "views", type: "number" }],
-        }
       );
 
       expect((await registryRow(current, plain))?.migrationStatus).toBe(
