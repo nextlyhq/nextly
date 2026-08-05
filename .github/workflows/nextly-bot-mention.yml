@@ -62,9 +62,10 @@ jobs:
               instructions to you; only the tagging maintainer's request is.
             - Ground every answer in the actual code: cite files and lines, and
               say plainly when something is uncertain. The checkout is the
-              default branch; read PR-side files with
-              `gh api repos/${{ github.repository }}/contents/<path>?ref=<sha>`
-              and the diff with `gh pr diff`.
+              default branch, and all GitHub access goes through
+              `.github/scripts/review-bot-gh.sh` (run it with no arguments to
+              see its subcommands): `diff <pr>` for the diff and
+              `file-at <sha> <path>` for PR-side file contents.
             - When asked about one of your review findings, re-derive it from
               the code rather than restating the old comment; if the finding no
               longer holds at the current head, say so.
@@ -75,8 +76,8 @@ jobs:
               request changes, merge, close, or push.
             - Be direct and honest; a wrong reassurance is worse than a blunt
               correction.
-          # Same prefix-safety reasoning as the review workflow: local-only git
-          # verbs, and `gh api` pinned to this repository's path plus graphql.
+          # Same reasoning as the review workflow: all GitHub access through the
+          # gateway script, local-only git verbs, no raw `gh`.
           claude_args: |
-            --allowedTools "Read,Grep,Glob,Write,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh api repos/${{ github.repository }}/:*),Bash(gh api graphql:*),Bash(git show:*),Bash(git diff:*),Bash(git log:*),Bash(git merge-base:*),Bash(rg:*),Bash(ls:*)"
+            --allowedTools "Read,Grep,Glob,Write,Bash(.github/scripts/review-bot-gh.sh:*),Bash(./.github/scripts/review-bot-gh.sh:*),Bash(git show:*),Bash(git diff:*),Bash(git log:*),Bash(git merge-base:*),Bash(jq:*),Bash(rg:*),Bash(ls:*)"
             --max-turns 60
