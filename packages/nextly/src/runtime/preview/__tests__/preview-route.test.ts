@@ -134,6 +134,10 @@ describe("the preview route", () => {
 
       for (const target of [
         "//evil.example/x",
+        // A special scheme normalises a backslash to a slash, so these resolve
+        // to another host while still starting with a single "/".
+        "/\\evil.example/x",
+        "/\\\\evil.example/x",
         "https://evil.example/x",
         "javascript:alert(1)",
       ]) {
@@ -144,6 +148,50 @@ describe("the preview route", () => {
         expect(enable).not.toHaveBeenCalled();
       }
     });
+  });
+});
+
+describe("request input the reader must survive", () => {
+  it("treats a cookie that cannot be decoded as no session", async () => {
+    // A cookie is request input whoever wrote it, and "%" alone makes
+    // decodeURIComponent throw — which would answer a page request with a 500
+    // rather than simply no preview.
+    const scope = await readPreviewScope({
+      secret: TEST_SECRET,
+      generation: GENERATION,
+      cookies: () => Promise.resolve({ get: () => ({ value: "%" }) }),
+    });
+
+    expect(scope).toBeNull();
+  });
+
+  it("accepts synchronous cookies(), as Next 14 supplies", async () => {
+    // The peer range covers Next 14, where these helpers are synchronous.
+    const scope = await readPreviewScope({
+      secret: TEST_SECRET,
+      generation: GENERATION,
+      cookies: () => ({ get: () => undefined }),
+    });
+
+    expect(scope).toBeNull();
+  });
+
+  it("accepts a synchronous draftMode(), as Next 14 supplies", async () => {
+    const { token } = await signPreviewToken(SCOPE, TEST_SECRET, {
+      generation: GENERATION,
+    });
+    const enable = vi.fn();
+    const route = createPreviewRoute({
+      secret: TEST_SECRET,
+      generation: GENERATION,
+      redirectTo: () => "/pages/entry-1",
+      draftMode: () => ({ enable }),
+    });
+
+    const response = await route.GET(request(token));
+
+    expect(response.status).toBe(307);
+    expect(enable).toHaveBeenCalledOnce();
   });
 });
 

@@ -41,8 +41,14 @@ export interface PreviewRouteConfig {
    * returned value must be a site-relative path.
    */
   redirectTo: (scope: PreviewTokenScope) => string | Promise<string>;
-  /** Reads and enables Next's draft mode. Injected so the route is testable. */
-  draftMode: () => Promise<{ enable: () => void }>;
+  /**
+   * Reads and enables Next's draft mode. Injected so the route is testable.
+   *
+   * Accepts a synchronous return as well: `draftMode()` is sync on Next 14 and
+   * async from 15, and the peer range covers both, so requiring a promise would
+   * make the natural import fail to typecheck on the older one.
+   */
+  draftMode: () => { enable: () => void } | Promise<{ enable: () => void }>;
 }
 
 /**
@@ -55,7 +61,19 @@ export interface PreviewRouteConfig {
  * why matching a leading slash is not enough on its own.
  */
 function isSiteRelative(path: string): boolean {
-  return path.startsWith("/") && !path.startsWith("//");
+  if (!path.startsWith("/")) return false;
+  try {
+    // Resolved against a base rather than pattern-matched, because the
+    // spellings that escape an origin are the URL parser's to know and not
+    // this function's to guess: `//host`, `/\\host` and `/\\\\host` all resolve
+    // to another origin, since a special scheme normalises a backslash to a
+    // slash. Asking the same parser the browser will use is the only check
+    // that cannot fall behind the list.
+    const base = "https://nextly.invalid";
+    return new URL(path, base).origin === base;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -145,11 +163,19 @@ export async function readPreviewScope(
       ? await config.generation()
       : config.generation;
 
-  const verified = await verifyPreviewToken(
-    decodeURIComponent(raw),
-    config.secret,
-    { generation }
-  );
+  // A cookie is request input whoever sent it, and `%` alone makes
+  // `decodeURIComponent` throw — which would answer a page request with a 500
+  // rather than simply no preview session.
+  let token: string;
+  try {
+    token = decodeURIComponent(raw);
+  } catch {
+    return null;
+  }
+
+  const verified = await verifyPreviewToken(token, config.secret, {
+    generation,
+  });
   return verified.valid ? verified.scope : null;
 }
 
