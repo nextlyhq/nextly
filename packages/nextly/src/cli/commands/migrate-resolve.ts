@@ -17,11 +17,11 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
-import { customJunctionNames } from "../../domains/schema/migrate/junction-names";
 import {
   resolveMigration,
   type ResolveMode,
 } from "../../domains/schema/migrate/resolve";
+import { resolveDeclaredSchema } from "../../domains/schema/migrate/resolved-schema";
 import { parseSnapshotFile } from "../../domains/schema/migrate-create/snapshot-io";
 import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
 import type { NextlySchemaSnapshot } from "../../domains/schema/pipeline/diff/types";
@@ -151,6 +151,14 @@ export async function runMigrateResolve(
     // this flag, and recovery is exactly when a stale lock is most likely.
     await maybeForceUnlock(options, db, dialect);
 
+    // Config and the Builder manifest, merged as generation merges them, so
+    // the verifier excludes the same derived tables the snapshot never held.
+    const resolvedSchema = await resolveDeclaredSchema({
+      projectRoot: cwd,
+      config: configResult.config,
+      deferredExtends: configResult.deferredExtends,
+    });
+
     // fail-fast mode (the default) never returns undefined — it runs fn or
     // throws — so the non-null assertion below is safe.
     const result = (await withMigrateLock(db, dialect, () =>
@@ -187,7 +195,7 @@ export async function runMigrateResolve(
             // is in no snapshot, so without it the verifier compares a live
             // scope containing the junction against a target that never could
             // and refuses a recovery the operator has no other way to make.
-            new Set(customJunctionNames(configResult.config.collections))
+            resolvedSchema.knownJunctions
           );
           return introspectLiveSnapshot(db, dialect, managed);
         },

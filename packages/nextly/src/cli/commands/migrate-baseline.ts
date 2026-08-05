@@ -40,7 +40,10 @@ import {
   EMPTY_SNAPSHOT,
   planBaseline,
 } from "../../domains/schema/migrate/baseline";
-import { customJunctionNames } from "../../domains/schema/migrate/junction-names";
+import {
+  resolveDeclaredSchema,
+  type ResolvedEntity,
+} from "../../domains/schema/migrate/resolved-schema";
 import {
   formatMigrationFile,
   formatTimestamp,
@@ -61,14 +64,6 @@ import {
   snapshotComparableTables,
 } from "../../domains/schema/pipeline/managed-tables";
 import { generateSQL } from "../../domains/schema/pipeline/sql-templates/index";
-import type { ColumnOrigin } from "../../domains/schema/services/field-column-descriptor";
-import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
-import { applyDeferredExtendsToManifest } from "../../domains/schema/ui-schema/merge";
-import {
-  resolveCollectionTableName,
-  resolveComponentTableName,
-} from "../../domains/schema/utils/resolve-table-name";
-import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
 import { describeError, NextlyError } from "../../errors/index";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { createContext, type CommandContext } from "../program";
@@ -103,11 +98,17 @@ const DEFAULT_BASELINE_NAME = "baseline";
  * adopt" and leave the operator believing their schema was already recorded.
  */
 async function listManagedTables(
-  adapter: CLIDatabaseAdapter
+  adapter: CLIDatabaseAdapter,
+  knownJunctions: ReadonlySet<string>
 ): Promise<string[]> {
-  return (adapter as unknown as { listTables: () => Promise<string[]> })
-    .listTables()
-    .then(names => names.filter(isManagedTable));
+  const names = await (
+    adapter as unknown as { listTables: () => Promise<string[]> }
+  ).listTables();
+  // A custom `options.junctionTable` name need not carry a managed prefix, and
+  // the production DDL uses it verbatim — so filtering on the prefix alone
+  // drops an existing relationship table from adoption entirely, and a fresh
+  // environment rebuilt from the baseline has nowhere to write links.
+  return names.filter(n => isManagedTable(n) || knownJunctions.has(n));
 }
 
 /**
@@ -136,18 +137,26 @@ async function listMigrationFiles(migrationsDir: string): Promise<string[]> {
  * migrations directory currently contains.
  */
 async function firstAppliedMigration(
-  repo: SchemaEventsRepository
+  repo: SchemaEventsRepository,
+  adapter: CLIDatabaseAdapter
 ): Promise<string | undefined> {
-  try {
-    const rows = await repo.listFileApplies();
-    const names = rows
-      .map(r => (r as { filename?: string | null }).filename)
-      .filter((n): n is string => typeof n === "string" && n.length > 0)
-      .sort();
-    return names[0];
-  } catch {
-    return undefined;
-  }
+  if (!(await ledgerExists(adapter))) return undefined;
+  // Past the existence check, a failure is a real one — permissions, a wrong
+  // schema, a broken table. Swallowing it would read as "never migrated" and
+  // write a second origin beside whatever history the ledger already holds.
+  const rows = await repo.listFileApplies();
+  const names = rows
+    .map(r => (r as { filename?: string | null }).filename)
+    .filter((n): n is string => typeof n === "string" && n.length > 0)
+    .sort();
+  return names[0];
+}
+
+/** Whether the migration ledger table is there at all. */
+async function ledgerExists(adapter: CLIDatabaseAdapter): Promise<boolean> {
+  return (adapter as unknown as DrizzleAdapter).tableExists(
+    "nextly_schema_events"
+  );
 }
 
 /**
@@ -167,73 +176,22 @@ async function firstAppliedMigration(
  */
 function annotateLocalization(
   snapshot: NextlySchemaSnapshot,
-  companionTables: readonly string[]
+  companionColumns: ReadonlyMap<string, string[]>
 ): NextlySchemaSnapshot {
-  const localized = new Set(
-    companionTables.map(name =>
-      name.slice(0, -STORAGE_FORMAT.companionSuffix.length)
-    )
-  );
-  if (localized.size === 0) return snapshot;
+  if (companionColumns.size === 0) return snapshot;
   return {
     ...snapshot,
-    tables: snapshot.tables.map(table =>
-      localized.has(table.name) ? { ...table, localized: true } : table
-    ),
+    tables: snapshot.tables.map(table => {
+      const columns = companionColumns.get(table.name);
+      if (!columns) return table;
+      // Both markers, because the consumer needs both: `buildDisableSpec`
+      // returns null when `localizedColumns` is absent, so a table marked
+      // localized with no recorded columns still leaves a later disable
+      // emitting nothing and the translations orphaned.
+      return { ...table, localized: true, localizedColumns: columns };
+    }),
   };
 }
-
-/**
- * Reduce raw entities to what the baseline needs, keeping their fields intact.
- *
- * `builtBy` is the service that created the table, not "who wrote the config":
- * `DynamicCollectionSchemaService` builds Builder collections AND singles, and
- * `FieldGroupSchemaService` builds components. Naming an origin outside that
- * union does not fail to compile if it is cast — it reaches the descriptor's
- * default branch and throws.
- */
-function toBaselineEntities(
-  entities: readonly unknown[],
-  builtBy: ColumnOrigin,
-  resolveTableName: (entity: { slug: string; dbName?: string }) => string
-): BaselineEntity[] {
-  return entities.map(raw => {
-    const e = raw as {
-      slug: string;
-      dbName?: string;
-      fields?: readonly unknown[];
-      status?: boolean;
-    };
-    return {
-      slug: e.slug,
-      tableName: resolveTableName({ slug: e.slug, dbName: e.dbName }),
-      fields: e.fields ?? [],
-      status: e.status === true,
-      builtBy,
-    };
-  });
-}
-
-/**
- * The Builder's manifest, when the project has one.
- *
- * Only an absent file is ordinary — that is the code-first case. A manifest
- * that exists but cannot be read is the operator's to fix: swallowing it would
- * silently drop every Builder declaration, and the baseline would record an
- * incomplete starting point that looks deliberate.
- */
-async function loadUiSchemaIfPresent(
-  projectRoot: string,
-  uiSchemaFile: string
-): Promise<Awaited<ReturnType<typeof loadUiSchema>> | null> {
-  try {
-    return await loadUiSchema({ projectRoot, uiSchemaFile });
-  } catch (error) {
-    if ((error as { code?: string }).code === "ENOENT") return null;
-    throw error;
-  }
-}
-
 /**
  * `CREATE TABLE` for each companion standing in the database.
  *
@@ -250,13 +208,16 @@ async function loadUiSchemaIfPresent(
  */
 function buildCompanionStatements(args: {
   companionTables: string[];
-  entities: BaselineEntity[];
+  entities: ResolvedEntity[];
   dialect: SupportedDialect;
   defaultLocale: string;
-}): string[] {
-  if (args.companionTables.length === 0) return [];
+}): { statements: string[]; columnsByMain: Map<string, string[]> } {
+  if (args.companionTables.length === 0) {
+    return { statements: [], columnsByMain: new Map() };
+  }
   const present = new Set(args.companionTables);
   const statements: string[] = [];
+  const columnsByMain = new Map<string, string[]>();
 
   for (const entity of args.entities) {
     if (!present.has(`${entity.tableName}${STORAGE_FORMAT.companionSuffix}`)) {
@@ -277,41 +238,19 @@ function buildCompanionStatements(args: {
       collectionLocalized: true,
       status: entity.status === true,
     });
-    if (spec)
+    if (spec) {
       statements.push(
         buildCompanionCreateOnlySql(spec, { emittedToFile: true })
       );
+      // The column names the companion actually declares, which is what a
+      // later disable transition restores, archives and drops.
+      columnsByMain.set(
+        entity.tableName,
+        spec.columns.map(c => c.name)
+      );
+    }
   }
-  return statements;
-}
-
-/**
- * Everything `migrate:baseline` needs once the environment has been resolved.
- *
- * Shaped like `MigrateCoreDeps` for the same reason: the command's work is
- * driving a database and a directory, and neither of those needs the CLI's
- * environment parsing to be exercised.
- */
-/**
- * An entity as the baseline needs it: its table name, and enough of its fields
- * to rebuild a companion the way the creator built it.
- *
- * The fields are the RAW ones, not the diff engine's reduced shape. The column
- * descriptor reads `options.variant`, `validation.maxLength` and
- * `options.format` to decide a column's storage, and the reduction drops all
- * three — so a companion derived from it recreates bounded text and formatted
- * numbers as plain TEXT and integers, which is not the table `db:sync` built.
- *
- * `builtBy` names the service that created the table, because each reads those
- * inputs differently: on MySQL an unbounded field is `text` under the
- * collection rules and `varchar(255)` under the code-first ones.
- */
-export interface BaselineEntity {
-  slug: string;
-  tableName: string;
-  fields: readonly unknown[];
-  status: boolean;
-  builtBy: ColumnOrigin;
+  return { statements, columnsByMain };
 }
 
 export interface BaselineCoreDeps {
@@ -333,7 +272,7 @@ export interface BaselineCoreDeps {
    * emitted instead. Which companions to emit is still decided from the
    * database; only their shape comes from here.
    */
-  localizedEntities?: BaselineEntity[];
+  localizedEntities?: ResolvedEntity[];
   /** From `config.localization.defaultLocale`; defaults to `"en"`. */
   defaultLocale?: string;
   /**
@@ -392,7 +331,8 @@ export async function baselineCore(
       const latest = await loadLatestSnapshot(metaDir);
       const existingMigrations = await listMigrationFiles(migrationsDir);
 
-      const managed = await listManagedTables(adapter);
+      const known = deps.knownJunctions ?? new Set<string>();
+      const managed = await listManagedTables(adapter, known);
       // A companion is excluded from the SNAPSHOT for the same reason drift
       // excludes it: it is derived, never declared by config, and adopting it
       // as a first-class table would make the next diff want to drop it. It is
@@ -409,7 +349,6 @@ export async function baselineCore(
       const declared = new Set(
         (deps.localizedEntities ?? []).map(e => e.tableName)
       );
-      const known = deps.knownJunctions ?? new Set<string>();
       const junctionTables = junctionTablesAmong(managed, declared, known);
       const snapshotTables = snapshotComparableTables(managed, declared, known);
 
@@ -419,7 +358,7 @@ export async function baselineCore(
         live,
         latestSnapshotName: latest?.filename,
         existingMigrationFile: existingMigrations[0],
-        appliedMigration: await firstAppliedMigration(repo),
+        appliedMigration: await firstAppliedMigration(repo, adapter),
       });
 
       if (plan.kind === "already-baselined") {
@@ -478,7 +417,7 @@ export async function baselineCore(
       const sqlStatements = [
         ...plan.operations.map(op => generateSQL(op, dialect)),
         ...junctionSql,
-        ...companionSql,
+        ...companionSql.statements,
       ];
       const sqlContent = formatMigrationFile({
         name,
@@ -500,7 +439,7 @@ export async function baselineCore(
       const snapshotPath = await writeSnapshot(
         metaDir,
         baseName,
-        annotateLocalization(plan.snapshot, companionTables),
+        annotateLocalization(plan.snapshot, companionSql.columnsByMain),
         sqlContent
       );
 
@@ -614,53 +553,15 @@ export async function runMigrateBaseline(
     );
 
     const config = configResult.config;
-    // The Builder's entities count as declared too. `migrate:create` merges
-    // them from `ui-schema.json`, and a Builder entity whose table name
-    // resembles the generated junction shape would otherwise be classified as
-    // derived — left out of the snapshot while the SQL still builds it.
-    //
-    // Reduced through `toMinimalEntities` rather than stubbed: the fields are
-    // what `deriveCompanionSpec` reads to build a localized entity's companion,
-    // and an entity with no fields derives no companion at all — so a Builder
-    // collection with translations would get its main table and nowhere to put
-    // them.
-    let uiEntities: BaselineEntity[] = [];
-    let uiJunctions: string[] = [];
-    const rawManifest = await loadUiSchemaIfPresent(
-      cwd,
-      config.db.uiSchemaFile
-    );
-    // A plugin can extend a Builder entity, and `loadConfig` hands those
-    // fields back separately. `migrate:create` materialises them before
-    // generating DDL; without the same step a plugin-added translatable field
-    // is in the live companion but not in the one the baseline derives, so a
-    // fresh database is missing a translation column the adopted one had.
-    const manifest = rawManifest
-      ? applyDeferredExtendsToManifest(
-          rawManifest,
-          configResult.deferredExtends ?? []
-        )
-      : null;
-    if (manifest) {
-      uiEntities = [
-        // `DynamicCollectionSchemaService` builds Builder collections and
-        // singles alike, so both carry the `collection` reading.
-        ...toBaselineEntities(manifest.collections ?? [], "collection", e =>
-          resolveCollectionTableName(e.slug)
-        ),
-        ...toBaselineEntities(manifest.singles ?? [], "collection", e =>
-          resolveSingleTableName({ slug: e.slug })
-        ),
-        // Components are built by `FieldGroupSchemaService`, which bounds on a
-        // top-level maxLength and reads no variant at all. They also carry
-        // companions, and their table names can collide with the junction
-        // shape exactly as a collection's can.
-        ...toBaselineEntities(manifest.components ?? [], "fieldGroup", e =>
-          resolveComponentTableName(e.slug)
-        ),
-      ];
-      uiJunctions = customJunctionNames(manifest.collections ?? []);
-    }
+    // Config and the Builder manifest, merged the way generation merges them
+    // and resolved once. Every command that compares a live database against a
+    // snapshot reads the same answer, because assembling it per call site is
+    // how it kept being assembled differently.
+    const resolved = await resolveDeclaredSchema({
+      projectRoot: cwd,
+      config,
+      deferredExtends: configResult.deferredExtends,
+    });
 
     const result = await baselineCore({
       adapter,
@@ -672,24 +573,10 @@ export async function runMigrateBaseline(
       // Every kind that can carry a companion, reduced the same way
       // `migrate:create` reduces them so the emitted DDL matches what a
       // generated companion migration would have produced.
-      localizedEntities: [
-        ...uiEntities,
-        ...toBaselineEntities(config.collections, "codeFirst", e =>
-          resolveCollectionTableName(e.slug, e.dbName)
-        ),
-        ...toBaselineEntities(config.singles ?? [], "codeFirst", e =>
-          resolveSingleTableName({ slug: e.slug, dbName: e.dbName })
-        ),
-        ...toBaselineEntities(config.fieldGroups ?? [], "codeFirst", e =>
-          resolveComponentTableName(e.slug)
-        ),
-      ],
+      localizedEntities: resolved.entities,
       defaultLocale: config.localization?.defaultLocale,
       ttlSeconds: config.db.migrateLockTtlSeconds,
-      knownJunctions: new Set([
-        ...customJunctionNames(config.collections),
-        ...uiJunctions,
-      ]),
+      knownJunctions: resolved.knownJunctions,
     });
 
     if (result.kind === "already-baselined") {

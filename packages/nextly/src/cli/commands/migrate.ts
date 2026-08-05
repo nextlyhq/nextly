@@ -51,7 +51,7 @@ import {
 } from "../../domains/schema/events/schema-events-repository";
 import { reconcileCore } from "../../domains/schema/migrate/core-reconcile";
 import { reconcileFile } from "../../domains/schema/migrate/drift-reconcile";
-import { customJunctionNames } from "../../domains/schema/migrate/junction-names";
+import { resolveDeclaredSchema } from "../../domains/schema/migrate/resolved-schema";
 import {
   EMPTY_SNAPSHOT,
   parseSnapshotFile,
@@ -251,6 +251,15 @@ export async function runMigrate(
     const cwd = options.cwd ?? process.cwd();
     const appMigrationsDir = resolve(cwd, configResult.config.db.migrationsDir);
 
+    // Config and the Builder manifest, merged as generation merges them. The
+    // drift check needs the derived-table set, and assembling it here from the
+    // config alone missed Builder entities and plugin extends.
+    const resolvedSchema = await resolveDeclaredSchema({
+      projectRoot: cwd,
+      config: configResult.config,
+      deferredExtends: configResult.deferredExtends,
+    });
+
     // Phase 0 — legacy bookkeeping gate (spec §4.6). Aborts with
     // NEXTLY_LEGACY_BOOKKEEPING_DETECTED if the pre-consolidation tables exist.
     await assertNoLegacyBookkeeping(
@@ -301,9 +310,7 @@ export async function runMigrate(
         // convention, and such a table is in no snapshot — so the drift check
         // has to be told about it or it reports a difference no migration can
         // resolve.
-        knownJunctions: new Set(
-          customJunctionNames(configResult.config.collections)
-        ),
+        knownJunctions: resolvedSchema.knownJunctions,
         allowDestructive: allowCoreDestructive,
         ensureLedger: async () => {
           if (!(await dz.tableExists("nextly_schema_events"))) {
