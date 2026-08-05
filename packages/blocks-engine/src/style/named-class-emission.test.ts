@@ -850,3 +850,33 @@ describe("two missing class ids that begin alike", () => {
     expect(warnings.filter(w => w.code === "unknown-class")).toHaveLength(2);
   });
 });
+
+describe("many classes that each exhaust their own style budget", () => {
+  it("says it stopped a fixed number of times, however large the library", () => {
+    // The truncation marker is exempt from the allowance so it survives the bound it describes.
+    // Exempt AND repeatable is the other failure: every map that hits its own style budget adds
+    // one, so a large library answers with a marker per class.
+    //
+    // Two bounds can each announce once — the warning allowance and the per-map style budget —
+    // so the invariant is that the count does not GROW with the library, not that it is one.
+    const noisy: Record<string, unknown> = {};
+    for (let index = 0; index < 400; index += 1) {
+      noisy[`bogusProperty${index}`] = "nonsense";
+    }
+    const libraryOf = (count: number) =>
+      Array.from({ length: count }, (_unused, index) => ({
+        id: `c${index}`,
+        slug: `cls-${index}`,
+        orderIndex: index,
+        styles: styles(noisy),
+      }));
+    const markers = (count: number) =>
+      compile(doc({}), libraryOf(count) as never).warnings.filter(
+        w => w.code === "style-issues-truncated"
+      ).length;
+
+    const small = markers(20);
+    expect(small).toBeGreaterThan(0);
+    expect(markers(200)).toBe(small);
+  });
+});

@@ -711,6 +711,58 @@ describe("an interactive state that nests", () => {
   });
 });
 
+describe("a shorthand carrying two components", () => {
+  it("answers a longhand with its own component, not the whole value", () => {
+    // `gap: "4px 8px"` is row 4px and column 8px. The whole string is neither what the browser
+    // applies to columns nor a value the one-value control can hold.
+    const found = resolveStyle("columnGap", "base", "desktop", {
+      classes: [namedClass("card", 0, at("desktop", { gap: "4px 8px" }))],
+    });
+
+    expect(found?.value).toBe("8px");
+  });
+
+  it("leaves a single-component shorthand alone, since it applies to both", () => {
+    const found = resolveStyle("rowGap", "base", "desktop", {
+      classes: [namedClass("card", 0, at("desktop", { gap: "16px" }))],
+    });
+
+    expect(found?.value).toBe("16px");
+  });
+});
+
+describe("a token reference crossing keys", () => {
+  it("reads it as a value rather than refusing it as a record", () => {
+    // A token ref is stored as a record and means a value, which is the reading `fold` already
+    // takes. Judged as a record it blocked every crossing.
+    const found = resolveStyle("columnGap", "base", "desktop", {
+      classes: [
+        namedClass("card", 0, at("desktop", { gap: { $token: "space.4" } })),
+      ],
+    });
+
+    expect(found?.value).toEqual({ $token: "space.4" });
+  });
+});
+
+describe("an activation on a descendant", () => {
+  it("reads an ancestor's active rule, because a press nests", () => {
+    const found = resolveStyle("color", "active", "desktop", {
+      ancestors: [
+        {
+          nodeId: "parent",
+          node: {
+            base: { desktop: { color: "black" } },
+            active: { desktop: { color: "red" } },
+          } as unknown as NodeStyles,
+        },
+      ],
+    });
+
+    expect(found?.value).toBe("red");
+  });
+});
+
 describe("a state the compiler does not know", () => {
   it("reports nothing, because no rule was written for it", () => {
     // `pressed` is reported as `invalid-style-state` and emits nothing. Read here, it would hand

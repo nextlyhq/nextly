@@ -411,11 +411,40 @@ function compilerWroteKeys(values: Record<string, unknown>): Set<string> {
 /**
  * The states an ancestor is in whenever this node is.
  *
- * Hover nests: the pointer is over the child AND over every ancestor containing it, so an
- * ancestor's hover rule matches at the same moment. Focus and active do not — they belong to one
- * element, and a parent is not focus-visible because its child is.
+ * Hover and activation nest: the pointer is over the child AND over every ancestor containing it,
+ * and a press on a descendant puts the whole containing chain in `:active`. So an ancestor's rule
+ * for either matches at the same moment the child's does.
+ *
+ * Focus does not. It belongs to one element, and a parent is not focus-visible because its child
+ * holds focus.
  */
-const STATES_REACHING_ANCESTORS = new Set(["hover"]);
+const STATES_REACHING_ANCESTORS = new Set(["hover", "active"]);
+
+/**
+ * The part of a shorthand that belongs to a longhand asking for it.
+ *
+ * `gap: "4px 8px"` is row 4px and column 8px, so answering `columnGap` with the whole string
+ * reports a value the browser does not apply and the one-value control cannot hold. The order of
+ * `declarationsCovered` IS the order of the components, which is what makes the index meaningful.
+ *
+ * A single-component shorthand applies to every longhand, so it is returned unchanged.
+ */
+function shorthandComponent(
+  candidate: string,
+  property: string,
+  value: StyleValue
+): StyleValue {
+  if (typeof value !== "string") return value;
+  const parts = value.trim().split(/\s+/);
+  if (parts.length < 2) return value;
+  const [shorthandCss] = cssPropertiesForField(candidate, []);
+  const [wantedCss] = cssPropertiesForField(property, []);
+  if (shorthandCss === undefined || wantedCss === undefined) return value;
+  const components = declarationsCovered(shorthandCss).slice(1);
+  const index = components.indexOf(wantedCss);
+  if (index < 0 || index >= parts.length) return value;
+  return parts[index];
+}
 
 /** Whether a tier reaches this node from somewhere else rather than being a rule on it. */
 function isInherited(source: StyleSource): boolean {
@@ -737,7 +766,14 @@ export function resolveStyle(
           // `background: { url }` covers all of `backgroundGradient`'s one declaration, so total
           // overlap alone let a record be read as a gradient — fabricating `position`, `size` and
           // `repeat` fields out of whatever had accumulated, or answering `{ url }` as a gradient.
-          const shapeFits = !isPlainRecord(value) || candidate === property;
+          // A token reference is a record in storage and a VALUE in meaning, which is the reading
+          // `fold` already takes of it. Judged as a record it blocked every crossing: a class
+          // setting `gap: { $token: "space.4" }` writes a declaration covering `column-gap`, and
+          // `columnGap` answered nothing.
+          const shapeFits =
+            !isPlainRecord(value) ||
+            isTokenRef(value) ||
+            candidate === property;
           if (candidate !== property && (!coversEverything || !shapeFits)) {
             // Only the leaves this candidate overwrote. A lower tier's `background` may have set
             // `position`, `size` and `repeat` alongside its `url`, and a higher `backgroundGradient`
@@ -757,7 +793,10 @@ export function resolveStyle(
           }
           accumulated = fold(
             accumulated,
-            value,
+            // A shorthand crossing to a longhand answers with the longhand's own component.
+            candidate === property
+              ? value
+              : shorthandComponent(candidate, property, value),
             source,
             // The key the value was stored under, because this decides which DECLARATIONS the
             // compiler wrote for it. Reading it through the requested property's keys instead

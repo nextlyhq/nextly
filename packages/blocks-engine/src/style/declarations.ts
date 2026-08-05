@@ -347,7 +347,10 @@ function chargeIssues(
   for (const issue of issues) {
     if (issue.severity !== "error") continue;
     if (issue.code === "style-issues-truncated") {
-      reported.push(issue);
+      if (!allowance.styleIssuesAnnounced) {
+        allowance.styleIssuesAnnounced = true;
+        reported.push(issue);
+      }
       continue;
     }
     pushBoundedWarning(allowance, reported, issue);
@@ -409,9 +412,20 @@ export function compileStyleValues(
               // invalid properties takes, so leaving it uncharged is exactly where a large class
               // library multiplied its diagnostics.
               ...chargeIssues(issues, allowance),
-              warning(
-                basePath,
-                "These styles were not written, because checking stopped before they could be read."
+              // Charged like the rest. Left out of the allowance it is one message per refused
+              // map, and the branch this is in is the one every map takes once the style budget
+              // is spent — so a large library answers with a message per class.
+              ...chargeIssues(
+                [
+                  {
+                    ...warning(
+                      basePath,
+                      "These styles were not written, because checking stopped before they could be read."
+                    ),
+                    severity: "error" as const,
+                  },
+                ],
+                allowance
               ),
             ],
     };
