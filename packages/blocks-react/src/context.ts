@@ -1,4 +1,8 @@
-import type { BlockRenderArgs as EngineBlockRenderArgs } from "@nextlyhq/blocks-engine";
+import type {
+  BlockRenderArgs as EngineBlockRenderArgs,
+  BlockDefinition as EngineBlockDefinition,
+  BlockRenderResult,
+} from "@nextlyhq/blocks-engine";
 import type { ReactNode } from "react";
 
 /**
@@ -207,4 +211,35 @@ export function createStandaloneContext(
   ) as Partial<PageContext>;
 
   return { ...defaults, ...defined };
+}
+
+/**
+ * A block definition written against THIS renderer.
+ *
+ * The engine's `defineBlock` leaves the context unnamed and types `renderSlot`
+ * as returning `BlockRenderResult`, which is `unknown`: the engine carries no
+ * React types. That is correct for the engine and wrong for an author, who then
+ * cannot place a slot's output into their own JSX without annotating the
+ * argument by hand at every block.
+ *
+ * Naming both here is the same service `@nextlyhq/plugin-sdk/blocks` performs
+ * for plugin authors, offered to anyone rendering with this package directly.
+ */
+export interface ReactBlockDefinition<P extends object>
+  extends Omit<EngineBlockDefinition<P, PageContext>, "render"> {
+  render(args: BlockRenderArgs<P>): BlockRenderResult;
+}
+
+/**
+ * Declare a block for this renderer.
+ *
+ * Identity at runtime, exactly like the engine's: the value is the definition.
+ * What it adds is the typing above, so a block's `render` receives a context
+ * this package has named and a `renderSlot` that returns something React can
+ * render.
+ */
+export function defineBlock<P extends object>(
+  definition: ReactBlockDefinition<P>
+): ReactBlockDefinition<P> {
+  return definition;
 }
