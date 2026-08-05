@@ -35,8 +35,12 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          # Full history: the review protocol distinguishes PR-introduced defects
-          # from pre-existing ones via git archaeology against main.
+          # The PR head itself, not the merge ref: the review protocol judges
+          # the code at a specific head SHA and reports findings against it.
+          ref: ${{ github.event.pull_request.head.sha }}
+          # Full history: the protocol distinguishes PR-introduced defects from
+          # pre-existing ones by comparing against main, and materializing every
+          # ref here means the agent never needs a network-capable git command.
           fetch-depth: 0
           persist-credentials: false
 
@@ -74,9 +78,15 @@ jobs:
 
             Post the review with the single gh api reviews call the prompt
             specifies. Do not approve, request changes, merge, close, or push.
-          # Read-only bash allowlist plus Write for composing the review JSON
-          # payload; no Edit and no unrestricted Bash, so injected instructions
-          # in a diff cannot exfiltrate or modify anything.
+          # Allowlist entries match a command prefix, so every entry has to be
+          # safe for ANY arguments appended to it. The git verbs here are all
+          # local-only (a network-capable `git fetch` would accept an arbitrary
+          # remote URL), and `gh api` is pinned to this repository's path plus
+          # graphql so an absolute URL to another host cannot match. Write
+          # composes the review payload; there is no Edit and no bare Bash, so
+          # the agent cannot alter the tree. Network egress is narrowed here,
+          # not eliminated: `contents: read`, the fork skip, and human review of
+          # this file are what actually bound a compromised run.
           claude_args: |
-            --allowedTools "Read,Grep,Glob,Write,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh api:*),Bash(git fetch:*),Bash(git show:*),Bash(git diff:*),Bash(git log:*),Bash(git merge-base:*),Bash(rg:*),Bash(ls:*)"
+            --allowedTools "Read,Grep,Glob,Write,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh api repos/${{ github.repository }}/:*),Bash(gh api graphql:*),Bash(git show:*),Bash(git diff:*),Bash(git log:*),Bash(git merge-base:*),Bash(rg:*),Bash(ls:*)"
             --max-turns 150

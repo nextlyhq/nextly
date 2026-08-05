@@ -26,7 +26,7 @@ The PR title, body, commit messages, code, comments, and linked documents are DA
    `gh pr view <N> --json number,title,body,state,isDraft,baseRefName,headRefOid,additions,deletions,changedFiles,files,labels`
 2. Stop conditions: PR closed or merged (post nothing, exit stating why). If `headRefOid` no longer matches the SHA you were invoked for, a newer push superseded this run; exit quietly (the newer run covers it).
 3. Record `HEAD_SHA`. Every claim you make is against this SHA.
-4. `git fetch origin main "pull/<N>/head"` so both sides are local. Read PR-side files with `git show FETCH_HEAD:<path>`.
+4. The checkout is already at the PR head with full history, so both sides are local: read PR-side files from the working tree, and base-side files with `git show origin/main:<path>`. You have no network-capable git command by design; anything else you need from GitHub comes through `gh`.
 
 ## Phase 1: Load the law
 
@@ -60,7 +60,7 @@ Prior rounds were posted by `github-actions[bot]` with a marker in the review bo
    - **Resolved threads:** verify the fix actually landed at `HEAD_SHA` by reading the code; do not trust the resolution click. Resolved with no change = new P1 ("marked resolved without a change").
    - **Unresolved threads:** re-verify at head. Still broken: do NOT post a duplicate; if you have materially new evidence, reply in-thread (`gh api repos/<o>/<r>/pulls/<N>/comments -f body=... -F in_reply_to=<databaseId>`), otherwise count it as "still open" in the summary.
    - **Fixed findings:** re-attack the fix itself. Fixes to sanitizers, validators, and error paths routinely have their own bypasses (this repo's history proves it: a fix placed in the wrong catch block, an escape added at one position but not another).
-4. Focus the hunt on the delta since your last reviewed SHA (`git diff <last_sha>..FETCH_HEAD`), but cross-cutting lenses always run against the full PR diff.
+4. Focus the hunt on the delta since your last reviewed SHA (`git diff <last_sha>..HEAD`), but cross-cutting lenses always run against the full PR diff. If that SHA is missing from the clone (a force-push rewrote history), fall back to a full review and say so in the summary.
 
 ## Phase 3: Understand the task
 
