@@ -14,6 +14,7 @@ import { container } from "../../di/container";
 import type { NextlyServiceConfig } from "../../di/register";
 import type { DrizzleMigrationJournal } from "../../domains/schema/journal/migration-journal";
 import type { SingleEntryService } from "../../domains/singles/services/single-entry-service";
+import type { SingleMetadataService } from "../../domains/singles/services/single-metadata-service";
 import type { SingleRegistryService } from "../../domains/singles/services/single-registry-service";
 import type { CollectionRegistryService } from "../../services/collections/collection-registry-service";
 import type { CollectionsHandler } from "../../services/collections-handler";
@@ -64,6 +65,19 @@ export function getSingleRegistryFromDI(): SingleRegistryService | undefined {
   try {
     if (container.has("singleRegistryService")) {
       return container.get<SingleRegistryService>("singleRegistryService");
+    }
+  } catch {
+    // DI not initialized
+  }
+  return undefined;
+}
+
+export function getSingleMetadataServiceFromDI():
+  | SingleMetadataService
+  | undefined {
+  try {
+    if (container.has("singleMetadataService")) {
+      return container.get<SingleMetadataService>("singleMetadataService");
     }
   } catch {
     // DI not initialized

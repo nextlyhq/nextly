@@ -15,6 +15,7 @@ import type { RBACAccessControlService } from "../../domains/auth/services/rbac-
 import { MetaRetentionGate } from "../../domains/retention/gate";
 import { buildRetentionRunner } from "../../domains/retention/passes";
 import { SingleEntryService } from "../../domains/singles/services/single-entry-service";
+import { SingleMetadataService } from "../../domains/singles/services/single-metadata-service";
 import { SingleRegistryService } from "../../domains/singles/services/single-registry-service";
 import type { WebhookFastDrainScheduler } from "../../domains/webhooks/after-drain";
 import type { CacheRevalidator } from "../../revalidation/types";
@@ -44,6 +45,20 @@ export function registerSingleServices(ctx: RegistrationContext): void {
 
       return singleRegistryService;
     }
+  );
+
+  // Schema changes for a Single, holding the table change and the registry write together. It is
+  // registered rather than built per request so a single wrapper here governs every caller: the
+  // migration lock has to enclose both halves, and a lock applied at one call site leaves the
+  // others uncovered.
+  container.registerSingleton<SingleMetadataService>(
+    "singleMetadataService",
+    () =>
+      new SingleMetadataService(
+        container.get<SingleRegistryService>("singleRegistryService"),
+        logger,
+        adapter
+      )
   );
 
   container.registerSingleton<SingleEntryService>("singleEntryService", () => {
