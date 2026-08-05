@@ -184,6 +184,45 @@ for (const dialect of getConfiguredTestDialects()) {
     });
 
     /**
+     * 🔴 Nullability is part of the shape, not a detail of it.
+     *
+     * A column the Builder now calls optional while the database still has it NOT NULL accepts
+     * every write the Builder considers valid and then fails the constraint — a failure that
+     * surfaces at write time, far from the migration that caused it.
+     */
+    it("refuses when an existing column has the wrong nullability", async () => {
+      current = await createTestNextly({ dialect });
+
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: plain,
+          label: "Plain",
+          fields: [{ name: "body", type: "text", required: true }],
+        }
+      );
+
+      const registry = current.getService("singleRegistryService");
+      await registry.deleteSingle(plain, { force: true });
+
+      // Same name, same type, now optional. The physical column keeps its NOT NULL.
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: plain,
+          label: "Plain",
+          fields: [{ name: "body", type: "text", required: false }],
+        }
+      );
+
+      expect((await registryRow(current, plain))?.migrationStatus).toBe(
+        "failed"
+      );
+    });
+
+    /**
      * The same repair for a LOCALIZED single, where there are two tables to find already present.
      *
      * The companion reconcile is told `wasLocalized: false` and `oldFields: []`, because from the

@@ -105,6 +105,17 @@ export async function shapeMismatches(
       problems.push(
         `${column.name} is ${actual.type}, expected ${column.type}`
       );
+      continue;
+    }
+    // Nullability is part of the shape, not a detail of it: a column the Builder now calls optional
+    // while the database still has it NOT NULL accepts every write the Builder considers valid and
+    // then fails the constraint. Reported after the type so one column produces one problem.
+    if (column.nullable !== actual.nullable) {
+      problems.push(
+        `${column.name} is ${actual.nullable ? "nullable" : "NOT NULL"}, expected ${
+          column.nullable ? "nullable" : "NOT NULL"
+        }`
+      );
     }
   }
   return problems;
