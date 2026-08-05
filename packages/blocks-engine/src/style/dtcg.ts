@@ -261,6 +261,24 @@ function familyToDtcg(css: string): string | string[] | undefined {
   // this vendor's extension. Reported as unrepresentable instead, which is the
   // same answer a `clamp()` dimension already gets.
   if (parts.some(part => !part.valid)) return undefined;
+  // A bare CSS-wide keyword is not a family name: `font-family: inherit` takes
+  // the parent's font, so exporting `"inherit"` as a `$value` would describe a
+  // font by that name to any tool reading the standard value. Quoted, it IS a
+  // name somebody chose.
+  if (
+    parts.some(
+      part =>
+        !part.quoted && FAMILY_KEYWORD_NOT_A_NAME.has(part.name.toLowerCase())
+    )
+  ) {
+    return undefined;
+  }
+  // An unquoted item is a run of identifiers and nothing else. `10px, serif`
+  // tokenizes as a dimension, so a browser drops any declaration reading the
+  // token — exporting it as a family list shows a stack the site never used.
+  if (parts.some(part => !part.quoted && !UNQUOTED_FAMILY.test(part.name))) {
+    return undefined;
+  }
   if (parts.some(part => !part.quoted && /[()]/.test(part.name))) {
     return undefined;
   }
@@ -325,6 +343,20 @@ function splitFamilyList(css: string): FamilyPart[] {
 
   return parts.filter(part => part.name !== "");
 }
+
+/** Words that are keywords rather than family names when written bare. */
+const FAMILY_KEYWORD_NOT_A_NAME = new Set([
+  "inherit",
+  "initial",
+  "unset",
+  "revert",
+  "revert-layer",
+  "default",
+]);
+
+/** A run of identifiers, which is all an unquoted family item may be. */
+const UNQUOTED_FAMILY =
+  /^-?[A-Za-z_\u00a0-\uffff][A-Za-z0-9_\-\u00a0-\uffff]*(?: -?[A-Za-z_\u00a0-\uffff][A-Za-z0-9_\-\u00a0-\uffff]*)*$/;
 
 /** One family from a list, how it was written, and whether CSS accepts it. */
 interface FamilyPart {
@@ -660,6 +692,11 @@ function colorFromDtcg(value: unknown): string | undefined {
   }
   const alpha = typeof value.alpha === "number" ? value.alpha : 1;
   if (typeof value.hex === "string" && /^#[0-9a-f]{6}$/i.test(value.hex)) {
+    // The hex is a FALLBACK for the components beside it, not an alternative to
+    // them. Where both are present and disagree — `components: [1, 0, 0]` with
+    // `hex: "#000000"` — taking the hex imports black for a token that
+    // describes red, so the file is refused rather than silently reinterpreted.
+    if (hexDisagreesWithComponents(value)) return undefined;
     if (alpha >= 1) return value.hex;
     const rgb = parseColor(value.hex);
     if (rgb !== undefined) return `rgb(${rgb.r} ${rgb.g} ${rgb.b} / ${alpha})`;
@@ -682,6 +719,28 @@ function colorFromDtcg(value: unknown): string | undefined {
   }
   const [r, g, b] = channels.map(part => Math.round(part * 255));
   return alpha < 1 ? `rgb(${r} ${g} ${b} / ${alpha})` : `rgb(${r} ${g} ${b})`;
+}
+
+/**
+ * Whether a supplied `hex` describes a different colour from the components.
+ *
+ * Compared after rounding to the same 8-bit channels the hex can express, so a
+ * component that merely lost precision on the way to two digits still agrees.
+ */
+function hexDisagreesWithComponents(value: Record<string, unknown>): boolean {
+  const components = value.components;
+  if (!Array.isArray(components) || components.length !== 3) return false;
+  if (!components.every(part => typeof part === "number")) return false;
+  const fromHex = parseColor(String(value.hex));
+  if (fromHex === undefined) return false;
+  const channels = components.map(part =>
+    Math.round(Math.min(1, Math.max(0, part)) * 255)
+  );
+  return (
+    channels[0] !== fromHex.r ||
+    channels[1] !== fromHex.g ||
+    channels[2] !== fromHex.b
+  );
 }
 
 /* ------------------------------------------------------------------ shared */

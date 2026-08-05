@@ -1240,6 +1240,87 @@ describe("custom CSS may not reach off this origin", () => {
       expect(out.css).not.toContain("data-probe");
     });
 
+    it("rewrites a name held by an escaped custom property", () => {
+      // `\\2d\\2d anim` IS `--anim`, but the parser does not recognise it as a
+      // custom property, so its value arrives as an ordinary Value rather than
+      // the usual Raw and the custom-property path returned early.
+      const out = sanitizeCustomCss(
+        `@keyframes fade { from { opacity: 0 } }
+         .x { \\2d\\2d anim: fade; animation: var(--anim) 1s }`,
+        SCOPE
+      );
+      expect(out.css).toContain(`anim:${ns("fade")}`);
+    });
+
+    it("rewrites a name written in a var() fallback", () => {
+      // The fallback is the branch that runs exactly when the variable is not
+      // set, and the parser keeps it as raw text the value walk never sees.
+      const out = sanitizeCustomCss(
+        `@keyframes fade { from { opacity: 0 } } .x { animation: var(--missing, fade) 1s }`,
+        SCOPE
+      );
+      expect(out.css).toContain(ns("fade"));
+      expect(out.css).not.toMatch(/,\s*fade\)/);
+    });
+
+    it("leaves a keyword in a var() fallback alone", () => {
+      const out = sanitizeCustomCss(
+        `@keyframes fade { from { opacity: 0 } } .x { animation: var(--missing, ease) 1s }`,
+        SCOPE
+      );
+      expect(out.css).toContain("ease)");
+    });
+
+    it("rewrites the prefixed animation shorthand too", () => {
+      const out = sanitizeCustomCss(
+        `@keyframes fade { from { opacity: 0 } } .x { -webkit-animation: fade 1s }`,
+        SCOPE
+      );
+      expect(out.css).toContain(`-webkit-animation:${ns("fade")} 1s`);
+    });
+
+    it("treats a bare default as the keyword it is", () => {
+      // `default` is excluded from `<custom-ident>`, so a bare one never names
+      // a keyframes rule however the stylesheet spells its definition.
+      const out = sanitizeCustomCss(
+        `@keyframes "default" { from { opacity: 0 } } .x { animation-name: default }`,
+        SCOPE
+      );
+      expect(out.css).toContain("animation-name:default");
+    });
+
+    it("ignores a font-face family descriptor that is a bare keyword", () => {
+      // The browser discards the invalid descriptor and keeps `Brand`. Treating
+      // the keyword as effective renames the good descriptor and leaves every
+      // reference on the old global name.
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: Brand; font-family: inherit; src: url("/f.woff2") }
+         .x { font-family: Brand }`,
+        SCOPE
+      );
+      expect(out.css).toContain(`.x{font-family:"${ns("Brand")}"}`);
+    });
+
+    it("does not keep a face whose only source has no argument", () => {
+      // `local()` is a malformed descriptor the browser discards, so no face is
+      // defined and `X` may be a font the reader already has.
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: X; src: local() } .x { font-family: X, serif }`,
+        SCOPE
+      );
+      expect(out.css).toContain(".x{font-family:X,serif}");
+      expect(out.css).not.toContain("@font-face");
+    });
+
+    it("still keeps a face whose local() names a family", () => {
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: X; src: local("X") } .x { font-family: X }`,
+        SCOPE
+      );
+      expect(out.css).toContain("@font-face");
+      expect(out.css).toContain(`.x{font-family:"${ns("X")}"}`);
+    });
+
     it("still refuses a remote url inside a keyframe step", () => {
       // The step blocks are ordinary declarations, so the origin policy has to
       // reach them — allowing the at-rule must not open a door beneath it.

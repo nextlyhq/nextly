@@ -66,6 +66,9 @@ import type * as csstree from "css-tree";
  * as Function nodes rather than identifiers, so they never reach the check.
  */
 const ANIMATION_KEYWORDS = new Set([
+  // `default` is excluded from `<custom-ident>` like the CSS-wide keywords, so
+  // a bare one never names a keyframes rule however the stylesheet spells it.
+  "default",
   "normal",
   "reverse",
   "alternate",
@@ -98,6 +101,7 @@ const ANIMATION_KEYWORDS = new Set([
  * longhand IS a keyframes name — that is what the property is for.
  */
 const ANIMATION_NAME_KEYWORDS = new Set([
+  "default",
   "none",
   "initial",
   "inherit",
@@ -121,6 +125,23 @@ const ANIMATION_NAME_KEYWORDS = new Set([
  * keyframes grammar excludes `none` on top of that. A rule named with one of
  * them is invalid and ignored, so it defines nothing to namespace.
  */
+/**
+ * Words a bare `@font-face` family descriptor may not be.
+ *
+ * The CSS-wide keywords and `default` are excluded from `<custom-ident>`, so a
+ * descriptor spelled with one is invalid and ignored. Unlike the reference
+ * side, the generic families are absent: `@font-face { font-family: serif }` is
+ * a legal, if unwise, face name.
+ */
+const FAMILY_RESERVED_NAMES = new Set([
+  "initial",
+  "inherit",
+  "unset",
+  "revert",
+  "revert-layer",
+  "default",
+]);
+
 const KEYFRAMES_RESERVED_NAMES = new Set([
   "none",
   "initial",
@@ -272,14 +293,25 @@ export function fontFaceHasSrc(node: csstree.Atrule): boolean {
  */
 function srcNamesAFile(value: csstree.CssNode): boolean {
   if (value.type !== "Value") return false;
-  return value.children
-    .toArray()
-    .some(
-      child =>
-        child.type === "Url" ||
-        (child.type === "Function" &&
-          decodeIdentifier(child.name).toLowerCase() === "local")
-    );
+  return value.children.toArray().some(child => sourceIsUsable(child));
+}
+
+/**
+ * Whether one `src` entry actually names something to load.
+ *
+ * The function NAME is not enough: `local()` with no argument is a malformed
+ * descriptor the browser discards, so a face built on it defines nothing — and
+ * recording its family points every reference at a private name no surviving
+ * rule provides.
+ */
+function sourceIsUsable(node: csstree.CssNode): boolean {
+  if (node.type === "Url") return node.value.trim() !== "";
+  if (node.type !== "Function") return false;
+  if (asciiLower(decodeIdentifier(node.name)) !== "local") return false;
+  // `local(<family-name>)` takes a string or a run of identifiers, which is the
+  // grammar a family descriptor takes.
+  const named = singleName({ type: "Value", children: node.children });
+  return named !== undefined && named.name.trim() !== "";
 }
 
 /**
@@ -402,6 +434,17 @@ export function namespaceDefinedNames(
         for (const declaration of declarations) {
           const original = singleName(declaration.value);
           if (original === undefined || original.name === "") continue;
+          // A bare CSS-wide keyword or `default` is not a `<custom-ident>`, so
+          // the descriptor is invalid and the browser keeps whichever earlier
+          // one was valid. Treating it as the effective family renames the good
+          // descriptor and leaves every reference on the old global name, so
+          // the face stops resolving. Quoted, it is a legal name.
+          if (
+            !original.quoted &&
+            FAMILY_RESERVED_NAMES.has(asciiLower(original.name))
+          ) {
+            continue;
+          }
           replaceValueWithString(
             declaration.value as csstree.Value,
             namespacedGlobalName(original.name, scopeClass)
@@ -464,23 +507,50 @@ export function rewriteNameReferences(
       // and the name is what the spelling denotes — `--f: "My Font"` holds the
       // family `My Font`, and matching the quotes along with it would find
       // nothing and leave the reference behind after the definition moved.
+      // `\\2d\\2d anim` IS `--anim` to a browser, and `property` is already
+      // decoded, so the dashed-name test reads what CSS reads rather than what
+      // was typed.
       if (property.startsWith("--")) {
-        if (value.type !== "Raw") return;
-        rewriteCustomProperty(value, map, css);
+        if (value.type === "Raw") {
+          rewriteCustomProperty(value, map, css);
+          return;
+        }
+        // A custom property spelled with escapes — `\\2d\\2d anim` IS `--anim` —
+        // is not recognised as one by the parser, so its value arrives as an
+        // ordinary `Value` rather than the usual `Raw`. It still holds a name
+        // that `var()` will substitute, so it is read the same way.
+        if (value.type === "Value") rewriteHeldName(value, map);
         return;
       }
 
       if (value.type !== "Value") return;
 
+      // A `var()` fallback holds its text as a `Raw` inside the function, so the
+      // readers below — which walk the value's direct children — never see it.
+      // `animation: var(--missing, fade)` renames the definition and leaves the
+      // fallback asking for the old name, which is the branch that runs exactly
+      // when the variable is not set.
+      rewriteFallbackNames(value, map, css);
+
       if (map.keyframes.size > 0) {
-        if (property === "animation-name") {
+        if (
+          property === "animation-name" ||
+          property === "-webkit-animation-name"
+        ) {
           rewriteKeyframeNames(
             value,
             map.keyframes,
             ANIMATION_NAME_KEYWORDS,
             0
           );
-        } else if (property === "animation") {
+        } else if (
+          property === "animation" ||
+          property === "-webkit-animation"
+        ) {
+          // The prefixed alias is the same shorthand. Rewriting one and not the
+          // other leaves the fallback declaration asking for a name the
+          // definition no longer has, which is the shape a browser relying on
+          // the alias actually renders.
           rewriteKeyframeNames(value, map.keyframes, ANIMATION_KEYWORDS, 0);
         }
       }
@@ -697,6 +767,50 @@ function rewriteCustomProperty(
   if (parsed === undefined) return;
 
   const before = css.generate(parsed);
+  rewriteHeldName(parsed, map);
+  const after = css.generate(parsed);
+  // Written only when a name actually moved, so a value this had no business
+  // touching is not silently reformatted by the generator on its way out.
+  if (after !== before) value.value = after;
+}
+
+/**
+ * Rewrite names written inside a `var()` fallback.
+ *
+ * The fallback is the second argument, and the parser keeps it as raw text
+ * because it may hold anything. It is read the same way a custom property's
+ * value is: parsed, run through the same positional readers, and written back
+ * only when a name actually moved.
+ */
+function rewriteFallbackNames(
+  value: csstree.Value,
+  map: GlobalNameMap,
+  css: CssTreeApi
+): void {
+  css.walk(value, {
+    visit: "Raw",
+    enter(node: csstree.CssNode) {
+      const raw = node as csstree.Raw;
+      const text = raw.value.trim();
+      if (text === "") return;
+      const parsed = parseValue(text, css.parse);
+      if (parsed === undefined) return;
+      const before = css.generate(parsed);
+      rewriteHeldName(parsed, map);
+      const after = css.generate(parsed);
+      if (after !== before) raw.value = after;
+    },
+  });
+}
+
+/**
+ * Rewrite the names a value holds for something else to substitute.
+ *
+ * The same positional readers the declarations use, which is what keeps `1s`
+ * and `ease` from being mistaken for names and what decides whether a family
+ * list starts at the first token or after a font size.
+ */
+function rewriteHeldName(parsed: csstree.Value, map: GlobalNameMap): void {
   if (map.keyframes.size > 0) {
     rewriteKeyframeNames(parsed, map.keyframes, ANIMATION_KEYWORDS, 0);
   }
@@ -711,10 +825,6 @@ function rewriteCustomProperty(
     const start = familyStartIndex(parsed) ?? 0;
     rewriteFontFamilies(parsed, map.fontFamilies, start);
   }
-  const after = css.generate(parsed);
-  // Written only when a name actually moved, so a value this had no business
-  // touching is not silently reformatted by the generator on its way out.
-  if (after !== before) value.value = after;
 }
 
 /**

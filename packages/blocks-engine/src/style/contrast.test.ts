@@ -97,6 +97,17 @@ describe("parseColor", () => {
     expect(parseColor("rgb(1. 0 0)")).toBeUndefined();
   });
 
+  it("reads an escaped function name as the function it is", () => {
+    // `r\\67 b(...)` IS `rgb(...)` to a browser, so refusing it makes the
+    // contrast check silent about a colour that renders.
+    expect(parseColor("r\\67 b(255 0 0)")).toEqual({
+      r: 255,
+      g: 0,
+      b: 0,
+      a: 1,
+    });
+  });
+
   it("refuses what it cannot read rather than guessing", () => {
     // A figure computed from a misread colour is worse than none, because it
     // is a number somebody acts on.

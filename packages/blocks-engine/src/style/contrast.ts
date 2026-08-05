@@ -28,6 +28,7 @@
  *
  * @module style/contrast
  */
+import { decodeIdentifier } from "./css-value";
 
 /** Straight sRGB channels, 0-255, plus alpha 0-1. */
 export interface Rgb {
@@ -51,6 +52,9 @@ export interface ContrastResult {
 
 const HEX_SHORT = /^#([0-9a-f])([0-9a-f])([0-9a-f])([0-9a-f])?$/i;
 const HEX_LONG = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})?$/i;
+// The function name is an identifier, so `r\\67 b(...)` IS `rgb(...)` to a
+// browser. Matched against the decoded text, or a colour that renders is
+// reported as one this cannot read.
 const RGB_FUNCTION = /^rgba?\(([^)]*)\)$/i;
 
 /**
@@ -62,7 +66,7 @@ const RGB_FUNCTION = /^rgba?\(([^)]*)\)$/i;
  * worse than no figure, because it is a number somebody will act on.
  */
 export function parseColor(value: string): Rgb | undefined {
-  const text = value.trim();
+  const text = decodeIdentifier(value).trim();
 
   const short = HEX_SHORT.exec(text);
   if (short) {

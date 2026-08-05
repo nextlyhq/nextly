@@ -222,6 +222,43 @@ describe("export", () => {
     expect(issues[0]?.message).toContain("cannot express");
   });
 
+  it("reports a family list that is a bare CSS-wide keyword", () => {
+    // `font-family: inherit` takes the parent's font. Exported as a `$value` it
+    // would describe a font actually named "inherit".
+    const { document, issues } = tokensToDtcg(
+      tokens([{ name: "f", kind: "fontFamily", values: { light: "inherit" } }])
+    );
+    expect(document).toEqual({});
+    expect(issues[0]?.message).toContain("cannot express");
+  });
+
+  it("reports a family list whose bare item is not an identifier run", () => {
+    // `10px` tokenizes as a dimension, so a browser drops any declaration
+    // reading the token — exporting it shows a stack the site never used.
+    const { document } = tokensToDtcg(
+      tokens([
+        { name: "f", kind: "fontFamily", values: { light: "10px, serif" } },
+      ])
+    );
+    expect(document).toEqual({});
+  });
+
+  it("still exports a quoted item that would be a keyword bare", () => {
+    const { document } = tokensToDtcg(
+      tokens([
+        {
+          name: "f",
+          kind: "fontFamily",
+          values: { light: `"inherit", serif` },
+        },
+      ])
+    );
+    expect((document.f as Record<string, unknown>)?.$value).toEqual([
+      "inherit",
+      "serif",
+    ]);
+  });
+
   it("carries another tool's extension data through untouched", () => {
     // "Tools that process design token files MUST preserve any extension data
     // they do not themselves understand."
@@ -374,6 +411,37 @@ describe("import", () => {
     });
     expect(read).toEqual([]);
     expect(issues[0]?.message).toContain("could not be read");
+  });
+
+  it("refuses a colour whose hex contradicts its components", () => {
+    // The hex is a FALLBACK for the components, not an alternative to them.
+    // Taking it imports black for a token that describes red.
+    const { tokens: read, issues } = dtcgToTokens({
+      c: {
+        $type: "color",
+        $value: {
+          colorSpace: "srgb",
+          components: [1, 0, 0],
+          hex: "#000000",
+        },
+      },
+    });
+    expect(read).toEqual([]);
+    expect(issues[0]?.message).toContain("could not be read");
+  });
+
+  it("still accepts a hex that merely rounded from its components", () => {
+    const { tokens: read } = dtcgToTokens({
+      c: {
+        $type: "color",
+        $value: {
+          colorSpace: "srgb",
+          components: [1, 0, 0],
+          hex: "#ff0000",
+        },
+      },
+    });
+    expect(read[0]?.values.light).toBe("#ff0000");
   });
 
   it("skips a type it has no kind for, and says so", () => {

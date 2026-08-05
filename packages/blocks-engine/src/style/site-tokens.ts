@@ -287,7 +287,11 @@ const OPAQUE_VALUE =
 /** The only words `font-weight` takes; every other value is a number. */
 const FONT_WEIGHT_KEYWORDS = new Set(["normal", "bold", "bolder", "lighter"]);
 
-const MEASUREMENT = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?([a-z%]*)$/i;
+/** Text that begins the way a number does, whether or not it finishes like one. */
+const NUMERIC_LOOKING = /^[+-]?[.\d]/;
+
+const MEASUREMENT =
+  /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?((?:[a-zA-Z%]|\\[0-9a-fA-F]{1,6}\s?|\\.)*)$/;
 
 /**
  * Why a value cannot be what its token says it is, when that is knowable.
@@ -313,7 +317,26 @@ export function checkTokenKind(
   if (isCssWideKeyword(asciiLower(text))) return undefined;
 
   const measured = MEASUREMENT.exec(text);
-  const unit = measured?.[1]?.toLowerCase();
+  // Text plainly trying to be a number but failing to be one — `1.px`, `1..2` —
+  // reaches no verdict below, because nothing matches and every branch reads
+  // `undefined` as "cannot judge". For the kinds that ARE numbers, failing to
+  // parse is itself the answer.
+  if (
+    measured === null &&
+    NUMERIC_LOOKING.test(text) &&
+    (kind === "dimension" ||
+      kind === "duration" ||
+      kind === "number" ||
+      kind === "fontWeight")
+  ) {
+    return "is not a number CSS can read";
+  }
+  // A unit is an identifier, so `1m\\73` IS `1ms`. Read raw, the check reaches
+  // no verdict and stays silent about a value the browser drops.
+  const unit =
+    measured === null
+      ? undefined
+      : asciiLower(decodeIdentifier(measured[1] ?? ""));
   const amount = measured === null ? undefined : Number.parseFloat(text);
   const isColor = parseColor(text) !== undefined;
 
