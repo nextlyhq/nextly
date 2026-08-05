@@ -1,13 +1,19 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runProdMigrationsIfEnabled } from "../prod-migrations";
 
 const ORIG = process.env.NODE_ENV;
+const ORIG_CWD = process.cwd();
 beforeEach(() => {
   process.env.NODE_ENV = "production";
 });
 afterEach(() => {
   process.env.NODE_ENV = ORIG;
+  process.chdir(ORIG_CWD);
 });
 
 function args(over: Record<string, unknown> = {}) {
@@ -17,7 +23,9 @@ function args(over: Record<string, unknown> = {}) {
         runMigrationsOnBoot: true,
         migrationsDir: "./src/db/migrations",
         migrateLockTtlSeconds: 900,
+        uiSchemaFile: "ui-schema.json",
       },
+      collections: [],
     },
     adapter: {
       dialect: "postgresql" as const,
@@ -73,6 +81,55 @@ describe("runProdMigrationsIfEnabled", () => {
     expect(a.logger.error).not.toHaveBeenCalled();
     // success was routed to the boot logger's info.
     expect(a.logger.info).toHaveBeenCalledWith("Applied x.sql");
+  });
+
+  it("tells migrateCore about a junction the Schema Builder declares", async () => {
+    // Boot runs the same drift verification the CLI does, so it has to know
+    // the same derived tables. A custom junction name matches no convention
+    // and is in no snapshot, so a boot that resolved only the config would
+    // stop with drift the CLI path does not report — on the same database.
+    const projectRoot = await mkdtemp(join(tmpdir(), "nextly-prod-mig-"));
+    try {
+      await writeFile(
+        join(projectRoot, "ui-schema.json"),
+        JSON.stringify({
+          collections: [{ slug: "articles", fields: [] }],
+          singles: [],
+          components: [],
+        }),
+        "utf-8"
+      );
+      process.chdir(projectRoot);
+
+      const a = args({
+        deferredExtends: [
+          {
+            target: "articles",
+            owner: "plugin-tagging",
+            fields: [
+              {
+                name: "tags",
+                type: "relationship",
+                options: {
+                  target: "tags",
+                  relationType: "manyToMany",
+                  junctionTable: "articles_to_tags",
+                },
+              },
+            ],
+          },
+        ],
+      });
+      await runProdMigrationsIfEnabled(a as never);
+
+      const passed = a.migrateCore.mock.calls[0][0] as {
+        knownJunctions: ReadonlySet<string>;
+      };
+      expect([...passed.knownJunctions]).toContain("articles_to_tags");
+    } finally {
+      process.chdir(ORIG_CWD);
+      await rm(projectRoot, { recursive: true, force: true });
+    }
   });
 
   it("logs and returns (does NOT throw) when migrateCore throws", async () => {

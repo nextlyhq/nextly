@@ -19,6 +19,7 @@ import { NextlyError } from "../../../errors";
 import { diffSnapshots } from "../pipeline/diff/diff";
 import type { NextlySchemaSnapshot, Operation } from "../pipeline/diff/types";
 
+import { isUnadoptedDatabase } from "./baseline";
 import { migrationDriftError, type DriftItem } from "./drift-error";
 
 export type ReconcileState = "in_sync" | "already_applied" | "drift";
@@ -43,6 +44,8 @@ export interface ReconcileRepo {
     supersededEventIds: string[];
     byEventId: string;
   }): Promise<void>;
+  /** Every `file_apply` row for one filename: applied, failed, rolled back. */
+  findFileApplies(filename: string): Promise<ReadonlyArray<unknown>>;
 }
 
 export interface ReconcileFileArgs {
@@ -149,5 +152,22 @@ export async function reconcileFile(
 
   // DRIFT — live matches neither baseline nor target.
   const driftItems = diffSnapshots(before, live).map(toDriftItem);
-  throw migrationDriftError({ migration, file: file.path, driftItems });
+  // A half-applied first migration is indistinguishable from an unadopted
+  // database by schema alone — MySQL commits each DDL statement as it runs, so
+  // a first migration that failed partway leaves its tables and the retry sees
+  // only tables that already exist. The ledger separates them: a failed
+  // attempt left a row, and a database nobody has adopted never has one.
+  const priorAttempts = await repo.findFileApplies(file.filename);
+  throw migrationDriftError({
+    migration,
+    file: file.path,
+    driftItems,
+    // A database standing before the history started is a different problem
+    // from a drifted one, and the recoveries for drift do not solve it.
+    unadoptedDatabase: isUnadoptedDatabase({
+      before,
+      driftKinds: driftItems.map(d => d.kind),
+      hasPriorAttempt: priorAttempts.length > 0,
+    }),
+  });
 }

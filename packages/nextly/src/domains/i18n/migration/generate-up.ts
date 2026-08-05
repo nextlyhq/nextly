@@ -1,3 +1,8 @@
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+
+import type { TableSpec } from "../../schema/pipeline/diff/types";
+import { createTableBody } from "../../schema/pipeline/sql-templates/create-table-body";
+
 import { ddlType, lit, q } from "./ddl-types";
 import type { CompanionCopyRef, CompanionMigrationSpec } from "./types";
 
@@ -12,6 +17,24 @@ import type { CompanionCopyRef, CompanionMigrationSpec } from "./types";
  */
 export const COMPANION_DEFAULT_STATUS = "draft";
 
+/** Per-locale draft/publish state; present only when the entity has one. */
+export const COMPANION_STATUS_COLUMN = "_status";
+
+/**
+ * The columns a companion has by virtue of BEING a companion, rather than
+ * because a field is localized.
+ *
+ * Exported so a reader looking at an existing companion can subtract them and
+ * be left with exactly the translated columns. Kept beside the statement that
+ * writes them: a reader that decided this set for itself would misread the
+ * table the moment either side gained a column.
+ */
+export const COMPANION_STRUCTURAL_COLUMNS: ReadonlySet<string> = new Set([
+  "_parent",
+  "_locale",
+  COMPANION_STATUS_COLUMN,
+]);
+
 function buildCompanionCreateStatement(
   spec: CompanionMigrationSpec,
   ifNotExists: boolean
@@ -22,7 +45,7 @@ function buildCompanionCreateStatement(
     .join(",\n");
   // i18n M6: per-locale draft/publish status column (only when the collection has Draft/Published).
   const statusDef = spec.status
-    ? `  ${q("_status", dialect)} VARCHAR(20) NOT NULL DEFAULT '${COMPANION_DEFAULT_STATUS}',\n`
+    ? `  ${q(COMPANION_STATUS_COLUMN, dialect)} VARCHAR(20) NOT NULL DEFAULT '${COMPANION_DEFAULT_STATUS}',\n`
     : "";
   // 🔴 `IF NOT EXISTS` is OPT-IN, and only an emitted migration FILE may ask for it.
   //
@@ -48,6 +71,44 @@ function buildCompanionCreateStatement(
     `  PRIMARY KEY (${q("_parent", dialect)}, ${q("_locale", dialect)}),\n` +
     `  FOREIGN KEY (${q("_parent", dialect)}) REFERENCES ${q(mainTable, dialect)} (${q("id", dialect)}) ON DELETE CASCADE\n` +
     `)`
+  );
+}
+
+/**
+ * `CREATE TABLE` for a companion that already exists, rebuilt from what the
+ * database actually has.
+ *
+ * The spec-derived form above renders columns from their logical KIND, which is
+ * the right source when a field describes each one. A companion standing in a
+ * database being adopted may hold a column no field describes — and its logical
+ * kind is unrecoverable, while its physical type is right there. Rendering the
+ * introspected columns directly is therefore not a fallback but the more
+ * faithful path: it reproduces the table as it is, with no kind→type round trip
+ * to lose anything.
+ *
+ * Two things a snapshot cannot express are added back. The composite key comes
+ * free — introspection records `primaryKey` per column, so `createTableBody`
+ * emits `PRIMARY KEY (_parent, _locale)` from the live shape. The foreign key
+ * does not exist in the snapshot model at all, so it is spelled here, and
+ * INLINE: SQLite cannot add a constraint by `ALTER` at any point after the
+ * table is created.
+ */
+export function buildCompanionCreateFromLive(args: {
+  live: TableSpec;
+  mainTable: string;
+  dialect: SupportedDialect;
+}): string {
+  const { live, mainTable, dialect } = args;
+  const quote = (id: string): string => q(id, dialect);
+  const body = createTableBody(live, quote);
+  // `IF NOT EXISTS` for the same reason the spec-derived file form uses it: a
+  // baseline reaches databases that already have the companion, and the file is
+  // applied statement by statement with no enclosing transaction.
+  return (
+    `CREATE TABLE IF NOT EXISTS ${quote(live.name)} (\n` +
+    `${body},\n` +
+    `  FOREIGN KEY (${quote("_parent")}) REFERENCES ${quote(mainTable)} (${quote("id")}) ON DELETE CASCADE\n` +
+    `);`
   );
 }
 

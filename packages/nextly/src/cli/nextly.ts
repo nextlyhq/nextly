@@ -12,7 +12,8 @@
  * - Project commands: init, build, db:sync (alias: sync)
  * - Type generation: generate:types, generate:schema
  * - Migration commands: migrate, migrate:create, migrate:status,
- *   migrate:check, migrate:down, migrate:resolve, migrate:fresh
+ *   migrate:check, migrate:down, migrate:resolve, migrate:fresh,
+ *   migrate:baseline
  *
  * There is no `nextly dev` command: user apps run their own dev server
  * (`next dev`), and schema changes apply in-process via the HMR listener.
