@@ -33,6 +33,7 @@ import type { Command } from "commander";
 
 import { deriveCompanionSpec } from "../../domains/i18n/migration/derive-companion-spec";
 import {
+  buildCompanionCreateFromLive,
   buildCompanionCreateOnlySql,
   COMPANION_STATUS_COLUMN,
   COMPANION_STRUCTURAL_COLUMNS,
@@ -87,6 +88,7 @@ interface BaselineOptions {
   quiet?: boolean;
   cwd?: string;
   forceUnlock?: boolean;
+  adoptUnknown?: boolean;
 }
 
 /** The migration name used when the operator supplies none. */
@@ -216,6 +218,8 @@ function buildCompanionStatements(args: {
   entities: ResolvedEntity[];
   dialect: SupportedDialect;
   defaultLocale: string;
+  /** Rebuild a companion from the live table when config cannot describe it. */
+  adoptUnknown: boolean;
 }): {
   statements: string[];
   columnsByMain: Map<string, string[]>;
@@ -267,13 +271,36 @@ function buildCompanionStatements(args: {
       name => !COMPANION_STRUCTURAL_COLUMNS.has(name) && !described.has(name)
     );
     if (missing.length > 0) {
-      // Refused rather than skipped. A column standing in the database that
-      // the config no longer describes cannot be rendered faithfully — its
-      // logical kind is what decides the DDL type, and introspection recovers
-      // only the physical one — and emitting the companion without it would
-      // produce a baseline that rebuilds the table missing a column holding
-      // translations.
-      undescribed.push({ table: companionTable, columns: missing.sort() });
+      // A column standing in the database that the config no longer describes
+      // has no logical kind, and the kind is what decides the DDL type. So the
+      // spec-derived rendering cannot express it, and emitting the companion
+      // without it would produce a baseline that rebuilds the table missing a
+      // column holding translations.
+      //
+      // Refused by default, because adopting a schema nobody can describe
+      // should be a decision rather than a silent one. When the operator makes
+      // it, the table is rebuilt from what the database actually has, which
+      // reproduces every column including this one.
+      if (!args.adoptUnknown || !liveTable) {
+        undescribed.push({ table: companionTable, columns: missing.sort() });
+        continue;
+      }
+      statements.push(
+        buildCompanionCreateFromLive({
+          live: liveTable,
+          mainTable: entity.tableName,
+          dialect: args.dialect,
+        })
+      );
+      // Every translated column the companion holds, undescribed ones
+      // included: a later disable has to bring all of them home, and one it
+      // does not know about is one it strands.
+      columnsByMain.set(
+        entity.tableName,
+        [...liveColumns]
+          .filter(n => !COMPANION_STRUCTURAL_COLUMNS.has(n))
+          .sort()
+      );
       continue;
     }
 
@@ -337,6 +364,15 @@ export interface BaselineCoreDeps {
    * project that configured a shorter takeover for far longer than it asked.
    */
   ttlSeconds?: number;
+  /**
+   * Adopt a companion holding translated columns the config does not describe.
+   *
+   * Off by default: such a column cannot be rendered from its logical kind,
+   * so adopting one means recording a schema nobody can describe, which should
+   * be the operator's decision rather than a silent one. On, the companion is
+   * rebuilt from the live table instead of from the config's spec.
+   */
+  adoptUnknown?: boolean;
   /** Override the clock so a test can predict the filename. */
   now?: Date;
 }
@@ -473,6 +509,7 @@ export async function baselineCore(
         entities: deps.localizedEntities ?? [],
         dialect,
         defaultLocale: deps.defaultLocale ?? "en",
+        adoptUnknown: deps.adoptUnknown === true,
       });
       if (companionSql.undescribed.length > 0) {
         // Before anything is written. A baseline that silently omitted these
@@ -649,6 +686,7 @@ export async function runMigrateBaseline(
       defaultLocale: config.localization?.defaultLocale,
       ttlSeconds: config.db.migrateLockTtlSeconds,
       knownJunctions: resolved.knownJunctions,
+      adoptUnknown: options.adoptUnknown,
     });
 
     if (result.kind === "already-baselined") {
@@ -739,6 +777,10 @@ export function registerMigrateBaselineCommand(program: Command): void {
     .option(
       "--force-unlock",
       "Clear a stale migrate lock before taking it (use after a crashed run)"
+    )
+    .option(
+      "--adopt-unknown",
+      "Adopt translation tables holding columns your config no longer describes, rebuilding them from the database"
     )
     .action(async (opts: BaselineOptions, command: Command) => {
       const globalOpts = command.parent?.opts() ?? {};
