@@ -7,6 +7,7 @@
  * - Design-token refs compile to CSS custom properties.
  * - Breakpoints are project-configurable DATA; default cascade is DESKTOP-FIRST.
  */
+import { PAGE_ROOT_CLASS } from "@nextlyhq/blocks-engine";
 import * as csstree from "css-tree";
 
 import { sanitizeBlockCss } from "./css-sanitize";
@@ -80,14 +81,45 @@ export function compileTokensCss(
   return decls.length ? `.${rootClass} { ${decls.join("; ")}; }` : "";
 }
 
-/** Deterministic, short, stable scoped class for a node id (FNV-1a → base36). */
-export function nodeClass(id: string): string {
+/** Deterministic, short, stable base36 digest (FNV-1a). */
+function hash36(text: string): string {
   let h = 0x811c9dc5;
-  for (let i = 0; i < id.length; i++) {
-    h ^= id.charCodeAt(i);
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
     h = Math.imul(h, 0x01000193);
   }
-  return `nx-pb-${(h >>> 0).toString(36)}`;
+  return (h >>> 0).toString(36);
+}
+
+/** Deterministic, short, stable scoped class for a node id. */
+export function nodeClass(id: string): string {
+  return `nx-pb-${hash36(id)}`;
+}
+
+/**
+ * The class that identifies ONE document, for everything two documents on a
+ * page must not share.
+ *
+ * `nx-pb-page` is on every page-builder document by design — it is the public
+ * hook a host styles against — so it cannot also be what separates them. Two
+ * documents rendered into one page both anchor their custom CSS to it, and
+ * both namespace their `@keyframes` and `@font-face` off it, which means one
+ * document's `fade` is the other's and the later `<style>` wins for both. The
+ * per-node classes never had that problem because a node id is unique; this
+ * gives the document the same property.
+ *
+ * Derived from the root node's id rather than generated, because the same
+ * document has to produce the same class every time it is compiled: a
+ * counter or a random token would differ between the server render and the
+ * client's, and the styles would arrive anchored to a class the markup does
+ * not carry. Two renders of the SAME document share a scope, which is correct —
+ * they are the same document, and its names should mean the same thing in both.
+ */
+export function documentScopeClass(doc: BlockDocument): string {
+  const id = doc?.root?.id;
+  return typeof id === "string" && id !== ""
+    ? `nx-pb-d-${hash36(id)}`
+    : PAGE_ROOT_CLASS;
 }
 
 function resolveScalar(v: StyleScalar): string {

@@ -28,8 +28,18 @@
 import type { ValidationIssue } from "../validation";
 
 import type { TokenKind } from "./catalog-types";
-import { checkCssValue, checkUrlValue } from "./css-value";
-import { DEFAULT_TOKEN_PREFIX, tokenCustomProperty } from "./declarations";
+import { parseColor } from "./contrast";
+import {
+  asciiLower,
+  checkCssValue,
+  checkUrlValue,
+  isCssWideKeyword,
+} from "./css-value";
+import {
+  isTokenName,
+  safeTokenPrefix,
+  tokenCustomProperty,
+} from "./declarations";
 
 /** The modes a token may carry a value for. */
 export type TokenMode = "light" | "dark";
@@ -111,22 +121,17 @@ export interface FontFaceDef {
  */
 export const DARK_MODE_ATTRIBUTE = "data-nx-theme";
 
-/**
- * Prefixes a site may not take.
- *
- * `--nx-` is the admin's own; `--tw-` is Tailwind's internals. Either would let
- * a site's token silently restyle surfaces the site does not own — the admin
- * panel around the editor, or the utility classes a host's own markup uses.
- */
-const RESERVED_PREFIXES = ["--nx-", "--tw-"];
-
-const PREFIX_SHAPE = /^--[a-z0-9-]*$/;
-
 /** The `format()` hints a face may declare: plain keywords, nothing else. */
 const FONT_FORMAT = /^[a-z0-9-]+$/i;
 
 /**
  * The prefix to emit under, with a reason when the requested one is refused.
+ *
+ * The rule itself lives with the compiler, which is the other half of the same
+ * decision: this side writes the definitions and that side writes the `var()`
+ * that reads them, so a prefix either side refused alone would leave the two
+ * pointing at different custom properties. Only the shape of the report differs
+ * here, because the token table answers in issues rather than strings.
  *
  * A refused prefix falls back rather than throwing, in keeping with the rest of
  * the compiler: one bad setting should cost the site its naming choice, not its
@@ -136,25 +141,10 @@ export function resolveTokenPrefix(prefix: string | undefined): {
   prefix: string;
   issue?: ValidationIssue;
 } {
-  if (prefix === undefined) return { prefix: DEFAULT_TOKEN_PREFIX };
-  if (!PREFIX_SHAPE.test(prefix)) {
-    return {
-      prefix: DEFAULT_TOKEN_PREFIX,
-      issue: tokenIssue(
-        `"${prefix}" is not a custom-property prefix, so tokens were written under "${DEFAULT_TOKEN_PREFIX}". A prefix starts with "--" and holds only lowercase letters, digits and dashes.`
-      ),
-    };
-  }
-  const reserved = RESERVED_PREFIXES.find(value => prefix.startsWith(value));
-  if (reserved !== undefined) {
-    return {
-      prefix: DEFAULT_TOKEN_PREFIX,
-      issue: tokenIssue(
-        `"${prefix}" starts with "${reserved}", which is reserved, so tokens were written under "${DEFAULT_TOKEN_PREFIX}" instead. Tokens under that prefix would change the ${reserved === "--nx-" ? "admin interface" : "Tailwind internals"} as well as this site.`
-      ),
-    };
-  }
-  return { prefix };
+  const safe = safeTokenPrefix(prefix);
+  return safe.warning === undefined
+    ? { prefix: safe.prefix }
+    : { prefix: safe.prefix, issue: tokenIssue(safe.warning) };
 }
 
 function tokenIssue(
@@ -165,20 +155,19 @@ function tokenIssue(
 }
 
 /**
- * The shape a token name may take.
+ * Whether a name may be turned into a custom property.
  *
- * Dot-separated segments of letters, digits and dashes — the names authors
- * read and write. Checked rather than trusted because the name is not data
- * that lands in a value: it becomes the custom PROPERTY, so a name carrying
- * `}` closes the rule the emitter opened and everything after it is CSS the
- * site never wrote. `x:1}body{color` is the whole attack.
+ * The compiler's grammar, not a second one: it is what a `$token` reference is
+ * held to, and a table that accepted names references cannot name would hold
+ * tokens that exist and resolve to nothing. Re-exported because this is where
+ * a reader of the token table looks for it.
+ *
+ * The check matters beyond agreement, too — the name becomes the custom
+ * PROPERTY, so a name carrying `}` closes the rule the emitter opened and
+ * everything after it is CSS the site never wrote. `x:1}body{color` is the
+ * whole attack.
  */
-const TOKEN_NAME = /^[A-Za-z0-9][A-Za-z0-9-]*(?:\.[A-Za-z0-9][A-Za-z0-9-]*)*$/;
-
-/** Whether a name may be turned into a custom property. */
-export function isTokenName(name: string): boolean {
-  return TOKEN_NAME.test(name);
-}
+export { isTokenName };
 
 /**
  * A font descriptor that goes inside a quoted CSS string, made safe to put
@@ -204,6 +193,85 @@ function cssString(value: string): string {
  */
 function unquotedDescriptor(value: string): boolean {
   return checkCssValue(value) === null;
+}
+
+/**
+ * A value whose kind nothing can judge from the text alone.
+ *
+ * `var()` resolves elsewhere, `calc()` and its relatives compute, and
+ * `color-mix()` produces a colour from arguments this is not going to evaluate.
+ * A guess about any of them would be a guess, so they are passed.
+ */
+const OPAQUE_VALUE =
+  /^(?:var|calc|clamp|min|max|env|attr|color-mix|light-dark|round|abs)\(/i;
+
+/** A bare number, with the unit it carries — the shape most kinds disagree over. */
+const MEASUREMENT = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)([a-z%]*)$/i;
+
+/**
+ * Why a value cannot be what its token says it is, when that is knowable.
+ *
+ * The kind is not decoration: it decides which properties may reference the
+ * token, so a `dimension` holding `red` compiles into `padding:var(--site-…)`
+ * and the browser drops the declaration at use time. Nothing on the page says
+ * why, and the author is left looking at a padding that does not apply.
+ *
+ * Deliberately one-sided. It reports only what it is CERTAIN of — a length
+ * where a colour belongs, a colour where a length belongs — and stays quiet
+ * about everything it merely cannot parse, because `oklch()`, a named colour
+ * and next year's colour function are all valid CSS this has no business
+ * refusing. And it is a warning rather than a refusal for the same reason: a
+ * wrong verdict then costs a message, not the token.
+ */
+export function checkTokenKind(
+  kind: TokenKind,
+  value: string
+): string | undefined {
+  const text = value.trim();
+  if (text === "" || OPAQUE_VALUE.test(text)) return undefined;
+  if (isCssWideKeyword(asciiLower(text))) return undefined;
+
+  const measured = MEASUREMENT.exec(text);
+  const unit = measured?.[1]?.toLowerCase();
+  const amount = measured === null ? undefined : Number.parseFloat(text);
+  const isColor = parseColor(text) !== undefined;
+
+  switch (kind) {
+    case "color":
+      // A number is never a colour, whatever unit it wears.
+      return measured
+        ? `is a ${unit === "" ? "number" : "measurement"}, not a colour`
+        : undefined;
+    case "dimension":
+      if (isColor) return "is a colour, not a length";
+      // Only zero may go without a unit; `16` is not `16px` to CSS.
+      return unit === "" && amount !== 0
+        ? "is a number with no unit, so it is not a length"
+        : undefined;
+    case "duration":
+      if (isColor) return "is a colour, not a duration";
+      return unit !== undefined && unit !== "s" && unit !== "ms" && amount !== 0
+        ? `is measured in ${unit === "" ? "no unit" : unit}, not seconds or milliseconds`
+        : undefined;
+    case "number":
+      if (isColor) return "is a colour, not a number";
+      return unit !== undefined && unit !== ""
+        ? `carries the unit "${unit}", so it is not a plain number`
+        : undefined;
+    case "fontWeight":
+      if (unit !== undefined && unit !== "") {
+        return `carries the unit "${unit}", so it is not a font weight`;
+      }
+      return amount !== undefined && (amount < 1 || amount > 1000)
+        ? "is outside the 1 to 1000 a font weight may take"
+        : undefined;
+    // A family is any text, a shadow is a list this does not parse, and
+    // `custom` exists precisely so a site can hold something with no rules.
+    case "fontFamily":
+    case "shadow":
+    case "custom":
+      return undefined;
+  }
 }
 
 /**
@@ -440,6 +508,23 @@ export function emitTokenBlocks(
       continue;
     }
     seen.set(property, token.name);
+
+    // Reported, and then written anyway. A value that does not match its kind
+    // is dropped by the browser where it is USED, which costs the author the
+    // one declaration and no more; a refusal here would cost them the token on
+    // a verdict this is deliberately not certain enough to act on.
+    for (const mode of TOKEN_MODES) {
+      const modeValue = token.values[mode];
+      if (modeValue === undefined) continue;
+      const mismatch = checkTokenKind(token.kind, modeValue);
+      if (mismatch !== undefined) {
+        issues.push(
+          tokenIssue(
+            `"${token.name}" is a ${token.kind} token, but its ${mode} value "${modeValue}" ${mismatch}. It was written as given, and will do nothing where the token is used.`
+          )
+        );
+      }
+    }
 
     light.push(`${property}:${token.values.light}`);
     if (token.values.dark !== undefined) {

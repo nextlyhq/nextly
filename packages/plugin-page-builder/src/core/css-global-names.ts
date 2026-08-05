@@ -105,6 +105,27 @@ const ANIMATION_NAME_KEYWORDS = new Set([
 ]);
 
 /**
+ * Font sizes that are words rather than numbers.
+ *
+ * The `font` shorthand is read positionally around its size, and a size is not
+ * always a length: `font: italic small Brand` is as valid as `font: italic 12px
+ * Brand`. Without these the shorthand looks sizeless, the family list is never
+ * found, and a family the stylesheet defined keeps pointing at the global name.
+ */
+const FONT_SIZE_KEYWORDS = new Set([
+  "xx-small",
+  "x-small",
+  "small",
+  "medium",
+  "large",
+  "x-large",
+  "xx-large",
+  "xxx-large",
+  "smaller",
+  "larger",
+]);
+
+/**
  * The names an author's stylesheet defines, mapped to their namespaced form.
  *
  * Two maps rather than one, because the two name spaces do not share a
@@ -175,21 +196,46 @@ export function fontFaceHasSrc(node: csstree.Atrule): boolean {
     );
 }
 
+/** A name a value denotes, and whether it was written as a quoted string. */
+interface SingleName {
+  name: string;
+  quoted: boolean;
+}
+
 /**
- * The single name a value denotes, or `undefined` if it is not a plain name.
+ * The single family or keyframes name a value denotes, or `undefined`.
  *
- * A `@font-face` family that arrives as several unquoted identifiers is joined,
- * since `font-family: My Font` names one family rather than two.
+ * The grammar is `<string> | <custom-ident>+`, and the alternation is exclusive:
+ * one string names a family, and so does a run of identifiers
+ * (`font-family: My Font` is one family, not two), but `"A" "B"` is neither. A
+ * browser reading that descriptor discards it and keeps whichever earlier one
+ * was valid, so treating it as a name would record a family the page never
+ * uses — and leave the family it DOES use holding its global name.
+ *
+ * Whether the name was quoted is carried out with it, because writing a name
+ * back in the other form can change what it means: `@keyframes "none"` is a
+ * real animation, and `animation-name: none` is the keyword that cancels one.
  */
-function valueAsName(value: csstree.CssNode): string | undefined {
+function singleName(value: csstree.CssNode): SingleName | undefined {
   if (value.type !== "Value") return undefined;
-  const parts: string[] = [];
-  for (const child of value.children.toArray()) {
-    const part = nameOf(child);
-    if (part === undefined) return undefined;
-    parts.push(part);
+  const children = value.children.toArray();
+  const first = children[0];
+  if (first === undefined) return undefined;
+
+  if (first.type === "String") {
+    return children.length === 1
+      ? { name: first.value, quoted: true }
+      : undefined;
   }
-  return parts.length > 0 ? parts.join(" ") : undefined;
+
+  const parts: string[] = [];
+  for (const child of children) {
+    if (child.type !== "Identifier") return undefined;
+    parts.push(decodeIdentifier(child.name));
+  }
+  return parts.length > 0
+    ? { name: parts.join(" "), quoted: false }
+    : undefined;
 }
 
 /**
@@ -238,13 +284,13 @@ export function namespaceDefinedNames(
         // the one a reference has to be pointed at.
         let effective: string | undefined;
         for (const declaration of declarations) {
-          const original = valueAsName(declaration.value);
-          if (original === undefined || original === "") continue;
+          const original = singleName(declaration.value);
+          if (original === undefined || original.name === "") continue;
           replaceValueWithString(
             declaration.value as csstree.Value,
-            namespacedGlobalName(original, scopeClass)
+            namespacedGlobalName(original.name, scopeClass)
           );
-          effective = original;
+          effective = original.name;
         }
         if (effective !== undefined) {
           map.fontFamilies.set(
@@ -268,7 +314,8 @@ export function namespaceDefinedNames(
 export function rewriteNameReferences(
   ast: csstree.CssNode,
   map: GlobalNameMap,
-  walk: typeof csstree.walk
+  walk: typeof csstree.walk,
+  parse: typeof csstree.parse
 ): void {
   if (map.keyframes.size === 0 && map.fontFamilies.size === 0) return;
 
@@ -295,12 +342,23 @@ export function rewriteNameReferences(
       //
       // Read from `Raw`, because that is what a custom property's value parses
       // as: it may hold arbitrary tokens, so the parser does not interpret it.
+      // Parsed here rather than compared as text, since the text is a spelling
+      // and the name is what the spelling denotes — `--f: "My Font"` holds the
+      // family `My Font`, and matching the quotes along with it would find
+      // nothing and leave the reference behind after the definition moved.
       if (property.startsWith("--")) {
         if (value.type !== "Raw") return;
-        const whole = value.value.trim();
-        const namespaced =
-          map.keyframes.get(whole) ?? map.fontFamilies.get(whole.toLowerCase());
-        if (namespaced !== undefined) value.value = namespaced;
+        const held = parseSingleName(value.value, parse);
+        if (held === undefined) return;
+        const keyframe = map.keyframes.get(held.name);
+        if (keyframe !== undefined) {
+          value.value = writtenName(keyframe, held.quoted);
+          return;
+        }
+        const family = map.fontFamilies.get(held.name.toLowerCase());
+        if (family !== undefined) {
+          value.value = writtenName(family, held.quoted);
+        }
         return;
       }
 
@@ -343,15 +401,38 @@ export function rewriteNameReferences(
  * is a style/variant/weight/stretch token, and the families follow it — after
  * an optional `/ line-height`. Without a size there is no family list either;
  * `font: caption` is a system font and names nothing.
+ *
+ * The LAST measurement is the size, not the first, because the tokens before it
+ * can be measurements too: `font-stretch` takes a percentage, so the `87.5%` of
+ * `font: 87.5% 16px Brand` is the stretch and reading it as the size would put
+ * the family list one token early. Reading from the end lands on the size in
+ * that case and on the line-height in `font: 16px/1.5 Brand`, and the family
+ * follows both.
+ *
+ * A word size is consulted only when there is no measurement at all, which
+ * keeps a family named after one — `font: 16px small` — being read as the size
+ * of a declaration that has already given one.
  */
 function familyStartIndex(value: csstree.Value): number | undefined {
   const nodes = value.children.toArray();
-  const sizeAt = nodes.findIndex(
+  const measured = lastIndexWhere(
+    nodes,
     node =>
       node.type === "Dimension" ||
       node.type === "Percentage" ||
-      node.type === "Number"
+      node.type === "Number" ||
+      // `clamp()`, `calc()` and `var()` all stand in for a length here.
+      node.type === "Function"
   );
+  const sizeAt =
+    measured !== -1
+      ? measured
+      : lastIndexWhere(
+          nodes,
+          node =>
+            node.type === "Identifier" &&
+            FONT_SIZE_KEYWORDS.has(decodeIdentifier(node.name).toLowerCase())
+        );
   if (sizeAt === -1) return undefined;
 
   let index = sizeAt + 1;
@@ -382,7 +463,14 @@ function rewriteKeyframeNames(
     if (original === undefined) continue;
     // A keyword is compared case-insensitively, as CSS reads it; the name it
     // shadows is not, since a keyframes name is a case-sensitive custom-ident.
-    if (skip.has(original.toLowerCase())) continue;
+    //
+    // Identifiers only: a keyword is a keyword only when written as one.
+    // `animation-name: none` cancels the animation, while `animation-name:
+    // "none"` names the keyframes rule `@keyframes "none"` — the quotes are
+    // exactly what tells the two apart, so skipping the quoted form would leave
+    // a reference pointing at a name that no longer exists.
+    if (node.type === "Identifier" && skip.has(original.toLowerCase()))
+      continue;
     const namespaced = names.get(original);
     if (namespaced !== undefined) setName(node, namespaced);
   }
@@ -447,6 +535,46 @@ function rewriteFontFamilies(
     children.insertData({ type: "String", value: name }, first);
     for (const item of matched) children.remove(item);
   }
+}
+
+/**
+ * The one name a custom property's raw text holds, or `undefined`.
+ *
+ * A custom property's value is not parsed by the stylesheet parser — it may
+ * hold any token sequence — so it is parsed here, as a value, to read what it
+ * would mean once `var()` puts it somewhere. Anything the value grammar cannot
+ * read is left alone: a property holding a whole declaration list, or nothing,
+ * is not a name however it is squinted at.
+ */
+function parseSingleName(
+  raw: string,
+  parse: typeof csstree.parse
+): SingleName | undefined {
+  const text = raw.trim();
+  if (text === "") return undefined;
+  try {
+    return singleName(parse(text, { context: "value" }));
+  } catch {
+    return undefined;
+  }
+}
+
+/** The index of the last node a test accepts, or -1. */
+function lastIndexWhere(
+  nodes: readonly csstree.CssNode[],
+  accepts: (node: csstree.CssNode) => boolean
+): number {
+  for (let index = nodes.length - 1; index >= 0; index--) {
+    const node = nodes[index];
+    if (node !== undefined && accepts(node)) return index;
+  }
+  return -1;
+}
+
+/** A name written as CSS would read it back, in the form it arrived in. */
+function writtenName(name: string, quoted: boolean): string {
+  if (!quoted) return name;
+  return `"${name.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
 /** Replace every child of a value with one quoted string. */

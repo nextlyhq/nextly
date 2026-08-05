@@ -819,6 +819,81 @@ describe("custom CSS may not reach off this origin", () => {
       expect(out.css).toContain(`--f:${ns("Brand")}`);
     });
 
+    it("follows a quoted family through a custom property", () => {
+      // The property holds the family `My Font`; the quotes are how it is
+      // spelled, not part of the name. Matching the spelling finds nothing and
+      // leaves the reference pointing at a family the rename took away.
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: "My Font"; src: url("/f.woff2") }
+         .a { --f: "My Font"; font-family: var(--f) }`,
+        SCOPE
+      );
+      expect(out.css).toContain(`--f:"${ns("My Font")}"`);
+    });
+
+    it("ignores a font-family descriptor CSS itself would ignore", () => {
+      // The descriptor is `<string> | <custom-ident>+`, so `"Bad" "Name"` is
+      // not a family name and the browser keeps `Good`. Reading it as one
+      // records a family the page never uses and leaves the one it does use
+      // holding its global name.
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: Good; font-family: "Bad" "Name"; src: url("/f.woff2") }
+         .a { font-family: Good }`,
+        SCOPE
+      );
+      expect(out.css).toContain(`font-family:"${ns("Good")}"`);
+      expect(out.css).not.toMatch(/font-family:\s*Good\b/);
+    });
+
+    it("rewrites a quoted keyframes name that is spelled like a keyword", () => {
+      // `@keyframes "none"` is a real animation and `animation-name: "none"`
+      // references it, while the bare `none` is the keyword that cancels one.
+      // The quotes are the only thing telling them apart.
+      const out = sanitizeCustomCss(
+        `@keyframes "none" { from { opacity: 0 } } .a { animation-name: "none" }`,
+        SCOPE
+      );
+      expect(out.css).toContain(`animation-name:"${ns("none")}"`);
+    });
+
+    it("finds the family after a font size that is a word", () => {
+      // `font: italic small Brand` has no measurement in it, and a shorthand
+      // read as sizeless never reaches its family list.
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: Brand; src: url("/f.woff2") } .a { font: italic small Brand }`,
+        SCOPE
+      );
+      // The whole declaration, not just the name: the `@font-face` in the same
+      // output holds that name too, so a bare containment check passes while
+      // the reference this is about is left exactly as it was.
+      expect(out.css).toContain(`font:italic small"${ns("Brand")}"`);
+    });
+
+    it("reads the size past a font-stretch percentage", () => {
+      // `font-stretch` takes a percentage, so the FIRST measurement here is the
+      // stretch, not the size. Reading it as the size puts the family list one
+      // token early, and the `normal` line-height then joins the run in front
+      // of `Brand` — the pair matches no family and the reference is left
+      // behind. The word line-height is what makes it observable: a numeric one
+      // is skipped as an unnamed node and the family still matches by luck.
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: Brand; src: url("/f.woff2") } .a { font: 87.5% 16px/normal Brand }`,
+        SCOPE
+      );
+      expect(out.css).toContain(`font:87.5% 16px/normal"${ns("Brand")}"`);
+    });
+
+    it("finds the family after a computed font size", () => {
+      // `clamp()` is a size like any other, and a shorthand whose size is a
+      // function has to reach its family list the same way.
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: Brand; src: url("/f.woff2") }
+         .a { font: clamp(1rem, 2vw, 2rem) Brand }`,
+        SCOPE
+      );
+      expect(out.css).toContain(`font:clamp(1rem,2vw,2rem)"${ns("Brand")}"`);
+    });
+
     it("still refuses a remote url inside a keyframe step", () => {
       // The step blocks are ordinary declarations, so the origin policy has to
       // reach them — allowing the at-rule must not open a door beneath it.

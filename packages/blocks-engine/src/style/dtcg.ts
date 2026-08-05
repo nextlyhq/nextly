@@ -41,6 +41,12 @@
 import type { ValidationIssue } from "../validation";
 
 import type { TokenKind } from "./catalog-types";
+// The colour reader the contrast utility already uses. One parser rather than
+// two, because a second would have to be kept in step with it by hand and the
+// symptom of failure is silent: an exported `$value` that describes a different
+// colour from the one the site renders.
+import { parseColor } from "./contrast";
+import type { Rgb } from "./contrast";
 import type { SiteToken, SiteTokenSet } from "./site-tokens";
 import { isTokenName } from "./site-tokens";
 
@@ -191,12 +197,8 @@ function toDtcgValue(token: SiteToken): unknown {
       return familyToDtcg(css);
     case "fontWeight":
       return weightToDtcg(css);
-    case "number": {
-      const value = Number.parseFloat(css);
-      return Number.isFinite(value) && String(value) === css
-        ? value
-        : undefined;
-    }
+    case "number":
+      return numberToDtcg(css);
     // A CSS shadow is a list of lengths and a colour in an order DTCG models as
     // named fields. Converting it means parsing the shorthand, which is the
     // kind of guessing this file exists to avoid; the extension carries it.
@@ -222,7 +224,7 @@ function measureToDtcg(
 
 /** A hex or `rgb()` colour in the format's object form. */
 function colorToDtcg(css: string): DtcgNode | undefined {
-  const rgb = parseSimpleColor(css);
+  const rgb: Rgb | undefined = parseColor(css);
   if (rgb === undefined) return undefined;
   const component = (value: number): number =>
     Math.round((value / 255) * 10000) / 10000;
@@ -237,18 +239,78 @@ function colorToDtcg(css: string): DtcgNode | undefined {
 
 /** A family list as one string or an array, which is what the format takes. */
 function familyToDtcg(css: string): string | string[] | undefined {
-  const parts = css
-    .split(",")
-    .map(part => part.trim().replace(/^["']|["']$/g, ""))
-    .filter(part => part !== "");
+  const parts = splitFamilyList(css);
   if (parts.length === 0) return undefined;
   return parts.length === 1 ? parts[0] : parts;
 }
 
+/**
+ * A CSS family list split into its families.
+ *
+ * The comma only separates families outside quotes: `"ACME, Inc", serif` names
+ * two families, not three, and a plain split turns a real company's font into a
+ * fallback list that fails over to a family called `Inc`. Quotes are removed
+ * because the name is the family, not the spelling, and backslash escapes are
+ * resolved for the same reason.
+ */
+function splitFamilyList(css: string): string[] {
+  const parts: string[] = [];
+  let current = "";
+  let quote: string | undefined;
+
+  for (let index = 0; index < css.length; index++) {
+    const char = css[index];
+    if (char === "\\") {
+      // An escape stands for the next character whatever it is, including the
+      // comma of `ACME\, Inc` and a quote inside a quoted name.
+      current += css[index + 1] ?? "";
+      index++;
+      continue;
+    }
+    if (quote !== undefined) {
+      if (char === quote) quote = undefined;
+      else current += char;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (char === ",") {
+      parts.push(current.trim());
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  parts.push(current.trim());
+
+  return parts.filter(part => part !== "");
+}
+
+/**
+ * The CSS `<number>` grammar, which is wider than one canonical spelling.
+ *
+ * `1.0`, `+2` and `1e3` are all valid numbers a person may reasonably have
+ * typed. Accepting only the text `String(Number.parseFloat(x))` happens to
+ * produce reports those as inexpressible and drops them from the export, which
+ * is a formatting preference presented to the author as a limitation of the
+ * format. The exact text is kept in the extension either way, so the round trip
+ * stays byte for byte.
+ */
+const CSS_NUMBER = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
+
+/** A number token as the format stores it: a JSON number. */
+function numberToDtcg(css: string): number | undefined {
+  if (!CSS_NUMBER.test(css)) return undefined;
+  const value = Number.parseFloat(css);
+  return Number.isFinite(value) ? value : undefined;
+}
+
 /** A weight as a number, or one of the two keywords the format names. */
 function weightToDtcg(css: string): number | string | undefined {
-  const numeric = Number.parseInt(css, 10);
-  if (Number.isFinite(numeric) && String(numeric) === css) return numeric;
+  const numeric = numberToDtcg(css);
+  if (numeric !== undefined) return numeric;
   const keyword = css.toLowerCase();
   return keyword === "normal" || keyword === "bold" ? keyword : undefined;
 }
@@ -427,8 +489,16 @@ function fromDtcgValue(value: unknown, kind: TokenKind): string | undefined {
  */
 function colorFromDtcg(value: unknown): string | undefined {
   if (!isPlainObject(value)) return undefined;
+  // `alpha` is a member of its own, and `hex` is the six-digit fallback for the
+  // colour WITHOUT it. Taking the hex on its own therefore imports a
+  // half-transparent colour as an opaque one — a value that renders, looks
+  // deliberate, and is not the colour the file described.
+  const alpha =
+    typeof value.alpha === "number" ? Math.min(1, Math.max(0, value.alpha)) : 1;
   if (typeof value.hex === "string" && /^#[0-9a-f]{6}$/i.test(value.hex)) {
-    return value.hex;
+    if (alpha >= 1) return value.hex;
+    const rgb = parseColor(value.hex);
+    if (rgb !== undefined) return `rgb(${rgb.r} ${rgb.g} ${rgb.b} / ${alpha})`;
   }
   const components = value.components;
   if (!Array.isArray(components) || components.length < 3) return undefined;
@@ -438,7 +508,6 @@ function colorFromDtcg(value: unknown): string | undefined {
   const [r, g, b] = channels.map(part =>
     Math.round(Math.min(1, Math.max(0, part)) * 255)
   );
-  const alpha = typeof value.alpha === "number" ? value.alpha : 1;
   return alpha < 1 ? `rgb(${r} ${g} ${b} / ${alpha})` : `rgb(${r} ${g} ${b})`;
 }
 
@@ -446,50 +515,6 @@ function colorFromDtcg(value: unknown): string | undefined {
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-/** Hex and `rgb()` only — the same two forms the contrast utility reads. */
-function parseSimpleColor(
-  css: string
-): { r: number; g: number; b: number; a: number } | undefined {
-  const short = /^#([0-9a-f])([0-9a-f])([0-9a-f])$/i.exec(css);
-  if (short) {
-    const [, r, g, b] = short;
-    return {
-      r: Number.parseInt(`${r}${r}`, 16),
-      g: Number.parseInt(`${g}${g}`, 16),
-      b: Number.parseInt(`${b}${b}`, 16),
-      a: 1,
-    };
-  }
-  const long = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(css);
-  if (long) {
-    const [, r, g, b] = long;
-    return {
-      r: Number.parseInt(r ?? "0", 16),
-      g: Number.parseInt(g ?? "0", 16),
-      b: Number.parseInt(b ?? "0", 16),
-      a: 1,
-    };
-  }
-  const fn = /^rgba?\(([^)]*)\)$/i.exec(css);
-  if (!fn) return undefined;
-  const parts = (fn[1] ?? "")
-    .replace(/\//g, " ")
-    .split(/[\s,]+/)
-    .filter(part => part !== "");
-  if (parts.length < 3) return undefined;
-  const [r, g, b] = parts.slice(0, 3).map(part => Number.parseFloat(part));
-  if ([r, g, b].some(part => part === undefined || !Number.isFinite(part))) {
-    return undefined;
-  }
-  const alpha = parts[3] === undefined ? 1 : Number.parseFloat(parts[3]);
-  return {
-    r: r,
-    g: g,
-    b: b,
-    a: Number.isFinite(alpha) ? alpha : 1,
-  };
 }
 
 function toHex(rgb: { r: number; g: number; b: number }): string {

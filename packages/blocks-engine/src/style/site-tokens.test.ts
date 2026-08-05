@@ -7,11 +7,14 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { compileStyleValues } from "./declarations";
 import {
+  checkTokenKind,
   DARK_MODE_ATTRIBUTE,
   defaultSiteTokens,
   emitFontFaces,
   emitTokenBlocks,
+  isTokenName,
   resolveTokenPrefix,
   validateFontFace,
 } from "./site-tokens";
@@ -44,6 +47,146 @@ describe("resolveTokenPrefix", () => {
       const result = resolveTokenPrefix(bad);
       expect(result.prefix, bad).toBe("--site-");
       expect(result.issue, bad).toBeDefined();
+    }
+  });
+
+  it.each(["--nx-", "--tw-", "--brand_", "site-"])(
+    "sends definitions and references to the same property for %s",
+    prefix => {
+      // The two sides of one decision. A prefix refused where the table is
+      // written but accepted where `var()` is written is worse than either
+      // verdict alone: the definitions land under the fallback, every
+      // reference still reads the prefix that was asked for, and the tokens
+      // resolve to nothing with no warning on the page to say why.
+      const { css } = emitTokenBlocks(
+        {
+          prefix,
+          tokens: [
+            { name: "color.primary", kind: "color", values: { light: "#000" } },
+          ],
+        },
+        SCOPE
+      );
+      const reference = compileStyleValues(
+        { color: { $token: "color.primary" } },
+        "/styles",
+        prefix
+      );
+
+      const property = "--site-color-primary";
+      expect(css).toContain(`${property}:`);
+      expect(reference.declarations[0]?.value).toBe(`var(${property})`);
+    }
+  );
+});
+
+describe("a value that cannot be its kind", () => {
+  it("says so, and writes it anyway", () => {
+    // The kind decides which properties may reference the token, so a colour
+    // holding a length compiles to `color:var(--site-…)` and the browser drops
+    // it at use time — nothing on the page says why. Writing it regardless
+    // keeps the verdict cheap: this is a warning, not a gate.
+    const { css, issues } = emitTokenBlocks(
+      {
+        tokens: [
+          { name: "color.brand", kind: "color", values: { light: "1rem" } },
+        ],
+      },
+      SCOPE
+    );
+    expect(css).toContain("--site-color-brand:1rem");
+    expect(issues[0]?.severity).toBe("warning");
+    expect(issues[0]?.message).toContain("not a colour");
+  });
+
+  it("checks the dark value too, not only the light one", () => {
+    // The half-fixed set: a rule applied to `light` and not to the `dark`
+    // sitting beside it passes every test written about light.
+    const { issues } = emitTokenBlocks(
+      {
+        tokens: [
+          {
+            name: "space.gap",
+            kind: "dimension",
+            values: { light: "1rem", dark: "#ff0000" },
+          },
+        ],
+      },
+      SCOPE
+    );
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.message).toContain("dark");
+    expect(issues[0]?.message).toContain("not a length");
+  });
+
+  it.each([
+    ["color", "#2563eb"],
+    ["color", "oklch(0.6 0.1 250)"],
+    ["color", "rebeccapurple"],
+    ["color", "var(--brand)"],
+    ["color", "color-mix(in srgb, red, blue)"],
+    ["dimension", "0"],
+    ["dimension", "1.5rem"],
+    ["dimension", "clamp(20rem, 80vw, 72rem)"],
+    ["duration", "150ms"],
+    ["duration", "0"],
+    ["number", "1.5"],
+    ["fontWeight", "700"],
+    ["fontWeight", "bold"],
+    ["fontFamily", "system-ui"],
+    ["shadow", "0 1px 2px rgba(0,0,0,.2)"],
+    ["custom", "anything at all"],
+  ] as const)("stays quiet about a valid %s value %s", (kind, value) => {
+    // The check is one-sided on purpose. A false positive here would tell an
+    // author their perfectly good `oklch()` is wrong, which is worse than the
+    // silence it replaced.
+    expect(checkTokenKind(kind, value), `${kind}: ${value}`).toBeUndefined();
+  });
+
+  it.each([
+    ["color", "16px"],
+    ["color", "3"],
+    ["dimension", "#fff"],
+    ["dimension", "16"],
+    ["duration", "16px"],
+    ["number", "16px"],
+    ["fontWeight", "1200"],
+    ["fontWeight", "700px"],
+  ] as const)("names what is wrong with %s value %s", (kind, value) => {
+    expect(checkTokenKind(kind, value), `${kind}: ${value}`).toBeDefined();
+  });
+});
+
+describe("the token name grammar", () => {
+  it("holds the table to what a reference can name", () => {
+    // An uppercase name is legal as a custom property, so nothing stops the
+    // table writing `--site-Color-Primary`. What stops it is that the compiler
+    // refuses `{ $token: "Color.Primary" }`, and a token nothing can reference
+    // is a token that exists, resolves to nothing, and reports no reason.
+    const { css, issues } = emitTokenBlocks(
+      {
+        tokens: [
+          { name: "Color.Primary", kind: "color", values: { light: "#000" } },
+        ],
+      },
+      SCOPE
+    );
+    expect(css).toBe("");
+    expect(issues[0]?.message).toContain("Color.Primary");
+
+    const reference = compileStyleValues(
+      { color: { $token: "Color.Primary" } },
+      "/styles"
+    );
+    expect(reference.declarations).toEqual([]);
+  });
+
+  it("keeps accepting the names the default set uses", () => {
+    // The refusal above has to be narrow: `space.4` and `content.width` are
+    // shipped defaults, and a grammar that took them out with the uppercase
+    // names would empty the table it was tightening.
+    for (const token of defaultSiteTokens()) {
+      expect(isTokenName(token.name), token.name).toBe(true);
     }
   });
 });

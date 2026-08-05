@@ -1,8 +1,9 @@
+import { namespacedGlobalName } from "@nextlyhq/blocks-engine";
 import { describe, it, expect } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { createBlockRegistry } from "../core/registry";
-import { nodeClass } from "../core/style-compiler";
+import { documentScopeClass, nodeClass } from "../core/style-compiler";
 import { makeNode } from "../core/tree";
 import type { BlockDefinition } from "../core/types";
 import { PageRenderer } from "./PageRenderer";
@@ -62,7 +63,55 @@ describe("PageRenderer", () => {
     expect(html).toContain("Hello world");
     expect(html).toContain("<style");
     expect(html).toContain("padding-top: 10px");
-    expect(html).toContain(".nx-pb-page .x"); // custom css scoped to the page root
+    // Custom CSS is scoped to THIS document's class, and the element carries it
+    // alongside the shared `nx-pb-page` a host styles against.
+    const scope = documentScopeClass({ version: 1, root });
+    expect(html).toContain(`class="nx-pb-page ${scope}"`);
+    expect(html).toContain(`.${scope} .x`);
+  });
+
+  it("gives two documents on one page separate scopes", () => {
+    // `nx-pb-page` is on every document by design, so it cannot also be what
+    // separates them. Sharing it means one document's custom CSS applies inside
+    // the other, and their `@keyframes` resolve to whichever `<style>` came
+    // last — a collision that depends on render order and nothing else.
+    const first = { version: 1 as const, root: makeNode("core/container", {}) };
+    const second = {
+      version: 1 as const,
+      root: makeNode("core/container", {}),
+    };
+    const render = (doc: typeof first, css: string): string =>
+      renderToStaticMarkup(
+        <PageRenderer document={doc} registry={registry()} customCss={css} />
+      );
+
+    const a = render(
+      first,
+      "@keyframes fade { from { opacity: 0 } } .x{color:red}"
+    );
+    const b = render(
+      second,
+      "@keyframes fade { from { opacity: 1 } } .x{color:blue}"
+    );
+
+    const scopeA = documentScopeClass(first);
+    const scopeB = documentScopeClass(second);
+    expect(scopeA).not.toBe(scopeB);
+    expect(a).toContain(`.${scopeA} .x`);
+    expect(b).toContain(`.${scopeB} .x`);
+    // The namespaced animation names have to differ too: they are resolved in
+    // one flat space for the whole document, so equal names are one animation.
+    expect(a).toContain(namespacedGlobalName("fade", scopeA));
+    expect(b).toContain(namespacedGlobalName("fade", scopeB));
+    expect(a).not.toContain(namespacedGlobalName("fade", scopeB));
+  });
+
+  it("keeps a document's scope stable across renders", () => {
+    // The class is written into the markup by one render and into the
+    // stylesheet by the same one, so a scope that changed per render would
+    // anchor the styles to a class the next render's markup does not carry.
+    const doc = { version: 1 as const, root: makeNode("core/container", {}) };
+    expect(documentScopeClass(doc)).toBe(documentScopeClass(doc));
   });
 
   it("applies the scoped class to the block's OWN element (no wrapper div)", () => {

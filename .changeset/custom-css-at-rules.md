@@ -41,6 +41,13 @@ animation the page itself provides.
 left without a usable `src` is removed rather than left declaring a family that
 resolves to nothing.
 
+Each rendered document now carries a class of its own alongside `nx-pb-page`,
+and its tokens and custom CSS are anchored to it. Two page builder documents on
+one page no longer share a scope: one document's custom CSS stays inside that
+document, and their `@keyframes` and `@font-face` names no longer resolve to
+whichever `<style>` happened to load last. `nx-pb-page` is unchanged and still
+matches every document, so host CSS written against it keeps working.
+
 A site can define design tokens and self-hosted fonts, and the styling layer
 emits both.
 

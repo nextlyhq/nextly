@@ -68,6 +68,73 @@ describe("export", () => {
     expect(issues[0]?.message).toContain("still here in Nextly");
   });
 
+  it("reads rgb() percentages as the colour they are", () => {
+    // `rgb(100% 0% 0% / 50%)` is red at half opacity. Read as plain numbers it
+    // exports as `rgb(100 0 0)` at full opacity — a dark maroon, opaque, and a
+    // design tool importing the standard `$value` sees that instead.
+    const { document } = tokensToDtcg(
+      tokens([
+        {
+          name: "brand",
+          kind: "color",
+          values: { light: "rgb(100% 0% 0% / 50%)" },
+        },
+      ])
+    );
+    const value = (document.brand as Record<string, unknown>).$value as Record<
+      string,
+      unknown
+    >;
+    expect(value.components).toEqual([1, 0, 0]);
+    expect(value.alpha).toBeCloseTo(0.5, 5);
+  });
+
+  it("keeps a family name that contains a comma in one piece", () => {
+    // The comma only separates families outside quotes. Split blindly, a real
+    // company's font becomes a fallback list ending in a family called "Inc".
+    const { document } = tokensToDtcg(
+      tokens([
+        {
+          name: "font.body",
+          kind: "fontFamily",
+          values: { light: `"ACME, Inc", serif` },
+        },
+      ])
+    );
+    const group = document.font as Record<string, Record<string, unknown>>;
+    expect(group.body?.$value).toEqual(["ACME, Inc", "serif"]);
+  });
+
+  it("exports a number whose spelling is not the canonical one", () => {
+    // `1.0` and `1e3` are valid CSS numbers DTCG can store. Reporting them as
+    // inexpressible drops usable tokens over a formatting preference.
+    for (const [css, expected] of [
+      ["1.0", 1],
+      ["1e3", 1000],
+      ["+2", 2],
+      [".5", 0.5],
+    ] as const) {
+      const { document, issues } = tokensToDtcg(
+        tokens([{ name: "n", kind: "number", values: { light: css } }])
+      );
+      expect(issues, css).toEqual([]);
+      expect((document.n as Record<string, unknown>)?.$value, css).toBe(
+        expected
+      );
+    }
+  });
+
+  it("still refuses text that is not a number at all", () => {
+    // The widening above has to stay a widening: `12px` and `1 2` are not
+    // numbers, and exporting either under `$type: number` would misdescribe it.
+    for (const css of ["12px", "1 2", "abc", ""]) {
+      const { document } = tokensToDtcg(
+        tokens([{ name: "n", kind: "number", values: { light: css } }])
+      );
+      expect(document, css).toEqual({});
+    }
+  });
+
   it("carries another tool's extension data through untouched", () => {
     // "Tools that process design token files MUST preserve any extension data
     // they do not themselves understand."
@@ -143,6 +210,24 @@ describe("import", () => {
       },
     });
     expect(read[0]?.values.light).toBe("#1a334d");
+  });
+
+  it("keeps the alpha of a colour that also supplies a hex", () => {
+    // `hex` is the six-digit fallback for the colour WITHOUT its alpha, so
+    // taking it alone imports a half-transparent red as an opaque one. It
+    // renders, it looks deliberate, and it is not what the file said.
+    const { tokens: read } = dtcgToTokens({
+      brand: {
+        $type: "color",
+        $value: {
+          colorSpace: "srgb",
+          components: [1, 0, 0],
+          hex: "#ff0000",
+          alpha: 0.5,
+        },
+      },
+    });
+    expect(read[0]?.values.light).toBe("rgb(255 0 0 / 0.5)");
   });
 
   it("reads a colour with no hex from its components", () => {
