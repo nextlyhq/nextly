@@ -1,10 +1,11 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { sql, eq } from "drizzle-orm";
+import { sql, eq, and } from "drizzle-orm";
 
 import type { RBACDatabaseInstance } from "@nextly/types/rbac-operations";
 
 import type { CollectedPermission } from "../../../plugins/permissions/collect-permissions";
-import { SYSTEM_RESOURCES } from "../../../schemas/_zod/rbac";
+import { ADOPTED_LIFECYCLE_ACTIONS } from "../../../plugins/permissions/collect-permissions";
+import { SYSTEM_RESOURCES, permissionSlug } from "../../../schemas/_zod/rbac";
 import { BaseService } from "../../../services/base-service";
 import type { Logger } from "../../../services/shared";
 import { resolveRegistryTableName } from "../../field-groups/storage/resolve-storage-names";
@@ -281,6 +282,29 @@ const SYSTEM_PERMISSIONS: SystemPermissionDef[] = [
  * await seedService.assignNewPermissionsToSuperAdmin(result.newPermissionIds);
  * ```
  */
+/**
+ * The actions the built-in seeder creates for every collection and every single.
+ *
+ * Stated once because two things read them: the seeding loops below, and the check that decides
+ * whether a plugin may claim a permission. A second copy is how the reservation drifted from what
+ * is actually seeded in the first place.
+ */
+const COLLECTION_SEEDED_ACTIONS = [
+  "create",
+  "read",
+  "update",
+  "delete",
+  "publish",
+  "unpublish",
+] as const;
+
+const SINGLE_SEEDED_ACTIONS = [
+  "read",
+  "update",
+  "publish",
+  "unpublish",
+] as const;
+
 export class PermissionSeedService extends BaseService {
   private _permissionService?: PermissionService;
   private _rolePermissionService?: RolePermissionService;
@@ -318,6 +342,14 @@ export class PermissionSeedService extends BaseService {
    */
   async seedSystemPermissions(): Promise<SeedResult> {
     const result = this.emptySeedResult();
+
+    // Before seeding, repair rows an older version wrote with the two halves
+    // of the slug the wrong way round. Here because this is the one method
+    // every boot path already calls — the CLI build, post-init and the auth
+    // handler — so no call site has to remember it. Ensuring a permission
+    // heals a DECLARED slug, but the rows this reaches were never declared:
+    // they came from the REST grant path, so nothing else revisits them.
+    await this.normalizeReversedSlugs();
 
     for (const perm of SYSTEM_PERMISSIONS) {
       result.total++;
@@ -362,19 +394,12 @@ export class PermissionSeedService extends BaseService {
   async seedCollectionPermissions(collectionSlug: string): Promise<SeedResult> {
     const result = this.emptySeedResult();
     const label = this.slugToLabel(collectionSlug);
-    const actions = [
-      "create",
-      "read",
-      "update",
-      "delete",
-      "publish",
-      "unpublish",
-    ] as const;
+    const actions = COLLECTION_SEEDED_ACTIONS;
 
     for (const action of actions) {
       const actionLabel = action.charAt(0).toUpperCase() + action.slice(1);
       const name = `${actionLabel} ${label}`;
-      const slug = `${action}-${collectionSlug}`;
+      const slug = permissionSlug(action, collectionSlug);
       const description = `Permission to ${action} ${label.toLowerCase()}`;
 
       result.total++;
@@ -414,12 +439,12 @@ export class PermissionSeedService extends BaseService {
   async seedSinglePermissions(singleSlug: string): Promise<SeedResult> {
     const result = this.emptySeedResult();
     const label = this.slugToLabel(singleSlug);
-    const actions = ["read", "update", "publish", "unpublish"] as const;
+    const actions = SINGLE_SEEDED_ACTIONS;
 
     for (const action of actions) {
       const actionLabel = action.charAt(0).toUpperCase() + action.slice(1);
       const name = `${actionLabel} ${label}`;
-      const slug = `${action}-${singleSlug}`;
+      const slug = permissionSlug(action, singleSlug);
       const description = `Permission to ${action} ${label.toLowerCase()}`;
 
       result.total++;
@@ -509,13 +534,91 @@ export class PermissionSeedService extends BaseService {
    * `(action, resource)` unique index + `ensurePermission` make re-seeding a
    * no-op. New IDs are returned for super-admin assignment by the caller.
    */
+  /**
+   * Give a built-in permission back to the presets, on a database that already got it wrong.
+   *
+   * Ownership is what `role-presets.ts` reads to decide a permission is a plugin's, so a row left
+   * attributed goes on being withheld from Editor however the declaration is treated now. Matched
+   * case-insensitively, the way `ensurePermission` matches.
+   *
+   * `orphanedAt` is cleared with it, and has to be: the orphan sweep skips a row with no owner, so
+   * a permission marked while it was misattributed — declared, then absent for one boot, then
+   * declared again — would never be unmarked by anything, and `listPermissions` filters marked
+   * rows out before the presets are seeded. The permission would exist, and its collection would
+   * exist, and Editor would still not be granted it. This is the same reconciliation
+   * `ensurePermission` performs for a row it writes; a row withheld from it needs it too.
+   */
+  private async returnPermissionToPresets(
+    action: string,
+    resource: string
+  ): Promise<void> {
+    const { permissions } = this.tables;
+    try {
+      await (this.db as RBACDatabaseInstance)
+        .update(permissions)
+        .set({ owner: null, orphanedAt: null })
+        .where(
+          and(
+            sql`LOWER(${permissions.action}) = LOWER(${action})`,
+            sql`LOWER(${permissions.resource}) = LOWER(${resource})`
+          )
+        );
+    } catch {
+      // The table may predate the column on a partially migrated database. Nothing is written and
+      // the permission keeps whatever it had, which is the state this repair found it in.
+    }
+  }
+
   async seedCustomPermissions(
     perms: CollectedPermission[]
   ): Promise<SeedResult> {
     const result = this.emptySeedResult();
+    const builtIn = await this.builtInOwnedPermissions();
 
     for (const perm of perms) {
       result.total++;
+      // A permission the built-in seeder owns is not a plugin's to claim, however it was
+      // declared. `collectCustomPermissions` refuses these from the CONFIG, but it decides what
+      // an entity is from the config alone, so a Schema Builder collection — which exists only in
+      // `dynamic_collections` — is invisible to it and its permissions were collected as custom.
+      //
+      // The consequence is not cosmetic. Attaching an owner makes the row look plugin-provided,
+      // and the role presets grant Editor on `!isSystem && !isPlugin`, so a Builder collection's
+      // publish permission silently stopped being granted — and became eligible for the orphan
+      // sweep the day the plugin was removed.
+      //
+      // Decided here rather than at collection time because this is the layer that knows: the
+      // list below is read from the database, which the pure collector deliberately cannot touch.
+      // Compared in lower case, because `ensurePermission` matches an existing row with
+      // `LOWER(action) = LOWER(action)`. An exact-match guard here is bypassed by a declaration
+      // that differs only in case — `{ action: "Publish", resource: "Reports" }` walks straight
+      // past it and then patches the seeded `publish/reports` row anyway.
+      //
+      // Only the ADOPTED LIFECYCLE actions are held back, which is the same line the collector
+      // draws for entities it can see. Held back because ownership is what withholds the Editor
+      // grant: the presets grant on `!isSystem && !isPlugin`, so a `publish` declaration landing
+      // on a Builder collection's own row stops that collection being publishable by an editor.
+      //
+      // A CRUD collision is deliberately left owned by its declarer. Withholding ownership there
+      // would leave the row unowned and therefore granted to Editor by the presets, reaching a
+      // plugin route guarded by `delete-reports` that is protected today precisely because the
+      // plugin owns it. Refusing such a declaration outright belongs at boot validation, before
+      // anything is served, rather than here where the rows are being written.
+      if (
+        ADOPTED_LIFECYCLE_ACTIONS.has(perm.action.toLowerCase()) &&
+        builtIn.has(
+          `${perm.action.toLowerCase()}:${perm.resource.toLowerCase()}`
+        )
+      ) {
+        // Repaired, not merely skipped. On a database seeded by the old behaviour the row already
+        // carries `owner = <plugin>`, and nothing else revisits it: `markOrphanedPermissions`
+        // leaves an attribution alone while the declaration is still there. Withholding ownership
+        // from here on would fix new installs and leave every upgraded one exactly as broken —
+        // the Editor grant still missing, for the same reason.
+        await this.returnPermissionToPresets(perm.action, perm.resource);
+        result.skipped++;
+        continue;
+      }
       try {
         const ensured = await this.permissionService.ensurePermission(
           perm.action,
@@ -796,6 +899,71 @@ export class PermissionSeedService extends BaseService {
    *
    * First removes permissions from all roles, then deletes the permissions.
    */
+  /**
+   * Rename permissions whose slug is exactly its own `resource-action`.
+   *
+   * A slug is what every authorization check resolves — the middleware, the
+   * guards, `hasPermission`, and the scopes an API key is issued with — so a
+   * row written the other way round is a permission nothing can find. It
+   * denies rather than escalates, which is why it goes unnoticed: the grant is
+   * listed as assigned and simply never applies.
+   *
+   * Renaming revokes nothing. Identity is `(action, resource)` and grants
+   * reference the row by id, so this brings a label into line and leaves every
+   * assignment intact.
+   *
+   * Only the exactly-reversed form. A slug that merely differs from the
+   * convention was chosen by whoever declared it — `manage-api-keys` on action
+   * `update` is in the seed set on purpose — and renaming those would break
+   * the declarations that use them.
+   *
+   * A rename can still collide, because `slug` is unique and some other row
+   * may already hold the canonical name. That is left in place rather than
+   * resolved: guessing which of two permissions should own a name is not
+   * something a boot-time repair should decide, and failing the boot over it
+   * would be worse than the stale slug.
+   */
+  private async normalizeReversedSlugs(): Promise<number> {
+    const { permissions } = this.tables;
+    let repaired = 0;
+
+    const rows = (await this.db
+      .select({
+        id: permissions.id,
+        slug: permissions.slug,
+        action: permissions.action,
+        resource: permissions.resource,
+      })
+      .from(permissions)) as Array<{
+      id: string;
+      slug: string;
+      action: string;
+      resource: string;
+    }>;
+
+    for (const row of rows) {
+      const canonical = permissionSlug(row.action, row.resource);
+      const reversed = permissionSlug(row.resource, row.action);
+      // A palindrome pair has nothing to repair, and comparing them keeps a
+      // one-word action on a same-named resource from being "fixed" in place.
+      if (canonical === reversed) continue;
+      if (row.slug !== reversed) continue;
+
+      try {
+        await (this.db as RBACDatabaseInstance)
+          .update(permissions)
+          .set({ slug: canonical })
+          .where(eq(permissions.id, row.id));
+        repaired++;
+      } catch {
+        // Almost certainly the unique index: another row already answers to
+        // the canonical name. Left as it is, for the reason above.
+      }
+    }
+
+    return repaired;
+  }
+
   async cleanupOrphanedPermissions(): Promise<SeedResult> {
     const result = this.emptySeedResult();
 
@@ -879,6 +1047,38 @@ export class PermissionSeedService extends BaseService {
     }
 
     return result;
+  }
+
+  /**
+   * The `${action}:${resource}` pairs the built-in seeders own.
+   *
+   * Read from the same slug sources the seeding passes read — which include entities that exist
+   * only in the database — and the same action lists they seed. Deriving it any other way is what
+   * let the reservation and the seeder disagree about which entities exist.
+   *
+   * A database that cannot answer yields an empty set, leaving today's behaviour rather than
+   * refusing every declared permission on a fresh or half-migrated install.
+   */
+  private async builtInOwnedPermissions(): Promise<Set<string>> {
+    const owned = new Set<string>();
+    try {
+      // Keyed in lower case, matching how `ensurePermission` finds an existing row.
+      for (const slug of await this.getAllCollectionSlugs()) {
+        for (const action of COLLECTION_SEEDED_ACTIONS) {
+          owned.add(`${action}:${slug.toLowerCase()}`);
+        }
+      }
+      for (const slug of await this.getAllSingleSlugs()) {
+        for (const action of SINGLE_SEEDED_ACTIONS) {
+          owned.add(`${action}:${slug.toLowerCase()}`);
+        }
+      }
+    } catch {
+      this.logger.warn(
+        "Could not read the entity tables — plugin permissions were not checked against built-in ones."
+      );
+    }
+    return owned;
   }
 
   private async getAllCollectionSlugs(): Promise<string[]> {

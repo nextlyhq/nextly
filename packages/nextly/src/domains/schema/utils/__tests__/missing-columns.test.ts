@@ -81,7 +81,7 @@ describe("addMissingColumnsForFields", () => {
       fakeLogger,
       "dc_posts",
       fields,
-      { timestamps: false }
+      { timestamps: false, builtBy: "codeFirst" }
     );
 
     expect(added).toEqual(["excerpt"]);
@@ -103,7 +103,7 @@ describe("addMissingColumnsForFields", () => {
       fakeLogger,
       "dc_pages",
       fields,
-      { timestamps: false }
+      { timestamps: false, builtBy: "codeFirst" }
     );
 
     expect(added).toEqual([]);
@@ -124,7 +124,7 @@ describe("addMissingColumnsForFields", () => {
       fakeLogger,
       "dc_posts",
       fields,
-      { timestamps: false }
+      { timestamps: false, builtBy: "codeFirst" }
     );
 
     expect(added).toEqual(["title"]);
@@ -148,7 +148,7 @@ describe("addMissingColumnsForFields", () => {
       fakeLogger,
       "dc_posts",
       fields,
-      { timestamps: false }
+      { timestamps: false, builtBy: "codeFirst" }
     );
 
     expect(added).toEqual(["body"]);
@@ -173,7 +173,7 @@ describe("addMissingColumnsForFields", () => {
       fakeLogger,
       "dc_posts",
       fields,
-      { timestamps: false }
+      { timestamps: false, builtBy: "codeFirst" }
     );
 
     const alter = calls.find(c => c.sql.startsWith("ALTER TABLE"));
@@ -196,7 +196,7 @@ describe("addMissingColumnsForFields", () => {
       fakeLogger,
       "dc_posts",
       fields,
-      { timestamps: false }
+      { timestamps: false, builtBy: "codeFirst" }
     );
 
     expect(added).toEqual([]);
@@ -219,8 +219,10 @@ describe("addMissingColumnsForFields", () => {
       adapter as unknown as Parameters<typeof addMissingColumnsForFields>[0],
       fakeLogger,
       "dc_posts",
-      fields
-      // options omitted -> timestamps default true
+      fields,
+      // timestamps default true; the origin is stated because a column added here has to
+      // match the one a fresh table gets.
+      { builtBy: "codeFirst" }
     );
 
     // No alter expected (everything exists, timestamps have empty defs).
@@ -244,7 +246,7 @@ describe("addMissingColumnsForFields", () => {
       fakeLogger,
       "dc_posts",
       fields,
-      { timestamps: false }
+      { timestamps: false, builtBy: "codeFirst" }
     );
 
     expect(added).toEqual([]);
@@ -265,7 +267,7 @@ describe("addMissingColumnsForFields", () => {
       fakeLogger,
       "dc_posts",
       fields,
-      { timestamps: false }
+      { timestamps: false, builtBy: "codeFirst" }
     );
 
     expect(added).toEqual(["published_at"]);
@@ -304,7 +306,7 @@ describe("addMissingColumnsForFields", () => {
         fakeLogger,
         "dc_posts",
         [{ name: "isPublished", type: "checkbox" } as FieldConfig],
-        { timestamps: false }
+        { timestamps: false, builtBy: "codeFirst" }
       );
       const alter = calls.find(c => c.sql.startsWith("ALTER TABLE"));
       expect(alter?.sql).toContain(expected);

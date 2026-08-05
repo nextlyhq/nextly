@@ -60,6 +60,9 @@ export const NEXTLY_ERROR_STATUS = {
   NEXTLY_SCHEMA_CROSS_PLUGIN_RELATION: 409,
   // Plugin platform (P2c) — framework remap (.rename()).
   NEXTLY_SCHEMA_RENAME_UNKNOWN_TARGET: 400,
+  // Plugin platform — a declared admin.clientConfig that cannot be delivered
+  // to the browser, refused at boot rather than serialized mangled.
+  NEXTLY_PLUGIN_CLIENT_CONFIG_INVALID: 500,
   // Plugin platform (P0) — boot-time plugin dependency/version resolution.
   PLUGIN_RESOLUTION_ERROR: 500,
   // Plugin platform (P4) — contributes.routes collection (D25).
@@ -170,3 +173,16 @@ export function genericPublicMessage(code: string): string {
     GENERIC_PUBLIC_MESSAGE.INTERNAL_ERROR!
   );
 }
+
+/**
+ * The canonical error code a service names when it knows which one it means.
+ *
+ * A status is coarser than a code -- 409 covers both a name clash and a stale
+ * write, and they need opposite advice -- so a failure that knows the
+ * difference says so, and the boundary believes it instead of inferring the
+ * safer reading from the number alone.
+ *
+ * Widened to `string` rather than `NextlyErrorCode`: a plugin declares codes
+ * outside the canonical set, and the converter already carries those through.
+ */
+export type ServiceErrorCode = string;

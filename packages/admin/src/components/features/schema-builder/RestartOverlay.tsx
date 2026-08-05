@@ -11,8 +11,10 @@ export function RestartOverlay() {
 
   // This covers the whole app while the server is down, so it is its own dark
   // surface rather than a themed one. `--nx-overlay-strong` rather than the
-  // modal scrim: the message is read ON this surface, and the see-through
-  // variant tops out below AA over a white page even for pure white text. The
+  // modal scrim: the message is read ON this surface, and the muted detail
+  // line is what decides the strength — `text-white/60` is 2.81:1 over the
+  // see-through variant on a white page against 5.66:1 here. Pure white would
+  // have cleared AA on either, so the heading alone did not decide it. The
   // dots and text stay literal white, read against the scrim rather than
   // against the palette underneath it.
   return (

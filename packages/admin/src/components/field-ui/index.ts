@@ -29,6 +29,11 @@ export type {
 // a FieldTypePicker renders; a surface passes the result alongside its built-in
 // entries so plugin types appear in the picker, surface-filtered.
 export { usePluginFieldTypeEntries } from "./usePluginFieldTypeEntries";
+// Reads the PUBLIC configuration a plugin declared in
+// `contributes.admin.clientConfig`, delivered through `/api/admin-meta`. It is
+// how a plugin's server-side config reaches its own browser components, which
+// nothing else carries it to.
+export { usePluginClientConfig } from "./usePluginClientConfig";
 
 // One condition, edited as source / operator / value. The ROW is what surfaces
 // share; the container is not — the schema builder shows exactly one and the

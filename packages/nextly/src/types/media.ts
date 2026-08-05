@@ -6,6 +6,8 @@
 
 import { z } from "zod";
 
+import type { ServiceErrorCode } from "../errors/error-codes";
+
 // ========================================
 // MEDIA TYPE ENUM
 // ========================================
@@ -139,6 +141,7 @@ export type MediaParams = z.infer<typeof MediaParamsSchema>;
 // ========================================
 
 export interface MediaListResponse {
+  code?: ServiceErrorCode;
   success: boolean;
   statusCode: number;
   message: string;
@@ -152,14 +155,7 @@ export interface MediaListResponse {
 }
 
 export interface MediaResponse {
-  /**
-   * The canonical error code, when this service knows which one it means.
-   *
-   * A status is coarser than a code -- 409 covers both a name clash and a stale
-   * write -- so a failure that knows the difference says so here rather than
-   * leaving a boundary to infer the safer reading from the number alone.
-   */
-  code?: string;
+  code?: ServiceErrorCode;
   success: boolean;
   statusCode: number;
   message: string;
@@ -167,14 +163,7 @@ export interface MediaResponse {
 }
 
 export interface DeleteMediaResponse {
-  /**
-   * The canonical error code, when this service knows which one it means.
-   *
-   * A status is coarser than a code -- 409 covers both a name clash and a stale
-   * write -- so a failure that knows the difference says so here rather than
-   * leaving a boundary to infer the safer reading from the number alone.
-   */
-  code?: string;
+  code?: ServiceErrorCode;
   success: boolean;
   statusCode: number;
   message: string;

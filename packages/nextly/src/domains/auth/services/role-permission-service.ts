@@ -8,9 +8,28 @@ import type {
   RolePermissionInsertData,
 } from "@nextly/types/rbac-operations";
 
+import { permissionName, permissionSlug } from "../../../schemas/_zod/rbac";
 import { BaseService } from "../../../services/base-service";
 import { invalidatePermissionCache } from "../../../services/lib/permissions";
 import type { Logger } from "../../../services/shared";
+
+/**
+ * The transaction methods this service calls.
+ *
+ * `withTransaction` hands back a dialect-specific instance typed `unknown`,
+ * because naming all three would bind this file to all three driver packages.
+ * Narrowing to what is actually used keeps the body typed without an `any`.
+ *
+ * `onConflictDoNothing` is optional because only some dialect builders expose
+ * it; the call site tests for it before using it.
+ */
+interface TransactionLike {
+  insert(table: unknown): {
+    values(data: unknown): Promise<unknown> & {
+      onConflictDoNothing?: () => Promise<unknown>;
+    };
+  };
+}
 
 /**
  * RolePermissionService handles role-permission relationship management.
@@ -49,8 +68,12 @@ export class RolePermissionService extends BaseService {
     roleId: string,
     perm: { action: string; resource: string; name?: string; slug?: string }
   ): Promise<void> {
-    const permName = perm.name || `${perm.resource}:${perm.action}`;
-    const permSlug = perm.slug || `${perm.resource}-${perm.action}`;
+    // Composed by the shared helpers rather than written out. This method
+    // creates the permission row when the pair has none, and it is reached from
+    // the REST surface with neither field supplied — so what these fallbacks
+    // produce IS the identity every later authorization check looks up.
+    const permName = perm.name || permissionName(perm.action, perm.resource);
+    const permSlug = perm.slug || permissionSlug(perm.action, perm.resource);
 
     let permissionId: string;
 
@@ -60,11 +83,13 @@ export class RolePermissionService extends BaseService {
       where: { action: perm.action, resource: perm.resource },
       columns: {
         id: true,
+        slug: true,
       },
     });
 
     if (existing) {
       permissionId = String(existing.id);
+      await this.healReversedSlug(permissionId, String(existing.slug), perm);
 
       const id = randomUUID();
       const rolePermissionData: RolePermissionInsertData = {
@@ -84,10 +109,15 @@ export class RolePermissionService extends BaseService {
       const newPermId = randomUUID();
       const rolePermId = randomUUID();
 
-      // Required by Drizzle ORM: transaction callback type varies by dialect and
-      // cannot be narrowed without importing internal Drizzle helper types.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await this.db.transaction(async (tx: any) => {
+      // `withTransaction`, not Drizzle's `db.transaction`. better-sqlite3 is
+      // synchronous and rejects any callback returning a promise, so calling
+      // the driver directly threw `Transaction function cannot return a
+      // promise` on SQLite — this whole branch, the one that CREATES the
+      // permission, was unreachable there. The base-service helper opens
+      // `BEGIN IMMEDIATE` on the shared connection for that dialect and uses
+      // the native transaction on Postgres and MySQL.
+      await this.withTransaction(async txRaw => {
+        const tx = txRaw as TransactionLike;
         const permissionData = {
           id: newPermId,
           name: permName,
@@ -124,6 +154,52 @@ export class RolePermissionService extends BaseService {
     }
 
     void invalidatePermissionCache({ roleId });
+  }
+
+  /**
+   * Bring a row written by the reversed composition back onto the convention.
+   *
+   * An install upgraded from a version that composed `resource-action` still
+   * holds those rows, and creating-if-missing never reaches them: identity is
+   * `(action, resource)`, so the lookup finds the row and the corrected
+   * composition is simply not used. The permission stays one that no
+   * authorization check can resolve — which is the original bug, surviving the
+   * fix.
+   *
+   * Renaming is safe here for the reason `ensurePermission` gives for doing the
+   * same thing: a slug is a label rather than a key, grants reference the row
+   * by id, so bringing a stale one into line renames without revoking.
+   *
+   * Deliberately narrow. It repairs ONLY a slug that is exactly the reversed
+   * composition, and only where the caller supplied none of its own — so a
+   * deliberately custom slug (`manage-api-keys` on action `update`, say) is
+   * left alone rather than renamed to something its declarer never chose.
+   */
+  private async healReversedSlug(
+    permissionId: string,
+    currentSlug: string,
+    perm: { action: string; resource: string; slug?: string }
+  ): Promise<void> {
+    if (perm.slug !== undefined) return;
+    const reversed = permissionSlug(perm.resource, perm.action);
+    if (currentSlug !== reversed) return;
+
+    const canonical = permissionSlug(perm.action, perm.resource);
+    if (canonical === reversed) return;
+
+    try {
+      await (this.db as RBACDatabaseInstance)
+        .update(this.tables.permissions)
+        .set({ slug: canonical })
+        .where(eq(this.tables.permissions.id, permissionId));
+    } catch {
+      // `slug` is unique, so another row may already answer to the canonical
+      // name — a swapped pair of `(action, resource)` produces exactly that.
+      // The repair is opportunistic and the GRANT is what was asked for, so a
+      // collision leaves the stale slug and the assignment goes ahead. Failing
+      // here would turn a tidy-up into a refusal to do the requested work, and
+      // the boot-time pass makes the same choice for the same reason.
+    }
   }
 
   /**

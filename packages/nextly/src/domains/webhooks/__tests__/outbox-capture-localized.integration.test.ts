@@ -83,6 +83,8 @@ async function migrate(t: TestNextly): Promise<void> {
     dialect: t.adapter.dialect,
     defaultLocale: "en",
     collectionLocalized: true,
+    // Defined in config, so the pipeline built this table.
+    builtBy: "codeFirst",
     status: true,
   });
   if (!spec)
@@ -231,9 +233,7 @@ describe("webhook outbox capture, localized (integration)", () => {
       .filter(r => r.type === "entry.published")
       .map(envelopeOf);
     const byLocale = (loc: string | undefined) =>
-      published.find(
-        e => (e.resource as { locale?: string }).locale === loc
-      );
+      published.find(e => (e.resource as { locale?: string }).locale === loc);
     // The German companion transitioned draft -> published, so it carries its
     // own locale tag...
     const de = byLocale("de");

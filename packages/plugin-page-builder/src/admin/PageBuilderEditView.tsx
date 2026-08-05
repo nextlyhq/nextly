@@ -13,6 +13,7 @@ import { EditorSurface } from "./EditorSurface";
 import { SaveShell } from "./SaveShell";
 import { EditorProvider, draftKeyFor } from "./store/EditorProvider";
 import type { CustomEditViewProps } from "./types";
+import { useRemotePatterns } from "./useRemotePatterns";
 
 function emptyDoc(): BlockDocument {
   return {
@@ -22,6 +23,10 @@ function emptyDoc(): BlockDocument {
 }
 
 export function PageBuilderEditView(props: CustomEditViewProps) {
+  // The canvas renders the same blocks the published page does, so it enforces
+  // the same allowlist. The edit-view props are core's contract and carry no
+  // plugin configuration, so it is read from the plugin's own admin metadata.
+  const remotePatterns = useRemotePatterns();
   const data = props.initialData ?? {};
   const doc = (data.content as BlockDocument | undefined) ?? emptyDoc();
   const customCss = typeof data.customCss === "string" ? data.customCss : "";
@@ -31,6 +36,7 @@ export function PageBuilderEditView(props: CustomEditViewProps) {
       document={doc}
       draftKey={draftKeyFor(props.collectionSlug, props.entryId)}
       customCss={customCss}
+      remotePatterns={remotePatterns}
     >
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         <SaveShell props={props} />

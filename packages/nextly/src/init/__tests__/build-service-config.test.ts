@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { SanitizedLocalizationConfig } from "../../domains/i18n/config/types";
 import type { SanitizedNextlyConfig } from "../../shared/types/config";
+import { resolveAuditRetentionConfig } from "../../domains/audit/retention-config";
 import { buildServiceConfig } from "../build-service-config";
 
 /**
@@ -49,5 +50,33 @@ describe("buildServiceConfig — localization carry-through", () => {
       localization: explicit,
     });
     expect(result.localization).toBe(explicit);
+  });
+});
+
+/**
+ * The retention policies must survive the same hop. Dropped here, every
+ * `ctx.config.auditRetention` read is undefined, so no audit pass is ever
+ * registered and neither trail is pruned however the windows are configured —
+ * a feature that reads as present and does nothing.
+ */
+describe("buildServiceConfig — retention carry-through", () => {
+  const auditRetention = resolveAuditRetentionConfig({
+    activityMaxAgeMs: 7 * 24 * 60 * 60 * 1000,
+  });
+
+  it("forwards the resolved audit windows from config", () => {
+    const result = buildServiceConfig({
+      config: { auditRetention } as SanitizedNextlyConfig,
+    });
+    expect(result.auditRetention).toEqual(auditRetention);
+  });
+
+  it("prefers an explicitly provided policy over the config block", () => {
+    const explicit = resolveAuditRetentionConfig({ authMaxAgeMs: false });
+    const result = buildServiceConfig({
+      config: { auditRetention } as SanitizedNextlyConfig,
+      auditRetention: explicit,
+    });
+    expect(result.auditRetention).toEqual(explicit);
   });
 });

@@ -290,7 +290,7 @@ describe("RegexRenameDetector - a column left under a legacy spelling", () => {
           typeof buildDesiredTableFromFields
         >[1],
         dialect,
-        { hasStatus: false }
+        { builtBy: "collection", hasStatus: false }
       ).columns.find(c => c.name === "published_items")?.type;
 
     const outcomes: Record<string, string> = {};
@@ -367,7 +367,7 @@ describe("RegexRenameDetector - the legacy column reached through the diff", () 
             typeof buildDesiredTableFromFields
           >[1],
           "postgresql",
-          { hasStatus: false }
+          { builtBy: "collection", hasStatus: false }
         ),
       ],
     };
@@ -407,7 +407,7 @@ describe("RegexRenameDetector - the legacy column reached through the diff", () 
             { name: "headline", type: "text" },
           ] as Parameters<typeof buildDesiredTableFromFields>[1],
           "postgresql",
-          { hasStatus: false }
+          { builtBy: "collection", hasStatus: false }
         ),
       ],
     };

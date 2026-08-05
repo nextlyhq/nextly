@@ -810,6 +810,8 @@ const COLLECTIONS_METHODS: Record<
               ? await companionHasStatusColumn(adapter, `${tableName}_locales`)
               : undefined;
           const plan = buildCompanionTransitionStatements({
+            // The companion mirrors the main table, and a collection's table comes from the Schema Builder's collection creator.
+            builtBy: "collection" as const,
             slug: p.collectionName,
             tableName,
             dialect,
@@ -857,6 +859,9 @@ const COLLECTIONS_METHODS: Record<
               }
             }
           }
+          // 🔴 STRICT on purpose, matching the other two companion paths: tolerating a re-run
+          // would make a half-finished localization ENABLE look like success, because the planner
+          // cannot tell that state from an orphan repair. A loud failure is the safer outcome.
           for (const stmt of plan.statements) {
             await adapter.executeQuery(stmt);
           }
@@ -1284,6 +1289,7 @@ const COLLECTIONS_METHODS: Record<
       const result = await svc.publishAllLocales({
         collectionName: p.collectionName,
         entryId: p.entryId,
+        actor: readAuthenticatedActor(p),
         userId: p._authenticatedUserId
           ? String(p._authenticatedUserId)
           : undefined,

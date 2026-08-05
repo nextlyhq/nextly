@@ -49,9 +49,9 @@
 // with NextlyError factories. Identifiers (mediaId/folderId/etc) move to
 // logContext per §13.8; public messages remain generic and end with a period.
 import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
+import type { RetentionRunner } from "../../../domains/retention/runner";
 import type { WebhookFastDrainScheduler } from "../../../domains/webhooks/after-drain";
 import { isUnscopedRecordingActive } from "../../../domains/webhooks/recording-activation";
-import type { WebhookRetentionRunner } from "../../../domains/webhooks/retention-runner";
 import { NextlyError } from "../../../errors";
 import { errorFromServiceEnvelope } from "../../../errors/from-service-envelope";
 import { emitMediaEvent } from "../../../events/domain-events";
@@ -161,6 +161,27 @@ export function toMediaDate(value: unknown): Date {
   return new Date(normalized || new Date());
 }
 
+/**
+ * Whether a failed folder result is the service refusing well-formed input.
+ *
+ * A folder that cannot be moved into itself, or deleted while it still holds
+ * something, is not a malformed request: the boundary answers it with a
+ * field-anchored validation error a caller can act on, rather than the generic
+ * sentence a bare code carries.
+ *
+ * Reads the code the service names, and still recognises a bare 400 for a
+ * producer that names none — those were the only failures reaching this branch
+ * before any of them named a code, and the branch has to keep answering them
+ * the same way.
+ */
+function isRefusedInput(result: {
+  code?: string;
+  statusCode: number;
+}): boolean {
+  if (result.code) return result.code === "INVALID_INPUT";
+  return result.statusCode === 400;
+}
+
 // ============================================================
 // MediaService
 // ============================================================
@@ -194,11 +215,16 @@ export class MediaService {
     private readonly svgCsp: boolean = true,
     private readonly logger: Logger = consoleLogger,
     /**
-     * Prunes the outbox after a media write appends an event. The media write
-     * path records events through this service, so it carries its own runner
-     * (the webhook handler's is not on this path), mirroring collections.
+     * Retention passes offered after a write. The shared runner carries both —
+     * the webhook outbox and the audit trails — each on its own window and its
+     * own gate, and decides which are configured.
+     *
+     * Absent only when NEITHER has anything to prune: an install with webhook
+     * retention off and audit retention on still gets one. A construction site
+     * that forwards a single policy leaves that domain unpruned rather than
+     * failing, so both belong wherever this is built.
      */
-    private readonly retentionRunner?: WebhookRetentionRunner,
+    private readonly retentionRunner?: RetentionRunner,
     /**
      * Shared post-response drain fast path. A media write commits its outbox
      * row inside the DB transaction; `offer()` then schedules the immediate
@@ -1051,7 +1077,7 @@ export class MediaService {
     );
 
     if (!result.success || !result.data) {
-      if (!result.code && result.statusCode === 400) {
+      if (isRefusedInput(result)) {
         // Per §13.8 the per-error message names the field but never the value;
         // driver text moves to logContext.
         throw NextlyError.validation({
@@ -1097,7 +1123,7 @@ export class MediaService {
     );
 
     if (!result.success) {
-      if (!result.code && result.statusCode === 400) {
+      if (isRefusedInput(result)) {
         // Folder-not-empty rejection. Per §13.8 the per-error message names
         // the field but never the value; the operator hint stays in logContext.
         throw NextlyError.validation({

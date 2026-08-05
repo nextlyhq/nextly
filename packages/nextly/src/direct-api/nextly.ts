@@ -112,8 +112,8 @@ import type {
   CountArgs,
   CountResult,
   CreateArgs,
-  DataFromCollectionSlug,
-  DataFromSingleSlug,
+  RowFromCollectionSlug,
+  RowFromSingleSlug,
   DeleteArgs,
   DeleteResult,
   DirectAPIConfig,
@@ -463,7 +463,7 @@ export class Nextly implements NextlyContext {
    */
   find<TSlug extends CollectionSlug>(
     args: FindArgs<TSlug>
-  ): Promise<ListResult<DataFromCollectionSlug<TSlug>>> {
+  ): Promise<ListResult<RowFromCollectionSlug<TSlug>>> {
     return collectionsNs.find(this, args);
   }
 
@@ -473,7 +473,7 @@ export class Nextly implements NextlyContext {
    */
   findByID<TSlug extends CollectionSlug>(
     args: FindByIDArgs<TSlug>
-  ): Promise<DataFromCollectionSlug<TSlug> | null> {
+  ): Promise<RowFromCollectionSlug<TSlug> | null> {
     return collectionsNs.findByID(this, args);
   }
 
@@ -484,7 +484,7 @@ export class Nextly implements NextlyContext {
    */
   create<TSlug extends CollectionSlug>(
     args: CreateArgs<TSlug>
-  ): Promise<MutationResult<DataFromCollectionSlug<TSlug>>> {
+  ): Promise<MutationResult<RowFromCollectionSlug<TSlug>>> {
     return collectionsNs.create(this, args);
   }
 
@@ -495,7 +495,7 @@ export class Nextly implements NextlyContext {
    */
   update<TSlug extends CollectionSlug>(
     args: UpdateArgs<TSlug>
-  ): Promise<MutationResult<DataFromCollectionSlug<TSlug>>> {
+  ): Promise<MutationResult<RowFromCollectionSlug<TSlug>>> {
     return collectionsNs.update(this, args);
   }
 
@@ -532,14 +532,14 @@ export class Nextly implements NextlyContext {
    */
   duplicate<TSlug extends CollectionSlug>(
     args: DuplicateArgs<TSlug>
-  ): Promise<MutationResult<DataFromCollectionSlug<TSlug>>> {
+  ): Promise<MutationResult<RowFromCollectionSlug<TSlug>>> {
     return collectionsNs.duplicate(this, args);
   }
 
   /** Get a Single (global) document by slug. */
   findSingle<TSlug extends SingleSlug>(
     args: FindSingleArgs<TSlug>
-  ): Promise<DataFromSingleSlug<TSlug>> {
+  ): Promise<RowFromSingleSlug<TSlug>> {
     return singlesNs.findSingle(this, args);
   }
 
@@ -552,7 +552,7 @@ export class Nextly implements NextlyContext {
    */
   updateSingle<TSlug extends SingleSlug>(
     args: UpdateSingleArgs<TSlug>
-  ): Promise<MutationResult<DataFromSingleSlug<TSlug>>> {
+  ): Promise<MutationResult<RowFromSingleSlug<TSlug>>> {
     return singlesNs.updateSingle(this, args);
   }
 

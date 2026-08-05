@@ -17,6 +17,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
+import type { RetentionRunner } from "../../../domains/retention/runner";
 import type { HookRegistry } from "../../../hooks/hook-registry";
 import type { CacheRevalidator } from "../../../revalidation/types";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
@@ -24,7 +25,6 @@ import { BaseService } from "../../../shared/base-service";
 import type { Logger } from "../../../shared/types";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import type { WebhookFastDrainScheduler } from "../../webhooks/after-drain";
-import type { WebhookRetentionRunner } from "../../webhooks/retention-runner";
 import type {
   GetSingleOptions,
   SingleResult,
@@ -67,11 +67,17 @@ export class SingleEntryService extends BaseService {
     // translatable fields via its companion `single_<slug>_locales` table.
     localization?: SanitizedLocalizationConfig,
     /**
-     * Webhook-retention pass offered after a write that recorded an event, so a
-     * frequently-written single trims old outbox rows without waiting for a
-     * scheduled drain. Absent when webhook retention is not configured.
+     * Retention passes offered after a write, so a frequently-written single
+     * trims what it fills without waiting for a scheduled drain. The shared
+     * runner carries both — the webhook outbox and the audit trails — each on
+     * its own window and its own gate, and decides which are configured.
+     *
+     * Absent only when NEITHER has anything to prune: an install with webhook
+     * retention off and audit retention on still gets a runner. A construction
+     * site forwarding one policy and not the other leaves that domain unpruned
+     * rather than failing, so both belong here.
      */
-    private readonly retentionRunner?: WebhookRetentionRunner,
+    private readonly retentionRunner?: RetentionRunner,
     /**
      * Kicks an immediate, bounded drain after a write (via Next `after()`) so a
      * single's outbox rows are delivered without waiting for the scheduled

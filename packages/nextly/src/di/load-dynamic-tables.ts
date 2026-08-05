@@ -21,6 +21,7 @@ import {
   resolveFieldGroupRegistryName,
   type FieldGroupRegistryName,
 } from "../domains/field-groups/storage/resolve-storage-names";
+import { isCodeOwned } from "../domains/schema/pipeline/registered-collections";
 
 /**
  * Row shape returned by the `SELECT table_name, fields, slug, status FROM
@@ -33,6 +34,13 @@ export type DynamicTableRow = {
   slug: string;
   status?: boolean | number | null;
   localized?: boolean | number | null;
+  /**
+   * Ownership, as the registry recorded it. These tables hold code-first and plugin-owned rows
+   * alongside Builder-made ones, and the two are built by different creators that size a text
+   * column differently — so a caller describing a column has to be able to tell them apart.
+   */
+  source?: string | null;
+  locked?: boolean | number | null;
 };
 
 /**
@@ -59,7 +67,13 @@ export async function loadDynamicTables(
     tableName: string,
     fields: unknown[],
     hasStatus: boolean,
-    localized: boolean
+    localized: boolean,
+    /**
+     * Whether the Schema Builder owns this row, rather than code or a plugin. Passed because a
+     * caller that emits DDL has to describe a column the way its creator built it, and these
+     * tables hold both kinds. `undefined` where the registry is too old to say.
+     */
+    builderOwned: boolean | undefined
   ) => Promise<void>
 ): Promise<void> {
   // Components have no `status` column (they're not Draft/Published) — selecting it
@@ -67,34 +81,54 @@ export async function loadDynamicTables(
   // Asked under both registry spellings: the storage migration renames this
   // table, and comparing against the legacy name alone would add `status` to the
   // select the moment it has run.
-  const statusCol = isFieldGroupRegistry(sourceTable) ? "" : ", status";
+  const hasStatusColumn = !isFieldGroupRegistry(sourceTable);
 
-  // Read the rows, tolerating an existing DB that predates the i18n `localized`
-  // column: try the full select first, and on failure fall back to one without
-  // `localized`. Without this, the missing column throws and the outer catch
-  // below silently disables EVERY dynamic table app-wide. The
-  // column is added by the core-schema reconcile; until it runs, `localized`
-  // defaults to false, which is correct for a pre-i18n database.
+  // Every column this read wants, in the order it gives them up.
+  //
+  // A registry older than the code is missing the newest columns, and the read has to survive that:
+  // letting the error reach the outer catch would disable EVERY dynamic table app-wide over one
+  // absent column. Ownership is dropped first because it is the newest and the least costly to
+  // lose — without it a caller describes a column the way the pipeline would, which is the reading
+  // every code-first table already gets.
+  //
+  // Written as one projection with optional tiers rather than three hand-written statements, so the
+  // column list and the table name are stated once and the rungs cannot drift apart.
+  const required = ["table_name", "fields", "slug"];
+  const optionalTiers = [
+    hasStatusColumn ? ["status"] : [],
+    ["localized"],
+    ["source", "locked"],
+  ].filter(tier => tier.length > 0);
+
+  const candidateSelects = optionalTiers
+    .map((_, dropped) => optionalTiers.slice(0, optionalTiers.length - dropped))
+    .concat([[]])
+    .map(
+      tiers =>
+        `SELECT ${[...required, ...tiers.flat()].join(", ")} FROM ${sourceTable}`
+    );
+
   const readRows = async (): Promise<DynamicTableRow[]> => {
-    try {
-      return await adapter.executeQuery<DynamicTableRow>(
-        `SELECT table_name, fields, slug${statusCol}, localized FROM ${sourceTable}`
-      );
-    } catch (err) {
-      // Only a MISSING `localized` column should trigger the fallback select. A transient,
-      // permission, or genuinely-missing-table error must propagate (to the outer catch)
-      // instead of being converted into a non-localized registration with the wrong runtime
-      // schema for a localized table.
-      const msg = err instanceof Error ? err.message : String(err);
-      if (
-        !/localized|no such column|does not exist|unknown column/i.test(msg)
-      ) {
-        throw err;
+    let lastError: unknown;
+    for (const sql of candidateSelects) {
+      try {
+        return await adapter.executeQuery<DynamicTableRow>(sql);
+      } catch (err) {
+        // Only a MISSING column may step down. A transient, permission, or genuinely-missing-table
+        // error must propagate (to the outer catch) instead of being converted into a registration
+        // with the wrong runtime schema for the table.
+        const msg = err instanceof Error ? err.message : String(err);
+        if (
+          !/localized|source|locked|no such column|does not exist|unknown column/i.test(
+            msg
+          )
+        ) {
+          throw err;
+        }
+        lastError = err;
       }
-      return adapter.executeQuery<DynamicTableRow>(
-        `SELECT table_name, fields, slug${statusCol} FROM ${sourceTable}`
-      );
     }
+    throw lastError;
   };
 
   try {
@@ -112,7 +146,23 @@ export async function loadDynamicTables(
         // 0/1 as numbers — same dance as the registry deserializer.
         const hasStatus = row.status === 1 || row.status === true;
         const localized = row.localized === 1 || row.localized === true;
-        await register(row.table_name, fields, hasStatus, localized);
+        // `undefined` when the registry could not report ownership at all, which is different from
+        // reporting "not the Builder": the caller treats the unknown case as the pipeline's, the
+        // same reading every code-first table already gets.
+        const builderOwned =
+          row.source === undefined && row.locked === undefined
+            ? undefined
+            : !isCodeOwned({
+                source: row.source ?? undefined,
+                locked: row.locked === 1 || row.locked === true,
+              });
+        await register(
+          row.table_name,
+          fields,
+          hasStatus,
+          localized,
+          builderOwned
+        );
       } catch {
         // Skip individual row if schema generation fails.
       }

@@ -2053,9 +2053,14 @@ export class SingleQueryService extends BaseService {
       // field is required: use its type default when required, otherwise drop the
       // seed so it is never inserted/seeded into (e.g.) a numeric column.
       if (SINGLE_IDENTITY_FIELDS.has(field.name)) {
+        // A Single's table is built by the same service that builds collections. The question
+        // asked here — does this kind store text — is answered the same way whatever built the
+        // table, so the builtBy cannot change the outcome; it is stated rather than defaulted so
+        // this call site cannot drift if that ever stops being true.
         const desc = getColumnDescriptor(
           field as unknown as FieldDefinition,
-          this.adapter.dialect
+          this.adapter.dialect,
+          "collection"
         );
         // Keep the seeded label/slug whenever the column stores text. The descriptor answers that
         // rather than a list of kind names kept here: a list restated locally judged a kind added
@@ -2101,9 +2106,11 @@ export class SingleQueryService extends BaseService {
       // same-named field emits none, so their seed must never be dropped here.
       if (SINGLE_IDENTITY_FIELDS.has(field.name)) continue;
       if (
+        // Only whether the field occupies a column at all, which no builtBy changes.
         getColumnDescriptor(
           field as unknown as FieldDefinition,
-          this.adapter.dialect
+          this.adapter.dialect,
+          "collection"
         ) == null
       ) {
         noColumnFieldNames.add(field.name);

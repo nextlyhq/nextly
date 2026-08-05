@@ -16,6 +16,7 @@ import { resolveBindings } from "../core/bindings";
 import type { BlockRegistry } from "../core/registry";
 import { nodeClass } from "../core/style-compiler";
 import type { BlockNode } from "../core/types";
+import type { RemotePatternInput } from "../core/url-policy";
 
 import type { DataProvider } from "./dataProvider";
 import { BlockErrorBoundary } from "./ErrorBoundary";
@@ -24,6 +25,26 @@ import type { QueryBudget } from "./query/runQuery";
 import { QUERY_LOOP_TYPE } from "./query/types";
 
 const BLOCKED_ATTRS = new Set(["style", "srcdoc", "class", "classname"]);
+
+/**
+ * Attributes the browser resolves on its own.
+ *
+ * These are applied by `cloneElement` AFTER the block has rendered, so a custom
+ * attribute here overwrites the value the block already put through the origin
+ * policy — an author-supplied `src` silently replaces the checked one and
+ * reaches any host it names. A block sets the ones it needs itself, so there is
+ * nothing to allow: overriding them is only ever a way around the gate.
+ *
+ * `data` is the `<object>` attribute, matched exactly; `data-*` is untouched.
+ */
+const FETCH_ATTRS = new Set([
+  "src",
+  "srcset",
+  "poster",
+  "background",
+  "data",
+  "lowsrc",
+]);
 
 /** Allowlist author-supplied HTML attributes: valid names, no event handlers, no style. */
 function safeAttributes(
@@ -36,6 +57,7 @@ function safeAttributes(
     if (!/^[a-z][a-z0-9-]*$/.test(key)) continue; // valid attr name only
     if (key.startsWith("on")) continue; // no event handlers
     if (BLOCKED_ATTRS.has(key)) continue;
+    if (FETCH_ATTRS.has(key)) continue;
     out[k] = String(v);
   }
   return out;
@@ -45,6 +67,8 @@ export interface RenderNodeProps {
   node: BlockNode;
   registry: BlockRegistry;
   dataProvider?: DataProvider;
+  /** Hosts this page may load media from; passed to every block's render args. */
+  remotePatterns?: readonly RemotePatternInput[];
   /** Current Query Loop item — threaded to resolve bindings at any depth. */
   item?: Record<string, unknown>;
   /** Remaining query budget shared across nested loops on this page render. */
@@ -61,6 +85,7 @@ export function RenderNode({
   node,
   registry,
   dataProvider,
+  remotePatterns,
   item,
   budget,
   refs,
@@ -82,6 +107,7 @@ export function RenderNode({
         node={target}
         registry={registry}
         dataProvider={dataProvider}
+        remotePatterns={remotePatterns}
         item={item}
         budget={budget}
         refs={refs}
@@ -105,6 +131,7 @@ export function RenderNode({
           node={node}
           registry={registry}
           dataProvider={dataProvider}
+          remotePatterns={remotePatterns}
           className={className}
           budget={budget ?? { n: 0 }}
         />
@@ -121,6 +148,7 @@ export function RenderNode({
           node={child}
           registry={registry}
           dataProvider={dataProvider}
+          remotePatterns={remotePatterns}
           item={item}
           budget={budget}
           refs={refs}
@@ -131,7 +159,7 @@ export function RenderNode({
   }
 
   const props = item ? resolveBindings(node, item) : node.props;
-  const el = def.render({ props, node, slots, className });
+  const el = def.render({ props, node, slots, className, remotePatterns });
 
   const extra: Record<string, string> = {
     ...safeAttributes(node.attributes),

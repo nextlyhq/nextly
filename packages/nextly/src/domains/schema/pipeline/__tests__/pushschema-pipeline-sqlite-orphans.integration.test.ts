@@ -25,6 +25,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { getDialectTables } from "../../../../database/index";
 import { DynamicCollectionSchemaService } from "../../../dynamic-collections/services/dynamic-collection-schema-service";
 import { buildCompanionReconcileStatements } from "../../../i18n/migration/reconcile-companion";
+import { builtByFor } from "../registered-collections";
 import { DrizzleStatementExecutor } from "../../services/drizzle-statement-executor";
 
 import { freshPushSchema } from "../fresh-push";
@@ -93,6 +94,10 @@ describe("PushSchemaPipeline — SQLite applies with orphan live tables", () => 
       dialect: "sqlite",
       status: false,
       companionExists: false,
+      // The orphan this file plants stands in for a Builder-created
+      // localized collection, so its columns carry that creator's origin —
+      // taken from the production helper rather than spelled here.
+      builtBy: builtByFor("collection", true),
     })) {
       sqlite.exec(stmt);
     }

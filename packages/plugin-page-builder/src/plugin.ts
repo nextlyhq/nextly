@@ -15,11 +15,35 @@ import {
 } from "./blocks/registration-service";
 import { PAGE_BUILDER_FIELD_TYPE } from "./collections/pageBuilderEntry";
 import { pagesCollection } from "./collections/pages";
+import type { RemotePattern } from "./core/url-policy";
 import { BLOCKS_FIELD_TYPE } from "./fields/blocksField";
 
 export interface PageBuilderOptions {
   /** Disable behavior while still applying schema. Default true. */
   enabled?: boolean;
+  /**
+   * Remote hosts a page may load images, video and embeds from, in the same
+   * shape `next/image` uses.
+   *
+   * The editor canvas renders the same blocks the published page does, so it
+   * has to enforce the same allowlist — otherwise it hides media the live page
+   * shows, and the preview stops being a preview. Declared here rather than
+   * only on `PageRenderer` because the canvas runs in the browser, where a
+   * component prop from the host's server config cannot reach it.
+   *
+   * Set the SAME value on `PageRenderer.remotePatterns`. These are two
+   * assignments, not one: this configures the editor, and `PageRenderer` reads
+   * only its own prop. Setting one alone produces a mismatch in whichever
+   * direction you set it, so a shared constant in the host is what keeps them
+   * equal.
+   *
+   * Object patterns only, unlike `PageRenderer`, which also accepts a `URL`.
+   * This value is serialized to the browser and a `URL` does not survive that:
+   * it would arrive as a string. Converting one here would mean deciding what
+   * its default `pathname` of `"/"` means as a glob, and guessing at that in a
+   * security control is worse than declining the input.
+   */
+  remotePatterns?: readonly RemotePattern[];
 }
 
 /**
@@ -30,12 +54,23 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) =>
   definePlugin({
     name: "@nextlyhq/plugin-page-builder",
     version: PLUGIN_VERSION,
-    // `blocks()` builds its field with `pluginField`, which core first exports
-    // in alpha.49. Against an earlier core that import resolves to `undefined`
-    // and every `blocks()` call throws while the config is evaluated, so the
-    // floor states the version carrying the API rather than the one this plugin
-    // was first published against.
-    nextly: ">=0.0.2-alpha.49",
+    // The floor states the version carrying the APIs this plugin needs, not the
+    // one it was first published against. Two of them: `blocks()` builds its
+    // field with `pluginField`, and the editor reads its allowlist through
+    // `usePluginClientConfig`, which the SDK re-exports from the admin package.
+    // Against a core older than either, the import resolves to nothing and the
+    // failure is a crash while the config is evaluated or the field mounts.
+    //
+    // Written from this package's OWN version rather than a literal, because
+    // every published package here versions in lockstep: a plugin at version X
+    // and a core at version X are always released together, so requiring a core
+    // at least as new as this build is exactly the compatibility this needs. A
+    // literal cannot say that. The APIs above land in the same release as the
+    // plugin build that first calls them, and that version does not exist while
+    // the change is being written — naming the next one guesses at a release
+    // that has not happened, and leaves the source tree, where core carries the
+    // CURRENT version, unable to satisfy its own plugin.
+    nextly: `>=${PLUGIN_VERSION}`,
     // Identity metadata for the admin plugins page, mirroring package.json.
     author: "Nextly",
     homepage: "https://nextlyhq.com",
@@ -74,6 +109,15 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) =>
       // could publish. Granting it did nothing and withholding it prevented
       // nothing. Declare it again alongside the check that reads it.
       admin: {
+        // The canvas needs the allowlist and runs in the browser, so it
+        // travels with the rest of the admin metadata. `remotePatterns` is
+        // plain data and survives the trip; the serializer rejects it if a
+        // future addition here does not.
+        ...(opts.remotePatterns !== undefined
+          ? {
+              clientConfig: { remotePatterns: opts.remotePatterns },
+            }
+          : {}),
         menu: [
           { label: "Pages", to: "/admin/collections/pages", icon: "Layout" },
         ],

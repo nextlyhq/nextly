@@ -12,9 +12,20 @@
 
 import { deliverDueDeliveries, type DeliverDeps } from "./deliver";
 import { fanOutDueEvents, type FanOutDeps } from "./fan-out";
+import { pruneAuditDataSafely } from "../audit/prune";
+import {
+  activeAuditRetention,
+  type ResolvedAuditRetentionConfig,
+} from "../audit/retention-config";
 import { pruneWebhookDataSafely, type PruneDeps } from "./prune";
 import type { ResolvedWebhookRetentionConfig } from "./retention-config";
-import { claimRetentionPass, type RetentionGateStore } from "./retention-gate";
+import {
+  claimRetentionPass,
+  releaseRetentionPass,
+  type RetentionGateStore,
+  AUDIT_RETENTION_DRAIN_GATE_KEY,
+  WEBHOOK_RETENTION_GATE_KEY,
+} from "../../domains/retention/gate";
 
 /** Hard cap on rounds so a persistently-retrying backlog can't loop unbounded. */
 const DEFAULT_MAX_ROUNDS = 100;
@@ -40,7 +51,14 @@ export interface RunDrainDeps {
    * invoked drain does not prune on every call.
    */
   retention?: {
-    policy: ResolvedWebhookRetentionConfig;
+    /**
+     * Absent when webhook retention is off. The trails are pruned on their own
+     * policy either way, so switching one off does not silently switch off the
+     * other's only full-budget trigger.
+     */
+    policy?: ResolvedWebhookRetentionConfig;
+    /** Absent when the audit trails are configured to keep everything. */
+    auditPolicy?: ResolvedAuditRetentionConfig;
     prune: PruneDeps;
     gate: RetentionGateStore;
   };
@@ -61,7 +79,13 @@ export interface RunDrainResult {
    */
   abandoned: number;
   /** Rows retention removed on this call; zero when the gate held it off. */
-  pruned: { events: number; deliveries: number };
+  pruned: {
+    events: number;
+    deliveries: number;
+    /** Rows removed from the activity and auth trails on this call. */
+    activity: number;
+    auth: number;
+  };
 }
 
 /**
@@ -71,6 +95,23 @@ export interface RunDrainResult {
  * `maxRounds` is reached. Deliveries scheduled for a future retry are intentionally
  * left for a later drain — this returns once nothing is immediately actionable.
  */
+/**
+ * Half of whatever time is left, as an absolute moment.
+ *
+ * Used to bound the first of two passes so the second is reachable. A fixed
+ * reserve would be a constant to tune per deployment; a share of the remainder
+ * adapts to how much the call has already spent, and leaves the later pass a
+ * meaningful slice whatever that was.
+ */
+function halfOfRemaining(
+  deadline: Date | undefined,
+  now: () => Date
+): Date | undefined {
+  if (!deadline) return undefined;
+  const remaining = deadline.getTime() - now().getTime();
+  return remaining <= 0 ? deadline : new Date(now().getTime() + remaining / 2);
+}
+
 export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
   const maxRounds = deps.maxRounds ?? DEFAULT_MAX_ROUNDS;
   // The delivery clock, reused for the budget so the deadline and the delivery
@@ -90,7 +131,7 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
     retried: 0,
     failed: 0,
     abandoned: 0,
-    pruned: { events: 0, deliveries: 0 },
+    pruned: { events: 0, deliveries: 0, activity: 0, auth: 0 },
   };
 
   for (let round = 0; round < maxRounds; round += 1) {
@@ -121,17 +162,111 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
   // because housekeeping could not run.
   const retention = deps.retention;
   if (retention) {
-    const due = await claimRetentionPass(
-      retention.gate,
-      retention.policy.intervalMs
-    );
-    if (due) {
-      const pruned = await pruneWebhookDataSafely(
-        retention.prune,
-        retention.policy
+    // Read fresh at each claim rather than once for both. Claiming a gate with
+    // nothing left to spend takes the turn and does no work, and the marker
+    // then holds the next attempt off for a full interval — so a drain that
+    // repeatedly spends its budget would consume every retention turn and
+    // prune nothing. A single reading taken before the first pass is stale by
+    // the second, which is precisely the case worth catching: the first pass
+    // is what spends the remaining time.
+    const deadlineSpent = (): boolean =>
+      deadline !== undefined && now() >= deadline;
+
+    // Read live for the same reason the request-path pass does: this dependency
+    // is a singleton built at boot, so a captured policy would outlive every
+    // reload that changed it.
+    const auditPolicy = activeAuditRetention(deps.retention?.auditPolicy);
+    const auditPrunes =
+      auditPolicy !== undefined &&
+      (auditPolicy.activityMaxAgeMs !== false ||
+        auditPolicy.authMaxAgeMs !== false);
+
+    // The audit turn is claimed BEFORE the webhook sweep runs, so the sweep's
+    // budget can be decided from whether a second pass will actually follow.
+    // Halving for a pass that is not due leaves the other half unusable until
+    // the next interval — the gate is claimed by then — so a ledger needing
+    // more than half a budget would grow while time sat idle. Claiming is two
+    // statements; running is where the time goes, and that still happens below
+    // in the original order.
+    const auditTurn =
+      auditPrunes && !deadlineSpent()
+        ? await claimRetentionPass(
+            retention.gate,
+            AUDIT_RETENTION_DRAIN_GATE_KEY,
+            auditPolicy!.intervalMs
+          )
+        : false;
+
+    const webhookPolicy = retention.policy;
+    if (webhookPolicy && !deadlineSpent()) {
+      const due = await claimRetentionPass(
+        retention.gate,
+        WEBHOOK_RETENTION_GATE_KEY,
+        webhookPolicy.intervalMs
       );
-      result.pruned.events = pruned.events.webhook + pruned.events.audit;
-      result.pruned.deliveries = pruned.deliveries;
+      // Re-checked after the claim, not only before it: the claim is two
+      // statements against the database and can itself spend what remained.
+      // Giving the turn back matters as much as not using it — the marker
+      // would otherwise hold the next attempt off for a full interval on a
+      // pass that did nothing.
+      if (due && deadlineSpent()) {
+        await releaseRetentionPass(retention.gate, WEBHOOK_RETENTION_GATE_KEY);
+      } else if (due) {
+        // Bounded by HALF the time that remains, not by the shared deadline.
+        // Both sweeps ran to the same absolute moment and this one goes first,
+        // so a sustained webhook backlog consumed the whole allowance and the
+        // audit trails — whose only full-budget trigger this call is — were
+        // skipped every time. Splitting what is left needs no tuned reserve:
+        // each pass gets a share that shrinks with the work already done.
+        const pruned = await pruneWebhookDataSafely(
+          {
+            ...retention.prune,
+            // Halved only when a second pass will actually follow. Reserving
+            // for a sweep that will not run leaves the unclaimable half unused
+            // until the next interval, so a ledger needing more than half a
+            // budget per interval would grow while time sat idle.
+            deadline: auditTurn ? halfOfRemaining(deadline, now) : deadline,
+          },
+          webhookPolicy
+        );
+        result.pruned.events = pruned.events.webhook + pruned.events.audit;
+        result.pruned.deliveries = pruned.deliveries;
+      }
+    }
+
+    // The audit trails are offered here too, and at their FULL budget. Every
+    // other trigger is a user's write, which passes a small override so a save
+    // is not held up by a backlog sweep — so without this the configured
+    // budget is never reachable and a busy site accumulates faster than the
+    // capped passes can retire. Nothing waits on the drain, which is what makes
+    // it the right place to spend it. Gated on its own key, so a webhook pass
+    // taken this round does not consume the audit trails' turn.
+    // Skipped once the delivery deadline is spent. The wall-clock bound is a
+    // promise this function makes to a serverless cron route, and a full-budget
+    // pass is up to forty statements — enough to carry the invocation past the
+    // platform's limit and have it killed, losing the drain's own work with it.
+    // The gate is not claimed in that case either, so the pass is deferred to
+    // the next invocation rather than consumed by one that could not run it.
+    if (auditTurn) {
+      const auditDue = true;
+      // Re-checked after the claim, not only before it: the claim is two
+      // statements against the database and can itself spend what remained. A
+      // pass that prunes nothing has still written the marker, which holds the
+      // next attempt off for a full interval — so what matters is whether time
+      // is left NOW, after paying for the turn.
+      if (auditDue && deadlineSpent()) {
+        await releaseRetentionPass(
+          retention.gate,
+          AUDIT_RETENTION_DRAIN_GATE_KEY
+        );
+      } else if (auditDue) {
+        const trails = await pruneAuditDataSafely(
+          { ...retention.prune, deadline },
+          auditPolicy!
+        );
+        result.pruned.activity = trails.activity;
+        result.pruned.auth = trails.auth;
+      }
     }
   }
 

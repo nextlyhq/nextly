@@ -2,34 +2,36 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
-    // The release-tag guard reads this package's OWN `dist/index.d.ts`: the
-    // tags it checks are written by the declaration bundler, so there is
-    // nothing to assert against until the package is built.
-    //
-    // A global setup rather than a build chained into the `test` script. That
-    // chain covered one entry point of four — `test:watch`, `test:ui` and
-    // `test:coverage` all invoke vitest directly — and it ran `rimraf dist`
-    // inside the parallel task graph, where other packages are reading this
-    // package's artifacts at the same time. This runs for every entry point,
-    // rebuilds only when the declarations are stale, and never removes them.
-    globalSetup: ["./src/__tests__/global-setup.ts"],
-
-    // The surface guard READS the sources rather than importing them (the
-    // barrel ships `"use client"` and pulls in the whole component tree, which
-    // does not belong in a Node test process). Vitest therefore sees no module
-    // dependency on them, and in watch mode an edit to `src/index.ts` reran
-    // nothing: the suite kept reporting on declarations built before the edit,
-    // so a wrong release tag stayed green until a manual restart. Naming the
-    // sources as rerun triggers is what puts them back in the watch graph.
-    //
-    // The defaults are repeated because this REPLACES them rather than adding
-    // to them, and dropping them would stop a config or manifest edit from
-    // triggering a rerun at all.
+    // The suites read `theme.css` and the package sources through the
+    // filesystem rather than importing them, so Vitest has no module
+    // dependency to invalidate and a watch session would keep reporting on
+    // files it never re-read.
     forceRerunTriggers: [
       "**/package.json/**",
       "**/vitest.config.*/**",
       "**/vite.config.*/**",
       "**/src/**/*.{ts,tsx}",
+      "**/src/**/*.css",
+      // The declaration build runs through both tsup configs, and a child
+      // process loads them — they are in no module graph Vitest can invalidate,
+      // so a config that stops emitting an entry point would leave the last
+      // green surface result on screen.
+      //
+      // Deliberately NOT written `**/tsup*.config.*/**` to match the shape of
+      // the entries above, because that shape does not match a FILE. Measured
+      // against the picomatch Vitest matches with:
+      //
+      //   `**/package.json/**`     vs `packages/ui/package.json`     -> true
+      //   `**/vitest.config.*/**`  vs `packages/ui/vitest.config.ts` -> false
+      //   `**/tsup*.config.*`      vs `packages/ui/tsup.config.ts`   -> true
+      //
+      // Only a trailing literal segment collapses onto the file; a segment
+      // holding a `*` does not. So two of the three defaults above match
+      // nothing — harmless there, since editing a Vitest or Vite config
+      // restarts the server anyway, and they are kept to stay in step with the
+      // defaults they replace. A trigger for these configs has to be written
+      // without the suffix or it would silently never fire.
+      "**/tsup*.config.*",
     ],
   },
 });

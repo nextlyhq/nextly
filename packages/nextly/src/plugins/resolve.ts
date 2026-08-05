@@ -1,5 +1,6 @@
 import type { PluginDefinition } from "./plugin-context";
 import { topoSortPlugins } from "./topo-sort";
+import { assertClientConfigs } from "./validate-client-config";
 import { validatePluginVersions } from "./validate-versions";
 
 export interface ResolvePluginsOptions {
@@ -22,5 +23,10 @@ export function resolvePlugins(
   opts: ResolvePluginsOptions
 ): PluginDefinition[] {
   validatePluginVersions(plugins, opts.coreVersion);
+  // Before anything reads it. A `clientConfig` that cannot be delivered is a
+  // configuration error like an incompatible version, so it belongs with the
+  // other fail-fast checks rather than surfacing when the admin first asks for
+  // its metadata and losing the whole branding response with it.
+  assertClientConfigs(plugins);
   return topoSortPlugins(plugins);
 }

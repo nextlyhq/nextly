@@ -12,3 +12,17 @@ export type { RenderNodeProps } from "./RenderNode";
 export { BlockErrorBoundary } from "./ErrorBoundary";
 export type { DataProvider, FindArgs, ResolvedMedia } from "./dataProvider";
 export * from "./blocks";
+
+/**
+ * The origin policy, for a block registered from outside this package.
+ *
+ * A block's `render` receives `remotePatterns` and is responsible for putting
+ * its own media through this: the renderer cannot inspect the React element a
+ * block returns, so a custom block that writes an author-controlled URL into an
+ * `src` or an inline background reaches whatever host it names unless it asks.
+ *
+ * `mediaUrl` for an attribute, `cssMediaUrl` for a value interpolated into a
+ * CSS `url("…")` — the second also refuses the delimiters that would end the
+ * declaration it sits in.
+ */
+export { mediaUrl, cssMediaUrl } from "./blocks/util";
