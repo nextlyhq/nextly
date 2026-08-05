@@ -34,6 +34,7 @@ import {
   type AnyBlockDefinition,
   type SupportDefinition,
 } from "@nextlyhq/blocks-engine";
+import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import type { PluginContext } from "@nextlyhq/plugin-sdk";
 import { collectDeclarations } from "nextly";
 
@@ -207,6 +208,26 @@ function isBlockRegistrationBackend(
  * effect; silently ignoring it would leave a plugin looking installed while
  * contributing nothing.
  */
+/**
+ * Register the core primitive library.
+ *
+ * Called before {@link registerDeclaredBlocks}, and the order is load-bearing
+ * twice over. It resolves the registration service first, which is what
+ * performs the boot's one-time clear, so the core blocks are added to an empty
+ * registry rather than wiped by a later resolution. And registering core first
+ * means a contributed block colliding with a `core/` name is the one reported
+ * as the duplicate, which is the right way round: the core namespace is this
+ * package's.
+ *
+ * Attributed to the page builder itself, because that is the package a reader
+ * would have to go and change.
+ */
+export function registerCoreBlocks(ctx: PluginContext): void {
+  const service = ctx.services.plugins[PAGE_BUILDER_PLUGIN]?.[BLOCK_SERVICE];
+  if (!isBlockRegistrationBackend(service)) return;
+  service.register(coreBlocks, PAGE_BUILDER_PLUGIN);
+}
+
 export function registerDeclaredBlocks(ctx: PluginContext): void {
   const service = ctx.services.plugins[PAGE_BUILDER_PLUGIN]?.[BLOCK_SERVICE];
   if (!isBlockRegistrationBackend(service)) return;

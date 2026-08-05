@@ -1186,6 +1186,9 @@ importers:
       '@nextlyhq/blocks-engine':
         specifier: workspace:*
         version: link:../blocks-engine
+      '@nextlyhq/blocks-react':
+        specifier: workspace:*
+        version: link:../blocks-react
       css-tree:
         specifier: ^2.3.1
         version: 2.3.1

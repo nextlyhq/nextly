@@ -6,12 +6,18 @@
  *
  * @module blocks/library/section
  */
-import { defineBlock } from "@nextlyhq/plugin-sdk/blocks";
+import { defineBlock } from "@nextlyhq/blocks-engine";
+
+import type { PageContext } from "../context";
 
 import { renderContainer } from "./container";
 import type { ContainerProps } from "./container";
 
-export const section = defineBlock<ContainerProps>({
+// Defined against the ENGINE's `defineBlock`, not the plugin SDK's: the engine
+// declares the contract and the SDK re-exports it for third parties. The
+// context is named rather than augmented, so a block compiled against the
+// published types is typed the same as one compiled here. See `./index.ts`.
+export const section = defineBlock<ContainerProps, PageContext>({
   name: "core/section",
   version: 1,
   description:

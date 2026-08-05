@@ -17,10 +17,10 @@
  *
  * @module blocks/library/container
  */
-import type { BlockRenderArgs } from "@nextlyhq/plugin-sdk/blocks";
+
 import type { ReactElement } from "react";
 
-import "../context-augmentation";
+import type { BlockRenderArgs } from "../context";
 
 /** What both presets store. */
 export interface ContainerProps {

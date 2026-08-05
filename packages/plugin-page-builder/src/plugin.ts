@@ -11,6 +11,7 @@ import { version as PLUGIN_VERSION } from "../package.json";
 import {
   BLOCK_SERVICE,
   createBlockRegistrationService,
+  registerCoreBlocks,
   registerDeclaredBlocks,
 } from "./blocks/registration-service";
 import { PAGE_BUILDER_FIELD_TYPE } from "./collections/pageBuilderEntry";
@@ -91,6 +92,7 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) =>
     // because the factory is memoized for the boot and clears only on its
     // first resolution.
     init: ctx => {
+      registerCoreBlocks(ctx);
       registerDeclaredBlocks(ctx);
     },
     contributes: {

@@ -99,7 +99,7 @@ describe("the block library does not depend on the code it replaces", () => {
     const scanned = sourceFiles().map(file =>
       posix(relative(BLOCKS_DIR, file))
     );
-    expect(scanned).toContain("library/collection-loop.tsx");
+    expect(scanned).toContain("registration-service.ts");
     expect(scanned).toContain("context.ts");
     expect(scanned.length).toBeGreaterThan(5);
   });

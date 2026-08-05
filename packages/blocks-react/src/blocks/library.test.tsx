@@ -8,13 +8,13 @@ import {
   registerBlocks,
 } from "@nextlyhq/blocks-engine";
 import type { BlockNode } from "@nextlyhq/blocks-engine";
-import type {
-  BlockRenderArgs,
-  BlockRenderContext,
-} from "@nextlyhq/plugin-sdk/blocks";
 import type { ReactElement } from "react";
 
-import type { DataProvider } from "../context";
+import type {
+  BlockRenderArgs,
+  BlocksDataProvider,
+  PageContext,
+} from "../context";
 
 import { box } from "./box";
 import { collectionLoop, renderCollectionLoop } from "./collection-loop";
@@ -36,18 +36,34 @@ function storedProps(props: unknown): ContainerProps {
  * to tell a slot drawn once per entry from one drawn once and copied: identical
  * output either way, unless the output depends on the entry.
  */
+/**
+ * A context supplying the host services every render receives, all inert.
+ *
+ * `PageContext` requires them, so a test that does not care still has to hand
+ * over something; answering nothing is what a standalone render does anyway.
+ */
+function testContext(overrides: Partial<PageContext> = {}): PageContext {
+  return {
+    entry: null,
+    data: { find: () => Promise.resolve({ items: [], total: 0 }) },
+    resolveMedia: () => Promise.resolve(null),
+    resolveEntryPath: () => Promise.resolve(null),
+    ...overrides,
+  };
+}
+
 function args<P>(
   props: P,
-  ctx: BlockRenderContext = {}
-): BlockRenderArgs<P> & { drawnWith: BlockRenderContext[] } {
-  const drawnWith: BlockRenderContext[] = [];
+  ctx: PageContext = testContext()
+): BlockRenderArgs<P> & { drawnWith: PageContext[] } {
+  const drawnWith: PageContext[] = [];
   return {
     props,
     node: NODE,
     className: "nx-n1",
     ctx,
     drawnWith,
-    renderSlot: (_name: string, override?: BlockRenderContext) => {
+    renderSlot: (_name: string, override?: PageContext) => {
       const used = override ?? ctx;
       drawnWith.push(used);
       const title = used.item?.title;
@@ -58,10 +74,10 @@ function args<P>(
 
 /** A data source that answers from a fixed list and records what it was asked. */
 function stubProvider(items: Record<string, unknown>[]): {
-  provider: DataProvider;
-  calls: Parameters<DataProvider["find"]>[0][];
+  provider: BlocksDataProvider;
+  calls: Parameters<BlocksDataProvider["find"]>[0][];
 } {
-  const calls: Parameters<DataProvider["find"]>[0][] = [];
+  const calls: Parameters<BlocksDataProvider["find"]>[0][] = [];
   return {
     calls,
     provider: {
@@ -125,7 +141,7 @@ describe("core/collection-loop", () => {
     const element = await renderCollectionLoop(
       args<{ collection?: string; limit?: number }>(
         { collection: "posts", limit: 5 },
-        { data: provider }
+        testContext({ data: provider })
       )
     );
     const html = renderToStaticMarkup(element);
@@ -138,7 +154,7 @@ describe("core/collection-loop", () => {
     await renderCollectionLoop(
       args<{ collection?: string; sort?: string }>(
         { collection: "posts", sort: "-publishedAt" },
-        { data: provider }
+        testContext({ data: provider })
       )
     );
     expect(calls[0]).toEqual({
@@ -151,7 +167,7 @@ describe("core/collection-loop", () => {
   it("renders its template once while no collection is chosen", async () => {
     const { provider, calls } = stubProvider([{ id: "a" }, { id: "b" }]);
     const element = await renderCollectionLoop(
-      args<{ collection?: string }>({}, { data: provider })
+      args<{ collection?: string }>({}, testContext({ data: provider }))
     );
     const html = renderToStaticMarkup(element);
     // An author who has placed the loop but not chosen a collection still sees
@@ -162,17 +178,23 @@ describe("core/collection-loop", () => {
 
   it("renders its template once when the renderer supplies no data source", async () => {
     const element = await renderCollectionLoop(
-      args<{ collection?: string }>({ collection: "posts" }, {})
+      args<{ collection?: string }>(
+        { collection: "posts" },
+        testContext({ data: undefined })
+      )
     );
     expect(renderToStaticMarkup(element)).toContain("<span>child</span>");
   });
 
   it("renders empty rather than throwing when the query fails", async () => {
-    const failing: DataProvider = {
+    const failing: BlocksDataProvider = {
       find: () => Promise.reject(new Error("no database")),
     };
     const element = await renderCollectionLoop(
-      args<{ collection?: string }>({ collection: "posts" }, { data: failing })
+      args<{ collection?: string }>(
+        { collection: "posts" },
+        testContext({ data: failing })
+      )
     );
     const html = renderToStaticMarkup(element);
     // The page survives a data source it cannot reach: this block goes empty,
@@ -185,7 +207,10 @@ describe("core/collection-loop", () => {
     // fixed key would do the moment a collection has no id field.
     const { provider } = stubProvider([{ title: "x" }, { title: "y" }]);
     const element = await renderCollectionLoop(
-      args<{ collection?: string }>({ collection: "posts" }, { data: provider })
+      args<{ collection?: string }>(
+        { collection: "posts" },
+        testContext({ data: provider })
+      )
     );
     const children = (
       element as ReactElement<{ children: ReactElement<unknown>[] }>
@@ -203,7 +228,7 @@ describe("core/collection-loop", () => {
     ]);
     const rendered = args<{ collection?: string }>(
       { collection: "posts" },
-      { data: provider }
+      testContext({ data: provider })
     );
     const html = renderToStaticMarkup(await renderCollectionLoop(rendered));
     expect(html).toContain("First");
@@ -221,7 +246,10 @@ describe("core/collection-loop", () => {
     // Laziness is the other half of the change: a slot that is never drawn
     // costs nothing, which is what lets a block show one panel out of four
     // without paying for the three it hides.
-    const rendered = args<{ collection?: string }>({ collection: "posts" }, {});
+    const rendered = args<{ collection?: string }>(
+      { collection: "posts" },
+      testContext({ data: undefined })
+    );
     expect(rendered.drawnWith).toEqual([]);
     await renderCollectionLoop(rendered);
     expect(rendered.drawnWith.length).toBeGreaterThan(0);
@@ -233,7 +261,10 @@ describe("core/collection-loop", () => {
     // where reordering makes React reuse the wrong DOM node.
     const { provider } = stubProvider([{ id: 7 }, { id: 8 }]);
     const element = await renderCollectionLoop(
-      args<{ collection?: string }>({ collection: "posts" }, { data: provider })
+      args<{ collection?: string }>(
+        { collection: "posts" },
+        testContext({ data: provider })
+      )
     );
     const children = (
       element as ReactElement<{ children: ReactElement<unknown>[] }>
@@ -255,7 +286,10 @@ describe("core/collection-loop", () => {
     // swallowed, and the block renders empty instead of showing its template.
     const { provider, calls } = stubProvider([{ id: "a" }]);
     return renderCollectionLoop(
-      args<{ collection?: string }>({ collection: "   " }, { data: provider })
+      args<{ collection?: string }>(
+        { collection: "   " },
+        testContext({ data: provider })
+      )
     ).then(element => {
       expect(renderToStaticMarkup(element)).toContain("<span>child</span>");
       expect(calls).toEqual([]);
@@ -270,7 +304,7 @@ describe("core/collection-loop", () => {
     await renderCollectionLoop(
       args<{ collection?: string; limit?: number }>(
         { collection: "posts", limit: 100_000 },
-        { data: provider }
+        testContext({ data: provider })
       )
     );
     expect(calls[0]?.limit).toBe(100);
@@ -278,7 +312,7 @@ describe("core/collection-loop", () => {
     await renderCollectionLoop(
       args<{ collection?: string; limit?: number }>(
         { collection: "posts", limit: -5 },
-        { data: second.provider }
+        testContext({ data: second.provider })
       )
     );
     expect(second.calls[0]?.limit).toBe(1);
@@ -291,7 +325,7 @@ describe("core/collection-loop", () => {
     const element = await renderCollectionLoop(
       args<{ collection?: string }>(
         { collection: "posts" },
-        { data: provider, queries: { take: () => false } }
+        testContext({ data: provider, queries: { take: () => false } })
       )
     );
     expect(calls).toEqual([]);
