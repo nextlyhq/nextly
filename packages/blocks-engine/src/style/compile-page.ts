@@ -178,6 +178,24 @@ export interface CompiledPageCss {
    * both match the same element.
    */
   trace?: readonly StyleTraceEntry[];
+  /**
+   * The node-local rules of every node that declares `visibility.conditions`, keyed by node id
+   * and EXCLUDED from `css`.
+   *
+   * A page's stylesheet is compiled when the document is saved; a condition is decided when the
+   * page is read. So a single pre-compiled string carries rules for nodes a reader will prune —
+   * and any `url(...)` inside them — publishing the assets of a block whose markup is withheld.
+   * A reader appends the entries whose nodes survived.
+   *
+   * Only NODE-LOCAL rules move. A block type's base rules stay in `css`, because an
+   * unconditional node may share the type and those rules come from the block definition rather
+   * than from anything an author gated.
+   *
+   * Absent when the document gates nothing, which keeps `css` byte-identical for every document
+   * that has no conditions. Additive: a reader that does not know this field renders the main
+   * sheet and leaves gated nodes unstyled rather than breaking.
+   */
+  gated?: Readonly<Record<string, string>>;
 }
 
 /**
@@ -608,6 +626,22 @@ function envelopeRules(
   return rules;
 }
 
+/**
+ * Whether a node's styling can be pruned from the page after the sheet is written.
+ *
+ * True only for a node that DECLARES entry-field conditions. `devices` is not the same thing and
+ * must not be conflated with it: per-breakpoint hiding is presentation, decided by CSS on a node
+ * that is always in the markup, while a condition decides whether the node is served at all.
+ *
+ * Read defensively, because a document reaches this compiler whether or not anything validated
+ * it. An empty array declares nothing, and neither does a value that is not an array.
+ */
+function declaresConditions(node: BlockNode): boolean {
+  const conditions = (node as { visibility?: { conditions?: unknown } })
+    .visibility?.conditions;
+  return Array.isArray(conditions) && conditions.length > 0;
+}
+
 /** Split declarations by the descendant they attach to, root first. */
 function groupByDescendant(
   declarations: readonly Declaration[]
@@ -925,6 +959,7 @@ export function compilePageCss(
   }
 
   const rules: CssRule[] = [];
+  const gated: Record<string, string> = {};
   // One array for the whole compile, appended to in emission order by every tier below.
   const trace: StyleTraceEntry[] | undefined =
     ctx.trace === true ? [] : undefined;
@@ -1169,7 +1204,7 @@ export function compilePageCss(
       continue;
     }
     const selector = `${pageRoot} .${className}`;
-    rules.push(
+    const nodeRules = [
       ...envelopeRules(
         node.styles,
         selector,
@@ -1181,9 +1216,7 @@ export function compilePageCss(
         warningAllowance,
         { kind: "node", id: node.id },
         trace
-      )
-    );
-    rules.push(
+      ),
       ...visibilityRules(
         node,
         selector,
@@ -1191,8 +1224,18 @@ export function compilePageCss(
         path,
         warnings,
         warningAllowance
-      )
-    );
+      ),
+    ];
+    // Held out of the sheet when the node can be pruned at read time. Serialized on its own, so
+    // each entry carries whatever at-rules its own contexts opened and a reader can append it
+    // without reading what came before. Appending is safe because every node carries its own
+    // hashed class: two nodes' local rules never collide, and tier order is preserved inside
+    // each entry.
+    if (declaresConditions(node)) {
+      gated[node.id] = serializeRules(nodeRules);
+      continue;
+    }
+    rules.push(...nodeRules);
   }
 
   // The classes a renderer puts on each node, which is not the same as the class this compiler
@@ -1348,5 +1391,8 @@ export function compilePageCss(
     // Omitted rather than empty when nobody asked, so a caller cannot mistake "not requested"
     // for "nothing was written".
     ...(trace === undefined ? {} : { trace }),
+    // Omitted when the document gates nothing, so a page without conditions compiles to exactly
+    // the shape it did before this field existed.
+    ...(Object.keys(gated).length === 0 ? {} : { gated }),
   };
 }
