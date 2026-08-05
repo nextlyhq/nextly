@@ -22,6 +22,7 @@ import { DEFAULT_LIMITS, LIMIT_WARNING_RATIO } from "./limits";
 import type { DocumentLimits } from "./limits";
 import { isPlainRecord } from "./plain-record";
 import type { TokenKind } from "./style/catalog-types";
+import { MAX_NAMED_CLASS_NAME_LENGTH } from "./style/named-class";
 import {
   canResolveName,
   chargeIssueBudget,
@@ -842,6 +843,21 @@ function validateClasses(
       code: "too-many-classes",
       severity: ctx.mode === "strict" ? "error" : "warning",
       message: `This node lists ${node.classes.length} classes; only the first ${MAX_CLASSES_PER_NODE} are applied.`,
+    });
+  }
+  // A reference longer than a class id may be names nothing the library can hold, whatever a
+  // caller's lookup answers: `isUsableNamedClass` refuses an entry carrying one, so the compiler
+  // drops the reference. Reported here for the same reason the count above is — a document that
+  // passes a strict publish and then renders without its class styling is the one outcome these
+  // two halves must not produce between them.
+  for (let index = 0; index < node.classes.length; index += 1) {
+    const id = node.classes[index];
+    if (id.length <= MAX_NAMED_CLASS_NAME_LENGTH) continue;
+    issues.push({
+      path: pointer(pointer(path, "classes"), index),
+      code: "invalid-classes",
+      severity: ctx.mode === "strict" ? "error" : "warning",
+      message: `This class id is ${id.length} characters; a class id may be at most ${MAX_NAMED_CLASS_NAME_LENGTH}, so it was not applied.`,
     });
   }
   const lookup = ctx.classes;

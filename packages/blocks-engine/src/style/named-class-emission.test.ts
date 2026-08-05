@@ -840,6 +840,38 @@ describe("what a warning about one class reference points at", () => {
     ).toEqual(["/nodes/0/classes/0", "/nodes/1/classes/0"]);
   });
 
+  it("is refused by a publish gate when an id is too long to name a class", () => {
+    // The compiler drops such a reference, so validation has to refuse it too — otherwise a
+    // strict publish succeeds and the page renders without that class's styling. The caller's
+    // lookup saying the id exists does not change it: no library entry can carry one that long.
+    const enormous = "c".repeat(MAX_NAMED_CLASS_NAME_LENGTH + 1);
+    const document = doc({ classes: [enormous] });
+    const known = { has: () => true };
+
+    const strict = validate(document, {
+      mode: "strict",
+      classes: known,
+    } as never);
+    const forgiving = validate(document, {
+      mode: "forgiving",
+      classes: known,
+    } as never);
+
+    expect(
+      strict.filter(
+        i =>
+          i.code === "invalid-classes" &&
+          i.severity === "error" &&
+          i.path === "/nodes/0/classes/0"
+      )
+    ).toHaveLength(1);
+    expect(
+      forgiving.filter(
+        i => i.code === "invalid-classes" && i.severity === "warning"
+      )
+    ).toHaveLength(1);
+  });
+
   it("calls an id too long to name a class malformed", () => {
     // `isUsableNamedClass` caps an id, so no class can carry a longer one. Hashing it to dedupe
     // or to look it up reads the whole string, on every render, for a value nothing can match.
