@@ -279,4 +279,6 @@ export type { BreakpointAxis } from "./style/breakpoint-axes";
 // Where each emitted declaration came from, for an editor that has to tell an author which of
 // several tiers they are looking at. Produced only when `StyleCompileContext.trace` asks for it.
 export type { StyleOrigin, StyleTraceEntry } from "./style/style-trace";
+export type { StyleQuery, StyleSubject } from "./style/style-origin";
+export { styleOrigin } from "./style/style-origin";
 export { BREAKPOINT_AXES } from "./style/breakpoint-axes";
