@@ -12,7 +12,7 @@ import { FIXTURE_BREAKPOINTS } from "../validation.fixtures";
 
 import { compilePageCss } from "./compile-page";
 import type { NamedClass } from "./named-class";
-import { resolveNodeClasses } from "./named-class";
+import { MAX_NAMED_CLASS_NAME_LENGTH, resolveNodeClasses } from "./named-class";
 import { resolveStyle } from "./resolve-style";
 
 // The breakpoint id every fixture styles at. `base` is the widest in the shared set, which is
@@ -815,5 +815,38 @@ describe("diagnostics across a whole library", () => {
     const { warnings } = compile(doc({}), library as never);
 
     expect(warnings.length).toBeLessThan(1000);
+  });
+});
+
+describe("a class name too long to be real", () => {
+  it("refuses it, so it never reaches a selector", () => {
+    // The library COUNT is capped and its bytes are not, so one corrupted entry with a
+    // syntactically valid but enormous slug is copied into a selector on every page render.
+    const enormous = `c${"a".repeat(MAX_NAMED_CLASS_NAME_LENGTH)}`;
+    const { css, warnings } = compile(doc({}), [
+      {
+        id: "c1",
+        slug: enormous,
+        orderIndex: 0,
+        styles: styles({ color: "blue" }),
+      },
+    ]);
+
+    expect(css).not.toContain(enormous);
+    expect(warnings.length).toBeGreaterThan(0);
+  });
+});
+
+describe("two missing class ids that begin alike", () => {
+  it("reports both, because they are separate repairs", () => {
+    // `describeValue` truncates, so ids sharing a long prefix collapsed to one key and the second
+    // went unreported — a distinct class silently accounted for by the first.
+    const prefix = "ghost-".padEnd(200, "x");
+    const { warnings } = compile(
+      doc({ classes: [`${prefix}-one`, `${prefix}-two`] }),
+      [card]
+    );
+
+    expect(warnings.filter(w => w.code === "unknown-class")).toHaveLength(2);
   });
 });

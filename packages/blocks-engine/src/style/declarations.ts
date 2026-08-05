@@ -328,6 +328,33 @@ function refusedAt(path: string, refused: readonly string[]): boolean {
  * costs nothing and buys the guarantee that the same styles always produce the
  * same bytes.
  */
+/**
+ * Validation's errors, charged to the allowance exactly once.
+ *
+ * Returned uncharged they were bounded only by the per-map style budget, so a large class library
+ * multiplied them; charged again by the caller they paid twice, and later omissions lost their
+ * explanations while the allowance still had room. So the charging happens here, where the
+ * allowance is already in hand, and callers append what they are given.
+ *
+ * The truncation notice is exempt: charged to the allowance it describes, it is the first thing
+ * dropped once that allowance is spent, leaving a truncated list looking complete.
+ */
+function chargeIssues(
+  issues: readonly ValidationIssue[],
+  allowance: WarningAllowance
+): ValidationIssue[] {
+  const reported: ValidationIssue[] = [];
+  for (const issue of issues) {
+    if (issue.severity !== "error") continue;
+    if (issue.code === "style-issues-truncated") {
+      reported.push(issue);
+      continue;
+    }
+    pushBoundedWarning(allowance, reported, issue);
+  }
+  return reported;
+}
+
 export function compileStyleValues(
   values: Readonly<Record<string, unknown>>,
   basePath: string,
@@ -358,6 +385,9 @@ export function compileStyleValues(
   // those, and reading a missing site allowance would bound nothing.
   const budget =
     normalizeStyleIssueBudget(suppliedBudget) ?? newStyleIssueBudget();
+  // Resolved before the refusal branch below, which reports through it. A direct caller gets a
+  // fresh one, so the diagnostics are bounded however this is reached.
+  const allowance = suppliedAllowance ?? newWarningAllowance();
   const spentBefore = structuralAllowanceSpent(budget);
   const issues = validateStyleValues(values, basePath, "strict", budget);
   const stopped =
@@ -375,7 +405,10 @@ export function compileStyleValues(
         issues.length === 0
           ? []
           : [
-              ...issues,
+              // Charged like everything else this returns. This is the branch a map full of
+              // invalid properties takes, so leaving it uncharged is exactly where a large class
+              // library multiplied its diagnostics.
+              ...chargeIssues(issues, allowance),
               warning(
                 basePath,
                 "These styles were not written, because checking stopped before they could be read."
@@ -388,9 +421,6 @@ export function compileStyleValues(
     .map(issue => issue.path);
 
   const safe = safeTokenPrefix(tokenPrefix);
-  // A direct caller gets a fresh one, so this is bounded however it is reached
-  // rather than only when the page compiler happens to pass its own.
-  const allowance = suppliedAllowance ?? newWarningAllowance();
   const walk: Walk = {
     placed: [],
     warnings: [],
@@ -427,14 +457,17 @@ export function compileStyleValues(
     const { path: _path, ...declaration } = placed;
     declarations.push(declaration);
   }
+  // Validation's errors are reported as the reason something is missing from
+  // the stylesheet. They keep their own paths and codes, so a caller that
+  // already validated sees the same issue twice rather than two accounts of it.
+  //
+  // Charged HERE, alongside the compiler's own objections, so everything this returns has been
+  // through the allowance exactly once. Returned uncharged they were bounded only by the style
+  // budget, which is per map — so a large class library multiplied them; charged again by the
+  // caller, the compiler's objections paid twice and later omissions lost their explanations
+  // while the allowance still had room.
   return {
     declarations,
-    // Validation's errors are reported as the reason something is missing from
-    // the stylesheet. They keep their own paths and codes, so a caller that
-    // already validated sees the same issue twice rather than two accounts of it.
-    warnings: [
-      ...issues.filter(issue => issue.severity === "error"),
-      ...walk.warnings,
-    ],
+    warnings: [...chargeIssues(issues, walk.allowance), ...walk.warnings],
   };
 }

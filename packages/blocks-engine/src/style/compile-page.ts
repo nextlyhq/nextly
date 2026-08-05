@@ -541,19 +541,10 @@ function envelopeRules(
       // per class, so one bad entry cannot silence the others — but that also means each class
       // can produce a full budget's worth of diagnostics, and a large library multiplies them.
       // The allowance is what bounds the returned list, so everything returned goes through it.
-      for (const issue of compiled.warnings) {
-        if (issue.code === "style-issues-truncated") {
-          // Metadata about the report rather than a finding in it. Charged to the allowance it
-          // describes, it is the first thing dropped once that allowance is spent — leaving a
-          // truncated list looking complete, which is the one thing it exists to prevent. Kept
-          // once per compile, so a large library cannot repeat it per class either.
-          if (!warnings.some(seen => seen.code === "style-issues-truncated")) {
-            warnings.push(issue);
-          }
-          continue;
-        }
-        pushBoundedWarning(warningAllowance, warnings, issue);
-      }
+      // Appended as they come. `compileStyleValues` receives this same allowance and has already
+      // charged everything it returns to it, so charging again here spends it twice and costs
+      // later omissions their explanations while the budget still had room.
+      warnings.push(...compiled.warnings);
       // A property that styles something inside the block goes into its own
       // rule. Keeping the exception in the catalog rather than in a branch here
       // is what makes the set of them enumerable; this only has to honour it.
@@ -1162,7 +1153,10 @@ export function compilePageCss(
       // the node, no class on the element, and nothing connecting the two — the same account
       // every other unwritten value in this compile gets. Once per id, because a second report
       // would name the same missing class and the same fix.
-      const key = describeValue(id);
+      // Deduped on the RAW id. `describeValue` truncates, so two distinct ids sharing a long
+      // prefix collapse to one key and the second reference goes unreported — a separate class,
+      // needing a separate repair, silently accounted for by the first.
+      const key = typeof id === "string" ? id : describeValue(id);
       if (reportedMissingClasses.has(key)) continue;
       reportedMissingClasses.add(key);
       pushBoundedWarning(warningAllowance, warnings, {

@@ -408,6 +408,15 @@ function compilerWroteKeys(values: Record<string, unknown>): Set<string> {
   return keys;
 }
 
+/**
+ * The states an ancestor is in whenever this node is.
+ *
+ * Hover nests: the pointer is over the child AND over every ancestor containing it, so an
+ * ancestor's hover rule matches at the same moment. Focus and active do not — they belong to one
+ * element, and a parent is not focus-visible because its child is.
+ */
+const STATES_REACHING_ANCESTORS = new Set(["hover"]);
+
 /** Whether a tier reaches this node from somewhere else rather than being a rule on it. */
 function isInherited(source: StyleSource): boolean {
   let innermost = source;
@@ -654,12 +663,14 @@ export function resolveStyle(
   let strongest = 0;
 
   for (const tier of tiers(input, property)) {
-    // An interactive state belongs to the element the rule is written for. A parent's `focus`
-    // styles compile to `.parent:where(:focus-visible)`, which matches when the PARENT is
-    // focus-visible — focusing a child does not make it match, so an ancestor's focus colour is
-    // not something the child shows. Read at `base` instead, which is the part of an ancestor
-    // that does reach here.
-    const tierStates = isInherited(tier.source) ? ["base"] : states;
+    // An interactive state on an ancestor reaches this node only if the ancestor is in that
+    // state when this node is. Hovering a child hovers every ancestor too, so `.parent:where(
+    // :hover) a` does match a hovered link inside it. Focus does not work that way: focus is on
+    // one element, and `:focus-visible` on the parent is false while the child holds it.
+    const tierStates =
+      isInherited(tier.source) && !STATES_REACHING_ANCESTORS.has(state)
+        ? ["base"]
+        : states;
     for (const candidateState of tierStates) {
       for (const id of live) {
         const values = valuesAt(tier.styles, candidateState, id);
@@ -722,7 +733,12 @@ export function resolveStyle(
           // when nothing had — so asking for `background` with only a `backgroundGradient` stored
           // returned the gradient string as a `background`, a value that shape cannot hold and a
           // control cannot edit.
-          if (candidate !== property && !coversEverything) {
+          // A value from another key can only be folded when it fits THIS property's shape.
+          // `background: { url }` covers all of `backgroundGradient`'s one declaration, so total
+          // overlap alone let a record be read as a gradient — fabricating `position`, `size` and
+          // `repeat` fields out of whatever had accumulated, or answering `{ url }` as a gradient.
+          const shapeFits = !isPlainRecord(value) || candidate === property;
+          if (candidate !== property && (!coversEverything || !shapeFits)) {
             // Only the leaves this candidate overwrote. A lower tier's `background` may have set
             // `position`, `size` and `repeat` alongside its `url`, and a higher `backgroundGradient`
             // replaces the image alone — the browser goes on using the rest, so clearing the whole
@@ -743,6 +759,10 @@ export function resolveStyle(
             accumulated,
             value,
             source,
+            // The key the value was stored under, because this decides which DECLARATIONS the
+            // compiler wrote for it. Reading it through the requested property's keys instead
+            // asks whether `linkColorHover` was written when `linkColor` was, and drops it.
+            // Shape compatibility is the separate guard above.
             candidate,
             [],
             emitted

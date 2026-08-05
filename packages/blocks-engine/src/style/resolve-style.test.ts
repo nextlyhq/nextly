@@ -669,6 +669,48 @@ describe("an interactive state on an ancestor", () => {
   });
 });
 
+describe("an alias whose value does not fit this shape", () => {
+  it("does not read a background record as a gradient", () => {
+    // `background: { url }` covers all of `backgroundGradient`'s one declaration, so overlap
+    // alone let a record be read as a gradient — answering `{ url }` as the gradient value, or
+    // fabricating fields out of whatever had accumulated.
+    const found = resolveStyle("backgroundGradient", "base", "desktop", {
+      node: at("desktop", { background: { url: "/a.png" } }),
+    });
+
+    expect(found).toBeUndefined();
+  });
+
+  it("still folds a scalar alias, which does fit", () => {
+    const found = resolveStyle("columnGap", "base", "desktop", {
+      classes: [namedClass("card", 0, at("desktop", { gap: "16px" }))],
+    });
+
+    expect(found?.value).toBe("16px");
+  });
+});
+
+describe("an interactive state that nests", () => {
+  it("reads a hovered ancestor, because hovering a child hovers it too", () => {
+    // The pointer is over the child AND every ancestor containing it, so `.parent:where(:hover)`
+    // matches at the same moment. Forcing every inherited tier to `base` skipped a rule that
+    // genuinely applies.
+    const found = resolveStyle("color", "hover", "desktop", {
+      ancestors: [
+        {
+          nodeId: "parent",
+          node: {
+            base: { desktop: { color: "black" } },
+            hover: { desktop: { color: "red" } },
+          } as unknown as NodeStyles,
+        },
+      ],
+    });
+
+    expect(found?.value).toBe("red");
+  });
+});
+
 describe("a state the compiler does not know", () => {
   it("reports nothing, because no rule was written for it", () => {
     // `pressed` is reported as `invalid-style-state` and emits nothing. Read here, it would hand

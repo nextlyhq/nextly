@@ -34,6 +34,16 @@ export const NAMED_CLASS_PREFIX = "nx-c-";
 export const NAMED_CLASS_SLUG_RE = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 
 /**
+ * The longest slug or id this engine will accept from the stored library.
+ *
+ * `MAX_NAMED_CLASSES` bounds how MANY entries are read and says nothing about their size, so one
+ * corrupted entry with a syntactically valid but enormous slug is copied into a selector on every
+ * page render. Well above any name a person would type, so the cap is only ever reached by data
+ * that is already wrong.
+ */
+export const MAX_NAMED_CLASS_NAME_LENGTH = 128;
+
+/**
  * A reusable set of styles, applied to nodes by ID.
  *
  * `styles` is the same `NodeStyles` envelope a node carries, so a class is stored, validated,
@@ -72,6 +82,8 @@ export function isUsableNamedClass(value: unknown): value is NamedClass {
     typeof candidate.id === "string" &&
     typeof candidate.slug === "string" &&
     NAMED_CLASS_SLUG_RE.test(candidate.slug) &&
+    candidate.slug.length <= MAX_NAMED_CLASS_NAME_LENGTH &&
+    candidate.id.length <= MAX_NAMED_CLASS_NAME_LENGTH &&
     // Held to the same plain-record test the compiler applies to the envelope itself, not merely
     // to "is an object". An array passes the looser test and then produces no declarations, so
     // the class reserved its slug and wrote nothing — and a later, valid class wanting that name
