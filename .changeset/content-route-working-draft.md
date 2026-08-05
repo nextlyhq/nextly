@@ -32,8 +32,11 @@ The draft model is two-layered and they fail differently: `status` covers an
 entry that has never been published, while pending edits on an ALREADY-published
 entry live in a sidecar row that no `status` scope can see. Widening `status`
 alone therefore showed a published page live while the edits being previewed
-stayed invisible. Setting `draft` now widens `status` with it (an explicit
-`status` still wins) so the pair cannot be half-configured.
+stayed invisible. The two are gated differently: pending edits are judged
+per row by an update-capability probe, so asking for them is safe from anywhere,
+while never-published rows are judged by nothing. So `draft` widens `status`
+only on a trusted read (`overrideAccess: true`); an explicit `status` always
+wins.
 
 On the route the option is a per-request decision, because route config is
 captured once at module scope while whether a visitor is previewing is not:
@@ -42,10 +45,16 @@ captured once at module scope while whether a visitor is previewing is not:
 export const { ContentPage, generateMetadata, generateStaticParams } =
   createContentRoute({
     collections: ["pages"],
-    draft: async () => (await draftMode()).isEnabled,
+    draft: async ({ collection, slug }) => grantsDraftAt(collection, slug),
     render: page => <Page {...page} />,
   });
 ```
+
+The decision is handed the collection and slug being resolved, because Next's
+draft mode is one boolean for the whole host: `isEnabled` says a visitor opened
+a valid preview link, never which document it was for. Answering from that alone
+would turn a link scoped to one page into a key to every unpublished page in the
+configured collections.
 
 Returning `true` is an authorization decision rather than a display preference,
 so that request reads trusted — the route resolves anonymously and the overlay

@@ -25,7 +25,7 @@ vi.mock("../../cache/cached-find", () => ({
 }));
 
 function reader(): NextlyContentReader {
-  const row = { id: "1", title: "A" };
+  const row = { id: "1", title: "A", status: "published" };
   return {
     find: async (): Promise<ListResult<Record<string, unknown>>> => ({
       items: [row],
@@ -70,6 +70,11 @@ describe("caching a draft read", () => {
 
     expect(cachedFindSpy).not.toHaveBeenCalled();
     // And the read still happened — "not cached" must not mean "not read".
-    expect(result).toEqual({ id: "1", title: "A", _isWorkingDraft: true });
+    expect(result).toEqual({
+      id: "1",
+      title: "A",
+      status: "published",
+      _isWorkingDraft: true,
+    });
   });
 });

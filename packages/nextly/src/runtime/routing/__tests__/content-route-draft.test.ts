@@ -14,10 +14,15 @@ import type {
 } from "../../../direct-api/types/collections";
 import type { ListResult } from "../../../direct-api/types/shared";
 import { createContentRoute } from "../content-route";
+import type { ResolvedContext } from "../content-route";
 import type { ContentEntry, NextlyContentReader } from "../resolve-content";
 
 function stubReader(
-  row: Record<string, unknown> | null = { id: "1", slug: "a" }
+  row: Record<string, unknown> | null = {
+    id: "1",
+    slug: "a",
+    status: "published",
+  }
 ): {
   reader: NextlyContentReader;
   calls: FindArgs[];
@@ -150,6 +155,56 @@ describe("the content route's draft decision", () => {
     }).generateMetadata(params);
 
     expect(calls[0].status).toBe("published");
+  });
+
+  it("scopes the decision to the path being resolved", async () => {
+    // Next's draft mode is one boolean for the whole host: `isEnabled` says a
+    // visitor opened A valid preview link, never WHICH document it was for.
+    // Answering from that alone would turn a link scoped to one unpublished
+    // page into a key to every unpublished page in the configured collections.
+    // The collection and slug are handed in so the answer can be compared
+    // against what the token actually granted.
+    const { reader, byIdCalls } = stubReader();
+    const seen: ResolvedContext[] = [];
+    const route = createContentRoute({
+      collections: ["pages"],
+      nextly: reader,
+      render: (entry: ContentEntry) => entry,
+      buildMetadata: (entry: ContentEntry) => ({ title: String(entry.id) }),
+      draft: context => {
+        seen.push(context);
+        return context.slug === "granted";
+      },
+    });
+
+    await route.generateMetadata({ params: { slug: ["denied"] } });
+    expect(seen).toEqual([{ collection: "pages", slug: "denied" }]);
+    expect(byIdCalls).toHaveLength(0);
+
+    await route.generateMetadata({ params: { slug: ["granted"] } });
+    expect(seen[1]).toEqual({ collection: "pages", slug: "granted" });
+    expect(byIdCalls).toHaveLength(1);
+  });
+
+  it("asks per collection, since one slug can name a different document in each", async () => {
+    const { reader } = stubReader(null);
+    const seen: ResolvedContext[] = [];
+
+    await createContentRoute({
+      collections: ["pages", "docs"],
+      nextly: reader,
+      render: (entry: ContentEntry) => entry,
+      buildMetadata: (entry: ContentEntry) => ({ title: String(entry.id) }),
+      draft: context => {
+        seen.push(context);
+        return false;
+      },
+    }).generateMetadata(params);
+
+    expect(seen).toEqual([
+      { collection: "pages", slug: "a" },
+      { collection: "docs", slug: "a" },
+    ]);
   });
 
   it("never pre-renders draft paths", async () => {

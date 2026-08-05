@@ -67,7 +67,9 @@ describe("resolveContent (unit)", () => {
   });
 
   it("forwards an explicit user and status, and a trusted override", async () => {
-    const { reader, calls } = stubReader({ items: [{ id: "1" }] });
+    const { reader, calls } = stubReader({
+      items: [{ id: "1", status: "published" }],
+    });
     await resolveContent("posts", "a", {
       nextly: reader,
       overrideAccess: true,
@@ -101,7 +103,9 @@ describe("resolveContent (unit)", () => {
 describe("resolveContent (working-draft layer)", () => {
   it("does not re-read by id when no draft was asked for", async () => {
     // The ordinary published read stays exactly one query.
-    const { reader, byIdCalls } = stubReader({ items: [{ id: "1" }] });
+    const { reader, byIdCalls } = stubReader({
+      items: [{ id: "1", status: "published" }],
+    });
     await resolveContent("posts", "a", { nextly: reader });
     expect(byIdCalls).toHaveLength(0);
   });
@@ -110,7 +114,7 @@ describe("resolveContent (working-draft layer)", () => {
     // The overlay lives on the by-id read, not the list read, so a slug lookup
     // cannot surface it without this second step.
     const { reader, calls, byIdCalls } = stubReader({
-      items: [{ id: "1", title: "live" }],
+      items: [{ id: "1", title: "live", status: "published" }],
       overlay: { id: "1", title: "pending edit", _isWorkingDraft: true },
     });
 
@@ -136,7 +140,9 @@ describe("resolveContent (working-draft layer)", () => {
     // Half-configuring preview is the failure this default exists to prevent: a
     // published-only lookup finds nothing to overlay for an entry that has
     // never gone live, so the page 404s while the editor is looking at it.
-    const { reader, calls } = stubReader({ items: [{ id: "1" }] });
+    const { reader, calls } = stubReader({
+      items: [{ id: "1", status: "published" }],
+    });
     await resolveContent("posts", "a", {
       nextly: reader,
       draft: true,
@@ -145,9 +151,91 @@ describe("resolveContent (working-draft layer)", () => {
     expect(calls[0].status).toBe("all");
   });
 
+  it("does not widen the lifecycle scope for an untrusted draft read", async () => {
+    // The two halves of a draft read are gated very differently. The overlay is
+    // judged per row by an update-capability probe, so asking for it is safe
+    // from anywhere; widening `status` is judged by nothing at all — the list
+    // read simply returns never-published rows. Tying the widening to the draft
+    // flag alone would let a preview flag wired from an untrusted request
+    // publish unpublished pages.
+    const { reader, calls } = stubReader({
+      items: [{ id: "1", status: "published" }],
+    });
+
+    await resolveContent("posts", "a", { nextly: reader, draft: true });
+
+    expect(calls[0].status).toBe("published");
+  });
+
+  it("still overlays pending edits on an untrusted read", async () => {
+    // Refusing the widening must not cost the half that IS safely gated: a
+    // published page's pending edits are still previewable, judged per row.
+    const { reader, byIdCalls } = stubReader({
+      items: [{ id: "1", status: "published" }],
+      overlay: { id: "1", title: "pending", _isWorkingDraft: true },
+    });
+
+    const result = await resolveContent("posts", "a", {
+      nextly: reader,
+      draft: true,
+      user: { id: "u1", role: "editor" },
+    });
+
+    expect(byIdCalls).toHaveLength(1);
+    expect(result).toEqual({
+      id: "1",
+      title: "pending",
+      _isWorkingDraft: true,
+    });
+  });
+
+  it("does not re-read a row that is not published", async () => {
+    // Only a published row can have pending edits beside it; an unpublished row
+    // already IS the draft. Skipping the second read there is also what keeps
+    // an enforced preview working, since a by-id read without trust filters to
+    // published and would answer 404 for exactly these rows.
+    const { reader, byIdCalls } = stubReader({
+      items: [{ id: "1", title: "never published", status: "draft" }],
+    });
+
+    const result = await resolveContent("posts", "a", {
+      nextly: reader,
+      draft: true,
+      overrideAccess: true,
+    });
+
+    expect(byIdCalls).toHaveLength(0);
+    expect(result).toEqual({
+      id: "1",
+      title: "never published",
+      status: "draft",
+    });
+  });
+
+  it("treats a deletion race as a miss rather than an error", async () => {
+    // The real by-id read THROWS `NOT_FOUND` rather than answering null, so the
+    // overlay asks it not to: a row deleted between the two reads is a content
+    // miss, and the slug lookup answering nothing would simply have rendered
+    // the not-found page.
+    const { reader, byIdCalls } = stubReader({
+      items: [{ id: "1", status: "published" }],
+      overlay: null,
+    });
+
+    await resolveContent("posts", "a", {
+      nextly: reader,
+      draft: true,
+      overrideAccess: true,
+    });
+
+    expect(byIdCalls[0].disableErrors).toBe(true);
+  });
+
   it("still lets an explicit lifecycle scope win", async () => {
     // Previewing pending edits on live pages only is a legitimate ask.
-    const { reader, calls } = stubReader({ items: [{ id: "1" }] });
+    const { reader, calls } = stubReader({
+      items: [{ id: "1", status: "published" }],
+    });
     await resolveContent("posts", "a", {
       nextly: reader,
       draft: true,
@@ -160,7 +248,9 @@ describe("resolveContent (working-draft layer)", () => {
   it("carries the read context into the overlay read", async () => {
     // The two reads must agree: an overlay fetched at a different depth or
     // locale would render a page the slug lookup never described.
-    const { reader, byIdCalls } = stubReader({ items: [{ id: "1" }] });
+    const { reader, byIdCalls } = stubReader({
+      items: [{ id: "1", status: "published" }],
+    });
     await resolveContent("posts", "a", {
       nextly: reader,
       draft: true,
@@ -181,7 +271,10 @@ describe("resolveContent (working-draft layer)", () => {
   it("resolves to nothing when the row disappears between the two reads", async () => {
     // Falling back to the copy already in hand would render a page that no
     // longer exists.
-    const { reader } = stubReader({ items: [{ id: "1" }], overlay: null });
+    const { reader } = stubReader({
+      items: [{ id: "1", status: "published" }],
+      overlay: null,
+    });
     expect(
       await resolveContent("posts", "a", {
         nextly: reader,
@@ -195,7 +288,7 @@ describe("resolveContent (working-draft layer)", () => {
     // A collection whose rows carry no usable id has nothing to re-read by;
     // the live row is a truthful answer where a crash is not.
     const { reader, byIdCalls } = stubReader({
-      items: [{ id: { nested: true }, title: "live" }],
+      items: [{ id: { nested: true }, title: "live", status: "published" }],
     });
 
     const result = await resolveContent("posts", "a", {
@@ -204,7 +297,11 @@ describe("resolveContent (working-draft layer)", () => {
       overrideAccess: true,
     });
 
-    expect(result).toEqual({ id: { nested: true }, title: "live" });
+    expect(result).toEqual({
+      id: { nested: true },
+      title: "live",
+      status: "published",
+    });
     expect(byIdCalls).toHaveLength(0);
   });
 });

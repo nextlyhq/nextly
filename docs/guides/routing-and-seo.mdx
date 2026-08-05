@@ -49,16 +49,21 @@ never been published is covered by `status`, but pending edits to an
 await resolveContent("posts", slug, { draft: true, overrideAccess: true });
 ```
 
-Because a preview needs both layers, `draft: true` widens `status` to `"all"`
-unless you set `status` yourself. Widening only one of the two is the mistake
-this prevents: a preview that just set `status: "all"` would show a published
-page's **live** content while the edits being previewed stayed invisible.
+The two layers are gated differently, and that difference is the important part:
 
-Two rules come with it. The working draft is only surfaced to a caller who could
-edit the document, so a draft read must be trusted (`overrideAccess: true`) or
-carry a `user` — otherwise you silently get the published row. And a draft read
-is **never cached**, because cache tags are busted by writes to the live row
-while a draft changes on every save.
+- **Pending edits** are judged per row, by an update-capability probe, so asking
+  for them is safe from anywhere. A caller who cannot edit the document gets the
+  published row instead.
+- **Never-published entries** are judged by nothing — the query simply returns
+  them. So `draft: true` widens `status` to `"all"` **only on a trusted read**
+  (`overrideAccess: true`). Without that, a draft read still sees published rows
+  and overlays their pending edits.
+
+That split exists because a `draft` flag wired from an untrusted request would
+otherwise publish unpublished pages. An explicit `status` always wins.
+
+A draft read is **never cached**, because cache tags are busted by writes to the
+live row while a draft changes on every save.
 
 **Access.** By default `resolveContent` **enforces** the collection's read
 policy (`overrideAccess: false`). A rule-less (public) collection still renders;
@@ -137,15 +142,27 @@ Whether a visitor is previewing is a per-request fact, and route config is not �
 so `draft` takes a function the route asks on every request. Wire it to Next's
 draft mode:
 
-```ts
-import { draftMode } from "next/headers";
+The function is handed the collection and slug being resolved, so the answer can
+be scoped to a document:
 
+```ts
 const route = createContentRoute({
   collections: ["pages"],
-  draft: async () => (await draftMode()).isEnabled,
+  draft: async ({ collection, slug }) => {
+    const scope = await readPreviewScope(previewConfig);
+    if (scope === null || scope.collection !== collection) return false;
+    return slug === (await slugOf(scope.collection, scope.entryId));
+  },
   render: page => <Page {...page} />,
 });
 ```
+
+**Use that argument.** Next's draft mode is a single boolean for the whole host:
+`draftMode().isEnabled` tells you a visitor opened _a_ valid preview link, never
+_which_ document it was for. Answering from it alone turns a link scoped to one
+unpublished page into a key to every unpublished page in the configured
+collections, for the life of the session — which is exactly what a preview
+token's scope exists to prevent.
 
 **Returning `true` is an authorization decision, not a display preference.** The
 route resolves anonymously and the working draft is only shown to a caller who

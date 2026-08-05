@@ -76,35 +76,46 @@ export interface ContentRouteConfig<TNode> {
    */
   status?: "published" | "draft" | "all";
   /**
-   * Whether THIS request may see pending unpublished edits.
+   * Whether this request may see pending unpublished edits at THIS path.
    *
    * Almost always a function, because route config is captured once at module
-   * scope and whether a visitor is previewing is a per-request fact. The
-   * function is evaluated on every resolved read, so the natural wiring is
-   * Next's draft mode:
+   * scope while whether a visitor is previewing is a per-request fact. It is
+   * asked for every path the route resolves, and is handed the collection and
+   * slug being resolved so the answer can be scoped to a document.
+   *
+   * **The argument is the point, not a convenience.** Next's draft mode is a
+   * single boolean for the whole host — `draftMode().isEnabled` says a visitor
+   * opened *a* valid preview link, never *which* document it was for. Answering
+   * from that alone turns a link scoped to one unpublished page into a key to
+   * every unpublished page in the configured collections for the life of the
+   * session, which is precisely what the preview token's scope exists to
+   * prevent. Compare it against what the token actually granted:
    *
    * ```ts
-   * draft: async () => (await draftMode()).isEnabled
+   * draft: async ({ collection, slug }) => {
+   *   const scope = await readPreviewScope(previewConfig);
+   *   if (scope === null || scope.collection !== collection) return false;
+   *   return slug === (await slugOf(scope.collection, scope.entryId));
+   * }
    * ```
    *
-   * **Returning `true` is an authorization decision, not a display preference.**
-   * This route always resolves anonymously, and the working-draft overlay is
-   * gated on an update-capability probe that an anonymous read can never pass —
-   * so a request this returns `true` for is read TRUSTED, exactly as Payload
-   * pairs `draft: isDraftMode` with `overrideAccess: isDraftMode`. Put the
-   * authorization in this function (a verified preview cookie, a session
-   * check), never in a query parameter the visitor controls.
+   * **Returning `true` is an authorization decision, not a display
+   * preference.** This route always resolves anonymously, and the working-draft
+   * overlay is gated on an update-capability probe an anonymous read can never
+   * pass — so a request this returns `true` for is read TRUSTED, exactly as
+   * Payload pairs `draft: isDraftMode` with `overrideAccess: isDraftMode`. Put
+   * the authorization here, never in a query parameter the visitor controls.
    *
    * A literal `true` is accepted for a route mounted behind the app's own auth,
-   * and means every visitor sees unpublished content. It is almost never what a
-   * public site wants.
+   * and means every visitor sees unpublished content at every path. It is
+   * almost never what a public site wants.
    *
    * `generateStaticParams` ignores this entirely — draft paths are never
    * pre-rendered.
    *
    * @default false
    */
-  draft?: boolean | (() => boolean | Promise<boolean>);
+  draft?: boolean | ((context: ResolvedContext) => boolean | Promise<boolean>);
   /** Relation depth for the resolved read (default `1`). */
   depth?: number;
   /** A booted Nextly instance (defaults to `getNextly()`). */
@@ -222,19 +233,22 @@ export function createContentRoute<TNode>(
 
   const getInstance = (): NextlyContentReader => config.nextly ?? getNextly();
 
-  /** Whether this request may see unpublished edits. Asked once per resolve. */
-  async function draftForThisRequest(): Promise<boolean> {
+  /** Whether this request may see unpublished edits at one collection + slug. */
+  async function draftForThisPath(context: ResolvedContext): Promise<boolean> {
     const decision = config.draft;
     if (decision === undefined) return false;
-    return typeof decision === "function" ? decision() : decision;
+    return typeof decision === "function" ? decision(context) : decision;
   }
 
   /** Resolve the joined slug across the configured collections (first match wins). */
   async function resolve(
     slug: string
   ): Promise<{ entry: ContentEntry; context: ResolvedContext } | null> {
-    const draft = await draftForThisRequest();
     for (const collection of collections) {
+      // Asked per collection, not once per request: the answer is scoped to a
+      // document, and the same slug can name a different document in each
+      // configured collection.
+      const draft = await draftForThisPath({ collection, slug });
       const entry = await resolveContent(collection, slug, {
         nextly: config.nextly,
         slugField,

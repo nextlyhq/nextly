@@ -20,6 +20,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { createContentRoute } from "../content-route";
+import { resolveContent } from "../resolve-content";
 import type { ContentEntry } from "../resolve-content";
 
 const pages = () =>
@@ -38,7 +39,12 @@ afterEach(async () => {
 
 function route(
   nextly: TestNextly["nextly"],
-  draft?: boolean | (() => boolean | Promise<boolean>)
+  draft?:
+    | boolean
+    | ((context: {
+        collection: string;
+        slug: string;
+      }) => boolean | Promise<boolean>)
 ) {
   return createContentRoute({
     collections: ["pages"],
@@ -95,6 +101,60 @@ describe("createContentRoute + draft layers (integration)", () => {
       params: { slug: ["unreleased"] },
     })) as ContentEntry;
     expect(previewPage.title).toBe("Unreleased");
+  });
+
+  it("grants a draft only at the path the decision names", async () => {
+    // The scope that a preview token carries has to survive the trip. Next's
+    // draft mode cannot express it — one boolean for the whole host — so a
+    // route answering from `isEnabled` alone would hand a link for one page the
+    // drafts of every other.
+    current = await createTestNextly({ collections: [pages()] });
+    for (const slug of ["granted", "other"]) {
+      const created = await current.nextly.create({
+        collection: "pages",
+        data: { slug, title: `${slug} live`, status: "published" },
+      });
+      await current.nextly.update({
+        collection: "pages",
+        id: String(created.item.id),
+        data: { title: `${slug} pending` },
+      });
+    }
+
+    const scoped = route(current.nextly, ({ slug }) => slug === "granted");
+
+    expect(
+      (
+        (await scoped.ContentPage({
+          params: { slug: ["granted"] },
+        })) as ContentEntry
+      ).title
+    ).toBe("granted pending");
+    expect(
+      (
+        (await scoped.ContentPage({
+          params: { slug: ["other"] },
+        })) as ContentEntry
+      ).title
+    ).toBe("other live");
+  });
+
+  it("does not publish a never-published entry to an untrusted draft read", async () => {
+    // Widening the lifecycle scope is gated by nothing per row, so it follows
+    // trust rather than the draft flag. `resolveContent` called with `draft`
+    // alone must not surface an entry that has never been published.
+    current = await createTestNextly({ collections: [pages()] });
+    await current.nextly.create({
+      collection: "pages",
+      data: { slug: "unreleased", title: "Unreleased", status: "draft" },
+    });
+
+    expect(
+      await resolveContent("pages", "unreleased", {
+        nextly: current.nextly,
+        draft: true,
+      })
+    ).toBeNull();
   });
 
   it("keeps drafts out of the paths a build pre-renders", async () => {

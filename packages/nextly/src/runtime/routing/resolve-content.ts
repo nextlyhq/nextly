@@ -140,15 +140,26 @@ export async function resolveContent(
   const nextly = options.nextly ?? getNextly();
   const slugField = options.slugField ?? "slug";
   const draft = options.draft ?? false;
-  // A draft read that still filtered to published rows would miss an entry that
-  // has never been published — half of what "preview" means. An explicit
-  // `status` still wins, so a caller wanting only pending edits on live pages
-  // can still say `status: "published"`.
-  const status = options.status ?? (draft ? "all" : "published");
   const depth = options.depth ?? 1;
   const locale = options.locale;
   const overrideAccess = options.overrideAccess ?? false;
   const user = options.user;
+
+  // Widening the lifecycle scope follows TRUST, not the draft flag.
+  //
+  // The two halves of a draft read are gated very differently. The working-draft
+  // overlay is judged per row, by an update-capability probe, so asking for it
+  // is safe from anywhere. Widening `status` is not judged at all — the list
+  // read simply returns never-published rows — so tying it to `draft` alone
+  // would let a preview flag wired from an untrusted request publish
+  // unpublished pages.
+  //
+  // So an untrusted draft read still sees only published rows, and overlays
+  // their pending edits. Previewing an entry that has never been published
+  // needs `overrideAccess: true`, which is the caller stating they have already
+  // authorized it. An explicit `status` still wins either way.
+  const status =
+    options.status ?? (draft && overrideAccess ? "all" : "published");
 
   const read = async (): Promise<ContentEntry | null> => {
     try {
@@ -182,6 +193,17 @@ export async function resolveContent(
       const found = result.items[0] ?? null;
       if (found === null || !draft) return found;
 
+      // Only a PUBLISHED row can have pending edits beside it. The split keeps
+      // the live row published and stores the edit separately, so a row that is
+      // not published already IS the draft and there is nothing to overlay.
+      //
+      // Skipping the second read there is also what keeps an enforced preview
+      // working: a by-id read without `overrideAccess` filters to published, so
+      // it would answer 404 for exactly the rows that reached here unpublished.
+      // A status-less collection takes the same path, correctly — drafts
+      // require the status lifecycle, so it can never have one.
+      if (found.status !== "published") return found;
+
       // The overlay lives on the by-id read, not the list read, so a slug
       // lookup cannot surface it directly. Re-reading the resolved row by id is
       // what turns "the live row whose slug matches" into "what an editor is
@@ -201,6 +223,11 @@ export async function resolveContent(
         depth,
         overrideAccess,
         user,
+        // A row deleted between the two reads is a content miss, not an error.
+        // Without this the by-id read THROWS `NOT_FOUND` and the throw escapes
+        // as a 500, where the slug lookup answering nothing would simply have
+        // rendered the not-found page.
+        disableErrors: true,
         ...(options.richTextFormat
           ? { richTextFormat: options.richTextFormat }
           : {}),
