@@ -119,19 +119,17 @@ export function collectCustomPermissions(
         "system-resource-reserved"
       );
     }
-    // Both halves compared in lower case, because the seeder compares both halves that way. With
-    // only the action normalised, `{ action: "Publish", resource: "Posts" }` survives here while
-    // the seeder withholds `publish:posts` — so role bundles and generated types reference a slug
-    // that is never seeded rather than resolving to the permission that exists.
+    // Both halves read in lower case, because the seeder decides the same question that way:
+    // `ensurePermission` matches an existing row with `LOWER(action) = LOWER(action)`. Left
+    // case-sensitive here, `{ action: "Publish", resource: "Posts" }` is collected as a custom
+    // permission while the seeder recognises it as the seeded `publish/posts` and withholds it —
+    // so a role bundle and a generated type name a slug no row was ever written under.
     const entitySlug = resource.toLowerCase();
     const ownedByEntity =
       lowerCollectionSlugs.has(entitySlug) || lowerSingleSlugs.has(entitySlug);
 
     // Redundant with what the seeder now emits, and valid before it did. Drop
     // it and carry on rather than failing the boot of an app that upgraded.
-    // Compared in lower case, the way the seeder compares it. Left case-sensitive, a declaration
-    // like `Publish-Reports` survives here while the seeder withholds it — so codegen and role
-    // bundles go on referencing a slug that is never seeded under that name.
     if (ADOPTED_LIFECYCLE_ACTIONS.has(action.toLowerCase()) && ownedByEntity) {
       return;
     }
@@ -152,15 +150,12 @@ export function collectCustomPermissions(
     out.push({
       action,
       resource,
-      // Composed from the normalized halves, because identity already is: two lines above, and in
-      // `ensurePermission`, an existing row is matched with `LOWER(action) = LOWER(action)`. So
-      // `Publish/Reports` and `publish/reports` are ONE permission, and deriving two slugs for it
-      // means whichever is written first owns the row while the other's role bundle and generated
-      // type reference a name no row answers to. The seeder cannot repair that: for an entity it
-      // cannot see — a Builder collection lives in `dynamic_collections`, not the config — the
-      // declaration is collected rather than dropped, and the row it collides with keeps its own
-      // canonical slug.
-      slug: permissionSlug(action.toLowerCase(), entitySlug),
+      // Composed from the identity exactly as stored, not from a normalized copy of it. The slug
+      // is what a route guard declares, and `parsePermissionSlug` turns that back into an action
+      // and a resource which `hasPermission` matches with `eq()` — case-sensitively. Composing
+      // from lower-cased halves while the row keeps the declared casing breaks that round trip,
+      // and a role holding the grant is denied by a guard naming the permission it holds.
+      slug: permissionSlug(action, resource),
       name: perm.label ?? permissionName(action, resource),
       description: perm.description,
       owner,

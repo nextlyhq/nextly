@@ -595,9 +595,9 @@ export class PermissionSeedService extends BaseService {
       // past it and then patches the seeded `publish/reports` row anyway.
       //
       // Only the ADOPTED LIFECYCLE actions are held back, which is the same line the collector
-      // draws for entities it can see. That is also the whole of the reported bug: a plugin
-      // declaring `publish` on a Builder collection took ownership of the row, the Editor preset
-      // grants on `!isSystem && !isPlugin`, and the permission quietly stopped being granted.
+      // draws for entities it can see. Held back because ownership is what withholds the Editor
+      // grant: the presets grant on `!isSystem && !isPlugin`, so a `publish` declaration landing
+      // on a Builder collection's own row stops that collection being publishable by an editor.
       //
       // A CRUD collision is deliberately left owned by its declarer. Withholding ownership there
       // would leave the row unowned and therefore granted to Editor by the presets, reaching a

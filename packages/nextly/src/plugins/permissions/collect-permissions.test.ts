@@ -247,20 +247,16 @@ describe("the publish lifecycle a plugin may already have declared", () => {
     expect(out).toEqual([]);
   });
 
-  it("derives one slug for a permission however it was cased", () => {
-    // Identity is case-insensitive: `ensurePermission` matches an existing row with
-    // `LOWER(action) = LOWER(action)`, so these two declarations are ONE permission. Deriving the
-    // slug from the declaration's own casing gave it two names, and only the first written is a
-    // name any row answers to — the other is what a role bundle and a generated type reference.
-    //
-    // It is not reachable for an entity the collector can see, because those declarations are
-    // dropped above. A Schema Builder collection lives in `dynamic_collections` and is invisible
-    // here, so its declaration is collected, and the row it collides with keeps its own slug.
+  it("derives the slug from the identity exactly as declared", () => {
+    // `parsePermissionSlug` turns a route guard's slug back into an action and a resource, and
+    // `hasPermission` matches those with `eq()`. A slug composed from a normalized copy of the
+    // identity no longer round-trips to the row it names, so a role holding the grant is denied
+    // by the guard that asks for it.
     const out = collectCustomPermissions(cfg(), [
-      plugin("@acme/workflow", [{ action: "Publish", resource: "Reports" }]),
+      plugin("@acme/workflow", [{ action: "Export", resource: "Reports" }]),
     ]);
 
-    expect(out.map(p => p.slug)).toEqual(["publish-reports"]);
+    expect(out.map(p => p.slug)).toEqual(["Export-Reports"]);
   });
 
   it("drops unpublish on a collection too", () => {
