@@ -13,6 +13,7 @@ import { MAX_CLASSES_PER_NODE, MAX_NAMED_CLASSES } from "../document";
 import { FIXTURE_BREAKPOINTS } from "../validation.fixtures";
 
 import { compilePageCss } from "./compile-page";
+import { MAX_COMPILE_WARNING_PATH_BYTES } from "./warning-allowance";
 import type { NamedClass } from "./named-class";
 import { MAX_NAMED_CLASS_NAME_LENGTH } from "./named-class";
 
@@ -674,6 +675,44 @@ describe("a node listing more classes than a node can have", () => {
 
     // `card` is real and would otherwise be applied; it sits one past the bound.
     expect(classes.get("n1")).not.toContain("nx-c-card");
+  });
+});
+
+describe("a class holding a key larger than the whole warning allowance", () => {
+  // A JSON-Pointer carries its key whole, deliberately: a shortened one resolves to nothing and a
+  // dropped one resolves to the wrong value. What keeps that bounded is the document byte cap —
+  // and a class library is site settings, outside it, read on every page render.
+  //
+  // Charged after the fact, the byte allowance was a running total rather than a bound: the first
+  // warning was admitted whole however large, so one corrupt key was copied into the answer on
+  // every compile. Each kind of stored key is checked because each builds its own pointer.
+  const enormous = (prefix: string) => `${prefix}${"x".repeat(100_000)}`;
+
+  const warningsFor = (styles: Record<string, unknown>) =>
+    compile(doc({}), [
+      { id: "c1", slug: "card", orderIndex: 0, styles } as never,
+    ]).warnings;
+
+  const bounded = (styles: Record<string, unknown>): void => {
+    const warnings = warningsFor(styles);
+    const bytes = warnings.reduce((total, w) => total + w.path.length, 0);
+
+    // Bounded by the allowance, not by the size of the stored key.
+    expect(bytes).toBeLessThan(MAX_COMPILE_WARNING_PATH_BYTES);
+    // And it says it stopped, rather than returning a shorter list that reads as complete.
+    expect(warnings.map(w => w.code)).toContain("style-issues-truncated");
+  };
+
+  it("bounds the answer for an unusable state key", () => {
+    bounded({ [enormous("s")]: { base: { color: "blue" } } });
+  });
+
+  it("bounds the answer for an unusable breakpoint id", () => {
+    bounded({ base: { [enormous("b")]: { color: "blue" } } });
+  });
+
+  it("bounds the answer for an unusable property name", () => {
+    bounded({ base: { [BP]: { [enormous("p")]: "blue" } } });
   });
 });
 
