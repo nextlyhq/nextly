@@ -775,3 +775,45 @@ describe("a class carrying an enormous style envelope", () => {
     expect(warnings.some(w => w.path.includes("ghost-"))).toBe(true);
   });
 });
+
+describe("what a class style warning points at", () => {
+  it("names the stored styles field, so an editor can open it", () => {
+    // The envelope lives under `styles`. A pointer built without it reads
+    // `/classes/0/base/base/bogus` and resolves to nothing.
+    const { warnings } = compile(doc({}), [
+      {
+        id: "c1",
+        slug: "card",
+        orderIndex: 0,
+        styles: styles({ color: "not a color" }),
+      },
+    ]);
+
+    const objection = warnings.find(
+      w => w.path.includes("bogus") || w.path.includes("color")
+    );
+    expect(objection?.path.startsWith("/classes/0/styles")).toBe(true);
+  });
+});
+
+describe("diagnostics across a whole library", () => {
+  it("bounds what is returned even though each class writes on its own budget", () => {
+    // The per-class WRITE budget is what stops one bad entry silencing the others. It also means
+    // each class can produce a full budget of diagnostics, so a large library multiplies them —
+    // the returned list is bounded by the shared allowance instead.
+    const noisy: Record<string, unknown> = {};
+    for (let index = 0; index < 200; index += 1) {
+      noisy[`bogusProperty${index}`] = "nonsense";
+    }
+    const library = Array.from({ length: 200 }, (_unused, index) => ({
+      id: `c${index}`,
+      slug: `cls-${index}`,
+      orderIndex: index,
+      styles: styles(noisy),
+    }));
+
+    const { warnings } = compile(doc({}), library as never);
+
+    expect(warnings.length).toBeLessThan(1000);
+  });
+});

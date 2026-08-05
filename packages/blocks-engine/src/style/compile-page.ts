@@ -537,7 +537,23 @@ function envelopeRules(
         budget,
         warningAllowance
       );
-      warnings.push(...compiled.warnings);
+      // Charged to the shared allowance rather than appended straight on. The WRITE budget is
+      // per class, so one bad entry cannot silence the others — but that also means each class
+      // can produce a full budget's worth of diagnostics, and a large library multiplies them.
+      // The allowance is what bounds the returned list, so everything returned goes through it.
+      for (const issue of compiled.warnings) {
+        if (issue.code === "style-issues-truncated") {
+          // Metadata about the report rather than a finding in it. Charged to the allowance it
+          // describes, it is the first thing dropped once that allowance is spent — leaving a
+          // truncated list looking complete, which is the one thing it exists to prevent. Kept
+          // once per compile, so a large library cannot repeat it per class either.
+          if (!warnings.some(seen => seen.code === "style-issues-truncated")) {
+            warnings.push(issue);
+          }
+          continue;
+        }
+        pushBoundedWarning(warningAllowance, warnings, issue);
+      }
       // A property that styles something inside the block goes into its own
       // rule. Keeping the exception in the catalog rather than in a branch here
       // is what makes the set of them enumerable; this only has to honour it.
@@ -1047,12 +1063,17 @@ export function compilePageCss(
       ...envelopeRules(
         cls.styles,
         `${pageRoot} .${escapeIdentifier(namedClassName(cls.slug))}`,
-        pointer("/classes", String(libraryIndex.get(cls) ?? 0)),
+        // The envelope is stored under `styles`, so the pointer names it. Without that a warning
+        // reads `/classes/0/base/base/bogus`, which resolves to nothing an editor can open.
+        pointer(
+          pointer("/classes", String(libraryIndex.get(cls) ?? 0)),
+          "styles"
+        ),
         contexts,
         tokenPrefix,
         warnings,
-        // One budget per class, not one for the tier. Shared, a single unreferenced entry with
-        // enough invalid properties spends it and every later class is refused unread — so a node
+        // One WRITE budget per class, not one for the tier. Shared, a single unreferenced entry
+        // with enough invalid properties spends it and every later class is refused unread — so a node
         // referencing a perfectly good class receives its token and no declarations, styled by a
         // library entry it never mentions. The tier's total output stays bounded by the warning
         // allowance, which is shared and is what actually caps the reporting.

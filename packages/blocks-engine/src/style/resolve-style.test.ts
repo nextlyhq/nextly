@@ -621,6 +621,54 @@ describe("a shorthand and its longhands", () => {
   });
 });
 
+describe("a shorthand partly overridden by a longhand", () => {
+  it("stops reporting the shorthand for the side the longhand replaced", () => {
+    // `gap: "16px"` writes both gaps; a local `rowGap: "4px"` replaces one of them. The
+    // shorthand answered only `gap` unexpanded while the overwriting longhand was tracked as
+    // `row-gap`, so the two never met and the class's uniform value kept being reported.
+    const found = resolveStyle("gap", "base", "desktop", {
+      classes: [namedClass("card", 0, at("desktop", { gap: "16px" }))],
+      node: at("desktop", { rowGap: "4px" }),
+    });
+
+    expect(found).toBeUndefined();
+  });
+});
+
+describe("a partial alias with nothing accumulated yet", () => {
+  it("does not answer with a value the property cannot hold", () => {
+    // Only a `backgroundGradient` is stored. Gated on there being an earlier producer, the skip
+    // never ran and the gradient came back as a `background` — a value that shape cannot express
+    // and a control cannot edit.
+    const found = resolveStyle("background", "base", "desktop", {
+      node: at("desktop", { backgroundGradient: "linear-gradient(red, blue)" }),
+    });
+
+    expect(found).toBeUndefined();
+  });
+});
+
+describe("an interactive state on an ancestor", () => {
+  it("does not report a parent's focus colour on a focused child", () => {
+    // A parent's focus styles compile to `.parent:where(:focus-visible)`, which matches when the
+    // PARENT is focus-visible. Focusing a child does not make that selector match, so the child
+    // never shows it.
+    const found = resolveStyle("color", "focus", "desktop", {
+      ancestors: [
+        {
+          nodeId: "parent",
+          node: {
+            base: { desktop: { color: "black" } },
+            focus: { desktop: { color: "red" } },
+          } as unknown as NodeStyles,
+        },
+      ],
+    });
+
+    expect(found?.value).toBe("black");
+  });
+});
+
 describe("a state the compiler does not know", () => {
   it("reports nothing, because no rule was written for it", () => {
     // `pressed` is reported as `invalid-style-state` and emits nothing. Read here, it would hand

@@ -408,6 +408,13 @@ function compilerWroteKeys(values: Record<string, unknown>): Set<string> {
   return keys;
 }
 
+/** Whether a tier reaches this node from somewhere else rather than being a rule on it. */
+function isInherited(source: StyleSource): boolean {
+  let innermost = source;
+  while (innermost.tier === "inheritedBreakpoint") innermost = innermost.source;
+  return innermost.tier === "ancestor" || innermost.tier === "pageSettings";
+}
+
 /** The keys a candidate writes that also belong to the property being asked about. */
 function overlappingWrites(candidate: string, property: string): string[] {
   const wanted = new Set(declarationsWritten(property));
@@ -452,9 +459,17 @@ function withoutOverwritten(
 /** The keys a candidate property would produce, in the same form `compilerWrites` records. */
 function writeKeysFor(property: string, path: readonly string[]): string[] {
   const descendant = propertyDescendantSelector(property) ?? "";
-  return cssPropertiesForField(property, path).map(
-    css => `${descendant}|${css}`
-  );
+  const keys: string[] = [];
+  for (const css of cssPropertiesForField(property, path)) {
+    // Expanded, because a shorthand is tracked by what it SETS. A whole `gap` value answers only
+    // `gap` unexpanded, while the longhand that overwrites part of it is recorded as `row-gap` —
+    // so the two never met and a class's uniform gap kept being reported over a local row gap the
+    // browser was actually using.
+    for (const covered of declarationsCovered(css)) {
+      keys.push(`${descendant}|${covered}`);
+    }
+  }
+  return keys;
 }
 
 /**
@@ -637,12 +652,15 @@ export function resolveStyle(
   const properties = new Set([...propertiesAlsoMatching(property), property]);
   let accumulated: Accumulated | undefined;
   let strongest = 0;
-  // Which catalog key produced what is accumulated, so a key overriding a DIFFERENT key that
-  // happens to write the same CSS property replaces it rather than merging into its shape.
-  let producer: string | undefined;
 
   for (const tier of tiers(input, property)) {
-    for (const candidateState of states) {
+    // An interactive state belongs to the element the rule is written for. A parent's `focus`
+    // styles compile to `.parent:where(:focus-visible)`, which matches when the PARENT is
+    // focus-visible — focusing a child does not make it match, so an ancestor's focus colour is
+    // not something the child shows. Read at `base` instead, which is the part of an ancestor
+    // that does reach here.
+    const tierStates = isInherited(tier.source) ? ["base"] : states;
+    for (const candidateState of tierStates) {
       for (const id of live) {
         const values = valuesAt(tier.styles, candidateState, id);
         if (values === undefined) continue;
@@ -699,11 +717,12 @@ export function resolveStyle(
           // the whole of what can honestly be reported.
           const coversEverything =
             overwrote.length === declarationsWritten(property).length;
-          if (
-            producer !== undefined &&
-            producer !== candidate &&
-            !coversEverything
-          ) {
+          // A candidate from another key that covers only PART of this property can never be the
+          // answer, whether or not anything has accumulated. Gated on what came before, it was skipped
+          // when nothing had — so asking for `background` with only a `backgroundGradient` stored
+          // returned the gradient string as a `background`, a value that shape cannot hold and a
+          // control cannot edit.
+          if (candidate !== property && !coversEverything) {
             // Only the leaves this candidate overwrote. A lower tier's `background` may have set
             // `position`, `size` and `repeat` alongside its `url`, and a higher `backgroundGradient`
             // replaces the image alone — the browser goes on using the rest, so clearing the whole
@@ -714,14 +733,12 @@ export function resolveStyle(
               [],
               new Set(overwrote)
             );
-            // Cleared, not replaced. The value belongs to a DIFFERENT key, in a different stored
-            // shape, so there is no field of the property being asked about that can hold it —
-            // `backgroundGradient` is not a `background.url`. What survives is what the other key
-            // did not overwrite, which is exactly what a control can still edit here.
-            producer = candidate;
+            // Cleared, never replaced. The value belongs to a DIFFERENT key, in a different
+            // stored shape, so there is no field of the property being asked about that can hold
+            // it — `backgroundGradient` is not a `background.url`. What survives is what the other
+            // key did not overwrite, which is exactly what a control can still edit here.
             continue;
           }
-          producer = candidate;
           accumulated = fold(
             accumulated,
             value,
