@@ -236,6 +236,17 @@ describe("the publish lifecycle a plugin may already have declared", () => {
     expect(out).toEqual([]);
   });
 
+  it("drops one whose RESOURCE differs in case too", () => {
+    // The seeder lowercases both halves. With only the action normalised here, `Publish-Posts`
+    // survives collection while the seeder withholds `publish:posts` — so role bundles and
+    // generated types reference a slug that is never seeded.
+    const out = collectCustomPermissions(cfg(["posts"]), [
+      plugin("@acme/workflow", [{ action: "Publish", resource: "Posts" }]),
+    ]);
+
+    expect(out).toEqual([]);
+  });
+
   it("drops unpublish on a collection too", () => {
     const out = collectCustomPermissions(cfg(["posts"]), [
       plugin("@acme/workflow", [{ action: "unpublish", resource: "posts" }]),

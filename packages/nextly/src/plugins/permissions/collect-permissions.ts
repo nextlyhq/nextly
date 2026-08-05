@@ -87,6 +87,12 @@ export function collectCustomPermissions(
 ): CollectedPermission[] {
   const collectionSlugs = new Set((config.collections ?? []).map(c => c.slug));
   const singleSlugs = new Set((config.singles ?? []).map(s => s.slug));
+  const lowerCollectionSlugs = new Set(
+    [...collectionSlugs].map(slug => slug.toLowerCase())
+  );
+  const lowerSingleSlugs = new Set(
+    [...singleSlugs].map(slug => slug.toLowerCase())
+  );
   const seen = new Map<string, string>(); // `${action}:${resource}` -> first owner
   const out: CollectedPermission[] = [];
 
@@ -113,8 +119,13 @@ export function collectCustomPermissions(
         "system-resource-reserved"
       );
     }
+    // Both halves compared in lower case, because the seeder compares both halves that way. With
+    // only the action normalised, `{ action: "Publish", resource: "Posts" }` survives here while
+    // the seeder withholds `publish:posts` — so role bundles and generated types reference a slug
+    // that is never seeded rather than resolving to the permission that exists.
+    const entitySlug = resource.toLowerCase();
     const ownedByEntity =
-      collectionSlugs.has(resource) || singleSlugs.has(resource);
+      lowerCollectionSlugs.has(entitySlug) || lowerSingleSlugs.has(entitySlug);
 
     // Redundant with what the seeder now emits, and valid before it did. Drop
     // it and carry on rather than failing the boot of an app that upgraded.

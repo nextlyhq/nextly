@@ -592,11 +592,11 @@ export class PermissionSeedService extends BaseService {
       // declaring `publish` on a Builder collection took ownership of the row, the Editor preset
       // grants on `!isSystem && !isPlugin`, and the permission quietly stopped being granted.
       //
-      // A CRUD collision is deliberately left as it is. Withholding ownership there would leave
-      // the row unowned and therefore granted to Editor — reaching a plugin route guarded by
-      // `delete-reports` that today is protected precisely because the plugin owns it. Refusing
-      // it outright is the right answer and is a larger change than this one: it has to run on
-      // every boot entry point, before anything is served. Filed separately.
+      // A CRUD collision is deliberately left owned by its declarer. Withholding ownership there
+      // would leave the row unowned and therefore granted to Editor by the presets, reaching a
+      // plugin route guarded by `delete-reports` that is protected today precisely because the
+      // plugin owns it. Refusing such a declaration outright belongs at boot validation, before
+      // anything is served, rather than here where the rows are being written.
       if (
         ADOPTED_LIFECYCLE_ACTIONS.has(perm.action.toLowerCase()) &&
         builtIn.has(
