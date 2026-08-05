@@ -660,7 +660,7 @@ describe("a node listing more classes than a node can have", () => {
     );
     const { warnings } = compile(doc({ classes: many }), [card]);
 
-    expect(warnings.map(w => w.code)).toContain("invalid-classes");
+    expect(warnings.map(w => w.code)).toContain("too-many-classes");
     // Every id here is missing, so an unbounded read reports one per entry. The bound is what
     // makes the last of them unreachable.
     const missing = warnings.filter(w => w.code === "unknown-class").length;
@@ -747,6 +747,41 @@ describe("a class holding a key larger than the whole warning allowance", () => 
 
   it("bounds the answer for an unusable property name", () => {
     bounded({ base: { [BP]: { [enormous("p")]: "blue" } } });
+  });
+});
+
+describe("what a warning about one class reference points at", () => {
+  it("names the entry that was dropped, not the whole list", () => {
+    // An editor follows this pointer to highlight or remove the reference. Addressed to the
+    // array, it names a list the author has to search, and a repair tool cannot act on it.
+    const { warnings } = compile(doc({ classes: ["c1", "ghost"] }), [card]);
+
+    const missing = warnings.find(w => w.code === "unknown-class");
+    expect(missing?.path).toBe("/nodes/0/classes/1");
+  });
+
+  it("calls a non-string entry malformed rather than unknown", () => {
+    // No library can define `null`, so advising the author to add it there sends them to fix
+    // something that cannot be fixed that way. Validation calls this shape malformed; so does it.
+    const { warnings } = compile(doc({ classes: [null] }), [card]);
+
+    const reported = warnings.find(
+      w => w.code === "invalid-classes" || w.code === "unknown-class"
+    );
+    expect(reported?.code).toBe("invalid-classes");
+    expect(reported?.path).toBe("/nodes/0/classes/0");
+  });
+
+  it("reports an over-long list under its own code", () => {
+    // A shape error and an over-cap list need different repairs, so a consumer keying off the
+    // code has to be able to tell them apart.
+    const many = Array.from(
+      { length: MAX_CLASSES_PER_NODE + 1 },
+      (_unused, index) => `c${index}`
+    );
+    const { warnings } = compile(doc({ classes: many }), [card]);
+
+    expect(warnings.map(w => w.code)).toContain("too-many-classes");
   });
 });
 

@@ -325,6 +325,9 @@ export const MAX_BREAKPOINTS_PER_AXIS = 7;
  * The library is site settings, not part of a document, so the document's own byte cap does not
  * bound it — and it is read on every page render. Set far above any hand-authored library so the
  * cap is only ever reached by data that is already wrong.
+ *
+ * Applied to the STORED order, before `orderIndex` is read. Deciding by `orderIndex` instead
+ * means reading every entry to know which to keep, which is exactly the read this bounds.
  */
 export const MAX_NAMED_CLASSES = 2000;
 

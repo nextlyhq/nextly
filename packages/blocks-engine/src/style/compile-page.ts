@@ -86,6 +86,13 @@ export interface StyleCompileContext {
    * anything the author set on one node. Precedence BETWEEN classes is their library order,
    * carried on the class itself rather than taken from the order a node lists them in, so two
    * nodes with the same classes cannot resolve differently.
+   *
+   * "In any order" holds up to `MAX_NAMED_CLASSES`. A library longer than that is read as its
+   * stored PREFIX, before `orderIndex` is consulted, so which entries survive the cap depends on
+   * how they were stored. Ordering first would mean reading the whole array to decide what to
+   * drop, which is the read the cap exists to bound — and a library past it is already data no
+   * site authored. Callers holding more than the cap should store them in the order they want
+   * read.
    */
   namedClasses?: readonly NamedClass[];
   /**
@@ -1182,47 +1189,60 @@ export function compilePageCss(
     //
     // The bound counts entries READ rather than distinct ids kept: a list of a million copies of
     // one id allocates nothing either way, but only a read bound stops it being scanned.
-    const applied: unknown[] = [];
+    // Each entry keeps the position it was stored at, so a warning about one of them resolves to
+    // the reference rather than to the whole array. Deduping by id alone loses that, and an
+    // editor following the pointer can then neither highlight nor remove what it names.
+    const applied: Array<{ id: unknown; index: number }> = [];
     const seenIds = new Set<unknown>();
     const readLimit = Math.min(stored.length, MAX_CLASSES_PER_NODE);
     for (let index = 0; index < readLimit; index += 1) {
       const id = stored[index];
       if (seenIds.has(id)) continue;
       seenIds.add(id);
-      applied.push(id);
+      applied.push({ id, index });
     }
     if (stored.length > MAX_CLASSES_PER_NODE) {
       pushBoundedWarning(warningAllowance, warnings, {
         path: pointer(path, "classes"),
-        code: "invalid-classes",
+        code: "too-many-classes",
         severity: "warning",
         message: `This node lists ${stored.length} classes; only the first ${MAX_CLASSES_PER_NODE} were applied.`,
         suggestion:
           "Remove the references the node no longer needs, or combine them into one class.",
       });
     }
-    for (const id of applied) {
+    for (const { id, index } of applied) {
       if (typeof id === "string" && byId.has(id)) continue;
+      const entryPath = pointer(pointer(path, "classes"), index);
+      // A value that is not a string is not a class id the library could ever define, so telling
+      // an author to add it there sends them to fix something that cannot be fixed that way. The
+      // same shape validation calls malformed, called malformed here too.
+      if (typeof id !== "string") {
+        pushBoundedWarning(warningAllowance, warnings, {
+          path: entryPath,
+          code: "invalid-classes",
+          severity: "warning",
+          message: `This node lists ${describeValue(id)} as a class, which is not a class id, so it was not applied.`,
+          suggestion: "Store node classes as an array of class-id strings.",
+        });
+        continue;
+      }
       // A reference that reached nothing. Silently dropping it leaves an author with a class on
       // the node, no class on the element, and nothing connecting the two — the same account
       // every other unwritten value in this compile gets. Once per id, because a second report
       // would name the same missing class and the same fix.
-      // Deduped on the RAW id. `describeValue` truncates, so two distinct ids sharing a long
-      // prefix collapse to one key and the second reference goes unreported — a separate class,
-      // needing a separate repair, silently accounted for by the first.
-      // The raw id is the dedupe KEY, because `describeValue` truncates and would collapse two
-      // distinct references into one report. The message still uses the described form: an
-      // unvalidated document can carry an enormous id, and the allowance charges paths rather
-      // than message text, so interpolating the raw one returns a diagnostic its size.
-      const key = typeof id === "string" ? id : describeValue(id);
-      if (reportedMissingClasses.has(key)) continue;
-      reportedMissingClasses.add(key);
-      const described = describeValue(id);
+      // Deduped on the RAW id, because `describeValue` truncates and would collapse two distinct
+      // references into one report — a separate class, needing a separate repair, silently
+      // accounted for by the first. The message still uses the described form: an unvalidated
+      // document can carry an enormous id, and the allowance charges paths rather than message
+      // text, so interpolating the raw one returns a diagnostic its size.
+      if (reportedMissingClasses.has(id)) continue;
+      reportedMissingClasses.add(id);
       pushBoundedWarning(warningAllowance, warnings, {
-        path: pointer(path, "classes"),
+        path: entryPath,
         code: "unknown-class",
         severity: "warning",
-        message: `This node lists the class ${described}, which the site library does not define, so it was not applied.`,
+        message: `This node lists the class ${describeValue(id)}, which the site library does not define, so it was not applied.`,
         suggestion: "Remove the reference, or add the class to the library.",
       });
     }
@@ -1236,9 +1256,10 @@ export function compilePageCss(
       for (const cls of orderedNamedClasses(
         applied
           // A stored reference that is not a string names nothing the library can hold, and was
-          // already reported above as unknown.
-          .filter((id): id is string => typeof id === "string")
-          .map(id => byId.get(id))
+          // already reported above as malformed.
+          .map(entry =>
+            typeof entry.id === "string" ? byId.get(entry.id) : undefined
+          )
           .filter((cls): cls is NamedClass => cls !== undefined)
       )) {
         names.push(namedClassName(cls.slug));
