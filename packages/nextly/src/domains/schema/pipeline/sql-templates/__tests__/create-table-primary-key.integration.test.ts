@@ -245,15 +245,36 @@ describe("generated CREATE TABLE declares its primary key", () => {
       // because InnoDB promotes such an index to the clustered key. Reading it
       // would mark `slug` as the primary key, hiding a table that has none and
       // rebuilding it elsewhere with the wrong one.
+      //
+      // Built through the generator like the case above, so the fixture cannot
+      // drift from the DDL this suite protects — and the promotion still
+      // happens for the shape it emits (`CREATE TABLE` then a separate
+      // `CREATE UNIQUE INDEX`), which is what makes the case reachable.
       const conn = await mysql.createConnection(MYSQL_URL);
       pools.push(() => conn.end());
       const db = drizzleMysql({ client: conn });
       const name = "dc_mysql_promoted";
+      const spec: TableSpec = {
+        name,
+        columns: [
+          { name: "slug", type: "varchar(40)", nullable: false },
+          { name: "other", type: "varchar(10)", nullable: true },
+        ],
+        indexes: [{ name: `uq_${name}_slug`, columns: ["slug"], unique: true }],
+      };
 
       await conn.query(`DROP TABLE IF EXISTS \`${name}\``);
-      await conn.query(
-        `CREATE TABLE \`${name}\` (slug varchar(40) NOT NULL UNIQUE, other varchar(10)) ENGINE=InnoDB`
-      );
+      for (const stmt of statements(spec, "mysql")) await conn.query(stmt);
+
+      // The trap is still armed. If a future MySQL stopped promoting, the
+      // assertion below would pass for the wrong reason and stop guarding
+      // anything, so the promotion is asserted rather than assumed.
+      const [promoted] = (await conn.query(
+        `SELECT COLUMN_KEY FROM information_schema.columns
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = 'slug'`,
+        [name]
+      )) as [{ COLUMN_KEY: string }[], unknown];
+      expect(promoted[0]?.COLUMN_KEY).toBe("PRI");
 
       const live = await introspectLiveSnapshot(db, "mysql", [name]);
       expect(
