@@ -38,6 +38,28 @@ draft translation under a published main row is never returned. On a status-less
 collection (no built-in Draft/Published lifecycle) the scope is a no-op and
 every row is live, so you can mix lifecycle and status-less collections freely.
 
+**Pending edits.** Publish state is only half the picture. An entry that has
+never been published is covered by `status`, but pending edits to an
+**already-published** entry are stored as a separate working draft that no
+`status` scope can see — the live row keeps serving until you publish. Pass
+`draft: true` to read those instead:
+
+```ts
+// The page as the editor last saved it, not as visitors see it.
+await resolveContent("posts", slug, { draft: true, overrideAccess: true });
+```
+
+Because a preview needs both layers, `draft: true` widens `status` to `"all"`
+unless you set `status` yourself. Widening only one of the two is the mistake
+this prevents: a preview that just set `status: "all"` would show a published
+page's **live** content while the edits being previewed stayed invisible.
+
+Two rules come with it. The working draft is only surfaced to a caller who could
+edit the document, so a draft read must be trusted (`overrideAccess: true`) or
+carry a `user` — otherwise you silently get the published row. And a draft read
+is **never cached**, because cache tags are busted by writes to the live row
+while a draft changes on every save.
+
 **Access.** By default `resolveContent` **enforces** the collection's read
 policy (`overrideAccess: false`). A rule-less (public) collection still renders;
 a collection with a stored member-only or role-based read rule is hidden from an
@@ -87,8 +109,8 @@ import { createContentRoute, buildMetadata } from "nextly/runtime";
 
 const route = createContentRoute({
   collections: ["pages"],
-  render: (entry) => <Page entry={entry} />,
-  buildMetadata: (entry) => buildMetadata(entry),
+  render: entry => <Page entry={entry} />,
+  buildMetadata: entry => buildMetadata(entry),
 });
 
 export const generateStaticParams = route.generateStaticParams;
@@ -108,6 +130,36 @@ This route always resolves **anonymously** — its config is captured once at
 module scope, so it cannot carry a per-request user. For a route that renders
 per-visitor member content, call `resolveContent` with the request's `user`
 inside your own page rather than using `createContentRoute`.
+
+### Previewing drafts
+
+Whether a visitor is previewing is a per-request fact, and route config is not —
+so `draft` takes a function the route asks on every request. Wire it to Next's
+draft mode:
+
+```ts
+import { draftMode } from "next/headers";
+
+const route = createContentRoute({
+  collections: ["pages"],
+  draft: async () => (await draftMode()).isEnabled,
+  render: page => <Page {...page} />,
+});
+```
+
+**Returning `true` is an authorization decision, not a display preference.** The
+route resolves anonymously and the working draft is only shown to a caller who
+could edit the document, so a request this returns `true` for is read trusted.
+Put the check inside that function — a verified preview cookie, a session — and
+never in a query parameter a visitor controls.
+
+`generateStaticParams` ignores `draft` entirely: it runs at build time, where
+there is no visitor to gate, and a draft baked into a static path would be
+published to everyone.
+
+A literal `draft: true` is accepted for a route mounted behind your own auth. It
+means **every** visitor sees unpublished content, which is almost never what a
+public site wants.
 
 > **Next 16 Cache Components:** an exported `generateStaticParams` must return at
 > least one entry under Cache Components. For a no-prerender or empty-site setup
@@ -164,7 +216,7 @@ export default nextlySitemap({
   tags: nextlyTags("posts"),
   entries: async () =>
     (await buildSitemapUrls(services, { collections: ["posts"], baseUrl })).map(
-      (u) => ({ url: u.loc, lastModified: u.lastModified })
+      u => ({ url: u.loc, lastModified: u.lastModified })
     ),
 });
 ```

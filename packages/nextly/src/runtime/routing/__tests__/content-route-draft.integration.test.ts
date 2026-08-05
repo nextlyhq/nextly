@@ -1,0 +1,162 @@
+/**
+ * The draft layers a preview has to honour, against a real boot.
+ *
+ * The shipped model is two-layered and they fail differently:
+ *
+ * - `status` covers an entry that has NEVER been published.
+ * - The working draft covers pending edits on an ALREADY-published entry, which
+ *   live in a sidecar row the live table knows nothing about.
+ *
+ * A preview that only widened `status` would satisfy the first and silently
+ * fail the second — showing a published page's live content while the edits
+ * being previewed stay invisible. These prove both layers move together, and
+ * that neither reaches a visitor who is not previewing.
+ */
+import { afterEach, describe, expect, it } from "vitest";
+
+import { defineCollection, text } from "../../../config";
+import {
+  createTestNextly,
+  type TestNextly,
+} from "../../../plugins/test-nextly";
+import { createContentRoute } from "../content-route";
+import type { ContentEntry } from "../resolve-content";
+
+const pages = () =>
+  defineCollection({
+    slug: "pages",
+    status: true,
+    versions: { drafts: true },
+    fields: [text({ name: "slug" }), text({ name: "title" })],
+  });
+
+let current: TestNextly | undefined;
+afterEach(async () => {
+  await current?.destroy();
+  current = undefined;
+});
+
+function route(
+  nextly: TestNextly["nextly"],
+  draft?: boolean | (() => boolean | Promise<boolean>)
+) {
+  return createContentRoute({
+    collections: ["pages"],
+    nextly,
+    render: (entry: ContentEntry) => entry,
+    ...(draft === undefined ? {} : { draft }),
+  });
+}
+
+describe("createContentRoute + draft layers (integration)", () => {
+  it("shows pending edits to a preview and live content to everyone else", async () => {
+    current = await createTestNextly({ collections: [pages()] });
+    const created = await current.nextly.create({
+      collection: "pages",
+      data: { slug: "about", title: "Live", status: "published" },
+    });
+
+    // An update that names no status on a published document is
+    // non-destructive: the live row keeps its title and the edit becomes the
+    // working draft.
+    await current.nextly.update({
+      collection: "pages",
+      id: String(created.item.id),
+      data: { title: "Pending edit" },
+    });
+
+    const publicPage = (await route(current.nextly).ContentPage({
+      params: { slug: ["about"] },
+    })) as ContentEntry;
+    expect(publicPage.title).toBe("Live");
+    expect(publicPage._isWorkingDraft).toBeUndefined();
+
+    const previewPage = (await route(current.nextly, true).ContentPage({
+      params: { slug: ["about"] },
+    })) as ContentEntry;
+    expect(previewPage.title).toBe("Pending edit");
+    expect(previewPage._isWorkingDraft).toBe(true);
+  });
+
+  it("shows a never-published entry to a preview and 404s it publicly", async () => {
+    // The other layer. Widening `status` is what covers this one, and a
+    // preview needs both — hence `draft` widening the scope with it.
+    current = await createTestNextly({ collections: [pages()] });
+    await current.nextly.create({
+      collection: "pages",
+      data: { slug: "unreleased", title: "Unreleased", status: "draft" },
+    });
+
+    await expect(
+      route(current.nextly).ContentPage({ params: { slug: ["unreleased"] } })
+    ).rejects.toThrow();
+
+    const previewPage = (await route(current.nextly, true).ContentPage({
+      params: { slug: ["unreleased"] },
+    })) as ContentEntry;
+    expect(previewPage.title).toBe("Unreleased");
+  });
+
+  it("keeps drafts out of the paths a build pre-renders", async () => {
+    // `generateStaticParams` runs where there is no visitor to gate. A draft
+    // baked into a static path is published to everyone, permanently.
+    current = await createTestNextly({ collections: [pages()] });
+    await current.nextly.create({
+      collection: "pages",
+      data: { slug: "about", title: "About", status: "published" },
+    });
+    await current.nextly.create({
+      collection: "pages",
+      data: { slug: "unreleased", title: "Unreleased", status: "draft" },
+    });
+
+    const params = await route(current.nextly, true).generateStaticParams();
+
+    expect(params).toContainEqual({ slug: ["about"] });
+    expect(params).not.toContainEqual({ slug: ["unreleased"] });
+  });
+
+  it("follows the decision from request to request", async () => {
+    // The whole reason the decision is a function: one route object serves both
+    // the visitor and the editor, and the answer changes between them.
+    current = await createTestNextly({ collections: [pages()] });
+    const created = await current.nextly.create({
+      collection: "pages",
+      data: { slug: "about", title: "Live", status: "published" },
+    });
+    await current.nextly.update({
+      collection: "pages",
+      id: String(created.item.id),
+      data: { title: "Pending edit" },
+    });
+
+    let previewing = false;
+    const shared = route(current.nextly, () => previewing);
+
+    expect(
+      (
+        (await shared.ContentPage({
+          params: { slug: ["about"] },
+        })) as ContentEntry
+      ).title
+    ).toBe("Live");
+
+    previewing = true;
+    expect(
+      (
+        (await shared.ContentPage({
+          params: { slug: ["about"] },
+        })) as ContentEntry
+      ).title
+    ).toBe("Pending edit");
+
+    previewing = false;
+    expect(
+      (
+        (await shared.ContentPage({
+          params: { slug: ["about"] },
+        })) as ContentEntry
+      ).title
+    ).toBe("Live");
+  });
+});

@@ -75,6 +75,36 @@ export interface ContentRouteConfig<TNode> {
    * collections.
    */
   status?: "published" | "draft" | "all";
+  /**
+   * Whether THIS request may see pending unpublished edits.
+   *
+   * Almost always a function, because route config is captured once at module
+   * scope and whether a visitor is previewing is a per-request fact. The
+   * function is evaluated on every resolved read, so the natural wiring is
+   * Next's draft mode:
+   *
+   * ```ts
+   * draft: async () => (await draftMode()).isEnabled
+   * ```
+   *
+   * **Returning `true` is an authorization decision, not a display preference.**
+   * This route always resolves anonymously, and the working-draft overlay is
+   * gated on an update-capability probe that an anonymous read can never pass —
+   * so a request this returns `true` for is read TRUSTED, exactly as Payload
+   * pairs `draft: isDraftMode` with `overrideAccess: isDraftMode`. Put the
+   * authorization in this function (a verified preview cookie, a session
+   * check), never in a query parameter the visitor controls.
+   *
+   * A literal `true` is accepted for a route mounted behind the app's own auth,
+   * and means every visitor sees unpublished content. It is almost never what a
+   * public site wants.
+   *
+   * `generateStaticParams` ignores this entirely — draft paths are never
+   * pre-rendered.
+   *
+   * @default false
+   */
+  draft?: boolean | (() => boolean | Promise<boolean>);
   /** Relation depth for the resolved read (default `1`). */
   depth?: number;
   /** A booted Nextly instance (defaults to `getNextly()`). */
@@ -192,20 +222,37 @@ export function createContentRoute<TNode>(
 
   const getInstance = (): NextlyContentReader => config.nextly ?? getNextly();
 
+  /** Whether this request may see unpublished edits. Asked once per resolve. */
+  async function draftForThisRequest(): Promise<boolean> {
+    const decision = config.draft;
+    if (decision === undefined) return false;
+    return typeof decision === "function" ? decision() : decision;
+  }
+
   /** Resolve the joined slug across the configured collections (first match wins). */
   async function resolve(
     slug: string
   ): Promise<{ entry: ContentEntry; context: ResolvedContext } | null> {
+    const draft = await draftForThisRequest();
     for (const collection of collections) {
       const entry = await resolveContent(collection, slug, {
         nextly: config.nextly,
         slugField,
-        status,
+        // `status` is left to widen itself when a draft is asked for, so a
+        // route cannot end up previewing with only one of the two draft layers
+        // switched on.
+        ...(config.status ? { status: config.status } : {}),
+        draft,
         depth,
         tags: config.tags,
         revalidate: config.revalidate,
         cacheScope: config.cacheScope,
-        overrideAccess,
+        // A draft request reads trusted. The overlay is gated on an
+        // update-capability probe and this route resolves anonymously, so an
+        // enforced draft read could only ever return the published row — the
+        // silent no-op that makes preview look broken. The authorization that
+        // justifies this lives in the `draft` decision itself.
+        overrideAccess: overrideAccess || draft,
       });
       if (entry) return { entry, context: { collection, slug } };
     }
