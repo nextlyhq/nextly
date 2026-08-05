@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { getStyleProperty } from "./catalog";
+import {
+  CATALOG_IN_EMISSION_ORDER,
+  getStyleProperty,
+  STYLE_CATALOG,
+} from "./catalog";
 import { isStyleLeaf } from "./catalog-types";
 import type { UrlLeaf } from "./catalog-types";
 import { compileStyleValues, urlText } from "./declarations";
@@ -99,5 +103,44 @@ describe("compiling one map directly is bounded too", () => {
     const out = compileStyleValues(values, "/nodes/0/styles/base/base");
     expect(out.declarations).toEqual([]);
     expect(out.warnings.length).toBeLessThan(1_000);
+  });
+});
+
+describe("the emitter walks the catalog, not the stored map", () => {
+  it("carries every catalog property, so nothing stops being emitted", () => {
+    // The substitution is only sound if the two walks cover the same set. A property missing from
+    // this list is one the compiler silently stops writing, on every page, for every site.
+    expect(
+      CATALOG_IN_EMISSION_ORDER.map(entry => entry.property).sort()
+    ).toEqual(STYLE_CATALOG.map(entry => entry.property).sort());
+  });
+
+  it("orders declarations by property name, whatever order they were stored in", () => {
+    // What the stored-key sort used to provide. Emitted output is bytes a page caches and a diff
+    // is read against, so the order has to come from the catalog rather than from insertion.
+    const out = compileStyleValues(
+      { width: "10px", color: "red", background: { color: "blue" } },
+      "/nodes/0/styles/base/base"
+    );
+
+    const properties = out.declarations.map(d => d.property);
+    expect(properties).toEqual([...properties].sort());
+  });
+
+  it("emits the same declarations with unknown keys mixed in", () => {
+    // Held below the style budget on purpose: at 200 unknown properties the map is refused whole
+    // and the emit walk never runs, so a larger fixture would assert nothing about this walk.
+    const real = { color: "red", width: "10px" };
+    const junk = Object.fromEntries(
+      Array.from({ length: 150 }, (_unused, index) => [
+        `notAProperty${index}`,
+        "1px",
+      ])
+    );
+
+    const clean = compileStyleValues(real, "/p");
+    const noisy = compileStyleValues({ ...junk, ...real }, "/p");
+
+    expect(noisy.declarations).toEqual(clean.declarations);
   });
 });

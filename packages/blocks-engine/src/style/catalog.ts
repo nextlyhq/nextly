@@ -909,6 +909,24 @@ export function getStyleProperty(property: string): StyleProperty | undefined {
   return CATALOG_BY_PROPERTY.get(property);
 }
 
+/**
+ * Every catalog row, ordered by property name, computed once.
+ *
+ * What the emitter walks, instead of the keys of the map it is compiling. The two produce the
+ * same declarations in the same order, because a stored key this catalog does not define writes
+ * nothing either way — but one is bounded by the catalog and the other by whatever was persisted,
+ * and a named class is site settings, outside the document byte cap and read on every page
+ * render.
+ *
+ * Sorted rather than left in catalog order so that adding a property to the table cannot silently
+ * reorder the declarations an existing page emits.
+ */
+export const CATALOG_IN_EMISSION_ORDER: readonly StyleProperty[] = [
+  ...STYLE_CATALOG,
+].sort((a, b) =>
+  a.property < b.property ? -1 : a.property > b.property ? 1 : 0
+);
+
 /** Every catalog row in one group, in catalog order. */
 export function stylePropertiesInGroup(
   group: StyleGroup

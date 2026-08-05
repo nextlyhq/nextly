@@ -20,7 +20,7 @@ import { describeValue, pointer } from "../issue-text";
 import { isPlainRecord } from "../plain-record";
 import type { ValidationIssue } from "../validation";
 
-import { getStyleProperty } from "./catalog";
+import { CATALOG_IN_EMISSION_ORDER } from "./catalog";
 import { isStyleLeaf } from "./catalog-types";
 import type { StyleLeaf, StyleShape, UrlLeaf } from "./catalog-types";
 import {
@@ -451,16 +451,17 @@ export function compileStyleValues(
       warning(basePath, safe.warning)
     );
   }
-  const properties = Object.keys(values)
-    .filter(key => Object.hasOwn(values, key))
-    .sort();
-  for (const property of properties) {
-    const entry = getStyleProperty(property);
-    if (entry === undefined) continue;
+  // Walked over the catalog rather than over the stored map's keys. Both emit the same
+  // declarations in the same order — a key the catalog does not define writes nothing, and this
+  // loop skipped those anyway — but materializing and sorting the stored keys first made the work
+  // proportional to whatever was persisted. A named class is site settings: outside the document
+  // byte cap, read on every page render, so one corrupt entry paid that cost every time.
+  for (const entry of CATALOG_IN_EMISSION_ORDER) {
+    if (!Object.hasOwn(values, entry.property)) continue;
     shapeDeclarations(
       entry.shape,
-      values[property],
-      pointer(basePath, property),
+      values[entry.property],
+      pointer(basePath, entry.property),
       walk
     );
   }
