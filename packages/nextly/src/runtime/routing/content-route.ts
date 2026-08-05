@@ -264,19 +264,6 @@ export function createContentRoute<TNode>(
     return typeof decision === "function" ? decision(context) : decision;
   }
 
-  /** Whether a grant covers the document the path actually resolved to. */
-  function grantCovers(grant: DraftGrant, entry: ContentEntry): boolean {
-    if (typeof grant === "boolean") return grant;
-    // Only a primitive id can be compared. An `afterRead` hook's return value
-    // REPLACES the document, so a collection that reshapes its public read can
-    // hand back a row whose id is absent or an object — and stringifying those
-    // yields `"undefined"` and `"[object Object]"`, values a grant could carry
-    // literally and thereby match a document it never named.
-    const id = entry.id;
-    if (typeof id !== "string" && typeof id !== "number") return false;
-    return String(id) === grant.entryId;
-  }
-
   /** Resolve the joined slug across the configured collections (first match wins). */
   async function resolve(
     slug: string
@@ -286,7 +273,23 @@ export function createContentRoute<TNode>(
       // document, and the same slug can name a different document in each
       // configured collection.
       const grant = await draftForThisPath({ collection, slug });
-      const draft = grant !== false;
+      // A grant that NAMES an entry is resolved by that id rather than by slug,
+      // so a duplicate slug cannot decide which document a preview opens. A
+      // bare `true` names nothing and keeps the ordinary lookup.
+      //
+      // An object grant carrying no usable id authorizes NOTHING. The decision
+      // is app-supplied code and the type is not a runtime guarantee, so a
+      // `{}` reaching here would otherwise widen the lifecycle scope while
+      // naming no entry to bound it, which is the one combination that must not
+      // exist.
+      const grantedEntryId =
+        typeof grant === "object" &&
+        grant !== null &&
+        typeof grant.entryId === "string" &&
+        grant.entryId !== ""
+          ? grant.entryId
+          : undefined;
+      const draft = grant === true || grantedEntryId !== undefined;
       const entry = await resolveContent(collection, slug, {
         nextly: config.nextly,
         slugField,
@@ -295,6 +298,7 @@ export function createContentRoute<TNode>(
         // switched on.
         ...(config.status ? { status: config.status } : {}),
         draft,
+        ...(grantedEntryId === undefined ? {} : { entryId: grantedEntryId }),
         depth,
         tags: config.tags,
         revalidate: config.revalidate,
@@ -307,26 +311,14 @@ export function createContentRoute<TNode>(
         overrideAccess: overrideAccess || draft,
       });
       if (!entry) continue;
-      if (draft && !grantCovers(grant, entry)) {
-        // The grant named a different document. A slug need not be unique, so
-        // this is where a token for one entry would otherwise have opened
-        // another that happens to share its slug — read again with no draft
-        // rather than serving the one that was never granted.
-        const published = await resolveContent(collection, slug, {
-          nextly: config.nextly,
-          slugField,
-          ...(config.status ? { status: config.status } : {}),
-          depth,
-          tags: config.tags,
-          revalidate: config.revalidate,
-          cacheScope: config.cacheScope,
-          overrideAccess,
-        });
-        if (published) {
-          return { entry: published, context: { collection, slug } };
-        }
-        continue;
-      }
+      // No identity check here, deliberately. Both halves a grant has to
+      // satisfy — that it names THIS entry, and that the entry lives at THIS
+      // path — are settled inside `resolveContent`, which reads by the granted
+      // id and confirms the slug, and resolves published-only when either fails.
+      // Re-comparing ids at this layer is what the by-id read replaced: it
+      // compares a POST-`afterRead` document, so a collection that reshapes its
+      // public read would fail a valid grant and send the editor to live
+      // content.
       return { entry, context: { collection, slug } };
     }
     return null;

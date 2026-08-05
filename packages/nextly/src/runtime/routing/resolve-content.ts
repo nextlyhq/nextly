@@ -80,6 +80,26 @@ export interface ResolveContentOptions {
    * @default false
    */
   draft?: boolean;
+  /**
+   * The entry a preview grant NAMES, resolved by id instead of by slug.
+   *
+   * Only meaningful alongside `draft` on a trusted read. A slug is not unique:
+   * the ordinary lookup settles duplicates by sorting on `id`, so a grant for
+   * one entry can land on another that happens to share its slug, and the
+   * caller then rejects the mismatch and falls back to published. The editor
+   * sees LIVE content at a link they were given for a draft.
+   *
+   * Reading by the id the grant names removes that comparison rather than
+   * hardening it. The resolved entry's own slug is then confirmed against the
+   * requested one, which is what stops a preview session turning every path on
+   * the site into the previewed entry: without that check a cookie for one page
+   * would render that page at every URL for the life of the session.
+   *
+   * A grant that names a deleted entry, or one whose slug no longer matches the
+   * path, falls through to the ordinary slug resolution rather than failing. A
+   * preview link outlives what it points at.
+   */
+  entryId?: string;
   /** Relation population depth for rendering (default `1`). */
   depth?: number;
   /** Read a specific locale (localized collections). */
@@ -170,6 +190,7 @@ export async function resolveContent(
   const nextly = options.nextly ?? getNextly();
   const slugField = options.slugField ?? "slug";
   const draft = options.draft ?? false;
+  const grantedEntryId = options.entryId;
   const depth = options.depth ?? 1;
   const locale = options.locale;
   const overrideAccess = options.overrideAccess ?? false;
@@ -191,8 +212,68 @@ export async function resolveContent(
   const status =
     options.status ?? (draft && overrideAccess ? "all" : "published");
 
+  /** Whether a resolved entry is the one this path asked for. */
+  const answersThisPath = (entry: ContentEntry): boolean =>
+    entry[slugField] === slug;
+
+  /**
+   * Resolve this path with no draft authorization at all.
+   *
+   * Used when a named grant did not answer this path. Reading with the widened
+   * scope would surface a never-published row the grant never named, which is
+   * exactly the disclosure the grant is supposed to bound.
+   */
+  const publishedOnly = async (): Promise<ContentEntry | null> => {
+    const result = await nextly.find({
+      collection,
+      where: { [slugField]: { equals: slug } },
+      status: options.status ?? "published",
+      limit: 1,
+      sort: "id",
+      depth,
+      overrideAccess,
+      user,
+      ...(options.richTextFormat
+        ? { richTextFormat: options.richTextFormat }
+        : {}),
+      ...(locale ? { locale } : {}),
+    });
+    return result.items[0] ?? null;
+  };
+
   const read = async (): Promise<ContentEntry | null> => {
     try {
+      // A named grant resolves by id FIRST, so a duplicate slug cannot decide
+      // which document a preview opens. Trusted-only for the same reason the
+      // status widening is: an enforced read could not return an unpublished
+      // row anyway, and reading by an id the request supplied is exactly the
+      // shape that must not be reachable without the caller having authorized
+      // it.
+      if (draft && grantedEntryId !== undefined && overrideAccess) {
+        const granted = await readOverlay(() =>
+          nextly.findByID({
+            collection,
+            id: grantedEntryId,
+            draft: true,
+            depth,
+            overrideAccess,
+            user,
+            ...(options.richTextFormat
+              ? { richTextFormat: options.richTextFormat }
+              : {}),
+            ...(locale ? { locale } : {}),
+          })
+        );
+        if (granted !== null && answersThisPath(granted)) return granted;
+        // Deleted, or living at a different path than the one requested, so
+        // this request holds no draft authorization for THIS path. It resolves
+        // published-only from here, which is what makes the fall-through safe
+        // to take without a second identity check downstream: a named grant
+        // authorizes exactly one entry, and the widened lifecycle scope exists
+        // solely to reach it.
+        return publishedOnly();
+      }
+
       const result = await nextly.find({
         collection,
         where: { [slugField]: { equals: slug } },
