@@ -337,6 +337,7 @@ const DIRECT_DISPATCH_SERVICES = new Set<string>([
   "apiKeys",
   "webhooks",
   "generalSettings",
+  "previewLinks",
   "imageSizes",
   "dashboard",
   "schema",

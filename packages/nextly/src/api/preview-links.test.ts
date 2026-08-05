@@ -24,6 +24,7 @@ vi.mock("../lib/env", () => ({
   env: { NEXTLY_SECRET: "a-test-secret-value" },
 }));
 
+import { verifyPreviewToken } from "../auth/preview/preview-token";
 import { container } from "../di";
 
 import {
@@ -32,6 +33,9 @@ import {
 } from "./route-auth";
 
 import { mintPreviewLink, revokePreviewLinks } from "./preview-links";
+
+/** The value the mocked `env` supplies, named once so both sides agree. */
+const SECRET = "a-test-secret-value";
 
 const getGeneration = vi.fn();
 const revokeAll = vi.fn();
@@ -89,17 +93,44 @@ describe("mintPreviewLink", () => {
     expect(getGeneration).not.toHaveBeenCalled();
   });
 
-  it("mints under the site's current generation", async () => {
-    // Minting under a stale generation would issue a link that is already
-    // revoked, which looks to the editor like preview is broken.
+  it("signs the site's current generation into the token", async () => {
+    // Asserting that the getter RAN would pass for a handler that read 4 and
+    // signed 0, which is the regression that matters: a link minted under a
+    // stale generation is already revoked, and looks to the editor like preview
+    // is simply broken. So the token is verified rather than inspected.
     getGeneration.mockResolvedValue(4);
 
     const body = await json(
       await mintPreviewLink(post({ collection: "pages", entryId: "7" }))
     );
+    const item = body.item as { token: string };
 
-    expect(getGeneration).toHaveBeenCalled();
-    expect(typeof body.token).toBe("string");
+    const atCurrent = await verifyPreviewToken(item.token, SECRET, {
+      generation: 4,
+    });
+    expect(atCurrent.valid).toBe(true);
+
+    // And the same token is refused once the generation moves, which is what
+    // makes revocation reach links already in circulation.
+    const afterRevoke = await verifyPreviewToken(item.token, SECRET, {
+      generation: 5,
+    });
+    expect(afterRevoke.valid).toBe(false);
+  });
+
+  it("scopes the token to the entry that was asked for", async () => {
+    const body = await json(
+      await mintPreviewLink(post({ collection: "pages", entryId: "7" }))
+    );
+    const item = body.item as { token: string };
+
+    const verified = await verifyPreviewToken(item.token, SECRET, {
+      generation: 0,
+    });
+    expect(verified.valid && verified.scope).toEqual({
+      collection: "pages",
+      entryId: "7",
+    });
   });
 
   it("returns a token rather than a url", async () => {
@@ -108,9 +139,11 @@ describe("mintPreviewLink", () => {
     const body = await json(
       await mintPreviewLink(post({ collection: "pages", entryId: "7" }))
     );
-    // `respondData` returns the object bare, so these ARE the response keys.
-    expect(Object.keys(body).sort()).toEqual(["expiresAt", "token"]);
-    expect(String(body.token)).not.toContain("http");
+    // The canonical mutation envelope, so a direct-API caller reads `.item`.
+    expect(Object.keys(body).sort()).toEqual(["item", "message"]);
+    const item = body.item as Record<string, unknown>;
+    expect(Object.keys(item).sort()).toEqual(["expiresAt", "token"]);
+    expect(String(item.token)).not.toContain("http");
   });
 
   it("refuses a ttl beyond the maximum rather than shortening it", async () => {
@@ -178,6 +211,6 @@ describe("revokePreviewLinks", () => {
       )
     );
 
-    expect(body.generation).toBe(9);
+    expect((body.item as { generation?: unknown }).generation).toBe(9);
   });
 });

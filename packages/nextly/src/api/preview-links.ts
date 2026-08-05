@@ -26,7 +26,7 @@ import { getCachedNextly } from "../init";
 import { env } from "../lib/env";
 import type { GeneralSettingsService } from "../services/general-settings/general-settings-service";
 
-import { respondData } from "./response-shapes";
+import { respondMutation } from "./response-shapes";
 import {
   requireRouteCollectionAccess,
   requireRoutePermission,
@@ -107,7 +107,10 @@ export const mintPreviewLink = withErrorHandler(async (req: Request) => {
   // The token, not a full URL. Where a preview route is mounted is the app's
   // decision, and guessing it here would produce a link that 404s on any app
   // that mounted it elsewhere.
-  return respondData({ token, expiresAt: expiresAt.toISOString() });
+  return respondMutation("Preview link created", {
+    token,
+    expiresAt: expiresAt.toISOString(),
+  });
 });
 
 /**
@@ -119,5 +122,5 @@ export const mintPreviewLink = withErrorHandler(async (req: Request) => {
 export const revokePreviewLinks = withErrorHandler(async (req: Request) => {
   await requireRoutePermission(req, "manage", "settings");
   const generation = await (await settingsService()).revokeAllPreviewTokens();
-  return respondData({ generation });
+  return respondMutation("Preview links revoked", { generation });
 });

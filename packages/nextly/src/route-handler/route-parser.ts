@@ -1725,10 +1725,16 @@ function parseUserFieldRoutes(
  */
 function parsePreviewLinkRoutes(
   id: string | undefined,
+  subresource: string | undefined,
   httpMethod: string,
   routeParams: Record<string, string>
 ): ParsedRoute | null {
   if (httpMethod !== "POST") return null;
+  // Anything deeper than the two known paths is refused rather than falling
+  // through to the nearest match. Ignoring the extra segments would make
+  // `/preview-links/revoke/anything` revoke every link on the site, which is
+  // the most destructive thing either of these endpoints does.
+  if (subresource !== undefined) return null;
 
   if (id === "revoke") {
     return {
@@ -2340,7 +2346,12 @@ export function parseRestRoute(
 
   // Handle preview link minting and revocation
   if (resource === "preview-links") {
-    const result = parsePreviewLinkRoutes(id, httpMethod, routeParams);
+    const result = parsePreviewLinkRoutes(
+      id,
+      subresource,
+      httpMethod,
+      routeParams
+    );
     if (result) return result;
   }
 
