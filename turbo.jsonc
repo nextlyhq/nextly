@@ -86,6 +86,7 @@
     "NEXTLY_SKIP_AUTO_SYNC",
     "NEXTLY_SKIP_SCHEMA_FILES",
     "NEXTLY_STRICT_PLUGIN_TARGETS", // P8: fail-fast on unresolvable plugin extend/relation targets
+    "NEXTLY_ALLOW_PLUGIN_PERMISSION_OVERRIDE", // let a plugin keep a permission an entity already owns
     "PERMISSION_CACHE_ENABLED",
     "PERMISSION_CACHE_MEMORY_SIZE",
     "PERMISSION_CACHE_TTL_SECONDS",
