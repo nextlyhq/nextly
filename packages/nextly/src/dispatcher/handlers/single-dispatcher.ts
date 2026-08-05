@@ -86,6 +86,7 @@ import {
   isSuperAdmin,
   listEffectivePermissions,
 } from "../../services/lib/permissions";
+import { assertGlobalResourceSlugAvailable } from "../../services/lib/resource-slug-guard";
 import {
   readAuthenticatedActor,
   readAuthenticatedScope,
@@ -473,6 +474,19 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             ownedBy: owner.slug,
           },
         });
+      }
+
+      // The same refusal for a slug a COLLECTION already owns, or one reserved by a system
+      // resource. `registerSingle` makes this check too, but it makes it after the table has been
+      // created, so a conflicting slug rejected the request and left `single_<slug>` behind with
+      // nothing describing it. Checked here, the rejection costs nothing and creates nothing.
+      // The registry keeps its own call because other callers reach it without passing through
+      // this handler.
+      const conflictAdapter = container.has("adapter")
+        ? container.get<DrizzleAdapter>("adapter")
+        : undefined;
+      if (conflictAdapter) {
+        await assertGlobalResourceSlugAvailable(conflictAdapter, b.slug);
       }
 
       // The table change and the registry row are one operation, so they are issued as one:
