@@ -19,12 +19,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../../helpers/di", () => ({
   getSingleRegistryFromDI: vi.fn(),
   getSingleEntryServiceFromDI: vi.fn(),
+  getSingleMetadataServiceFromDI: vi.fn(),
   getComponentRegistryFromDI: vi.fn().mockReturnValue(undefined),
   getAdapterFromDI: vi.fn(),
   // Reached by the companion reconciliation a localized create runs. Omitted, calling it throws and
   // the handler catches that as a companion-provisioning failure — so the assertions below would
   // describe a FAILED migration while passing.
   getConfigFromDI: vi.fn(() => undefined),
+  // Reached by the companion's runtime registration. Answering `undefined` is what a server with no
+  // schema registry does; omitting it throws inside the registration instead, which is a different
+  // path and not one a create ever takes.
+  getSchemaRegistryFromDI: vi.fn(() => undefined),
 }));
 
 const executed: string[] = [];
@@ -64,11 +69,23 @@ vi.mock("../../../di/container", () => ({
   },
 }));
 
+import { SingleMetadataService } from "../../../domains/singles/services/single-metadata-service";
+import type { SingleRegistryService } from "../../../domains/singles/services/single-registry-service";
+import type { Logger } from "../../../shared/types";
 import {
   getSingleEntryServiceFromDI,
+  getSingleMetadataServiceFromDI,
   getSingleRegistryFromDI,
 } from "../../helpers/di";
 import { dispatchSingles } from "../single-dispatcher";
+
+/** Silent: these tests read the statements, not the log. */
+const logger: Logger = {
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+};
 
 function wireRegistry() {
   const registry = {
@@ -77,6 +94,9 @@ function wireRegistry() {
     getAllSingles: vi.fn().mockResolvedValue([]),
     getSingleBySlug: vi.fn(),
     registerSingle: vi.fn(async (row: unknown) => row),
+    // The confirm write. A create persists its intent as `pending` before touching the table and
+    // records the outcome here afterwards, so a double without it fails the whole create.
+    updateMigrationStatus: vi.fn(),
     updateSingle: vi.fn(),
     deleteSingle: vi.fn(),
   };
@@ -87,24 +107,54 @@ function wireRegistry() {
     get: vi.fn(),
     update: vi.fn(),
   } as unknown as ReturnType<typeof getSingleEntryServiceFromDI>);
+  // The REAL service over the same doubles, because the create path's behaviour IS this service's
+  // behaviour: what the request forwards into the DDL is decided inside it, and a stub standing in
+  // for it would leave these assertions describing the stub.
+  vi.mocked(getSingleMetadataServiceFromDI).mockReturnValue(
+    new SingleMetadataService(
+      registry as unknown as SingleRegistryService,
+      logger,
+      adapter as unknown as ConstructorParameters<
+        typeof SingleMetadataService
+      >[2]
+    )
+  );
   return registry;
 }
 
-/** Everything the adapter was asked to run, as one string. */
+/**
+ * Everything the adapter was asked to run, as one string.
+ *
+ * 🔴 The create's OWN recorded outcome is checked before any of it is returned, and that check is
+ * here rather than in each test because it is a precondition of the entire file: statements that
+ * ran on the way to a failure prove nothing about what a working create emits. Breaking a rule
+ * shows a test CAN fail; it does not show the code reached the state the test describes. A create
+ * that gave up part-way still leaves its earlier statements in `executed`, so every assertion below
+ * would keep passing while describing a run that never finished.
+ *
+ * `migration_status` is the product's own success signal — the value the admin reads back — so
+ * nothing is computed here that does not already exist, and a regression names itself:
+ * `expected 'failed' to be 'applied'`.
+ */
 async function ddlFor(
   payload: Record<string, unknown>,
   dialect: "postgresql" | "mysql" | "sqlite" = "postgresql"
 ): Promise<string> {
   executed.length = 0;
   adapter = makeAdapter(dialect);
-  wireRegistry();
+  const registry = wireRegistry();
   await dispatchSingles("createSingle", {}, payload);
+
+  const recorded = registry.updateMigrationStatus.mock.calls[0]?.[1];
+  expect(recorded, "the create recorded its own outcome").toBe("applied");
+
   return executed.join("\n");
 }
 
 beforeEach(() => {
   vi.mocked(getSingleRegistryFromDI).mockReset();
   vi.mocked(getSingleEntryServiceFromDI).mockReset();
+  vi.mocked(getSingleMetadataServiceFromDI).mockReset();
 });
 
 describe("createSingle — what the request forwards into the DDL", () => {

@@ -851,6 +851,9 @@ const COLLECTIONS_METHODS: Record<
               }
             }
           }
+          // 🔴 STRICT on purpose, matching the other two companion paths: tolerating a re-run
+          // would make a half-finished localization ENABLE look like success, because the planner
+          // cannot tell that state from an orphan repair. A loud failure is the safer outcome.
           for (const stmt of plan.statements) {
             await adapter.executeQuery(stmt);
           }

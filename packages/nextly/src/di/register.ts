@@ -62,6 +62,7 @@ import { builtByFor } from "../domains/schema/pipeline/registered-collections";
 import type { DesiredCollection } from "../domains/schema/pipeline/types";
 import type { ColumnOrigin } from "../domains/schema/services/field-column-descriptor";
 import type { SingleEntryService } from "../domains/singles/services/single-entry-service";
+import type { SingleMetadataService } from "../domains/singles/services/single-metadata-service";
 import type {
   SingleRegistryService,
   CodeFirstSingleConfig,
@@ -327,6 +328,8 @@ export interface ServiceMap {
   mediaService: UnifiedMediaService;
   singleRegistryService: SingleRegistryService;
   singleEntryService: SingleEntryService;
+  /** Owns a Single's table change together with the registry write that records it. */
+  singleMetadataService: SingleMetadataService;
   fieldGroupRegistryService: FieldGroupRegistryService;
   fieldGroupSchemaService: FieldGroupSchemaService;
   fieldGroupDataService: FieldGroupDataService;
