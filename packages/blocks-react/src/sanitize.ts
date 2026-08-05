@@ -35,17 +35,6 @@ export function sanitizeDocument(
 ): BlockDocument {
   let changed = false;
   let remaining = limits.maxNodes;
-  // Ids are the document's only addressing mechanism and the renderer's React
-  // keys. A duplicate makes React reuse one block's instance for another, which
-  // is a wrong page rather than a missing one, and validation rejects the shape
-  // anyway — so a repeat is dropped rather than rendered.
-  const seenIds = new Set<string>();
-  // DOM ids, separately from node ids. Two nodes may legitimately carry
-  // different node ids and the same `cssId`, and rendering both puts duplicate
-  // `id` attributes in the page — which is what makes an anchor, a label's
-  // `for`, or an `#id` selector ambiguous. Engine validation rejects the shape;
-  // the forgiving render path must not quietly reintroduce it.
-  const seenDomIds = new Set<string>();
 
   const sanitizeNodes = (nodes: unknown, depth: number): BlockNode[] => {
     if (!Array.isArray(nodes)) {
@@ -99,36 +88,15 @@ export function sanitizeDocument(
         continue;
       }
 
-      if (seenIds.has(candidate.id)) {
-        changed = true;
-        continue;
-      }
-      seenIds.add(candidate.id);
-
-      const domId =
-        typeof candidate.cssId === "string" ? candidate.cssId : undefined;
-      let kept = candidate;
-      if (domId !== undefined) {
-        if (seenDomIds.has(domId)) {
-          // The first node to claim an id keeps it; the later one renders
-          // without one rather than being dropped, since its content is fine.
-          changed = true;
-          kept = { ...candidate };
-          delete kept.cssId;
-        } else {
-          seenDomIds.add(domId);
-        }
-      }
-
-      const slots = kept.slots;
+      const slots = candidate.slots;
       if (slots === undefined) {
-        result.push(kept);
+        result.push(candidate);
         continue;
       }
 
       if (typeof slots !== "object" || slots === null || Array.isArray(slots)) {
         changed = true;
-        const withoutSlots: BlockNode = { ...kept };
+        const withoutSlots: BlockNode = { ...candidate };
         delete withoutSlots.slots;
         result.push(withoutSlots);
         continue;
@@ -142,12 +110,133 @@ export function sanitizeDocument(
         nextSlots[name] = sanitized;
       }
 
-      result.push(slotsChanged ? { ...kept, slots: nextSlots } : kept);
+      result.push(
+        slotsChanged ? { ...candidate, slots: nextSlots } : candidate
+      );
     }
 
     return changed ? result : (nodes as BlockNode[]);
   };
 
   const nodes = sanitizeNodes(document.nodes, 1);
+  return changed ? { ...document, nodes } : document;
+}
+
+/**
+ * The DOM id a node will actually render with, if any.
+ *
+ * `cssId` is the modelled field and the attribute bag is the escape hatch
+ * beside it, so a node carrying both renders the modelled one — which means
+ * that is the only value worth reserving. Attribute NAMES are matched
+ * case-insensitively because HTML treats them that way and the render path
+ * lowercases before writing, so a stored `ID` becomes an `id` on the page.
+ *
+ * The VALUE is compared exactly. Ids are case-sensitive in the DOM: `#Hero` and
+ * `#hero` address different elements, and folding them together would strip an
+ * id that was never ambiguous.
+ */
+function renderedDomId(node: BlockNode): string | undefined {
+  if (typeof node.cssId === "string") return node.cssId;
+  const attributes: unknown = node.attributes;
+  if (
+    typeof attributes !== "object" ||
+    attributes === null ||
+    Array.isArray(attributes)
+  ) {
+    return undefined;
+  }
+  for (const [name, value] of Object.entries(attributes)) {
+    if (name.toLowerCase() === "id" && typeof value === "string") return value;
+  }
+  return undefined;
+}
+
+/** A node with whatever supplied the given DOM id removed. */
+function withoutDomId(node: BlockNode): BlockNode {
+  const stripped: BlockNode = { ...node };
+  delete stripped.cssId;
+  const attributes: unknown = stripped.attributes;
+  if (
+    typeof attributes === "object" &&
+    attributes !== null &&
+    !Array.isArray(attributes)
+  ) {
+    stripped.attributes = Object.fromEntries(
+      Object.entries(attributes).filter(([name]) => name.toLowerCase() !== "id")
+    );
+  }
+  return stripped;
+}
+
+/**
+ * Makes every address in a document unique.
+ *
+ * Two kinds, both of which have to be unique only among nodes that will
+ * actually render:
+ *
+ * - **Node ids** are the document's addressing mechanism and the renderer's
+ *   React keys. A duplicate makes React reuse one block's instance for another,
+ *   which is a wrong page rather than a missing one.
+ * - **DOM ids** are what an anchor, a label's `for` and an `#id` selector
+ *   resolve against. Two elements answering to one is the ambiguity `cssId`
+ *   exists to prevent, and it can arrive through `cssId` or through the
+ *   attribute bag.
+ *
+ * Run AFTER condition-gated nodes are pruned, deliberately. A hidden node never
+ * reaches the page, so letting it reserve an address would take that address
+ * away from a visible node for no benefit: the visible one would be dropped or
+ * stripped, the hidden one would then be pruned, and the page would be missing
+ * content or an anchor that was never in conflict with anything.
+ *
+ * Engine validation rejects both shapes at write time; this is the forgiving
+ * render path declining to reintroduce what a stored document may already hold.
+ * Returns the ORIGINAL document when nothing collided.
+ */
+export function dedupeAddresses(document: BlockDocument): BlockDocument {
+  let changed = false;
+  const seenIds = new Set<string>();
+  const seenDomIds = new Set<string>();
+
+  const walk = (nodes: BlockNode[]): BlockNode[] => {
+    const result: BlockNode[] = [];
+    for (const node of nodes) {
+      if (seenIds.has(node.id)) {
+        changed = true;
+        continue;
+      }
+      seenIds.add(node.id);
+
+      let kept = node;
+      const domId = renderedDomId(node);
+      if (domId !== undefined) {
+        if (seenDomIds.has(domId)) {
+          // The first node to claim an id keeps it; the later one renders
+          // without one rather than being dropped, since its content is fine.
+          changed = true;
+          kept = withoutDomId(node);
+        } else {
+          seenDomIds.add(domId);
+        }
+      }
+
+      const slots = kept.slots;
+      if (slots === undefined) {
+        result.push(kept);
+        continue;
+      }
+
+      let slotsChanged = false;
+      const nextSlots: Record<string, BlockNode[]> = {};
+      for (const [name, children] of Object.entries(slots)) {
+        const walked = walk(children);
+        if (walked !== children) slotsChanged = true;
+        nextSlots[name] = walked;
+      }
+      result.push(slotsChanged ? { ...kept, slots: nextSlots } : kept);
+    }
+    return changed ? result : nodes;
+  };
+
+  const nodes = walk(document.nodes);
   return changed ? { ...document, nodes } : document;
 }

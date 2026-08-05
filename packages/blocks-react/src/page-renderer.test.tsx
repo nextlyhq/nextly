@@ -1,4 +1,5 @@
 import {
+  Activity,
   StrictMode,
   Suspense,
   createContext,
@@ -1196,6 +1197,62 @@ describe("PageRenderer", () => {
       expect(html).toContain("nested");
     });
 
+    it("counts an attribute id as the same address as a cssId", async () => {
+      // `id` is on the attribute allowlist, so the bag is a second way to write
+      // the same address. Reserving only `cssId` left the two able to collide
+      // with each other while each looked unique on its own.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", {
+              props: { value: "first" },
+              cssId: "hero",
+            }),
+            node("b", "test/text", {
+              props: { value: "second" },
+              attributes: { id: "hero" },
+            }),
+            node("c", "test/text", {
+              props: { value: "third" },
+              // Case variants of the NAME are the same attribute, since the
+              // render path lowercases before writing.
+              attributes: { ID: "hero" },
+            })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+        />
+      );
+
+      expect(html.match(/id="hero"/g)).toHaveLength(1);
+      for (const body of ["first", "second", "third"]) {
+        expect(html).toContain(body);
+      }
+    });
+
+    it("keeps ids that differ only in case", async () => {
+      // DOM ids are case-SENSITIVE even though attribute names are not, so
+      // `#Hero` and `#hero` address different elements and folding them
+      // together would strip an anchor that was never ambiguous.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", {
+              props: { value: "first" },
+              cssId: "Hero",
+            }),
+            node("b", "test/text", {
+              props: { value: "second" },
+              cssId: "hero",
+            })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+        />
+      );
+
+      expect(html).toContain('id="Hero"');
+      expect(html).toContain('id="hero"');
+    });
+
     it("takes over a promise it wrapped when it refuses the output around it", async () => {
       // Wrapping substitutes a component that awaits the promise; refusing the
       // output discards that wrapper, so nothing is left listening to a promise
@@ -1402,6 +1459,96 @@ describe("PageRenderer", () => {
 
       expect(placeholderReasons(html)).toEqual(["invalid-output"]);
       expect(html).toContain("survivor");
+    });
+
+    it("renders React 19's Activity and walks what is inside it", async () => {
+      // The cost of enumerating element types, paid: a built-in this list has
+      // not heard of is refused, so every one React ships has to be here. The
+      // second half is the reason it cannot just be added to the type list —
+      // Activity renders its children itself, so they are walked like a
+      // fragment's.
+      const visible = defineBlock({
+        name: "test/activity-visible",
+        version: 1,
+        description: "Puts a real element inside Activity.",
+        example: { props: {} },
+        render: () => (
+          <Activity mode="visible">
+            <span>inside activity</span>
+          </Activity>
+        ),
+      });
+      const bad = defineBlock({
+        name: "test/activity-bad-child",
+        version: 1,
+        description: "Puts a plain object inside Activity.",
+        example: { props: {} },
+        render: () => (
+          <Activity mode="visible">
+            {{ not: "a node" } as unknown as ReactElement}
+          </Activity>
+        ),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/activity-visible"),
+            node("b", "test/activity-bad-child"),
+            node("c", "test/text", { props: { value: "survivor" } })
+          )}
+          blocks={createBlockResolver([
+            visible as AnyBlockDefinition,
+            bad as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+        />
+      );
+
+      expect(html).toContain("inside activity");
+      expect(placeholderReasons(html)).toEqual(["invalid-output"]);
+      expect(html).toContain("survivor");
+    });
+
+    it("refuses an object element type React only appears to own", async () => {
+      // The same enumeration mistake as the symbol one, a level over: an object
+      // whose `$$typeof` merely starts with `react.` is not an element type.
+      // `react.portal` is React's own tag on a value React refuses as a type,
+      // `react.whatever` is not React's at all, and `Symbol("react.context")`
+      // is a private symbol wearing the right name. All three were verified to
+      // reach "Element type is invalid" from inside React's render.
+      const tags: Array<[string, unknown]> = [
+        ["portal", Symbol.for("react.portal")],
+        ["invented", Symbol.for("react.whatever")],
+        ["unregistered", Symbol("react.context")],
+      ];
+
+      for (const [label, tag] of tags) {
+        const forged = defineBlock({
+          name: `test/forged-${label}`,
+          version: 1,
+          description: "Builds an element from a React-looking object.",
+          example: { props: {} },
+          render: () =>
+            createElement({ $$typeof: tag } as unknown as string, null, "x"),
+        });
+
+        const html = await renderToHtml(
+          <PageRenderer
+            document={doc(
+              node("a", `test/forged-${label}`),
+              node("b", "test/text", { props: { value: "survivor" } })
+            )}
+            blocks={createBlockResolver([
+              forged as AnyBlockDefinition,
+              text as AnyBlockDefinition,
+            ])}
+          />
+        );
+
+        expect(placeholderReasons(html)).toEqual(["invalid-output"]);
+        expect(html).toContain("survivor");
+      }
     });
 
     it("renders the ordinary use of that same built-in", async () => {
@@ -1985,6 +2132,77 @@ describe("PageRenderer", () => {
       expect(html).toContain("survivor");
     });
 
+    it("contains contents given to a void element", async () => {
+      // A void tag has no closing tag and so no contents. React throws rather
+      // than dropping them, and it throws while writing the element — a caption
+      // read out of stored content into an `<img>` is how it happens.
+      const cases: Array<[string, () => ReactElement]> = [
+        ["img-children", () => createElement("img", null, "caption")],
+        ["br-children", () => createElement("br", null, "x")],
+        [
+          "input-html",
+          () =>
+            createElement("input", {
+              dangerouslySetInnerHTML: { __html: "x" },
+            }),
+        ],
+      ];
+
+      for (const [label, render] of cases) {
+        const block = defineBlock({
+          name: `test/void-${label}`,
+          version: 1,
+          description: "Gives a void element contents.",
+          example: { props: {} },
+          render,
+        });
+
+        const html = await renderToHtml(
+          <PageRenderer
+            document={doc(
+              node("a", `test/void-${label}`),
+              node("b", "test/text", { props: { value: "survivor" } })
+            )}
+            blocks={createBlockResolver([
+              block as AnyBlockDefinition,
+              text as AnyBlockDefinition,
+            ])}
+          />
+        );
+
+        expect(placeholderReasons(html)).toEqual(["invalid-output"]);
+        expect(html).toContain("survivor");
+      }
+    });
+
+    it("still renders a void element used correctly", async () => {
+      // React skips a null `children` on a void tag exactly as it skips a null
+      // `dangerouslySetInnerHTML`, so the guard has to stop where React's does.
+      const ok = defineBlock({
+        name: "test/void-ok",
+        version: 1,
+        description: "Uses void elements the way HTML allows.",
+        example: { props: {} },
+        render: () => (
+          <div>
+            <img src="/a.png" alt="" />
+            {createElement("br", { children: null })}
+          </div>
+        ),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(node("a", "test/void-ok"))}
+          blocks={createBlockResolver([ok as AnyBlockDefinition])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual([]);
+      expect(html).toContain("/a.png");
+      expect(html).toContain("<br/>");
+    });
+
     it("still renders the ordinary uses of dangerouslySetInnerHTML", async () => {
       // React skips the prop entirely when it is absent or null, so neither may
       // be refused here: a guard stricter than React's turns working blocks
@@ -2224,6 +2442,80 @@ describe("PageRenderer", () => {
       );
 
       expect(html).not.toContain("nested vip");
+    });
+
+    it("withholds a node whose visibility envelope cannot be read", async () => {
+      // `visibility: "hidden"` answers `undefined` to a property read, and
+      // `undefined` means "no gate" — so an unreadable envelope was resolving
+      // in favour of showing the node, which is the one direction the
+      // fail-closed rule exists to forbid.
+      for (const envelope of ["hidden", ["tier"], 1]) {
+        const html = await renderToHtml(
+          <PageRenderer
+            document={doc(
+              node("a", "test/text", {
+                props: { value: "gated body" },
+                visibility: envelope as unknown as BlockNode["visibility"],
+              }),
+              node("b", "test/text", { props: { value: "public body" } })
+            )}
+            blocks={createBlockResolver([text as AnyBlockDefinition])}
+          />
+        );
+
+        expect(html).not.toContain("gated body");
+        expect(html).toContain("public body");
+      }
+    });
+
+    it("shows a node with no visibility field at all", async () => {
+      // Absent and null are not restrictions, so failing closed must not reach
+      // them: every ordinary node has no envelope.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", {
+              props: { value: "no envelope" },
+              visibility: null as unknown as BlockNode["visibility"],
+            })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+        />
+      );
+
+      expect(html).toContain("no envelope");
+    });
+
+    it("does not let a gated node take an address from a visible one", async () => {
+      // Addresses are made unique over what will RENDER. A hidden node never
+      // reaches the page, so letting it reserve a node id or a DOM id would
+      // drop or strip the visible node it collided with — and then prune the
+      // node it collided with, leaving content or an anchor missing for no
+      // reason at all.
+      const gated = {
+        conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+      };
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("hero", "test/text", {
+              props: { value: "gated body" },
+              cssId: "anchor",
+              visibility: gated,
+            }),
+            node("hero", "test/text", {
+              props: { value: "public body" },
+              cssId: "anchor",
+            })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+        />
+      );
+
+      expect(html).not.toContain("gated body");
+      expect(html).toContain("public body");
+      expect(html).toContain('id="anchor"');
     });
 
     it("recompiles under the scope the stored artifact was anchored to", async () => {

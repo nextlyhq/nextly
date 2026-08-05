@@ -20,7 +20,15 @@ import type { BlockDocument, BlockNode } from "@nextlyhq/blocks-engine";
  * predicate is visible again.
  */
 export function isUnconditional(node: BlockNode): boolean {
-  const groups = node.visibility?.conditions;
+  const envelope: unknown = node.visibility;
+  if (envelope === undefined || envelope === null) return true;
+  // The envelope has to be readable before the field inside it means anything.
+  // `visibility: "hidden"` and `visibility: ["tier"]` both answer `undefined`
+  // to a property read, and `undefined` here reads as "no gate" — the one
+  // answer a shape this renderer cannot understand must never produce.
+  if (typeof envelope !== "object" || Array.isArray(envelope)) return false;
+
+  const groups = (envelope as { conditions?: unknown }).conditions;
   if (groups === undefined || groups === null) return true;
   // A malformed value — a flat list of predicates from an older writer, an
   // object, a string — is still an author saying this node is restricted, and a

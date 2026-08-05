@@ -131,13 +131,13 @@ export function describeValue(value: unknown): string {
  * Missing a future provider-like tag costs an escape; wrongly including a
  * component wrapper costs a working block. The list stays conservative.
  */
-const PROVIDER_TAGS: ReadonlySet<string> = new Set([
-  "react.context",
-  "react.provider",
+const PROVIDER_TAGS: ReadonlySet<symbol> = new Set([
+  Symbol.for("react.context"),
+  Symbol.for("react.provider"),
 ]);
 
 /** The context consumer tag, whose single child must be a function. */
-const CONSUMER_TAG = "react.consumer";
+const CONSUMER_TAG = Symbol.for("react.consumer");
 
 /** Suspense, whose `fallback` prop is rendered as well as its children. */
 const SUSPENSE_TYPE = Symbol.for("react.suspense");
@@ -149,6 +149,31 @@ const RENDERABLE_REACT_SYMBOLS: ReadonlySet<symbol> = new Set([
   Symbol.for("react.suspense_list"),
   Symbol.for("react.strict_mode"),
   Symbol.for("react.profiler"),
+  // React 19.2's `<Activity>`: an element type like the rest, and one whose
+  // children React renders itself.
+  Symbol.for("react.activity"),
+]);
+
+/**
+ * The `$$typeof` tags that make an OBJECT a usable element type.
+ *
+ * The wrappers a component can be built out of, and the two spellings of a
+ * context provider — React 19 tags `Ctx` and `Ctx.Provider` alike as
+ * `react.context`, earlier versions used `react.provider`.
+ *
+ * By identity and enumerated, for the same reason the symbol list is: a tag
+ * whose description merely begins `react.` proves nothing. An object tagged
+ * `react.portal` is React's own and is still not an element type, a
+ * `react.whatever` is not React's at all, and `Symbol("react.context")` is a
+ * private symbol wearing the right name — all three were verified to reach
+ * "Element type is invalid" from inside React's render.
+ */
+const ELEMENT_TYPE_TAGS: ReadonlySet<symbol> = new Set([
+  Symbol.for("react.memo"),
+  Symbol.for("react.forward_ref"),
+  Symbol.for("react.lazy"),
+  ...PROVIDER_TAGS,
+  CONSUMER_TAG,
 ]);
 
 /**
@@ -169,14 +194,11 @@ function isReactBuiltinSymbol(value: unknown): boolean {
   return typeof value === "symbol" && RENDERABLE_REACT_SYMBOLS.has(value);
 }
 
-/** The `$$typeof` tag of a value, when it carries a React one. */
-function reactTag(value: unknown): string | null {
+/** The `$$typeof` tag of a value, when it is one React renders elements from. */
+function reactTag(value: unknown): symbol | null {
   if (typeof value !== "object" || value === null) return null;
   const tag = (value as { $$typeof?: unknown }).$$typeof;
-  if (typeof tag !== "symbol" || typeof tag.description !== "string") {
-    return null;
-  }
-  return tag.description.startsWith("react.") ? tag.description : null;
+  return typeof tag === "symbol" && ELEMENT_TYPE_TAGS.has(tag) ? tag : null;
 }
 
 /**
@@ -194,6 +216,11 @@ function isRenderableElementType(type: unknown): boolean {
   // A component, and every React built-in (fragment, Suspense, StrictMode).
   if (typeof type === "function") return true;
   if (isReactBuiltinSymbol(type)) return true;
+  // An object type is only renderable when its tag is one of the wrappers a
+  // component can be built out of. Accepting every `react.*` description here
+  // was the same enumeration mistake as accepting every `react.*` symbol, one
+  // level over: `{ $$typeof: Symbol.for("react.portal") }` is React's own tag
+  // on a value React refuses as a type.
   return reactTag(type) !== null;
 }
 
@@ -215,18 +242,45 @@ function rendersOwnChildren(element: unknown): boolean {
 }
 
 /**
+ * Elements the HTML spec gives no closing tag, and so no contents.
+ *
+ * An enumeration, unlike the rest of this module — and defensible here because
+ * the set is closed by the HTML standard rather than by a library's internals.
+ * React hardcodes the same list. Nothing has been added to it since `<wbr>`,
+ * and a new one would be a change to HTML itself.
+ */
+const VOID_ELEMENTS: ReadonlySet<string> = new Set([
+  "area",
+  "base",
+  "br",
+  "col",
+  "embed",
+  "hr",
+  "img",
+  "input",
+  "link",
+  "meta",
+  "param",
+  "source",
+  "track",
+  "wbr",
+]);
+
+/**
  * A host-element prop React's server renderer refuses outright.
  *
- * Deliberately ONE case rather than a general prop validator. React throws on
- * a non-object `style`, and that is the one worth pre-empting here because it
- * arrives from stored content — a block reading a text field into `style` is an
- * ordinary mistake, and React raises it while writing the attribute, long after
- * this package's containment has returned.
+ * A short list of named invariants rather than a general prop validator, and
+ * each one is here for the same reason: React raises it while WRITING the
+ * element, long after this package's containment has returned, and the value
+ * that trips it arrives from stored content — a block reading a text field into
+ * `style`, or a caption into a tag that cannot hold one.
  *
- * The line stops there on purpose. Reproducing React's own prop validation
- * would mean tracking its internals across versions, and every rule that drifts
- * out of date becomes a valid block refused in production. What React accepts
- * is React's to say; what is a renderable NODE is this module's.
+ * The line stops at invariants React THROWS on and that are stable properties
+ * of HTML or of React's documented API. Reproducing React's full prop
+ * validation would mean tracking its internals across versions, and every rule
+ * that drifted out of date would become a valid block refused in production.
+ * What React accepts is React's to say; what is a renderable NODE is this
+ * module's.
  */
 function hostPropReason(element: unknown): string | null {
   const type = (element as { type?: unknown }).type;
@@ -240,22 +294,30 @@ function hostPropReason(element: unknown): string | null {
     return `a ${typeof style} \`style\` prop on <${type}>, where React requires an object`;
   }
 
-  // The other two host invariants React throws on rather than warns about, and
-  // both arrive the same way `style` does — from stored content read into JSX.
-  // `!= null` on both, matching React: it skips the prop entirely when it is
-  // absent OR null, so refusing a null here would reject markup React renders
-  // without complaint.
+  // `!= null` throughout, matching React: it skips a prop that is absent OR
+  // null, so refusing a null here would reject markup React renders without
+  // complaint. Any other non-null value counts — React throws on `children:
+  // false` and `children: ""` as readily as on a string, because it tests the
+  // prop rather than what the prop would render to.
+  const children = (props as { children?: unknown }).children;
   const html = (props as { dangerouslySetInnerHTML?: unknown })
     .dangerouslySetInnerHTML;
+
   if (html != null) {
     if (typeof html !== "object" || !("__html" in html)) {
       return `a \`dangerouslySetInnerHTML\` prop on <${type}> that is not an object carrying \`__html\``;
     }
-    // Any non-null children, not just a rendered one: React throws on `false`
-    // here as readily as on a string, because it tests the prop rather than
-    // what the prop would render to.
-    if ((props as { children?: unknown }).children != null) {
+    if (children != null) {
       return `both \`children\` and \`dangerouslySetInnerHTML\` on <${type}>, which React refuses`;
+    }
+  }
+
+  if (VOID_ELEMENTS.has(type)) {
+    if (children != null) {
+      return `children on <${type}>, which is a void element and cannot have contents`;
+    }
+    if (html != null) {
+      return `a \`dangerouslySetInnerHTML\` prop on <${type}>, which is a void element and cannot have contents`;
     }
   }
 

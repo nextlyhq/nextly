@@ -17,7 +17,7 @@ import {
   migrationSourceFor,
   type BlockResolver,
 } from "./resolver";
-import { sanitizeDocument } from "./sanitize";
+import { dedupeAddresses, sanitizeDocument } from "./sanitize";
 import {
   resolvePageStyles,
   styleTextForInjection,
@@ -131,11 +131,18 @@ export function PageRenderer({
   // and the markup are compiled from the same document. Filtering only the
   // render would withhold a gated node's HTML while still publishing its
   // scoped CSS, and with it whatever that CSS referenced.
-  const visible = pruneHiddenNodes(doc);
+  const pruned = pruneHiddenNodes(doc);
   // `pruneHiddenNodes` returns the original document when nothing was gated, so
   // identity is the signal — and it is exactly what decides whether a stored
   // stylesheet can still be trusted.
-  const prunedGatedNodes = visible !== doc;
+  const prunedGatedNodes = pruned !== doc;
+
+  // Addresses are made unique LAST, over what will actually render. A gated node
+  // never reaches the page, so letting it reserve a node id or a DOM id would
+  // take that address from a visible node for nothing: the visible one would be
+  // dropped or stripped of its anchor, and the node it collided with would then
+  // be pruned anyway.
+  const visible = dedupeAddresses(pruned);
 
   // Recompiling after pruning must not lose what the stored artifact and the
   // renderer knew. `scope` lives on the artifact rather than in the compile
