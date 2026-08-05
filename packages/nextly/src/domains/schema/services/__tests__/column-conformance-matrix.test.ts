@@ -18,11 +18,11 @@
 //
 // ## Why the accepted list, rather than fixing them here
 //
-// Fifty-two disagreements are recorded today. Most resolve by moving the generator to the
-// descriptor, and at least one must move the DESCRIPTOR to the generator instead: on MySQL a select
-// renders as
-// `text` in the generator and `varchar(255)` in the descriptor, and taking the descriptor's answer
-// would silently cap existing content at 255 characters. The same two field types resolve the
+// The disagreements below are recorded, not endorsed. Most resolve by moving the generator to the
+// descriptor. Some must move the DESCRIPTOR instead: on MySQL a select renders as `text` in the
+// generator and `varchar(255)` in the descriptor, so taking the descriptor's answer would cap
+// existing content at 255 characters, and a multi-select is stored as JSON by the field-group
+// generator while the descriptor still describes a single string. The same field type resolves the
 // OTHER way on PostgreSQL, where the generator is the one that bounds. Deciding those one at a time
 // is a different job from stopping new ones appearing, and this file is the second job.
 //
@@ -64,10 +64,24 @@ import type {
 
 const DIALECTS: SupportedDialect[] = ["postgresql", "mysql", "sqlite"];
 
-/** The two Schema-Builder generators, each named by the provenance the descriptor knows it as. */
-const BUILDERS = [
-  { origin: "collection" as ColumnOrigin, label: "collection" },
-  { origin: "fieldGroup" as ColumnOrigin, label: "fieldGroup" },
+/**
+ * Each way a Schema-Builder column can come into existence.
+ *
+ * Two generators, and two paths through each: the column created WITH its table, and the same
+ * column added to a table that already exists. Those are separate code, so they are separate
+ * measurements — a field whose column is right on creation can still be wrong when added later.
+ */
+interface BuilderPath {
+  origin: ColumnOrigin;
+  path: "create" | "alter";
+  label: string;
+}
+
+const BUILDERS: BuilderPath[] = [
+  { origin: "collection", path: "create", label: "collection" },
+  { origin: "collection", path: "alter", label: "collection-alter" },
+  { origin: "fieldGroup", path: "create", label: "fieldGroup" },
+  { origin: "fieldGroup", path: "alter", label: "fieldGroup-alter" },
 ];
 
 /**
@@ -80,6 +94,13 @@ const BUILDERS = [
 interface FieldCase {
   label: string;
   field: Record<string, unknown>;
+  /**
+   * Overrides the generated probe name.
+   *
+   * Only set where the NAME is the thing under test. Every other case uses an already-snake_case
+   * name, which cannot detect a builder that stopped converting.
+   */
+  fieldName?: string;
 }
 
 const selectOptions = { options: [{ label: "One", value: "one" }] };
@@ -126,11 +147,32 @@ const CASES: Record<DynamicFieldType, FieldCase[]> = {
       label: "hasMany decimal",
       field: { type: "number", hasMany: true, dbType: "decimal" },
     },
+    // How a Builder-created number asks for fractions, as opposed to `dbType` which is how a
+    // code-first one does. Approximate storage rather than exact, so it is a different column from
+    // the decimal case above and cannot stand in for it.
+    {
+      label: "float",
+      field: { type: "number", options: { format: "float" } },
+    },
   ],
   checkbox: [{ label: "plain", field: { type: "checkbox" } }],
   date: [{ label: "plain", field: { type: "date" } }],
   select: [
     { label: "plain", field: { type: "select", options: selectOptions } },
+    // A multi-select holds several chosen values at once, which is a different column from the one
+    // that holds a single choice.
+    {
+      label: "hasMany",
+      field: { type: "select", hasMany: true, options: selectOptions },
+    },
+    // The one case whose FIELD NAME is the thing under test. Every builder and the descriptor share
+    // one snake_case rule, and nothing measured it: every other probe is already snake_case, so a
+    // builder that stopped converting would agree with the descriptor by coincidence.
+    {
+      label: "camelCase name",
+      fieldName: "probeCamelCaseName",
+      field: { type: "select", options: selectOptions },
+    },
   ],
   radio: [{ label: "plain", field: { type: "radio", options: selectOptions } }],
   upload: [
@@ -236,21 +278,36 @@ function byAspect(entries: AcceptedDivergence[]): Map<string, string> {
   return merged;
 }
 
-/** Every builder/dialect combination a family covers, so a family is declared once and not nine times. */
+/**
+ * Expand a family across the builder paths, dialects and field types it covers.
+ *
+ * Scoped by builder ORIGIN rather than by label, and expanded across both of that origin's paths by
+ * default, because most divergences come from the type map both paths share. `paths` narrows a
+ * family to the one path that has it — which is what the ADD COLUMN path needs, since it drops
+ * everything a field says beyond its type and length.
+ */
 function everywhere(
   types: DynamicFieldType[],
   variations: string[],
   aspect: DivergenceAspect,
   reason: string,
-  scope: { builders?: string[]; dialects?: SupportedDialect[] } = {}
+  scope: {
+    origins?: ColumnOrigin[];
+    dialects?: SupportedDialect[];
+    paths?: Array<"create" | "alter">;
+  } = {}
 ): AcceptedDivergence[] {
-  const builders = scope.builders ?? BUILDERS.map(b => b.label);
+  const origins = scope.origins ?? ["collection", "fieldGroup"];
+  const paths = scope.paths ?? ["create", "alter"];
   const dialects = scope.dialects ?? DIALECTS;
-  return builders.flatMap(builder =>
+  const builders = BUILDERS.filter(
+    b => origins.includes(b.origin) && paths.includes(b.path)
+  );
+  return builders.flatMap(b =>
     dialects.flatMap(dialect =>
       types.flatMap(type =>
         variations.map(variation => ({
-          builder,
+          builder: b.label,
           dialect,
           type,
           variation,
@@ -274,7 +331,7 @@ const ACCEPTED = byAspect([
     ["plain"],
     "absence",
     "field-group generator emits no column at all for chips; descriptor names a JSON column",
-    { builders: ["fieldGroup"] }
+    { origins: ["fieldGroup"] }
   ),
 
   // --- 🔴 Fixed-point numbers ----------------------------------------------
@@ -285,7 +342,7 @@ const ACCEPTED = byAspect([
     ["decimal"],
     "type",
     "collection generator ignores dbType and emits an integer column; descriptor says exact decimal",
-    { builders: ["collection"] }
+    { origins: ["collection"] }
   ),
 
   // --- Required foreign keys: nullability ----------------------------------
@@ -308,7 +365,7 @@ const ACCEPTED = byAspect([
     ["optional", "required"],
     "type",
     "field-group generator types an FK column as UUID; descriptor and the runtime say text",
-    { builders: ["fieldGroup"], dialects: ["postgresql"] }
+    { origins: ["fieldGroup"], dialects: ["postgresql"] }
   ),
 
   // --- Foreign keys on MySQL: type -----------------------------------------
@@ -317,7 +374,7 @@ const ACCEPTED = byAspect([
     ["optional", "required"],
     "type",
     "collection generator emits text for an upload FK; descriptor bounds it at varchar(36)",
-    { builders: ["collection"], dialects: ["mysql"] }
+    { origins: ["collection"], dialects: ["mysql"] }
   ),
 
   // --- 🔴 Many values in one column ----------------------------------------
@@ -339,14 +396,67 @@ const ACCEPTED = byAspect([
     ["hasMany"],
     "type",
     "collection generator emits a single FK column for a hasMany upload; descriptor stores the ids as JSON",
-    { builders: ["collection"], dialects: ["postgresql", "mysql"] }
+    { origins: ["collection"], dialects: ["postgresql", "mysql"] }
   ),
   ...everywhere(
     ["relationship"],
     ["hasMany", "polymorphic"],
     "type",
     "collection generator emits a single FK column for a multi-reference relationship; descriptor stores the ids as JSON",
-    { builders: ["collection"], dialects: ["postgresql", "mysql"] }
+    { origins: ["collection"], dialects: ["postgresql", "mysql"] }
+  ),
+
+  // --- 🔴 A number that wants fractions -------------------------------------
+  // Two ways to ask, and neither generator gives the descriptor's answer. `options.format` is how a
+  // Builder-created number asks; the create path answers with an EXACT decimal where the descriptor
+  // wants approximate floating point, and the ALTER path answers with a whole number because it
+  // never sees the options at all.
+  ...everywhere(
+    ["number"],
+    ["float"],
+    "type",
+    "collection generator emits an exact decimal for a float field; descriptor says floating point",
+    {
+      origins: ["collection"],
+      paths: ["create"],
+      dialects: ["postgresql", "mysql"],
+    }
+  ),
+
+  // --- 🔴 What the ADD COLUMN path never sees -------------------------------
+  // A column added to an existing table is rendered from the field's TYPE and LENGTH only, so
+  // everything else a field says is dropped on the way: the short-text variant, the width behind
+  // it, and `options.format`. The same field creates one column with its table and a different one
+  // when added later, and the diff then proposes that difference on every run afterwards.
+  ...everywhere(
+    ["text"],
+    ["short variant"],
+    "type",
+    "ADD COLUMN drops the field's options and validation, so a bounded text field is added unbounded",
+    {
+      origins: ["collection"],
+      paths: ["alter"],
+      dialects: ["postgresql", "mysql"],
+    }
+  ),
+  ...everywhere(
+    ["number"],
+    ["float"],
+    "type",
+    "ADD COLUMN drops the field's options, so a float field is added as a whole number",
+    { origins: ["collection"], paths: ["alter"] }
+  ),
+
+  // --- 🔴 A select that holds several choices -------------------------------
+  // The field-group generator switches a hasMany select to a JSON column; the descriptor does not
+  // look at `hasMany` for a select at all and keeps describing a single string. Recorded against the
+  // DESCRIPTOR: the generator is storing several values the way several values have to be stored.
+  ...everywhere(
+    ["select"],
+    ["hasMany"],
+    "type",
+    "field-group generator stores a multi-select as JSON; descriptor still describes a single string",
+    { origins: ["fieldGroup"], dialects: ["postgresql", "mysql"] }
   ),
 
   // --- Structured values ---------------------------------------------------
@@ -358,7 +468,7 @@ const ACCEPTED = byAspect([
     ["plain"],
     "type",
     "collection generator stores structured values as text; descriptor names the JSON type",
-    { builders: ["collection"], dialects: ["postgresql", "mysql"] }
+    { origins: ["collection"], dialects: ["postgresql", "mysql"] }
   ),
 
   // --- Bounded strings: the two directions ---------------------------------
@@ -368,18 +478,32 @@ const ACCEPTED = byAspect([
   // the DESCRIPTOR has to move. On PostgreSQL it is the reverse: the generator bounds at 255 and the
   // descriptor leaves it unbounded, so the generator can move safely because widening loses nothing.
   ...everywhere(
-    ["select", "radio"],
+    ["select"],
+    ["plain", "hasMany", "camelCase name"],
+    "type",
+    "generator emits text, descriptor emits varchar(255); narrowing would truncate, so the descriptor moves",
+    { origins: ["collection"], dialects: ["mysql"] }
+  ),
+  ...everywhere(
+    ["radio"],
     ["plain"],
     "type",
     "generator emits text, descriptor emits varchar(255); narrowing would truncate, so the descriptor moves",
-    { builders: ["collection"], dialects: ["mysql"] }
+    { origins: ["collection"], dialects: ["mysql"] }
   ),
   ...everywhere(
-    ["select", "radio"],
+    ["select"],
+    ["plain", "camelCase name"],
+    "type",
+    "field-group generator bounds the column at varchar(255); descriptor leaves it text",
+    { origins: ["fieldGroup"], dialects: ["postgresql"] }
+  ),
+  ...everywhere(
+    ["radio"],
     ["plain"],
     "type",
     "field-group generator bounds the column at varchar(255); descriptor leaves it text",
-    { builders: ["fieldGroup"], dialects: ["postgresql"] }
+    { origins: ["fieldGroup"], dialects: ["postgresql"] }
   ),
   ...everywhere(
     ["email", "password"],
@@ -397,7 +521,7 @@ const ACCEPTED = byAspect([
     ["plain"],
     "type",
     "field-group generator emits DATETIME; descriptor says timestamp",
-    { builders: ["fieldGroup"], dialects: ["mysql"] }
+    { origins: ["fieldGroup"], dialects: ["mysql"] }
   ),
 ]);
 
@@ -483,27 +607,85 @@ function parseCreateTable(sql: string): Map<string, Rendered> {
   return out;
 }
 
+/**
+ * The columns an ALTER migration adds.
+ *
+ * A column created WITH its table and the same column added to an existing one are emitted by
+ * different code, and they are allowed to disagree without anything noticing: the ADD COLUMN path
+ * passes only a field's type and length, so anything a field says through its options or its
+ * validation is dropped on the way. That makes "created fresh" and "added later" two separate
+ * answers to one question, and both have to be measured.
+ */
+function parseAddColumns(sql: string): Map<string, Rendered> {
+  const out = new Map<string, Rendered>();
+  for (const statement of sql.split(";")) {
+    const m = statement.match(
+      /ADD\s+COLUMN\s+["`]?([a-z0-9_]+)["`]?\s+([^;]+)/i
+    );
+    if (!m?.[1] || !m[2]) continue;
+    const rest = m[2].trim();
+    out.set(m[1], {
+      type: rest
+        .replace(/\b(NOT NULL|PRIMARY KEY|UNIQUE|AUTO_INCREMENT)\b/gi, "")
+        .replace(/\bDEFAULT\s+.*/gi, "")
+        .replace(/\bREFERENCES\b.*/gi, "")
+        .replace(/\bAFTER\b.*/gi, "")
+        .trim(),
+      notNull: /\bNOT NULL\b/i.test(rest),
+    });
+  }
+  return out;
+}
+
+const PROBE_TABLE = "conformance_probe";
+
+/** Every column a builder emits for a field list, through the path being measured. */
+function emittedColumns(
+  builder: BuilderPath,
+  dialect: SupportedDialect,
+  fields: FieldDefinition[]
+): Map<string, Rendered> {
+  if (builder.origin === "collection") {
+    const service = new DynamicCollectionSchemaService(undefined, dialect);
+    return builder.path === "create"
+      ? parseCreateTable(service.generateMigrationSQL(PROBE_TABLE, fields, {}))
+      : parseAddColumns(
+          // Measured against an empty table. A required column whose type offers no backfill is
+          // REFUSED when the table may already hold rows, which is correct and is a different
+          // question from what column the field becomes. Saying the table is empty is what makes
+          // the generator emit rather than refuse, so there is something to compare.
+          service.generateAlterTableMigration(PROBE_TABLE, [], fields, {
+            tableHasRows: false,
+          })
+        );
+  }
+  const service = new FieldGroupSchemaService(dialect);
+  const asConfigs = fields as unknown as Parameters<
+    FieldGroupSchemaService["generateMigrationSQL"]
+  >[1];
+  return builder.path === "create"
+    ? parseCreateTable(service.generateMigrationSQL(PROBE_TABLE, asConfigs, {}))
+    : parseAddColumns(
+        service.generateAlterTableMigration(PROBE_TABLE, [], asConfigs)
+      );
+}
+
+/**
+ * The column a field occupies, looked up by the name the descriptor gives it.
+ *
+ * The descriptor's name is the right key precisely because it is the name the runtime table and the
+ * diff will use: a generator that emits some other name has produced a column the product cannot
+ * address, which this reports as an absence. That the two agree on the name at all is checked
+ * separately and explicitly, since every probe here is already snake_case and so could not detect a
+ * builder that stopped converting.
+ */
 function generatorColumn(
-  builder: ColumnOrigin,
+  builder: BuilderPath,
   dialect: SupportedDialect,
   field: FieldDefinition,
   columnName: string
 ): Rendered | null {
-  const table = "conformance_probe";
-  const sql =
-    builder === "collection"
-      ? new DynamicCollectionSchemaService(
-          undefined,
-          dialect
-        ).generateMigrationSQL(table, [field], {})
-      : new FieldGroupSchemaService(dialect).generateMigrationSQL(
-          table,
-          [field] as unknown as Parameters<
-            FieldGroupSchemaService["generateMigrationSQL"]
-          >[1],
-          {}
-        );
-  return parseCreateTable(sql).get(columnName) ?? null;
+  return emittedColumns(builder, dialect, [field]).get(columnName) ?? null;
 }
 
 /**
@@ -598,19 +780,15 @@ function measure(): Observed[] {
         [DynamicFieldType, FieldCase[]]
       >) {
         for (const testCase of cases) {
-          const columnName = `probe_${type.toLowerCase()}`;
           const field = {
-            name: columnName,
+            name: testCase.fieldName ?? `probe_${type.toLowerCase()}`,
             ...testCase.field,
           } as unknown as FieldDefinition;
 
-          const generated = generatorColumn(
-            builder.origin,
-            dialect,
-            field,
-            columnName
-          );
           const described = getColumnDescriptor(field, dialect, builder.origin);
+          const generated = described
+            ? generatorColumn(builder, dialect, field, described.name)
+            : null;
           for (const { aspect, detail } of difference(generated, described)) {
             found.push({
               builder: builder.label,
@@ -654,6 +832,14 @@ describe("column conformance: the generators against the descriptor", () => {
     const types = Object.keys(CASES).length;
     const variations = Object.values(CASES).reduce((n, c) => n + c.length, 0);
     expect(types, "every DynamicFieldType has a row").toBe(18);
+    // A Record satisfied by `newType: []` type-checks and measures nothing, and the aggregate below
+    // would stay comfortably over its floor while the new type entered uncovered.
+    expect(
+      Object.entries(CASES)
+        .filter(([, cases]) => cases.length === 0)
+        .map(([type]) => type),
+      "a field type with no cases is covered by nothing"
+    ).toEqual([]);
     expect(
       variations * BUILDERS.length * DIALECTS.length,
       "columns compared"
