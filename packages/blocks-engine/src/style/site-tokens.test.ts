@@ -15,6 +15,7 @@ import {
   emitFontFaces,
   emitTokenBlocks,
   isTokenName,
+  tokenValueFetches,
   resolveTokenPrefix,
   validateFontFace,
 } from "./site-tokens";
@@ -78,6 +79,85 @@ describe("resolveTokenPrefix", () => {
       expect(reference.declarations[0]?.value).toBe(`var(${property})`);
     }
   );
+});
+
+describe("a token value may not fetch", () => {
+  it.each([
+    "url(https://evil.example/a.png)",
+    "url(/local.png)",
+    'image-set("https://evil.example/a.png" 1x)',
+    "cross-fade(url(/a.png), url(/b.png))",
+    "attr(data-probe)",
+  ])("refuses %s outright", value => {
+    // A token is read back by a `var()` somewhere this cannot see, so custom
+    // CSS can write `background: var(--site-x)` with no URL in it for the
+    // origin policy to inspect. That is the selector-gated request channel the
+    // whole layer exists to close, reopened through stored data.
+    const { css, issues } = emitTokenBlocks(
+      { tokens: [{ name: "x", kind: "custom", values: { light: value } }] },
+      SCOPE
+    );
+    expect(css).toBe("");
+    expect(issues[0]?.severity).toBe("error");
+    expect(issues[0]?.message).toContain("load a file");
+  });
+
+  it("reads an escaped spelling as the function it is", () => {
+    // `\\75 rl(` IS `url(` to a browser, so a check against the raw text is one
+    // an author writes straight past. Asserted on the check itself rather than
+    // through `emitTokenBlocks`, because the general value guard happens to
+    // refuse this spelling too — which would let this pass with the decoding
+    // removed entirely.
+    expect(tokenValueFetches("\\75 rl(https://evil.example/a.png)")).toBe(true);
+    expect(tokenValueFetches("URL(/a.png)")).toBe(true);
+    expect(tokenValueFetches("Image-Set('/a.png' 1x)")).toBe(true);
+    expect(tokenValueFetches("var(--other)")).toBe(false);
+    expect(tokenValueFetches("Urbanist, serif")).toBe(false);
+  });
+
+  it("checks the dark value too", () => {
+    const { css } = emitTokenBlocks(
+      {
+        tokens: [
+          {
+            name: "x",
+            kind: "custom",
+            values: { light: "red", dark: "url(/a.png)" },
+          },
+        ],
+      },
+      SCOPE
+    );
+    expect(css).toBe("");
+  });
+
+  it("still writes the values a token is actually for", () => {
+    // Refusing a whole shape only works if the shape is not one tokens use.
+    // None of the kinds denotes a URL, so nothing legitimate is lost — but a
+    // value merely containing those letters must still pass.
+    const { css, issues } = emitTokenBlocks(
+      {
+        tokens: [
+          { name: "a", kind: "color", values: { light: "#2563eb" } },
+          {
+            name: "b",
+            kind: "dimension",
+            values: { light: "clamp(1rem, 2vw, 3rem)" },
+          },
+          { name: "c", kind: "custom", values: { light: "var(--other)" } },
+          {
+            name: "d",
+            kind: "fontFamily",
+            values: { light: "Urbanist, serif" },
+          },
+        ],
+      },
+      SCOPE
+    );
+    expect(issues).toEqual([]);
+    expect(css).toContain("--site-a:#2563eb");
+    expect(css).toContain("--site-d:Urbanist, serif");
+  });
 });
 
 describe("a value that cannot be its kind", () => {

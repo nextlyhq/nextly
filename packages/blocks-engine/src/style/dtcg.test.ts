@@ -135,6 +135,42 @@ describe("export", () => {
     }
   });
 
+  it("exports a measure whose number is signed or has an exponent", () => {
+    // The same CSS number grammar a `number` token already gets. A narrower one
+    // here reports `+16px` and `1e3ms` as something the format cannot express
+    // and drops usable spacing and timing tokens from the exported file.
+    const measure = (kind: "dimension" | "duration", css: string): unknown =>
+      (
+        tokensToDtcg(tokens([{ name: "m", kind, values: { light: css } }]))
+          .document.m as Record<string, unknown>
+      )?.$value;
+
+    expect(measure("dimension", "+16px")).toEqual({ value: 16, unit: "px" });
+    expect(measure("dimension", "1e3px")).toEqual({ value: 1000, unit: "px" });
+    expect(measure("duration", "-1e3ms")).toEqual({ value: -1000, unit: "ms" });
+    // And a unit the format does not allow is still refused.
+    expect(measure("dimension", "16vw")).toBeUndefined();
+  });
+
+  it("decodes a hex escape inside a family name", () => {
+    // `\\26 ` is `&`, so `"ACME\\26 Co"` is the one family `ACME&Co`. Taking the
+    // character after the backslash literally exports `ACME26 Co`, a different
+    // font to every tool that reads the standard value.
+    const { document } = tokensToDtcg(
+      tokens([
+        {
+          name: "f",
+          kind: "fontFamily",
+          values: { light: `"ACME\\26 Co", serif` },
+        },
+      ])
+    );
+    expect((document.f as Record<string, unknown>)?.$value).toEqual([
+      "ACME&Co",
+      "serif",
+    ]);
+  });
+
   it("carries another tool's extension data through untouched", () => {
     // "Tools that process design token files MUST preserve any extension data
     // they do not themselves understand."

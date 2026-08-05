@@ -33,6 +33,7 @@ import {
   asciiLower,
   checkCssValue,
   checkUrlValue,
+  decodeIdentifier,
   isCssWideKeyword,
 } from "./css-value";
 import {
@@ -193,6 +194,39 @@ function cssString(value: string): string {
  */
 function unquotedDescriptor(value: string): boolean {
   return checkCssValue(value) === null;
+}
+
+/**
+ * Functions in a token value that can make the browser fetch something.
+ *
+ * `url()` is the obvious one; `image-set()` and `cross-fade()` hold URLs of
+ * their own, `element()` and `paint()` name a source, and `attr()` reads its
+ * destination out of the DOM at use time, where nothing here can see it.
+ */
+const FETCHING_FUNCTION =
+  /(^|[^\w-])(url|src|image|image-set|-webkit-image-set|cross-fade|-webkit-cross-fade|element|paint|attr)\s*\(/;
+
+/**
+ * Whether a token value can reach off this site, which none of them may.
+ *
+ * A token is emitted as a custom property and read back by `var()` somewhere
+ * this cannot see. That is the whole problem: sanitized custom CSS may write
+ * `background: var(--site-hero)` with no URL literal anywhere in it, so the
+ * origin policy that guards custom CSS has nothing to inspect and the
+ * selector-gated request channel it exists to close is open again through
+ * stored token data.
+ *
+ * Refused outright rather than origin-checked, because no token KIND denotes a
+ * URL — colours, lengths, durations, families, weights, numbers and shadows are
+ * the whole list. A value that fetches is not a restricted token, it is not a
+ * token. An image belongs in a block's `backgroundImage`, which carries the
+ * declared-hosts policy and is checked where it is written.
+ *
+ * Read decoded, because `\75 rl(…)` IS `url(…)` to a browser and a check
+ * against the raw text is one an author can write straight past.
+ */
+export function tokenValueFetches(value: string): boolean {
+  return FETCHING_FUNCTION.test(asciiLower(decodeIdentifier(value)));
 }
 
 /**
@@ -489,6 +523,23 @@ export function emitTokenBlocks(
       issues.push(
         tokenIssue(
           `"${token.name}" has a value that cannot be used, so it was not written.`
+        )
+      );
+      continue;
+    }
+    // Refused as an error rather than reported and written, unlike the kind
+    // check below: this one is not about whether the value renders. A token
+    // that fetches is read by a `var()` in a stylesheet that has no URL in it
+    // for the origin policy to see.
+    const fetching = TOKEN_MODES.filter(mode => {
+      const value = token.values[mode];
+      return value !== undefined && tokenValueFetches(value);
+    });
+    if (fetching.length > 0) {
+      issues.push(
+        tokenIssue(
+          `"${token.name}" has a value that would load a file, so it was not written. A token holds a colour, a length, a duration, a font or a number; put an image on the block that shows it, where the site's allowed hosts still apply.`,
+          "error"
         )
       );
       continue;

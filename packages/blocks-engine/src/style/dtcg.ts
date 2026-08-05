@@ -214,7 +214,7 @@ function measureToDtcg(
   css: string,
   units: readonly string[]
 ): { value: number; unit: string } | undefined {
-  const match = /^(-?\d*\.?\d+)([a-z]+)$/i.exec(css);
+  const match = CSS_MEASURE.exec(css);
   if (!match) return undefined;
   const value = Number.parseFloat(match[1] ?? "");
   const unit = (match[2] ?? "").toLowerCase();
@@ -261,10 +261,14 @@ function splitFamilyList(css: string): string[] {
   for (let index = 0; index < css.length; index++) {
     const char = css[index];
     if (char === "\\") {
-      // An escape stands for the next character whatever it is, including the
-      // comma of `ACME\, Inc` and a quote inside a quoted name.
-      current += css[index + 1] ?? "";
-      index++;
+      // An escape stands for what it denotes, which is not always the next
+      // character: `\26 ` is `&`, so `"ACME\26 Co"` is the family `ACME&Co`.
+      // Taking the character after the backslash literally would export the
+      // family `ACME26 Co`, a different font stack to every tool that reads the
+      // standard value.
+      const escape = readCssEscape(css, index);
+      current += escape.text;
+      index = escape.next - 1;
       continue;
     }
     if (quote !== undefined) {
@@ -298,7 +302,18 @@ function splitFamilyList(css: string): string[] {
  * format. The exact text is kept in the extension either way, so the round trip
  * stays byte for byte.
  */
-const CSS_NUMBER = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
+const CSS_NUMBER_SOURCE = "[+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?";
+const CSS_NUMBER = new RegExp(`^${CSS_NUMBER_SOURCE}$`);
+
+/**
+ * The same number, followed by a unit.
+ *
+ * Built from one source rather than written again, because a measurement is a
+ * number with a unit on it and two spellings of "number" is how the two come to
+ * disagree — a token exporting as `1e3` while `1e3px` is reported as something
+ * the format cannot express.
+ */
+const CSS_MEASURE = new RegExp(`^(${CSS_NUMBER_SOURCE})([a-zA-Z]+)$`);
 
 /** A number token as the format stores it: a JSON number. */
 function numberToDtcg(css: string): number | undefined {
@@ -516,6 +531,34 @@ function colorFromDtcg(value: unknown): string | undefined {
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * One CSS escape sequence, and where the text continues after it.
+ *
+ * Two forms, and only one of them is "the next character". A backslash followed
+ * by up to six hex digits is that code point, and a single whitespace after the
+ * digits belongs to the escape rather than to the name — that trailing space is
+ * how `\26 Co` says `&Co` instead of leaving the parser to guess where the hex
+ * ended. Anything else after a backslash stands for itself.
+ */
+function readCssEscape(
+  text: string,
+  at: number
+): { text: string; next: number } {
+  const hex = /^[0-9a-fA-F]{1,6}/.exec(text.slice(at + 1, at + 7));
+  if (hex === null) {
+    return { text: text[at + 1] ?? "", next: at + 2 };
+  }
+  const digits = hex[0];
+  let next = at + 1 + digits.length;
+  // Exactly one whitespace character is consumed as the terminator.
+  if (/\s/.test(text[next] ?? "")) next += 1;
+  const code = Number.parseInt(digits, 16);
+  // A zero or out-of-range code point is the replacement character, which is
+  // what CSS says a parser must substitute.
+  const safe = code === 0 || code > 0x10ffff ? 0xfffd : code;
+  return { text: String.fromCodePoint(safe), next };
 }
 
 /**

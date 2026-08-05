@@ -1,4 +1,5 @@
 import {
+  escapeIdentifier,
   findUnnamespacedGlobals,
   namespacedGlobalName,
 } from "@nextlyhq/blocks-engine";
@@ -943,6 +944,81 @@ describe("custom CSS may not reach off this origin", () => {
         SCOPE
       );
       expect(out.css).toContain(`font:16px"${ns("Brand")}",var(--fallback)`);
+    });
+
+    it("reads a fragment as a font shorthand when it carries a size", () => {
+      // `--font: italic 16px Arial` can only be the `font` shorthand, so the
+      // family list starts after the size. Rewriting from the first token turns
+      // the style keyword into the private face and the declaration stops
+      // meaning italic Arial at all.
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: italic; src: url("/f.woff2") }
+         .a { --font: italic 16px Arial; font: var(--font) }`,
+        SCOPE
+      );
+      expect(out.css).toContain("--font: italic 16px Arial");
+    });
+
+    it("keeps a family-list fragment working", () => {
+      // The other side of that rule: a fragment with no size is not the `font`
+      // shorthand, so it is read as a family list from the start.
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: Brand; src: url("/f.woff2") }
+         .a { --stack: Brand, serif; font-family: var(--stack) }`,
+        SCOPE
+      );
+      expect(out.css).toContain(`--stack:"${ns("Brand")}",serif`);
+    });
+
+    it("emits a renamed identifier CSS can read back", () => {
+      // `@keyframes a\\ b` is named `a b`, and the name is compared decoded — so
+      // it has to be escaped again on the way out. Written bare it is two
+      // tokens, the rule is invalid, and the animation resolves to nothing.
+      const out = sanitizeCustomCss(
+        `@keyframes a\\ b { from { opacity: 0 } } .a { animation: a\\ b 1s }`,
+        SCOPE
+      );
+      const emitted = escapeIdentifier(ns("a b"));
+      expect(emitted).toContain("\\ ");
+      expect(out.css).toContain(`@keyframes ${emitted}{`);
+      expect(out.css).toContain(`animation:${emitted} 1s`);
+    });
+
+    it("leaves a generic family alone when a face is named after one", () => {
+      // A face may be called `"serif"`, and CSS keeps it apart from the generic
+      // by the quotes. Rewriting the bare keyword would replace the reader's
+      // own serif font with the author's private face.
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: "serif"; src: url("/f.woff2") }
+         .a { font-family: serif }`,
+        SCOPE
+      );
+      expect(out.css).toContain(".a{font-family:serif}");
+    });
+
+    it("still rewrites that face when it is referenced as a name", () => {
+      // The keyword skip must not swallow the real reference: quoted, it is a
+      // family name and has to follow the rename.
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: "serif"; src: url("/f.woff2") }
+         .a { font-family: "serif" }`,
+        SCOPE
+      );
+      expect(out.css).toContain(`.a{font-family:"${ns("serif")}"}`);
+    });
+
+    it("leaves references alone when the face it named was removed", () => {
+      // The face loses its only `src` to the origin policy and is dropped, so
+      // nothing defines the private name. `X` may well be an installed font, and
+      // rewriting the reference would turn a working fallback into a missing
+      // name.
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: X; src: url("https://evil.example/f.woff2") }
+         .a { font-family: X, serif }`,
+        SCOPE
+      );
+      expect(out.css).toContain(".a{font-family:X,serif}");
+      expect(out.css).not.toContain("@font-face");
     });
 
     it("still refuses a remote url inside a keyframe step", () => {

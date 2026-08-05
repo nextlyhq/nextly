@@ -511,21 +511,17 @@ export function sanitizeCustomCss(
     },
   });
 
-  // Namespace what the author defined, and point their own references at it.
-  // AFTER the declaration walk, so a `@font-face` whose only `src` reached off
-  // this origin has already lost it and can be recognised as unusable below.
-  const cssTree = {
-    walk: csstree.walk,
-    parse: csstree.parse,
-    generate: csstree.generate,
-  };
-  const definedNames = namespaceDefinedNames(ast, scopeClass, cssTree);
-  rewriteNameReferences(ast, definedNames, cssTree);
-
   // A `@font-face` with no `src` left declares a family that can never load,
   // and CSS resolves it to nothing rather than falling back — so text asking
   // for that family renders in the browser's default instead of the author's
   // next choice. Dropping the rule restores the fallback and says why.
+  //
+  // BEFORE the names are namespaced, and that order is the whole point. A face
+  // whose only `src` reached off this origin has just lost it above; if its
+  // family were recorded first, every reference to that family would be
+  // rewritten to a private name no surviving rule defines. For a family the
+  // author never owned — an installed font, or one the host provides — that
+  // turns a working fallback list into a missing name.
   csstree.walk(ast, {
     visit: "Atrule",
     enter(node: CssNode, item: ListItem<CssNode>, list: List<CssNode>) {
@@ -539,6 +535,15 @@ export function sanitizeCustomCss(
       list.remove(item);
     },
   });
+
+  // Namespace what the author defined, and point their own references at it.
+  const cssTree = {
+    walk: csstree.walk,
+    parse: csstree.parse,
+    generate: csstree.generate,
+  };
+  const definedNames = namespaceDefinedNames(ast, scopeClass, cssTree);
+  rewriteNameReferences(ast, definedNames, cssTree);
 
   // A nested rule is a `Raw` child of its parent's block in css-tree 2.3, not a
   // Declaration, so the declaration walk above never sees inside it and

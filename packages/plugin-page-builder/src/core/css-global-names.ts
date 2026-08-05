@@ -48,6 +48,7 @@
  */
 import {
   decodeIdentifier,
+  escapeIdentifier,
   namespacedGlobalName,
 } from "@nextlyhq/blocks-engine";
 import type * as csstree from "css-tree";
@@ -157,11 +158,51 @@ function nameOf(node: csstree.CssNode): string | undefined {
   return undefined;
 }
 
-/** Write a name back onto the node it came from. */
+/**
+ * Write a name back onto the node it came from.
+ *
+ * An identifier is escaped on the way in, because the name being written was
+ * DECODED on the way out: `@keyframes a\ b` is named `a b`, and putting `a b`
+ * back bare emits two tokens where the stylesheet had one. The name would then
+ * resolve to nothing, which is the same silent failure the namespacing exists
+ * to prevent. A string carries its own delimiters and needs none of this.
+ */
 function setName(node: csstree.CssNode, name: string): void {
-  if (node.type === "Identifier") node.name = name;
+  if (node.type === "Identifier") node.name = escapeIdentifier(name);
   else if (node.type === "String") node.value = name;
 }
+
+/**
+ * Family names that are not families.
+ *
+ * The generics resolve to whatever the reader has installed, and the CSS-wide
+ * keywords are not names at all — but only while bare. A face may legitimately
+ * be called `"serif"`, and CSS keeps the two apart by the quotes, so a stylesheet
+ * defining one must still leave `font-family: serif` meaning the generic. Read
+ * as a name, that declaration would be rewritten to the private face and the
+ * author's fallback would be gone.
+ */
+const FONT_FAMILY_KEYWORDS = new Set([
+  "serif",
+  "sans-serif",
+  "monospace",
+  "cursive",
+  "fantasy",
+  "system-ui",
+  "ui-serif",
+  "ui-sans-serif",
+  "ui-monospace",
+  "ui-rounded",
+  "math",
+  "emoji",
+  "fangsong",
+  "initial",
+  "inherit",
+  "unset",
+  "revert",
+  "revert-layer",
+  "default",
+]);
 
 /**
  * Every `font-family` descriptor in a `@font-face`, in source order.
@@ -517,7 +558,16 @@ function rewriteFontFamilies(
 
   const closeRun = (): void => {
     if (run.length > 0 && parts.length > 0) {
-      const namespaced = families.get(parts.join(" ").toLowerCase());
+      const joined = parts.join(" ").toLowerCase();
+      // A lone bare identifier that names a generic family or a CSS-wide
+      // keyword is that keyword, not a family — even when the stylesheet
+      // defines a face called `"serif"`, because the quotes are what tell the
+      // two apart. A quoted reference reaches here as a String and is a name.
+      const bareKeyword =
+        run.length === 1 &&
+        run[0]?.data.type === "Identifier" &&
+        FONT_FAMILY_KEYWORDS.has(joined);
+      const namespaced = bareKeyword ? undefined : families.get(joined);
       if (namespaced !== undefined)
         replacements.push({ run, name: namespaced });
     }
@@ -598,7 +648,15 @@ function rewriteCustomProperty(
     rewriteKeyframeNames(parsed, map.keyframes, ANIMATION_KEYWORDS, 0);
   }
   if (map.fontFamilies.size > 0) {
-    rewriteFontFamilies(parsed, map.fontFamilies, 0);
+    // Which shorthand the fragment belongs to is decided the same way the
+    // declarations decide it. A fragment carrying a font SIZE can only be a
+    // `font` shorthand, so the family list starts after it — otherwise
+    // `--font: italic 16px Arial` would have its style keyword rewritten as a
+    // family by a stylesheet that happens to define a face called `italic`. A
+    // fragment with no size cannot be that shorthand at all, so it is read as a
+    // family list from the start.
+    const start = familyStartIndex(parsed) ?? 0;
+    rewriteFontFamilies(parsed, map.fontFamilies, start);
   }
   const after = css.generate(parsed);
   // Written only when a name actually moved, so a value this had no business

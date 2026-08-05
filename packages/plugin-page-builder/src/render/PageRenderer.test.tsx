@@ -106,6 +106,24 @@ describe("PageRenderer", () => {
     expect(a).not.toContain(namespacedGlobalName("fade", scopeB));
   });
 
+  it("separates two documents whose ids collide in one 32-bit hash", () => {
+    // A real pair: `6542vktadvlet` and `a2j6g1pu0x2okx` both reduce to `r3it9l`
+    // under the single FNV round the per-node classes use. Sharing a scope puts
+    // two documents back to sharing their custom CSS, their token block and
+    // their namespaced `@keyframes` — the exact failure this class prevents,
+    // restored silently and only when both happen to render together.
+    const first = {
+      version: 1 as const,
+      root: { ...makeNode("core/container", {}), id: "6542vktadvlet" },
+    };
+    const second = {
+      version: 1 as const,
+      root: { ...makeNode("core/container", {}), id: "a2j6g1pu0x2okx" },
+    };
+    expect(nodeClass(first.root.id)).toBe(nodeClass(second.root.id));
+    expect(documentScopeClass(first)).not.toBe(documentScopeClass(second));
+  });
+
   it("keeps a document's scope stable across renders", () => {
     // The class is written into the markup by one render and into the
     // stylesheet by the same one, so a scope that changed per render would
