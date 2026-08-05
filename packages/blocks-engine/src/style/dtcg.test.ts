@@ -171,6 +171,40 @@ describe("export", () => {
     ]);
   });
 
+  it("reports a family list holding a substitution instead of naming a font", () => {
+    // DTCG stores family NAMES. Exporting the text would describe a font
+    // literally called `var(--brand-font)` to every tool that reads the
+    // standard value rather than this vendor's extension.
+    const { document, issues } = tokensToDtcg(
+      tokens([
+        {
+          name: "f",
+          kind: "fontFamily",
+          values: { light: "var(--brand-font), serif" },
+        },
+      ])
+    );
+    expect(document).toEqual({});
+    expect(issues[0]?.message).toContain("cannot express");
+  });
+
+  it("keeps a quoted family that merely looks like one", () => {
+    // The quotes say it is a name somebody chose, not syntax.
+    const { document } = tokensToDtcg(
+      tokens([
+        {
+          name: "f",
+          kind: "fontFamily",
+          values: { light: `"var(--x)", serif` },
+        },
+      ])
+    );
+    expect((document.f as Record<string, unknown>)?.$value).toEqual([
+      "var(--x)",
+      "serif",
+    ]);
+  });
+
   it("carries another tool's extension data through untouched", () => {
     // "Tools that process design token files MUST preserve any extension data
     // they do not themselves understand."

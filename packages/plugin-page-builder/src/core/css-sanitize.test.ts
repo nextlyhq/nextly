@@ -817,7 +817,10 @@ describe("custom CSS may not reach off this origin", () => {
         `@font-face { font-family: Brand; src: url("/f.woff2") } .a { --f: Brand; font-family: var(--f) }`,
         SCOPE
       );
-      expect(out.css).toContain(`--f:${ns("Brand")}`);
+      // Quoted, because the family rewriter writes a name as one string — the
+      // same node the declaration path emits. A custom property holding a name
+      // is read by exactly those readers now, with no shorter path of its own.
+      expect(out.css).toContain(`--f:"${ns("Brand")}"`);
     });
 
     it("follows a quoted family through a custom property", () => {
@@ -1049,6 +1052,53 @@ describe("custom CSS may not reach off this origin", () => {
         SCOPE
       );
       expect(out.css).toContain(`animation:${ns("fade")} 1s`);
+    });
+
+    it("leaves an animation keyword in a custom property alone", () => {
+      // `--anim: none` is the keyword that cancels an animation, even where the
+      // stylesheet defines `@keyframes "none"` — quotes are what tell a name
+      // from a keyword, and a bare one is the keyword wherever it sits.
+      const out = sanitizeCustomCss(
+        `@keyframes "none" { from { opacity: 0 } }
+         .x { --anim: none; animation-name: var(--anim) }`,
+        SCOPE
+      );
+      expect(out.css).toContain("--anim: none");
+      expect(out.css).not.toContain(`--anim: ${ns("none")}`);
+    });
+
+    it("leaves a generic family in a custom property alone", () => {
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: "serif"; src: url("/f.woff2") }
+         .x { --f: serif; font-family: var(--f) }`,
+        SCOPE
+      );
+      expect(out.css).toContain("--f: serif");
+    });
+
+    it("escapes a renamed name written into a custom property", () => {
+      // The same rule as the identifier written onto an AST node: the name was
+      // compared decoded, so `a b` has to go back out escaped or `var()`
+      // substitutes two tokens where the definition has one.
+      const out = sanitizeCustomCss(
+        `@keyframes a\\ b { from { opacity: 0 } }
+         .x { --anim: a\\ b; animation: var(--anim) 1s }`,
+        SCOPE
+      );
+      expect(out.css).toContain(`--anim:${escapeIdentifier(ns("a b"))}`);
+    });
+
+    it("ignores a keyframes rule whose prelude is not just a name", () => {
+      // `@keyframes fade 1` is malformed and a browser ignores the whole rule.
+      // Renaming its first token records a name defined only by a rule nothing
+      // applies, and points every reference at that — so an animation the host
+      // page provides would stop resolving.
+      const out = sanitizeCustomCss(
+        `@keyframes fade 1 { from { opacity: 0 } } .x { animation: fade 1s }`,
+        SCOPE
+      );
+      expect(out.css).toContain("animation:fade 1s");
+      expect(out.css).not.toContain(ns("fade"));
     });
 
     it("still refuses a remote url inside a keyframe step", () => {

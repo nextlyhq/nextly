@@ -239,8 +239,16 @@ export function tokenValueFetches(value: string): boolean {
 const OPAQUE_VALUE =
   /^(?:var|calc|clamp|min|max|env|attr|color-mix|light-dark|round|abs)\(/i;
 
-/** A bare number, with the unit it carries — the shape most kinds disagree over. */
-const MEASUREMENT = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)([a-z%]*)$/i;
+/**
+ * A bare number, with the unit it carries — the shape most kinds disagree over.
+ *
+ * The exponent branch is not decoration: without it `1e3px` does not match at
+ * all, so the check reaches no verdict and stays silent about a duration token
+ * that will be dropped by the browser. The rest of the token code accepts that
+ * spelling, and a grammar narrower here than there is a check that quietly
+ * stops covering the values the other side lets through.
+ */
+const MEASUREMENT = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?([a-z%]*)$/i;
 
 /**
  * Why a value cannot be what its token says it is, when that is knowable.

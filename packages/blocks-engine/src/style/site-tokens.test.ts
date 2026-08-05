@@ -232,6 +232,12 @@ describe("a value that cannot be its kind", () => {
     ["number", "16px"],
     ["fontWeight", "1200"],
     ["fontWeight", "700px"],
+    // Exponent spellings the rest of the token code accepts: without the
+    // exponent branch these match nothing, the check reaches no verdict, and it
+    // stays silent about a value the browser will drop.
+    ["duration", "1e3px"],
+    ["number", "1e3px"],
+    ["fontWeight", "2e3"],
   ] as const)("names what is wrong with %s value %s", (kind, value) => {
     expect(checkTokenKind(kind, value), `${kind}: ${value}`).toBeDefined();
   });

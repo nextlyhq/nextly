@@ -320,6 +320,12 @@ export function namespaceDefinedNames(
         if (!prelude || prelude.type !== "AtrulePrelude") return;
         const first = prelude.children.first;
         if (!first) return;
+        // Exactly one, because that is the whole grammar: `@keyframes fade 1`
+        // is malformed and a browser ignores the rule entirely. Renaming its
+        // first token would record a name defined only by a rule nothing
+        // applies, and every reference to it would be pointed at that — taking
+        // an animation the host page provides and making it resolve to nothing.
+        if (first !== prelude.children.last) return;
         const original = nameOf(first);
         if (original === undefined || original === "") return;
         const namespaced = namespacedGlobalName(original, scopeClass);
@@ -609,12 +615,15 @@ function rewriteFontFamilies(
  * cannot see. So the value is parsed here, as a value, and read for what it
  * would mean once something substitutes it.
  *
- * Two shapes are followed. A value that is exactly one name is matched whole
- * and written back in the form it arrived in, quotes included. A value that is
- * longer may still be a fragment of a shorthand — `--anim: fade 1s ease` read
- * by `animation: var(--anim)` is the ordinary way to write one — so the same
- * positional readers the declarations use are run over it, which is what keeps
- * `ease` and `1s` from being mistaken for names.
+ * Read by exactly the readers the declarations use, with no shorter path for
+ * the one-name case. A custom property holding a single name is not a simpler
+ * problem than one holding a shorthand fragment — it is the same problem, and
+ * every guard those readers carry applies to it: `--anim: none` is the keyword
+ * that cancels an animation even where the stylesheet defines `@keyframes
+ * "none"`, `--f: serif` is the generic family even where a face is called
+ * `"serif"`, and a name compared decoded has to be escaped again on the way
+ * out. A branch that matched the whole value directly kept acquiring those
+ * three rules one at a time, each after the declarations already had it.
  *
  * The trade is the one this whole path already makes: a custom property holding
  * a defined name as literal text comes back namespaced. Against it is a
@@ -631,20 +640,6 @@ function rewriteCustomProperty(
 
   const parsed = parseValue(text, css.parse);
   if (parsed === undefined) return;
-
-  const held = singleName(parsed);
-  if (held !== undefined) {
-    const keyframe = map.keyframes.get(held.name);
-    if (keyframe !== undefined) {
-      value.value = writtenName(keyframe, held.quoted);
-      return;
-    }
-    const family = map.fontFamilies.get(held.name.toLowerCase());
-    if (family !== undefined) {
-      value.value = writtenName(family, held.quoted);
-    }
-    return;
-  }
 
   const before = css.generate(parsed);
   if (map.keyframes.size > 0) {
@@ -737,12 +732,6 @@ function lastIndexWhere(
     if (node !== undefined && accepts(node)) return index;
   }
   return -1;
-}
-
-/** A name written as CSS would read it back, in the form it arrived in. */
-function writtenName(name: string, quoted: boolean): string {
-  if (!quoted) return name;
-  return `"${name.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
 /** Replace every child of a value with one quoted string. */

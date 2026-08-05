@@ -252,7 +252,15 @@ function colorToDtcg(css: string): DtcgNode | undefined {
 function familyToDtcg(css: string): string | string[] | undefined {
   const parts = splitFamilyList(css);
   if (parts.length === 0) return undefined;
-  return parts.length === 1 ? parts[0] : parts;
+  // A family list holding `var(--brand-font)` has no DTCG form: the format
+  // stores NAMES, so exporting the text would describe a font literally called
+  // `var(--brand-font)` to every tool that reads the standard value rather than
+  // this vendor's extension. Reported as unrepresentable instead, which is the
+  // same answer a `clamp()` dimension already gets.
+  if (parts.some(part => !part.quoted && /[()]/.test(part.name))) {
+    return undefined;
+  }
+  return parts.length === 1 ? parts[0]?.name : parts.map(part => part.name);
 }
 
 /**
@@ -264,9 +272,10 @@ function familyToDtcg(css: string): string | string[] | undefined {
  * because the name is the family, not the spelling, and backslash escapes are
  * resolved for the same reason.
  */
-function splitFamilyList(css: string): string[] {
-  const parts: string[] = [];
+function splitFamilyList(css: string): FamilyPart[] {
+  const parts: FamilyPart[] = [];
   let current = "";
+  let quoted = false;
   let quote: string | undefined;
 
   for (let index = 0; index < css.length; index++) {
@@ -289,18 +298,28 @@ function splitFamilyList(css: string): string[] {
     }
     if (char === '"' || char === "'") {
       quote = char;
+      // Remembered, because the quotes are what say the text is a NAME rather
+      // than syntax: `"var(--x)"` is a family somebody called that.
+      quoted = true;
       continue;
     }
     if (char === ",") {
-      parts.push(current.trim());
+      parts.push({ name: current.trim(), quoted });
       current = "";
+      quoted = false;
       continue;
     }
     current += char;
   }
-  parts.push(current.trim());
+  parts.push({ name: current.trim(), quoted });
 
-  return parts.filter(part => part !== "");
+  return parts.filter(part => part.name !== "");
+}
+
+/** One family from a list, and whether the file wrote it as a quoted string. */
+interface FamilyPart {
+  name: string;
+  quoted: boolean;
 }
 
 /**
