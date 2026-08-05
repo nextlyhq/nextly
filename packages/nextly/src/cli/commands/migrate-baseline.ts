@@ -57,7 +57,8 @@ import { withMigrateLock } from "../../domains/schema/pipeline/locks";
 import {
   isCompanionTable,
   isManagedTable,
-  isSnapshotComparableTable,
+  junctionTablesAmong,
+  snapshotComparableTables,
 } from "../../domains/schema/pipeline/managed-tables";
 import { generateSQL } from "../../domains/schema/pipeline/sql-templates/index";
 import {
@@ -120,43 +121,6 @@ async function listMigrationFiles(migrationsDir: string): Promise<string[]> {
     if ((err as { code?: string }).code === "ENOENT") return [];
     throw err;
   }
-}
-
-/**
- * The live managed tables that exist because of a relationship, not because
- * the config declares them.
- *
- * A many-to-many field creates `<mainA>_<mainB>_<field>` with both main names
- * sorted, and every one of those matches the managed prefix — so adoption
- * would record it in the snapshot, and the next `migrate:create` would compare
- * that against a desired snapshot which declares only collections, singles and
- * components, see an extra table, and emit `DROP TABLE`. That is silent loss
- * of every relationship row on the documented graduation path.
- *
- * Recognised by shape rather than by asking the config, because the reduced
- * field shape the diff engine uses does not carry `options.relationType`. The
- * shape is unambiguous here: both halves have to be tables the config actually
- * declares, and a declared table is never itself a junction.
- */
-function junctionTablesAmong(
-  liveTables: readonly string[],
-  entityTables: ReadonlySet<string>
-): Set<string> {
-  const mains = [...entityTables].sort();
-  const junctions = new Set<string>();
-  for (const table of liveTables) {
-    if (entityTables.has(table)) continue;
-    for (const a of mains) {
-      for (const b of mains) {
-        // Generation sorts the pair, so only that order can appear.
-        if (a > b) continue;
-        if (table.startsWith(`${a}_${b}_`)) {
-          junctions.add(table);
-        }
-      }
-    }
-  }
-  return junctions;
 }
 
 /**
@@ -290,17 +254,14 @@ export async function baselineCore(
       // as a first-class table would make the next diff want to drop it. It is
       // NOT excluded from the SQL — see below.
       const companionTables = managed.filter(isCompanionTable);
-      const entityTables = new Set(
-        (deps.localizedEntities ?? []).map(e => e.tableName)
-      );
       // Derived tables are kept OUT of the snapshot and put INTO the SQL, for
       // the same reason in both cases: the config never declares them, so a
       // diff that saw one would want to drop it, while a fresh environment
-      // still needs it built.
-      const junctionTables = junctionTablesAmong(managed, entityTables);
-      const snapshotTables = managed
-        .filter(isSnapshotComparableTable)
-        .filter(t => !junctionTables.has(t));
+      // still needs it built. The same exclusion runs in `migrate`'s drift
+      // check, from the same helper, because a live snapshot that includes a
+      // junction cannot match a recorded one that never could have held it.
+      const junctionTables = junctionTablesAmong(managed);
+      const snapshotTables = snapshotComparableTables(managed);
 
       const live = await introspectLiveSnapshot(db, dialect, snapshotTables);
 

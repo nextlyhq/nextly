@@ -68,3 +68,54 @@ export function isCompanionTable(name: string): boolean {
 export function isSnapshotComparableTable(name: string): boolean {
   return isManagedTable(name) && !isCompanionTable(name);
 }
+
+/**
+ * The managed tables that exist because of a relationship, not because the
+ * config declares them.
+ *
+ * A many-to-many field creates `<mainA>_<mainB>_<field>` with the two main
+ * names sorted, and every one of those carries a managed prefix — so nothing
+ * above tells them apart from a collection's own table. They have to be
+ * excluded in TWO places for the same reason a companion is: the desired
+ * snapshot never declares one, so a snapshot that records it makes the next
+ * diff want to drop it, and a live snapshot that includes it makes the apply
+ * path report drift against a snapshot that never could have held it.
+ *
+ * Derived from the live list alone rather than from config, so both callers
+ * can reach it: `migrate`'s drift check has no config to consult.
+ */
+export function junctionTablesAmong(
+  liveTables: readonly string[]
+): Set<string> {
+  const mains = liveTables
+    .filter(name => isManagedTable(name) && !isCompanionTable(name))
+    .sort();
+  const junctions = new Set<string>();
+  for (const table of liveTables) {
+    for (const a of mains) {
+      if (table === a) continue;
+      for (const b of mains) {
+        // Generation sorts the pair, so only that order can appear.
+        if (a > b) continue;
+        if (table.startsWith(`${a}_${b}_`)) junctions.add(table);
+      }
+    }
+  }
+  return junctions;
+}
+
+/**
+ * Whether a live table belongs in a snapshot the apply path compares against.
+ *
+ * `isSnapshotComparableTable` answers it for one name; this needs the whole
+ * list, because whether a table is a junction depends on which other tables
+ * are standing beside it.
+ */
+export function snapshotComparableTables(
+  liveTables: readonly string[]
+): string[] {
+  const junctions = junctionTablesAmong(liveTables);
+  return liveTables.filter(
+    name => isSnapshotComparableTable(name) && !junctions.has(name)
+  );
+}

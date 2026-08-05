@@ -543,6 +543,24 @@ function runSuite(dialect: SupportedDialect): void {
       parseSqlSections(await readFile(adopted.sqlPath, "utf-8")).upSql
     );
     expect(up.filter(st => st.includes(junction))).not.toEqual([]);
+
+    // And the next migration still APPLIES. Excluding the junction from the
+    // recorded snapshot is only half the job: `migrate`'s drift check builds
+    // its own live snapshot, and if that one still contains the junction it
+    // matches neither the baseline nor the target, so the first migration
+    // after adoption stops with drift no migration could ever resolve.
+    const delta = await runMigrateCreate(h, configV2, "add_subtitle");
+    expect(delta).not.toBeNull();
+    await expect(
+      runFileMigrations({
+        adapter: h.adapter,
+        db: h.db,
+        dialect: h.dialect,
+        migrationsDir: h.migrationsDir,
+        logger,
+      })
+    ).resolves.toBe(1);
+    expect(await hasColumn(h, "subtitle")).toBe(true);
   });
 
   it("refuses to give a project that already migrated a second starting point", async () => {

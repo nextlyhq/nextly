@@ -61,7 +61,7 @@ import {
   forceUnlock,
   withMigrateLock,
 } from "../../domains/schema/pipeline/locks";
-import { isSnapshotComparableTable } from "../../domains/schema/pipeline/managed-tables";
+import { snapshotComparableTables } from "../../domains/schema/pipeline/managed-tables";
 import { NextlyError, describeError } from "../../errors";
 import { createContext, type CommandContext } from "../program";
 import {
@@ -659,7 +659,10 @@ export async function runFileMigrations(args: {
     // Managed main tables only, for the same reason `migrate:resolve` uses
     // this predicate: a localized companion never appears in the snapshot this
     // is diffed against, so including one reports drift that is not there.
-    const managed = liveTables.filter(isSnapshotComparableTable);
+    // Junctions are excluded alongside companions: neither is declared by
+    // config, so neither can appear in the snapshot this is compared against,
+    // and including one reports drift that no migration could ever resolve.
+    const managed = snapshotComparableTables(liveTables);
     const live = await introspectLiveSnapshot(db, dialect, managed);
     await reconcileFile({
       file: { filename, sql: m.upSql, path: m.filePath, sha256: m.checksum },
