@@ -4,6 +4,7 @@
  * renders the block tree. The host injects a `dataProvider`; the default registry holds
  * the built-in blocks (populated by importing `./blocks`).
  */
+import { PAGE_ROOT_CLASS } from "@nextlyhq/blocks-engine";
 import type { ReactNode } from "react";
 
 import { sanitizeCustomCss } from "../core/css-sanitize";
@@ -13,6 +14,7 @@ import {
   compileDocumentCss,
   compileDocumentMotionCss,
   compileTokensCss,
+  documentScopeClass,
   type BreakpointDef,
   type RemotePatternInput,
 } from "../core/style-compiler";
@@ -21,8 +23,6 @@ import type { BlockDocument, BlockNode } from "../core/types";
 import type { DataProvider } from "./dataProvider";
 import { DEFAULT_QUERY_BUDGET } from "./query/types";
 import { RenderNode } from "./RenderNode";
-
-const PAGE_ROOT_CLASS = "nx-pb-page";
 
 export interface PageRendererProps {
   document: BlockDocument;
@@ -63,21 +63,34 @@ export function PageRenderer({
 }: PageRendererProps): ReactNode {
   if (!document?.root) return null;
 
+  // Everything two documents on one page must not share is anchored to a class
+  // of this document's own: its token values, and the custom CSS whose
+  // selectors and `@keyframes`/`@font-face` names would otherwise resolve
+  // across the boundary. `nx-pb-page` stays on the element beside it, because
+  // it is what a host styles page-builder content with and is meant to match
+  // every document.
+  const scope = documentScopeClass(document);
   const css = [
-    compileTokensCss(PAGE_ROOT_CLASS, tokens),
+    compileTokensCss(scope, tokens),
     compileDocumentMotionCss(document),
-    compileDocumentCss(document, { breakpoints, remotePatterns }),
+    compileDocumentCss(document, { breakpoints, remotePatterns, scope }),
     compileDocumentBlockCss(document),
     // `.css` alone: the sanitizer also returns what it removed, and this path
     // renders rather than edits, so there is nowhere to show a warning. The
     // editor reads the same result and displays them.
-    sanitizeCustomCss(customCss ?? "", PAGE_ROOT_CLASS).css,
+    sanitizeCustomCss(customCss ?? "", scope).css,
   ]
     .filter(Boolean)
     .join("\n");
 
   return (
-    <div className={PAGE_ROOT_CLASS}>
+    <div
+      className={
+        scope === PAGE_ROOT_CLASS
+          ? PAGE_ROOT_CLASS
+          : `${PAGE_ROOT_CLASS} ${scope}`
+      }
+    >
       <style dangerouslySetInnerHTML={{ __html: css }} />
       <RenderNode
         node={document.root}

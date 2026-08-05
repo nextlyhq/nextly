@@ -64,6 +64,25 @@ describe("canEmitWithoutDrizzleKit", () => {
     );
   });
 
+  it("keeps drop_index fast-path-eligible (routing only; pre-resolution executes it)", () => {
+    // drop_index is executed by executePreResolutionOps, but an apply of
+    // additive ops plus index drops must still take the fast path — falling
+    // back to drizzle-kit's re-introspection re-opens the `_pkey` incident
+    // surface below.
+    const dropIndex: Operation = {
+      type: "drop_index",
+      tableName: "dc_authors",
+      index: {
+        name: "idx_dc_authors_avatar",
+        columns: ["avatar"],
+        unique: false,
+      },
+    };
+    expect(canEmitWithoutDrizzleKit([addCol, dropIndex], "postgresql")).toBe(
+      true
+    );
+  });
+
   it("returns false if any op is outside the fast-path set (mixed list)", () => {
     const renameTable: Operation = {
       type: "rename_table",

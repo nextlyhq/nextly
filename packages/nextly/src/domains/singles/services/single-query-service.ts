@@ -18,13 +18,15 @@
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { sql } from "drizzle-orm";
+import { inArray, type AnyColumn } from "drizzle-orm";
 
 import {
   apiKeyWriteAllowed,
   type AuthenticatedScope,
 } from "../../../auth/authenticated-scope";
+import { isFieldGroupField } from "../../../collections/fields/guards";
 import type { FieldConfig } from "../../../collections/fields/types";
+import { getDialectTables } from "../../../database";
 import { container } from "../../../di/container";
 import type { Nextly as NextlyDirectAPI } from "../../../direct-api/nextly";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
@@ -36,6 +38,7 @@ import {
 import type { HookRegistry } from "../../../hooks/hook-registry";
 import type { HookContext } from "../../../hooks/types";
 import { keysToCamelCase, keysToSnakeCase } from "../../../lib/case-conversion";
+import { absolutizeMediaUrls } from "../../../lib/media-variant";
 import { resolveStatusFilter } from "../../../lib/status-filter";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { DynamicSingleRecord } from "../../../schemas/dynamic-singles/types";
@@ -825,6 +828,29 @@ export class SingleQueryService extends BaseService {
       // can be evaluated for the rows this pulls in.
       true
     );
+
+    // A strict pass is the authorization view, and its whole contract is that a
+    // rule is judged on complete data or not at all. Field-group values live in
+    // their own tables, so without the service that loads them the rule reads
+    // the fields as empty — the same "absence looks like permission" failure the
+    // depth floor and the relationship completeness check exist to prevent, and
+    // it would silently admit callers a rule inspecting those values refuses.
+    // Only a Single that actually declares field-group fields is affected; the
+    // service is always wired in the DI graph, so this guards the seam rather
+    // than a reachable configuration.
+    if (!this.fieldGroupDataService && strict) {
+      const declaresFieldGroups = singleMeta.fields.some(field =>
+        isFieldGroupField(field)
+      );
+      if (declaresFieldGroups) {
+        throw NextlyError.internal({
+          logContext: {
+            single: slug,
+            reason: "field-group-data-service-unavailable-during-authorization",
+          },
+        });
+      }
+    }
 
     if (this.fieldGroupDataService) {
       try {
@@ -2564,6 +2590,14 @@ export class SingleQueryService extends BaseService {
 
   /**
    * Fetch media records by IDs.
+   *
+   * Uses Drizzle's typed query builder against the dialect's registered media
+   * table rather than a raw `db.execute(sql...)`: better-sqlite3 doesn't
+   * expose `.execute()` on its Drizzle handle, so the raw form threw
+   * `db.execute is not a function` on SQLite and every upload field silently
+   * expanded to null. Mirrors CollectionRelationshipService.fetchMediaByIds so
+   * singles and collections resolve media identically (including absolutizing
+   * relative local-storage URLs).
    */
   private async fetchMediaByIds(
     ids: string[]
@@ -2571,45 +2605,56 @@ export class SingleQueryService extends BaseService {
     if (ids.length === 0) return [];
 
     try {
-      const idPlaceholders = sql.join(
-        ids.map(id => sql`${id}`),
-        sql`, `
-      );
-
-      const mediaQuery = sql`
-        SELECT * FROM media
-        WHERE id IN (${idPlaceholders})
-      `;
-
-      const db = this.db as unknown as {
-        execute: (query: unknown) => Promise<unknown>;
-      };
-      const results = await db.execute(mediaQuery);
-
-      let rows: unknown[];
-      if (Array.isArray(results)) {
-        rows = results;
-      } else if (
-        results &&
-        typeof results === "object" &&
-        "rows" in results &&
-        Array.isArray((results as { rows: unknown[] }).rows)
-      ) {
-        rows = (results as { rows: unknown[] }).rows;
-      } else {
-        rows = [];
+      const tables = getDialectTables(
+        this.adapter.dialect
+      ) as unknown as Record<string, { id: AnyColumn } | undefined>;
+      const mediaTable = tables.media;
+      if (!mediaTable) {
+        throw NextlyError.internal({
+          logContext: {
+            op: "fetchMediaByIds",
+            detail: "media table schema not registered for dialect",
+            dialect: this.adapter.dialect,
+          },
+        });
       }
 
-      return rows.map(
-        row =>
-          keysToCamelCase(row as Record<string, unknown>) as Record<
-            string,
-            unknown
-          >
-      );
+      // Structural cast: this.db is the cross-dialect Drizzle union, whose
+      // select() overloads don't unify over a dynamically-resolved table.
+      // Every dialect's handle supports this exact builder chain.
+      const db = this.db as unknown as {
+        select: () => {
+          from: (table: unknown) => {
+            where: (condition: unknown) => Promise<Record<string, unknown>[]>;
+          };
+        };
+      };
+      const rows = await db
+        .select()
+        .from(mediaTable)
+        .where(inArray(mediaTable.id, ids));
+
+      return rows.map(row => {
+        const camel = keysToCamelCase(row) as Record<string, unknown>;
+        // Local storage stores relative URLs (`/uploads/...`); cloud adapters
+        // store absolute ones. Prefix the relative form so expanded media in
+        // API responses is reachable by external clients.
+        return absolutizeMediaUrls(camel);
+      });
     } catch (error) {
-      this.logger.error("Failed to fetch media by IDs", { error });
-      return [];
+      // Raised, not swallowed. Returning [] here degrades a failed fetch into
+      // an upload field that reads back as null, which is indistinguishable
+      // from "this document references no media" — the symptom that hid a
+      // broken media fetch on SQLite until a user reported vanishing images.
+      // Expansion failing is not a normal outcome, so the read fails loudly.
+      throw NextlyError.internal({
+        cause: error instanceof Error ? error : undefined,
+        logContext: {
+          op: "fetchMediaByIds",
+          dialect: this.adapter.dialect,
+          mediaIds: ids.length,
+        },
+      });
     }
   }
 }

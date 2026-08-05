@@ -148,6 +148,21 @@ export {
   checkCssValue,
   checkDimensionValue,
   checkUrlValue,
+  // How CSS reads an identifier that carries escapes. Public for the same
+  // reason as the namespacing rule: anything deciding what a name IS has to
+  // decode it the same way, or `font\2d family` reads as a different property
+  // here than it does in a browser.
+  decodeIdentifier,
+  // The other direction, public for the same reason. A caller that decoded a
+  // name to compare it has to escape it again before writing it back, or a name
+  // holding a space or a quote is emitted as tokens the parser reads apart.
+  escapeIdentifier,
+  // ASCII-only case folding, which is what CSS applies to keywords. JavaScript's
+  // `toLowerCase` folds more than that: U+212A KELVIN SIGN becomes "k", so
+  // `@\u212Aeyframes` reads as `@keyframes` to a check using it and as an unknown
+  // at-rule to a browser. Public because every surface deciding what a keyword
+  // IS has to fold it the same way.
+  asciiLower,
 } from "./style/css-value";
 export type { CssValueRejection } from "./style/css-value";
 export {
@@ -163,6 +178,49 @@ export {
 } from "./style/validate-style-value";
 export type { StyleIssueBudget } from "./style/validate-style-value";
 export { compilePageCss, BASE_BREAKPOINT } from "./style/compile-page";
+// The one rule for how a document-global CSS name wears its scope. Public
+// because more than one place has to produce it and they must agree exactly:
+// the compiler namespaces the names it emits, the custom-CSS sanitizer
+// namespaces the names an author writes, and `findUnnamespacedGlobals` checks
+// the result. Two spellings of "namespaced" would make that check pass on
+// output the browser still resolves globally.
+export {
+  findUnnamespacedGlobals,
+  namespacedGlobalName,
+} from "./style/isolation";
+// Site tokens and self-hosted fonts: the table a token name resolves in, and
+// the faces a site serves. Public because the admin's tokens studio and the
+// site-sheet compiler both build on these types.
+export {
+  DARK_MODE_ATTRIBUTE,
+  TOKEN_MODES,
+  defaultSiteTokens,
+  emitFontFaces,
+  emitTokenBlocks,
+  isTokenName,
+  resolveTokenPrefix,
+  validateFontFace,
+} from "./style/site-tokens";
+export type {
+  DarkModeStrategy,
+  FontFaceDef,
+  FontSource,
+  SiteToken,
+  SiteTokenSet,
+  TokenMode,
+} from "./style/site-tokens";
+// Interop and judgement, both pure: the format other design-token tools read,
+// and the contrast a person needs while a colour picker is open.
+export { NEXTLY_EXTENSION, dtcgToTokens, tokensToDtcg } from "./style/dtcg";
+export type { DtcgNode } from "./style/dtcg";
+export {
+  checkContrast,
+  compositeOver,
+  contrastRatio,
+  parseColor,
+  relativeLuminance,
+} from "./style/contrast";
+export type { ContrastLevel, ContrastResult, Rgb } from "./style/contrast";
 export type {
   CompiledPageCss,
   StyleCompileContext,

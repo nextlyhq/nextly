@@ -702,6 +702,7 @@ function applyRenameDecisions(
   }
 
   // Append rename_column ops for each effective acceptance.
+  const renames: Operation[] = [];
   for (const d of effectiveAccepts) {
     const c = d.candidate;
     const renameOp: RenameColumnOp = {
@@ -712,10 +713,34 @@ function applyRenameDecisions(
       fromType: c.fromType,
       toType: c.toType,
     };
-    remaining.push(renameOp);
+    renames.push(renameOp);
   }
 
-  return remaining;
+  // Nothing was collapsed, so the diff's own ordering already holds and the
+  // list is returned untouched. Partitioning here regardless would produce the
+  // same array only for as long as diffSnapshots keeps emitting add_index
+  // last, which makes this function silently depend on that contract.
+  if (renames.length === 0) return remaining;
+
+  // The renames land ahead of the index tail, not at the very end. Collapsing a
+  // (drop_column, add_column) pair removes the statement that would have
+  // created the new column, so an index declared on it can only be created
+  // once the rename has produced that name — otherwise the generated UP reads
+  // `CREATE INDEX ... (image); RENAME COLUMN hero_image TO image` and fails on
+  // a column that does not exist yet.
+  //
+  // Inserted before the FIRST add_index rather than filtering add_index out,
+  // so the tail keeps the order the diff chose. That tail can end with an index
+  // drop the diff deliberately placed after its replacement's creation, and
+  // hoisting the renames past it would reorder the two.
+  const firstAddIndex = remaining.findIndex(op => op.type === "add_index");
+  if (firstAddIndex === -1) return [...remaining, ...renames];
+
+  return [
+    ...remaining.slice(0, firstAddIndex),
+    ...renames,
+    ...remaining.slice(firstAddIndex),
+  ];
 }
 
 /**

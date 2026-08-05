@@ -28,6 +28,21 @@ export { quoteIdent } from "./identifier-quoting";
 export { MysqlUnsupportedOperationError } from "./mysql";
 export { SqliteUnsupportedOperationError } from "./sqlite";
 
+/**
+ * SQL for one operation.
+ *
+ * The return value is not guaranteed to be a single statement. An operation
+ * whose effect has no single-statement spelling returns several, separated by
+ * `; ` — today that is PostgreSQL `drop_index` on a unique, which must drop a
+ * possible owning constraint as well as the index. Callers that write the
+ * result into a migration file are unaffected (the runner's splitter handles
+ * it, and `index-sql.test.ts` pins that round-trip); callers that hand it to a
+ * driver must be able to run a compound statement, which the pre-resolution
+ * executor does on the simple-query protocol.
+ *
+ * Anyone adding an operation type here should know compound returns are legal,
+ * and anyone adding a consumer should decide which of those two it is.
+ */
 export function generateSQL(op: Operation, dialect: SupportedDialect): string {
   switch (dialect) {
     case "postgresql":

@@ -114,9 +114,14 @@ export function emitPostgresDdl(op: Operation): string[] {
   switch (op.type) {
     case "rename_table":
     case "rename_column":
+    case "drop_index":
     case "drop_column":
     case "drop_table":
       // Already applied by executePreResolutionOps. Emit nothing.
+      // drop_index moved into that set alongside drop_column: the index
+      // must fall in the same phase as, and before, its column's drop
+      // (SQLite rejects DROP COLUMN on an indexed column), so emitting it
+      // here again would double-apply it on the fast path.
       return [];
 
     case "add_column":
@@ -140,9 +145,6 @@ export function emitPostgresDdl(op: Operation): string[] {
 
     case "add_index":
       return [createIndexStatement(op.tableName, op.index)];
-
-    case "drop_index":
-      return [`DROP INDEX IF EXISTS ${quoteIdent(op.index.name)}`];
 
     case "change_column_type":
       return [
