@@ -77,6 +77,7 @@ interface PgRow {
   is_nullable: "YES" | "NO";
   column_default: string | null;
   owned_sequence_default: boolean;
+  is_primary_key: boolean;
 }
 
 interface MysqlRow {
@@ -85,6 +86,13 @@ interface MysqlRow {
   COLUMN_TYPE: string;
   IS_NULLABLE: "YES" | "NO";
   COLUMN_DEFAULT: string | null;
+  DATA_TYPE: string;
+  EXTRA: string;
+}
+
+interface MysqlPrimaryKeyRow {
+  TABLE_NAME: string;
+  COLUMN_NAME: string;
 }
 
 interface MysqlIndexRow {
@@ -154,9 +162,27 @@ export async function introspectLiveSnapshot(
     // that is not exactly a `nextval()` call yields NULL from the substring
     // and so falls to false, which is the safe direction: a default the diff
     // does not recognise is reported, never swallowed.
+    // `is_primary_key` comes from `pg_index.indisprimary` rather than
+    // `information_schema.table_constraints`, so it needs no second round trip
+    // and reports the same key the index query deliberately excludes. A live
+    // snapshot without it renders a key-less `CREATE TABLE` in any statement
+    // generated from it, which is how an adopted database rebuilt elsewhere
+    // ended up with no primary keys at all.
     const result = (await dbTyped.execute(
       sql`SELECT c.table_name, c.column_name, c.udt_name, c.is_nullable,
                  c.column_default,
+                 EXISTS (
+                   SELECT 1
+                   FROM pg_index i
+                   JOIN pg_class t ON t.oid = i.indrelid
+                   JOIN pg_namespace n ON n.oid = t.relnamespace
+                   JOIN pg_attribute a
+                     ON a.attrelid = t.oid AND a.attnum = ANY(i.indkey)
+                   WHERE i.indisprimary
+                     AND n.nspname = c.table_schema
+                     AND t.relname = c.table_name
+                     AND a.attname = c.column_name
+                 ) AS is_primary_key,
                  COALESCE(
                    substring(
                      c.column_default from '^nextval[(]''(.+)''::regclass[)]$'
@@ -217,7 +243,8 @@ export async function introspectLiveSnapshot(
     // mysql2's execute returns a [rows, fieldPackets] tuple; drizzle-orm/mysql2
     // sometimes wraps it. Handle both shapes defensively.
     const result = (await dbTyped.execute(
-      sql`SELECT TABLE_NAME, COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT
+      sql`SELECT TABLE_NAME, COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT,
+                 DATA_TYPE, EXTRA
           FROM information_schema.columns
           WHERE TABLE_SCHEMA = DATABASE()
             AND TABLE_NAME IN (${tableNamesIn})
@@ -229,7 +256,32 @@ export async function introspectLiveSnapshot(
       Array.isArray((result as unknown[])[0])
         ? (result as [MysqlRow[], unknown])[0]
         : (result as MysqlRow[]);
-    const snapshot = buildSnapshotFromMysqlRows(rows);
+    // The key comes from the PRIMARY index rather than `COLUMN_KEY`, which
+    // does not mean what its name suggests: a table with no primary key but a
+    // NOT NULL UNIQUE index reports `PRI` for that column, because InnoDB
+    // promotes such an index to the clustered key. Trusting it would mark
+    // something like `slug` as the primary key, hiding a table that genuinely
+    // has none and rebuilding it elsewhere with the wrong key. Verified
+    // against MySQL 8: `STATISTICS` shows only the `slug` index, no `PRIMARY`,
+    // while `COLUMN_KEY` still says `PRI`.
+    const pkRaw = (await dbTyped.execute(
+      sql`SELECT TABLE_NAME, COLUMN_NAME
+          FROM information_schema.STATISTICS
+          WHERE TABLE_SCHEMA = DATABASE()
+            AND TABLE_NAME IN (${tableNamesIn})
+            AND INDEX_NAME = 'PRIMARY'`
+    )) as MysqlPrimaryKeyRow[] | [MysqlPrimaryKeyRow[], unknown];
+    const pkRows: MysqlPrimaryKeyRow[] =
+      Array.isArray(pkRaw) &&
+      pkRaw.length > 0 &&
+      Array.isArray((pkRaw as unknown[])[0])
+        ? (pkRaw as [MysqlPrimaryKeyRow[], unknown])[0]
+        : (pkRaw as MysqlPrimaryKeyRow[]);
+    const primaryKeyColumns = new Set(
+      pkRows.map(r => `${r.TABLE_NAME}.${r.COLUMN_NAME}`)
+    );
+
+    const snapshot = buildSnapshotFromMysqlRows(rows, primaryKeyColumns);
     // Index query: information_schema.STATISTICS. Exclude PRIMARY.
     const idxRaw = (await dbTyped.execute(
       sql`SELECT TABLE_NAME, INDEX_NAME, NON_UNIQUE, COLUMN_NAME, SEQ_IN_INDEX
@@ -311,6 +363,10 @@ export async function introspectLiveSnapshot(
           // database. Whether requiring such a column is safe is decided from
           // the data, in resolve-safe-nullability.ts.
           nullable: r.notnull === 0,
+          // `pk` is 0 for an ordinary column and the 1-based position within
+          // the key otherwise, so any non-zero value means this column is part
+          // of it. PRAGMA has always returned this; nothing read it.
+          ...(r.pk > 0 ? { primaryKey: true as const } : {}),
           // dflt_value can be string, number, null, or undefined.
           // Coerce primitives to string; treat anything non-primitive as
           // missing (defensive - SQLite never returns object defaults).
@@ -350,6 +406,10 @@ function buildSnapshotFromPgRows(rows: PgRow[]): NextlySchemaSnapshot {
     // Recorded only when true, so a snapshot carries the marker rather than a
     // false on every column that has no sequence at all.
     if (r.owned_sequence_default === true) column.ownedSequenceDefault = true;
+    // Same convention for the key: present when it is one, absent otherwise,
+    // so a snapshot taken before this reads the same as one where the column
+    // is genuinely not part of the key.
+    if (r.is_primary_key === true) column.primaryKey = true;
     cols.push(column);
   }
   return {
@@ -359,7 +419,58 @@ function buildSnapshotFromPgRows(rows: PgRow[]): NextlySchemaSnapshot {
   };
 }
 
-function buildSnapshotFromMysqlRows(rows: MysqlRow[]): NextlySchemaSnapshot {
+/** MySQL types whose default is reported as a bare number, not a literal. */
+const MYSQL_NUMERIC_TYPES = new Set([
+  "tinyint",
+  "smallint",
+  "mediumint",
+  "int",
+  "integer",
+  "bigint",
+  "decimal",
+  "numeric",
+  "float",
+  "double",
+  "real",
+]);
+
+/**
+ * A MySQL default as it must appear in DDL.
+ *
+ * MySQL is the odd one out. PostgreSQL reports `'draft'::character varying`
+ * and SQLite reports `'draft'`, both already quoted; MySQL's
+ * `information_schema.COLUMN_DEFAULT` strips the quotes and reports `draft`.
+ * Recorded verbatim, a snapshot then renders `DEFAULT draft`, which the server
+ * reads as an identifier and refuses — so a schema generated from a live MySQL
+ * snapshot could not be applied anywhere.
+ *
+ * `EXTRA` is what separates the two cases: an expression default (
+ * `CURRENT_TIMESTAMP`, `json_array()`) carries `DEFAULT_GENERATED` and must be
+ * left alone, while everything else is a literal. Numeric types need no quotes
+ * either, and quoting them would turn a number into a string.
+ */
+function mysqlDefaultExpression(row: MysqlRow): string | undefined {
+  const value = row.COLUMN_DEFAULT;
+  if (value === null || value === undefined) return undefined;
+  // An expression is already valid DDL as written.
+  if ((row.EXTRA ?? "").toUpperCase().includes("DEFAULT_GENERATED")) {
+    return value;
+  }
+  if (MYSQL_NUMERIC_TYPES.has((row.DATA_TYPE ?? "").toLowerCase())) {
+    return value;
+  }
+  // A literal. Both the backslash and the quote have to be escaped, and the
+  // backslash first: under MySQL's default sql_mode a backslash introduces an
+  // escape sequence, so a default of `a\nb` re-emitted with only the quote
+  // handled would store a newline instead of the two characters it had.
+  const escaped = value.replace(/\\/g, "\\\\").replace(/'/g, "''");
+  return `'${escaped}'`;
+}
+
+function buildSnapshotFromMysqlRows(
+  rows: MysqlRow[],
+  primaryKeyColumns: ReadonlySet<string>
+): NextlySchemaSnapshot {
   const byTable = new Map<string, ColumnSpec[]>();
   for (const r of rows) {
     let cols = byTable.get(r.TABLE_NAME);
@@ -367,12 +478,16 @@ function buildSnapshotFromMysqlRows(rows: MysqlRow[]): NextlySchemaSnapshot {
       cols = [];
       byTable.set(r.TABLE_NAME, cols);
     }
-    cols.push({
+    const column: ColumnSpec = {
       name: r.COLUMN_NAME,
       type: r.COLUMN_TYPE,
       nullable: r.IS_NULLABLE === "YES",
-      default: r.COLUMN_DEFAULT ?? undefined,
-    });
+      default: mysqlDefaultExpression(r),
+    };
+    if (primaryKeyColumns.has(`${r.TABLE_NAME}.${r.COLUMN_NAME}`)) {
+      column.primaryKey = true;
+    }
+    cols.push(column);
   }
   return {
     tables: [...byTable.entries()].map(
