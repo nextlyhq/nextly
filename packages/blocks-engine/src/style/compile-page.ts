@@ -387,6 +387,28 @@ function scopeSelector(
  * values without a word, and this result promises that anything missing from
  * the stylesheet is explained.
  */
+/**
+ * The keys of a stored record, bounded before they are sorted.
+ *
+ * Enumeration has to stop where reporting stops, and it was stopping one step too late: the
+ * allowance was consulted INSIDE the loop, after `Object.keys(...).sort()` had already allocated
+ * and ordered every key. A named class carrying a very large map of stale breakpoint ids paid
+ * that on every page compile, from site settings, however small the returned warning list was.
+ *
+ * Sliced before sorting rather than after, so neither the array nor the sort scales with what was
+ * stored. Which keys survive the slice does not matter: they feed diagnostics that are capped a
+ * few entries later anyway.
+ */
+function boundedKeys(record: Record<string, unknown>): string[] {
+  const keys = Object.keys(record);
+  return (
+    keys.length > MAX_SCANNED_KEYS ? keys.slice(0, MAX_SCANNED_KEYS) : keys
+  ).sort();
+}
+
+/** How many keys of one stored record are read before the walk gives up. */
+const MAX_SCANNED_KEYS = 256;
+
 function unknownBreakpointWarnings(
   styles: NodeStyles,
   basePath: string,
@@ -394,12 +416,13 @@ function unknownBreakpointWarnings(
   warnings: ValidationIssue[],
   allowance: WarningAllowance
 ): void {
+  if (allowanceSpent(allowance)) return;
   const known = new Set(contexts.map(context => context.id));
   const knownStates = new Set<string>(STYLE_STATES);
   // Iterating only the states this engine knows means an unrecognised one is
   // never compiled AND never mentioned. The envelope's own keys are read here
   // so a stored `pressed` is accounted for rather than disappearing.
-  for (const state of Object.keys(styles).sort()) {
+  for (const state of boundedKeys(styles)) {
     if (!knownStates.has(state)) {
       pushBoundedWarning(allowance, warnings, {
         path: pointer(basePath, state),
@@ -410,9 +433,10 @@ function unknownBreakpointWarnings(
       });
       continue;
     }
+    if (allowanceSpent(allowance)) return;
     const byBreakpoint = styles[state as StyleState];
     if (!isPlainRecord(byBreakpoint)) continue;
-    for (const id of Object.keys(byBreakpoint).sort()) {
+    for (const id of boundedKeys(byBreakpoint)) {
       // Enumeration stops where reporting stops. The allowance bounds what is
       // RETURNED, and a state map with a very large number of stale ids costs a
       // full sort and a full scan before that bound is ever consulted — work

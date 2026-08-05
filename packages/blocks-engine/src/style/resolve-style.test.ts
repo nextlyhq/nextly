@@ -453,10 +453,26 @@ describe("a shorthand under a partial record", () => {
 });
 
 describe("two catalog keys writing one CSS property", () => {
-  it("prefers the one the compiler writes last, even under a different name", () => {
-    // `background.url` and `backgroundGradient` both emit `background-image`. Reading only the
-    // asked-for key reports the image while the browser paints the gradient over it.
+  it("stops reporting a value another key has overwritten", () => {
+    // `background.url` and `backgroundGradient` both write `background-image`, and the compiler
+    // writes the gradient last. Reporting the class's image would name a picture the browser is
+    // no longer painting.
     const found = resolveStyle("background", "base", "desktop", {
+      classes: [
+        namedClass("card", 0, at("desktop", { background: { url: "/a.png" } })),
+      ],
+      node: at("desktop", {
+        backgroundGradient: "linear-gradient(red, blue)",
+      }),
+    });
+
+    expect(found?.parts?.url).toBeUndefined();
+  });
+
+  it("reports the gradient under the key that actually holds it", () => {
+    // The overwriting value is not expressible as a `background` — there is no field of it that
+    // holds a gradient — so it is answered where it lives.
+    const found = resolveStyle("backgroundGradient", "base", "desktop", {
       classes: [
         namedClass("card", 0, at("desktop", { background: { url: "/a.png" } })),
       ],
@@ -473,22 +489,21 @@ describe("two catalog keys writing one CSS property", () => {
     // The compiler SORTS a map's keys before emitting, so two documents differing only in the
     // order they were written compile to the same bytes. `background` sorts before
     // `backgroundGradient`, so the gradient is written last and wins — from either storage order.
-    // Reading the stored order instead looks like the write order and is not.
-    const gradientStoredLast = resolveStyle("background", "base", "desktop", {
+    const storedLast = resolveStyle("backgroundGradient", "base", "desktop", {
       node: at("desktop", {
         background: { url: "/a.png" },
         backgroundGradient: "linear-gradient(red, blue)",
       }),
     });
-    const gradientStoredFirst = resolveStyle("background", "base", "desktop", {
+    const storedFirst = resolveStyle("backgroundGradient", "base", "desktop", {
       node: at("desktop", {
         backgroundGradient: "linear-gradient(red, blue)",
         background: { url: "/a.png" },
       }),
     });
 
-    expect(gradientStoredLast?.value).toBe("linear-gradient(red, blue)");
-    expect(gradientStoredFirst?.value).toBe("linear-gradient(red, blue)");
+    expect(storedLast?.value).toBe("linear-gradient(red, blue)");
+    expect(storedFirst?.value).toBe("linear-gradient(red, blue)");
   });
 });
 
@@ -547,6 +562,62 @@ describe("a declaration is evidence only for the key that wrote it", () => {
 
     expect(found?.value).toEqual({ $token: "brand.primary" });
     expect(found?.source).toEqual({ tier: "local" });
+  });
+});
+
+describe("two keys that overlap on only part of what they write", () => {
+  it("keeps the fields the other key did not overwrite, and their tier", () => {
+    // `backgroundGradient` replaces `background-image` and nothing else. The class's position,
+    // size and repeat are still painting the element, so clearing the whole value would send an
+    // author looking for values that are plainly there.
+    const found = resolveStyle("background", "base", "desktop", {
+      classes: [
+        namedClass(
+          "card",
+          0,
+          at("desktop", {
+            background: {
+              url: "/a.png",
+              position: "center",
+              repeat: "no-repeat",
+            },
+          })
+        ),
+      ],
+      node: at("desktop", { backgroundGradient: "linear-gradient(red, blue)" }),
+    });
+
+    expect(found?.parts?.position.source).toEqual({
+      tier: "class",
+      id: "card",
+      slug: "card",
+    });
+    expect(found?.parts?.url).toBeUndefined();
+  });
+
+  it("ignores a key that writes none of what was asked about", () => {
+    // `background: { position }` emits `background-position` only. Accepted as a candidate for
+    // the gradient, it reports a position object as the image over an element with no image.
+    const found = resolveStyle("backgroundGradient", "base", "desktop", {
+      node: at("desktop", { background: { position: "center" } }),
+    });
+
+    expect(found).toBeUndefined();
+  });
+});
+
+describe("a shorthand and its longhands", () => {
+  it("sees a value the shorthand supplied under a different property name", () => {
+    // `gap` writes both `row-gap` and `column-gap`, and shares no property NAME with either. A
+    // longhand control that matched on the name alone reported no source for a gap the browser
+    // is plainly applying.
+    const found = resolveStyle("columnGap", "base", "desktop", {
+      classes: [namedClass("card", 0, at("desktop", { gap: "16px" }))],
+      node: at("desktop", { rowGap: "4px" }),
+    });
+
+    expect(found?.value).toBe("16px");
+    expect(found?.source).toEqual({ tier: "class", id: "card", slug: "card" });
   });
 });
 

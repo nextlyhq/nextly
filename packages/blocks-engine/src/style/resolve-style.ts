@@ -27,8 +27,10 @@ import { isPlainRecord } from "../plain-record";
 import { BREAKPOINT_AXES } from "./breakpoint-axes";
 import {
   compositeFieldNames,
+  declarationsCovered,
   cssPropertiesForField,
   propertiesAlsoMatching,
+  declarationsWritten,
   propertyDescendantSelector,
   propertyInheritsToDescendants,
   propertyPseudoClassCount,
@@ -394,6 +396,59 @@ function compilerWrites(values: Record<string, unknown>): Set<string> {
   );
 }
 
+/** What the compiler wrote, with each shorthand also standing for the longhands it sets. */
+function compilerWroteKeys(values: Record<string, unknown>): Set<string> {
+  const keys = new Set<string>();
+  for (const written of compilerWrites(values)) {
+    const [descendant = "", css = ""] = written.split("|");
+    for (const covered of declarationsCovered(css)) {
+      keys.add(`${descendant}|${covered}`);
+    }
+  }
+  return keys;
+}
+
+/** The keys a candidate writes that also belong to the property being asked about. */
+function overlappingWrites(candidate: string, property: string): string[] {
+  const wanted = new Set(declarationsWritten(property));
+  const descendant = propertyDescendantSelector(candidate) ?? "";
+  return declarationsWritten(candidate)
+    .filter(css => wanted.has(css))
+    .map(css => `${descendant}|${css}`);
+}
+
+/**
+ * What survives when another catalog key overwrites part of this one.
+ *
+ * Dropped leaf by leaf rather than wholesale: two keys can overlap on one declaration and leave
+ * the rest of a composite standing, and those fields keep both their value and the tier that set
+ * them.
+ */
+function withoutOverwritten(
+  current: Accumulated | undefined,
+  property: string,
+  path: readonly string[],
+  overwritten: ReadonlySet<string>
+): Accumulated | undefined {
+  if (current === undefined) return undefined;
+  if (current.kind === "whole") {
+    return writeKeysFor(property, path).some(key => overwritten.has(key))
+      ? undefined
+      : current;
+  }
+  const kept = new Map<string, Accumulated>();
+  for (const [name, held] of current.fields) {
+    const survivor = withoutOverwritten(
+      held,
+      property,
+      [...path, name],
+      overwritten
+    );
+    if (survivor !== undefined) kept.set(name, survivor);
+  }
+  return kept.size === 0 ? undefined : { kind: "fields", fields: kept };
+}
+
 /** The keys a candidate property would produce, in the same form `compilerWrites` records. */
 function writeKeysFor(property: string, path: readonly string[]): string[] {
   const descendant = propertyDescendantSelector(property) ?? "";
@@ -595,7 +650,7 @@ export function resolveStyle(
         // together — enough malformed siblings exhaust the structural budget and nothing in it is
         // written — so asking about one property in isolation can report a value the browser
         // never received because of the company it was stored with.
-        const emitted = compilerWrites(values);
+        const emitted = compilerWroteKeys(values);
         // Sorted, because that is the order the compiler writes a map in — it sorts the keys so
         // two documents differing only in the order they were written compile to the same bytes.
         // Stored order looks like the write order and is not: with `backgroundGradient` stored
@@ -604,9 +659,15 @@ export function resolveStyle(
           if (!properties.has(candidate)) continue;
           const value = values[candidate] as StyleValue;
           if (value === undefined) continue;
-          if (!writeKeysFor(candidate, []).some(key => emitted.has(key))) {
-            continue;
-          }
+          // Accepted only if this candidate actually wrote a declaration that OVERLAPS the
+          // property being asked about. That it emitted something is not enough: a same-map
+          // `background: { position: "center" }` writes `background-position` and nothing else,
+          // so treating it as a candidate for `backgroundGradient` reports a position object as
+          // the gradient over an element with no image declaration at all.
+          const overwrote = overlappingWrites(candidate, property).filter(key =>
+            emitted.has(key)
+          );
+          if (overwrote.length === 0) continue;
           const source: StyleSource =
             id === breakpoint
               ? tier.source
@@ -630,8 +691,35 @@ export function resolveStyle(
           // both write `background-image`, but they are stored in different shapes and neither is
           // a partial version of the other, so the later one replaces rather than merges. Only a
           // key overriding itself can leave the other's fields standing.
-          if (producer !== undefined && producer !== candidate) {
-            accumulated = undefined;
+          // Whether the other key covers ALL of this property's declarations decides what can be
+          // said about it. `linkColor` under `linkColorHover` writes the same one declaration, so
+          // its value IS the answer and folds in. `backgroundGradient` under `background` writes
+          // one of five, so it replaces the image and leaves position, size and repeat standing —
+          // and there is no field of `background` that can hold a gradient, so those survivors are
+          // the whole of what can honestly be reported.
+          const coversEverything =
+            overwrote.length === declarationsWritten(property).length;
+          if (
+            producer !== undefined &&
+            producer !== candidate &&
+            !coversEverything
+          ) {
+            // Only the leaves this candidate overwrote. A lower tier's `background` may have set
+            // `position`, `size` and `repeat` alongside its `url`, and a higher `backgroundGradient`
+            // replaces the image alone — the browser goes on using the rest, so clearing the whole
+            // accumulator would hide fields that are still painting the element.
+            accumulated = withoutOverwritten(
+              accumulated,
+              property,
+              [],
+              new Set(overwrote)
+            );
+            // Cleared, not replaced. The value belongs to a DIFFERENT key, in a different stored
+            // shape, so there is no field of the property being asked about that can hold it —
+            // `backgroundGradient` is not a `background.url`. What survives is what the other key
+            // did not overwrite, which is exactly what a control can still edit here.
+            producer = candidate;
+            continue;
           }
           producer = candidate;
           accumulated = fold(

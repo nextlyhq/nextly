@@ -1034,11 +1034,44 @@ export function propertyPseudoClassCount(property: string): number {
  * related to `linkColor` without anything here being edited. Returned least specific first, which
  * is the order they have to be read in.
  */
+/**
+ * The longhands a CSS shorthand sets, for the shorthands this catalog can emit.
+ *
+ * A shorthand and its longhands compete without sharing a property NAME: `gap` writes both
+ * `row-gap` and `column-gap`, so a class setting `gap` and a node setting `rowGap` both reach the
+ * same element and matching on the name alone sees neither. Everything else here is emitted as
+ * logical longhands already, which is why the table is this short.
+ */
+const SHORTHAND_LONGHANDS: Readonly<Record<string, readonly string[]>> = {
+  gap: ["row-gap", "column-gap"],
+};
+
+/** A CSS property and everything it sets, so two keys can be compared by what they overwrite. */
+export function declarationsCovered(cssProperty: string): readonly string[] {
+  const longhands = SHORTHAND_LONGHANDS[cssProperty];
+  return longhands === undefined ? [cssProperty] : [cssProperty, ...longhands];
+}
+
+/**
+ * Every CSS declaration a property can write, shorthands expanded.
+ *
+ * Comparing two catalog keys by what they OVERWRITE rather than by the key they are written under
+ * is the only test that holds: `gap` and `columnGap` share no property name and compete anyway,
+ * while `background.position` and `backgroundGradient` share the `background-` prefix and do not.
+ */
+export function declarationsWritten(property: string): readonly string[] {
+  const covered = new Set<string>();
+  for (const css of cssPropertiesForField(property, [])) {
+    for (const name of declarationsCovered(css)) covered.add(name);
+  }
+  return [...covered];
+}
+
 export function propertiesAlsoMatching(property: string): readonly string[] {
   const entry = CATALOG_BY_PROPERTY.get(property);
   if (entry === undefined) return [];
   const descendant = descendantOf(entry);
-  const emits = new Set(shapeLeaves(entry.shape).map(leaf => leaf.cssProperty));
+  const emits = new Set(declarationsWritten(property));
   const related: string[] = [];
   for (const other of STYLE_CATALOG) {
     if (other.property === property) continue;
@@ -1046,7 +1079,10 @@ export function propertiesAlsoMatching(property: string): readonly string[] {
     // whether or not either uses a descendant selector, and the earlier version asked only about
     // descendants — so `background` and `backgroundGradient`, which are exactly this case, were
     // resolved as though they could not overwrite each other.
-    if (!shapeLeaves(other.shape).some(leaf => emits.has(leaf.cssProperty))) {
+    // Overlap in what they WRITE, not in what they are called. `gap` against `columnGap` shares
+    // no name and overwrites it; `background` against `backgroundGradient` shares a prefix and
+    // only collides on `background-image`.
+    if (!declarationsWritten(other.property).some(css => emits.has(css))) {
       continue;
     }
     const otherDescendant = descendantOf(other);

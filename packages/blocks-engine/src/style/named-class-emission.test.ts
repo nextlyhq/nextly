@@ -744,3 +744,34 @@ describe("a class library the compiler cannot use whole", () => {
     expect(css).toContain("color: red");
   });
 });
+
+describe("a class carrying an enormous style envelope", () => {
+  it("stops reading stored keys once the report is bounded", () => {
+    // Site settings, read on every page render. The allowance bounds what is RETURNED, and the
+    // walk was consulting it only after `Object.keys(...).sort()` had already allocated and
+    // ordered every key — so a class holding a huge map of stale breakpoint ids paid that on
+    // every compile however short the warning list ended up.
+    //
+    // Asserted deterministically rather than by a stopwatch, which is what makes this a test
+    // rather than a flake. The bound slices before sorting, so it reads keys in STORED order;
+    // unbounded, the sort runs first and `aaa-sorts-first` leads. Inserted last, it is therefore
+    // reported only if every key was read.
+    const stale: Record<string, unknown> = {};
+    for (let index = 0; index < 5000; index += 1) {
+      stale[`ghost-${index}`] = { color: "blue" };
+    }
+    stale["aaa-sorts-first"] = { color: "blue" };
+
+    const { warnings } = compile(doc({}), [
+      {
+        id: "c1",
+        slug: "card",
+        orderIndex: 0,
+        styles: { base: stale } as never,
+      },
+    ]);
+
+    expect(warnings.some(w => w.path.includes("aaa-sorts-first"))).toBe(false);
+    expect(warnings.some(w => w.path.includes("ghost-"))).toBe(true);
+  });
+});
