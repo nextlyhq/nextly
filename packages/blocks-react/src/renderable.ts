@@ -347,10 +347,13 @@ function rendersOwnChildren(element: unknown): boolean {
  * effect would perform it twice.
  *
  * Primitives all coerce except a symbol, which throws. An object coerces
- * through `toString` or `valueOf`, so one of the two has to be reachable and
- * callable — a plain object inherits `Object.prototype.toString` and is fine
- * (React renders `[object Object]`), while `Object.create(null)` and an object
- * that nulls both inherit nothing and throw.
+ * through `Symbol.toPrimitive` if it has one and through `toString` or
+ * `valueOf` otherwise, so the order here mirrors the language's: a
+ * `Symbol.toPrimitive` that is present but not callable throws before either of
+ * the other two is consulted. A plain object inherits
+ * `Object.prototype.toString` and is fine (React renders `[object Object]`),
+ * while `Object.create(null)` and an object that nulls both inherit nothing and
+ * throw.
  *
  * The residual case is a REACHABLE method that throws when called. It cannot be
  * detected without calling it, and block code that wants to throw during render
@@ -361,7 +364,21 @@ function isStringable(value: unknown): boolean {
   if (value === null || typeof value !== "object") {
     return typeof value !== "function" || typeof value.toString === "function";
   }
-  const candidate = value as { toString?: unknown; valueOf?: unknown };
+  const candidate = value as {
+    toString?: unknown;
+    valueOf?: unknown;
+    [Symbol.toPrimitive]?: unknown;
+  };
+  // Reading a property can run a getter, so a throw here is an answer of "no"
+  // rather than something to propagate out of a predicate.
+  try {
+    const toPrimitive = candidate[Symbol.toPrimitive];
+    if (toPrimitive !== undefined && typeof toPrimitive !== "function") {
+      return false;
+    }
+  } catch {
+    return false;
+  }
   return (
     typeof candidate.toString === "function" ||
     typeof candidate.valueOf === "function"
@@ -830,13 +847,23 @@ export function normalizeRenderable(
     }
 
     if (Array.isArray(current)) {
-      for (const item of current) sweepThenables(item);
+      for (const item of current) {
+        if (sweepBudget <= 0) return;
+        sweepThenables(item);
+      }
       return;
     }
 
     if (!isIterable(current)) return;
     try {
-      for (const item of current) sweepThenables(item);
+      for (const item of current) {
+        // Checked BEFORE pulling the next value, not just inside the recursive
+        // call: an exhausted budget makes that call return immediately while
+        // this loop keeps asking the iterator for more, so an endless generator
+        // child would spin here forever rather than being abandoned.
+        if (sweepBudget <= 0) return;
+        sweepThenables(item);
+      }
     } catch {
       // A hostile iterator throwing mid-sweep must not replace the refusal that
       // is already on its way back with a different one.
