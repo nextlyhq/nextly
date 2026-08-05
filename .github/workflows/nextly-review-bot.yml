@@ -1,4 +1,6 @@
-# Nextly Review Bot: automatic in-depth review on every push to a PR targeting main.
+# Nextly Review Bot: automatic in-depth review on every push to a PR targeting
+# main, and on demand for any such PR via the Actions tab or
+# `gh workflow run "Nextly Review Bot" -f pr=<number>`.
 # The reviewer is Claude Code driven by GLM through z.ai's Anthropic-compatible API;
 # the review protocol lives in .github/review-prompt.md so it can evolve without
 # touching this workflow.
@@ -8,11 +10,17 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Number of the pull request to review
+        required: true
+        type: string
 
 # A newer push supersedes an in-flight review of the same PR; cancelling keeps
 # one review per head SHA instead of a queue of stale rounds.
 concurrency:
-  group: nextly-review-bot-${{ github.event.pull_request.number }}
+  group: nextly-review-bot-${{ github.event.pull_request.number || inputs.pr }}
   cancel-in-progress: true
 
 # contents stays read-only so a prompt-injected agent cannot push; the bot only
@@ -26,18 +34,52 @@ jobs:
   review:
     # Drafts are skipped until ready_for_review; the same-repo guard makes fork
     # PRs (which get no secrets on pull_request) skip cleanly instead of failing.
+    # A dispatch carries no pull_request payload to test, so it passes here and
+    # is checked against the same conditions in the resolve step below.
     if: >
-      !github.event.pull_request.draft &&
-      github.event.pull_request.head.repo.full_name == github.repository
+      github.event_name == 'workflow_dispatch' ||
+      (!github.event.pull_request.draft &&
+      github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     # GLM thinking responses are slow; a deep multi-phase review needs headroom.
     timeout-minutes: 90
     steps:
+      # One place decides which PR is under review and at which commit, so the
+      # event and dispatch paths cannot drift apart. `jq` here runs on the
+      # runner, outside the agent's allowlist, which deliberately withholds it.
+      - name: Resolve the pull request under review
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.pull_request.number || inputs.pr }}
+        run: |
+          set -euo pipefail
+          case "$NUMBER" in
+            '' | *[!0-9]*) echo "::error::not a pull request number: '$NUMBER'"; exit 1 ;;
+          esac
+          pr=$(gh api "repos/$REPO/pulls/$NUMBER")
+          state=$(jq -r .state <<<"$pr")
+          draft=$(jq -r .draft <<<"$pr")
+          base=$(jq -r .base.ref <<<"$pr")
+          head_repo=$(jq -r .head.repo.full_name <<<"$pr")
+          # A dispatch can name any pull request, so every condition the event
+          # filters enforce is re-checked rather than assumed.
+          [ "$state" = open ] || { echo "::error::PR #$NUMBER is $state"; exit 1; }
+          [ "$draft" = false ] || { echo "::error::PR #$NUMBER is a draft"; exit 1; }
+          [ "$base" = main ] || { echo "::error::PR #$NUMBER targets $base, not main"; exit 1; }
+          [ "$head_repo" = "$REPO" ] || { echo "::error::PR #$NUMBER comes from a fork"; exit 1; }
+          {
+            echo "number=$NUMBER"
+            echo "sha=$(jq -r .head.sha <<<"$pr")"
+            echo "base=$base"
+          } >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           # The PR head itself, not the merge ref: the review protocol judges
           # the code at a specific head SHA and reports findings against it.
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ steps.pr.outputs.sha }}
           # Full history: the protocol distinguishes PR-introduced defects from
           # pre-existing ones by comparing against main, and materializing every
           # ref here means the agent never needs a network-capable git command.
@@ -72,14 +114,14 @@ jobs:
 
             Invocation context:
             - Repository: ${{ github.repository }}
-            - PR number: ${{ github.event.pull_request.number }}
-            - Head SHA this run was triggered for: ${{ github.event.pull_request.head.sha }}
-            - Base branch: ${{ github.event.pull_request.base.ref }}
+            - PR number: ${{ steps.pr.outputs.number }}
+            - Head SHA this run was triggered for: ${{ steps.pr.outputs.sha }}
+            - Base branch: ${{ steps.pr.outputs.base }}
 
             Write the review payload under .nextly-review/ (the only directory
             you may write to), then post it with exactly one call, run from the
             repository root. A `gh api` call of your own is not permitted:
-              .github/scripts/review-bot-gh.sh post-review <PR> .nextly-review/review.json
+              .github/scripts/review-bot-gh.sh post-review ${{ steps.pr.outputs.number }} .nextly-review/review.json
             Do not approve, request changes, merge, close, or push.
           # Allowlist entries match a command prefix, so every entry has to be
           # safe under ANY arguments appended to it. No raw `gh` qualifies:
