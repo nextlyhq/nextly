@@ -77,7 +77,8 @@ jobs:
             - Be direct and honest; a wrong reassurance is worse than a blunt
               correction.
           # Same reasoning as the review workflow: all GitHub access through the
-          # gateway script, local-only git verbs, no raw `gh`.
+          # gateway script, local-only git verbs, no raw `gh`, and Write scoped
+          # away from the gateway so it cannot be rewritten and then run.
           claude_args: |
-            --allowedTools "Read,Grep,Glob,Write,Bash(.github/scripts/review-bot-gh.sh:*),Bash(./.github/scripts/review-bot-gh.sh:*),Bash(bash .github/scripts/review-bot-gh.sh:*),Bash(${{ github.workspace }}/.github/scripts/review-bot-gh.sh:*),Bash(git show:*),Bash(git diff:*),Bash(git log:*),Bash(git merge-base:*),Bash(jq:*),Bash(rg:*),Bash(ls:*)"
+            --allowedTools "Read,Grep,Glob,Write(.nextly-review/**),Bash(.github/scripts/review-bot-gh.sh:*),Bash(./.github/scripts/review-bot-gh.sh:*),Bash(bash .github/scripts/review-bot-gh.sh:*),Bash(${{ github.workspace }}/.github/scripts/review-bot-gh.sh:*),Bash(git show:*),Bash(git diff:*),Bash(git log:*),Bash(git merge-base:*),Bash(jq:*),Bash(rg:*),Bash(ls:*)"
             --max-turns 60
