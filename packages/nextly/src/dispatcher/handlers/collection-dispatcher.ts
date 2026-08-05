@@ -952,8 +952,30 @@ const COLLECTIONS_METHODS: Record<
       } catch (err) {
         versionPersisted = false;
         const msg = err instanceof Error ? err.message : String(err);
-        // Non-fatal: the schema apply itself already succeeded. If the
-        // metadata write fails, the actual DB column was already
+        // A localization TRANSITION that reaches this point has already moved
+        // the translatable columns between the main table and the companion.
+        // The stored flag is what every later process reads to decide which
+        // of those two tables a translatable field lives in, so failing to
+        // store it does not leave a cosmetic gap — it leaves the registry
+        // describing a layout the database no longer has, and the next boot
+        // generates runtime schemas against the wrong table. That is the same
+        // half-migrated state the companion reconcile above refuses to return
+        // success for, so it is refused the same way.
+        if (wasLocalized !== isLocalized) {
+          throw NextlyError.internal({
+            cause: err instanceof Error ? err : undefined,
+            logContext: {
+              op: "persistLocalizedFlag",
+              collection: p.collectionName,
+              detail: msg,
+              wasLocalized,
+              isLocalized,
+              note: "columns moved but dynamic_collections.localized was not updated; re-apply to retry",
+            },
+          });
+        }
+        // Otherwise non-fatal: the schema apply itself already succeeded. If
+        // the metadata write fails, the actual DB column was already
         // renamed and the collection is in a good state structurally;
         // only the admin's view of the field name is stale, and the version
         // was not advanced (the response reports the current version so a

@@ -223,6 +223,12 @@ describe("canEmitWithoutDrizzleKit", () => {
     expect(canEmitWithoutDrizzleKit([uniqueOnText], "sqlite")).toBe(true);
   });
 
+  // The counterpart to the case above, and the reason the fallback is scoped
+  // to UNIQUE rather than to TEXT: on a non-unique index the 191-character
+  // prefix decides only how much of the value MySQL indexes — lookup coverage,
+  // invisible to callers and identical to what the Builder's own DDL emits for
+  // these columns. No row is rejected for it, so there is nothing to hand to
+  // drizzle-kit and no reason to leave the fast path.
   it("keeps a non-unique TEXT index, and a unique index on a sized column", () => {
     const nonUniqueOnText: Operation = {
       type: "add_table",

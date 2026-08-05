@@ -1263,3 +1263,101 @@ describe("dispatchCollections, i18n request flag", () => {
     expect(passed.desired.collections.posts.localized).toBe(false);
   });
 });
+
+// Persisting the flag is not bookkeeping when the flag MOVED: the DDL above
+// has already relocated the translatable columns, and the stored flag is what
+// every later process reads to decide which table those columns live in.
+// Losing that write leaves the registry describing a layout the database no
+// longer has, so the apply must not report success.
+describe("dispatchCollections, localized persistence failure", () => {
+  const LOCALIZATION = {
+    locales: [{ code: "en", label: "English", rtl: false, fallbackLocale: [] }],
+    defaultLocale: "en",
+    fallback: true,
+  };
+
+  beforeEach(() => {
+    container.register("config", () => ({ localization: LOCALIZATION }));
+  });
+
+  afterEach(() => {
+    container.clear();
+  });
+
+  function wireFailingUpdate(storedLocalized: boolean) {
+    const registry = makeFakeRegistry({
+      slug: "posts",
+      tableName: "posts",
+      schemaVersion: 4,
+      localized: storedLocalized,
+    });
+    const adapter = {
+      dialect: "postgresql" as const,
+      tableExists: vi.fn().mockResolvedValue(true),
+      getDrizzle: vi.fn().mockReturnValue({
+        all: vi.fn().mockResolvedValue([]),
+        run: vi.fn().mockResolvedValue(undefined),
+        execute: vi.fn().mockResolvedValue([]),
+      }),
+      execute: vi.fn().mockResolvedValue(undefined),
+      executeQuery: vi.fn().mockResolvedValue([]),
+      update: vi.fn().mockRejectedValue(new Error("registry write failed")),
+    };
+    vi.mocked(getCollectionRegistryFromDI).mockReturnValue(
+      registry as unknown as ReturnType<typeof getCollectionRegistryFromDI>
+    );
+    vi.mocked(getAdapterFromDI).mockReturnValue(
+      adapter as unknown as ReturnType<typeof getAdapterFromDI>
+    );
+    vi.mocked(createApplyDesiredSchema).mockReturnValue(
+      vi.fn().mockResolvedValue({
+        success: true,
+        newSchemaVersions: { posts: 5 },
+        statementsExecuted: 3,
+        renamesApplied: 0,
+        durationMs: 12,
+        summary: { added: 1, removed: 0, renamed: 0, changed: 0 },
+      }) as unknown as ReturnType<typeof createApplyDesiredSchema>
+    );
+  }
+
+  it("refuses success when a localization transition could not be stored", async () => {
+    wireFailingUpdate(false);
+
+    await expect(
+      dispatchCollections(
+        { collections: {} } as unknown as ServiceContainer,
+        "applySchemaChanges",
+        { collectionName: "posts" },
+        {
+          fields: [{ name: "title", type: "text" }],
+          confirmed: true,
+          schemaVersion: 4,
+          localized: true,
+        }
+      )
+    ).rejects.toThrow(NextlyError);
+  });
+
+  // Without a transition the write carries only `fields`/`schema_version`, and
+  // losing it leaves the admin showing stale names over a correct database —
+  // the long-standing non-fatal case, which must stay non-fatal.
+  it("still reports success when no transition was involved", async () => {
+    wireFailingUpdate(true);
+
+    const result = await dispatchCollections(
+      { collections: {} } as unknown as ServiceContainer,
+      "applySchemaChanges",
+      { collectionName: "posts" },
+      {
+        fields: [{ name: "title", type: "text" }],
+        confirmed: true,
+        schemaVersion: 4,
+        localized: true,
+      }
+    );
+
+    expect(result).toBeInstanceOf(Response);
+    expect((result as Response).status).toBe(200);
+  });
+});
