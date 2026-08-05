@@ -107,7 +107,12 @@ jobs:
           # Explicit token skips the Anthropic GitHub App / OIDC exchange, which
           # is not needed with a third-party provider.
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          track_progress: true
+          # The progress comment needs an event that carries a conversation to
+          # post into, and a dispatch has none — the action refuses the whole
+          # run rather than skipping the comment. The review itself is posted
+          # through the gateway either way, so a dispatch simply runs without
+          # the running commentary.
+          track_progress: ${{ github.event_name == 'pull_request' }}
           prompt: |
             Read the file .github/review-prompt.md in the checked-out repository
             and execute it exactly, phase by phase.
