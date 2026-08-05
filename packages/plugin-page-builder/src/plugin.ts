@@ -18,6 +18,7 @@ import { PAGE_BUILDER_FIELD_TYPE } from "./collections/pageBuilderEntry";
 import { pagesCollection } from "./collections/pages";
 import type { RemotePattern } from "./core/url-policy";
 import { BLOCKS_FIELD_TYPE } from "./fields/blocksField";
+import { CUSTOM_CSS_ACTION, CUSTOM_CSS_RESOURCE } from "./permissions";
 
 export interface PageBuilderOptions {
   /** Disable behavior while still applying schema. Default true. */
@@ -110,6 +111,27 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) =>
       // `update-pages` already covers, and no code path asked whether the user
       // could publish. Granting it did nothing and withholding it prevented
       // nothing. Declare it again alongside the check that reads it.
+      //
+      // Custom CSS follows that rule rather than breaking it: the permission
+      // below ships WITH the field rule in `pagesCollection()` that reads it,
+      // so granting and withholding both do something the day it lands.
+      permissions: [
+        {
+          action: CUSTOM_CSS_ACTION,
+          resource: CUSTOM_CSS_RESOURCE,
+          label: "Write custom CSS",
+          description:
+            "Author per-page and per-block custom CSS in the page builder. Without it the CSS already on a page stays visible and applied, but cannot be changed.",
+          // No `group`: the admin files this under the plugin that declared it,
+          // and one permission does not need sorting into headings.
+          //
+          // `danger` because it is author-written CSS that reaches the
+          // published page. A site that declared `remotePatterns` for its
+          // images declared them for this too, and a selector can make such a
+          // request conditional on what a page contains.
+          danger: true,
+        },
+      ],
       admin: {
         // The canvas needs the allowlist and runs in the browser, so it
         // travels with the rest of the admin metadata. `remotePatterns` is
