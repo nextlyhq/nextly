@@ -401,14 +401,13 @@ function scopeSelector(
 /**
  * The keys of a stored record, bounded before they are sorted.
  *
- * Enumeration has to stop where reporting stops, and it was stopping one step too late: the
- * allowance was consulted INSIDE the loop, after `Object.keys(...).sort()` had already allocated
- * and ordered every key. A named class carrying a very large map of stale breakpoint ids paid
- * that on every page compile, from site settings, however small the returned warning list was.
+ * Enumeration stops where reporting stops. Slicing before the sort rather than checking the
+ * allowance inside the loop keeps neither the array nor the sort scaling with what was stored,
+ * which matters because a named class is site settings read on every page compile and its map of
+ * breakpoint ids is whatever was persisted.
  *
- * Sliced before sorting rather than after, so neither the array nor the sort scales with what was
- * stored. Which keys survive the slice does not matter: they feed diagnostics that are capped a
- * few entries later anyway.
+ * Which keys survive the slice does not matter: they feed diagnostics that are capped a few
+ * entries later anyway.
  */
 function boundedKeys(record: Record<string, unknown>): string[] {
   // Read with an early break rather than through `Object.keys`, which materialises every key
@@ -554,13 +553,9 @@ function envelopeRules(
         budget,
         warningAllowance
       );
-      // Charged to the shared allowance rather than appended straight on. The WRITE budget is
-      // per class, so one bad entry cannot silence the others — but that also means each class
-      // can produce a full budget's worth of diagnostics, and a large library multiplies them.
-      // The allowance is what bounds the returned list, so everything returned goes through it.
-      // Appended as they come. `compileStyleValues` receives this same allowance and has already
-      // charged everything it returns to it, so charging again here spends it twice and costs
-      // later omissions their explanations while the budget still had room.
+      // Appended as they come. `compileStyleValues` holds this same allowance and charges
+      // everything it returns against it exactly once, so charging again here would spend it
+      // twice and leave later omissions unexplained while it still had room.
       warnings.push(...compiled.warnings);
       // A property that styles something inside the block goes into its own
       // rule. Keeping the exception in the catalog rather than in a branch here
@@ -1162,7 +1157,7 @@ export function compilePageCss(
   // dropped must not be put on an element, where it would match a rule some other class owns.
   const byId = new Map(usableClasses.map(cls => [cls.id, cls]));
   const attributeClasses = new Map<string, string>();
-  const reportedMissingClasses = new Set<string>();
+  const reportedMissingClasses = new Map<string, Set<string>>();
   for (const { node, path } of nodes) {
     const own = classes.get(node.id);
     if (own === undefined) continue;
@@ -1231,13 +1226,21 @@ export function compilePageCss(
       // the node, no class on the element, and nothing connecting the two — the same account
       // every other unwritten value in this compile gets. Once per id, because a second report
       // would name the same missing class and the same fix.
-      // Deduped on the RAW id, because `describeValue` truncates and would collapse two distinct
-      // references into one report — a separate class, needing a separate repair, silently
-      // accounted for by the first. The message still uses the described form: an unvalidated
+      // A set per node, because the pointer above names one stored reference and a reference is
+      // per node. Deduped across the document, the first node to list a missing class takes the
+      // only report, and an author who follows that pointer and repairs it hears nothing about
+      // the others. Nested rather than keyed on a joined string, so no separator has to be a
+      // character an id cannot contain.
+      //
+      // On the RAW id, because `describeValue` truncates and would collapse two distinct
+      // references into one report. The message still uses the described form: an unvalidated
       // document can carry an enormous id, and the allowance charges paths rather than message
       // text, so interpolating the raw one returns a diagnostic its size.
-      if (reportedMissingClasses.has(id)) continue;
-      reportedMissingClasses.add(id);
+      const reportedHere =
+        reportedMissingClasses.get(node.id) ?? new Set<string>();
+      reportedMissingClasses.set(node.id, reportedHere);
+      if (reportedHere.has(id)) continue;
+      reportedHere.add(id);
       pushBoundedWarning(warningAllowance, warnings, {
         path: entryPath,
         code: "unknown-class",

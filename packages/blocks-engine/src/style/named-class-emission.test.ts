@@ -45,6 +45,20 @@ const feature: NamedClass = {
   styles: styles({ color: "green" }),
 };
 
+/**
+ * Where a selector sits in the stylesheet, refusing one that is not there.
+ *
+ * `indexOf` answers -1 for an absent needle, and -1 is less than every real index, so an order
+ * assertion written straight on `indexOf` holds whether or not the rule was ever emitted. Every
+ * comparison below reads its positions through this, so a selector that stops being written
+ * fails the test that depends on it instead of satisfying it.
+ */
+const at = (css: string, needle: string, last = false): number => {
+  const index = last ? css.lastIndexOf(needle) : css.indexOf(needle);
+  expect(index, `"${needle}" is not in the stylesheet`).toBeGreaterThan(-1);
+  return index;
+};
+
 const compile = (
   document: BlockDocument,
   namedClasses: NamedClass[],
@@ -68,9 +82,7 @@ describe("the class tier is emitted where it belongs in the cascade", () => {
     // At one specificity the cascade is source order, so the ORDER here is the whole mechanism.
     const { css } = compile(doc({}), [feature, card]);
 
-    expect(css.indexOf(".nx-c-card")).toBeLessThan(
-      css.indexOf(".nx-c-feature")
-    );
+    expect(at(css, ".nx-c-card")).toBeLessThan(at(css, ".nx-c-feature"));
   });
 
   it("emits classes after the block default and before the node's own values", () => {
@@ -78,9 +90,9 @@ describe("the class tier is emitted where it belongs in the cascade", () => {
       "core/box": styles({ color: "black" }),
     });
 
-    const blockDefault = css.indexOf(".nx-bt-core--box");
-    const classRule = css.indexOf(".nx-c-card");
-    const nodeRule = css.lastIndexOf("color: red");
+    const blockDefault = at(css, ".nx-bt-core--box");
+    const classRule = at(css, ".nx-c-card");
+    const nodeRule = at(css, "color: red", true);
 
     expect(blockDefault).toBeLessThan(classRule);
     expect(classRule).toBeLessThan(nodeRule);
@@ -122,9 +134,7 @@ describe("tier order beats breakpoint order, in both halves", () => {
       [cardAtTablet]
     );
 
-    expect(css.indexOf(".nx-c-card")).toBeLessThan(
-      css.lastIndexOf("color: red")
-    );
+    expect(at(css, ".nx-c-card")).toBeLessThan(at(css, "color: red", true));
   });
 
   it("writes only the first of two classes sharing a name, and says why", () => {
@@ -326,15 +336,15 @@ describe("link colour, where two properties reach one element", () => {
 
     // The stylesheet is the authority. Both rules match a hovered link; the class's is written
     // after, and neither outranks the other.
-    expect(css.indexOf("a:hover")).toBeLessThan(css.indexOf(".nx-c-card a"));
+    expect(at(css, "a:hover")).toBeLessThan(at(css, ".nx-c-card a"));
   });
 });
 
 describe("one bad library entry cannot spend the whole tier", () => {
   it("still writes a later class after an earlier one exhausts its own budget", () => {
-    // Sharing one budget across the tier meant an unreferenced entry with enough invalid
-    // properties refused every class after it unread — so a node referencing a perfectly good
-    // class received its token and no declarations, styled by an entry it never mentions.
+    // Each class writes on a budget of its own. Shared across the tier, one unreferenced entry
+    // with enough invalid properties refuses every class after it unread, and a node referencing
+    // a perfectly good class receives its token and no declarations.
     const noisy: Record<string, unknown> = {};
     for (let index = 0; index < 200; index += 1) {
       noisy[`bogusProperty${index}`] = "nonsense";
@@ -487,8 +497,8 @@ describe("block defaults competing on a descendant selector", () => {
       } as never
     );
 
-    expect(css.indexOf(".nx-bt-a--inner a")).toBeLessThan(
-      css.indexOf(".nx-bt-z--outer a")
+    expect(at(css, ".nx-bt-a--inner a")).toBeLessThan(
+      at(css, ".nx-bt-z--outer a")
     );
   });
 });
@@ -528,9 +538,7 @@ describe("what an interactive state actually resolves to", () => {
       [cardHover]
     );
 
-    expect(css.indexOf(":where(:hover)")).toBeLessThan(
-      css.lastIndexOf("color: red")
-    );
+    expect(at(css, ":where(:hover)")).toBeLessThan(at(css, "color: red", true));
   });
 });
 
@@ -560,10 +568,10 @@ describe("a class library the compiler cannot use whole", () => {
 
 describe("a class carrying an enormous style envelope", () => {
   it("stops reading stored keys once the report is bounded", () => {
-    // Site settings, read on every page render. The allowance bounds what is RETURNED, and the
-    // walk was consulting it only after `Object.keys(...).sort()` had already allocated and
-    // ordered every key — so a class holding a huge map of stale breakpoint ids paid that on
-    // every compile however short the warning list ended up.
+    // Site settings, read on every page render. The allowance bounds what is RETURNED, so the
+    // walk has to consult it before `Object.keys(...).sort()` allocates and orders every key —
+    // otherwise a class holding a huge map of stale breakpoint ids pays for that on every
+    // compile however short the warning list ends up.
     //
     // Asserted deterministically rather than by a stopwatch, which is what makes this a test
     // rather than a flake. The bound slices before sorting, so it reads keys in STORED order;
@@ -717,9 +725,9 @@ describe("a class holding a key larger than the whole warning allowance", () => 
   // dropped one resolves to the wrong value. What keeps that bounded is the document byte cap —
   // and a class library is site settings, outside it, read on every page render.
   //
-  // Charged after the fact, the byte allowance was a running total rather than a bound: the first
-  // warning was admitted whole however large, so one corrupt key was copied into the answer on
-  // every compile. Each kind of stored key is checked because each builds its own pointer.
+  // The byte allowance is charged before a warning is admitted, which is what makes it a bound
+  // rather than a running total: charged afterwards, the first warning is admitted whole however
+  // large. Each kind of stored key is checked because each builds its own pointer.
   const enormous = (prefix: string) => `${prefix}${"x".repeat(100_000)}`;
 
   const warningsFor = (styles: Record<string, unknown>) =>
@@ -758,6 +766,46 @@ describe("what a warning about one class reference points at", () => {
 
     const missing = warnings.find(w => w.code === "unknown-class");
     expect(missing?.path).toBe("/nodes/0/classes/1");
+  });
+
+  it("reports the same missing class once per node that lists it", () => {
+    // The pointer names one stored reference, and a reference is per node. Deduped across the
+    // document, the first node takes the only report and an author who follows that pointer and
+    // repairs it hears nothing about the rest.
+    const twoNodes = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/box",
+          version: 1,
+          props: {},
+          classes: ["ghost"],
+        },
+        {
+          id: "n2",
+          type: "core/box",
+          version: 1,
+          props: {},
+          classes: ["ghost"],
+        },
+      ],
+    } as unknown as BlockDocument;
+
+    const { warnings } = compile(twoNodes, [card]);
+    const missing = warnings.filter(w => w.code === "unknown-class");
+
+    expect(missing.map(w => w.path)).toEqual([
+      "/nodes/0/classes/0",
+      "/nodes/1/classes/0",
+    ]);
+  });
+
+  it("still reports it once for a node that lists it twice", () => {
+    const { warnings } = compile(doc({ classes: ["ghost", "ghost"] }), [card]);
+
+    expect(warnings.filter(w => w.code === "unknown-class")).toHaveLength(1);
   });
 
   it("calls a non-string entry malformed rather than unknown", () => {
@@ -802,8 +850,8 @@ describe("two malformed library entries that are the same value", () => {
 
 describe("two missing class ids that begin alike", () => {
   it("reports both, because they are separate repairs", () => {
-    // `describeValue` truncates, so ids sharing a long prefix collapsed to one key and the second
-    // went unreported — a distinct class silently accounted for by the first.
+    // `describeValue` truncates, so a report keyed on the described form collapses ids sharing a
+    // long prefix into one and leaves the second class unreported.
     const prefix = "ghost-".padEnd(200, "x");
     const { warnings } = compile(
       doc({ classes: [`${prefix}-one`, `${prefix}-two`] }),
