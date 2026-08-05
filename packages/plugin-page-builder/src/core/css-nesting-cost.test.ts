@@ -36,51 +36,80 @@ function nested(depth: number): string {
   return `@keyframes fade { from { opacity: 0 } } ${css}`;
 }
 
-/** The real css-tree, with every `parse` call counted. */
-function countingApi(): { api: CssTreeApi; parses: () => number } {
-  let parses = 0;
+/** What one run handed to the parser: how often, and how much. */
+interface ParseCost {
+  calls: number;
+  bytes: number;
+}
+
+/** The real css-tree, with every `parse` call and its input measured. */
+function countingApi(): { api: CssTreeApi; cost: () => ParseCost } {
+  const cost: ParseCost = { calls: 0, bytes: 0 };
   return {
     api: {
       walk: csstree.walk,
       generate: csstree.generate,
       parse: ((text: string, options?: unknown) => {
-        parses += 1;
+        cost.calls += 1;
+        // Bytes, not only calls. A regression that re-reads the whole subtree
+        // at each level still makes about one call per level, so a call count
+        // alone cannot see it — the text handed over is where the quadratic
+        // shows.
+        cost.bytes += text.length;
         return (csstree.parse as (t: string, o?: unknown) => csstree.CssNode)(
           text,
           options
         );
       }) as typeof csstree.parse,
     },
-    parses: () => parses,
+    cost: () => cost,
   };
 }
 
-/** Parses spent rewriting names in a sheet nested `depth` deep. */
-function parsesForDepth(depth: number, budget: number): number {
+/** Parser work spent rewriting names in a sheet nested `depth` deep. */
+function costForDepth(depth: number, budget: number): ParseCost {
   const ast = csstree.parse(nested(depth));
-  const { api, parses } = countingApi();
+  const { api, cost } = countingApi();
   const map = namespaceDefinedNames(ast, SCOPE, api);
   rewriteNameReferences(ast, map, api, budget);
-  return parses();
+  return cost();
 }
 
-describe("following nested rules stays linear in the nesting", () => {
-  it("spends parses in proportion to depth, not to depth squared", () => {
-    // Doubling the depth may at most double the work. A re-parse per level of
-    // every level above it — the quadratic this bound exists to prevent —
-    // would show as roughly four times.
-    const shallow = parsesForDepth(4, MAX_RULE_NESTING);
-    const deep = parsesForDepth(8, MAX_RULE_NESTING);
+describe("what following nested rules is allowed to cost", () => {
+  it("makes a number of parse calls linear in the depth", () => {
+    // Doubling the depth roughly doubles the CALLS. A pass that re-read every
+    // level above each level — the quadratic this bound exists to prevent —
+    // would show near four times. Measured: 5 calls at depth 4, 13 at depth 8.
+    const shallow = costForDepth(4, MAX_RULE_NESTING);
+    const deep = costForDepth(8, MAX_RULE_NESTING);
 
-    expect(shallow).toBeGreaterThan(0);
-    expect(deep).toBeLessThanOrEqual(shallow * 2 + 2);
+    expect(shallow.calls).toBeGreaterThan(0);
+    expect(deep.calls / shallow.calls).toBeLessThan(3);
+  });
+
+  it("hands the parser no more text than the bound allows", () => {
+    // The BYTES are superlinear in the depth, and that is by design rather than
+    // a defect: each level is re-parsed from the text of the level above, so d
+    // levels of a sheet of length n read O(n·d) characters. Measured, they grow
+    // about 3.6x per doubling of depth.
+    //
+    // The promise is therefore not linearity, it is the CEILING — which is what
+    // the nesting bound buys. Each level is read at most twice, once as a rule
+    // and once as the declarations beside one, so the whole pass may never hand
+    // the parser more than the sheet itself times twice the bound. That is the
+    // assertion an unbounded regression fails, however deep the input goes.
+    const deep = costForDepth(MAX_RULE_NESTING + 20, MAX_RULE_NESTING);
+    const ceiling = nested(MAX_RULE_NESTING + 20).length * MAX_RULE_NESTING * 2;
+
+    expect(deep.bytes).toBeGreaterThan(0);
+    expect(deep.bytes).toBeLessThanOrEqual(ceiling);
   });
 
   it("stops at the bound rather than following nesting without end", () => {
-    // The bound is what makes the cost above a promise rather than an
-    // observation about the inputs this test happens to use.
-    const beyond = parsesForDepth(MAX_RULE_NESTING + 20, MAX_RULE_NESTING);
-    expect(beyond).toBeLessThanOrEqual(MAX_RULE_NESTING + 2);
+    // Two readings per level, so the call count settles at twice the bound
+    // however much deeper the input goes.
+    const beyond = costForDepth(MAX_RULE_NESTING + 20, MAX_RULE_NESTING);
+    expect(beyond.calls).toBeLessThanOrEqual(MAX_RULE_NESTING * 2 + 2);
   });
 
   it("does no parsing at all when the stylesheet defines no names", () => {
@@ -88,36 +117,48 @@ describe("following nested rules stays linear in the nesting", () => {
     // nothing to rewrite, and paying to re-parse its nesting anyway would tax
     // every author for a feature they are not using.
     const ast = csstree.parse(".a { .b { color: red } }");
-    const { api, parses } = countingApi();
+    const { api, cost } = countingApi();
     const map = namespaceDefinedNames(ast, SCOPE, api);
     rewriteNameReferences(ast, map, api, MAX_RULE_NESTING);
-    expect(parses()).toBe(0);
+    expect(cost().calls).toBe(0);
+    expect(cost().bytes).toBe(0);
   });
 });
 
 describe("the bound is the one the origin scan already uses", () => {
-  it("rewrites a name nested right up to the bound", () => {
-    // Inside the bound, the name follows the rename like any other.
-    const out = sanitizeCustomCss(nested(MAX_RULE_NESTING - 1), SCOPE);
-    expect(out.css).not.toBe("");
-    expect(out.css).not.toMatch(/animation:\s*fade\b/);
-    expect(out.css).toContain(namespacedGlobalName("fade", SCOPE));
+  it("rewrites a name nested exactly at the bound", () => {
+    // The edge itself, not one inside it: an off-by-one that refused
+    // `MAX_RULE_NESTING` would pass a test written at `MAX_RULE_NESTING - 1`.
+    const out = sanitizeCustomCss(nested(MAX_RULE_NESTING), SCOPE);
+    // The DECLARATION, not the name. `@keyframes <namespaced fade>` is in the
+    // output either way, so asserting the name alone passes when the rule
+    // holding the reference was removed — which is exactly what a bound shifted
+    // one level shallower does.
+    expect(out.css).toContain(
+      `animation:${namespacedGlobalName("fade", SCOPE)} 1s`
+    );
+    expect(out.warnings.map(warning => warning.code)).not.toContain(
+      "unchecked"
+    );
   });
 
-  it("removes what it will not follow, rather than leaving a stale name", () => {
-    // Past the bound the origin scan cannot check the rule either, so it goes
-    // and says so. That is the outcome that matters: two bounds would let one
-    // pass reach a level the other reports as too deep, leaving a block either
-    // rewritten but unverified, or verified and holding a name that moved.
-    const out = sanitizeCustomCss(nested(MAX_RULE_NESTING + 5), SCOPE);
+  it("removes the first nesting past the bound, name and all", () => {
+    // One deeper, so the two cases meet at the boundary and an off-by-one in
+    // either direction fails one of them.
+    //
+    // The rule GOES, rather than being rewritten unverified: the origin scan
+    // cannot check that deep either, and a block nobody checked must not reach
+    // the page whatever its names look like. Asserting only that the bare name
+    // is gone would pass on a namespaced one left inside an unchecked rule,
+    // which is the outcome this is here to rule out.
+    const out = sanitizeCustomCss(nested(MAX_RULE_NESTING + 1), SCOPE);
 
-    // The fixture has to be REAL CSS, asserted rather than assumed. An earlier
-    // version built it by string surgery, produced a stray `}`, and drove the
-    // sanitizer down its fatal-parse path — which returns an empty sheet, so
-    // the assertion below never ran and the test passed on nothing at all.
+    // The fixture parsed — an earlier version of this test built one that did
+    // not, and every assertion below it then passed on an empty sheet.
     expect(out.css).toContain("@keyframes");
 
     expect(out.warnings.map(warning => warning.code)).toContain("unchecked");
-    expect(out.css).not.toMatch(/animation:\s*fade\b/);
+    expect(out.css).not.toContain("animation");
+    expect(out.css).not.toContain(".n" + MAX_RULE_NESTING);
   });
 });

@@ -133,6 +133,20 @@ describe("invariant: a bare word is a keyword, a quoted one is a name", () => {
       css: `${FACE('"serif"')} .x { font-family: "serif" }`,
       expected: () => `.x{font-family:"${ns("serif")}"}`,
     },
+    {
+      // The custom-property rows above cover only the BARE forms, so a
+      // regression that skipped a quoted name there as though it were a
+      // keyword would pass all of them while every `var()` reference pointed
+      // at a name the definition had moved away from.
+      what: "a quoted keyframes name held by a custom property",
+      css: `@keyframes "none" { from { opacity: 0 } } .x { --a: "none"; animation-name: var(--a) }`,
+      expected: () => `--a:"${ns("none")}"`,
+    },
+    {
+      what: "a quoted family held by a custom property",
+      css: `${FACE('"serif"')} .x { --f: "serif"; font-family: var(--f) }`,
+      expected: () => `--f:"${ns("serif")}"`,
+    },
   ])("still renames $what", ({ css, expected }) => {
     // The other half of the same rule. A skip that swallowed these would look
     // correct in every test above and break the feature outright.
