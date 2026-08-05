@@ -5,8 +5,10 @@
 # request here is built from a fixed endpoint template plus validated
 # arguments, so nothing the agent passes can redirect a call to another host:
 # `gh api` reads the target host from `--hostname`/`GH_HOST`, and neither is
-# reachable through this interface. That is what keeps the model API key in the
-# environment from leaving the runner if a hostile PR hijacks the agent.
+# reachable through this interface. That closes the outbound half of the
+# posture -- the agent cannot choose where a request goes -- which is one layer
+# of the threat model set out in .github/workflows/nextly-review-bot.yml, not
+# the whole of it.
 set -euo pipefail
 
 REPO="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"

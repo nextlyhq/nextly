@@ -94,14 +94,17 @@ jobs:
           # are local-only, and there is no Edit and no bare Bash, so the agent
           # cannot alter the tree.
           #
-          # What this does NOT do is keep the model API key secret from the
-          # agent. An agent that can read files and emit text can disclose
-          # anything it can read, and the key is in its own process
-          # environment; the /proc denial below removes the documented path,
-          # not the class. The controls that actually bound a hijacked run are
-          # elsewhere: forks never reach this job, only collaborators can
-          # trigger it, the token is read-only, and the key should be a
-          # CI-dedicated one that can be rotated on suspicion.
+          # Keeping the model API key on the runner rests on two layers, not on
+          # this list alone. Outbound: the gateway fixes the destination of
+          # every request. Inbound: the key sits in the agent's own process
+          # environment, so reading it is the remaining path -- `/proc` and
+          # `/sys` are denied below, the action's own secret guard blocks the
+          # same reads, and no `env`/`printenv` is allowlisted. Treat that as
+          # defence in depth rather than an impossibility proof: an agent that
+          # reads files and emits text is trusted by construction. The backstops
+          # are that forks never reach this job, only collaborators can trigger
+          # it, the token is read-only, and the key should be a CI-dedicated one
+          # that is rotated on suspicion.
           claude_args: |
             --allowedTools "Read,Grep,Glob,Write(.nextly-review/**),Bash(.github/scripts/review-bot-gh.sh:*),Bash(./.github/scripts/review-bot-gh.sh:*),Bash(bash .github/scripts/review-bot-gh.sh:*),Bash(${{ github.workspace }}/.github/scripts/review-bot-gh.sh:*),Bash(git show:*),Bash(git diff:*),Bash(git log:*),Bash(git merge-base:*),Bash(jq:*),Bash(rg:*),Bash(ls:*)"
             --disallowedTools "WebSearch,WebFetch,Read(//proc/**),Read(//sys/**),Grep(//proc/**),Grep(//sys/**)"
