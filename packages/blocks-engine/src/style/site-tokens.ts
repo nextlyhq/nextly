@@ -182,7 +182,22 @@ export { isTokenName };
  * is legal CSS and the escape is what the spec provides for exactly this.
  */
 function cssString(value: string): string {
-  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  let out = "";
+  for (const char of value) {
+    const code = char.codePointAt(0) ?? 0;
+    if (char === "\\" || char === '"') {
+      out += `\\${char}`;
+    } else if (code < 0x20 || code === 0x7f) {
+      // A raw control character cannot appear in a CSS string — a newline ends
+      // it outright, so the whole `@font-face` is discarded and the uploaded
+      // font never loads. The hex escape is what the grammar provides, and the
+      // trailing space is what ends the escape.
+      out += `\\${code.toString(16)} `;
+    } else {
+      out += char;
+    }
+  }
+  return out;
 }
 
 /**
@@ -227,8 +242,28 @@ const FETCHING_FUNCTION =
  * against the raw text is one an author can write straight past.
  */
 export function tokenValueFetches(value: string): boolean {
-  return FETCHING_FUNCTION.test(asciiLower(decodeIdentifier(value)));
+  const read = asciiLower(decodeIdentifier(value));
+  return FETCHING_FUNCTION.test(read) || REMOTE_REFERENCE.test(read);
 }
+
+/**
+ * A remote destination written as text rather than as a call.
+ *
+ * The function check above is not enough on its own, because the FUNCTION need
+ * not be in the token. A token holding the bare string
+ * `"https://evil.example/a.png"` is inert until custom CSS writes
+ * `background-image: image-set(var(--site-x) 1x)` — and that declaration
+ * contains no URL for the origin policy to inspect, only a substitution. The
+ * two halves are written in different places by different people, which is
+ * exactly why neither half can be judged alone.
+ *
+ * Same-origin paths are left alone. `/logo.svg` resolves against the site
+ * serving the page and needs no allowlisting, which is the same line
+ * {@link isSameOriginUrl} draws for a font file. What is refused is anything
+ * naming another server: a scheme, or the `//host` form that names one while
+ * looking like a path.
+ */
+const REMOTE_REFERENCE = /\/\/|(?:^|[\s"'(,])[a-z][a-z0-9+.-]*:/;
 
 /**
  * A value whose kind nothing can judge from the text alone.
@@ -310,7 +345,11 @@ export function checkTokenKind(
     }
     case "duration": {
       if (isColor) return "is a colour, not a duration";
-      if (unit === undefined || amount === 0) return undefined;
+      if (unit === undefined) return undefined;
+      // CSS allows a unitless zero for a time, and only a unitless one: `0px`
+      // is still a length, and `animation-duration: var(--site-time)` reading
+      // it is a declaration the browser drops.
+      if (unit === "" && amount === 0) return undefined;
       return unitCategory(unit) === "time"
         ? undefined
         : `is measured in ${unit === "" ? "no unit" : unit}, not seconds or milliseconds`;

@@ -47,6 +47,7 @@
  * @module core/css-global-names
  */
 import {
+  asciiLower,
   decodeIdentifier,
   escapeIdentifier,
   namespacedGlobalName,
@@ -165,7 +166,7 @@ export function emptyGlobalNameMap(): GlobalNameMap {
 
 /** A property or descriptor name as CSS reads it: decoded, then case-folded. */
 function propertyName(raw: string): string {
-  return decodeIdentifier(raw).toLowerCase();
+  return asciiLower(decodeIdentifier(raw));
 }
 
 /** The text of a node that can carry a name, decoded, or `undefined`. */
@@ -379,7 +380,7 @@ export function namespaceDefinedNames(
         // never defined. Quoted, the same text is a legal name.
         if (
           first.type === "Identifier" &&
-          KEYFRAMES_RESERVED_NAMES.has(original.toLowerCase())
+          KEYFRAMES_RESERVED_NAMES.has(asciiLower(original))
         ) {
           return;
         }
@@ -409,7 +410,7 @@ export function namespaceDefinedNames(
         }
         if (effective !== undefined) {
           map.fontFamilies.set(
-            effective.toLowerCase(),
+            asciiLower(effective),
             namespacedGlobalName(effective, scopeClass)
           );
         }
@@ -547,7 +548,7 @@ function familyStartIndex(value: csstree.Value): number | undefined {
           head,
           node =>
             node.type === "Identifier" &&
-            FONT_SIZE_KEYWORDS.has(decodeIdentifier(node.name).toLowerCase())
+            FONT_SIZE_KEYWORDS.has(asciiLower(decodeIdentifier(node.name)))
         );
   if (sizeAt === -1) return undefined;
 
@@ -585,8 +586,7 @@ function rewriteKeyframeNames(
     // "none"` names the keyframes rule `@keyframes "none"` — the quotes are
     // exactly what tells the two apart, so skipping the quoted form would leave
     // a reference pointing at a name that no longer exists.
-    if (node.type === "Identifier" && skip.has(original.toLowerCase()))
-      continue;
+    if (node.type === "Identifier" && skip.has(asciiLower(original))) continue;
     const namespaced = names.get(original);
     if (namespaced !== undefined) setName(node, namespaced);
   }
@@ -622,7 +622,7 @@ function rewriteFontFamilies(
 
   const closeRun = (): void => {
     if (run.length > 0 && parts.length > 0 && runIsFamilyName(run)) {
-      const joined = parts.join(" ").toLowerCase();
+      const joined = asciiLower(parts.join(" "));
       // A lone bare identifier that names a generic family or a CSS-wide
       // keyword is that keyword, not a family — even when the stylesheet
       // defines a face called `"serif"`, because the quotes are what tell the
@@ -757,9 +757,51 @@ function rewriteNestedRules(
         }
         const before = css.generate(inner);
         rewriteNameReferences(inner, map, css, budget - 1);
+        rewriteRawDeclarations(inner, map, css);
         const after = css.generate(inner);
         if (after !== before) child.value = after;
       });
+    },
+  });
+}
+
+/**
+ * Rewrite the declarations written BESIDE a nested rule.
+ *
+ * A `Raw` here is either a nested rule or the declarations sitting next to one,
+ * and which it is cannot be told from where it sits — the origin scan reads it
+ * both ways for the same reason. `.a { .b {} animation: fade 1s }` re-parses as
+ * a stylesheet holding one rule and then a `Raw` carrying the trailing
+ * declaration, which the `Declaration` walk never sees. Left alone, the
+ * definition is renamed and that `animation` keeps asking for a name nothing
+ * defines.
+ *
+ * Only the declaration reading is attempted here; the rule reading is what the
+ * caller already did.
+ */
+function rewriteRawDeclarations(
+  ast: csstree.CssNode,
+  map: GlobalNameMap,
+  css: CssTreeApi
+): void {
+  css.walk(ast, {
+    visit: "Raw",
+    enter(node: csstree.CssNode) {
+      const raw = node as csstree.Raw;
+      const text = raw.value.trim();
+      if (text === "") return;
+      let parsed: csstree.CssNode;
+      try {
+        parsed = css.parse(text, { context: "declarationList" });
+      } catch {
+        return;
+      }
+      // A `Raw` that was a nested RULE parses here as nothing useful, so the
+      // generated text comes back unchanged and nothing is written.
+      const before = css.generate(parsed);
+      rewriteNameReferences(parsed, map, css, 0);
+      const after = css.generate(parsed);
+      if (after !== before) raw.value = after;
     },
   });
 }

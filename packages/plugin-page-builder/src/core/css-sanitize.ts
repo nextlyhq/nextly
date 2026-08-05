@@ -11,7 +11,7 @@
  * explanation is the thing authors file bugs about, and the editor has nowhere
  * to say "your Google Fonts import went and here is why" unless this says so.
  */
-import { decodeIdentifier } from "@nextlyhq/blocks-engine";
+import { asciiLower, decodeIdentifier } from "@nextlyhq/blocks-engine";
 import * as csstree from "css-tree";
 import type { CssNode, List, ListItem, Rule } from "css-tree";
 
@@ -150,13 +150,13 @@ function remoteUrlInValue(
   const raws: { text: string; position: string[] }[] = [];
   csstree.walk(value, {
     enter(node: csstree.CssNode) {
-      if (node.type === "Function") functions.push(node.name.toLowerCase());
+      if (node.type === "Function") functions.push(asciiLower(node.name));
       if (found !== undefined) return;
       // A custom property can land anywhere, so there every `attr()` is a
       // potential fetch; elsewhere the enclosing function decides.
       if (
         node.type === "Function" &&
-        node.name.toLowerCase() === "attr" &&
+        asciiLower(node.name) === "attr" &&
         (anyPositionIsUrl ||
           attrFetchesFromDom(node, positionOf(functions, outerPosition)))
       ) {
@@ -296,6 +296,57 @@ function remoteUrlInRawDeclarations(text: string): {
   return { read, finding };
 }
 
+/**
+ * Remove the sources in a `src` descriptor that reach off this origin.
+ *
+ * Returns whether at least one usable source survived. A descriptor is a
+ * comma-separated list, so each entry is judged on its own and the declaration
+ * is only lost when nothing in it can be loaded.
+ */
+function dropRemoteSources(decl: csstree.Declaration): boolean {
+  const value = decl.value;
+  if (value.type !== "Value") return false;
+
+  // Split into comma-separated entries, keeping the list items so the survivors
+  // can be reassembled in place.
+  const entries: ListItem<CssNode>[][] = [[]];
+  const commas: ListItem<CssNode>[] = [];
+  value.children.forEach((child: CssNode, item: ListItem<CssNode>) => {
+    if (child.type === "Operator" && child.value === ",") {
+      commas.push(item);
+      entries.push([]);
+      return;
+    }
+    entries[entries.length - 1]?.push(item);
+  });
+
+  const keep: ListItem<CssNode>[][] = [];
+  const drop: ListItem<CssNode>[] = [];
+  for (const entry of entries) {
+    if (entry.length === 0) continue;
+    const usable = entry.every(
+      item => remoteUrlInValue(item.data, 0, [], false) === undefined
+    );
+    if (usable) keep.push(entry);
+    else drop.push(...entry);
+  }
+
+  if (keep.length === 0) return false;
+
+  for (const item of drop) value.children.remove(item);
+  // Every separator is removed and the survivors re-joined, so a dropped entry
+  // cannot leave a dangling or doubled comma behind.
+  for (const item of commas) value.children.remove(item);
+  keep.forEach((entry, index) => {
+    if (index === 0) return;
+    const first = entry[0];
+    if (first !== undefined) {
+      value.children.insertData({ type: "Operator", value: "," }, first);
+    }
+  });
+  return true;
+}
+
 function remoteUrlInRawRule(
   text: string,
   depth: number
@@ -403,8 +454,7 @@ const SUPPORTED_AT_RULE_LIST = "@media, @supports, @keyframes and @font-face";
 /** Whether the walker is currently inside a `@keyframes` block. */
 function insideKeyframes(atrule: csstree.Atrule | null): boolean {
   return (
-    atrule !== null &&
-    decodeIdentifier(atrule.name).toLowerCase() === "keyframes"
+    atrule !== null && asciiLower(decodeIdentifier(atrule.name)) === "keyframes"
   );
 }
 
@@ -455,9 +505,12 @@ export function sanitizeCustomCss(
     enter(node: CssNode, item: ListItem<CssNode>, list: List<CssNode>) {
       // Decoded first: `@\6d edia` IS `@media` to a browser, so a raw
       // comparison is one an author can write straight past.
-      const name = decodeIdentifier(
-        (node as csstree.Atrule).name
-      ).toLowerCase();
+      // ASCII folding, because that is what CSS applies to a keyword. U+212A
+      // KELVIN SIGN lowercases to "k" in JavaScript and is its own character to
+      // CSS, so `@\u212Aeyframes` would enter the allowlist here and then be
+      // renamed into a valid private rule — turning an at-rule the browser
+      // ignores into one that shadows an animation the host page provides.
+      const name = asciiLower(decodeIdentifier((node as csstree.Atrule).name));
       if (SUPPORTED_AT_RULES.has(name)) return;
       warn(
         "unsupported-at-rule",
@@ -476,6 +529,23 @@ export function sanitizeCustomCss(
       if (!list || !item) return;
       const finding = firstRemoteUrl(decl);
       if (finding !== undefined) {
+        // A `src` descriptor is a LIST of places to try, and the whole point of
+        // the list is that some of them fail. Removing the declaration because
+        // one entry is remote takes the self-hosted font with it, and the face
+        // then loses its only source and is dropped — so an author who added a
+        // remote fallback to a font they uploaded correctly loses the upload.
+        // Dropping just the offending entry keeps what the author is allowed to
+        // load, and the warning still says the remote one went.
+        if (
+          asciiLower(decodeIdentifier(decl.property)) === "src" &&
+          dropRemoteSources(decl)
+        ) {
+          warn(
+            "remote-url",
+            `A font source in "${decl.property}" is not on this site, so that source was removed and the others kept. Custom CSS may only load fonts from this site's own origin.`
+          );
+          return;
+        }
         if (finding.kind === "remote") {
           warn(
             "remote-url",
@@ -526,7 +596,7 @@ export function sanitizeCustomCss(
     visit: "Atrule",
     enter(node: CssNode, item: ListItem<CssNode>, list: List<CssNode>) {
       const atrule = node as csstree.Atrule;
-      if (decodeIdentifier(atrule.name).toLowerCase() !== "font-face") return;
+      if (asciiLower(decodeIdentifier(atrule.name)) !== "font-face") return;
       if (fontFaceHasSrc(atrule)) return;
       warn(
         "unsupported-at-rule",
@@ -646,10 +716,15 @@ export function sanitizeCustomCss(
  */
 export function sanitizeBlockCss(
   css: string,
-  scopeClass: string
+  scopeClass: string,
+  documentScope?: string
 ): SanitizedCss {
   if (!css) return { css: "", warnings: [] };
   // Replace the `selector` keyword (word-boundary, not part of .foo-selector).
   const withScope = css.replace(/(^|[^\w.#-])selector\b/g, `$1.${scopeClass}`);
-  return sanitizeCustomCss(withScope, scopeClass);
+  // Anchored to the document when the caller supplies one, so a block's own CSS
+  // cannot reach a block of the same id in another document on the same page.
+  // The node class stays in the selector either way — it is what the block's
+  // element carries — so only the boundary changes, not what is targeted.
+  return sanitizeCustomCss(withScope, documentScope ?? scopeClass);
 }

@@ -1150,6 +1150,75 @@ describe("custom CSS may not reach off this origin", () => {
       expect(out.css).toContain(`.a{font-family:"${ns("X")}"}`);
     });
 
+    it("folds an at-rule name the way CSS does, not the way JavaScript does", () => {
+      // U+212A KELVIN SIGN lowercases to "k" in JavaScript and is its own
+      // character to CSS, so `@\u212Aeyframes` is an at-rule no browser knows.
+      // Folded with `toLowerCase` it enters the allowlist, gets renamed into a
+      // valid private rule, and every reference is pointed at it — taking an
+      // animation the host page provides and making it resolve to nothing.
+      const kelvin = String.fromCodePoint(0x212a);
+      const out = sanitizeCustomCss(
+        `@${kelvin}eyframes fade { from { opacity: 0 } } .x { animation: fade 1s }`,
+        SCOPE
+      );
+      expect(out.css).not.toContain("eyframes");
+      expect(out.css).toContain("animation:fade 1s");
+      expect(out.css).not.toContain(ns("fade"));
+    });
+
+    it("still recognises an at-rule spelled with ASCII capitals", () => {
+      // The folding has to stay folding: `@Keyframes` IS `@keyframes` to CSS.
+      const out = sanitizeCustomCss(
+        `@Keyframes fade { from { opacity: 0 } } .x { animation: fade 1s }`,
+        SCOPE
+      );
+      expect(out.css).toContain(`animation:${ns("fade")} 1s`);
+    });
+
+    it("keeps the self-hosted source when a font src also names a remote one", () => {
+      // A `src` is a LIST of places to try. Removing the declaration because
+      // one entry is remote takes the uploaded font with it, and the face then
+      // loses its only source and is dropped entirely.
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: Brand; src: url("/brand.woff2"), url("https://fonts.example/b.woff2") }
+         .a { font-family: Brand }`,
+        SCOPE
+      );
+      expect(out.css).toContain("src:url(/brand.woff2)");
+      expect(out.css).not.toContain("fonts.example");
+      expect(out.css).toContain(`.a{font-family:"${ns("Brand")}"}`);
+      expect(out.warnings.map(w => w.code)).toContain("remote-url");
+    });
+
+    it("rejoins the list when a source is dropped from the middle", () => {
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: Brand; src: local("Brand"), url("https://x.example/b.woff2"), url("/b.woff2") }`,
+        SCOPE
+      );
+      expect(out.css).toContain('src:local("Brand"),url(/b.woff2)');
+    });
+
+    it("still drops a face whose only source is remote", () => {
+      const out = sanitizeCustomCss(
+        `@font-face { font-family: Brand; src: url("https://fonts.example/b.woff2") } .a { font-family: Brand }`,
+        SCOPE
+      );
+      expect(out.css).not.toContain("@font-face");
+      expect(out.css).toContain(".a{font-family:Brand}");
+    });
+
+    it("rewrites a declaration written beside a nested rule", () => {
+      // Re-parsed, `.a { .b {} animation: fade 1s }` is one rule and then a
+      // `Raw` holding the trailing declaration, which the declaration walk
+      // never sees.
+      const out = sanitizeCustomCss(
+        `@keyframes fade { from { opacity: 0 } } .a { .b{color:red} animation: fade 1s }`,
+        SCOPE
+      );
+      expect(out.css).toContain(`animation:${ns("fade")} 1s`);
+      expect(out.css).not.toMatch(/animation:\s*fade\b/);
+    });
+
     it("still refuses a remote url inside a keyframe step", () => {
       // The step blocks are ordinary declarations, so the origin policy has to
       // reach them — allowing the at-rule must not open a door beneath it.

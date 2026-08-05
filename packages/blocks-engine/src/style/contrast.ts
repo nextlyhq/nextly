@@ -166,7 +166,7 @@ function parseRgbFunction(body: string): Rgb | undefined {
  * stops: it turns `0 0.5` into `0` and `12abc` into `12`, so a malformed
  * component would be accepted as whatever number happened to start it.
  */
-const NUMERIC_COMPONENT = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(%?)$/;
+const NUMERIC_COMPONENT = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?(%?)$/;
 
 /** One `rgb()` channel, as 0-255, from either a number or a percentage. */
 function channel(part: string): number | undefined {

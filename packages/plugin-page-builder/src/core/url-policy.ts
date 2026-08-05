@@ -1,3 +1,4 @@
+import { asciiLower } from "@nextlyhq/blocks-engine";
 import * as csstree from "css-tree";
 import picomatch from "picomatch";
 
@@ -73,7 +74,7 @@ export function attrFetchesFromDom(
   node: csstree.CssNode,
   position: readonly string[]
 ): boolean {
-  if (node.type !== "Function" || node.name.toLowerCase() !== "attr")
+  if (node.type !== "Function" || asciiLower(node.name) !== "attr")
     return false;
   const enclosing = position[position.length - 1];
   return enclosing !== undefined && !TEXT_ARGUMENT_FUNCTIONS.has(enclosing);
@@ -136,7 +137,7 @@ export function fetchableValues(
   let attrInFetchPosition = false;
   csstree.walk(value, {
     enter(node: csstree.CssNode) {
-      if (node.type === "Function") functions.push(node.name.toLowerCase());
+      if (node.type === "Function") functions.push(asciiLower(node.name));
       // The nearest enclosing function that actually decides what a string is;
       // substitutions stand in for a value and decide nothing, so the position
       // they sit in is the one that counts.
@@ -148,7 +149,7 @@ export function fetchableValues(
       // time, so this is a request whose destination the scan cannot see.
       if (
         node.type === "Function" &&
-        node.name.toLowerCase() === "attr" &&
+        asciiLower(node.name) === "attr" &&
         (anyPositionFetches || attrFetchesFromDom(node, position))
       )
         attrInFetchPosition = true;

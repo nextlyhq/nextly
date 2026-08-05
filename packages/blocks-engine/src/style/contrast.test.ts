@@ -89,6 +89,12 @@ describe("parseColor", () => {
     expect(parseColor("rgb(100% 0 0)")?.r).toBe(255);
     // Whitespace around the space form is not a missing component.
     expect(parseColor("rgb( 0 0 0 )")?.a).toBe(1);
+    // Exponent notation is valid CSS number syntax, and a colour written that
+    // way renders — so refusing it made `checkContrast` silent about a real one.
+    expect(parseColor("rgb(1e2 0 0 / 5e-1)")?.r).toBe(100);
+    expect(parseColor("rgb(1e2 0 0 / 5e-1)")?.a).toBeCloseTo(0.5, 5);
+    // A trailing dot is not a CSS number.
+    expect(parseColor("rgb(1. 0 0)")).toBeUndefined();
   });
 
   it("refuses what it cannot read rather than guessing", () => {
