@@ -39,8 +39,15 @@ export interface PreviewRouteConfig {
    *
    * Supplied by the app because only it knows how its content is routed. The
    * returned value must be a site-relative path.
+   *
+   * Returning `null` refuses the link the same way an invalid token is
+   * refused. A preview link outlives what it points at — the entry can be
+   * deleted, unpublished or moved between minting and clicking — and this is
+   * how an app says so without having to throw.
    */
-  redirectTo: (scope: PreviewTokenScope) => string | Promise<string>;
+  redirectTo: (
+    scope: PreviewTokenScope
+  ) => string | null | Promise<string | null>;
   /**
    * Reads and enables Next's draft mode. Injected so the route is testable.
    *
@@ -52,27 +59,49 @@ export interface PreviewRouteConfig {
 }
 
 /**
- * Whether a redirect target is somewhere this site can send a visitor.
+ * A redirect target reduced to its site-relative form, or `null` if it is not
+ * one.
  *
  * The value comes from the app rather than the request, so this guards a
- * mistake rather than an attack — but an open redirect built out of a
- * preview link is worth making unreachable by construction. A protocol-relative
+ * mistake rather than an attack — but an open redirect built out of a preview
+ * link is worth making unreachable by construction. A protocol-relative
  * `//evil.example` is a URL to another host wearing a path's clothes, which is
  * why matching a leading slash is not enough on its own.
+ *
+ * Two decisions, both about closing the gap between what is checked and what is
+ * used:
+ *
+ * 1. **Resolved against the REQUEST's origin**, not a fixed sentinel. Any
+ *    constant used as the base is a host that passes the check, and a public
+ *    one is a host anybody can name: `//nextly.invalid/x` would be approved and
+ *    then sent, taking the visitor off the site. Resolving against the request
+ *    leaves exactly one origin that passes, and it is the site's own.
+ * 2. **Returns the parser's normalized form** rather than the string that was
+ *    checked, so the value that reaches the `Location` header is the value that
+ *    was validated. The parser strips CR and LF and percent-encodes NUL; the
+ *    raw string keeps them, and a header carrying one makes the `Response`
+ *    constructor throw — which would happen after draft mode had been enabled,
+ *    turning a refusal into a 500 with a session already granted.
+ *
+ * Resolution is the URL parser's job rather than this function's, because the
+ * spellings that escape an origin are its to know: `//host`, `/\host` and
+ * `/\\host` all reach another origin, since a special scheme normalises a
+ * backslash to a slash. Asking the same parser the browser will use is the only
+ * check that cannot fall behind the list.
  */
-function isSiteRelative(path: string): boolean {
-  if (!path.startsWith("/")) return false;
+function siteRelativeTarget(target: string, requestUrl: string): string | null {
+  // Tested before parsing rather than after. `https://elsewhere` and
+  // `javascript:` would be caught by the origin comparison below, but a bare
+  // `pages/x` resolves against the CURRENT path and would pass as a
+  // site-relative target the app never meant to write.
+  if (!target.startsWith("/")) return null;
   try {
-    // Resolved against a base rather than pattern-matched, because the
-    // spellings that escape an origin are the URL parser's to know and not
-    // this function's to guess: `//host`, `/\\host` and `/\\\\host` all resolve
-    // to another origin, since a special scheme normalises a backslash to a
-    // slash. Asking the same parser the browser will use is the only check
-    // that cannot fall behind the list.
-    const base = "https://nextly.invalid";
-    return new URL(path, base).origin === base;
+    const base = new URL(requestUrl);
+    const resolved = new URL(target, base);
+    if (resolved.origin !== base.origin) return null;
+    return `${resolved.pathname}${resolved.search}${resolved.hash}`;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -104,15 +133,27 @@ export function createPreviewRoute(config: PreviewRouteConfig): {
       });
       if (!verified.valid) return refuse();
 
-      const target = await config.redirectTo(verified.scope);
-      if (!isSiteRelative(target)) return refuse();
+      // Everything that can fail happens before draft mode is enabled, so the
+      // request is never given a session it is then refused. A lookup here is
+      // the likeliest thing to reject: a link outlives what it points at, and
+      // the entry can be deleted between minting and clicking. Answering that
+      // with a 500 while every other failure answers 404 is what would make the
+      // endpoint an oracle again — a stranger could tell an entry that once
+      // existed from one that never did.
+      let target: string | null;
+      try {
+        target = await config.redirectTo(verified.scope);
+      } catch {
+        return refuse();
+      }
+      if (target === null) return refuse();
 
-      const draft = await config.draftMode();
-      draft.enable();
+      const location = siteRelativeTarget(target, request.url);
+      if (location === null) return refuse();
 
       const response = new Response(null, {
         status: 307,
-        headers: { location: target },
+        headers: { location },
       });
       // `httpOnly` because nothing in the browser needs to read this, and
       // `sameSite=lax` so the cookie survives following the link from an email
@@ -129,6 +170,14 @@ export function createPreviewRoute(config: PreviewRouteConfig): {
           `Expires=${verified.expiresAt.toUTCString()}`,
         ].join("; ")
       );
+
+      // Last, once the response it belongs to exists. Draft mode is a mutation
+      // on the outgoing request, and enabling it before a step that can still
+      // refuse would leave the visitor holding a draft session for a request
+      // that answered 404.
+      const draft = await config.draftMode();
+      draft.enable();
+
       return response;
     },
   };

@@ -6,6 +6,8 @@ import {
   createPreviewRoute,
   previewGrantsDraft,
   readPreviewScope,
+  type PreviewRouteConfig,
+  type PreviewScopeReaderConfig,
 } from "../preview-route";
 
 const TEST_SECRET = "preview-route-test-secret-at-least-32-chars!!";
@@ -140,14 +142,166 @@ describe("the preview route", () => {
         "/\\\\evil.example/x",
         "https://evil.example/x",
         "javascript:alert(1)",
+        // Not off-site, but not a path either: a bare relative target resolves
+        // against the ROUTE's own directory, so it would silently send the
+        // visitor somewhere under /api rather than where the app meant.
+        "pages/entry-1",
+        // No fixed sentinel origin can be named to slip past the check, because
+        // there is no fixed sentinel origin: the target is resolved against the
+        // request's own.
+        "//nextly.invalid/x",
+        "///nextly.invalid/x",
       ]) {
         const { route, enable } = routeFor({ redirectTo: () => target });
         const response = await route.GET(request(token));
 
         expect(response.status).toBe(404);
+        expect(response.headers.get("location")).toBeNull();
         expect(enable).not.toHaveBeenCalled();
       }
     });
+
+    it("refuses a link whose target cannot be resolved", async () => {
+      // A preview link outlives what it points at. When the entry has been
+      // deleted since the link was minted, the app's lookup rejects — and a 500
+      // here while every other failure answers 404 would make the endpoint an
+      // oracle again, separating entries that once existed from those that
+      // never did.
+      const { token } = await signPreviewToken(SCOPE, TEST_SECRET, {
+        generation: GENERATION,
+      });
+
+      for (const redirectTo of [
+        () => {
+          throw new Error("entry was deleted");
+        },
+        () => Promise.reject(new Error("entry was deleted")),
+        // Saying so without throwing, which is the shape an app should reach
+        // for first.
+        () => null,
+      ]) {
+        const { route, enable } = routeFor({ redirectTo });
+        const response = await route.GET(request(token));
+
+        expect(response.status).toBe(404);
+        expect(response.headers.get("set-cookie")).toBeNull();
+        expect(enable).not.toHaveBeenCalled();
+      }
+    });
+
+    it("sends the normalised target rather than the string it checked", async () => {
+      // CR, LF and NUL in a path — from a slug field, say — make the `Response`
+      // constructor throw when they reach a header raw. Emitting what the URL
+      // parser produced closes the gap between the value that was validated and
+      // the value that is used: the parser strips CR and LF and percent-encodes
+      // NUL, so the header cannot carry a second one.
+      const { token } = await signPreviewToken(SCOPE, TEST_SECRET, {
+        generation: GENERATION,
+      });
+      const CR = String.fromCharCode(13);
+      const LF = String.fromCharCode(10);
+      const NUL = String.fromCharCode(0);
+
+      for (const target of [
+        `/pages/a${CR}${LF}X-Injected: yes`,
+        `/pages/a${LF}X-Injected: yes`,
+        `/pages/a${NUL}b`,
+      ]) {
+        const { route, enable } = routeFor({ redirectTo: () => target });
+        const response = await route.GET(request(token));
+
+        expect(response.status).toBe(307);
+        const location = response.headers.get("location") ?? "";
+        expect(location).not.toContain(CR);
+        expect(location).not.toContain(LF);
+        expect(location).not.toContain(NUL);
+        expect(response.headers.get("x-injected")).toBeNull();
+        expect(enable).toHaveBeenCalledOnce();
+      }
+    });
+
+    it("keeps the query and fragment of a target it accepts", async () => {
+      // Normalising must not quietly drop the parts of a path a preview link
+      // needs — a locale query or an anchor into the page being reviewed.
+      const { token } = await signPreviewToken(SCOPE, TEST_SECRET, {
+        generation: GENERATION,
+      });
+      const { route } = routeFor({
+        redirectTo: () => "/pages/entry-1?locale=fr#section-2",
+      });
+
+      const response = await route.GET(request(token));
+
+      expect(response.headers.get("location")).toBe(
+        "/pages/entry-1?locale=fr#section-2"
+      );
+    });
+  });
+});
+
+/**
+ * The shape Next's own cookie store hands back: more than this reader needs,
+ * which is the point — the exported type has to accept it.
+ */
+interface NextRequestCookie {
+  name: string;
+  value: string;
+}
+const storedCookie: NextRequestCookie = {
+  name: PREVIEW_SCOPE_COOKIE,
+  value: "",
+};
+
+describe("the reader shapes both supported Next majors supply", () => {
+  // These are COMPILE-time assertions. Vitest does not typecheck, so a runtime
+  // test of a sync reader passes whatever the exported signature says; what
+  // makes these load-bearing is `tsc --noEmit -p tsconfig.tests.json`, which
+  // CI runs. An app on Next 14 gets synchronous helpers and one on Next 15 gets
+  // promises, and the peer range covers both, so a signature that required
+  // either alone would fail to typecheck in half the supported apps.
+  const next14Cookies: PreviewScopeReaderConfig["cookies"] = () => ({
+    get: (_name: string): NextRequestCookie | undefined => storedCookie,
+  });
+  const next15Cookies: PreviewScopeReaderConfig["cookies"] = () =>
+    Promise.resolve({
+      get: (_name: string): NextRequestCookie | undefined => storedCookie,
+    });
+  const next14Draft: PreviewRouteConfig["draftMode"] = () => ({
+    enable: () => undefined,
+  });
+  const next15Draft: PreviewRouteConfig["draftMode"] = () =>
+    Promise.resolve({ enable: () => undefined });
+
+  it("reads a cookie store from either major", async () => {
+    for (const cookies of [next14Cookies, next15Cookies]) {
+      // The stored value is empty, so this exercises the call rather than a
+      // grant; the assertion that matters is that both assignments above
+      // compile.
+      expect(
+        await readPreviewScope({
+          secret: TEST_SECRET,
+          generation: GENERATION,
+          cookies,
+        })
+      ).toBeNull();
+    }
+  });
+
+  it("enables draft mode from either major", async () => {
+    const { token } = await signPreviewToken(SCOPE, TEST_SECRET, {
+      generation: GENERATION,
+    });
+
+    for (const draftMode of [next14Draft, next15Draft]) {
+      const response = await createPreviewRoute({
+        secret: TEST_SECRET,
+        generation: GENERATION,
+        redirectTo: () => "/pages/entry-1",
+        draftMode,
+      }).GET(request(token));
+
+      expect(response.status).toBe(307);
+    }
   });
 });
 
