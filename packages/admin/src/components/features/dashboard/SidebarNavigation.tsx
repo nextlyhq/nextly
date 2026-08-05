@@ -275,10 +275,11 @@ export function SidebarNavigation({
     });
   }, [authorizedItems, search]);
 
-  // Group items by category (using filtered items)
+  // Group items by category (using filtered items). Users/Roles/Custom Fields
+  // are now filed under "settings" (User Management moved into Settings), so
+  // there is no separate "users" group anymore.
   const mainNavItems = filteredItems.filter(item => item.category === "main");
   const mediaItems = filteredItems.filter(item => item.category === "media");
-  const userItems = filteredItems.filter(item => item.category === "users");
   const settingsItems = filteredItems.filter(
     item => item.category === "settings"
   );
@@ -409,8 +410,9 @@ export function SidebarNavigation({
       {/* 6. Separator */}
       {!isCollapsed && <Separator className="my-1 bg-border/30" />}
 
-      {/* 7. Users */}
-      <RenderSection label="Users" items={userItems} />
+      {/* 7. Plugin collections placed under "users" (now part of Settings).
+          Kept here so plugin-contributed user-section items still render if
+          this legacy nav is ever revived. */}
       <DynamicPluginSectionItems placement="users" isActive={isActive} />
 
       {/* 8. Separator */}
