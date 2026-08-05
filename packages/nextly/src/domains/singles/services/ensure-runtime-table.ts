@@ -39,6 +39,8 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { Logger } from "../../../shared/types";
+import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
+import { resolveCompanionReadiness } from "../../i18n/runtime/companion-readiness";
 import { buildCompanionRuntimeTable } from "../../i18n/runtime/companion-registration";
 import { generateRuntimeSchema } from "../../schema/services/runtime-schema-generator";
 
@@ -97,11 +99,11 @@ function shapeSignature(
     : `f${JSON.stringify(fields)}:${shape}`;
 }
 
-export function ensureSingleRuntimeTable(
+export async function ensureSingleRuntimeTable(
   adapter: DrizzleAdapter,
   singleMeta: SingleRuntimeTableMeta,
   logger?: Logger
-): void {
+): Promise<void> {
   try {
     const resolver = (adapter as unknown as { tableResolver?: ResolverLike })
       .tableResolver;
@@ -141,12 +143,9 @@ export function ensureSingleRuntimeTable(
     // predates the localization enable, however much it looks like it: the
     // supported pre-migration window presents identically — the row says
     // localized, no companion exists, and the translatable columns are still
-    // on the main table, where reads and writes are meant to keep finding
-    // them until `nextly migrate` moves them. Re-deriving the main table as
-    // localized there drops those columns from the runtime shape and the
-    // write silently loses them. Telling the two apart needs to know whether
-    // the companion physically exists, which this synchronous helper cannot
-    // ask; the adopt rule is correct for both until it can.
+    // on the main table. Those two are told apart by the physical question
+    // below, not by the resolver's contents; the adopt rule stands for a
+    // registration this helper did not make.
 
     if (!mainMissing && !companionMissing && !rowMovedSinceOurs) {
       // Either up to date, or a foreign registration on first touch: adopt
@@ -155,21 +154,72 @@ export function ensureSingleRuntimeTable(
       return;
     }
 
+    // Past this point the helper is about to WRITE a registration, which is
+    // the rare branch — the steady state returned above. Only here is it
+    // worth asking the database where the translatable columns physically
+    // live, because building the main table for the wrong answer is what
+    // loses data: `localized: true` omits those columns from the runtime
+    // shape, so if they are still on the main table (the pre-migration
+    // window, before `nextly migrate` moves them) reads drop them and
+    // default-locale writes cannot target them. Upstream remembers a `ready`
+    // verdict per adapter but deliberately never remembers a NOT-ready one —
+    // another process may create the companion at any moment — so the
+    // pre-migration answer costs an introspection every time it is asked.
+    // Confining the question to this branch is what keeps that off the
+    // steady-state path, which returned above.
+    // A probe that cannot answer falls back to the ROW's flag, which is what
+    // this helper did before it could ask at all. Defaulting to "not ready"
+    // instead would be worse than the bug being fixed: it would put
+    // translatable columns on the main shape for every localized single whose
+    // introspection is briefly unavailable, and reads of a column that really
+    // does live on the companion then fail at the driver.
+    let companionReady = localized;
+    if (localized) {
+      try {
+        companionReady =
+          (await resolveCompanionReadiness(adapter, {
+            companionTableName: companionName,
+            mainTableName: singleMeta.tableName,
+            localizedColumns: resolveLocalizedFieldNames(
+              fields.map(f => ({
+                name: f.name,
+                type: f.type,
+                localized: f.localized,
+              })),
+              true
+            ),
+          })) === "ready";
+      } catch (err) {
+        logger?.debug("Companion readiness probe failed; using the row flag", {
+          slug: singleMeta.slug,
+          tableName: singleMeta.tableName,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
     if (mainMissing || rowMovedSinceOurs) {
       // Same generator + flags as the boot registration, so the lazily
-      // registered table matches the physical one (a localized single's
-      // main table omits its translatable columns — they live in the
-      // companion).
+      // registered table matches the PHYSICAL one. A localized single's main
+      // table omits its translatable columns only once the companion is
+      // actually holding them; until then they are still on main and the
+      // runtime shape has to say so.
       const { table } = generateRuntimeSchema(
         singleMeta.tableName,
         fields as Parameters<typeof generateRuntimeSchema>[1],
         dialect,
-        { status, localized }
+        { status, localized: localized && companionReady }
       );
       resolver.registerDynamicSchema(singleMeta.tableName, table);
     }
 
-    if (localized && (companionMissing || rowMovedSinceOurs)) {
+    // Registering a companion that does not physically exist would give the
+    // read path a table to resolve and the database nothing to answer with.
+    if (
+      localized &&
+      companionReady &&
+      (companionMissing || rowMovedSinceOurs)
+    ) {
       const companion = buildCompanionRuntimeTable({
         slug: singleMeta.slug,
         tableName: singleMeta.tableName,

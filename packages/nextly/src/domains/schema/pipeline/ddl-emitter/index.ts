@@ -126,10 +126,49 @@ function hasUniqueIndexOnTextColumn(table: {
 }
 
 /**
+ * Strip the indexes this emitter cannot spell correctly for the dialect,
+ * for callers that emit an `add_table` the routing decision REJECTED.
+ *
+ * The kit-path pre-creation is exactly that caller: it creates the planned
+ * tables itself so drizzle-kit's differ has an empty created set (see the
+ * HintsHandler note at its call site), and it runs on every `add_table` in
+ * the apply — including one that `canEmitWithoutDrizzleKit` sent to the kit
+ * precisely because of an index. Without this, the routing decision would be
+ * bypassed by the very branch it routed to, and a MySQL UNIQUE index over a
+ * TEXT/BLOB column would still be created with the 191-character prefix,
+ * silently rejecting rows that differ past that point.
+ *
+ * Dropping the index rather than the whole table keeps the crash guard: the
+ * table body is still pre-created, and drizzle-kit adds the index afterwards
+ * from its own introspection, which knows the column types.
+ */
+export function withoutUnemittableIndexes(
+  op: Operation,
+  dialect: SupportedDialect
+): Operation {
+  if (op.type !== "add_table" || dialect !== "mysql") return op;
+  const indexes = op.table.indexes;
+  if (!indexes || indexes.length === 0) return op;
+  const textColumns = new Set(
+    (op.table.columns ?? [])
+      .filter(c => /\b(text|blob)\b/i.test(c.type))
+      .map(c => c.name)
+  );
+  if (textColumns.size === 0) return op;
+  const safe = indexes.filter(
+    index =>
+      !(index.unique === true && index.columns.some(c => textColumns.has(c)))
+  );
+  if (safe.length === indexes.length) return op;
+  return { ...op, table: { ...op.table, indexes: safe } };
+}
+
+/**
  * Emit the SQL statements for a fast-path-eligible operation list.
  * Precondition: canEmitWithoutDrizzleKit(ops, dialect) === true — except
  * for the pipeline's kit-path add_table pre-creation, which may pass a
- * pure add_table subset of a mixed op list on SQLite/MySQL.
+ * pure add_table subset of a mixed op list on SQLite/MySQL, and must first
+ * run each op through `withoutUnemittableIndexes`.
  */
 export function emitDdl(ops: Operation[], dialect: SupportedDialect): string[] {
   if (dialect === "postgresql") {

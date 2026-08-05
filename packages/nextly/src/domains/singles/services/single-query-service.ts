@@ -1369,7 +1369,7 @@ export class SingleQueryService extends BaseService {
       // are per-process, so a UI single created in another dev worker — or
       // registered after this worker booted — would otherwise fail every
       // read here with "not found in schema registry" until a restart.
-      ensureSingleRuntimeTable(this.adapter, singleMeta, this.logger);
+      await ensureSingleRuntimeTable(this.adapter, singleMeta, this.logger);
 
       // 1.5. Access check (RBAC) after metadata, before hooks/DB operations.
       // The Single's stored read rule is evaluated here against the caller the

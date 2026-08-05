@@ -45,7 +45,11 @@ import {
   countNulls as countNullsHelper,
   countRows as countRowsHelper,
 } from "./classifier/count-helpers";
-import { canEmitWithoutDrizzleKit, emitDdl } from "./ddl-emitter";
+import {
+  canEmitWithoutDrizzleKit,
+  emitDdl,
+  withoutUnemittableIndexes,
+} from "./ddl-emitter";
 import {
   buildDesiredTableFromFields,
   buildDesiredTableFromComponentFields,
@@ -1039,7 +1043,17 @@ export class PushSchemaPipeline {
               op => op.type === "add_table"
             );
             if (addTableOps.length > 0) {
-              const createStatements = emitDdl(addTableOps, dialect);
+              // This branch runs for tables the routing decision may have
+              // REJECTED, so it cannot emit them verbatim: a MySQL UNIQUE
+              // index over a TEXT/BLOB column is exactly what sent such an
+              // apply here, and emitting it would reinstate the prefix
+              // uniqueness that decision existed to avoid. The table body is
+              // still pre-created (that is the crash guard); drizzle-kit adds
+              // the stripped index from its own introspection.
+              const createStatements = emitDdl(
+                addTableOps.map(op => withoutUnemittableIndexes(op, dialect)),
+                dialect
+              );
               try {
                 await this.deps.executor.executeStatements(
                   tx,
