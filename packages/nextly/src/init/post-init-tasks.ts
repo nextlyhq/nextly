@@ -14,6 +14,7 @@ import {
 } from "../database/repair-sqlite-timestamps";
 import { seedRolePresets } from "../database/seeders/role-presets";
 import { getService } from "../di/register";
+import { isPermissionCollision } from "../plugins/permission-error";
 import { collectCustomPermissions } from "../plugins/permissions/collect-permissions";
 import { collectRoles } from "../plugins/roles/collect-roles";
 import { seedPluginRoles } from "../plugins/roles/seed-roles";
@@ -113,9 +114,12 @@ export async function runPostInitTasks(): Promise<void> {
     if (allNewIds.length > 0) {
       await permissionSeedService.assignNewPermissionsToSuperAdmin(allNewIds);
     }
-  } catch {
-    // Silently skip — permissions table may not exist yet (migrations not run),
-    // or permissionSeedService may not be registered
+  } catch (error) {
+    // Forgiving on purpose: the permissions table may genuinely not exist yet (migrations not
+    // run), or the service may not be registered. A permission collision is not that — it is a
+    // configuration error, and swallowing it here would let boot continue with a plugin sharing
+    // a content permission, which is the thing refusing it was meant to prevent.
+    if (isPermissionCollision(error)) throw error;
   }
 
   // Bring the preset roles in line with the permissions that now exist. Runs
