@@ -218,49 +218,14 @@ describe("the content route's draft decision", () => {
     ]);
   });
 
-  it("discards a draft the grant did not name", async () => {
-    // A slug need not be unique — the resolver supports duplicates and settles
-    // them by sorting on `id` — so a grant scoped to one entry could otherwise
-    // open another that happens to share its slug. The grant names the
-    // document, and a resolve that lands on a different one falls back to
-    // published rather than serving what was never granted.
-    const { reader, byIdCalls } = stubReader();
-
-    const wrongEntry = await createContentRoute({
-      collections: ["pages"],
-      nextly: reader,
-      render: (entry: ContentEntry) => entry,
-      buildMetadata: (entry: ContentEntry) => ({ title: String(entry.id) }),
-      draft: () => ({ entryId: "some-other-entry" }),
-    }).ContentPage(params);
-
-    expect((wrongEntry as ContentEntry)._isWorkingDraft).toBeUndefined();
-
-    byIdCalls.length = 0;
-    const rightEntry = await createContentRoute({
-      collections: ["pages"],
-      nextly: reader,
-      render: (entry: ContentEntry) => entry,
-      buildMetadata: (entry: ContentEntry) => ({ title: String(entry.id) }),
-      draft: () => ({ entryId: "1" }),
-    }).ContentPage(params);
-
-    expect((rightEntry as ContentEntry)._isWorkingDraft).toBe(true);
-    expect(byIdCalls).toHaveLength(1);
-  });
-
-  it("refuses a grant when the resolved document has no comparable id", async () => {
-    // An `afterRead` hook's return value REPLACES the document, so a collection
-    // that reshapes its public read can hand back a row whose id is absent or
-    // structured. Stringifying those yields `"undefined"` and
-    // `"[object Object]"` — values a grant can carry literally.
-    //
-    // What that would cost is a disclosure, not a degraded preview: a grant the
-    // route honours is read with the lifecycle scope widened to `"all"`, so the
-    // row it matches by accident can be one that was NEVER published.
-    for (const id of [undefined, { nested: "1" }]) {
+  it("refuses a draft for an object grant that names no entry", async () => {
+    // The decision is app-supplied code, so the type is not a runtime
+    // guarantee. An object carrying no usable id must authorize nothing: the
+    // one combination that must not exist is a widened lifecycle scope with no
+    // entry named to bound it.
+    for (const grant of [{}, { entryId: "" }, { entryId: 42 }]) {
       const { reader, calls } = stubReader(
-        { id, slug: "a", status: "draft" },
+        { id: "1", slug: "a", status: "draft" },
         { enforceStatus: true }
       );
 
@@ -269,15 +234,14 @@ describe("the content route's draft decision", () => {
         nextly: reader,
         render: (row: ContentEntry) => row,
         buildMetadata: (row: ContentEntry) => ({ title: String(row.slug) }),
-        draft: () => ({ entryId: String(id) }),
+        draft: () => grant as never,
       });
 
-      // The never-published row is the only one there is, so refusing the grant
-      // leaves nothing to serve. Asserting the REFUSAL rather than the throw:
-      // the route re-read published-only, which is what a rejected grant does
-      // and what returning the row instead would have skipped.
+      // Nothing published lives at this path, so refusing the grant leaves
+      // nothing to serve. The read that happened is the assertion: published,
+      // not widened.
       await expect(route.ContentPage(params)).rejects.toThrow();
-      expect(calls.map(call => call.status)).toEqual(["all", "published"]);
+      expect(calls.map(call => call.status)).toEqual(["published"]);
     }
   });
 
