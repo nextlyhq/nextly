@@ -2,6 +2,8 @@ import { hkdfSync, randomBytes } from "node:crypto";
 
 import { SignJWT, jwtVerify, errors as joseErrors } from "jose";
 
+import { NextlyError } from "../../errors/nextly-error";
+
 /**
  * Scoped, short-lived tokens that let someone read ONE unpublished entry.
  *
@@ -97,6 +99,24 @@ export async function signPreviewToken(
   secret: string,
   options: SignPreviewTokenOptions
 ): Promise<{ token: string; expiresAt: Date }> {
+  // A locale that is present but unusable must not be minted. Verification
+  // reads an unreadable `loc` as ABSENT, and an absent locale deliberately
+  // covers every locale — so an empty string would quietly widen a
+  // locale-specific link into an all-locales grant. Refusing at the mint is
+  // where the caller can still be told.
+  if (scope.locale !== undefined && scope.locale.length === 0) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "locale",
+          code: "INVALID_FORMAT",
+          message:
+            "A preview token's locale must be a non-empty string when present.",
+        },
+      ],
+    });
+  }
+
   const ttlSeconds = options.ttlSeconds ?? DEFAULT_PREVIEW_TTL_SECONDS;
   const issuedAt = Math.floor(Date.now() / 1000);
   const expiresAt = issuedAt + ttlSeconds;
@@ -167,7 +187,16 @@ export async function verifyPreviewToken(
     typeof payload.exp === "number" ? new Date(payload.exp * 1000) : null;
   if (expiresAt === null) return { valid: false, reason: "invalid" };
 
-  const locale = readString(payload.loc);
+  // Present-but-unreadable is NOT the same as absent. An absent locale covers
+  // every locale by design, so silently dropping a malformed one would widen
+  // the grant rather than narrow it — the one direction a scope check must
+  // never fail in.
+  const localeClaim = payload.loc;
+  const locale = readString(localeClaim);
+  if (localeClaim !== undefined && locale === null) {
+    return { valid: false, reason: "invalid" };
+  }
+
   return {
     valid: true,
     scope: {

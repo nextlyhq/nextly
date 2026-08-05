@@ -1,3 +1,6 @@
+import { hkdfSync } from "node:crypto";
+
+import { SignJWT } from "jose";
 import { describe, expect, it, vi } from "vitest";
 
 import { signAccessToken } from "../../jwt/sign";
@@ -155,6 +158,53 @@ describe("preview tokens", () => {
         generation: GENERATION,
       });
 
+      expect(result).toEqual({ valid: false, reason: "invalid" });
+    });
+  });
+
+  describe("a locale that is present but unusable", () => {
+    it("refuses to mint a token carrying an empty locale", async () => {
+      // Verification reads an unreadable locale as ABSENT, and an absent locale
+      // covers every locale — so minting one would quietly widen a
+      // locale-specific link into an all-locales grant.
+      // Asserted on the structured error rather than its message: the public
+      // message is deliberately generic, and the field name is the part a
+      // caller acts on.
+      await expect(
+        signPreviewToken({ ...SCOPE, locale: "" }, TEST_SECRET, {
+          generation: GENERATION,
+        })
+      ).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+        publicData: { errors: [{ path: "locale", code: "INVALID_FORMAT" }] },
+      });
+    });
+
+    it("refuses a token whose locale claim is unusable", async () => {
+      // Minted around the guard, the way a token from an older writer or a
+      // hand-built one would arrive.
+      const forged = await new SignJWT({
+        col: SCOPE.collection,
+        eid: SCOPE.entryId,
+        loc: "",
+        gen: GENERATION,
+      })
+        .setProtectedHeader({ alg: "HS256" })
+        .setAudience("nextly:preview")
+        .setIssuedAt()
+        .setExpirationTime("1h")
+        .sign(
+          new Uint8Array(
+            hkdfSync("sha256", TEST_SECRET, "", "nextly:preview-token:v1", 32)
+          )
+        );
+
+      const result = await verifyPreviewToken(forged, TEST_SECRET, {
+        generation: GENERATION,
+      });
+
+      // Widening is the one direction a scope check must never fail in, so an
+      // unreadable locale is refused rather than dropped.
       expect(result).toEqual({ valid: false, reason: "invalid" });
     });
   });
