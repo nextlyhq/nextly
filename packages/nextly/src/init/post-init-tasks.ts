@@ -13,7 +13,11 @@ import {
   TIMESTAMP_REPAIR_META_KEY,
 } from "../database/repair-sqlite-timestamps";
 import { seedRolePresets } from "../database/seeders/role-presets";
-import { getService } from "../di/register";
+import {
+  getService,
+  isServicesRegistered,
+  shutdownServices,
+} from "../di/register";
 import { isPermissionCollision } from "../plugins/permission-error";
 import { collectCustomPermissions } from "../plugins/permissions/collect-permissions";
 import { collectRoles } from "../plugins/roles/collect-roles";
@@ -198,6 +202,12 @@ export async function assertNoReservedPermissionCollisions(): Promise<void> {
       collectCustomPermissions(config, config.plugins ?? [])
     );
   } catch (error) {
-    if (isPermissionCollision(error)) throw error;
+    if (!isPermissionCollision(error)) return;
+    // Boot is being refused, and the container has already been marked registered by the caller.
+    // Left that way, the next `getNextly()` or request sees services registered, skips the
+    // initializer that raised this, and serves against the very collision just rejected — so the
+    // refusal has to take the registration down with it, and repeat on the next attempt.
+    if (isServicesRegistered()) await shutdownServices();
+    throw error;
   }
 }

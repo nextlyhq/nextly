@@ -175,11 +175,6 @@ export async function ensureServicesInitialized(): Promise<void> {
     // createDynamicHandlers() get permissions auto-seeded on first request.
     // Without this, permissions like "update-api-keys" won't exist and
     // the admin UI will block access to protected settings tabs.
-    // The same refusal the main boot path makes. This cold start seeds permissions and never
-    // collects the custom ones, so without it an app reaching the engine only through
-    // `createDynamicHandlers` boots straight past a plugin sharing a content permission.
-    await assertNoReservedPermissionCollisions();
-
     try {
       const permissionSeedService = getService("permissionSeedService");
       const systemResult = await permissionSeedService.seedSystemPermissions();
@@ -266,6 +261,14 @@ export async function ensureServicesInitialized(): Promise<void> {
         },
       });
     }
+
+    // The same refusal the main boot path makes. This cold start seeds permissions and never
+    // collects the custom ones, so without it an app reaching the engine only through
+    // `createDynamicHandlers` boots straight past a plugin sharing a content permission.
+    //
+    // After the migrations, not before: on an unmigrated database `dynamic_collections` may not
+    // exist yet, and a check that cannot read it finds no collision and is never retried.
+    await assertNoReservedPermissionCollisions();
 
     // Open the HMR listener so live edits to nextly.config.ts during a
     // running dev session reach reloadNextlyConfig(). Without this, only
