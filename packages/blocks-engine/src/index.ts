@@ -280,5 +280,9 @@ export type { BreakpointAxis } from "./style/breakpoint-axes";
 // several tiers they are looking at. Produced only when `StyleCompileContext.trace` asks for it.
 export type { StyleOrigin, StyleTraceEntry } from "./style/style-trace";
 export type { StyleQuery, StyleSubject } from "./style/style-origin";
+
+// The stylesheet every page of a site shares, compiled once and addressed by its content.
+export type { SiteSheetArtifact, SiteSheetInput } from "./style/site-sheet";
+export { compileSiteSheet } from "./style/site-sheet";
 export { styleOrigin } from "./style/style-origin";
 export { BREAKPOINT_AXES } from "./style/breakpoint-axes";
