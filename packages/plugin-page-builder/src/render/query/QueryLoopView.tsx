@@ -25,6 +25,8 @@ export interface QueryLoopViewProps {
   className: string;
   result: QueryResult;
   budget: QueryBudget;
+  /** The document's node classes, threaded on to each rendered template node. */
+  classes?: ReadonlyMap<string, string>;
 }
 
 export function QueryLoopView({
@@ -35,6 +37,7 @@ export function QueryLoopView({
   className,
   result,
   budget,
+  classes,
 }: QueryLoopViewProps): ReactNode {
   const template = node.slots?.[DEFAULT_SLOT] ?? [];
 
@@ -80,6 +83,7 @@ export function QueryLoopView({
               remotePatterns={remotePatterns}
               item={item}
               budget={budget}
+              classes={classes}
             />
           ))}
         </div>

@@ -84,7 +84,7 @@ const OVERLAY_CSS = [
 ].join("");
 
 export function IframeCanvas({ children }: { children: ReactNode }) {
-  const { state, dispatch, remotePatterns } = useEditor();
+  const { state, dispatch, remotePatterns, nodeClasses } = useEditor();
   const ref = useRef<HTMLIFrameElement>(null);
   const [body, setBody] = useState<HTMLElement | null>(null);
   // Desktop/base is FLUID (fills the pane); only tablet/mobile use a fixed device width.
@@ -164,11 +164,22 @@ export function IframeCanvas({ children }: { children: ReactNode }) {
     pageStyle.textContent =
       compileTokensCss(pageScope) +
       "\n" +
-      compileDocumentCss(state.document, { remotePatterns, scope: pageScope }) +
+      compileDocumentCss(state.document, {
+        remotePatterns,
+        scope: pageScope,
+        classes: nodeClasses,
+      }) +
       "\n" +
       // Same sanitize+scope pass as PageRenderer, so the preview is faithful.
       sanitizeCustomCss(deferredCustomCss, pageScope).css;
-  }, [state.document, deferredCustomCss, remotePatterns, body, pageScope]);
+  }, [
+    state.document,
+    deferredCustomCss,
+    remotePatterns,
+    body,
+    pageScope,
+    nodeClasses,
+  ]);
 
   // Selection via a native delegated listener ON THE IFRAME DOCUMENT. React's synthetic
   // events don't cross the portal→iframe boundary, so onClick handlers inside the canvas

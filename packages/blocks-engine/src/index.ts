@@ -227,6 +227,11 @@ export type {
 } from "./style/compile-page";
 export {
   blockTypeClassName,
+  // The digest itself, for a caller naming something other than a node from an
+  // id — a per-document scope class, say. Exported so that caller reaches for
+  // this rather than writing a second hash, which is how the two that existed
+  // before came to disagree about the width a class needs.
+  hashId,
   nodeClassName,
   nodeClassNames,
   BLOCK_TYPE_CLASS_PREFIX,

@@ -1,10 +1,15 @@
 import { describe, it, expect } from "vitest";
 
+import { nodeClassName } from "@nextlyhq/blocks-engine";
+
 import {
   nodeClass,
+  compileDocumentBlockCss,
   compileNodeCss,
   compileDocumentCss,
   compileTokensCss,
+  documentNodeClasses,
+  documentNodeIds,
   isAllowedRemoteUrl,
   safeValue,
   DEFAULT_BREAKPOINTS,
@@ -16,6 +21,66 @@ describe("nodeClass", () => {
     expect(nodeClass("pb-abc")).toBe(nodeClass("pb-abc"));
     expect(nodeClass("pb-abc")).toMatch(/^nx-pb-[a-z0-9]+$/);
     expect(nodeClass("pb-abc")).not.toBe(nodeClass("pb-def"));
+  });
+
+  it("is the engine's class, not a second one under the same prefix", () => {
+    // Both sides emitted `nx-pb-` from different digests, so the compiler and
+    // the engine could name one node two ways. Comparing the strings is the
+    // only assertion that catches them drifting apart again.
+    expect(nodeClass("pb-abc")).toBe(nodeClassName("pb-abc"));
+  });
+});
+
+describe("document node classes", () => {
+  const leaf = makeNode("core/heading", { text: "Hi" });
+  const doc = {
+    version: 1 as const,
+    root: makeNode("core/container", {}, undefined, { default: [leaf] }),
+  };
+
+  it("covers every node the document walk reaches", () => {
+    expect(documentNodeIds(doc)).toEqual([doc.root.id, leaf.id]);
+    expect([...documentNodeClasses(doc).keys()].sort()).toEqual(
+      [doc.root.id, leaf.id].sort()
+    );
+  });
+
+  it("names a node in the stylesheet from the map it is given", () => {
+    // The map is what makes a collision resolvable, so a compiler that computed
+    // the class itself would emit a selector the markup never carries. A map
+    // holding a name the default would never produce is the only way to tell
+    // "consulted it" apart from "happened to agree with it".
+    const classes = new Map([[leaf.id, "nx-pb-from-the-map"]]);
+    const styled = { ...leaf, style: { base: { backgroundColor: "#111" } } };
+    expect(compileNodeCss(styled, { classes })).toContain(
+      ".nx-pb-from-the-map"
+    );
+  });
+
+  it("names a node in its custom CSS from the same map", () => {
+    // The other half of the same rule: per-block custom CSS is anchored to the
+    // node class too, and anchoring it to a different one scopes an author's
+    // CSS to a selector nothing on the page matches.
+    const withCss = { ...leaf, customCss: "selector { color: red }" };
+    const scoped = {
+      version: 1 as const,
+      root: makeNode("core/container", {}, undefined, { default: [withCss] }),
+    };
+    const classes = new Map([[withCss.id, "nx-pb-from-the-map"]]);
+    expect(compileDocumentBlockCss(scoped, classes)).toContain(
+      ".nx-pb-from-the-map"
+    );
+  });
+
+  it("compiles a whole document through one map without being handed one", () => {
+    const styled = { ...leaf, style: { base: { backgroundColor: "#111" } } };
+    const tree = {
+      version: 1 as const,
+      root: makeNode("core/container", {}, undefined, { default: [styled] }),
+    };
+    expect(compileDocumentCss(tree)).toContain(
+      `.${documentNodeClasses(tree).get(styled.id)}`
+    );
   });
 });
 
