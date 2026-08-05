@@ -208,7 +208,16 @@ export function registerMigrateBaselineCommand(program: Command): void {
       "Clear a stale migrate lock before taking it",
       false
     )
-    .action(async (options: BaselineCommandOptions) => {
-      await runMigrateBaseline(options, createContext(options));
+    .action(async (cmdOptions: BaselineCommandOptions, cmd: Command) => {
+      // Merged with the program's globals, as every sibling migrate command
+      // does: `nextly --cwd /app migrate:baseline` puts `--cwd` on the PROGRAM,
+      // not the subcommand, so reading command-local options alone would load
+      // the config from — and write migrations into — the shell's directory
+      // instead of the project the operator named.
+      const globalOpts = cmd.optsWithGlobals();
+      await runMigrateBaseline(
+        { ...globalOpts, ...cmdOptions },
+        createContext(globalOpts)
+      );
     });
 }
