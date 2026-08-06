@@ -197,6 +197,8 @@ exports[`ui public export surface > index.ts surface is unchanged 1`] = `
   "SheetTriggerProps (type)",
   "Skeleton (value)",
   "SkeletonProps (type)",
+  "Slider (value)",
+  "SliderProps (type)",
   "SortInfo (type)",
   "Spinner (value)",
   "SpinnerProps (type)",
