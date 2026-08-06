@@ -166,6 +166,54 @@ export class SingleMetadataService {
   }
 
   /**
+   * Remove a Single: its storage first, then its registry row.
+   *
+   * The order is the opposite of the create's and for the same reason. A create writes the row last
+   * so a failure cannot leave a row describing storage that was never made; a delete drops the
+   * storage first so a failure cannot leave storage that no row describes. Both put the registry
+   * write on the side where an interruption is visible rather than invisible.
+   *
+   * Failures propagate here rather than being recorded as a status. A single that cannot be fully
+   * removed stays intact and retryable, which is a better state than one whose row is gone while its
+   * tables survive: the row is what makes the tables findable.
+   */
+  async deleteSingle(
+    slug: string,
+    tableName: string | undefined
+  ): Promise<void> {
+    const adapter = this.adapter;
+    if (tableName && adapter) {
+      // Embedded field-group instances point back at this table by a plain string with no foreign
+      // key, so the drop below cascades nothing and would strand them. Sweep first.
+      const { teardownEntityComponentData } = await import(
+        "../../field-groups/services/teardown-entity-field-group-data"
+      );
+      await teardownEntityComponentData({ adapter, parentTable: tableName });
+
+      // Remove the companion `_locales` table and this single's archive rows before the main table.
+      // The companion holds a foreign key to `<main>.id`, so it must go first or the main drop
+      // orphans it on PostgreSQL and is rejected by the constraint on MySQL.
+      const { teardownEntityI18n } = await import(
+        "../../i18n/migration/teardown-entity-i18n"
+      );
+      await teardownEntityI18n({ adapter, slug, tableName, kind: "single" });
+
+      const dialect = adapter.getCapabilities().dialect;
+      const quoted =
+        dialect === "mysql" ? `\`${tableName}\`` : `"${tableName}"`;
+      // PostgreSQL needs CASCADE to drop dependent objects: the companion's foreign key makes the
+      // main table a target, and a non-cascading drop raises rather than proceeding.
+      await adapter.executeQuery(
+        dialect === "postgresql"
+          ? `DROP TABLE IF EXISTS ${quoted} CASCADE`
+          : `DROP TABLE IF EXISTS ${quoted}`
+      );
+    }
+
+    await this.registry.deleteSingle(slug, { force: true });
+  }
+
+  /**
    * Render the DDL and work out what the table must look like once it has run.
    *
    * Separated from the apply because the two have opposite contracts: this one is allowed to
