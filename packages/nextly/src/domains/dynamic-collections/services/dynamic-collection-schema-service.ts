@@ -37,6 +37,8 @@ import {
   getSystemColumnDescriptors,
   renderSystemColumnSql,
   toSnakeCase,
+  DEFAULT_DECIMAL_PRECISION,
+  DEFAULT_DECIMAL_SCALE,
 } from "../../schema/services/field-column-descriptor";
 import {
   columnTypeIsIndexable,
@@ -342,7 +344,7 @@ export class DynamicCollectionSchemaService {
 
         const type =
           this.canonicalSlugType(f) ??
-          this.mapFieldTypeToSQL(f.type, f.length, f.options, f.validation);
+          this.mapFieldTypeToSQL(f.type, f.length, f.options, f.validation, f);
         const nullable = f.required ? "NOT NULL" : "";
 
         const unique = this.columnIsUnique(f) ? "UNIQUE" : "";
@@ -525,7 +527,7 @@ ${allColumnDefs.join(",\n")}
         const indexSql = this.createIndexSql(
           tableName,
           col,
-          this.mapFieldTypeToSQL(f.type, f.length, f.options, f.validation)
+          this.mapFieldTypeToSQL(f.type, f.length, f.options, f.validation, f)
         );
         if (indexSql) indexStatements.push(indexSql);
       }
@@ -751,7 +753,13 @@ ${allColumnDefs.join(",\n")}
           continue;
         }
 
-        const type = this.mapFieldTypeToSQL(field.type, field.length);
+        const type = this.mapFieldTypeToSQL(
+          field.type,
+          field.length,
+          undefined,
+          undefined,
+          field
+        );
         const nullable = field.required ? "NOT NULL" : "";
         const addColName = toSnakeCase(field.name);
 
@@ -854,7 +862,13 @@ ${allColumnDefs.join(",\n")}
           const toggleIndexSql = this.createIndexSql(
             tableName,
             idxCol,
-            this.mapFieldTypeToSQL(field.type, field.length)
+            this.mapFieldTypeToSQL(
+              field.type,
+              field.length,
+              undefined,
+              undefined,
+              field
+            )
           );
           if (toggleIndexSql) statements.push(toggleIndexSql);
         } else {
@@ -983,7 +997,13 @@ ${allColumnDefs.join(",\n")}
         if (oldField && this.storageClassChanged(oldField, field)) continue;
         if (oldField && this.isFieldModified(oldField, field)) {
           const alterCol = toSnakeCase(field.name);
-          const type = this.mapFieldTypeToSQL(field.type, field.length);
+          const type = this.mapFieldTypeToSQL(
+            field.type,
+            field.length,
+            undefined,
+            undefined,
+            field
+          );
           statements.push(
             `ALTER TABLE ${this.quoteIdentifier(tableName)} ALTER COLUMN ${this.quoteIdentifier(alterCol)} TYPE ${type};`
           );
@@ -1172,7 +1192,8 @@ ${allColumnDefs.join(",\n")}
             field.type,
             field.length,
             field.options,
-            field.validation
+            field.validation,
+            field
           )
         ) !== null
       ) {
@@ -1307,11 +1328,54 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
    * outright. Converging the rest belongs with the column-descriptor
    * consolidation rather than with a per-column patch.
    */
+  /**
+   * The column a number field reaches, for the dialect this service builds for.
+   *
+   * Two independent things can ask for fractions and they mean different storage. `dbType:
+   * "decimal"` asks for EXACT fixed point, which is what money needs and what nothing else should
+   * use; `options.format === "float"` is the UI's way of asking for an ordinary fractional number.
+   * Silence means whole numbers.
+   *
+   * Read here rather than inline in each dialect map because the same three-way answer is needed
+   * three times, and a map that answered it per dialect is how one of the three came to be missing
+   * from all of them.
+   */
+  private numberColumnType(
+    options: FieldDefinition["options"],
+    storage: Pick<FieldDefinition, "dbType" | "precision" | "scale"> | undefined
+  ): string {
+    if (storage?.dbType === "decimal") {
+      const precision = storage.precision ?? DEFAULT_DECIMAL_PRECISION;
+      const scale = storage.scale ?? DEFAULT_DECIMAL_SCALE;
+      // Rendered the way the column descriptor renders it for each dialect, so a table built here
+      // and the runtime schema that reads it describe one column. SQLite has no sized numeric and
+      // stores the value with full fidelity either way.
+      if (this.dialect === "sqlite") return "numeric";
+      return this.dialect === "mysql"
+        ? `decimal(${precision},${scale})`
+        : `numeric(${precision}, ${scale})`;
+    }
+    if (options?.format === "float") {
+      return this.dialect === "sqlite" ? "real" : "decimal(10,2)";
+    }
+    return "integer";
+  }
+
   mapFieldTypeToSQL(
     declaredType: string,
     length?: number,
     options?: FieldDefinition["options"],
-    validation?: FieldDefinition["validation"]
+    validation?: FieldDefinition["validation"],
+    /**
+     * What a number field says about how it wants to be stored.
+     *
+     * Passed as its own argument because this map is reached from six call
+     * sites and four of them used to hand over only a type and a length, which
+     * is why an exact-decimal field silently became a whole-number column: the
+     * facts that decide it never arrived. Optional so a caller that genuinely
+     * has no field (a storage token resolved from a plugin type) is unchanged.
+     */
+    numberStorage?: Pick<FieldDefinition, "dbType" | "precision" | "scale">
   ): string {
     // A contributed type persists as its storage primitive, and this map has
     // never heard of the token it is declared under. Left unresolved it falls
@@ -1325,7 +1389,7 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
       const sqliteTypeMap: Record<string, string> = {
         text: "text",
         textarea: "text",
-        number: options?.format === "float" ? "real" : "integer",
+        number: this.numberColumnType(options, numberStorage),
         checkbox: "integer", // SQLite uses 0/1 for boolean
         date: "integer", // Store as Unix timestamp
         email: "text",
@@ -1347,7 +1411,7 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
             ? `varchar(${validation?.maxLength || 255})`
             : "text",
         textarea: "text",
-        number: options?.format === "float" ? "decimal(10,2)" : "integer",
+        number: this.numberColumnType(options, numberStorage),
         checkbox: "boolean",
         date: "timestamp",
         email: `varchar(${validation?.maxLength || 255})`,
@@ -1368,7 +1432,7 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
           ? `varchar(${validation?.maxLength || 255})`
           : "text",
       textarea: "text",
-      number: options?.format === "float" ? "decimal(10,2)" : "integer",
+      number: this.numberColumnType(options, numberStorage),
       checkbox: "boolean",
       date: "timestamp",
       email: `varchar(${validation?.maxLength || 255})`,
