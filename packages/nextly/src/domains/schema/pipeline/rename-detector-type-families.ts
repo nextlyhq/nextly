@@ -163,5 +163,30 @@ export function isTypesCompatible(
   const fromFamily = typeFamilyOf(fromType, dialect);
   const toFamily = typeFamilyOf(toType, dialect);
   if (fromFamily === null || toFamily === null) return false;
-  return fromFamily === toFamily;
+  if (fromFamily === toFamily) return true;
+  return isConvertibleFamilyChange(fromFamily, toFamily);
+}
+
+/**
+ * Whether a column can carry its contents across a change of family.
+ *
+ * Same-family is the ordinary case and needs no conversion. This covers the one pair that is not
+ * the same family and still holds every value it had: text into JSON. A structured value stored in
+ * a text column is already the JSON serialization of itself, so the database can reinterpret it in
+ * place, and refusing the rename means the only recovery on offer drops the column and recreates it
+ * empty.
+ *
+ * Deliberately one-directional. JSON back into text would also preserve the bytes, but nothing in
+ * this product moves that way, and a rule that answers a question no caller asks is a rule nobody
+ * maintains.
+ *
+ * 🔴 Offering the rename is only half of it. A rename does not convert on its own, so a caller that
+ * acts on this must also change the column's type; `executePreResolutionOps` is where that pairing
+ * is made.
+ */
+function isConvertibleFamilyChange(
+  fromFamily: TypeFamily,
+  toFamily: TypeFamily
+): boolean {
+  return fromFamily === "text" && toFamily === "json";
 }
