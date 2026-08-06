@@ -46,6 +46,7 @@ import {
   getEmailProviderRegistry,
   resetEmailProviderRegistry,
 } from "../domains/email/services/email-provider-registry";
+import type { FieldGroupMetadataService } from "../domains/field-groups/services/field-group-metadata-service";
 import {
   resolveFieldGroupRegistryName,
   resolveKnownTypeColumns,
@@ -334,6 +335,7 @@ export interface ServiceMap {
   singleEntryService: SingleEntryService;
   /** Owns a Single's table change together with the registry write that records it. */
   singleMetadataService: SingleMetadataService;
+  fieldGroupMetadataService: FieldGroupMetadataService;
   fieldGroupRegistryService: FieldGroupRegistryService;
   fieldGroupSchemaService: FieldGroupSchemaService;
   fieldGroupDataService: FieldGroupDataService;

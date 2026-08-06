@@ -21,6 +21,10 @@ import { z } from "zod";
 
 import { getService } from "../di";
 import { clampLimit } from "../domains/collections/query/query-parser";
+import type {
+  CreateFieldGroupInput,
+  FieldGroupMetadataService,
+} from "../domains/field-groups/services/field-group-metadata-service";
 import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
 import { resolveComponentTableName } from "../domains/schema/utils/resolve-table-name";
 import { getCachedNextly } from "../init";
@@ -36,6 +40,18 @@ import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 async function getComponentRegistry(): Promise<FieldGroupRegistryService> {
   await getCachedNextly();
   return getService("fieldGroupRegistryService");
+}
+
+/**
+ * The service that owns a field group's table and its registry row together.
+ *
+ * This route used to call the registry directly, which wrote the row and made no table: it answered
+ * 201 for a field group whose `comp_<slug>` did not exist, and every later read and write to it
+ * failed against the database.
+ */
+async function getFieldGroupMetadataService(): Promise<FieldGroupMetadataService> {
+  await getCachedNextly();
+  return getService("fieldGroupMetadataService");
 }
 
 const createComponentSchema = z.object({
@@ -164,7 +180,7 @@ export const POST = withErrorHandler(async (request: Request) => {
 
   // Boot services before the permission check (see GET) so lazy DI init does
   // not turn a valid caller's first request into a 403/503.
-  const registry = await getComponentRegistry();
+  const metadata = await getFieldGroupMetadataService();
 
   await requireRouteAnyPermission(request, [
     { action: "create", resource: "settings" },
@@ -190,13 +206,11 @@ export const POST = withErrorHandler(async (request: Request) => {
 
   // Validated by assertValidFieldsPayload above; cast through `unknown`
   // to the registry's config type while keeping the payload unstripped.
-  const fields = validated.fields as unknown as Parameters<
-    typeof registry.registerComponent
-  >[0]["fields"];
+  const fields = validated.fields as unknown as CreateFieldGroupInput["fields"];
 
   const schemaHash = calculateSchemaHash(fields);
 
-  const component = await registry.registerComponent({
+  const { record, migrationStatus } = await metadata.createFieldGroup({
     slug: validated.slug,
     label: validated.label,
     tableName,
@@ -208,5 +222,13 @@ export const POST = withErrorHandler(async (request: Request) => {
     schemaHash,
   });
 
-  return respondMutation("Field group created.", component, { status: 201 });
+  // The status is reported rather than swallowed. A create whose DDL failed still has a row
+  // describing what was attempted, and answering an unqualified success for it is what let a field
+  // group with no table look healthy.
+  const message =
+    migrationStatus === "applied"
+      ? "Field group created."
+      : "Field group created, but its table could not be provisioned. Check the server logs and retry.";
+
+  return respondMutation(message, record, { status: 201 });
 });
