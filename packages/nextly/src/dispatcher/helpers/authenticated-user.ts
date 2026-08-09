@@ -1,3 +1,4 @@
+import { buildUserContext } from "../../auth/user-context";
 import type { UserContext } from "../../domains/collections/services/collection-types";
 import type { Params } from "../types";
 
@@ -41,12 +42,8 @@ function readAuthenticatedClaims(p: Params): Record<string, unknown> {
 export function readAuthenticatedUser(p: Params): UserContext | undefined {
   if (!p._authenticatedUserId) return undefined;
 
-  const roles = readAuthenticatedRoles(p);
-  return {
-    // Verified extra claims first, so the canonical fields below always win: a
-    // token cannot restate `id` or `roles` as a claim and have it override the
-    // identity the route authenticated.
-    ...readAuthenticatedClaims(p),
+  return buildUserContext({
+    claims: readAuthenticatedClaims(p),
     id: String(p._authenticatedUserId),
     name: p._authenticatedUserName
       ? String(p._authenticatedUserName)
@@ -54,7 +51,6 @@ export function readAuthenticatedUser(p: Params): UserContext | undefined {
     email: p._authenticatedUserEmail
       ? String(p._authenticatedUserEmail)
       : undefined,
-    roles,
-    role: roles?.[0],
-  };
+    roles: readAuthenticatedRoles(p),
+  });
 }

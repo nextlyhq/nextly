@@ -20,6 +20,7 @@
 import { z } from "zod";
 
 import { signPreviewToken } from "../auth/preview/preview-token";
+import { buildUserContext } from "../auth/user-context";
 import { container } from "../di";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
@@ -113,15 +114,17 @@ export const mintPreviewLink = withErrorHandler(async (req: Request) => {
     id: entryId,
     depth: 0,
     overrideAccess: false,
-    user: {
+    // Built the one way a caller is built, so this probe reaches the verdict
+    // the caller's own read would. Claims matter here specifically: a stored
+    // `custom` rule that decides on one is absence-tolerant, so a probe that
+    // dropped them would admit exactly the caller the rule refuses.
+    user: buildUserContext({
+      claims: auth.claims,
       id: auth.userId,
       name: auth.userName,
       email: auth.userEmail,
       roles,
-      // A representative singular `role`, matching how the other routes shape
-      // a user for field-level access callbacks.
-      role: roles?.[0],
-    },
+    }),
   });
   if (!visible) {
     throw NextlyError.forbidden({

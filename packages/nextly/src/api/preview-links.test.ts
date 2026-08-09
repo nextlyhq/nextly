@@ -71,6 +71,10 @@ beforeEach(() => {
     permissions: [],
     roles: [],
     authMethod: "session",
+    // A stored `custom` read rule may decide on a claim this framework knows
+    // nothing about, so the probe has to carry them or it answers a different
+    // question than the caller's own read would.
+    claims: { tenant: "acme", tier: "restricted" },
   });
   getGeneration.mockResolvedValue(0);
   revokeAll.mockResolvedValue(1);
@@ -100,7 +104,17 @@ describe("mintPreviewLink", () => {
         collection: "pages",
         id: "someone-elses-draft",
         overrideAccess: false,
-        user: expect.objectContaining({ id: "u1" }),
+        // The whole identity, not an id: `roles` drives role-based rules and
+        // the claims drive `custom` ones. A probe missing either decides a
+        // different question than the read it stands in for — an
+        // absence-tolerant rule would admit a caller it was written to refuse.
+        user: expect.objectContaining({
+          id: "u1",
+          roles: ["editor"],
+          role: "editor",
+          tenant: "acme",
+          tier: "restricted",
+        }),
       })
     );
     // No token is minted for a refused entry.
