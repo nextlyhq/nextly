@@ -635,11 +635,23 @@ function envelopeRules(
  *
  * Read defensively, because a document reaches this compiler whether or not anything validated
  * it. An empty array declares nothing, and neither does a value that is not an array.
+ *
+ * Storage is an OR of ANDs, and an AND of nothing is satisfied — so a group with no predicates
+ * makes the whole OR satisfied no matter what the other groups hold. That is why the test is
+ * SOME group empty rather than ALL: `[[], [predicate]]` restricts nobody, exactly as `[[]]` does.
+ * A reader that gated on "not all groups are empty" would withhold the rules of a node that is
+ * served to everyone, which is the same defect this predicate exists to avoid, one shape along.
+ *
+ * This must stay the mirror of the renderer's `isUnconditional`. The two decide the same question
+ * from different packages: this one whether a node's rules leave the main sheet, that one whether
+ * the node reaches the markup at all. When they disagreed, a node with `conditions: [[]]` was
+ * served with its rules held back in `gated` — visible, and silently unstyled.
  */
 function declaresConditions(node: BlockNode): boolean {
   const conditions = (node as { visibility?: { conditions?: unknown } })
     .visibility?.conditions;
-  return Array.isArray(conditions) && conditions.length > 0;
+  if (!Array.isArray(conditions) || conditions.length === 0) return false;
+  return !conditions.some(group => Array.isArray(group) && group.length === 0);
 }
 
 /** Split declarations by the descendant they attach to, root first. */

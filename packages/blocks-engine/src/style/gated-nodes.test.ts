@@ -161,6 +161,45 @@ describe("appending a gated entry to the sheet", () => {
     expect(reassembled).toBe(ungated.css);
   });
 
+  describe("agrees with the renderer about what an empty group means", () => {
+    // Storage is an OR of ANDs. An AND of nothing is satisfied, so ONE empty group satisfies the
+    // whole OR whatever the other groups hold — the renderer's `isUnconditional` ends in
+    // `groups.some(g => g.length === 0)`. A compiler that counts groups instead of looking inside
+    // them holds back the rules of a node the renderer serves to everyone, and the page renders
+    // that node unstyled with nothing reporting it.
+    const PRED = { field: "tier", op: "eq", value: "vip" };
+    const OTHER = { field: "status", op: "eq", value: "on" };
+
+    const compileWith = (conditions: unknown) =>
+      compile(
+        page([
+          node({
+            visibility: { conditions },
+            styles: styles({ color: "red" }),
+          }),
+        ])
+      );
+
+    it.each([
+      ["no groups at all", [], true],
+      ["one empty group", [[]], true],
+      // The row that separates SOME from ALL: under "gated unless ALL groups are empty" this
+      // node is gated by the compiler and shown by the renderer, which is the original defect
+      // wearing a different shape. It is the only row here that an ALL implementation fails.
+      ["an empty group beside a real one", [[], [PRED]], true],
+      ["two real groups", [[PRED], [OTHER]], false],
+      ["one real group", [[PRED]], false],
+    ])(
+      "%s: rules stay in the sheet = %s",
+      (_label, conditions, staysInSheet) => {
+        const { css, gated } = compileWith(conditions);
+
+        expect(css.includes("color: red")).toBe(staysInSheet);
+        expect(gated?.n1 === undefined).toBe(staysInSheet);
+      }
+    );
+  });
+
   it("carries its own at-rule, so an entry can be appended on its own", () => {
     // Serialized separately, a narrow-breakpoint rule has to open its own `@media` — a reader
     // appends the entry without having read what came before it.
