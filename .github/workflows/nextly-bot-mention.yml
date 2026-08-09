@@ -1,5 +1,7 @@
 # Nextly Review Bot: mention mode. Tag @nextly-bot in any PR comment or review
 # thread to ask questions about the PR, the review findings, or the codebase.
+# `@nextly-bot review` is not a question — it asks for a full review, which the
+# Nextly Review Bot workflow answers, so this one stands aside for it.
 # Runs on the same GLM-backed Claude Code setup as the automatic reviewer.
 name: Nextly Bot Mention
 
@@ -27,6 +29,7 @@ jobs:
     if: >
       (github.event_name != 'issue_comment' || github.event.issue.pull_request) &&
       contains(github.event.comment.body, '@nextly-bot') &&
+      !contains(github.event.comment.body, '@nextly-bot review') &&
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) &&
       !endsWith(github.event.comment.user.login, '[bot]')
     runs-on: ubuntu-latest

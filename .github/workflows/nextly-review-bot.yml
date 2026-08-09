@@ -1,15 +1,17 @@
-# Nextly Review Bot: automatic in-depth review on every push to a PR targeting
-# main, and on demand for any such PR via the Actions tab or
-# `gh workflow run "Nextly Review Bot" -f pr=<number>`.
+# Nextly Review Bot: an in-depth review, on request only.
+#
+# Ask for one by commenting `@nextly-bot review` on a pull request, or run it
+# yourself with `gh workflow run "Nextly Review Bot" -f pr=<number>`. There is
+# deliberately no push trigger: reviews cost real money and wall-clock time, so
+# they happen when someone wants one.
 # The reviewer is Claude Code driven by GLM through z.ai's Anthropic-compatible API;
 # the review protocol lives in .github/review-prompt.md so it can evolve without
 # touching this workflow.
 name: Nextly Review Bot
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
-    branches: [main]
+  issue_comment:
+    types: [created]
   workflow_dispatch:
     inputs:
       pr:
@@ -20,7 +22,7 @@ on:
 # A newer push supersedes an in-flight review of the same PR; cancelling keeps
 # one review per head SHA instead of a queue of stale rounds.
 concurrency:
-  group: nextly-review-bot-${{ github.event.pull_request.number || inputs.pr }}
+  group: nextly-review-bot-${{ github.event.issue.number || inputs.pr }}
   cancel-in-progress: true
 
 # contents stays read-only so a prompt-injected agent cannot push; the bot only
@@ -32,14 +34,18 @@ permissions:
 
 jobs:
   review:
-    # Drafts are skipped until ready_for_review; the same-repo guard makes fork
-    # PRs (which get no secrets on pull_request) skip cleanly instead of failing.
-    # A dispatch carries no pull_request payload to test, so it passes here and
-    # is checked against the same conditions in the resolve step below.
+    # Gates evaluated before a runner starts: a pull request conversation, the
+    # review phrase, a trusted author (a stranger cannot spend the API budget or
+    # prompt-inject the agent), and never another bot. A dispatch carries no
+    # comment to test, so it passes here and meets the same eligibility rules in
+    # the resolve step, which is also where draft/fork/base are checked for both
+    # paths.
     if: >
       github.event_name == 'workflow_dispatch' ||
-      (!github.event.pull_request.draft &&
-      github.event.pull_request.head.repo.full_name == github.repository)
+      (github.event.issue.pull_request &&
+      contains(github.event.comment.body, '@nextly-bot review') &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) &&
+      !endsWith(github.event.comment.user.login, '[bot]'))
     runs-on: ubuntu-latest
     # GLM thinking responses are slow; a deep multi-phase review needs headroom.
     timeout-minutes: 90
@@ -52,7 +58,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
-          NUMBER: ${{ github.event.pull_request.number || inputs.pr }}
+          NUMBER: ${{ github.event.issue.number || inputs.pr }}
         run: |
           set -euo pipefail
           case "$NUMBER" in
@@ -124,7 +130,7 @@ jobs:
           # run rather than skipping the comment. The review itself is posted
           # through the gateway either way, so a dispatch simply runs without
           # the running commentary.
-          track_progress: ${{ github.event_name == 'pull_request' }}
+          track_progress: ${{ github.event_name == 'issue_comment' }}
           prompt: |
             Read the file .github/review-prompt.md in the checked-out repository
             and execute it exactly, phase by phase.
