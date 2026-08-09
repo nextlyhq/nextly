@@ -29,7 +29,6 @@ jobs:
     if: >
       (github.event_name != 'issue_comment' || github.event.issue.pull_request) &&
       contains(github.event.comment.body, '@nextly-bot') &&
-      !contains(github.event.comment.body, '@nextly-bot review') &&
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) &&
       !endsWith(github.event.comment.user.login, '[bot]')
     runs-on: ubuntu-latest
@@ -40,7 +39,17 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      # A request for a full review belongs to the review workflow, and the two
+      # decide that with the same script so a comment cannot fall between them
+      # and receive neither.
+      - name: Stand aside when a review was asked for
+        id: ask
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: echo "run=$(.github/scripts/is-review-command.sh)" >> "$GITHUB_OUTPUT"
+
       - name: Answer mention
+        if: steps.ask.outputs.run != 'true'
         uses: anthropics/claude-code-action@9db594c7a0e82298c121c18b7f08aa1579ce7341 # v1.0.185
         env:
           ANTHROPIC_BASE_URL: https://api.z.ai/api/anthropic
