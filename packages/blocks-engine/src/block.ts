@@ -251,8 +251,41 @@ export interface BlockDefinition<
    * its own props to sit in a registry of many prop shapes.
    */
   rendersNothing?(this: void, props: P): boolean;
+   * What this block contributes to the page's metadata when the entry's own
+   * SEO fields are blank.
+   *
+   * Declared by the BLOCK rather than derived by reading prop names, because
+   * only the block knows which of its props is a title and which is body text.
+   * A deriver that guessed from names would work for the core library and go
+   * silent for every contributed block — the wrong way round, since a page
+   * built mostly from third-party blocks is exactly the one with nothing else
+   * to fall back on.
+   *
+   * Pure and synchronous by design. It runs during metadata generation, once
+   * per node until each field is filled, so a definition that fetched here
+   * would put a network call between a crawler and the page title. An image is
+   * returned as a media id or a URL and resolved by the caller, which is what
+   * keeps it that way.
+   */
+  seo?(props: P): BlockSeoContribution | undefined;
   /** Editor-only metadata; never serialized. */
   editor?: BlockEditorMeta<P>;
+}
+
+/**
+ * A block's offer toward the page's metadata.
+ *
+ * Every field optional and independent: a heading knows a title and nothing
+ * else, an image knows a picture and nothing else, and the deriver fills each
+ * from the first block that answers for it.
+ */
+export interface BlockSeoContribution {
+  /** Page title, e.g. a heading's text. */
+  title?: string;
+  /** Description text, e.g. the opening paragraph. */
+  description?: string;
+  /** A media id, or a URL when the block holds one directly. */
+  image?: string;
 }
 
 /**

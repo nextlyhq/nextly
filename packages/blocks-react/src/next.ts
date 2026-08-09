@@ -13,11 +13,16 @@
  *
  * @module next
  */
-import { DOCUMENT_FORMAT_VERSION } from "@nextlyhq/blocks-engine";
+import {
+  deriveSeoFromDocument,
+  DOCUMENT_FORMAT_VERSION,
+} from "@nextlyhq/blocks-engine";
 import type {
   BlockDocument,
+  BlockSeoContribution,
   StyleCompileContext,
 } from "@nextlyhq/blocks-engine";
+import type { Metadata } from "next";
 import { createContentRoute } from "nextly/runtime";
 import type {
   ContentEntry,
@@ -32,6 +37,7 @@ import { createElement } from "react";
 import { createStandaloneContext } from "./context";
 import type { BlocksDataProvider, PageContext, ResolvedMedia } from "./context";
 import { PageRenderer } from "./page-renderer";
+import { registeredBlocks } from "./resolver";
 import type { BlockResolver } from "./resolver";
 import type { PageStyles } from "./styles";
 
@@ -107,6 +113,26 @@ export interface BlocksPageConfig
   data?: BlocksDataProvider;
   /** Shown in place of an asynchronous block until its output arrives. */
   blockFallback?: ReactNode;
+  /**
+   * Page metadata, given what the document says about itself.
+   *
+   * `derived` carries the title, description and image the blocks offered plus
+   * the page's canonical path, so the usual call is a one-liner:
+   *
+   * ```ts
+   * metadata: (entry, ctx, derived) => buildMetadata(entry, { fallback: derived })
+   * ```
+   *
+   * Named `metadata` rather than `buildMetadata` because it is not that
+   * function: `buildMetadata` maps an entry's SEO group and knows nothing about
+   * blocks, and this is where the two are joined. Supplying it replaces the
+   * route's own `buildMetadata`, which cannot see the document at all.
+   */
+  metadata?: (
+    entry: ContentEntry,
+    context: RenderContext,
+    derived: DerivedPageSeo
+  ) => Metadata | Promise<Metadata>;
 }
 
 /** An empty page, for a field that exists and holds no document yet. */
@@ -141,6 +167,53 @@ function readDocument(
   const value = entry[field];
   if (value === null || value === undefined) return emptyDocument();
   return value as BlockDocument;
+}
+
+/**
+ * What a page's own blocks say about it, for a caller composing metadata.
+ *
+ * Exposed rather than kept private because the derivation is useful wherever an
+ * entry's SEO fields are blank, and a caller wanting it otherwise would have to
+ * re-walk the document with its own copy of the rules.
+ */
+export interface DerivedPageSeo extends BlockSeoContribution {
+  /** The path the page renders at, for a canonical URL. */
+  canonical: string;
+}
+
+/** Whether a derived image is already a URL rather than a media id. */
+function looksLikeUrl(value: string): boolean {
+  return value.startsWith("/") || /^[a-z][a-z0-9+.-]*:/i.test(value);
+}
+
+/**
+ * The document's own metadata, with any media id resolved to a URL.
+ *
+ * The image arrives as a media id because a block cannot resolve one — the
+ * contribution is synchronous by design, so generating metadata never puts a
+ * network call between a crawler and the page title. Resolution happens here,
+ * through the SAME resolver the rendered image uses, so the picture in a link
+ * preview and the picture on the page cannot disagree.
+ */
+async function derivePageSeo(
+  document: BlockDocument,
+  blocks: BlockResolver | undefined,
+  resolveMedia: (id: string) => Promise<ResolvedMedia | null>,
+  slug: string
+): Promise<DerivedPageSeo> {
+  const resolver = blocks ?? registeredBlocks();
+  const derived = deriveSeoFromDocument(document, type => resolver.get(type));
+  const canonical = `/${slug}`;
+  if (derived.image === undefined || looksLikeUrl(derived.image)) {
+    return { ...derived, canonical };
+  }
+  // A failure here costs the preview image, not the page: metadata generation
+  // runs before the render, so letting a media read throw would fail the route
+  // over a picture.
+  const media = await resolveMedia(derived.image).catch(() => null);
+  return media
+    ? { ...derived, canonical, image: media.url }
+    : { ...derived, canonical, image: undefined };
 }
 
 /** A string property of the row, when it is one. */
@@ -292,6 +365,7 @@ export function createBlocksPage(
     styleContext,
     data,
     blockFallback,
+    metadata,
     // Consumed by the resolvers built below rather than forwarded: passing them
     // on would hand `createContentRoute` options it does not define.
     mediaCollection: _mediaCollection,
@@ -302,6 +376,22 @@ export function createBlocksPage(
 
   return createContentRoute<ReactElement>({
     ...routeConfig,
+    // Supplied only when asked for, so a route without it keeps whatever
+    // `buildMetadata` the caller passed straight through to the content route.
+    ...(metadata
+      ? {
+          buildMetadata: async (entry, context) => {
+            const document = readDocument(entry, field, context);
+            const derived = await derivePageSeo(
+              document,
+              blocks,
+              mediaResolver(config, context.reader),
+              context.slug
+            );
+            return metadata(entry, context, derived);
+          },
+        }
+      : {}),
     render: async (entry, context) => {
       const document = readDocument(entry, field, context);
       const resolved = styles ? await styles(entry, context) : undefined;

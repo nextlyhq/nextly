@@ -13,7 +13,14 @@ import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { createBlocksPage } from "./next";
+import { coreBlocks } from "./blocks";
+import { createBlockResolver } from "./resolver";
 import type { PageRendererProps } from "./page-renderer";
+
+/** The core library, so the derivation has real definitions to ask. */
+function coreResolver() {
+  return createBlockResolver(coreBlocks);
+}
 
 const document: BlockDocument = {
   formatVersion: DOCUMENT_FORMAT_VERSION,
@@ -287,6 +294,95 @@ describe("createBlocksPage", () => {
     await expect(
       props.context?.resolveEntryPath("pages", "secret")
     ).resolves.toBeNull();
+  });
+
+  it("derives metadata from the page's own blocks", async () => {
+    // The common case: nobody filled the SEO fields in, and the page already
+    // contains its title, its opening prose and its first picture.
+    const page: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        {
+          id: "1",
+          type: "core/heading",
+          version: 1,
+          props: { text: "Pricing" },
+        },
+        {
+          id: "2",
+          type: "core/text",
+          version: 1,
+          props: { text: "Plans for every team." },
+        },
+      ],
+    };
+    let seen: unknown;
+    const route = createBlocksPage({
+      collections: ["pages"],
+      field: "content",
+      nextly: reader({ slug: "pricing", content: page }),
+      blocks: coreResolver(),
+      metadata: (_entry, _ctx, derived) => {
+        seen = derived;
+        return { title: derived.title };
+      },
+    });
+
+    const meta = await route.generateMetadata({
+      params: { slug: ["pricing"] },
+    });
+
+    expect(meta).toEqual({ title: "Pricing" });
+    expect(seen).toMatchObject({
+      title: "Pricing",
+      description: "Plans for every team.",
+      canonical: "/pricing",
+    });
+  });
+
+  it("resolves a derived media id into a URL for the preview image", async () => {
+    // A block cannot resolve one — its offer is synchronous so metadata never
+    // puts a network call between a crawler and the title — so the route does
+    // it, through the same resolver the rendered image uses.
+    const page: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        { id: "1", type: "core/image", version: 1, props: { mediaId: "m1" } },
+      ],
+    };
+    let seen: { image?: string } | undefined;
+    const route = createBlocksPage({
+      collections: ["pages"],
+      field: "content",
+      nextly: reader(
+        { slug: "about", content: page },
+        { m1: { url: "https://cdn.example/hero.png" } }
+      ),
+      blocks: coreResolver(),
+      metadata: (_e, _c, derived) => {
+        seen = derived;
+        return {};
+      },
+    });
+
+    await route.generateMetadata({ params: { slug: ["about"] } });
+
+    expect(seen?.image).toBe("https://cdn.example/hero.png");
+  });
+
+  it("leaves the route's own buildMetadata alone when no metadata hook is given", async () => {
+    const route = createBlocksPage({
+      collections: ["pages"],
+      field: "content",
+      nextly: reader({ slug: "about", content: document }),
+      buildMetadata: () => ({ title: "From the caller" }),
+    });
+
+    await expect(
+      route.generateMetadata({ params: { slug: ["about"] } })
+    ).resolves.toEqual({ title: "From the caller" });
   });
 
   it("passes the stored stylesheet through for the resolved entry", async () => {

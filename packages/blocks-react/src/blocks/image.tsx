@@ -101,6 +101,9 @@ export const image = defineBlock<ImageProps, PageContext>({
     caption: { type: "text" },
   },
   defaultProps: { alt: "", loading: "lazy" },
+  // The media id when there is one, so the caller resolves it through the same
+  // path the rendered image uses; a directly-held `src` otherwise.
+  seo: props => ({ image: props.mediaId ?? props.src }),
   example: { props: { src: "/example.jpg", alt: "An example image" } },
   supports: {
     spacing: true,
