@@ -83,4 +83,51 @@ describe("Slider", () => {
     );
     expect(thumbsIn(container)[0].hasAttribute("data-disabled")).toBe(true);
   });
+
+  it("names the thumb, not the root, for a single-value slider", () => {
+    // The root is not focusable and carries no slider role; a name left there is
+    // announced by nothing. Screen readers meet the THUMB, so that is what has
+    // to carry the name.
+    const { container } = render(
+      <Slider aria-label="Opacity" value={[40]} onValueChange={() => {}} />
+    );
+    expect(thumbsIn(container)[0].getAttribute("aria-label")).toBe("Opacity");
+  });
+
+  it("gives a range's two thumbs distinct names", () => {
+    // A shared root name announces both ends identically, so nothing tells the
+    // user which one they are holding.
+    const { container } = render(
+      <Slider
+        aria-label="Size range"
+        defaultValue={[25, 75]}
+        thumbLabels={["Minimum size", "Maximum size"]}
+      />
+    );
+    const [lower, upper] = thumbsIn(container);
+    expect(lower.getAttribute("aria-label")).toBe("Minimum size");
+    expect(upper.getAttribute("aria-label")).toBe("Maximum size");
+  });
+
+  it("does not put a shared labelledby on both thumbs of a range", () => {
+    // One id cannot name two ends distinctly, so applying it to both would be
+    // worse than leaving them to `thumbLabels`.
+    const { container } = render(
+      <Slider aria-labelledby="size-heading" defaultValue={[25, 75]} />
+    );
+    for (const thumb of thumbsIn(container)) {
+      expect(thumb.hasAttribute("aria-labelledby")).toBe(false);
+    }
+  });
+
+  it("pads the root so the target clears the 24px minimum", () => {
+    // A 16px thumb on a 6px track is under WCAG 2.5.8, and on touch the gap
+    // between grabbing the thumb and missing the control is exactly this
+    // padding. The docs claimed it before the code did.
+    const { container } = render(
+      <Slider aria-label="Opacity" defaultValue={[10]} />
+    );
+    const root = container.firstElementChild;
+    expect(root?.className).toContain("py-2");
+  });
 });

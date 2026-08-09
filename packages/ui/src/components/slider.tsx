@@ -37,9 +37,13 @@
  * **Accessibility**:
  * - Each thumb is a `slider` with `aria-valuenow`/`aria-valuemin`/`aria-valuemax` from Radix
  * - Arrow keys step, PageUp/PageDown jump, Home/End go to the bounds
- * - `aria-label` or `aria-labelledby` is REQUIRED and not defaulted: an unlabelled slider
- *   announces only a number, and this kit cannot invent a name that would be honest
- * - The thumb is 16px with a larger touch target via padding on the root's vertical rhythm
+ * - A name is REQUIRED and not defaulted: an unlabelled slider announces only a number, and
+ *   this kit cannot invent a name that would be honest. The name lands on the THUMB, which is
+ *   what takes focus — `aria-label` on the root is inherited by nothing
+ * - A RANGE needs `thumbLabels`, one per thumb: two thumbs sharing the root's name are
+ *   announced identically, so nothing says which end is held
+ * - The root is padded so the target clears the 24px minimum (WCAG 2.5.8); the 16px thumb on a
+ *   6px track does not on its own
  *
  * @example
  * ```tsx
@@ -77,7 +81,19 @@ import { cn } from "../lib/utils";
  */
 export type SliderProps = React.ComponentPropsWithoutRef<
   typeof SliderPrimitive.Root
->;
+> & {
+  /**
+   * An accessible name per thumb, in value order.
+   *
+   * Required for a RANGE, and the reason this prop exists: the focusable
+   * element is the thumb, not the root, and a name on the root is not
+   * inherited. Two thumbs named only by their shared root are announced
+   * identically, so nothing tells a screen-reader user which end they are
+   * holding. A single thumb falls back to the root's `aria-label`, so the
+   * one-thumb API stays as documented.
+   */
+  thumbLabels?: readonly string[];
+};
 
 /**
  * One thumb per value, derived from whichever of `value`/`defaultValue` is present.
@@ -101,48 +117,78 @@ function thumbCount(
 const Slider = React.forwardRef<
   React.ElementRef<typeof SliderPrimitive.Root>,
   SliderProps
->(({ className, value, defaultValue, ...props }, ref) => (
-  <SliderPrimitive.Root
-    ref={ref}
-    className={cn(
-      "relative flex w-full touch-none select-none items-center",
-      "data-[orientation=vertical]:h-full data-[orientation=vertical]:w-auto",
-      "data-[orientation=vertical]:flex-col",
-      "data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
-      className
-    )}
-    value={value}
-    defaultValue={defaultValue}
-    {...props}
-  >
-    <SliderPrimitive.Track
-      className={cn(
-        "bg-secondary relative grow overflow-hidden rounded-full",
-        "h-1.5 w-full",
-        "data-[orientation=vertical]:h-full data-[orientation=vertical]:w-1.5"
-      )}
-    >
-      <SliderPrimitive.Range
+>(
+  (
+    {
+      className,
+      value,
+      defaultValue,
+      thumbLabels,
+      "aria-label": ariaLabel,
+      "aria-labelledby": ariaLabelledBy,
+      ...props
+    },
+    ref
+  ) => {
+    const count = thumbCount(value, defaultValue);
+    // The name goes on the THUMB, which is what carries the `slider` role and
+    // takes focus. Left on the root it is announced by nothing.
+    const nameFor = (index: number): string | undefined =>
+      thumbLabels?.[index] ?? (count === 1 ? ariaLabel : undefined);
+
+    return (
+      <SliderPrimitive.Root
+        ref={ref}
         className={cn(
-          "bg-primary absolute",
-          "h-full data-[orientation=vertical]:h-auto data-[orientation=vertical]:w-full"
+          "relative flex w-full touch-none select-none items-center",
+          "py-2 data-[orientation=vertical]:px-2 data-[orientation=vertical]:py-0",
+          // A 16px thumb on a 6px track is under the 24px minimum target size
+          // (WCAG 2.5.8), and on touch the difference between "grabbed the thumb"
+          // and "missed the control" is exactly this padding.
+
+          "data-[orientation=vertical]:h-full data-[orientation=vertical]:w-auto",
+          "data-[orientation=vertical]:flex-col",
+          "data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+          className
         )}
-      />
-    </SliderPrimitive.Track>
-    {Array.from({ length: thumbCount(value, defaultValue) }, (_, i) => (
-      <SliderPrimitive.Thumb
-        key={i}
-        className={cn(
-          "border-primary bg-background block h-4 w-4 rounded-full border-2",
-          "ring-offset-background transition-colors",
-          "focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2",
-          "focus-visible:ring-offset-2",
-          "disabled:pointer-events-none disabled:opacity-50"
-        )}
-      />
-    ))}
-  </SliderPrimitive.Root>
-));
+        value={value}
+        defaultValue={defaultValue}
+        {...props}
+      >
+        <SliderPrimitive.Track
+          className={cn(
+            "bg-secondary relative grow overflow-hidden rounded-full",
+            "h-1.5 w-full",
+            "data-[orientation=vertical]:h-full data-[orientation=vertical]:w-1.5"
+          )}
+        >
+          <SliderPrimitive.Range
+            className={cn(
+              "bg-primary absolute",
+              "h-full data-[orientation=vertical]:h-auto data-[orientation=vertical]:w-full"
+            )}
+          />
+        </SliderPrimitive.Track>
+        {Array.from({ length: count }, (_, i) => (
+          <SliderPrimitive.Thumb
+            key={i}
+            aria-label={nameFor(i)}
+            // Only meaningful for the single-thumb case: a range's thumbs need
+            // distinct names, which an id shared by both cannot give them.
+            aria-labelledby={count === 1 ? ariaLabelledBy : undefined}
+            className={cn(
+              "border-primary bg-background block h-4 w-4 rounded-full border-2",
+              "ring-offset-background transition-colors",
+              "focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2",
+              "focus-visible:ring-offset-2",
+              "disabled:pointer-events-none disabled:opacity-50"
+            )}
+          />
+        ))}
+      </SliderPrimitive.Root>
+    );
+  }
+);
 Slider.displayName = SliderPrimitive.Root.displayName;
 
 export { Slider };
