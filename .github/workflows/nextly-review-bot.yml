@@ -21,11 +21,17 @@ on:
         required: true
         type: string
 
-# A newer push supersedes an in-flight review of the same PR; cancelling keeps
-# one review per head SHA instead of a queue of stale rounds.
+# One review at a time per pull request, and NEVER cancel a running one.
+# Concurrency is evaluated from the event alone, before any of this workflow's
+# checks run, so every comment on the pull request lands in this group — a
+# passing remark would otherwise kill a review already in flight and the run
+# that replaced it would skip, leaving the request unanswered. Queuing instead
+# costs a few seconds for the no-op runs and nothing for the real ones.
+# Staleness is handled where it actually matters: `post-review` re-reads the
+# head and refuses to post against a commit that has moved on.
 concurrency:
   group: nextly-review-bot-${{ github.event.issue.number || github.event.pull_request.number || inputs.pr }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 # contents stays read-only so a prompt-injected agent cannot push; the bot only
 # needs to post reviews and comments.
@@ -57,6 +63,12 @@ jobs:
       # know a review was actually asked for.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          # Pinned to the default branch. Without an explicit ref a review-thread
+          # event checks out the pull request's own merge ref, so the candidate's
+          # copy of the parser would run — before the fork check below — and a
+          # script that executes this early sits next to `GH_TOKEN` and can
+          # persist itself into later steps through `$GITHUB_ENV`.
+          ref: ${{ github.event.repository.default_branch }}
           sparse-checkout: .github/scripts
           sparse-checkout-cone-mode: false
           persist-credentials: false
@@ -140,10 +152,19 @@ jobs:
           set -euo pipefail
           mkdir -p "$TOOLING"
           base="origin/${{ github.event.repository.default_branch || 'main' }}"
-          git show "$base:.github/review-prompt.md" > "$TOOLING/review-prompt.md"
           git show "$base:.github/scripts/review-bot-gh.sh" > "$TOOLING/review-bot-gh.sh"
           chmod +x "$TOOLING/review-bot-gh.sh"
+          # The protocol names the gateway by its in-repo path, which is the
+          # right thing for a human reading the file and the wrong thing for the
+          # agent: only the copy here is allowlisted. Rewrite the references in
+          # the trusted copy so the instructions and the permissions agree.
+          git show "$base:.github/review-prompt.md" |
+            sed "s|\.github/scripts/review-bot-gh\.sh|$TOOLING/review-bot-gh.sh|g" \
+            > "$TOOLING/review-prompt.md"
           test -s "$TOOLING/review-prompt.md"
+          # Every gateway reference must now point at the runnable copy; a stray
+          # in-repo path left behind would fail mid-review instead of here.
+          ! grep -q "\.github/scripts/review-bot-gh\.sh" "$TOOLING/review-prompt.md"
 
       # What already exists at this head, so the confirmation below can require
       # something NEW rather than accepting a review from an earlier request.

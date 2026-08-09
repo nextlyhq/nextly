@@ -36,6 +36,10 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          # Pinned for the same reason as the review workflow: a review-thread
+          # event would otherwise check out the candidate's own copy of the
+          # command parser and run it.
+          ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 0
           persist-credentials: false
 
