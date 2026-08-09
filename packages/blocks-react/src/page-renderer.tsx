@@ -261,9 +261,17 @@ export function PageRenderer({
   // render keeps them so their placeholders still appear.
   const styleInput = pruneKnownPlaceholders(visible, resolver);
 
+  // Gating is the one repair cause a stored artifact can answer on its own: an
+  // artifact carrying `gated` holds each conditioned node's rules separately, so
+  // the reader appends the survivors instead of recompiling the whole sheet or
+  // withholding it. A MISSING map is not the same as an empty one — it means the
+  // sheet was compiled before the split existed and knows nothing about gating —
+  // so only a present map licenses skipping the recompile.
+  const gatingCoveredByArtifact = pruned !== doc && styles?.gated !== undefined;
+
   const repairedDocument =
     sanitized !== document ||
-    pruned !== doc ||
+    (pruned !== doc && !gatingCoveredByArtifact) ||
     visible !== pruned ||
     styleInput !== visible;
 

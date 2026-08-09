@@ -2852,6 +2852,96 @@ describe("PageRenderer", () => {
       expect(html).toContain("nx-b");
     });
 
+    it("keeps a stored stylesheet when the artifact carries the gated rules", async () => {
+      // An artifact with `gated` holds the conditioned node's rules SEPARATELY, so the sheet it
+      // ships never contained them. There is nothing stale to withhold: the visible nodes keep
+      // their styling and the gated node contributes nothing, with no recompile and no compile
+      // context needed.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", {
+              props: { value: "gated body" },
+              visibility: {
+                conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+              },
+            }),
+            node("b", "test/text", { props: { value: "public body" } })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+          styles={{
+            css: ".nx-b { color: teal }",
+            classes: { a: "nx-a", b: "nx-b" },
+            gated: { a: ".nx-a { background-image: url(/gated-asset.png) }" },
+          }}
+        />
+      );
+
+      expect(html).not.toContain("gated body");
+      // The leak the split exists to stop: the withheld node's asset stays out.
+      expect(html).not.toContain("gated-asset.png");
+      // ...and, unlike the withholding path above, the sheet SURVIVES.
+      expect(html).toContain("color: teal");
+      expect(html).toContain("public body");
+    });
+
+    it("still withholds when the artifact has no gated map at all", async () => {
+      // A missing map means the sheet was compiled before the split existed, not that nothing was
+      // gated — the two are indistinguishable from the artifact alone. Reading absence as "nothing
+      // gated" would trust a sheet that predates gating entirely.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", {
+              props: { value: "gated body" },
+              visibility: {
+                conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+              },
+            }),
+            node("b", "test/text", { props: { value: "public body" } })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+          styles={{
+            css: ".nx-b { color: teal }",
+            classes: { a: "nx-a", b: "nx-b" },
+          }}
+        />
+      );
+
+      expect(html).not.toContain("gated body");
+      expect(html).not.toContain("color: teal");
+      expect(html).toContain("public body");
+    });
+
+    it("still withholds when a repair other than gating is also needed", async () => {
+      // `gated` answers ONE of the four repair causes. Here two nodes share an id, so the class map
+      // is rebuilt — a staleness the per-node split cannot fix — and the sheet must still go.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", {
+              props: { value: "gated body" },
+              visibility: {
+                conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+              },
+            }),
+            node("dup", "test/text", { props: { value: "first body" } }),
+            node("dup", "test/text", { props: { value: "second body" } })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+          styles={{
+            css: ".nx-b { color: teal }",
+            classes: { a: "nx-a", dup: "nx-dup" },
+            gated: { a: ".nx-a { color: rebeccapurple }" },
+          }}
+        />
+      );
+
+      expect(html).not.toContain("gated body");
+      expect(html).not.toContain("color: teal");
+      expect(html).not.toContain("rebeccapurple");
+    });
+
     it("recompiles rather than withholding when it can", async () => {
       // With a compile context present there is no need to lose the styling:
       // the sheet is rebuilt from the pruned document, so the visible nodes keep
