@@ -36,6 +36,7 @@ import { DEFAULT_LIMITS } from "../limits";
 import type { DocumentLimits } from "../limits";
 import { isPlainRecord } from "../plain-record";
 import type { ValidationIssue } from "../validation";
+import { isConditionGated } from "../visibility";
 
 import { BREAKPOINT_AXES } from "./breakpoint-axes";
 import type { BreakpointAxis } from "./breakpoint-axes";
@@ -633,25 +634,14 @@ function envelopeRules(
  * must not be conflated with it: per-breakpoint hiding is presentation, decided by CSS on a node
  * that is always in the markup, while a condition decides whether the node is served at all.
  *
- * Read defensively, because a document reaches this compiler whether or not anything validated
- * it. An empty array declares nothing, and neither does a value that is not an array.
- *
- * Storage is an OR of ANDs, and an AND of nothing is satisfied — so a group with no predicates
- * makes the whole OR satisfied no matter what the other groups hold. That is why the test is
- * SOME group empty rather than ALL: `[[], [predicate]]` restricts nobody, exactly as `[[]]` does.
- * A reader that gated on "not all groups are empty" would withhold the rules of a node that is
- * served to everyone, which is the same defect this predicate exists to avoid, one shape along.
- *
- * This must stay the mirror of the renderer's `isUnconditional`. The two decide the same question
- * from different packages: this one whether a node's rules leave the main sheet, that one whether
- * the node reaches the markup at all. When they disagreed, a node with `conditions: [[]]` was
- * served with its rules held back in `gated` — visible, and silently unstyled.
+ * Delegates to {@link isConditionGated}, the engine's single definition, which the renderer calls
+ * for the same node to decide whether its markup is served. A second derivation here is what let
+ * the two disagree, and they disagreed in both directions: gating what the renderer served
+ * published a node with its styling silently missing, and NOT gating what the renderer withheld
+ * left that node's rules in a sheet served to everyone.
  */
 function declaresConditions(node: BlockNode): boolean {
-  const conditions = (node as { visibility?: { conditions?: unknown } })
-    .visibility?.conditions;
-  if (!Array.isArray(conditions) || conditions.length === 0) return false;
-  return !conditions.some(group => Array.isArray(group) && group.length === 0);
+  return isConditionGated(node);
 }
 
 /** Split declarations by the descendant they attach to, root first. */

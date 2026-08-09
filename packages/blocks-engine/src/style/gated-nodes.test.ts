@@ -117,9 +117,12 @@ describe("what counts as gated", () => {
     expect(gated).toBeUndefined();
   });
 
-  it("does not gate on a conditions field that is not a list", () => {
-    // Persisted data reaches this compiler whether or not anything validated it.
-    const { gated } = compile(
+  it("GATES on a conditions field that is not a list", () => {
+    // Persisted data reaches this compiler whether or not anything validated it, and an
+    // unreadable restriction is still an author restricting the node. Leaving its rules in the
+    // sheet publishes the colour — and any `url(...)` beside it — for a block the renderer
+    // withholds, which is the leak the gate exists to prevent.
+    const { css, gated } = compile(
       page([
         node({
           visibility: { conditions: "vip" },
@@ -128,6 +131,40 @@ describe("what counts as gated", () => {
       ])
     );
 
+    expect(css).not.toContain("color: red");
+    expect(gated?.n1).toContain("color: red");
+  });
+
+  it.each([
+    ["conditions is an object", { conditions: {} }],
+    ["the envelope is a string", "hidden"],
+    ["the envelope is an array", ["tier"]],
+  ])("gates when %s", (_label, visibility) => {
+    // Each of these answers `undefined` to a property read for `conditions`, so a predicate that
+    // read the field without first checking the envelope resolved them to "no gate" — the one
+    // answer a shape neither side can understand must never produce.
+    const { css, gated } = compile(
+      page([node({ visibility, styles: styles({ color: "red" }) })])
+    );
+
+    expect(css).not.toContain("color: red");
+    expect(gated?.n1).toContain("color: red");
+  });
+
+  it("does not gate when conditions is explicitly null", () => {
+    // A positive control for the rows above: `null` is a readable absence, not an unreadable
+    // shape, so it must stay ungated. Without it the block above would pass just as well against
+    // a predicate that gated everything it was handed.
+    const { css, gated } = compile(
+      page([
+        node({
+          visibility: { conditions: null },
+          styles: styles({ color: "red" }),
+        }),
+      ])
+    );
+
+    expect(css).toContain("color: red");
     expect(gated).toBeUndefined();
   });
 });
