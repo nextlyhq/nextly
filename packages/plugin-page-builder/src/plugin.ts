@@ -35,35 +35,33 @@ export interface PageBuilderOptions {
    *
    * Set the SAME value on `PageRenderer.remotePatterns` from
    * `@nextlyhq/plugin-page-builder/render`, and pass it to `cspDirectives()` or
-   * `cspHeaderValue()`. Three assignments, not one: each reads only what it was
-   * given, and the CSP helpers default to an empty list, so a host that sets
-   * this alone emits a self-only policy that blocks the CDN the editor and the
-   * renderer both accept.
+   * `cspHeaderValue()`. Three assignments: each surface reads only what it was
+   * handed, and the CSP helpers default to an empty list.
    *
-   * A shared constant aligns them as far as CSP can go, which is not all the
-   * way. A pattern constraining `pathname` or `search` is accepted here and by
-   * the renderer, but `cspDirectives()` omits its host rather than widening the
-   * policy to the whole origin — CSP cannot express a path constraint. Read
-   * `unexpressibleHosts()` to see what was refused and write that source
-   * yourself.
+   * Even then the three are not identical. CSP cannot express a `pathname` or
+   * `search` constraint, so `cspDirectives()` omits such a host rather than
+   * widening the policy to its whole origin; `unexpressibleHosts()` reports what
+   * it refused so the host can write that source itself.
    *
-   * **What reads it.** Structured style values and block props, through
-   * `isFetchableUrl`; the embed HTML sanitizer; the editor canvas.
+   * **Enforced for** the built-in block renderers and structured style values,
+   * through `isFetchableUrl`; the embed HTML sanitizer; the editor canvas. A
+   * CUSTOM block is handed the patterns and must apply them itself — `RenderNode`
+   * passes them in and cannot inspect the element a block returns.
    *
-   * **Custom CSS does not.** `sanitizeCustomCss` takes no patterns and drops
-   * every ABSOLUTE url, including one naming the site's own origin — compilation
-   * has no document origin to compare against, so a scheme is all it can see.
-   * Relative paths survive. That surface is stricter than this value rather than
-   * governed by it, and allowlisting a CDN here does not make it usable there.
+   * **Not custom CSS.** `sanitizeCustomCss` takes no patterns and drops every
+   * url naming a host, whether by scheme — including `https://site.example/a.png`,
+   * the site's own origin, since compilation has no document origin to compare
+   * against — or by the scheme-less `//cdn.example/a.png`. Same-origin paths
+   * survive. That surface is stricter than this value, not governed by it.
    *
-   * **`@nextlyhq/blocks-react` does not read it either**, and has no equivalent.
-   * Its two URL checks are narrower and unrelated to hosts. The engine's CSS
-   * compiler limits an EXPLICIT scheme to `http` or `https`, and leaves a
-   * scheme-less value alone — so `//cdn.example/a.png`, which a browser fetches
-   * from `cdn.example`, passes. A block's attribute props reject `javascript:`,
-   * `vbscript:` and `data:` and admit every other scheme, including `blob:`.
-   * Neither compares a host, so a page rendered through it is not bounded by
-   * this value.
+   * **Not `@nextlyhq/blocks-react`**, which has no way to bound what a page
+   * fetches. Its checks are about schemes: the engine's CSS compiler limits an
+   * EXPLICIT scheme to `http`/`https` and leaves a scheme-less value alone, so
+   * `//cdn.example/a.png` passes; a block's attribute props reject
+   * `javascript:`, `vbscript:` and `data:` and admit every other scheme. It does
+   * compare hosts in one place — `hostPolicy.trustedFrameOrigins` decides
+   * whether an embed keeps its own origin — but that governs a sandbox
+   * permission, not whether the frame is loaded.
    *
    * Object patterns only. This value is serialized to the browser and a `URL`
    * does not survive that: it would arrive as a string. Converting one here
