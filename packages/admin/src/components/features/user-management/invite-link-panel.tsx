@@ -101,7 +101,7 @@ export function InviteLinkPanel({
             className="shrink-0"
           >
             {copied ? (
-              <Check className="h-4 w-4 text-success-600" />
+              <Check className="h-4 w-4 text-success" />
             ) : (
               <Copy className="h-4 w-4" />
             )}

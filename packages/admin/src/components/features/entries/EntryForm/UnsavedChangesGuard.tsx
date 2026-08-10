@@ -133,7 +133,7 @@ export function UnsavedChangesGuard({
             </AlertDialogCancel>
             <AlertDialogAction
               onClick={confirmLeave}
-              className="bg-destructive-solid text-destructive-foreground hover:bg-destructive-700"
+              className="bg-destructive-solid text-destructive-foreground hover:bg-destructive-600"
             >
               Discard Changes
             </AlertDialogAction>

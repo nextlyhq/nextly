@@ -107,9 +107,7 @@ export function AutoSaveIndicator({
       label = "Unsaved changes";
       tooltipContent = `Draft saved ${timeAgo}. New changes pending...`;
     } else {
-      icon = (
-        <Check className="h-4 w-4 text-success-600 dark:text-success-500" />
-      );
+      icon = <Check className="h-4 w-4 text-success dark:text-success-500" />;
       label = "Saved";
       tooltipContent = `All changes saved ${timeAgo}`;
     }

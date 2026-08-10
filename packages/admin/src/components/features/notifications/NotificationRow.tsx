@@ -108,7 +108,7 @@ function StatusIcon({
     // upgrades; replace with a lucide-react Check if visual polish
     // becomes a blocker.
     return (
-      <span className="text-success-600 font-mono text-base leading-5">✓</span>
+      <span className="text-success font-mono text-base leading-5">✓</span>
     );
   }
   if (status === "failed") {

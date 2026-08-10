@@ -86,8 +86,11 @@ export function DragOverlayContent({ data }: DragOverlayContentProps) {
           <span className="text-sm font-medium text-foreground">
             {field.label || field.name || "Unnamed Field"}
           </span>
+          {/* Dark counterparts, matching the Badge component's pairing: a pale
+              fill with darkened ink is only legible on a light page, and
+              without them the chip keeps its light colours on the dark one. */}
           {isRequired && (
-            <span className="text-xs px-2 py-0 bg-destructive-50 text-destructive-600 font-normal rounded-sm  border border-border border-destructive-200">
+            <span className="text-xs px-2 py-0 bg-destructive-50 text-destructive-600 dark:bg-destructive-900 dark:text-destructive-100 font-normal rounded-sm border border-destructive-200 dark:border-destructive-900">
               Required
             </span>
           )}

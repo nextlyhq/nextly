@@ -102,7 +102,7 @@ export function UploadProgress({
           className={cn(
             "tabular-nums font-medium ml-auto",
             isError && "text-destructive",
-            isComplete && "text-success-600"
+            isComplete && "text-success"
           )}
         >
           {Math.round(clampedProgress)}%

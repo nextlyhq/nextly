@@ -46,7 +46,7 @@ export function SafeChangeConfirmDialog({
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent className="max-w-md">
         <AlertDialogHeader>
-          <div className="flex items-center gap-2 text-success-600 dark:text-success-400 mb-1">
+          <div className="flex items-center gap-2 text-success dark:text-success-400 mb-1">
             <CheckCircle2 className="h-4 w-4" />
             <span className="text-xs font-semibold uppercase tracking-wider">
               Safe change
