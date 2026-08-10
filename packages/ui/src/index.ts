@@ -466,3 +466,18 @@ export {
 export { TreeView } from "./components/tree-view";
 /** @experimental The node shape a tree is built from, and the control's props. */
 export type { TreeNode, TreeViewProps } from "./components/tree-view";
+
+/**
+ * @experimental A bounded numeric value chosen by dragging.
+ *
+ * Every inspector is full of these — opacity, blur radius, letter spacing, a colour's alpha —
+ * and each is a property where "more or less?" is the useful question. `value` is an ARRAY even
+ * for one thumb, which is what makes a range slider the same component rather than a second one.
+ */
+export { Slider } from "./components/slider";
+/**
+ * @experimental The slider's props, and the per-thumb attributes assistive
+ * technology reads — which are read from the THUMB and inherited from nothing,
+ * so they cannot be passed through the root.
+ */
+export type { SliderProps, SliderThumbProps } from "./components/slider";
