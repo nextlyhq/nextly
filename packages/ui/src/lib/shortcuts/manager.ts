@@ -189,6 +189,9 @@ function isTypingTarget(target: EventTarget | null): boolean {
   if (target.isContentEditable) return true;
   const tag = target.tagName;
   if (tag === "TEXTAREA") return true;
+  // A native select does type-ahead on bare letters, so a single-key shortcut firing over it
+  // would both act and suppress the control's own behaviour.
+  if (tag === "SELECT") return true;
   if (tag === "INPUT") {
     // Only the text-bearing input types capture letters. A checkbox or a button is an input
     // element that a bare-letter shortcut should still fire over.
@@ -216,10 +219,13 @@ const NON_TEXT_INPUT_TYPES = new Set([
 function firesWhileTyping(prepared: PreparedBinding): boolean {
   const explicit = prepared.binding.whenTyping;
   if (explicit !== undefined) return explicit;
-  const last = prepared.keys[prepared.keys.length - 1];
-  if (last === undefined) return false;
+  // The FIRST chord decides, because that is the keystroke separating "issuing a command"
+  // from "typing". Reading the last one rejects `mod+k c` in an editor: the sequence is
+  // unmistakably a command, but its final chord is a bare letter.
+  const first = prepared.keys[0];
+  if (first === undefined) return false;
   return (
-    last.mod || last.ctrl || last.meta || last.alt || last.key === "Escape"
+    first.mod || first.ctrl || first.meta || first.alt || first.key === "Escape"
   );
 }
 
@@ -242,7 +248,7 @@ export function createShortcutManager(
   // The partially typed sequence, shared across layers. It is global rather than per-layer
   // because the keystrokes are: once `g` has been pressed, the next key belongs to whichever
   // layer completes it, and a per-layer prefix would let two layers each hold half a sequence.
-  let pending: { chords: string[]; at: number } | null = null;
+  let pendingAt: number | null = null;
 
   function prepare(bindings: readonly ShortcutBinding[]): PreparedBinding[] {
     return bindings.map(binding => ({
@@ -258,10 +264,6 @@ export function createShortcutManager(
       .sort(
         (a, b) => b.options.depth - a.options.depth || b.sequence - a.sequence
       );
-  }
-
-  function chordKey(event: KeyboardEvent): string {
-    return `${event.key} ${event.ctrlKey}${event.metaKey}${event.altKey}${event.shiftKey}`;
   }
 
   /**
@@ -285,9 +287,23 @@ export function createShortcutManager(
     return pressed.length === prepared.keys.length ? "exact" : "prefix";
   }
 
-  function fire(prepared: PreparedBinding, event: KeyboardEvent): void {
+  function fire(
+    prepared: PreparedBinding,
+    event: KeyboardEvent,
+    invoke: boolean
+  ): void {
     if (prepared.binding.preventDefault !== false) event.preventDefault();
-    prepared.binding.run(event);
+    if (invoke) prepared.binding.run(event);
+  }
+
+  /**
+   * Whether letting this keystroke through would put a character into a field.
+   *
+   * The single case a blocking layer must not suppress. Everything else it swallows has to be,
+   * or the grab is only half of one: the application stops acting while the BROWSER still does.
+   */
+  function insertsText(event: KeyboardEvent, typing: boolean): boolean {
+    return typing && !event.ctrlKey && !event.metaKey && !event.altKey;
   }
 
   /**
@@ -300,7 +316,8 @@ export function createShortcutManager(
   function offer(
     pressed: readonly KeyboardEvent[],
     event: KeyboardEvent,
-    typing: boolean
+    typing: boolean,
+    invoke: boolean
   ): "fired" | "pending" | "blocked" | "none" {
     for (const layer of ordered()) {
       for (const prepared of layer.bindings) {
@@ -308,7 +325,7 @@ export function createShortcutManager(
         if (prepared.binding.when && !prepared.binding.when()) continue;
         const depth = matchDepth(prepared, pressed);
         if (depth === "exact") {
-          fire(prepared, event);
+          fire(prepared, event, invoke);
           return "fired";
         }
         if (depth === "prefix") {
@@ -318,7 +335,12 @@ export function createShortcutManager(
           return "pending";
         }
       }
-      if (layer.options.blocking) return "blocked";
+      if (layer.options.blocking) {
+        // A grab that leaves the browser default in place is not a grab: mid-drag, `mod+s`
+        // would still open the browser's own save dialog while the shell binding was blocked.
+        if (!insertsText(event, typing)) event.preventDefault();
+        return "blocked";
+      }
     }
     return "none";
   }
@@ -326,37 +348,54 @@ export function createShortcutManager(
   const pressedEvents: KeyboardEvent[] = [];
 
   function handle(event: KeyboardEvent): boolean {
-    // A held key repeats; a shortcut should fire once per press.
-    if (event.repeat) return false;
+    // An IME turns keystrokes into composition input, and Escape there means "abandon what I am
+    // composing". Acting on it would cancel the composition AND dismiss whatever the application
+    // binds Escape to — a keystroke the user never aimed at the application at all.
+    if (event.isComposing) return false;
     // Pressing a modifier on its own is not a keystroke to match, and treating it as one would
     // clear any sequence in progress the moment the user reached for Shift.
     if (MODIFIER_KEYS.has(event.key)) return false;
 
-    if (pending && now() - pending.at > sequenceTimeoutMs) {
-      pending = null;
+    const typing = isTypingTarget(event.target);
+
+    // A held key repeats. The binding must not run again, but the key must stay CONSUMED: a
+    // shortcut that suppressed the browser on the first keydown and then let every repeat
+    // through would open the browser's own save dialog while the key was held down.
+    if (event.repeat) {
+      const repeated = offer([event], event, typing, false);
+      return repeated !== "none";
+    }
+
+    if (pendingAt !== null && now() - pendingAt > sequenceTimeoutMs) {
+      pendingAt = null;
       pressedEvents.length = 0;
     }
 
-    const typing = isTypingTarget(event.target);
     pressedEvents.push(event);
-
-    let outcome = offer(pressedEvents, event, typing);
+    let outcome = offer(pressedEvents, event, typing, true);
 
     // A sequence that led nowhere must not eat the key that broke it: `g` then `mod+k` should
     // open the palette rather than being discarded with the abandoned prefix.
-    if (outcome === "none" && pressedEvents.length > 1) {
+    //
+    // "blocked" counts as leading nowhere. A blocking layer holding both a sequence and a
+    // single-key binding would otherwise swallow the key that broke its own sequence — press
+    // `g`, then Escape, and the layer's own Escape handler would need a SECOND press.
+    if (
+      pressedEvents.length > 1 &&
+      (outcome === "none" || outcome === "blocked")
+    ) {
       pressedEvents.length = 0;
       pressedEvents.push(event);
-      pending = null;
-      outcome = offer(pressedEvents, event, typing);
+      pendingAt = null;
+      outcome = offer(pressedEvents, event, typing, true);
     }
 
     if (outcome === "pending") {
-      pending = { chords: pressedEvents.map(chordKey), at: now() };
+      pendingAt = now();
       return true;
     }
 
-    pending = null;
+    pendingAt = null;
     pressedEvents.length = 0;
     return outcome === "fired" || outcome === "blocked";
   }

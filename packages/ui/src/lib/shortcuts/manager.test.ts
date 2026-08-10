@@ -440,3 +440,161 @@ describe("activeBindings", () => {
     expect(manager.activeBindings()).toHaveLength(0);
   });
 });
+
+describe("keys the browser also acts on", () => {
+  it("suppresses the browser default for a key a blocking layer swallows", () => {
+    // A grab that stops the application but not the browser is only half a grab: mid-drag,
+    // mod+s would still open the browser's own save dialog.
+    const manager = managerFor();
+    manager.register([binding("mod+s", vi.fn())], { name: "shell", depth: 0 });
+    manager.register([binding("Escape", vi.fn())], {
+      name: "drag",
+      depth: 1,
+      blocking: true,
+    });
+    const event = press("s", { ctrlKey: true });
+    manager.handle(event);
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("still lets a blocked keystroke type into a field", () => {
+    // The one thing a blocking layer must not swallow. Suppressing a printable key aimed at an
+    // input would make the field unusable for as long as the layer is up.
+    const manager = managerFor();
+    manager.register([binding("Escape", vi.fn())], {
+      name: "modal",
+      depth: 1,
+      blocking: true,
+    });
+    const field = document.createElement("input");
+    document.body.append(field);
+    const detach = manager.attach(document);
+    const event = press("n");
+    field.dispatchEvent(event);
+    detach();
+    field.remove();
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("keeps a held shortcut consumed without running it again", () => {
+    // Returning early on a repeat skipped preventDefault as well, so holding mod+s ran the
+    // application save once and then handed every following repeat to the browser.
+    const run = vi.fn();
+    const manager = managerFor();
+    manager.register([binding("mod+s", run)], { name: "shell", depth: 0 });
+
+    manager.handle(press("s", { ctrlKey: true }));
+    const repeat = press("s", { ctrlKey: true, repeat: true });
+    manager.handle(repeat);
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(repeat.defaultPrevented).toBe(true);
+  });
+});
+
+describe("keys that belong to the platform, not the application", () => {
+  it("ignores keystrokes while an IME composition is active", () => {
+    // Escape during composition means "abandon what I am composing". Acting on it would cancel
+    // the composition and dismiss the dialog behind it, from one keypress the user aimed at
+    // neither.
+    const run = vi.fn();
+    const manager = managerFor();
+    manager.register([binding("Escape", run)], { name: "shell", depth: 0 });
+
+    const composing = press("Escape");
+    Object.defineProperty(composing, "isComposing", { value: true });
+    manager.handle(composing);
+
+    expect(run).not.toHaveBeenCalled();
+    expect(composing.defaultPrevented).toBe(false);
+  });
+
+  it("leaves a native select's type-ahead alone", () => {
+    // A select is not a text field, but bare letters jump between its options. A single-key
+    // shortcut firing there would act AND suppress the control's own behaviour.
+    const run = vi.fn();
+    const manager = managerFor();
+    manager.register([binding("n", run)], { name: "shell", depth: 0 });
+    const select = document.createElement("select");
+    document.body.append(select);
+    const detach = manager.attach(document);
+    select.dispatchEvent(press("n"));
+    detach();
+    select.remove();
+    expect(run).not.toHaveBeenCalled();
+  });
+});
+
+describe("the space bar", () => {
+  it("can be bound, under the name the grammar can carry", () => {
+    // The browser reports `key: " "`, which a spec split on whitespace cannot express: `" "`
+    // trims away to nothing. Without the alias the space bar is unbindable, ruling out canvas
+    // panning and play/pause.
+    const run = vi.fn();
+    const manager = managerFor();
+    manager.register([binding("Space", run)], { name: "canvas", depth: 0 });
+    manager.handle(press(" "));
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("distinguishes Shift+Space from Space", () => {
+    // Shift does not change the character space produces, so unlike `?` the two are genuinely
+    // different keystrokes and one binding must not answer for both.
+    const plain = vi.fn();
+    const manager = managerFor();
+    manager.register([binding("Space", plain)], { name: "canvas", depth: 0 });
+    manager.handle(press(" ", { shiftKey: true }));
+    expect(plain).not.toHaveBeenCalled();
+  });
+});
+
+describe("sequences that end somewhere else", () => {
+  it("lets a blocking layer act on the key that broke its own sequence", () => {
+    // Under a blocking layer the retry never ran, because an unmatched multi-key candidate came
+    // back "blocked" rather than "none". Pressing `g` then Escape cleared the prefix and did
+    // nothing, so the layer's own Escape needed a SECOND press.
+    const cancel = vi.fn();
+    const manager = managerFor();
+    manager.register([binding("g d", vi.fn()), binding("Escape", cancel)], {
+      name: "drag",
+      depth: 1,
+      blocking: true,
+    });
+
+    manager.handle(press("g"));
+    manager.handle(press("Escape"));
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows a modifier-led sequence to complete while typing", () => {
+    // The typing rule read the LAST chord, so `mod+k c` was rejected in a field on account of
+    // its bare final letter — even though `mod+k` had already made it a command.
+    const run = vi.fn();
+    const manager = managerFor();
+    manager.register([binding("mod+k c", run)], { name: "shell", depth: 0 });
+    const field = document.createElement("input");
+    document.body.append(field);
+    const detach = manager.attach(document);
+    field.dispatchEvent(press("k", { ctrlKey: true }));
+    field.dispatchEvent(press("c"));
+    detach();
+    field.remove();
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("still refuses an unmodified sequence while typing", () => {
+    // The positive control for the rule above: `g d` must stay inert mid-word, or typing "good"
+    // would trigger it. Basing the decision on the first chord has to keep this case out.
+    const run = vi.fn();
+    const manager = managerFor();
+    manager.register([binding("g d", run)], { name: "shell", depth: 0 });
+    const field = document.createElement("input");
+    document.body.append(field);
+    const detach = manager.attach(document);
+    field.dispatchEvent(press("g"));
+    field.dispatchEvent(press("d"));
+    detach();
+    field.remove();
+    expect(run).not.toHaveBeenCalled();
+  });
+});

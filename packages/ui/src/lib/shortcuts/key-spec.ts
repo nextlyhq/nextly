@@ -5,6 +5,9 @@
  * sequence — `"g d"`, meaning `g` then `d`. Steps are separated by spaces; within a step,
  * modifiers are joined to the key with `+`.
  *
+ * The space bar is written `"Space"`, because the character the browser reports for it is `" "`
+ * and a spec split on whitespace has no way to carry that.
+ *
  * **`mod` is the point of this module.** It resolves to Command on Apple platforms and Control
  * everywhere else, so a binding is written once. Writing `ctrl` or `meta` explicitly is still
  * possible and then means exactly that, which is what lets a platform-specific binding coexist
@@ -54,6 +57,9 @@ function normalizeKey(key: string): string {
  */
 function shiftIsMeaningful(key: string): boolean {
   if (key.length > 1) return true;
+  // Space is a single character that shift does NOT produce, so Shift+Space is a distinct
+  // keystroke and a plain `"Space"` binding must not answer for it.
+  if (key === " ") return true;
   return /[a-z0-9]/i.test(key);
 }
 
@@ -103,6 +109,13 @@ function parseChord(step: string, spec: string): KeyChord {
         break;
       case "shift":
         shift = true;
+        break;
+      case "space":
+        // The browser reports the space bar as `key: " "`, which cannot survive a spec split on
+        // whitespace — `" "` trims to nothing and a literal `"Space"` matches no event. Without
+        // this alias the space bar is simply unbindable, which rules out canvas panning and
+        // play/pause.
+        key = " ";
         break;
       default:
         if (key !== undefined) {
