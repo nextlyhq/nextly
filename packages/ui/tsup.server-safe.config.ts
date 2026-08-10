@@ -15,7 +15,8 @@ const external = [
 
 /**
  * The exports that contain no React runtime: a Tailwind preset read by build
- * tooling and a pure class-name helper. They are built here, without the
+ * tooling, a pure class-name helper, and colour conversions that are arithmetic
+ * on numbers. They are built here, without the
  * component bundle's `"use client"` banner, so server code can import them.
  *
  * Built separately from the component bundle so the client banner does not
@@ -37,6 +38,7 @@ export default defineConfig({
     // foot of the entry for the same reasoning beside the code.
     "tailwind-preset": "src/tailwind-preset.ts",
     utils: "src/lib/utils.ts",
+    color: "src/lib/color/index.ts",
   },
   format: ["esm", "cjs"],
   dts: true,
