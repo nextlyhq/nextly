@@ -2,6 +2,7 @@ import {
   DEFAULT_LIMITS,
   DOCUMENT_FORMAT_VERSION,
   PAGE_ROOT_CLASS,
+  isFetchableUrl,
   migrateDocument,
   walkNodes,
   type BlockDocument,
@@ -401,12 +402,24 @@ export function PageRenderer({
   // another document rendered beside it, and would repair against default caps
   // a caller had deliberately raised.
   const effectiveLimits = limits ?? styleContext?.limits ?? DEFAULT_LIMITS;
+  // A stylesheet fetches too. `background-image: url(...)` is a request the
+  // browser makes on every page the rule applies to, so the host's list has to
+  // reach the compile as well as the blocks — asked of the SAME list, through a
+  // predicate the engine calls, so the two channels cannot drift apart.
+  //
+  // A caller's own `mayFetchUrl` wins. It is the more specific answer, and a
+  // host that passed one deliberately should not have it replaced by one
+  // derived here.
+  const patterns = hostPolicy?.remotePatterns;
   const compileContext =
     styleContext === undefined
       ? undefined
       : {
           ...styleContext,
           limits: effectiveLimits,
+          ...(patterns === undefined || styleContext.mayFetchUrl !== undefined
+            ? {}
+            : { mayFetchUrl: (url: string) => isFetchableUrl(url, patterns) }),
           // Only a STRING scope is carried over. The artifact is a database
           // record, so `scope` can be null or a number, and the compiler
           // dereferences it before any block boundary exists — a malformed one
