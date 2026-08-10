@@ -28,6 +28,7 @@ import * as pageRendererModule from "./page-renderer";
 import * as placeholderModule from "./placeholder";
 import * as resolverModule from "./resolver";
 import * as stylesModule from "./styles";
+import * as visibilityModule from "./visibility";
 import * as rootEntry from "./index";
 import * as nextEntry from "./next";
 
@@ -81,7 +82,26 @@ const SOURCE_MODULES: ReadonlyArray<{
 }> = [
   { name: "context", module: contextModule, internal: [] },
   { name: "resolver", module: resolverModule, internal: [] },
-  { name: "styles", module: stylesModule, internal: [] },
+  {
+    name: "styles",
+    module: stylesModule,
+    // `readableGatedRules` is exported so `page-renderer` reads a stored artifact's gated map
+    // through the SAME predicate the delivery uses. They once disagreed — one accepted anything
+    // not undefined, the other required a plain record — so a malformed map counted as coverage
+    // while going unread, and the stale sheet shipped a hidden block's rules. It crosses a module
+    // boundary inside this package; it is not a consumer surface.
+    internal: ["readableGatedRules"],
+  },
+  {
+    name: "visibility",
+    module: visibilityModule,
+    // `isUnconditional` is the negation of the engine's `isConditionGated`, which
+    // `@nextlyhq/blocks-engine` already exports. Publishing a second spelling of one
+    // question from a second package is how the compiler and this renderer came to
+    // disagree about gating three separate times; the entry offers the PASS a caller
+    // actually needs and leaves the predicate with its single owner.
+    internal: ["isUnconditional"],
+  },
   { name: "placeholder", module: placeholderModule, internal: [] },
   { name: "page-renderer", module: pageRendererModule, internal: [] },
   {
@@ -105,6 +125,7 @@ describe("the root entry", () => {
       "defineBlock",
       "emptyDataProvider",
       "migrationSourceFor",
+      "pruneHiddenNodes",
       "registeredBlocks",
       "resolvePageStyles",
       "styleTextForInjection",
