@@ -414,7 +414,13 @@ function entryPathResolver(
   // widens, and the conditional form stays on the safe published read.
   const alwaysDraft = config.draft === true;
   const overrideAccess = alwaysDraft || (config.overrideAccess ?? false);
-  const scope = alwaysDraft ? "all" : (config.status ?? "published");
+  // An EXPLICIT status wins over draft widening, because that is the order
+  // `createContentRoute` resolves in: it passes the configured status through
+  // to `resolveContent`, where it beats the draft widening. Forcing `all`
+  // whenever `draft: true` was set would offer an href for an entry the same
+  // route refuses — a never-published target on `{ draft: true, status:
+  // "published" }` being the case that shows it.
+  const scope = config.status ?? (alwaysDraft ? "all" : "published");
 
   return async (collection: string, id: string) => {
     // A collection this route does not serve has no path THIS route can

@@ -401,6 +401,27 @@ describe("deriveSeoFromDocument", () => {
     ]);
   });
 
+  it("does not descend into stale children under a leaf block", () => {
+    // A definition declaring no slots is a leaf, and a leaf never calls
+    // `renderSlot` — so a hand-edited or stale child under one is not on the
+    // page and must not supply its title.
+    // The leaf offers NO title of its own, so the only candidate is the stale
+    // child. A test whose leaf supplied one would pass either way — the parent
+    // fills the field before the descent could matter.
+    const leaf = node(
+      "1",
+      "core/image",
+      { mediaId: "m1" },
+      {
+        children: [node("2", "core/heading", { text: "Ghost" })],
+      }
+    );
+
+    const derived = deriveSeoFromDocument(doc([leaf]), definitions(), visible);
+
+    expect(derived.title).toBeUndefined();
+  });
+
   it("returns nothing for an empty document", () => {
     expect(deriveSeoFromDocument(doc([]), definitions(), visible)).toEqual({});
   });

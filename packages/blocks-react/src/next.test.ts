@@ -1044,6 +1044,26 @@ describe("createBlocksPage", () => {
     expect(peak).toBeGreaterThan(1);
   });
 
+  it("honours an explicit status even on a draft-serving route", async () => {
+    // `createContentRoute` passes the configured status through, where it beats
+    // draft widening — so forcing `all` here would offer an href for an entry
+    // the same route refuses to serve.
+    const props = await render({
+      collections: ["pages"],
+      field: "content",
+      draft: true,
+      status: "published",
+      nextly: reader(
+        { slug: "about", content: document },
+        { never: { slug: "never-published", status: "draft" } }
+      ),
+    });
+
+    await expect(
+      props.context?.resolveEntryPath("pages", "never")
+    ).resolves.toBeNull();
+  });
+
   it("passes the stored stylesheet through for the resolved entry", async () => {
     const styles = { css: ".a{color:red}", classes: { n1: "a" } };
     const props = await render({

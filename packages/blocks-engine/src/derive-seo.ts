@@ -193,11 +193,16 @@ export function deriveSeoFromDocument(
       // API question rather than a walk question.
       const slots = node.slots;
       if (slots) {
-        const declared = definitions(node.type)?.slots;
-        const order =
-          declared === undefined
-            ? Object.keys(slots)
-            : Object.keys(declared).filter(name => name in slots);
+        // A definition declaring NO slots is a leaf, and a leaf never calls
+        // `renderSlot` — so stale or hand-edited children under one are not on
+        // the page and must not speak for it. `undefined` means exactly that
+        // here: the caller has already dropped nodes whose definition is
+        // unknown, so the only way to reach this with no declaration is to BE
+        // a leaf. Falling back to the stored keys conflated the two and let a
+        // heading beneath a leaf supply the title.
+        const definition = definitions(node.type);
+        const declared = definition?.slots ?? {};
+        const order = Object.keys(declared).filter(name => name in slots);
         for (const name of order) {
           const children = slots[name];
           if (children) visit(children);
