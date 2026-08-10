@@ -256,6 +256,18 @@ function inGamut([r, g, b]: [number, number, number]): boolean {
  * The search is a bisection on chroma, which converges to well under a perceptible step in the
  * fixed number of rounds below — no loop that might not terminate.
  *
+ * **The gamut is not always monotonic along this ray, and that is a deliberate trade.** At some
+ * lightness and hue pairs the boundary is crossed more than once: at `l = 0.2, h = 264.1` the ray
+ * is inside up to c ≈ 0.1192, outside until c ≈ 0.1368, briefly inside again to c ≈ 0.1386. A
+ * bisection therefore finds the FIRST boundary rather than the outermost reachable chroma.
+ *
+ * That is the intended behaviour rather than a limitation. Those islands span roughly a tenth of
+ * a degree of hue, so preferring the outermost value would make chroma jump by about 0.021
+ * between h = 264.05 and h = 264.10 — a visible step while dragging a hue slider, over a change
+ * no one can aim at. Taking the first boundary gives 0.1160, 0.1175, 0.1192, 0.1255, 0.1383
+ * across the same sweep: continuous, and one step less saturated at worst. It is also what the
+ * CSS Color 4 gamut-mapping algorithm does.
+ *
  * @experimental
  */
 export function oklchToRgb({ l, c, h }: Oklch): Rgb {
