@@ -78,20 +78,19 @@ interface Violation {
 
 function violationsIn(path: string): Violation[] {
   const found: Violation[] = [];
-  readFileSync(resolve(repo, path), "utf8")
-    .split("\n")
-    .forEach((line, index) => {
-      if (!COMMENT_LINE.test(line)) return;
-      for (const [pattern, kind] of META_REFERENCES) {
-        if (!pattern.test(line)) continue;
-        found.push({
-          where: `${path}:${index + 1}`,
-          kind,
-          text: line.trim().slice(0, 100),
-        });
-        return;
-      }
-    });
+  const lines: string[] = readFileSync(resolve(repo, path), "utf8").split("\n");
+  lines.forEach((line: string, index: number) => {
+    if (!COMMENT_LINE.test(line)) return;
+    for (const [pattern, kind] of META_REFERENCES) {
+      if (!pattern.test(line)) continue;
+      found.push({
+        where: `${path}:${index + 1}`,
+        kind,
+        text: line.trim().slice(0, 100),
+      });
+      return;
+    }
+  });
   return found;
 }
 

@@ -16,12 +16,14 @@ fi
 
 set -e
 
-# Design lint first: it runs in under a second and CI gates on it, so a
-# hardcoded colour should cost a local prompt rather than a CI round trip.
-# It is not part of `turbo lint` — knowing it exists was private knowledge
-# until it was wired in here, which is how an `hsl()` literal reached a
-# theme file whose every other token is OKLCH.
+# The two repo-wide lints CI gates on that `turbo lint` does not run. Both
+# finish in well under a second, and neither was reachable from any hook, so
+# knowing they existed was something each person carried privately: an `hsl()`
+# literal reached a theme file whose every other token is OKLCH, and an
+# out-of-order dependency key failed a build, each costing a CI round trip to
+# learn something a local prompt could have said immediately.
 pnpm lint:design
+pnpm lint:workspace
 
 pnpm turbo lint --continue \
   --filter='./packages/*'
