@@ -184,9 +184,14 @@ export function sourcesBySubpath() {
 }
 
 /**
- * The build entry for the root barrel, as tsup expects it.
+ * The build entry for the root barrel, KEYED by its published artifact name.
  *
- * @returns {string[]}
+ * Keyed rather than a bare path, because tsup names its output after the entry: an unnamed entry
+ * pointed at a differently named barrel emits files called after that barrel, and the export map
+ * still points at `dist/index.*`. The retarget this helper exists to support would then fail its
+ * own artifact checks.
+ *
+ * @returns {Record<string, string>}
  */
 export function rootBuildEntry() {
   const root = publishedEntries().find(entry => !entry.serverSafe);
@@ -196,5 +201,5 @@ export function rootBuildEntry() {
         "component build would be reading a path nothing publishes."
     );
   }
-  return [root.source];
+  return { [root.name]: root.source };
 }

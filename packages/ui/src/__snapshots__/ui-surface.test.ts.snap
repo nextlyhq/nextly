@@ -279,11 +279,6 @@ exports[`ui public export surface > src/lib/utils.ts surface is unchanged 1`] = 
 ]
 `;
 
-exports[`ui public export surface > src/lib/utils.ts surface is unchanged 2`] = `
-[
-  "cn (value)",
-]
-`;
 
 exports[`ui public export surface > src/tailwind-preset.ts surface is unchanged 1`] = `
 [
