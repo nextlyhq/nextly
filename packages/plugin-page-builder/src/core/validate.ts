@@ -46,6 +46,15 @@ export function validateDocument(
       }
       for (const [slotName, children] of Object.entries(n.slots)) {
         const spec = def?.slots?.find(s => s.name === slotName);
+        // A slot the definition does not declare has no allowlist, so every child in it would go
+        // unchecked. `spec` is undefined by two paths and `allowUnknown` gates only the first: an
+        // unregistered type, where the permissive answer is the one the caller asked for; and a
+        // KNOWN container carrying a slot name its own definition never declared, which nothing
+        // asked for. The containment is also retroactively wrong — the day a definition declares
+        // that name, children never checked against an allowlist become live.
+        if (def && !spec) {
+          return `${n.type} has no slot "${slotName}"`;
+        }
         for (const child of children) {
           if (spec?.allowedBlocks && !spec.allowedBlocks.includes(child.type)) {
             return `${child.type} is not allowed in slot "${slotName}" of ${n.type}`;

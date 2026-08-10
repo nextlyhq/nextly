@@ -8,6 +8,7 @@ import { PAGE_ROOT_CLASS } from "@nextlyhq/blocks-engine";
 import type { ReactNode } from "react";
 
 import { sanitizeCustomCss } from "../core/css-sanitize";
+import { pruneUndeclaredSlots } from "../core/declared-slots";
 import { defaultBlockRegistry, type BlockRegistry } from "../core/registry";
 import {
   compileDocumentStyles,
@@ -52,16 +53,43 @@ export interface PageRendererProps {
 }
 
 export function PageRenderer({
-  document,
+  document: stored,
   registry = defaultBlockRegistry,
   dataProvider,
   customCss,
   breakpoints,
   remotePatterns,
   tokens,
-  refs,
+  refs: storedRefs,
 }: PageRendererProps): ReactNode {
-  if (!document?.root) return null;
+  if (!stored?.root) return null;
+
+  // Held to the slots each definition declares, ONCE, before anything reads the tree. A stored
+  // document can carry children under a slot name a block update renamed or removed, and both the
+  // compiler and the renderer walked every STORED slot — so those children's rules, asset URLs
+  // included, were compiled into the sheet for markup nobody receives. Pruning here rather than in
+  // each walk is deliberate: `walk` has thirty call sites and no registry, and a rule enforced in
+  // thirty places is one that is eventually missed in one.
+  //
+  // The reusable library is pruned too. A library block is rendered by the same code and can hold
+  // a stale slot for the same reason.
+  const document = {
+    ...stored,
+    root: pruneUndeclaredSlots(stored.root, registry),
+  };
+  // A falsy library entry is left exactly as it is rather than pruned as a node. The library can be
+  // rebuilt from stored data, and every path downstream already tolerates one — `pageStyleKeys` and
+  // `compileDocumentMotionCss` skip it, `RenderNode` treats it as a missing ref and draws the
+  // placeholder. Dereferencing it here would take down the whole page before that placeholder gets
+  // the chance.
+  const refs = storedRefs
+    ? Object.fromEntries(
+        Object.entries(storedRefs).map(([id, target]) => [
+          id,
+          target ? pruneUndeclaredSlots(target, registry) : target,
+        ])
+      )
+    : storedRefs;
 
   // Everything two documents on one page must not share is anchored to a class
   // of this document's own: its token values, and the custom CSS whose
