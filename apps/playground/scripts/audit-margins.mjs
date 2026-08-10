@@ -25,9 +25,8 @@ register("./ts-extension-loader.mjs", import.meta.url);
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolvePath(here, "../../..");
 
-const { NEXTLY_THEMES } = await import("../src/theme-lab/themes/index.ts");
-const { TWEAKCN_THEMES } = await import(
-  "../src/theme-lab/themes/tweakcn.generated.ts"
+const { NEXTLY_THEMES, TWEAKCN_THEMES } = await import(
+  "../src/theme-lab/themes/index.ts"
 );
 const { measureTheme } = await import("../src/theme-lab/validate-contrast.ts");
 

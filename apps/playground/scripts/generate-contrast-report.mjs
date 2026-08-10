@@ -30,12 +30,8 @@ register("./ts-extension-loader.mjs", import.meta.url);
 
 const here = dirname(fileURLToPath(import.meta.url));
 
-const { NEXTLY_THEMES, EXPECTED_CONTRAST_FAILURES } = await import(
-  "../src/theme-lab/themes/index.ts"
-);
-const { TWEAKCN_THEMES } = await import(
-  "../src/theme-lab/themes/tweakcn.generated.ts"
-);
+const { NEXTLY_THEMES, TWEAKCN_THEMES, EXPECTED_CONTRAST_FAILURES } =
+  await import("../src/theme-lab/themes/index.ts");
 const { validateTheme } = await import("../src/theme-lab/validate-contrast.ts");
 
 // The `--color-*` scale referenced by the pairings is theme-independent and

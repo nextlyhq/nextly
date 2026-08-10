@@ -17,8 +17,24 @@ import { CALM } from "./calm";
 import { MONO } from "./mono";
 import { SAND } from "./sand";
 import { SIGNAL } from "./signal";
+import { withOverride } from "./tweakcn-overrides";
+import { TWEAKCN_THEMES as IMPORTED_PRESETS } from "./tweakcn.generated";
 
 export const NEXTLY_THEMES: ThemeDefinition[] = [MONO, SIGNAL, SAND, CALM];
+
+/**
+ * The tweakcn presets as the lab uses them: imported, then corrected for
+ * accessibility.
+ *
+ * Every consumer reads this rather than `tweakcn.generated` directly, so a
+ * preset cannot be corrected for one surface and raw for another -- the
+ * switcher, the gallery, the contrast report and the captures all see the
+ * same nine themes. The raw import stays reachable for the fidelity test,
+ * which asserts what the IMPORTER produced and must therefore not see the
+ * corrections.
+ */
+export const TWEAKCN_THEMES: ThemeDefinition[] =
+  IMPORTED_PRESETS.map(withOverride);
 
 /**
  * Themes that deliberately sit outside WCAG AA, and the number of asserted

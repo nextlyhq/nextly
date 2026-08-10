@@ -21,8 +21,7 @@ import { useState } from "react";
 import { CONTRAST_REPORT } from "./contrast-report.generated";
 import type { CssVars } from "./ThemePreviewCard";
 import { ThemePreviewCard } from "./ThemePreviewCard";
-import { NEXTLY_THEMES } from "./themes";
-import { TWEAKCN_THEMES } from "./themes/tweakcn.generated";
+import { NEXTLY_THEMES, TWEAKCN_THEMES } from "./themes";
 import type { DensityId, ThemeDefinition } from "./types";
 import { useThemeLab } from "./use-theme-lab";
 

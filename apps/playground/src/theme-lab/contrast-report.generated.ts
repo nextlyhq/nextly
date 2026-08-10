@@ -20,6 +20,6 @@ export const CONTRAST_REPORT: Record<string, number> = {
   "tweakcn-claude": 29,
   "tweakcn-modern-minimal": 28,
   "tweakcn-twitter": 30,
-  "tweakcn-vercel": 14,
+  "tweakcn-vercel": 0,
   "tweakcn-violet-bloom": 24,
 };

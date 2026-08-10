@@ -13,8 +13,7 @@
  */
 import { useCallback, useEffect, useState } from "react";
 
-import { NEXTLY_THEMES } from "./themes";
-import { TWEAKCN_THEMES } from "./themes/tweakcn.generated";
+import { NEXTLY_THEMES, TWEAKCN_THEMES } from "./themes";
 import type { DensityId, ThemeDefinition } from "./types";
 
 const STORAGE_KEY = "nextly-theme-lab";

@@ -14,8 +14,7 @@ import Link from "next/link";
 
 import { CONTRAST_REPORT } from "../../theme-lab/contrast-report.generated";
 import { ThemePreviewCard } from "../../theme-lab/ThemePreviewCard";
-import { NEXTLY_THEMES } from "../../theme-lab/themes";
-import { TWEAKCN_THEMES } from "../../theme-lab/themes/tweakcn.generated";
+import { NEXTLY_THEMES, TWEAKCN_THEMES } from "../../theme-lab/themes";
 import { useThemeLab } from "../../theme-lab/use-theme-lab";
 
 const GROUPS = [

@@ -70,9 +70,8 @@ register("./ts-extension-loader.mjs", import.meta.url);
 const here = dirname(fileURLToPath(import.meta.url));
 const outRoot = resolvePath(here, "../.theme-captures");
 
-const { NEXTLY_THEMES } = await import("../src/theme-lab/themes/index.ts");
-const { TWEAKCN_THEMES } = await import(
-  "../src/theme-lab/themes/tweakcn.generated.ts"
+const { NEXTLY_THEMES, TWEAKCN_THEMES } = await import(
+  "../src/theme-lab/themes/index.ts"
 );
 
 const BASE = "http://localhost:3000";
