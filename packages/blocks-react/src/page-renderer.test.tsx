@@ -2973,6 +2973,42 @@ describe("PageRenderer", () => {
       expect(html).not.toContain("rebeccapurple");
     });
 
+    it.each([
+      ["null", null],
+      ["an array", []],
+      ["a string", "nope"],
+    ])(
+      "still withholds when the stored gated map is %s",
+      async (_label, malformed) => {
+        // A malformed map is not a map. Counting it as coverage skips the repair while the
+        // delivery half correctly refuses to read it, so the stale main sheet ships with the
+        // hidden node's rules and asset URLs still in it.
+        const html = await renderToHtml(
+          <PageRenderer
+            document={doc(
+              node("a", "test/text", {
+                props: { value: "gated body" },
+                visibility: {
+                  conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+                },
+              }),
+              node("b", "test/text", { props: { value: "public body" } })
+            )}
+            blocks={createBlockResolver([text as AnyBlockDefinition])}
+            styles={{
+              css: ".nx-a { background-image: url(/gated-asset.png) }",
+              classes: { a: "nx-a", b: "nx-b" },
+              gated: malformed as unknown as Record<string, string>,
+            }}
+          />
+        );
+
+        expect(html).not.toContain("gated body");
+        expect(html).not.toContain("gated-asset.png");
+        expect(html).toContain("public body");
+      }
+    );
+
     it("recompiles rather than withholding when it can", async () => {
       // With a compile context present there is no need to lose the styling:
       // the sheet is rebuilt from the pruned document, so the visible nodes keep

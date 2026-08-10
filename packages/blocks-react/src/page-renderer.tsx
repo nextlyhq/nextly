@@ -21,6 +21,7 @@ import {
 } from "./resolver";
 import { dedupeNodeIds, sanitizeDocument } from "./sanitize";
 import {
+  readableGatedRules,
   resolvePageStyles,
   styleTextForInjection,
   type PageStyles,
@@ -284,7 +285,9 @@ export function PageRenderer({
   // the reader appends the survivors instead of recompiling the whole sheet or
   // withholding it. A MISSING map is not the same as an empty one — it means the
   // sheet was compiled before the split existed and knows nothing about gating —
-  // so only a present map licenses skipping the recompile.
+  // so only a READABLE map licenses skipping the recompile. Read through the same
+  // helper the delivery uses: a malformed map counting as coverage here while the
+  // delivery refuses to read it is how the stale sheet shipped.
   //
   // Duplicate ids in the STORED document disqualify it, even when pruning makes
   // them disappear. The compiler writes no node-local rules at all for an id more
@@ -294,7 +297,9 @@ export function PageRenderer({
   // sheet is still missing the SURVIVOR's rules. The pre-prune document is the
   // only place that evidence still exists.
   const gatingCoveredByArtifact =
-    pruned !== doc && styles?.gated !== undefined && !hasDuplicateNodeIds(doc);
+    pruned !== doc &&
+    readableGatedRules(styles) !== undefined &&
+    !hasDuplicateNodeIds(doc);
 
   const repairedDocument =
     sanitized !== document ||

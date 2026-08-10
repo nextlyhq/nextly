@@ -211,27 +211,35 @@ function normalizeStoredStyles(
  * element; only tier order matters, and each entry preserves its own tiers
  * internally.
  */
+/**
+ * The gated rules a stored artifact carries, or `undefined` when it carries none it can be read.
+ *
+ * ONE definition, because two places ask this question: the renderer, deciding whether the artifact
+ * covers gating well enough to skip the repair, and the delivery below, deciding whether to append.
+ * When they disagreed the artifact counted as coverage while its map went unread, so the repair was
+ * skipped and the stale sheet shipped with the hidden node's rules still in it — the leak, arrived
+ * at through two readings of one fact.
+ *
+ * The artifact is a database record, so `gated` can be null, an array, or a string. Anything not a
+ * plain record is treated as ABSENT, which is the safe direction: absent means the sheet predates
+ * the split, and gating then forces the recompile-or-withhold path.
+ */
+export function readableGatedRules(
+  styles: PageStyles | undefined
+): Readonly<Record<string, unknown>> | undefined {
+  const gated: unknown = styles?.gated;
+  if (typeof gated !== "object" || gated === null || Array.isArray(gated)) {
+    return undefined;
+  }
+  return gated as Readonly<Record<string, unknown>>;
+}
+
 function withGatedRules(
   styles: PageStyles,
   document: BlockDocument
 ): PageStyles {
-  // The artifact is a database record, so the field can arrive as null, an
-  // array, or a string. `!== undefined` is not enough of a check: indexing a
-  // null here throws while assembling the page's styles, BEFORE any block
-  // boundary exists, so one malformed row takes down the whole page rather than
-  // one block. Anything unreadable is treated as absent, which routes the caller
-  // back to recompile-or-withhold exactly as an older artifact does.
-  const gated: unknown = styles.gated;
-  if (
-    typeof gated !== "object" ||
-    gated === null ||
-    Array.isArray(gated) ||
-    styles.css === undefined
-  ) {
-    return styles;
-  }
-
-  const entries = gated as Record<string, unknown>;
+  const entries = readableGatedRules(styles);
+  if (entries === undefined || styles.css === undefined) return styles;
   const appended: string[] = [];
   for (const id of documentNodeIds(document)) {
     const rules = entries[id];
