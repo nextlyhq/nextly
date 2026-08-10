@@ -5,9 +5,8 @@
  * third-party reference themes shown for comparison, not Nextly identity
  * candidates.
  *
- * Pruned to the task-08 shortlist on 2026-08-10: five presets remain under
- * comparison. The importer still knows the full registry; re-running it
- * restores any preset.
+ * Pruned on 2026-08-10: five presets remain under comparison. The importer
+ * still knows the full registry; re-running it restores any preset.
  */
 import type { ThemeDefinition } from "../types";
 

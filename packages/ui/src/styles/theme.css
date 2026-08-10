@@ -722,9 +722,9 @@
   --nx-muted: oklch(0.97 0 0);
   /* Darkened so muted text clears WCAG 4.5:1 on the muted surface (was 4.35:1). */
   --nx-muted-foreground: oklch(0.44 0 0);
-  /* slate-500 */
+  /* A hover and selection SURFACE, not ink: one step off the page, with
+     `--nx-accent-foreground` as the only thing meant to be read on it. */
   --nx-accent: oklch(0.94 0 0);
-  /* Slate-500 per user request #64748b */
   --nx-accent-foreground: oklch(0 0 0);
   /* white */
 

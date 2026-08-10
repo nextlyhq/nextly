@@ -1,7 +1,6 @@
 /**
- * The Nextly-original theme set, pruned to the task-08 shortlist. Mono leads
- * as the unchanged control so a comparison always has a baseline in the same
- * list.
+ * The Nextly-original theme set. Mono leads as the unchanged control so a
+ * comparison always has a baseline in the same list.
  *
  * Order is the order a reviewer should walk them, each a bigger departure
  * from the control than the row above it: Signal changes only what colour
@@ -9,7 +8,7 @@
  * the SURFACES are (warm paper under warm ink), and Calm departs on the
  * legibility axis itself (soft, low-stimulus, deliberately quiet). The other
  * eight originals were exploration directions and live in git history; the
- * tweakcn shortlist lives in `tweakcn.generated.ts`.
+ * imported presets live in `tweakcn.generated.ts`.
  */
 import type { ThemeDefinition } from "../types";
 

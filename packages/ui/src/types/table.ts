@@ -1,7 +1,7 @@
 // Canonical pagination metadata (matches spec §5.1 wire shape and
-// nextly's response-shapes.ts PaginationMeta). Phase 4.7 unified the admin
-// internal type with the wire contract; the legacy {page, pageSize, total,
-// totalPages} shape was dropped.
+// nextly's response-shapes.ts PaginationMeta). The admin's internal type and
+// the wire contract are one shape; the legacy {page, pageSize, total,
+// totalPages} form is gone.
 /** @experimental */
 export interface PaginationMeta {
   total: number;
@@ -29,8 +29,8 @@ export interface FilterInfo {
 // Combined parameters for API calls. The `pageSize` field here is admin
 // internal React state (the user's selected page-size dropdown value) and
 // is mapped to the wire `limit` query param by the fetcher. Renaming this
-// admin-internal field is intentionally out of Phase 4.7 scope; it stays as
-// `pageSize` to avoid churn across every table component's local state.
+// admin-internal field is deliberately left alone: it stays `pageSize` to
+// avoid churn across every table component's local state.
 /** @experimental */
 export interface TableParams {
   pagination: {
@@ -41,9 +41,8 @@ export interface TableParams {
   filters?: FilterInfo;
 }
 
-// Server response structure (canonical wire shape). Renamed from
-// TableResponse in Phase 4.7. Field is `items` (not `data`) per spec
-// section 5.1.
+// Server response structure (canonical wire shape). Field is `items`, not
+// `data`, matching the wire contract in spec section 5.1.
 /** @experimental */
 export interface ListResponse<TData> {
   items: TData[];

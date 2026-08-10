@@ -1,22 +1,19 @@
 /**
- * The token-level half of the task-08 admin theme audit.
+ * Measures how heavily each theme draws its boundaries.
  *
- * Two things the contrast suite does NOT answer, both of which the founder
- * reported by eye:
+ * Two things a contrast suite does not answer, because both are questions
+ * about weight rather than about a floor:
  *
- * 1. A boundary can fail by being too LOUD. WCAG only sets a floor (3:1 for a
- *    boundary that identifies a control), so a suite built on it is silent
- *    about a divider at 6:1 drawing itself as a wall. "Prominent border lines
- *    on the top bar and sidebar" is that failure, and it is invisible to a
- *    pass/fail gate.
+ * 1. A boundary can fail by being too LOUD. WCAG only sets a minimum (3:1 for
+ *    a boundary that identifies a control), so a gate built on it is silent
+ *    about a divider at 6:1 drawing itself as a wall.
  * 2. A control can fail by being too QUIET. `input` and the checkbox border
- *    sit at the 3:1 floor, and a theme that lands just under it produces the
- *    "checkboxes are barely visible" report.
+ *    sit at that 3:1 minimum, and a theme landing just under it leaves a
+ *    control with no visible edge.
  *
- * So this measures the SPREAD rather than a threshold, per theme per mode,
- * and writes it as evidence rather than as an assertion: the numbers feed a
- * report a human reads, because "how heavy is too heavy" is a design call and
- * not a line a test can draw.
+ * So this reports the SPREAD rather than a pass or a fail, per theme per mode,
+ * and writes it as evidence: how heavy is too heavy is a design judgement, not
+ * a line a test can draw.
  *
  * Run: node scripts/audit-themes.mjs
  */
@@ -39,8 +36,18 @@ const { contrastRatio, compositeOver } = await import(
   "../../../packages/ui/src/styles/contrast/color.ts"
 );
 
-/** Alpha surfaces composite over the page, which is white at the bottom. */
-const OPAQUE_WHITE = { r: 1, g: 1, b: 1, alpha: 1 };
+/**
+ * The opaque colour a translucent surface ends up over: the mode's own page
+ * background, not a fixed white. A dark theme's page is near-black, so
+ * compositing its alpha tokens over white inverts the result -- a translucent
+ * light border on a dark page was scored as a dark border on a light one, and
+ * every dark-mode number in the report was measured against a page that does
+ * not exist.
+ */
+function pageUnder(tokens, ctx) {
+  const page = resolveColor(tokens.background, ctx);
+  return page && page.alpha === 1 ? page : { r: 1, g: 1, b: 1, alpha: 1 };
+}
 const { resolveColor } = await import(
   "../../../packages/ui/src/styles/contrast/resolve.ts"
 );
@@ -69,7 +76,7 @@ function ratio(tokens, fg, bg) {
   // opaque reports a 44%-opacity hairline as solid black -- which is how a
   // first run of this script scored Mono's border at 21:1, the theoretical
   // maximum, and called every theme's rules "prominent".
-  const surface = b.alpha < 1 ? compositeOver(b, OPAQUE_WHITE) : b;
+  const surface = b.alpha < 1 ? compositeOver(b, pageUnder(tokens, ctx)) : b;
   const rule = a.alpha < 1 ? compositeOver(a, surface) : a;
   return contrastRatio(rule, surface);
 }

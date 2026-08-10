@@ -107,8 +107,8 @@ describe("theme lab selection", () => {
 
   it("falls back to the shipped theme for one this build no longer ships", () => {
     // Not hypothetical: every browser that used the 54-theme lab has one of
-    // the pruned ids persisted. `graphite` was a real theme until the task-08
-    // shortlist, which is exactly the shape of id that arrives here.
+    // the pruned ids persisted. `graphite` was a real theme until the set was
+    // shortlisted, which is exactly the shape of id that arrives here.
     writeSelection({ theme: "graphite", density: "default" });
     expect(readSelection()).toEqual({
       theme: SHIPPED_THEME,

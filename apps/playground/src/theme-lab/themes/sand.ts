@@ -7,8 +7,8 @@
  * on, and the outer page is one step DARKER, so a card is legible as "raised"
  * before any border is perceived. Borders are pushed down to the faintest line
  * that is still a legal boundary, and the work they gave up is handed to a warm
- * shadow. This is the direction that asks the founder a real question: is the
- * admin's structure made of ink, or of light?
+ * shadow. The question this direction poses: is the admin's structure made of
+ * ink, or of light?
  *
  * The lightness ladder is the whole theme, so it is stated once here and held
  * everywhere: popover > card > background > page-background. It runs the same
