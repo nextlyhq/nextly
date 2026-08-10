@@ -22,7 +22,11 @@ import { defineEmailProvider } from "../../provider-definition";
 
 import { createResendProvider } from "./resend-provider";
 import { createSendLayerProvider } from "./sendlayer-provider";
-import { createSmtpProvider, verifySmtpConnection } from "./smtp-provider";
+import {
+  assertTransportIsSafe,
+  createSmtpProvider,
+  verifySmtpConnection,
+} from "./smtp-provider";
 
 /**
  * Turn a Zod failure into the error the API boundary reports.
@@ -117,7 +121,31 @@ export const smtpDefinition: RegisteredEmailProvider = defineEmailProvider({
       secret: true,
     },
   ],
-  parseConfig: input => parseOrThrow(smtpSchema, input, "smtp"),
+  parseConfig: input => {
+    const config = parseOrThrow(smtpSchema, input, "smtp");
+    // The transport-safety rule runs HERE, not only when an adapter is built.
+    // Otherwise a plaintext-to-remote configuration saves successfully and is
+    // refused at the first send -- a provider the admin reports as created and
+    // that cannot be used, which is exactly what validating at the write
+    // boundary exists to prevent.
+    try {
+      assertTransportIsSafe(config);
+    } catch (error) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "configuration.secure",
+            code: "INVALID_PROVIDER_CONFIG",
+            message:
+              "Refusing plaintext SMTP to a remote host. Use TLS (port 465), STARTTLS (port 587), or a loopback host.",
+          },
+        ],
+        cause: error instanceof Error ? error : undefined,
+        logContext: { providerType: "smtp" },
+      });
+    }
+    return config;
+  },
   createAdapter: config => createSmtpProvider(config),
   testConnection: config => verifySmtpConnection(config),
 });

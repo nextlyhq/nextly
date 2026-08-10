@@ -15,6 +15,7 @@
  */
 
 import {
+  SKIP_DATE_FORMATTING_HEADER,
   respondAction,
   respondData,
   respondDoc,
@@ -64,7 +65,14 @@ const EMAIL_PROVIDER_METHODS: Record<
     // The dispatcher awaits the returned value either way.
     execute: () => {
       const types = getEmailProviderRegistry().list().map(toDescriptor);
-      return Promise.resolve(respondData({ types }));
+      // Marked to skip global date formatting. These are provider DEFINITIONS,
+      // not records: a contributed text or select field whose default happens
+      // to look like a timestamp would otherwise be rewritten by value, so the
+      // descriptor would stop matching the registered definition and would vary
+      // with the installation's timezone.
+      const response = respondData({ types });
+      response.headers.set(SKIP_DATE_FORMATTING_HEADER, "1");
+      return Promise.resolve(response);
     },
   },
   createProvider: {

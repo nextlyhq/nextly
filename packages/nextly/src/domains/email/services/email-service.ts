@@ -634,28 +634,42 @@ export class EmailService extends BaseService {
       };
     }
 
-    // 2. DB default provider
+    // 2. DB default provider.
+    //
+    // The catch covers the LOOKUP only. Adapter construction now validates the
+    // stored configuration, and a validation failure is not a reason to fall
+    // through: a default whose configuration no longer parses would otherwise
+    // send silently through the code-first account instead, or report "no
+    // provider configured" when one is plainly selected. Falling back is right
+    // for a database that is not ready yet; it is wrong for a default that is
+    // there and broken.
+    let defaultProvider: Awaited<
+      ReturnType<EmailProviderService["getDefaultProviderDecrypted"]>
+    > = null;
     try {
-      const defaultProvider =
+      defaultProvider =
         await this.providerService.getDefaultProviderDecrypted();
-      if (defaultProvider && defaultProvider.isActive) {
-        return {
-          adapter: this.createAdapterFromRecord(defaultProvider),
-          from: this.formatFromAddress(
-            defaultProvider.fromName ?? null,
-            defaultProvider.fromEmail
-          ),
-          providerType: defaultProvider.type,
-        };
-      }
     } catch (error) {
-      // DB not ready (e.g., migrations not run yet) — fall through to code-first
       this.logger.warn(
         "Failed to look up default email provider from DB — trying code-first config",
         {
           error: error instanceof Error ? error.message : String(error),
         }
       );
+    }
+
+    if (defaultProvider && defaultProvider.isActive) {
+      // Outside the try: a throw here means the selected default is unusable,
+      // and the caller needs to hear that rather than have another account
+      // substituted for it.
+      return {
+        adapter: this.createAdapterFromRecord(defaultProvider),
+        from: this.formatFromAddress(
+          defaultProvider.fromName ?? null,
+          defaultProvider.fromEmail
+        ),
+        providerType: defaultProvider.type,
+      };
     }
 
     // 3. Code-first config

@@ -17,7 +17,7 @@ import type { EmailProviderAdapter } from "../../types";
  * SMTP configuration shape stored in `EmailProviderRecord.configuration`.
  * Matches the `SmtpConfig` type minus the discriminant `provider` field.
  */
-interface SmtpProviderConfig {
+export interface SmtpProviderConfig {
   host: string;
   port: number;
   secure?: boolean;
@@ -64,7 +64,7 @@ function isLoopbackHost(host: string): boolean {
   return host === "localhost" || host === "127.0.0.1" || host === "::1";
 }
 
-function assertTransportIsSafe(config: SmtpProviderConfig): boolean {
+export function assertTransportIsSafe(config: SmtpProviderConfig): boolean {
   // Default `secure` to true. Reject obviously insecure setups at construction
   // time so misconfiguration fails loudly rather than silently sending
   // plaintext credentials over the network. STARTTLS on port 587 is allowed via

@@ -58,7 +58,11 @@ import { mintPreviewLink, revokePreviewLinks } from "./api/preview-links";
 import { readOrGenerateRequestId, withRequestIdHeader } from "./api/request-id";
 // canonical respondX wire shapes (spec §5.1) instead of the
 // hand-rolled `{ data: <payload> }` envelope.
-import { respondData, respondMutation } from "./api/response-shapes";
+import {
+  SKIP_DATE_FORMATTING_HEADER,
+  respondData,
+  respondMutation,
+} from "./api/response-shapes";
 import { getSchemaJournal } from "./api/schema-journal";
 import {
   listWebhooks,
@@ -163,7 +167,6 @@ function getSchemaVersionHeader(): number {
  * whereas a path can be matched by a plugin route that happens to end in the
  * same segment and should keep its ordinary formatting.
  */
-const SKIP_DATE_FORMATTING_HEADER = "x-nextly-skip-date-formatting";
 
 async function applyGlobalDateFormatting(
   response: Response,
