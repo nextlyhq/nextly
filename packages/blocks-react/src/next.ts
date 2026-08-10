@@ -188,22 +188,38 @@ function readDocument(
  * entry's SEO fields are blank, and a caller wanting it otherwise would have to
  * re-walk the document with its own copy of the rules.
  */
-export interface DerivedPageSeo extends BlockSeoContribution {
+export interface DerivedPageSeo extends Omit<BlockSeoContribution, "image"> {
+  /**
+   * The resolved picture, when one resolved.
+   *
+   * Narrowed from the contribution's `string | readonly string[]`, which is the
+   * PRE-resolution shape: candidates have already been tried in order by the
+   * time a caller sees this. Leaving the union exposed made the documented
+   * `buildMetadata(entry, { fallback: derived })` call fail to typecheck, since
+   * that option takes a single string — a public type describing an internal
+   * stage rather than what the caller holds.
+   */
+  image?: string;
   /** The path the page renders at, for a canonical URL. */
   canonical: string;
 }
 
 /**
- * Whether a candidate is already a URL rather than a media id.
+ * A media id, as the ids this system mints are actually shaped.
  *
- * A media id is a UUID, so anything carrying a scheme, a leading slash, or a
- * path separator or dot is a URL — `assets/hero.png` and `hero.png` both render
- * fine through the image block and must not be sent to the media collection,
- * where the lookup misses and the preview image is dropped.
+ * Decided by matching the ID rather than by guessing at URLs, which is the
+ * inversion that mattered: the renderer accepts a relative reference with no
+ * scheme, slash, dot or extension — a bare `hero` is a valid `<img src>` — so
+ * every "is this a URL" heuristic classified some renderable source as an id,
+ * sent it to the media reader, missed, and dropped the preview image. Anything
+ * that is not this shape is passed through as a URL, which is what the renderer
+ * does with it.
  */
-function looksLikeUrl(value: string): boolean {
-  if (value.startsWith("/") || /^[a-z][a-z0-9+.-]*:/i.test(value)) return true;
-  return value.includes("/") || value.includes(".");
+const MEDIA_ID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function looksLikeMediaId(value: string): boolean {
+  return MEDIA_ID.test(value);
 }
 
 /**
@@ -224,7 +240,12 @@ async function derivePageSeo(
   styleContext: StyleCompileContext | undefined
 ): Promise<DerivedPageSeo> {
   const resolver = blocks ?? registeredBlocks();
-  const canonical = `/${slug}`;
+  // Encoded per SEGMENT, keeping the `/` separators. Next hands this route the
+  // DECODED segments while the request used their percent-encoded form, so a
+  // stored slug holding `?` or `#` — slugs are ordinary text — would otherwise
+  // produce a canonical a URL consumer reads as a query or a fragment instead
+  // of as the page's path.
+  const canonical = `/${slug.split("/").map(encodeURIComponent).join("/")}`;
 
   // One authoritative preparation, shared with the renderer rather than
   // restated here. Hand-copying the passes is what let metadata describe a
@@ -269,7 +290,7 @@ async function firstUsableImage(
   resolveMedia: (id: string) => Promise<ResolvedMedia | null>
 ): Promise<string | undefined> {
   for (const candidate of candidates ?? []) {
-    if (looksLikeUrl(candidate)) return candidate;
+    if (!looksLikeMediaId(candidate)) return candidate;
     const media = await resolveMedia(candidate).catch(() => null);
     if (media) return media.url;
   }

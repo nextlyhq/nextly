@@ -163,7 +163,7 @@ describe("createBlocksPage", () => {
       nextly: reader(
         { slug: "about", content: document },
         {
-          "media-1": {
+          "11111111-1111-4111-8111-111111111111": {
             url: "https://cdn.example/a.png",
             altText: "A cat",
             width: 800,
@@ -173,7 +173,9 @@ describe("createBlocksPage", () => {
       ),
     });
 
-    await expect(props.context?.resolveMedia("media-1")).resolves.toEqual({
+    await expect(
+      props.context?.resolveMedia("11111111-1111-4111-8111-111111111111")
+    ).resolves.toEqual({
       url: "https://cdn.example/a.png",
       alt: "A cat",
       width: 800,
@@ -187,11 +189,13 @@ describe("createBlocksPage", () => {
       field: "content",
       nextly: reader(
         { slug: "about", content: document },
-        { "media-2": { altText: "no url here" } }
+        { "22222222-2222-4222-8222-222222222222": { altText: "no url here" } }
       ),
     });
 
-    await expect(props.context?.resolveMedia("media-2")).resolves.toBeNull();
+    await expect(
+      props.context?.resolveMedia("22222222-2222-4222-8222-222222222222")
+    ).resolves.toBeNull();
   });
 
   it("resolves an entry reference through the route's own slug field", async () => {
@@ -233,7 +237,7 @@ describe("createBlocksPage", () => {
     // places and the mismatch would surface as missing images, not an error.
     const instance = reader(
       { slug: "about", content: document },
-      { "media-1": { url: "/a.png" } }
+      { "11111111-1111-4111-8111-111111111111": { url: "/a.png" } }
     ) as unknown as { media: { findByID: ReturnType<typeof vi.fn> } };
 
     const props = await render({
@@ -241,10 +245,10 @@ describe("createBlocksPage", () => {
       field: "content",
       nextly: instance as never,
     });
-    await props.context?.resolveMedia("media-1");
+    await props.context?.resolveMedia("11111111-1111-4111-8111-111111111111");
 
     expect(instance.media.findByID).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "media-1" })
+      expect.objectContaining({ id: "11111111-1111-4111-8111-111111111111" })
     );
   });
 
@@ -254,7 +258,9 @@ describe("createBlocksPage", () => {
     // default resolver would never resolve an ordinary Nextly media record.
     const instance = reader(
       { slug: "about", content: document },
-      { "media-1": { url: "/a.png", altText: "A" } }
+      {
+        "11111111-1111-4111-8111-111111111111": { url: "/a.png", altText: "A" },
+      }
     ) as unknown as {
       findByID: ReturnType<typeof vi.fn>;
       media: { findByID: ReturnType<typeof vi.fn> };
@@ -265,13 +271,15 @@ describe("createBlocksPage", () => {
       field: "content",
       nextly: instance as never,
     });
-    await expect(props.context?.resolveMedia("media-1")).resolves.toEqual({
+    await expect(
+      props.context?.resolveMedia("11111111-1111-4111-8111-111111111111")
+    ).resolves.toEqual({
       url: "/a.png",
       alt: "A",
     });
 
     expect(instance.media.findByID).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "media-1" })
+      expect.objectContaining({ id: "11111111-1111-4111-8111-111111111111" })
     );
     expect(instance.findByID).not.toHaveBeenCalled();
   });
@@ -281,7 +289,7 @@ describe("createBlocksPage", () => {
     // of its own — so it must not be sent to the media namespace.
     const instance = reader(
       { slug: "about", content: document },
-      { p1: { url: "/own.png" } }
+      { "66666666-6666-4666-8666-666666666666": { url: "/own.png" } }
     ) as unknown as {
       findByID: ReturnType<typeof vi.fn>;
       media: { findByID: ReturnType<typeof vi.fn> };
@@ -293,10 +301,13 @@ describe("createBlocksPage", () => {
       nextly: instance as never,
       mediaCollection: "photos",
     });
-    await props.context?.resolveMedia("p1");
+    await props.context?.resolveMedia("66666666-6666-4666-8666-666666666666");
 
     expect(instance.findByID).toHaveBeenCalledWith(
-      expect.objectContaining({ collection: "photos", id: "p1" })
+      expect.objectContaining({
+        collection: "photos",
+        id: "66666666-6666-4666-8666-666666666666",
+      })
     );
     expect(instance.media.findByID).not.toHaveBeenCalled();
   });
@@ -389,7 +400,12 @@ describe("createBlocksPage", () => {
       formatVersion: DOCUMENT_FORMAT_VERSION,
       kind: "page",
       nodes: [
-        { id: "1", type: "core/image", version: 1, props: { mediaId: "m1" } },
+        {
+          id: "1",
+          type: "core/image",
+          version: 1,
+          props: { mediaId: "33333333-3333-4333-8333-333333333333" },
+        },
       ],
     };
     let seen: DerivedPageSeo | undefined;
@@ -398,7 +414,11 @@ describe("createBlocksPage", () => {
       field: "content",
       nextly: reader(
         { slug: "about", content: page },
-        { m1: { url: "https://cdn.example/hero.png" } }
+        {
+          "33333333-3333-4333-8333-333333333333": {
+            url: "https://cdn.example/hero.png",
+          },
+        }
       ),
       blocks: coreResolver(),
       metadata: (_e, _c, derived) => {
@@ -493,7 +513,10 @@ describe("createBlocksPage", () => {
           id: "1",
           type: "core/image",
           version: 1,
-          props: { mediaId: "gone", src: "/fallback.png" },
+          props: {
+            mediaId: "44444444-4444-4444-8444-444444444444",
+            src: "/fallback.png",
+          },
         },
       ],
     };
@@ -583,7 +606,7 @@ describe("createBlocksPage", () => {
     // route resolves anonymously. `resolveContent` passes it for that reason.
     const instance = reader(
       { slug: "about", content: document },
-      { p1: { slug: "contact" } }
+      { "66666666-6666-4666-8666-666666666666": { slug: "contact" } }
     ) as unknown as { find: ReturnType<typeof vi.fn> };
 
     const props = await render({
@@ -591,7 +614,10 @@ describe("createBlocksPage", () => {
       field: "content",
       nextly: instance as never,
     });
-    await props.context?.resolveEntryPath("pages", "p1");
+    await props.context?.resolveEntryPath(
+      "pages",
+      "66666666-6666-4666-8666-666666666666"
+    );
 
     expect(instance.find).toHaveBeenCalledWith(
       expect.objectContaining({ user: undefined })
@@ -678,8 +704,18 @@ describe("createBlocksPage", () => {
       formatVersion: DOCUMENT_FORMAT_VERSION,
       kind: "page",
       nodes: [
-        { id: "1", type: "core/image", version: 1, props: { mediaId: "gone" } },
-        { id: "2", type: "core/image", version: 1, props: { mediaId: "live" } },
+        {
+          id: "1",
+          type: "core/image",
+          version: 1,
+          props: { mediaId: "44444444-4444-4444-8444-444444444444" },
+        },
+        {
+          id: "2",
+          type: "core/image",
+          version: 1,
+          props: { mediaId: "55555555-5555-4555-8555-555555555555" },
+        },
       ],
     };
     let seen: DerivedPageSeo | undefined;
@@ -689,7 +725,7 @@ describe("createBlocksPage", () => {
       blocks: coreResolver(),
       nextly: reader(
         { slug: "about", content: page },
-        { live: { url: "/second.png" } }
+        { "55555555-5555-4555-8555-555555555555": { url: "/second.png" } }
       ),
       metadata: (_e, _c, derived) => {
         seen = derived;
@@ -830,8 +866,59 @@ describe("createBlocksPage", () => {
     });
 
     await expect(
-      props.context?.resolveEntryPath("pages", "gone")
+      props.context?.resolveEntryPath(
+        "pages",
+        "44444444-4444-4444-8444-444444444444"
+      )
     ).resolves.toBeNull();
+  });
+
+  it("keeps an extensionless relative image source", async () => {
+    // The renderer accepts a bare `hero` as an <img src>, so classifying it as
+    // a media id sent it to the media reader, missed, and dropped the preview.
+    const page: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        { id: "1", type: "core/image", version: 1, props: { src: "hero" } },
+      ],
+    };
+    let seen: DerivedPageSeo | undefined;
+    const route = createBlocksPage({
+      collections: ["pages"],
+      field: "content",
+      blocks: coreResolver(),
+      nextly: reader({ slug: "about", content: page }),
+      metadata: (_e, _c, derived) => {
+        seen = derived;
+        return {};
+      },
+    });
+
+    await route.generateMetadata({ params: { slug: ["about"] } });
+
+    expect(seen?.image).toBe("hero");
+  });
+
+  it("percent-encodes each canonical segment", async () => {
+    // Next hands this route the DECODED segments while the request used their
+    // encoded form, so a slug holding `?` would produce a canonical a URL
+    // consumer reads as a query rather than as the page's path.
+    let seen: DerivedPageSeo | undefined;
+    const route = createBlocksPage({
+      collections: ["pages"],
+      field: "content",
+      blocks: coreResolver(),
+      nextly: reader({ slug: "faq?all", content: document }),
+      metadata: (_e, _c, derived) => {
+        seen = derived;
+        return {};
+      },
+    });
+
+    await route.generateMetadata({ params: { slug: ["help", "faq?all"] } });
+
+    expect(seen?.canonical).toBe("/help/faq%3Fall");
   });
 
   it("passes the stored stylesheet through for the resolved entry", async () => {
