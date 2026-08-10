@@ -286,6 +286,22 @@ export class EmailProviderService extends BaseService {
     for (const [key, value] of Object.entries(incoming)) {
       if (value === undefined) continue;
 
+      // `null` REMOVES the key. A patch merged over stored configuration has
+      // only two states otherwise -- absent means "leave it" and a value means
+      // "set it" -- with no way to say "unset it", so an optional field became
+      // permanent the moment it was first saved. Clearing it in the form
+      // omitted it, and omission is indistinguishable from not touching it.
+      //
+      // `null` rather than an empty string because an empty string is a value
+      // a provider may legitimately want to store, and because a parser
+      // written as `z.enum(options).optional()` rejects both an empty string
+      // and a null while accepting an absent key. Removing the key is what
+      // "optional and unset" actually means.
+      if (value === null) {
+        delete merged[key];
+        continue;
+      }
+
       if (this.isPlainObject(value) && this.isPlainObject(merged[key])) {
         merged[key] = this.deepMergeConfig(merged[key], value);
       } else {

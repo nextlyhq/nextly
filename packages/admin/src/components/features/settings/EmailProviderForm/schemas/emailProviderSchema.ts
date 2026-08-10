@@ -535,7 +535,8 @@ export function formValuesToPayload(
 ): EmailProviderPayload {
   const configuration = withoutUnselectedOptions(
     withoutUntouchedSecrets(values.configuration ?? {}, descriptor, stored),
-    descriptor
+    descriptor,
+    stored
   );
 
   return {
@@ -565,7 +566,8 @@ export function formValuesToPayload(
  */
 function withoutUnselectedOptions(
   configuration: Record<string, unknown>,
-  descriptor?: EmailProviderDescriptor
+  descriptor?: EmailProviderDescriptor,
+  stored?: Record<string, unknown>
 ): Record<string, unknown> {
   if (!descriptor) return configuration;
 
@@ -574,7 +576,21 @@ function withoutUnselectedOptions(
     if (field.kind !== "select" || field.required === true) continue;
     const path = splitFieldPath(field.name);
     if (path === null) continue;
-    if (readAtPath(cleaned, path) === "") deleteAtPath(cleaned, path);
+    if (readAtPath(cleaned, path) !== "") continue;
+
+    // Empty and it HAD a value: the user cleared it, and that is a change to
+    // send. `null` is the request to remove the key — omitting it would be
+    // read as "leave this alone", which made an optional selection permanent
+    // the moment it was first saved.
+    const hadValue =
+      stored !== undefined && readAtPath(stored, path) !== undefined;
+    if (hadValue) {
+      writeAtPath(cleaned, path, null);
+    } else {
+      // Empty and never set: nothing happened, and an empty string is not one
+      // of the provider's options.
+      deleteAtPath(cleaned, path);
+    }
   }
   return cleaned;
 }

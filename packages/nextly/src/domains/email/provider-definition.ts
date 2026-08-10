@@ -226,6 +226,14 @@ function assertFieldNameIsWalkable(
   type: string,
   field: EmailProviderConfigField
 ): void {
+  if (PATH_RESERVED_CHARACTERS.test(field.name)) {
+    throw new NextlyError({
+      code: "BUSINESS_RULE_VIOLATION",
+      publicMessage: `Email provider "${type}" declares the configuration field "${field.name}". A field name may not contain brackets or quotes: a form library reads those as structure and would store the value somewhere other than where it is validated and sent.`,
+      logContext: { type, field: field.name },
+    });
+  }
+
   const segments = field.name.split(".");
   const offender = segments.find(
     segment => segment === "" || UNWALKABLE_PATH_SEGMENTS.has(segment)
@@ -338,6 +346,52 @@ function assertSelectIsChoosable(
       logContext: { type, field: field.name },
     });
   }
+
+  // A default outside its own option list renders as nothing selected and then
+  // fails the schema generated from the same list, so the field arrives
+  // invalid and the provider cannot be saved until someone changes a value
+  // they never chose.
+  if (
+    field.default !== undefined &&
+    !options.some(option => option.value === field.default)
+  ) {
+    throw new NextlyError({
+      code: "BUSINESS_RULE_VIOLATION",
+      publicMessage: `Email provider "${type}" defaults the select field "${field.name}" to a value that is not one of its options.`,
+      logContext: { type, field: field.name, default: String(field.default) },
+    });
+  }
+}
+
+/**
+ * Characters a form library will read as structure rather than as a name.
+ *
+ * React Hook Form parses a registered path by splitting on `[` and stripping
+ * brackets and quotes, while this contract and every consumer of it split on
+ * dots alone. A field called `headers[x-api-key]` therefore registers as
+ * `{ headers: { "x-api-key": … } }` in the form and is validated and sent as
+ * `{ "headers[x-api-key]": … }` -- two different places in the configuration,
+ * neither of which reports the disagreement.
+ *
+ * Measured rather than assumed: `set(values, "configuration.headers[x-api-key]", v)`
+ * against react-hook-form produces the first shape, and the schema built from
+ * the same descriptor expects the second.
+ */
+const PATH_RESERVED_CHARACTERS = /[[\]"']/;
+
+/** Reject a numeric range no value can satisfy. */
+function assertNumericBoundsAreSatisfiable(
+  type: string,
+  field: EmailProviderConfigField
+): void {
+  const { min, max } = field.constraints ?? {};
+  if (min === undefined || max === undefined || min <= max) return;
+
+  throw new NextlyError({
+    code: "BUSINESS_RULE_VIOLATION",
+    publicMessage: `Email provider "${type}" gives the number field "${field.name}" a minimum of ${min} and a maximum of ${max}. No value can satisfy both, so the provider could never be saved.`,
+    logContext: { type, field: field.name, min, max },
+  });
 }
 
 /**
@@ -357,6 +411,7 @@ export function assertConfigFieldsAreUsable(
     assertFieldNameIsWalkable(type, field);
     assertDefaultMatchesKind(type, field);
     assertSelectIsChoosable(type, field);
+    assertNumericBoundsAreSatisfiable(type, field);
     if (field.secret === true && !SECRET_CAPABLE_KINDS.includes(field.kind)) {
       throw secretFieldMustBeTextual(type, field);
     }

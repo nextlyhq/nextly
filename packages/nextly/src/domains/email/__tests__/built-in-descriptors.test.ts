@@ -515,3 +515,116 @@ describe("two fields claiming one place in the configuration", () => {
     ).not.toThrow();
   });
 });
+
+describe("declarations a form could never satisfy", () => {
+  const base = {
+    type: "unsatisfiable",
+    label: "Unsatisfiable",
+    parseConfig: (input: unknown) => input as Record<string, unknown>,
+    createAdapter: () => ({
+      send: () => Promise.resolve({ success: true, messageId: "x" }),
+    }),
+  };
+
+  it("refuses a select default that is not one of its options", () => {
+    // It renders as nothing selected and then fails the schema generated from
+    // the same option list, so the field arrives invalid and the provider
+    // cannot be saved until someone changes a value they never chose.
+    expect(() =>
+      defineEmailProvider({
+        ...base,
+        configFields: [
+          {
+            name: "region",
+            label: "Region",
+            kind: "select",
+            default: "us",
+            options: [{ value: "eu", label: "Europe" }],
+          },
+        ],
+      })
+    ).toThrow(/not one of its options/);
+  });
+
+  it("accepts a select default that IS one of its options", () => {
+    expect(() =>
+      defineEmailProvider({
+        ...base,
+        configFields: [
+          {
+            name: "region",
+            label: "Region",
+            kind: "select",
+            default: "eu",
+            options: [{ value: "eu", label: "Europe" }],
+          },
+        ],
+      })
+    ).not.toThrow();
+  });
+
+  it("refuses a numeric range no value satisfies", () => {
+    expect(() =>
+      defineEmailProvider({
+        ...base,
+        configFields: [
+          {
+            name: "retries",
+            label: "Retries",
+            kind: "number",
+            constraints: { min: 10, max: 5 },
+          },
+        ],
+      })
+    ).toThrow(/No value can satisfy both/);
+  });
+
+  it("accepts a range with one value in it", () => {
+    // The control keeps the rule at "impossible", not "narrow": min === max is
+    // a legitimate way to pin a value.
+    expect(() =>
+      defineEmailProvider({
+        ...base,
+        configFields: [
+          {
+            name: "retries",
+            label: "Retries",
+            kind: "number",
+            constraints: { min: 5, max: 5 },
+          },
+        ],
+      })
+    ).not.toThrow();
+  });
+
+  it.each(["headers[x-api-key]", 'quoted"name', "single'quote"])(
+    "refuses the field name %p, which a form library reparses",
+    name => {
+      // Measured, not assumed: react-hook-form's `set` writes
+      // `{ headers: { "x-api-key": v } }` for the first of these, while the
+      // generated schema and the payload helpers split on dots alone and
+      // expect `{ "headers[x-api-key]": v }`. Two different places in the
+      // configuration, and nothing reports the disagreement.
+      expect(() =>
+        defineEmailProvider({
+          ...base,
+          configFields: [{ name, label: "X", kind: "text" }],
+        })
+      ).toThrow(/brackets or quotes/);
+    }
+  );
+
+  it("accepts a dotted name with hyphens and underscores", () => {
+    // The control: the rule is about characters a form reads as STRUCTURE, not
+    // about unusual names in general.
+    expect(() =>
+      defineEmailProvider({
+        ...base,
+        configFields: [
+          { name: "headers.x-api-key", label: "X", kind: "text" },
+          { name: "auth.access_token", label: "Y", kind: "text" },
+        ],
+      })
+    ).not.toThrow();
+  });
+});

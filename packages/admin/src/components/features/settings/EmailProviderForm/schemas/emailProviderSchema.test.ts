@@ -478,6 +478,24 @@ describe("an optional select nobody chose a value for", () => {
     expect(configuration).toHaveProperty("note", "");
   });
 
+  it("asks for removal when a stored value is cleared", () => {
+    // Omitting it would be read as "leave this alone" by the server's merge,
+    // which made an optional selection permanent the moment it was saved.
+    // `null` is the request to remove the key, which is what "optional and
+    // unset" means once something has been stored.
+    const values: ProviderFormValues = {
+      ...defaultFormValues(descriptor),
+      configuration: { tier: "", note: "" },
+    };
+
+    const { configuration } = formValuesToPayload(values, descriptor, {
+      tier: "standard",
+      note: "",
+    });
+
+    expect(configuration).toHaveProperty("tier", null);
+  });
+
   it("is sent once it has a value", () => {
     const values: ProviderFormValues = {
       ...defaultFormValues(descriptor),
