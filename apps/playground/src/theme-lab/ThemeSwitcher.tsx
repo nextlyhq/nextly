@@ -23,7 +23,7 @@ import type { CssVars } from "./ThemePreviewCard";
 import { ThemePreviewCard } from "./ThemePreviewCard";
 import { NEXTLY_THEMES, TWEAKCN_THEMES } from "./themes";
 import type { DensityId, ThemeDefinition } from "./types";
-import { useThemeLab } from "./use-theme-lab";
+import { SHIPPED_THEME, useThemeLab } from "./use-theme-lab";
 
 // Mirrors the DensityId union in types.ts. That is a compile-time type with
 // no runtime array of its own to iterate, so the options a <select> offers
@@ -197,6 +197,33 @@ export function ThemeSwitcher() {
           marginTop: 8,
         }}
       >
+        {/* The shipped theme is a row rather than a preview card: there is no
+            ThemeDefinition behind it, and that is the point -- it applies no
+            override at all, so what the admin shows is what the product ships.
+            First in the list because it is the resting state; comparing a
+            candidate is the deliberate act. */}
+        <button
+          type="button"
+          onClick={() => setTheme(SHIPPED_THEME)}
+          disabled={theme === SHIPPED_THEME}
+          style={{
+            ...buttonStyle,
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            width: "100%",
+            marginBottom: 12,
+            padding: "8px 10px",
+            cursor: theme === SHIPPED_THEME ? "default" : "pointer",
+            opacity: theme === SHIPPED_THEME ? 1 : 0.85,
+          }}
+        >
+          <span>shipped theme</span>
+          <span style={{ opacity: 0.75 }}>
+            {theme === SHIPPED_THEME ? "active" : "apply"}
+          </span>
+        </button>
+
         {GROUPS.map(group => (
           <div key={group.label}>
             {/* Sticky so the group a card belongs to stays visible while

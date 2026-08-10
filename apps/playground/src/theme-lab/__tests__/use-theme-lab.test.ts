@@ -9,10 +9,12 @@ import { act, createElement, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, beforeEach } from "vitest";
 
+import { NEXTLY_THEMES, TWEAKCN_THEMES } from "../themes";
 import {
   readSelection,
   writeSelection,
   DEFAULT_SELECTION,
+  SHIPPED_THEME,
   useThemeLab,
 } from "../use-theme-lab";
 
@@ -74,8 +76,23 @@ function renderThemeLab() {
 describe("theme lab selection", () => {
   beforeEach(() => localStorage.clear());
 
-  it("defaults to the mono control", () => {
+  it("defaults to the shipped theme, not a lab palette", () => {
+    // The harness at /admin is where contributors judge the admin. Defaulting
+    // to a lab id means every fresh session renders a palette that is not the
+    // product's, and the generated `[data-theme]` rules outrank the shipped
+    // base, so nothing on screen says so.
     expect(readSelection()).toEqual(DEFAULT_SELECTION);
+    expect(DEFAULT_SELECTION.theme).toBe(SHIPPED_THEME);
+  });
+
+  it("keeps the shipped sentinel out of the real theme ids", () => {
+    // The sentinel is compared by value, so a collision is silent and total: a
+    // theme whose id equalled it would be selectable, would report itself as
+    // applied, and would apply no override at all -- picking it from the
+    // switcher would show the shipped theme under the candidate's name.
+    const real = [...NEXTLY_THEMES, ...TWEAKCN_THEMES].map(theme => theme.id);
+    expect(real.length).toBeGreaterThan(0);
+    expect(real).not.toContain(SHIPPED_THEME);
   });
 
   it("round-trips a selection", () => {
@@ -83,17 +100,20 @@ describe("theme lab selection", () => {
     expect(readSelection()).toEqual({ theme: "sand", density: "compact" });
   });
 
-  it("falls back to mono for an unknown theme id", () => {
+  it("falls back to the shipped theme for an unknown id", () => {
     writeSelection({ theme: "deleted", density: "default" });
-    expect(readSelection().theme).toBe("mono");
+    expect(readSelection().theme).toBe(SHIPPED_THEME);
   });
 
-  it("falls back to mono for a theme this build no longer ships", () => {
+  it("falls back to the shipped theme for one this build no longer ships", () => {
     // Not hypothetical: every browser that used the 54-theme lab has one of
     // the pruned ids persisted. `graphite` was a real theme until the task-08
     // shortlist, which is exactly the shape of id that arrives here.
     writeSelection({ theme: "graphite", density: "default" });
-    expect(readSelection()).toEqual({ theme: "mono", density: "default" });
+    expect(readSelection()).toEqual({
+      theme: SHIPPED_THEME,
+      density: "default",
+    });
   });
 
   it("falls back to the default density for an unknown one", () => {
@@ -200,6 +220,33 @@ describe("theme lab density follow", () => {
       expect(hook.current.density).toBe(DEFAULT_SELECTION.density);
     } finally {
       hook.unmount();
+    }
+  });
+
+  it("sets no data-theme at all for the shipped selection", () => {
+    // Absence is the mechanism, not an omission: the generated stylesheet is
+    // keyed on `[data-theme="..."]`, so ANY value would win over the admin's
+    // own tokens. Setting `data-theme="shipped"` would be just as wrong as
+    // setting `data-theme="mono"` -- it would simply match no rule and leave
+    // the density attribute as the only thing applied.
+    const shell = document.createElement("div");
+    shell.className = "nextly-admin";
+    document.body.appendChild(shell);
+
+    const hook = renderThemeLab();
+    try {
+      expect(shell.dataset.theme).toBeUndefined();
+      expect(shell.dataset.density).toBe(DEFAULT_SELECTION.density);
+
+      // And a lab override is REMOVED on the way back, not left behind.
+      hook.act(() => hook.current.setTheme("sand"));
+      expect(shell.dataset.theme).toBe("sand");
+
+      hook.act(() => hook.current.setTheme(SHIPPED_THEME));
+      expect(shell.dataset.theme).toBeUndefined();
+    } finally {
+      hook.unmount();
+      shell.remove();
     }
   });
 

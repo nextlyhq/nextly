@@ -6,8 +6,11 @@ import "../../../theme-lab/densities.css";
 // Makes the font and radius a theme declares actually reach the admin, which
 // reads neither `--font-sans` nor `--radius` on its own.
 import "../../../theme-lab/harness.css";
-import { NEXTLY_THEMES } from "../../../theme-lab/themes";
-import { TWEAKCN_THEMES } from "../../../theme-lab/themes/tweakcn.generated";
+// Both from `themes`, which layers the accessibility corrections over the
+// generated presets. Importing the generated file directly would emit CSS for
+// the RAW preset while the switcher and the contrast report describe the
+// corrected one, so a preset would be reported as clean and rendered as broken.
+import { NEXTLY_THEMES, TWEAKCN_THEMES } from "../../../theme-lab/themes";
 import { ThemeSwitcher } from "../../../theme-lab/ThemeSwitcher";
 
 const brandingCss = getBrandingCss(config.admin?.branding);

@@ -23,8 +23,21 @@ export interface Selection {
   density: DensityId;
 }
 
+/**
+ * The selection that applies NO lab override, so the admin renders the theme it
+ * actually ships with.
+ *
+ * This is the default on purpose. A lab id as the default means the contributor
+ * harness at `/admin` shows a lab palette on every fresh session, and the
+ * generated `[data-theme="..."]` rules outrank the shipped base -- so routine
+ * development and visual QA exercise a palette that is not the product's, with
+ * nothing on screen saying so. Comparing a candidate is the deliberate act; the
+ * shipped theme is the resting state.
+ */
+export const SHIPPED_THEME = "shipped";
+
 export const DEFAULT_SELECTION: Selection = {
-  theme: "mono",
+  theme: SHIPPED_THEME,
   density: "default",
 };
 
@@ -32,7 +45,10 @@ export const DEFAULT_SELECTION: Selection = {
 // alike. Built from the arrays rather than a literal count anywhere, so the
 // set can grow (or a preset can be retired) without this file changing.
 const ALL_THEMES: ThemeDefinition[] = [...NEXTLY_THEMES, ...TWEAKCN_THEMES];
-const KNOWN_THEMES = new Set(ALL_THEMES.map(theme => theme.id));
+const KNOWN_THEMES = new Set([
+  SHIPPED_THEME,
+  ...ALL_THEMES.map(theme => theme.id),
+]);
 const THEMES_BY_ID = new Map(ALL_THEMES.map(theme => [theme.id, theme]));
 
 // Runtime companion to the DensityId union, which is compile-time only and so
@@ -125,7 +141,12 @@ export function useThemeLab() {
           // Only touch attributes that actually changed: the same `apply` runs
           // from the MutationObserver below on any attribute mutation, and
           // writing an unchanged value would otherwise retrigger that observer.
-          if (root.dataset.theme !== selection.theme) {
+          // The shipped selection REMOVES the attribute rather than setting a
+          // value: the generated stylesheet is keyed on `[data-theme="..."]`,
+          // so no attribute is what lets the admin's own tokens resolve.
+          if (selection.theme === SHIPPED_THEME) {
+            if (root.dataset.theme !== undefined) delete root.dataset.theme;
+          } else if (root.dataset.theme !== selection.theme) {
             root.dataset.theme = selection.theme;
           }
           if (root.dataset.density !== selection.density) {
@@ -154,6 +175,10 @@ export function useThemeLab() {
 
   const setTheme = useCallback((theme: string) => {
     setSelection(prev => {
+      // Returning to the shipped theme leaves density alone: it is a separate
+      // axis, and dropping a palette override is not a reason to discard a
+      // density the contributor chose.
+      if (theme === SHIPPED_THEME) return { ...prev, theme };
       const nextTheme = THEMES_BY_ID.get(theme);
       if (!nextTheme) return prev;
       const prevTheme = THEMES_BY_ID.get(prev.theme);
@@ -166,10 +191,14 @@ export function useThemeLab() {
       // "following" and moves with the new theme; one that has drifted from
       // it is a deliberate choice and is left alone across the switch, so it
       // can't be silently overridden by picking a theme.
-      const density =
-        prevTheme && prev.density === prevTheme.recommendedDensity
-          ? nextTheme.recommendedDensity
-          : prev.density;
+      // From the shipped selection there is no previous theme to have made a
+      // recommendation, so "following" means the density is still the one
+      // nobody chose. Without this, picking a candidate from the resting state
+      // -- the common path -- would show it at the wrong density.
+      const following = prevTheme
+        ? prev.density === prevTheme.recommendedDensity
+        : prev.density === DEFAULT_SELECTION.density;
+      const density = following ? nextTheme.recommendedDensity : prev.density;
 
       return { theme, density };
     });
