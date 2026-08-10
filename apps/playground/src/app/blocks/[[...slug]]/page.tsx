@@ -60,27 +60,43 @@ function canonicalFor(path: string): string {
   return path === "/" ? MOUNT : `${MOUNT}${path}`;
 }
 
-const { ContentPage, generateMetadata, generateStaticParams } =
-  createBlocksPage({
-    collections: ["block-pages"],
-    field: "content",
-    nextly: reader,
-    // An explicit set, not the process registry. `registeredBlocks()` reads the
-    // engine's global registry, which is populated by whatever booted the
-    // editor — so a public route depending on it renders the unknown-block
-    // placeholder whenever this request arrived before the admin did.
-    blocks: createBlockResolver(coreBlocks),
-    metadata: (entry, context, derived) => ({
-      title: derived.title ?? (entry.title as string | undefined),
-      description: derived.description,
-      ...(derived.canonical
-        ? { alternates: { canonical: canonicalFor(derived.canonical) } }
-        : {}),
-      ...(derived.image
-        ? { openGraph: { images: [{ url: derived.image }] } }
-        : {}),
-    }),
-  });
+/**
+ * Rendered per request, never prerendered at build.
+ *
+ * The same reason `(site)/[...slug]` gives: this repository's build environment
+ * has no database, and `generateStaticParams` reads one to learn which paths
+ * exist. Without this the playground build fails with "Failed to collect page
+ * data" — not because the route is wrong, but because a build box has nothing
+ * to collect from.
+ *
+ * A deployed site whose build CAN reach its database wants the opposite, and
+ * `createBlocksPage` returns `generateStaticParams` for exactly that. It is not
+ * re-exported here because `force-dynamic` makes Next ignore it, and an export
+ * that does nothing invites the next reader to conclude that static generation
+ * was tried and did not work.
+ */
+export const dynamic = "force-dynamic";
 
-export { generateMetadata, generateStaticParams };
+const { ContentPage, generateMetadata } = createBlocksPage({
+  collections: ["block-pages"],
+  field: "content",
+  nextly: reader,
+  // An explicit set, not the process registry. `registeredBlocks()` reads the
+  // engine's global registry, which is populated by whatever booted the
+  // editor — so a public route depending on it renders the unknown-block
+  // placeholder whenever this request arrived before the admin did.
+  blocks: createBlockResolver(coreBlocks),
+  metadata: (entry, context, derived) => ({
+    title: derived.title ?? (entry.title as string | undefined),
+    description: derived.description,
+    ...(derived.canonical
+      ? { alternates: { canonical: canonicalFor(derived.canonical) } }
+      : {}),
+    ...(derived.image
+      ? { openGraph: { images: [{ url: derived.image }] } }
+      : {}),
+  }),
+});
+
+export { generateMetadata };
 export default ContentPage;
