@@ -717,7 +717,7 @@
   /* Utility colors */
   --nx-muted: oklch(0.9696 0 0);
   /* Darkened so muted text clears WCAG 4.5:1 on the muted surface (was 4.35:1). */
-  --nx-muted-foreground: oklch(0.54 0.0407 257.44);
+  --nx-muted-foreground: oklch(0.5218 0.0407 257.44);
   /* slate-500 */
   --nx-accent: oklch(0.5547 0.0407 257.44);
   /* Slate-500 per user request #64748b */
@@ -743,7 +743,7 @@
   /* white */
   /* Darkened from amber-500 so it reads as text on white at WCAG 4.5:1 (was
    * 2.15:1); its light shades still tint badge/alert surfaces. */
-  --nx-warning: oklch(0.565 0.1646 70.11);
+  --nx-warning: oklch(0.5496 0.1646 70.11);
   --nx-warning-foreground: oklch(0.2079 0.0399 265.73);
   /* slate-900 - REQUIRED for AA contrast (warning-500 on white = 3.4:1, fails AA) */
 
@@ -763,14 +763,14 @@
   --nx-code-bg: oklch(0.9761 0.0035 247.86);
   --nx-code-fg: oklch(0.2079 0.0399 265.73);
   /* Darkened slightly to clear WCAG 4.5:1 on the code surface (was 4.44:1). */
-  --nx-code-comment: oklch(0.541 0.0407 257.44);
+  --nx-code-comment: oklch(0.5264 0.0407 257.44);
   --nx-code-keyword: oklch(0.4882 0.2172 303.9);
   --nx-code-string: oklch(0.4478 0.1189 152.1);
   --nx-code-number: oklch(0.5106 0.1518 44.2);
   --nx-code-function: oklch(0.4757 0.1444 254.6);
   --nx-code-operator: oklch(0.4936 0.1418 8.4);
   /* Darkened slightly to clear WCAG 4.5:1 on the code surface (was 4.44:1). */
-  --nx-code-punctuation: oklch(0.541 0.0407 257.44);
+  --nx-code-punctuation: oklch(0.5264 0.0407 257.44);
   --nx-code-variable: oklch(0.4694 0.1173 62.3);
   --nx-code-tag: oklch(0.5054 0.1905 27.5);
   --nx-code-deleted: oklch(0.5054 0.1905 27.5);
@@ -921,14 +921,14 @@
    * dark, so its base is unchanged here. */
   /* Lightened red so it reads as text at WCAG 4.5:1 on the dark page and on the
    * lighter popover surface (was 4.17:1 on the page, 4.25:1 on a popover). */
-  --nx-destructive: oklch(0.65 0.2078 25.33);
+  --nx-destructive: oklch(0.6706 0.2078 25.33);
   /* Darker red fill so white on-color button text clears 4.5:1. */
   --nx-destructive-solid: oklch(0.5778 0.2078 25.33);
   --nx-destructive-foreground: oklch(1 0 0);
   /* white */
   /* Lightened green so it reads as text at WCAG 4.5:1 on the dark page and on
    * the lighter popover surface (was 4.17:1 on the page, 4.29:1 on a popover). */
-  --nx-success: oklch(0.6 0.1921 149.58);
+  --nx-success: oklch(0.621 0.1921 149.58);
   /* Darker green fill so white on-color button text clears 4.5:1. */
   --nx-success-solid: oklch(0.5225 0.1921 149.58);
   --nx-success-foreground: oklch(1 0 0);
@@ -979,7 +979,7 @@
   --nx-border-strong: oklch(1 0 0 / 0.418);
   /* Brightened so the field border clears WCAG 3:1 on the lighter popover
    * surface as well as the page and card (was 1.73:1 on a popover). */
-  --nx-input: oklch(0.54 0.0128 285.92);
+  --nx-input: oklch(0.5514 0.0128 285.92);
   --nx-ring: var(--nx-primary);
 
   /* Black in dark mode too: the ramp reads as depth against the deep surfaces
