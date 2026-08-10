@@ -27,9 +27,18 @@ export interface QueryLoopViewProps {
   budget: QueryBudget;
   /** The document's node classes, threaded on to each rendered template node. */
   classes?: ReadonlyMap<string, string>;
+  /**
+   * The ref id whose reusable block this loop lives in, when it lives in one.
+   *
+   * Every template node rendered here is inside that block, so it is named from the ref exactly as
+   * the loop's own ancestors are. Stopping the scope at the loop would name the template from bare
+   * ids and put back the collision one level down.
+   */
+  refScope?: string;
 }
 
 export function QueryLoopView({
+  refScope,
   node,
   registry,
   dataProvider,
@@ -84,6 +93,7 @@ export function QueryLoopView({
               item={item}
               budget={budget}
               classes={classes}
+              refScope={refScope}
             />
           ))}
         </div>
