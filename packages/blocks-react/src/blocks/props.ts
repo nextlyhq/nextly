@@ -10,6 +10,7 @@
  *
  * @module blocks/props
  */
+import { normalizeUrl } from "@nextlyhq/blocks-engine";
 
 /** A string prop, or the fallback when the stored value is not usable text. */
 /**
@@ -98,26 +99,38 @@ const URL_SCHEME = /^([a-z][a-z0-9+.-]*):/i;
 /**
  * A URL safe to place in an attribute, or `undefined`.
  *
- * The scheme is tested against a form with control characters and whitespace
- * REMOVED, because a browser strips them before resolving: `java\0script:` and
- * `java\tscript:` both navigate to a `javascript:` URL while failing a naive
- * prefix test. The value returned is the ORIGINAL trimmed string rather than
- * the stripped one, so a legitimate URL is not silently rewritten.
+ * The scheme is read from the value as the BROWSER's parser will read it, using
+ * the engine's own normalisation rather than a second copy of the rules — the
+ * two disagreeing is how a scheme hides from one check while still navigating.
+ * That removes tab, LF and CR wherever they appear, because the parser does,
+ * and trims leading control characters and spaces, because the parser does.
+ *
+ * It deliberately does NOT remove an interior space. The parser does not either:
+ * it percent-encodes one. Removing it invents a scheme that was never written —
+ * `hero image:1.png` is an ordinary relative path to a file whose name has a
+ * space, and collapsing it to `heroimage:1.png` would refuse it as an unknown
+ * scheme.
+ *
+ * A control character left INSIDE after that normalisation refuses the value
+ * outright. One never appears in a URL anybody meant, since it has to be
+ * percent-encoded to survive, and its only use here is to break a scheme apart
+ * so a reader sees no scheme where a browser may still see one. Refusing is the
+ * answer that does not depend on which of those two a given browser does.
+ *
+ * The value RETURNED is the original trimmed string, not the normalised one, so
+ * a legitimate URL is never silently rewritten.
  */
 export function url(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
   if (trimmed === "") return undefined;
-  // Filtered by code point rather than by a regex over a control-character
-  // range, which needs a lint exemption to write and is easy to get subtly
-  // wrong. Everything at or below U+0020, plus DEL, is dropped before the
-  // scheme is read.
-  let collapsed = "";
-  for (const character of trimmed) {
-    const code = character.codePointAt(0) ?? 0;
-    if (code > 0x20 && code !== 0x7f) collapsed += character;
-  }
-  const scheme = URL_SCHEME.exec(collapsed);
+
+  const normalized = normalizeUrl(trimmed);
+  if (normalized === "") return undefined;
+  // eslint-disable-next-line no-control-regex -- the point is to match them
+  if (/[\u0000-\u001f\u007f]/.test(normalized)) return undefined;
+
+  const scheme = URL_SCHEME.exec(normalized);
   if (scheme === null) return trimmed;
   const name = scheme[1];
   if (name === undefined) return undefined;
