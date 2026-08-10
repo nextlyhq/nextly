@@ -20,6 +20,8 @@ import {
   respondDoc,
   respondMutation,
 } from "../../api/response-shapes";
+import { toDescriptor } from "../../domains/email/provider-definition";
+import { getEmailProviderRegistry } from "../../domains/email/services/email-provider-registry";
 import type { EmailProviderService } from "../../services/email/email-provider-service";
 import type { EmailTemplateService } from "../../services/email/email-template-service";
 import {
@@ -51,6 +53,18 @@ const EMAIL_PROVIDER_METHODS: Record<
     execute: async svc => {
       const providers = await svc.providerService.listProviders();
       return respondData({ providers });
+    },
+  },
+  listProviderTypes: {
+    // The catalog of provider types this install can configure, as descriptors.
+    // Served through the dispatcher because that is the router a default
+    // install actually mounts -- a standalone route handler the template never
+    // re-exports is reachable only by an app that opts into it by hand.
+    // Not async: the registry is in memory and this reads it synchronously.
+    // The dispatcher awaits the returned value either way.
+    execute: () => {
+      const types = getEmailProviderRegistry().list().map(toDescriptor);
+      return Promise.resolve(respondData({ types }));
     },
   },
   createProvider: {

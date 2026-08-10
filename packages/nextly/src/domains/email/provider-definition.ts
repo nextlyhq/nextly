@@ -287,10 +287,23 @@ export function toDescriptor(
       ...provider.capabilities,
       // Derived, not echoed: a definition that claims the capability without
       // supplying a probe would advertise a button that cannot do anything.
+      // Derived from the callback that actually exists, not from either
+      // declared flag. `RegisteredEmailProvider` is structural, so a hand-built
+      // provider can set `hasConnectionTest: true` and omit the callback -- the
+      // descriptor would then advertise a probe the service cannot find.
       connectionTest:
         provider.capabilities?.connectionTest === true &&
-        provider.hasConnectionTest,
+        typeof provider.testConnectionFrom === "function",
     },
-    configFields: provider.configFields,
+    // A default on a secret field is stripped. The type permits one -- a
+    // provider might reasonably want `default: process.env.PROVIDER_KEY` -- and
+    // the descriptor is served to anyone holding read or create, so forwarding
+    // it would hand out the credential that stored configuration is masked to
+    // protect. The field is still described; only its value is withheld.
+    configFields: provider.configFields.map(field =>
+      field.secret === true && field.default !== undefined
+        ? { ...field, default: undefined }
+        : field
+    ),
   };
 }

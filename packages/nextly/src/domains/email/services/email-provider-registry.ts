@@ -42,6 +42,16 @@ class EmailProviderRegistry {
     // boundary every provider actually crosses: RegisteredEmailProvider is a
     // structural type, so a JavaScript plugin or a hand-built object reaches
     // registration without passing through the authoring helper.
+    // An empty id is indistinguishable from an unselected value in a
+    // descriptor-driven picker, and the Direct API would persist a row carrying
+    // it even though the REST schema rejects the same value.
+    if (provider.type.trim() === "") {
+      throw new NextlyError({
+        code: "BUSINESS_RULE_VIOLATION",
+        publicMessage: "An email provider type id cannot be empty.",
+        logContext: { reason: "email-provider-type-empty" },
+      });
+    }
     if (provider.type.length > MAX_EMAIL_PROVIDER_TYPE_LENGTH) {
       throw emailProviderTypeTooLong(provider.type);
     }

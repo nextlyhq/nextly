@@ -97,11 +97,36 @@ describe("createSmtpProvider", () => {
       host: "smtp.example.com",
       port: 587,
       secure: false,
+      // Port 587 starts in the clear and upgrades. Without requireTLS
+      // nodemailer upgrades only if the server ADVERTISES STARTTLS and
+      // otherwise authenticates in plaintext, so a misconfigured or
+      // intercepted server could collect these credentials. Forcing it makes
+      // the connection fail instead, which is the right outcome for a link
+      // that cannot be secured.
+      requireTLS: true,
       auth: {
         user: "user@example.com",
         pass: "test-password",
       },
     });
+  });
+
+  it("does not force an upgrade when the connection is already implicitly TLS", async () => {
+    // secure: true (port 465) needs no STARTTLS negotiation, so requiring one
+    // would be meaningless rather than safer.
+    mockSendMail.mockResolvedValueOnce({ messageId: "<msg-tls>" });
+
+    const adapter = createSmtpProvider({
+      host: "smtp.example.com",
+      port: 465,
+      secure: true,
+      auth: { user: "user@example.com", pass: "test-password" },
+    });
+    await adapter.send(BASE_OPTIONS);
+
+    expect(mockCreateTransport).toHaveBeenCalledWith(
+      expect.objectContaining({ secure: true, requireTLS: false })
+    );
   });
 
   it("defaults secure to true when config.secure is undefined", async () => {

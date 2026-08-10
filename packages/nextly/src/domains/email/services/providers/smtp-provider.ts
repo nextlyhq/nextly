@@ -82,6 +82,29 @@ function assertTransportIsSafe(config: SmtpProviderConfig): boolean {
   return secure;
 }
 
+/**
+ * The transport options every SMTP connection uses.
+ *
+ * Shared so a send and a probe cannot disagree about what they will trust.
+ * `requireTLS` is the part that matters: on port 587 with `secure: false`,
+ * nodemailer upgrades ONLY if the server advertises STARTTLS, and otherwise
+ * proceeds to authenticate in the clear -- so a misconfigured or intercepted
+ * server could collect the username and password. Forcing it makes the
+ * connection fail instead, which is the correct outcome for a link that cannot
+ * be secured. Implicit TLS (`secure: true`, port 465) needs no upgrade and is
+ * unaffected.
+ */
+function smtpTransportOptions(config: SmtpProviderConfig) {
+  const secure = assertTransportIsSafe(config);
+  return {
+    host: config.host,
+    port: config.port,
+    secure,
+    requireTLS: !secure,
+    auth: { user: config.auth.user, pass: config.auth.pass },
+  };
+}
+
 export function createSmtpProvider(
   config: SmtpProviderConfig
 ): EmailProviderAdapter {
@@ -90,18 +113,15 @@ export function createSmtpProvider(
   // silently sending plaintext credentials over the network. STARTTLS on port 587 is allowed via secure: false
   // (nodemailer upgrades implicitly when requireTLS is set, but the
   // common pattern in the wild is to leave secure: false on 587).
-  const secure = assertTransportIsSafe(config);
+  // Validate at construction so a bad configuration fails when it is created,
+  // not on the first send.
+  assertTransportIsSafe(config);
+
   return {
     async send(options) {
-      const transport = nodemailer.createTransport({
-        host: config.host,
-        port: config.port,
-        secure,
-        auth: {
-          user: config.auth.user,
-          pass: config.auth.pass,
-        },
-      });
+      const transport = nodemailer.createTransport(
+        smtpTransportOptions(config)
+      );
 
       try {
         const info = await transport.sendMail({
@@ -148,16 +168,9 @@ export function createSmtpProvider(
 export async function verifySmtpConnection(
   config: SmtpProviderConfig
 ): Promise<{ ok: boolean; detail?: string }> {
-  // Same guard as the send path: a probe authenticates too, so it must not
-  // reach a host the send path would refuse.
-  const secure = assertTransportIsSafe(config);
-
-  const transport = nodemailer.createTransport({
-    host: config.host,
-    port: config.port,
-    secure,
-    auth: { user: config.auth.user, pass: config.auth.pass },
-  });
+  // Identical options to the send path, including requireTLS: a probe
+  // authenticates too, so it must not trust anything a send would not.
+  const transport = nodemailer.createTransport(smtpTransportOptions(config));
 
   try {
     await transport.verify();

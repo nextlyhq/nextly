@@ -447,6 +447,15 @@ export class EmailProviderService extends BaseService {
       getEmailProviderRegistry()
         .get(data.type as string)
         .validateConfig(submitted);
+
+      // Persist the replacement even when the update carried no configuration.
+      // Validating `{}` and then not writing it leaves the PREVIOUS provider's
+      // encrypted configuration under the new type -- so a permissive target
+      // parser would receive stale credentials, which is exactly what
+      // "a type change replaces rather than merges" is supposed to prevent.
+      if (data.configuration === undefined) {
+        updateData.configuration = this.encryptConfiguration(submitted);
+      }
     }
 
     if (data.name !== undefined) updateData.name = data.name;
