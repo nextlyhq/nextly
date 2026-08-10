@@ -1293,6 +1293,26 @@ describe("createBlocksPage", () => {
     ).resolves.toBeNull();
   });
 
+  it("charges a CUSTOM media resolver against the budget too", async () => {
+    // A host's resolver is the one most likely to be network-backed, and it is
+    // called once per image — so a template inside nested loops invokes it
+    // thousands of times. Exempting it bounds ours and leaves theirs unbounded.
+    const resolveMedia = vi.fn(async () => ({ url: "/from-the-host.png" }));
+    const props = await render({
+      collections: ["pages"],
+      field: "content",
+      maxQueries: 1,
+      resolveMedia,
+      nextly: reader({ slug: "about", content: document }),
+    });
+
+    await expect(props.context?.resolveMedia("a")).resolves.toEqual({
+      url: "/from-the-host.png",
+    });
+    await expect(props.context?.resolveMedia("b")).resolves.toBeNull();
+    expect(resolveMedia).toHaveBeenCalledTimes(1);
+  });
+
   it("charges a CUSTOM entry resolver against the budget too", async () => {
     // A custom resolver is usually database-backed and is called once per
     // reference, so a template inside a nested loop invokes it thousands of

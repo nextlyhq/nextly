@@ -509,6 +509,11 @@ function mediaResolver(
 ): (id: string) => Promise<ResolvedMedia | null> {
   if (config.resolveMedia) {
     const custom = config.resolveMedia;
+    // Charged like every other read on this path. A host's resolver is the one
+    // most likely to be database- or network-backed, and it is called once per
+    // image — so a template inside nested loops invokes it thousands of times.
+    // Exempting it bounds the resolver we wrote and leaves unbounded the one a
+    // site supplies, which is the wrong way round.
     // Normalized here rather than trusted, because this ONE function answers
     // both the render and the metadata. Left raw, a record carrying a blank URL
     // was rejected by the derivation — which moved on to the block's own `src`
@@ -516,6 +521,7 @@ function mediaResolver(
     // emitted it, so the preview picture and the page picture disagreed. The
     // usability rule has to live where both callers meet it.
     return async (id: string) => {
+      if (!budget.take()) return null;
       const record = await custom(id);
       return usableMedia(record) ? record : null;
     };

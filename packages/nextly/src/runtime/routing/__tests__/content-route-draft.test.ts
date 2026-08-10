@@ -597,3 +597,51 @@ describe("a status-less collection's ordinary fields", () => {
     expect(calls[0]?.req).toBeUndefined();
   });
 });
+
+describe("the callback reader's scope source", () => {
+  it("ignores a presentation hook that rewrote _status", async () => {
+    // Two earlier versions derived this scope from the request and then from
+    // the resolved row. The row comes back through `afterRead`, so a hook
+    // setting `_status` to any presentation value made the route conclude its
+    // read had been widened — and hand a callback an access-overriding,
+    // `all`-scoped reader. Config is the only statement no hook can rewrite.
+    const calls: FindArgs[] = [];
+    const reader: NextlyContentReader = {
+      find: async (args): Promise<ListResult<Record<string, unknown>>> => {
+        calls.push(args);
+        // A hook has relabelled the lifecycle field for display.
+        const items = [{ id: "1", slug: "a", _status: "Live · updated" }];
+        return {
+          items,
+          meta: {
+            total: 1,
+            page: 1,
+            limit: 1,
+            totalPages: 1,
+            hasNext: false,
+            hasPrev: false,
+          },
+        };
+      },
+      findByID: async (): Promise<Record<string, unknown> | null> => null,
+    };
+
+    let seen: NextlyContentReader | undefined;
+    const route = createContentRoute({
+      collections: ["pages"],
+      nextly: reader,
+      draft: () => ({ entryId: "gone" }),
+      render: (entry: ContentEntry, context) => {
+        seen = context.reader;
+        return entry;
+      },
+    });
+    await route.ContentPage(params).catch(() => undefined);
+    calls.length = 0;
+
+    await seen?.find({ collection: "authors" });
+
+    expect(calls[0]?.status).toBe("published");
+    expect(calls[0]?.overrideAccess).toBe(false);
+  });
+});

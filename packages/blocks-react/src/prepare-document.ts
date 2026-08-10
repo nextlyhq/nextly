@@ -160,6 +160,12 @@ export function prepareDocumentForRead(
   // page as empty rather than as unreadable.
   //
   // A document that was ALREADY empty stays empty: nothing was withheld there.
-  if (document.nodes.length > 0 && prepared.nodes.length === 0) return null;
+  // Compared against the tree AFTER gating, not against the stored one. A page
+  // whose blocks are all condition-gated is legitimately empty for this
+  // visitor — nothing failed to render, it was withheld on purpose — and
+  // reporting it as unreadable would show an unsupported-content fallback for a
+  // page that is working exactly as configured. Only content that survived
+  // gating and then turned out to be unrenderable is a placeholder-only page.
+  if (visible.nodes.length > 0 && prepared.nodes.length === 0) return null;
   return prepared;
 }

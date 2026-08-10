@@ -300,23 +300,6 @@ function isDotSegment(segment: string): boolean {
  * and that is the direction a caller cannot see.
  */
 /**
- * Whether the read that produced this entry was widened past published.
- *
- * Judged from `_status` ALONE, which is the lifecycle column. A collection
- * without a lifecycle has none, and an ordinary field a collection happens to
- * name `status` is not it — reading that as lifecycle made a status-less row
- * holding `"archived"` look unpublished and widened a public route's callback
- * reader on the strength of a value the route's own filter had ignored.
- *
- * Absent means the filter was a no-op for this collection, which is not
- * evidence of widening.
- */
-function readWasWidened(entry: ContentEntry): boolean {
-  const status = entry._status;
-  return typeof status === "string" && status !== "published";
-}
-
-/**
  * The caller's arguments, minus the keys they left explicitly `undefined`.
  *
  * `exactOptionalPropertyTypes` is off, so `find({ collection, status })` with an
@@ -520,14 +503,21 @@ export function createContentRoute<TNode>(
           // some fidelity; the alternative costs a stale grant a disclosure.
           reader: routeScopedReader(
             getInstance(),
-            // The ACCESS half follows the same evidence as the lifecycle half.
-            // A draft request that fell back to a published read — a grant
-            // naming a deleted entry, or one whose slug moved — authorized
-            // nothing at this path, so trusting the reader on the strength of
-            // the REQUEST would hand a callback access-rule bypass where the
-            // grant granted none.
-            overrideAccess || (draft && readWasWidened(entry)),
-            config.status ?? (readWasWidened(entry) ? "all" : "published"),
+            // The route's DECLARED policy, and nothing inferred. Two earlier
+            // attempts derived this from the request and then from the resolved
+            // row; the first trusted a stale grant, and the second read a
+            // post-`afterRead` `_status` that a presentation hook can set to
+            // anything — so a hook could hand a callback an access-overriding,
+            // `all`-scoped reader. Config is the only statement about this
+            // route that no hook and no grant can rewrite.
+            //
+            // The cost is stated rather than hidden: on a draft preview a
+            // callback reads PUBLISHED related rows, so a preview shows live
+            // relations beside pending content. That is a fidelity loss on one
+            // page. Every inference that avoided it turned out to be a
+            // disclosure on a route reachable by anyone with a URL.
+            config.overrideAccess ?? false,
+            config.status ?? "published",
             config.locale
           ),
           ...(config.locale ? { locale: config.locale } : {}),

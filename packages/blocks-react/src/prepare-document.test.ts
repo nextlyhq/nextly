@@ -2,7 +2,7 @@
  * The passes every reader shares, and the order they run in.
  */
 import { DOCUMENT_FORMAT_VERSION } from "@nextlyhq/blocks-engine";
-import type { BlockDocument } from "@nextlyhq/blocks-engine";
+import type { BlockDocument, BlockNode } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
 import { coreBlocks } from "./blocks";
@@ -10,7 +10,7 @@ import { prepareDocumentForRead } from "./prepare-document";
 import { createBlockResolver } from "./resolver";
 
 /** A registered node, so the test isolates duplicate-id repair from resolution. */
-function heading(id: string, text: string) {
+function heading(id: string, text: string): BlockNode {
   return { id, type: "core/heading", version: 1, props: { text } };
 }
 
@@ -34,6 +34,29 @@ describe("prepareDocumentForRead", () => {
         resolver: createBlockResolver(coreBlocks),
       })
     ).toBeNull();
+  });
+
+  it("keeps a fully GATED page empty rather than unreadable", () => {
+    // Nothing failed to render here: every block was withheld on purpose for
+    // this visitor. Reporting `null` would show an unsupported-content fallback
+    // for a page working exactly as configured, and `null` names the other
+    // case — content that survived gating and then could not be rendered.
+    const gated = heading("1", "Members only");
+    gated.visibility = {
+      conditions: [[{ field: "tier", op: "eq", value: "x" }]],
+    };
+    const document: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [gated],
+    };
+
+    const prepared = prepareDocumentForRead(document, {
+      resolver: createBlockResolver(coreBlocks),
+    });
+
+    expect(prepared).not.toBeNull();
+    expect(prepared?.nodes).toEqual([]);
   });
 
   it("keeps an already-empty document empty rather than null", () => {
