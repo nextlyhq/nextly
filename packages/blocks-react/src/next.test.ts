@@ -990,10 +990,14 @@ describe("createBlocksPage", () => {
     expect(seen?.canonical).toBe("/help/faq%3Fall");
   });
 
-  it("percent-encodes a dot segment so the canonical cannot resolve away", async () => {
-    // `encodeURIComponent` leaves `.` and `..` alone, and a URL consumer
-    // RESOLVES them: a canonical of `/pages/../admin` names `/admin`, a route
-    // this page has nothing to do with. Kept literal instead.
+  it("omits the canonical for a slug holding a dot segment", async () => {
+    // A canonical claims where this page lives, and every candidate answer for
+    // such a slug names a DIFFERENT route: URL resolution removes `.` and `..`
+    // before the request is sent, so `/pages/../admin` is fetched as `/admin`.
+    // Percent-encoding does not rescue it either — the URL standard counts
+    // `%2e` as a dot for exactly this purpose. Saying nothing is the only
+    // honest answer, and the KEY is absent rather than undefined so a caller's
+    // own canonical is not erased by spreading this over it.
     let seen: DerivedPageSeo | undefined;
     const route = createBlocksPage({
       collections: ["pages"],
@@ -1010,7 +1014,139 @@ describe("createBlocksPage", () => {
       params: { slug: ["pages", "..", "admin"] },
     });
 
-    expect(seen?.canonical).toBe("/pages/%2E%2E/admin");
+    expect(seen).toBeDefined();
+    expect("canonical" in (seen ?? {})).toBe(false);
+  });
+
+  it("omits the canonical for a slug the route would normalize", async () => {
+    // Next answers `/a//b` with a 308 to `/a/b`, and the lookup then asks for
+    // the slug `a/b`, which this entry does not have. The normalized path names
+    // a page the route answers with notFound(); the raw one redirects away from
+    // it. Neither is where this page lives.
+    let seen: DerivedPageSeo | undefined;
+    const route = createBlocksPage({
+      collections: ["pages"],
+      field: "content",
+      blocks: coreResolver(),
+      nextly: reader({ slug: "a//b", content: document }),
+      metadata: (_e, _c, derived) => {
+        seen = derived;
+        return {};
+      },
+    });
+
+    await route.generateMetadata({ params: { slug: ["a", "", "b"] } });
+
+    expect("canonical" in (seen ?? {})).toBe(false);
+  });
+
+  it("gives no path for a referenced slug the route would normalize", async () => {
+    const props = await render({
+      collections: ["pages"],
+      field: "content",
+      nextly: reader(
+        { slug: "about", content: document },
+        { doubled: { slug: "a//b" } }
+      ),
+    });
+
+    await expect(
+      props.context?.resolveEntryPath("pages", "doubled")
+    ).resolves.toBeNull();
+  });
+
+  it("keeps searching when a caller's resolver answers without a usable url", async () => {
+    // `resolveMedia` may be the caller's own, so its answer is third-party data
+    // however the type reads: a JavaScript one returning a missing `Map.get`
+    // answers `undefined`. The RENDERER treats that as unresolved and falls back
+    // to the block's own `src`, so counting it as a hit would leave metadata
+    // describing no image while the page displays one.
+    const page: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/image",
+          version: 1,
+          props: { mediaId: "44444444-4444-4444-8444-444444444444" },
+        },
+        {
+          id: "n2",
+          type: "core/image",
+          version: 1,
+          props: { src: "/later.png" },
+        },
+      ],
+    };
+    let seen: DerivedPageSeo | undefined;
+    const route = createBlocksPage({
+      collections: ["pages"],
+      field: "content",
+      blocks: coreResolver(),
+      nextly: reader({ slug: "about", content: page }),
+      // Answering the way an untyped implementation does. Built through
+      // `JSON.parse` because that is genuinely how a record with a missing
+      // field arrives, and it needs no cast to express: a JavaScript resolver
+      // returning a partial record, or a missing `Map.get`, produces exactly
+      // this class of answer.
+      resolveMedia: async () => JSON.parse('{"alt":"no url here"}'),
+      metadata: (_e, _c, derived) => {
+        seen = derived;
+        return {};
+      },
+    });
+
+    await route.generateMetadata({ params: { slug: ["about"] } });
+
+    expect(seen?.image).toBe("/later.png");
+  });
+
+  it("probes a shadowing collection the way the route resolves it", async () => {
+    // Two entries in one collection may share a slug, and `resolveContent`
+    // settles which the URL opens by sorting on `id`. An unsorted `limit: 1`
+    // probe may answer with either row, so the link could be emitted for the
+    // entry the route does NOT serve.
+    const instance = reader({
+      slug: "about",
+      content: document,
+    }) as unknown as {
+      find: ReturnType<typeof vi.fn>;
+    };
+    const sortSeen: unknown[] = [];
+    instance.find = vi.fn(
+      async ({
+        where,
+        sort,
+      }: {
+        where?: Record<string, { equals?: unknown }>;
+        sort?: unknown;
+      }) => {
+        if (where?.id?.equals === "dup2") {
+          return { items: [{ id: "dup2", slug: "shared" }], meta: {} };
+        }
+        if (where?.slug?.equals === "shared") {
+          sortSeen.push(sort);
+          // The row the ROUTE would serve: the lower id.
+          return { items: [{ id: "dup1", slug: "shared" }], meta: {} };
+        }
+        return {
+          items: [{ id: "p1", slug: "about", content: document }],
+          meta: {},
+        };
+      }
+    );
+
+    const props = await render({
+      collections: ["pages"],
+      field: "content",
+      nextly: instance as never,
+    });
+
+    await expect(
+      props.context?.resolveEntryPath("pages", "dup2")
+    ).resolves.toBeNull();
+    expect(sortSeen).toEqual(["id"]);
   });
 
   it("gives no path for a referenced slug holding a dot segment", async () => {

@@ -25,7 +25,11 @@ import type {
   StyleCompileContext,
 } from "@nextlyhq/blocks-engine";
 import type { Metadata } from "next";
-import { createContentRoute, isReservedPath, nextlyTags } from "nextly/runtime";
+import {
+  createContentRoute,
+  nextlyTags,
+  slugToStaticParam,
+} from "nextly/runtime";
 import type {
   ContentEntry,
   ContentRoute,
@@ -157,35 +161,32 @@ export interface BlocksPageConfig
  * and by reference links, because a page describing itself one way and linking
  * to itself another is the disagreement this exists to prevent.
  */
-function encodePath(slug: string): string {
-  return slug
-    .split("/")
-    .map(segment =>
-      // `encodeURIComponent` leaves `.` and `..` untouched, and a URL consumer
-      // RESOLVES those away — `/pages/../admin` reads as `/admin`, a different
-      // route this page has nothing to do with. Percent-encoding them keeps
-      // them literal segments, which is what a stored slug holding one means.
-      isDotSegment(segment)
-        ? segment.replace(/\./g, "%2E")
-        : encodeURIComponent(segment)
-    )
-    .join("/");
-}
-
-/** Whether a path segment is one a URL consumer resolves away. */
-function isDotSegment(segment: string): boolean {
-  return segment === "." || segment === "..";
-}
-
-/**
- * The path a stored slug renders at.
- *
- * An empty slug is the HOMEPAGE, which the content route resolves at `/` and
- * pre-renders as `{ slug: [] }`. Treating it as missing would strip the
- * destination from every button pointing at the site root.
- */
-function emitPath(slug: string): string {
-  return slug === "" ? "/" : `/${encodePath(slug)}`;
+function emitPath(slug: string): string | null {
+  // The route's OWN answer, not a second opinion. `slugToStaticParam` is what
+  // `generateStaticParams` pre-renders from, so deriving the path any other way
+  // is how a canonical or a link comes to name somewhere the route does not
+  // serve. It collapses repeated and edge slashes — Next answers `/a//b` with a
+  // 308 to `/a/b`, and the lookup then asks for a slug the entry does not have —
+  // refuses reserved paths, and refuses the segments URL resolution removes.
+  //
+  // An empty slug is the HOMEPAGE, which the route resolves at `/` and
+  // pre-renders as `{ slug: [] }`. Treating it as missing would strip the
+  // destination from every button pointing at the site root.
+  const param = slugToStaticParam(slug);
+  if (param === null) return null;
+  if (param.slug.length === 0) return "/";
+  // Normalization CHANGED the slug, so the path it yields is not the slug the
+  // route will look up. `resolveContent` matches the stored column against the
+  // joined incoming segments, and Next answers `/a//b` with a 308 to `/a/b` — so
+  // the request arrives asking for `a/b`, which this entry does not have.
+  // Emitting the normalized path would name a page the route answers with
+  // `notFound()`; emitting the raw one would name a path that redirects away
+  // from it. Neither is a destination, so there is none to give.
+  if (param.slug.join("/") !== slug) return null;
+  // Encoded per segment: Next hands this route DECODED segments while the
+  // request used their encoded form, so `faq?all` emitted raw is read as a path
+  // plus a query.
+  return `/${param.slug.map(encodeURIComponent).join("/")}`;
 }
 
 /** An empty page, for a field that exists and holds no document yet. */
@@ -241,8 +242,15 @@ export interface DerivedPageSeo extends Omit<BlockSeoContribution, "image"> {
    * stage rather than what the caller holds.
    */
   image?: string;
-  /** The path the page renders at, for a canonical URL. */
-  canonical: string;
+  /**
+   * The path the page renders at, for a canonical URL.
+   *
+   * Absent when the stored slug is not addressable — one holding a `.`/`..`
+   * segment, or a reserved path. A canonical is a claim about where this page
+   * lives, and for those slugs every candidate answer names a DIFFERENT route,
+   * so saying nothing is the only honest option.
+   */
+  canonical?: string;
 }
 
 /**
@@ -263,7 +271,11 @@ async function derivePageSeo(
   styleContext: StyleCompileContext | undefined
 ): Promise<DerivedPageSeo> {
   const resolver = blocks ?? registeredBlocks();
-  const canonical = emitPath(slug);
+  // Spread rather than assigned, so an unaddressable slug OMITS the key instead
+  // of carrying `undefined`. The result is spread over a caller's own fallbacks,
+  // where a present-but-undefined key erases a canonical they already knew.
+  const path = emitPath(slug);
+  const canonical = path === null ? {} : { canonical: path };
 
   // One authoritative preparation, shared with the renderer rather than
   // restated here. Hand-copying the passes is what let metadata describe a
@@ -277,7 +289,7 @@ async function derivePageSeo(
   });
   // Nothing readable means nothing to describe. The page renders a placeholder,
   // and metadata claiming a title it does not show would be worse than silence.
-  if (prepared === null) return { canonical };
+  if (prepared === null) return canonical;
 
   const { image: imageCandidates, ...text } = deriveSeoFromDocument(
     prepared,
@@ -286,8 +298,8 @@ async function derivePageSeo(
   );
   const image = await firstUsableImage(imageCandidates, resolveMedia);
   return image === undefined
-    ? { ...text, canonical }
-    : { ...text, canonical, image };
+    ? { ...text, ...canonical }
+    : { ...text, ...canonical, image };
 }
 
 /**
@@ -312,6 +324,26 @@ async function derivePageSeo(
  * chain of deleted references from being paid one round trip at a time.
  */
 const MEDIA_LOOKUP_BATCH = 5;
+
+/**
+ * Whether a resolution actually yielded a picture.
+ *
+ * `resolveMedia` may be the caller's own, so its answer is third-party data
+ * however the type reads: a JavaScript implementation returning a missing
+ * `Map.get` answers `undefined`, and one built from a partial record answers an
+ * object with no usable `url`. The RENDERER treats both as unresolved and falls
+ * back to the block's own `src`, so a check that counted them as a hit would end
+ * the search here and leave the page described by no image at all — while it
+ * displays one.
+ */
+function usableMedia(media: ResolvedMedia | null): boolean {
+  return (
+    media !== null &&
+    media !== undefined &&
+    typeof media.url === "string" &&
+    media.url.trim() !== ""
+  );
+}
 
 async function firstUsableImage(
   candidates: SeoImageCandidate[] | undefined,
@@ -343,7 +375,7 @@ async function firstUsableImage(
     // candidate is the one the renderer would show, and picking whichever
     // request happened to finish first would publish a different picture than
     // the page displays — silently, and only under load.
-    const hit = resolved.findIndex(media => media !== null);
+    const hit = resolved.findIndex(usableMedia);
     if (hit !== -1) return resolved[hit]?.url;
     if (direct !== -1) return batch[direct]?.value;
   }
@@ -529,19 +561,13 @@ function entryPathResolver(
     // rewriting it would invent a destination the author never wrote.
     if (slug.startsWith("/")) return null;
 
-    // Reserved paths are refused by `ContentPage` before it resolves anything,
-    // so a slug like `admin` or `robots.txt` can never be served here — and may
-    // instead lead into a route the application owns.
-    if (isReservedPath(slug === "" ? "/" : `/${slug}`)) return null;
-
-    // A stored slug can hold a `.` or `..` segment, and a URL consumer resolves
-    // those away before the request is ever made: `/pages/../admin` is fetched
-    // as `/admin`. The reserved-path check above cannot see it, because it
-    // examines the slug BEFORE that resolution. Refused rather than encoded —
-    // the canonical has to name some path and so encodes them, but a link may
-    // simply be omitted, and no link beats one that lands somewhere the author
-    // never wrote.
-    if (slug.split("/").some(isDotSegment)) return null;
+    // Where this slug renders, decided by the route's own rule — which also
+    // refuses the reserved paths `ContentPage` will not serve, the `.`/`..`
+    // segments URL resolution removes, and the slugs whose normalized form the
+    // lookup would not match. Asked BEFORE the ownership probes below, so an
+    // unaddressable slug costs no queries.
+    const path = emitPath(slug);
+    if (path === null) return null;
 
     // The route serves the FIRST entry whose STORED slug matches, searching its
     // collections in order — so that is the question to ask, rather than
@@ -565,6 +591,12 @@ function entryPathResolver(
           collection: candidate,
           where: { [slugField]: { equals: slug } },
           limit: 1,
+          // Nextly permits two entries in one collection to share a slug, and
+          // `resolveContent` settles which one the URL opens by sorting on `id`.
+          // An unsorted `limit: 1` may return either row, so without this the
+          // probe can answer with the referenced entry while the route serves
+          // the other — a link that opens a different document than it names.
+          sort: "id",
           status: scope,
           overrideAccess,
           user: undefined,
@@ -577,9 +609,7 @@ function entryPathResolver(
       // This link is honest only when that is this very record — same
       // collection, same row. A duplicate slug inside the collection lands here
       // too, and is refused for the same reason.
-      return candidate === collection && String(first.id) === id
-        ? emitPath(slug)
-        : null;
+      return candidate === collection && String(first.id) === id ? path : null;
     }
 
     // No collection serves this slug, so there is no path to offer.

@@ -73,6 +73,7 @@ export {
   resolveContent,
   isReservedPath,
   createContentRoute,
+  slugToStaticParam,
   nextlySitemap,
   nextlyRobots,
   type ContentEntry,

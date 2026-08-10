@@ -263,6 +263,18 @@ const MAX_STATIC_PARAMS_PER_PAGE = 500;
  * pre-renders — while whitespace-only, non-string, and reserved values are
  * dropped (the page would only `notFound()` them).
  */
+/**
+ * Whether a path segment is one URL resolution removes.
+ *
+ * Percent-encoded spellings count: the URL standard defines a single-dot segment
+ * as `.` or `%2e` and a double-dot segment as any casing of `..`, `.%2e`, `%2e.`
+ * or `%2e%2e`, so encoding the dots does not make the segment literal.
+ */
+function isDotSegment(segment: string): boolean {
+  const decoded = segment.toLowerCase().replaceAll("%2e", ".");
+  return decoded === "." || decoded === "..";
+}
+
 export function slugToStaticParam(value: unknown): { slug: string[] } | null {
   if (typeof value !== "string") return null;
   if (value === "") return isReservedPath("/") ? null : { slug: [] };
@@ -275,7 +287,15 @@ export function slugToStaticParam(value: unknown): { slug: string[] } | null {
     .replace(/\/{2,}/g, "/");
   if (normalized === "") return null;
   if (isReservedPath(`/${normalized}`)) return null;
-  return { slug: normalized.split("/") };
+  const segments = normalized.split("/");
+  // A `.` or `..` segment makes the slug UNADDRESSABLE. URL resolution removes
+  // those segments before a request is sent, so a pre-rendered `/pages/../admin`
+  // is fetched as `/admin` and the page generated here can never be reached —
+  // while the path it occupies belongs to a different, possibly reserved route.
+  // Percent-encoding does not help: the URL standard treats `%2e` as a dot for
+  // exactly this purpose, so `%2E%2E` resolves away too.
+  if (segments.some(isDotSegment)) return null;
+  return { slug: segments };
 }
 
 export function createContentRoute<TNode>(

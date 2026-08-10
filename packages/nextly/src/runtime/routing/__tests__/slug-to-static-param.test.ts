@@ -37,4 +37,33 @@ describe("slugToStaticParam", () => {
     });
     expect(slugToStaticParam("a//b")).toEqual({ slug: ["a", "b"] });
   });
+
+  it("rejects a slug holding a segment URL resolution removes", () => {
+    // Pre-rendering `/pages/../admin` produces a page nothing can reach: the
+    // request is normalized before it is sent, so it arrives asking for
+    // `/admin` — a different, possibly reserved route. The `.` case is the same
+    // rule and removes a segment too.
+    expect(slugToStaticParam("pages/../admin")).toBeNull();
+    expect(slugToStaticParam("a/./b")).toBeNull();
+    expect(slugToStaticParam("..")).toBeNull();
+  });
+
+  it("rejects the percent-encoded spelling of a dot segment", () => {
+    // Encoding does not make the segment literal: the URL standard defines a
+    // double-dot segment as any casing of `..`, `.%2e`, `%2e.` or `%2e%2e`, so
+    // `/pages/%2E%2E/admin` resolves to `/admin` exactly as the bare form does.
+    expect(slugToStaticParam("pages/%2E%2E/admin")).toBeNull();
+    expect(slugToStaticParam("pages/%2e%2e/admin")).toBeNull();
+    expect(slugToStaticParam("pages/.%2e/admin")).toBeNull();
+    expect(slugToStaticParam("a/%2E/b")).toBeNull();
+  });
+
+  it("keeps a segment that merely CONTAINS dots", () => {
+    // Only a segment that is entirely dots is removed. A file-like slug is an
+    // ordinary path, and rejecting it would strip real pages from the sitemap.
+    expect(slugToStaticParam("docs/v1.2/guide")).toEqual({
+      slug: ["docs", "v1.2", "guide"],
+    });
+    expect(slugToStaticParam("...")).toEqual({ slug: ["..."] });
+  });
 });

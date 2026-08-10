@@ -14,7 +14,12 @@ export type {
 
 export { isReservedPath } from "./reserved-paths";
 
-export { createContentRoute } from "./content-route";
+// `slugToStaticParam` is public because it is the route's own answer to "what
+// path does this stored slug render at". Anything emitting a URL for an entry —
+// a canonical, a link between entries — has to agree with the route or it names
+// a path the route does not serve, and re-deriving the rule is how the two come
+// to disagree.
+export { createContentRoute, slugToStaticParam } from "./content-route";
 export type {
   ContentRoute,
   ContentRouteArgs,
