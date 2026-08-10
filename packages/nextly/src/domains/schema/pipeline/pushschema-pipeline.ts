@@ -25,6 +25,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { dequal } from "dequal";
 
 import { getDialectTablesForPush } from "../../../database/index";
+import { NextlyError } from "../../../errors";
 import {
   getCachedSnapshot,
   getLiveSnapshot,
@@ -913,6 +914,11 @@ export class PushSchemaPipeline {
         try {
           await preResExecutor(tx, resolvedOps, dialect);
         } catch (err) {
+          // A refusal is not a failed statement. The pre-resolution phase can decline to start —
+          // when the stored values would not survive a conversion, for instance — and that answer
+          // carries the column, the reason and what to do about it. Wrapping it as a DDL failure
+          // replaces all of that with a generic message about a statement that never ran.
+          if (NextlyError.isValidation(err)) throw err;
           throw new DdlExecutionError(
             err instanceof Error ? err.message : String(err),
             err
@@ -1555,6 +1561,8 @@ export class PushSchemaPipeline {
   }
 
   private classifyErrorCode(err: unknown): string {
+    // Before the DDL branch: nothing ran, and saying so is the whole value of the distinction.
+    if (NextlyError.isValidation(err)) return "PRECONDITION_FAILED";
     if (err instanceof PushSchemaError) return "PUSHSCHEMA_FAILED";
     if (err instanceof DdlExecutionError) return "DDL_EXECUTION_FAILED";
     // PromptDispatcher signals - distinguish "user said no" from "no TTY

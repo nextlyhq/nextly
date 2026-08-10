@@ -507,3 +507,114 @@ describe("a legacy column holding prose is not converted — MySQL", () => {
     await q.query(`DROP TABLE IF EXISTS \`${jsonTable}\``);
   });
 });
+
+/**
+ * What the probe must NOT refuse, and where it must look.
+ *
+ * The guard exists to stop one specific conversion running against values that cannot survive it.
+ * Two ways for it to be wrong in the other direction, both of which refuse work that was always
+ * valid — and a refusal is as damaging as a bad apply when it blocks every legitimate delta behind
+ * it.
+ */
+describe("the probe's scope — PostgreSQL", () => {
+  const scopeCtx = makeTestContext("postgresql");
+  if (!scopeCtx.available || !scopeCtx.url) {
+    it.skip("Skipping: TEST_POSTGRES_URL not set", () => {});
+    return;
+  }
+
+  let pool: Pool;
+  let db: ReturnType<typeof drizzlePg>;
+
+  beforeAll(async () => {
+    pool = new Pool({ connectionString: scopeCtx.url ?? undefined });
+    db = drizzlePg({ client: pool });
+  });
+
+  afterAll(async () => {
+    await pool.end();
+  });
+
+  it("does not run for a type change that is not into JSON", async () => {
+    // `conversionForRename` emits `change_column_type` for ANY change of type. Gating the probe on
+    // its mere presence asks "is this valid JSON?" of a column becoming `varchar(255)`, and prose
+    // answers no — refusing a rename that was never about JSON at all.
+    const table = `${scopeCtx.prefix}_widen`;
+    await pool.query(`DROP TABLE IF EXISTS "${table}" CASCADE`);
+    await pool.query(
+      `CREATE TABLE "${table}" ("id" text PRIMARY KEY, "_body" text)`
+    );
+    await pool.query(`INSERT INTO "${table}" VALUES ('r1', $1)`, [
+      "the quick brown fox",
+    ]);
+
+    await expect(
+      executePreResolutionOps(
+        db,
+        [
+          {
+            type: "rename_column",
+            tableName: table,
+            fromColumn: "_body",
+            toColumn: "body",
+            fromType: "text",
+            toType: "varchar(255)",
+          },
+        ] as Operation[],
+        "postgresql"
+      )
+    ).resolves.toBe(1);
+
+    const after = await pool.query<{ body: string }>(
+      `SELECT "body" FROM "${table}" WHERE id = 'r1'`
+    );
+    expect(after.rows[0]?.body, "the prose came with it").toBe(
+      "the quick brown fox"
+    );
+    await pool.query(`DROP TABLE IF EXISTS "${table}" CASCADE`);
+  });
+
+  it("asks the table its PRE-rename name when the table is renamed too", async () => {
+    // Column operations carry the table's post-rename name, because they normally run after
+    // `rename_table`. This preflight runs before everything, so the new name does not exist yet:
+    // probing it hits a missing table, and — correctly — that now propagates rather than being
+    // read as bad data, so the whole apply dies on a rename that was fine.
+    const oldName = `${scopeCtx.prefix}_before`;
+    const newName = `${scopeCtx.prefix}_after`;
+    await pool.query(`DROP TABLE IF EXISTS "${oldName}" CASCADE`);
+    await pool.query(`DROP TABLE IF EXISTS "${newName}" CASCADE`);
+    await pool.query(
+      `CREATE TABLE "${oldName}" ("id" text PRIMARY KEY, "_body" text)`
+    );
+    await pool.query(`INSERT INTO "${oldName}" VALUES ('r1', $1)`, [
+      JSON.stringify({ ok: 1 }),
+    ]);
+
+    await expect(
+      executePreResolutionOps(
+        db,
+        [
+          { type: "rename_table", fromName: oldName, toName: newName },
+          {
+            type: "rename_column",
+            tableName: newName,
+            fromColumn: "_body",
+            toColumn: "body",
+            fromType: "text",
+            toType: "jsonb",
+          },
+        ] as Operation[],
+        "postgresql"
+      )
+    ).resolves.toBe(2);
+
+    const shape = await pool.query<{ data_type: string }>(
+      `SELECT data_type FROM information_schema.columns WHERE table_name = $1 AND column_name = 'body'`,
+      [newName]
+    );
+    expect(shape.rows[0]?.data_type, "and the conversion still happened").toBe(
+      "jsonb"
+    );
+    await pool.query(`DROP TABLE IF EXISTS "${newName}" CASCADE`);
+  });
+});

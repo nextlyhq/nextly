@@ -8,10 +8,16 @@
 
 import { UnsupportedDialectVersionError } from "@nextlyhq/adapter-drizzle/version-check";
 
+import { NextlyError } from "../../../errors";
+
 export type SchemaApplyErrorCode =
   | "SCHEMA_VERSION_CONFLICT"
   | "PUSHSCHEMA_FAILED"
   | "DDL_EXECUTION_FAILED"
+  // The apply declined to start, because the database's CONTENTS could not survive it. Distinct
+  // from DDL_EXECUTION_FAILED in the fact that matters most to whoever reads it: nothing ran, so
+  // the schema is exactly as it was. Its `details` carry which column and what to do about it.
+  | "PRECONDITION_FAILED"
   | "CONFIRMATION_DECLINED"
   | "CONFIRMATION_REQUIRED_NO_TTY"
   | "CONNECTION_FAILED"
@@ -27,7 +33,43 @@ export interface ClassifiedError {
 // Translates an unknown thrown value into one of the typed codes.
 // Used by the apply pipeline to convert exceptions into the discriminated
 // failure branch of ApplyResult.
+/**
+ * The operator-facing text for a refused precondition.
+ *
+ * Reads the per-error messages the refusal carried and falls back to the generic public message
+ * only when there are none, so a payload shape this does not recognise degrades to today's
+ * behaviour rather than to an empty string.
+ */
+function preconditionMessage(err: NextlyError): string {
+  const data: unknown = err.publicData;
+  if (data && typeof data === "object" && "errors" in data) {
+    const { errors } = data;
+    if (Array.isArray(errors)) {
+      const texts = errors
+        .map(e =>
+          e && typeof e === "object" && "message" in e ? e.message : undefined
+        )
+        .filter((m): m is string => typeof m === "string" && m.length > 0);
+      if (texts.length > 0) return texts.join(" ");
+    }
+  }
+  return err.message;
+}
+
 export function classifyError(err: unknown): ClassifiedError {
+  // Checked before the generic Error branch: a refused precondition IS a NextlyError, and the
+  // generic branch would flatten it to its public message and lose the payload naming the column.
+  if (NextlyError.isValidation(err)) {
+    return {
+      code: "PRECONDITION_FAILED",
+      // NOT `err.message`: the validation factory sets a deliberately generic public message
+      // ("Validation failed.") and puts the substance in `publicData`. Passing the generic one here
+      // would hand the operator a failure with no subject, which is the whole defect being fixed.
+      message: preconditionMessage(err),
+      details: err.publicData,
+    };
+  }
+
   if (err instanceof UnsupportedDialectVersionError) {
     return {
       code: "UNSUPPORTED_DIALECT_VERSION",

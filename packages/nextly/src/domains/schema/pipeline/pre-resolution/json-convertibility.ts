@@ -37,9 +37,17 @@ interface SqliteRunHandle {
   all(query: unknown): unknown;
 }
 
-/** Quote an identifier for the dialect. */
-function q(name: string, dialect: SupportedDialect): string {
-  return dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+/**
+ * Whether a destination type is one this probe can speak for.
+ *
+ * The question asked here is "does this text parse as JSON", so it means something only when the
+ * column is BECOMING json. `conversionForRename` emits `change_column_type` for any change of type
+ * at all — `text` to `varchar(255)`, `integer` to `bigint` — and running a JSON check against a
+ * column becoming `varchar` would reject ordinary prose as unconvertible, refusing a rename that was
+ * always valid.
+ */
+export function isJsonTarget(toType: string): boolean {
+  return /^jsonb?$/i.test(toType.trim());
 }
 
 /**
@@ -88,15 +96,15 @@ export async function columnHoldsOnlyJson(
   // SQLite stores JSON as text, so nothing is reinterpreted and nothing can fail.
   if (dialect === "sqlite") return true;
 
-  const table = q(tableName, dialect);
-  const column = q(columnName, dialect);
+  // Composed with Drizzle's identifier primitive rather than interpolated into a string, so the
+  // dialect's own quoting rules apply and a table or column name can never be read as SQL.
+  const table = sql.identifier(tableName);
+  const column = sql.identifier(columnName);
 
   if (dialect === "mysql") {
     const handle = txOrDb as AsyncExecuteHandle;
     const rows = await handle.execute(
-      sql.raw(
-        `SELECT 1 FROM ${table} WHERE ${column} IS NOT NULL AND NOT JSON_VALID(${column}) LIMIT 1`
-      )
+      sql`SELECT 1 FROM ${table} WHERE ${column} IS NOT NULL AND NOT JSON_VALID(${column}) LIMIT 1`
     );
     return countedRows(rows) === 0;
   }
@@ -104,9 +112,7 @@ export async function columnHoldsOnlyJson(
   const handle = txOrDb as AsyncExecuteHandle;
   try {
     await handle.execute(
-      sql.raw(
-        `SELECT count(${column}::jsonb) FROM ${table} WHERE ${column} IS NOT NULL`
-      )
+      sql`SELECT count(${column}::jsonb) FROM ${table} WHERE ${column} IS NOT NULL`
     );
     return true;
   } catch (error) {

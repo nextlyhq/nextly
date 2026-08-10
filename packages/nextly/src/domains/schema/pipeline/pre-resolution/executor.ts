@@ -36,7 +36,7 @@ import { isPreResolutionOp, type Operation } from "../diff/types";
 import { conversionForRename } from "../rename-conversion";
 import { generateSQL } from "../sql-templates/index";
 
-import { columnHoldsOnlyJson } from "./json-convertibility";
+import { columnHoldsOnlyJson, isJsonTarget } from "./json-convertibility";
 
 interface AsyncExecuteHandle {
   execute(query: unknown): Promise<unknown>;
@@ -132,10 +132,25 @@ async function assertConversionsAreSafe(
   ordered: Operation[],
   dialect: SupportedDialect
 ): Promise<void> {
+  // The name each table answers to RIGHT NOW. Column ops carry the table's post-rename name,
+  // because they normally run after `rename_table` — but this runs before anything at all, so the
+  // new name does not exist yet and probing it would fail on a table that is merely about to be
+  // called that.
+  const currentTableName = new Map<string, string>();
+  for (const op of ordered) {
+    if (op.type === "rename_table")
+      currentTableName.set(op.toName, op.fromName);
+  }
+
   for (const op of ordered) {
     if (op.type !== "rename_column") continue;
     const conversions = conversionForRename(op, dialect);
-    const converts = conversions.some(c => c.type === "change_column_type");
+    // Only a conversion INTO json is a question this probe can answer. Any change of type at all
+    // produces `change_column_type`, so gating on its mere presence would run a JSON check against a
+    // column becoming `varchar(255)` or `bigint` and refuse an ordinary rename as unconvertible.
+    const converts = conversions.some(
+      c => c.type === "change_column_type" && isJsonTarget(c.toType)
+    );
     if (!converts) continue;
 
     // The probe reads rows that are NOT NULL, because a NULL cannot make a cast fail. It can make a
@@ -165,10 +180,12 @@ async function assertConversionsAreSafe(
       });
     }
 
-    // The column still answers to its OLD name: nothing has run yet.
+    // Both names as the database currently has them: nothing has run yet, so neither the table's
+    // new name nor the column's exists.
+    const liveTable = currentTableName.get(op.tableName) ?? op.tableName;
     const safe = await columnHoldsOnlyJson(
       txOrDb,
-      op.tableName,
+      liveTable,
       op.fromColumn,
       dialect
     );
@@ -177,10 +194,10 @@ async function assertConversionsAreSafe(
     throw NextlyError.validation({
       errors: [
         {
-          path: `${op.tableName}.${op.fromColumn}`,
+          path: `${liveTable}.${op.fromColumn}`,
           code: "COLUMN_NOT_CONVERTIBLE",
           message:
-            `Column "${op.fromColumn}" on "${op.tableName}" holds values that are not valid JSON, ` +
+            `Column "${op.fromColumn}" on "${liveTable}" holds values that are not valid JSON, ` +
             `so renaming it to "${op.toColumn}" as a JSON column would lose them. Nothing has been ` +
             `changed. Remove the field and add it again if the existing values are not needed, or ` +
             `correct the stored values first.`,
