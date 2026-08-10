@@ -40,6 +40,7 @@ import type {
   ResolveAttachmentsDeps,
 } from "./attachment-resolver";
 import { resolveAttachments } from "./attachment-resolver";
+import type { EmailDeliveryService } from "./email-delivery-service";
 import { getEmailProviderRegistry } from "./email-provider-registry";
 import type { EmailProviderService } from "./email-provider-service";
 import type { EmailTemplateService } from "./email-template-service";
@@ -88,7 +89,16 @@ export class EmailService extends BaseService {
     private readonly providerService: EmailProviderService,
     private readonly templateService: EmailTemplateService,
     private readonly emailConfig?: EmailConfig,
-    private readonly attachmentSource?: EmailAttachmentSource
+    private readonly attachmentSource?: EmailAttachmentSource,
+    /**
+     * Where sends are recorded.
+     *
+     * Optional so an install that predates the delivery table -- or a test
+     * that does not care -- still sends. A missing recorder means no record,
+     * never a failed send: the log exists to observe delivery, and it must not
+     * become a thing that can prevent it.
+     */
+    private readonly deliveries?: EmailDeliveryService
   ) {
     super(adapter, logger);
   }
@@ -317,6 +327,14 @@ export class EmailService extends BaseService {
     cc?: string[];
     bcc?: string[];
     attachments?: EmailAttachmentInput[];
+    /**
+     * Which template produced this message, for the delivery log.
+     *
+     * The SLUG, never the rendered subject: a slug says which kind of message
+     * this was and cannot carry a name, while a rendered subject is the field
+     * most likely to interpolate one.
+     */
+    templateSlug?: string;
   }): Promise<{ success: boolean; messageId?: string }> {
     // Resolve attachments BEFORE the provider try/catch so that
     // NextlyError (validation for caller-fixable failures, internal for
@@ -391,6 +409,22 @@ export class EmailService extends BaseService {
         { providerId: options.providerId }
       );
 
+      // Recorded inline rather than through the after-send action seam. That
+      // seam exists for PLUGIN side-effects -- ordered, isolated, and
+      // registered by whoever installs one -- and core's own durable record of
+      // what it sent must not depend on a registry a plugin also writes into,
+      // where ordering and another author's failure could decide whether a
+      // send was recorded.
+      await this.deliveries?.record({
+        to: filtered.to,
+        providerId: options.providerId ?? null,
+        providerType,
+        templateSlug: options.templateSlug ?? null,
+        status: result.success ? "sent" : "failed",
+        messageId: result.messageId ?? null,
+        error: result.success ? null : "Send returned unsuccessful",
+      });
+
       const durationMs = Date.now() - startedAt;
       if (result.success) {
         // Stable, greppable send record for terminal / log-aggregator use.
@@ -426,6 +460,20 @@ export class EmailService extends BaseService {
         },
         { providerId: options.providerId }
       );
+      await this.deliveries?.record({
+        to: filtered.to,
+        providerId: options.providerId ?? null,
+        providerType,
+        templateSlug: options.templateSlug ?? null,
+        status: "failed",
+        // The provider's own words, which the record module strips addresses
+        // from before storing -- an SMTP rejection quotes the recipient back,
+        // and that would put the address in the row beside its own hash.
+        error:
+          describeProviderFailure(error).cause ??
+          describeProviderFailure(error).message,
+      });
+
       this.logger.error("email.failed", {
         event: "email.failed",
         provider: providerType,

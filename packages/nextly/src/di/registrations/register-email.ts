@@ -7,6 +7,7 @@
 
 import { EmailErrorCode } from "../../domains/email/errors";
 import { getAttachmentLimits } from "../../domains/email/services/attachment-limits";
+import { EmailDeliveryService } from "../../domains/email/services/email-delivery-service";
 import type { EmailAttachmentSource } from "../../domains/email/services/email-service";
 import { NextlyError } from "../../errors";
 import { EmailProviderService } from "../../services/email/email-provider-service";
@@ -28,6 +29,13 @@ export function registerEmailServices(ctx: RegistrationContext): void {
     () => new EmailProviderService(adapter, logger)
   );
 
+  // EmailDeliveryService — the durable record of what was sent. A log, not a
+  // queue: nothing drains it and its retry columns stay inert.
+  container.registerSingleton<EmailDeliveryService>(
+    "emailDeliveryService",
+    () => new EmailDeliveryService(adapter, logger)
+  );
+
   // EmailTemplateService — CRUD for email templates
   container.registerSingleton<EmailTemplateService>(
     "emailTemplateService",
@@ -44,6 +52,9 @@ export function registerEmailServices(ctx: RegistrationContext): void {
     );
     const templateService = container.get<EmailTemplateService>(
       "emailTemplateService"
+    );
+    const deliveryService = container.get<EmailDeliveryService>(
+      "emailDeliveryService"
     );
 
     // Build the attachment source when storage is available. The
@@ -137,7 +148,8 @@ export function registerEmailServices(ctx: RegistrationContext): void {
       providerService,
       templateService,
       config.email,
-      attachmentSource
+      attachmentSource,
+      deliveryService
     );
   });
 }

@@ -1,0 +1,103 @@
+/**
+ * What a delivery log row is allowed to know about a message.
+ *
+ * The table stores a hash of the recipient rather than the address, so that it
+ * answers "did this send" and "how many failed" without answering "to whom".
+ * That decision is only worth anything if EVERY value written beside the hash
+ * respects it, and the one that does not respect it by default is the error
+ * string: a mail server quotes the recipient back at you when it rejects them.
+ *
+ * @module domains/email/delivery-record
+ */
+
+import { createHash } from "crypto";
+
+/** How a delivery ended. A drain would add `pending` and `retrying`. */
+export type EmailDeliveryStatus = "sent" | "failed";
+
+/**
+ * Hash a recipient address for storage.
+ *
+ * Lowercased and trimmed first so the same mailbox hashes identically however
+ * it was typed — without that, support hashing the address they were given
+ * would miss a row written from a differently-cased copy of it, and the column
+ * would silently answer "no record" for a message that was sent.
+ *
+ * The local part of an address is technically case-sensitive per RFC 5321, and
+ * this normalises it anyway: no mail provider in practice treats `A@x.com` and
+ * `a@x.com` as different mailboxes, and matching what operators believe is
+ * worth more here than matching what the RFC permits.
+ *
+ * Not salted, deliberately. A salt would make the hash unmatchable by the one
+ * query it exists to serve — hash the address you were given, look for it —
+ * and the threat it would defend against, an attacker enumerating addresses
+ * against a stolen table, requires the database to be lost already, at which
+ * point the same attacker has the users table with the addresses in it.
+ */
+export function hashRecipient(address: string): string {
+  return createHash("sha256")
+    .update(address.trim().toLowerCase())
+    .digest("hex");
+}
+
+/**
+ * Anything that looks like an address, as a provider would quote it back.
+ *
+ * Deliberately broad rather than RFC-exact: the cost of removing something that
+ * merely resembles an address from a diagnostic is a slightly less specific
+ * error message, and the cost of missing one is the address sitting in the
+ * column next to the hash that exists to avoid storing it.
+ */
+const ADDRESS_SHAPED =
+  /[^\s<>()[\]{},;:"]+@[^\s<>()[\]{},;:"]+\.[^\s<>()[\]{},;:"]+/g;
+
+/** The token an address is replaced with, so the shape of the error survives. */
+export const REDACTED_ADDRESS = "[address]";
+
+/**
+ * Remove addresses from a provider's failure message.
+ *
+ * `550 5.1.1 <someone@example.com> User unknown` is the normal shape of an SMTP
+ * rejection, and storing it verbatim would reintroduce the recipient in the row
+ * beside its own hash — undoing the whole point of hashing, in the place most
+ * likely to be read.
+ *
+ * What survives is what the operator needs: the status code and the reason.
+ */
+export function redactAddresses(message: string): string {
+  return message.replace(ADDRESS_SHAPED, REDACTED_ADDRESS);
+}
+
+/** Longest error text stored. Beyond this a provider is narrating, not failing. */
+export const MAX_ERROR_LENGTH = 2000;
+
+/**
+ * Prepare a failure message for storage: addresses removed, length bounded.
+ *
+ * Bounded because a provider that returns a full HTML error page would
+ * otherwise put it in every row of a failing batch, and because an unbounded
+ * text column is how a log table becomes the largest thing in the database.
+ */
+export function storableError(message: string): string {
+  const redacted = redactAddresses(message);
+  return redacted.length > MAX_ERROR_LENGTH
+    ? `${redacted.slice(0, MAX_ERROR_LENGTH)}…`
+    : redacted;
+}
+
+/** One delivery, as the recorder is told about it. */
+export interface EmailDeliveryInput {
+  /** The address the message went to. Hashed here; never stored. */
+  to: string;
+  /** The provider row that carried it, when a stored provider did. */
+  providerId?: string | null;
+  /** The registered type, kept even after the provider is gone. */
+  providerType: string;
+  /** Which template produced it, when one did. Never the rendered subject. */
+  templateSlug?: string | null;
+  status: EmailDeliveryStatus;
+  /** The provider's own message id, when it returned one. */
+  messageId?: string | null;
+  /** Why it failed. Redacted and bounded before storage. */
+  error?: string | null;
+}

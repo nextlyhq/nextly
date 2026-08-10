@@ -40,6 +40,9 @@ import {
 import { dynamicSinglesMysql } from "./dynamic-singles/mysql";
 import { dynamicSinglesPg } from "./dynamic-singles/postgres";
 import { dynamicSinglesSqlite } from "./dynamic-singles/sqlite";
+import { emailDeliveriesMysql } from "./email-deliveries/mysql";
+import { emailDeliveriesPg } from "./email-deliveries/postgres";
+import { emailDeliveriesSqlite } from "./email-deliveries/sqlite";
 import { emailProvidersMysql } from "./email-providers/mysql";
 import { emailProvidersPg } from "./email-providers/postgres";
 import { emailProvidersSqlite } from "./email-providers/sqlite";
@@ -188,7 +191,8 @@ export function getCoreSchema(
         siteSettingsPg,
         userFieldDefinitionsPg,
         emailProvidersPg,
-        emailTemplatesPg
+        emailTemplatesPg,
+        emailDeliveriesPg
       );
       break;
     case "mysql":
@@ -199,7 +203,8 @@ export function getCoreSchema(
         siteSettingsMysql,
         userFieldDefinitionsMysql,
         emailProvidersMysql,
-        emailTemplatesMysql
+        emailTemplatesMysql,
+        emailDeliveriesMysql
       );
       break;
     case "sqlite":
@@ -210,7 +215,8 @@ export function getCoreSchema(
         siteSettingsSqlite,
         userFieldDefinitionsSqlite,
         emailProvidersSqlite,
-        emailTemplatesSqlite
+        emailTemplatesSqlite,
+        emailDeliveriesSqlite
       );
       break;
     default: {
