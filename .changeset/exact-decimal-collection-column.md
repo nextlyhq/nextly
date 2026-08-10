@@ -23,4 +23,4 @@
 "@nextlyhq/tsconfig": patch
 ---
 
-A number field declared as an exact decimal now reaches an exact decimal column in a collection or single, on every database and whether the field is created with its table or added to an existing one. It previously became a whole-number column, so any amount with a fractional part lost it.
+A number field declared as an exact decimal now reaches a decimal column in a collection or single, whether the field is created with its table or added to an existing one. It previously became a whole-number column, so any amount with a fractional part lost it. Storage is exact on PostgreSQL and MySQL; on SQLite the column carries NUMERIC affinity, which is the closest that engine offers rather than a guarantee of exactness.

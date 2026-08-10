@@ -24,6 +24,10 @@ import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import {
+  validateNumberDecimalDimensionsShared,
+  type BaseValidationError,
+} from "../../../shared/base-validator";
 import { env } from "../../../shared/lib/env";
 import {
   pluginEmptyColumnDefault,
@@ -37,8 +41,6 @@ import {
   getSystemColumnDescriptors,
   renderSystemColumnSql,
   toSnakeCase,
-  DEFAULT_DECIMAL_PRECISION,
-  DEFAULT_DECIMAL_SCALE,
 } from "../../schema/services/field-column-descriptor";
 import {
   columnTypeIsIndexable,
@@ -314,6 +316,9 @@ export class DynamicCollectionSchemaService {
       localized?: boolean;
     }
   ): string {
+    // Refuse an unusable decimal shape before any of it becomes SQL.
+    this.assertDecimalDimensions(fields);
+
     const constraints: string[] = [];
     const checks: string[] = [];
     const junctionTables: string[] = [];
@@ -648,6 +653,9 @@ ${allColumnDefs.join(",\n")}
       indexNames?: ReadonlySet<string>;
     }
   ): string {
+    // The added columns become SQL here too, so the same refusal applies.
+    this.assertDecimalDimensions(newFields);
+
     const statements: string[] = [`-- Update dynamic collection: ${tableName}`];
 
     // Status system column flip (enable / disable Draft/Published). When
@@ -1029,16 +1037,39 @@ ${allColumnDefs.join(",\n")}
   /**
    * Check if a field definition has been modified
    */
+  /**
+   * Whether an edit changes the physical column, and therefore needs an ALTER.
+   *
+   * The column is compared through the descriptor rather than by listing the properties that
+   * happen to affect it. A list is a claim about which properties matter, and it goes stale the
+   * moment a new one is added: `dbType`, `precision`, `scale` and `options.format` all decide a
+   * number's storage and none of them were listed, so changing a field to an exact decimal or
+   * widening its precision produced no ALTER at all — the registry described a decimal while the
+   * column stayed an integer, and every fractional write was still truncated.
+   *
+   * Asking the descriptor makes that class of omission impossible: whatever decides a column today
+   * or later is, by construction, what this compares.
+   *
+   * `unique` and `index` are compared separately because they are not properties of the column's
+   * shape. Two columns can be identical and differ in whether an index covers them.
+   */
   isFieldModified(
     oldField: FieldDefinition,
     newField: FieldDefinition
   ): boolean {
+    if (oldField.unique !== newField.unique) return true;
+    if (oldField.index !== newField.index) return true;
+
+    const before = getColumnDescriptor(oldField, this.dialect, "collection");
+    const after = getColumnDescriptor(newField, this.dialect, "collection");
+    // One producing no column and the other producing one is itself a change of storage class.
+    if (!before || !after) return before !== after;
+
     return (
-      oldField.type !== newField.type ||
-      oldField.length !== newField.length ||
-      oldField.required !== newField.required ||
-      oldField.unique !== newField.unique ||
-      oldField.index !== newField.index
+      before.name !== after.name ||
+      before.dialectType !== after.dialectType ||
+      before.nullable !== after.nullable ||
+      before.kind !== after.kind
     );
   }
 
@@ -1332,9 +1363,15 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
    * The column a number field reaches, for the dialect this service builds for.
    *
    * Two independent things can ask for fractions and they mean different storage. `dbType:
-   * "decimal"` asks for EXACT fixed point, which is what money needs and what nothing else should
+   * "decimal"` asks for exact fixed point, which is what money needs and what nothing else should
    * use; `options.format === "float"` is the UI's way of asking for an ordinary fractional number.
    * Silence means whole numbers.
+   *
+   * 🔴 "Exact" holds on PostgreSQL and MySQL, which have a real fixed-point type. SQLite has only
+   * NUMERIC affinity: it stores what it can as an exact value and falls back to binary floating
+   * point, and this package reads number columns back as JavaScript numbers either way. The column
+   * is therefore the best storage SQLite offers rather than a guarantee, which is the same caveat
+   * `NumberFieldConfig` already carries.
    *
    * Read here rather than inline in each dialect map because the same three-way answer is needed
    * three times, and a map that answered it per dialect is how one of the three came to be missing
@@ -1345,20 +1382,59 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${th
     storage: Pick<FieldDefinition, "dbType" | "precision" | "scale"> | undefined
   ): string {
     if (storage?.dbType === "decimal") {
-      const precision = storage.precision ?? DEFAULT_DECIMAL_PRECISION;
-      const scale = storage.scale ?? DEFAULT_DECIMAL_SCALE;
-      // Rendered the way the column descriptor renders it for each dialect, so a table built here
-      // and the runtime schema that reads it describe one column. SQLite has no sized numeric and
-      // stores the value with full fidelity either way.
-      if (this.dialect === "sqlite") return "numeric";
-      return this.dialect === "mysql"
-        ? `decimal(${precision},${scale})`
-        : `numeric(${precision}, ${scale})`;
+      // 🔴 Asked, not restated. The descriptor owns the decimal defaults and the per-dialect
+      // spelling, and both are read by the runtime table and the schema diff. Copying them here
+      // would be a second source of truth for the very question whose two answers produced this
+      // defect: a later change to a default or a dialect rendering would make a newly created
+      // table disagree with the schema that binds it, silently and only on one path.
+      //
+      // The dimensions are validated before this point, so what reaches the descriptor is a shape
+      // it can render rather than whatever a request happened to carry.
+      const described = getColumnDescriptor(
+        {
+          name: "n",
+          type: "number",
+          dbType: "decimal",
+          precision: storage.precision,
+          scale: storage.scale,
+        },
+        this.dialect,
+        "collection"
+      );
+      if (described) return described.dialectType;
     }
     if (options?.format === "float") {
       return this.dialect === "sqlite" ? "real" : "decimal(10,2)";
     }
     return "integer";
+  }
+
+  /**
+   * Refuse decimal dimensions that cannot safely become part of a type.
+   *
+   * `precision` and `scale` are interpolated into DDL, and on this path they arrive from a request
+   * payload that is only name- and plugin-validated. A value that is not an integer therefore
+   * reaches the template verbatim, which at best renders a migration no engine accepts and at worst
+   * carries whatever the string contains into a statement.
+   *
+   * The same rule the code-first config already enforces, reused rather than restated: the ranges
+   * and the scale-not-greater-than-precision check are one definition, so the Schema Builder cannot
+   * accept a shape `defineCollection` rejects.
+   */
+  private assertDecimalDimensions(fields: FieldDefinition[]): void {
+    const errors: BaseValidationError[] = [];
+    fields.forEach((field, index) => {
+      validateNumberDecimalDimensionsShared(field, `fields[${index}]`, errors);
+    });
+    if (errors.length > 0) {
+      throw NextlyError.validation({
+        errors: errors.map(e => ({
+          path: e.path,
+          code: e.code,
+          message: e.message,
+        })),
+      });
+    }
   }
 
   mapFieldTypeToSQL(

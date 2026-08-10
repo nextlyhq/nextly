@@ -97,3 +97,65 @@ describe("a number field's storage", () => {
     expect(createdColumn("postgresql", field)).toContain("numeric(10, 2)");
   });
 });
+
+describe("an edit that changes a number's storage", () => {
+  const svc = (d: Dialect = "postgresql") =>
+    new DynamicCollectionSchemaService(undefined, d);
+
+  const plain = { name: "price", type: "number" } as unknown as FieldDefinition;
+
+  // The defect: the modification check listed the properties it compared, and none of the four that
+  // decide a number's storage were on that list. A field switched to exact decimal therefore
+  // produced no ALTER, so the registry described a decimal over an integer column.
+  it("notices a field switched to an exact decimal", () => {
+    expect(svc().isFieldModified(plain, money("price"))).toBe(true);
+  });
+
+  it("notices a precision change on a field that is already decimal", () => {
+    const before = {
+      name: "price",
+      type: "number",
+      dbType: "decimal",
+      precision: 10,
+      scale: 2,
+    } as unknown as FieldDefinition;
+
+    expect(svc().isFieldModified(before, money("price"))).toBe(true);
+  });
+
+  // Stated so the cases above cannot be satisfied by reporting every field as modified, which would
+  // rewrite columns on every save.
+  it("still reports an unchanged field as unchanged", () => {
+    expect(svc().isFieldModified(plain, { ...plain })).toBe(false);
+    expect(svc().isFieldModified(money("price"), money("price"))).toBe(false);
+  });
+});
+
+describe("decimal dimensions that cannot safely become SQL", () => {
+  // These arrive from a request payload on the Builder path, which validates names and plugin
+  // options but not these. Unchecked, the value is interpolated into the type verbatim.
+  const generate = (field: FieldDefinition): string =>
+    new DynamicCollectionSchemaService(
+      undefined,
+      "postgresql"
+    ).generateMigrationSQL(TABLE, [field], {});
+
+  it.each([
+    ["a non-integer precision", { precision: 2.5, scale: 1 }],
+    ["a scale larger than the precision", { precision: 2, scale: 8 }],
+    ["a precision out of range", { precision: 0, scale: 0 }],
+  ])("refuses %s", (_label, dims) => {
+    const field = {
+      name: "price",
+      type: "number",
+      dbType: "decimal",
+      ...dims,
+    } as unknown as FieldDefinition;
+
+    expect(() => generate(field)).toThrow();
+  });
+
+  it("accepts dimensions that are usable", () => {
+    expect(() => generate(money("price"))).not.toThrow();
+  });
+});
