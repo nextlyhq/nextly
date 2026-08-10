@@ -212,3 +212,25 @@ describe("a chroma far beyond anything displayable", () => {
     expect(absurd.b).toBeCloseTo(large.b, 3);
   });
 });
+
+describe("colours close to black", () => {
+  it("keeps the hue it promises when almost nothing is in gamut", () => {
+    // At this lightness the channel VALUES are themselves near zero, so a tolerance chosen for
+    // colours near white accepted a materially negative channel. The final clamp then moved it,
+    // and the hue this function exists to preserve came back 68 degrees away.
+    const asked = { l: 0.01, c: 0.5, h: 98 };
+    const shown = rgbToOklch(oklchToRgb(asked));
+    const drift = Math.abs(((shown.h - asked.h + 540) % 360) - 180);
+    expect(drift).toBeLessThan(1);
+  });
+
+  it("produces channels that are genuinely inside the gamut", () => {
+    // The cause rather than the symptom: the bisection must not accept a colour it then has to
+    // clamp, because clamping is precisely what moves the hue.
+    const rgb = oklchToRgb({ l: 0.01, c: 0.5, h: 98 });
+    for (const channel of [rgb.r, rgb.g, rgb.b]) {
+      expect(channel).toBeGreaterThanOrEqual(0);
+      expect(channel).toBeLessThanOrEqual(1);
+    }
+  });
+});

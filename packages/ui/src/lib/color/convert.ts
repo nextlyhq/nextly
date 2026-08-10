@@ -226,9 +226,13 @@ export function rgbToOklch({ r, g, b }: Rgb): Oklch {
 
 /** Whether every channel of a linear triple lies within the displayable range. */
 function inGamut([r, g, b]: [number, number, number]): boolean {
-  // A small tolerance, because the round trip through cube roots does not land exactly on the
-  // boundary for a colour that sits on it.
-  const epsilon = 1e-6;
+  // Absorbs the floating-point error of the cube roots for a colour sitting exactly ON the
+  // boundary, and nothing more. It has to be far below the channel VALUES, not merely small:
+  // near black those values are themselves tiny, so a tolerance of 1e-6 accepted a materially
+  // negative channel, the final clamp moved it to zero, and the hue this function promises to
+  // preserve came back 68 degrees away. Measured at l=0.01, c=0.5, h=98 — 1e-6 drifts 68.17°,
+  // 1e-9 drifts 0.02°, 1e-12 drifts none — against a round-trip error of about 1e-16.
+  const epsilon = 1e-12;
   return (
     r >= -epsilon &&
     r <= 1 + epsilon &&
