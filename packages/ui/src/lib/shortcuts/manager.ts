@@ -270,6 +270,9 @@ function controlOwnsKey(
     return event.key === "Enter";
   }
   if (type === "checkbox") return event.key === " ";
+  // A colour input opens its native picker on either key, and this product puts focusable ones
+  // on screen in the page builder's colour and gradient controls.
+  if (type === "color") return event.key === " " || event.key === "Enter";
   // A range input is a slider: the arrows, Home/End and PageUp/PageDown are how its value moves.
   if (type === "range") {
     return event.key.startsWith("Arrow") || RANGE_KEYS.has(event.key);
@@ -353,6 +356,15 @@ export function createShortcutManager(
   let pendingAt: number | null = null;
 
   /**
+   * The layer that claimed the sequence in progress.
+   *
+   * A prefix is not a property of the keyboard, it is a promise made by ONE layer. Without this,
+   * disabling the claimer between keystrokes lets a lower layer's `g d` fire on a `d` whose `g`
+   * it never saw, and a layer mounted mid-sequence inherits a prefix typed before it existed.
+   */
+  let pendingLayer: RegisteredLayer | null = null;
+
+  /**
    * The keystroke consumed by the most recent fresh press, so its repeats stay consumed.
    *
    * Identifies the physical press rather than the binding that answered it: by the time a repeat
@@ -372,6 +384,7 @@ export function createShortcutManager(
   function abandonSequence(): void {
     pendingAt = null;
     pressedEvents.length = 0;
+    pendingLayer = null;
   }
 
   function prepare(bindings: readonly ShortcutBinding[]): PreparedBinding[] {
@@ -431,11 +444,12 @@ export function createShortcutManager(
     // AltGraph arrives as ctrl+alt on the layouts that use it, so it must be unwrapped before
     // either modifier is read as a chord.
     const altGraph = event.getModifierState?.("AltGraph") ?? false;
-    // Ctrl and Meta make a chord; Alt does NOT, because on macOS Option is a text modifier —
-    // Option+e begins an accent and Option+5 types a character outright. In both cases the key
-    // REPORTED is the character or `Dead`, never the base letter, so the text tests below
-    // recognise them while `mod+s` still reads as the chord it is.
+    // Ctrl and Meta always make a chord. Alt is platform-dependent: on macOS Option is a text
+    // modifier, while on Windows and Linux Alt+F is a menu accelerator that a grab must suppress.
+    // Where Option applies, the key REPORTED is the character or `Dead`, never the base letter,
+    // so the text tests below recognise it while `mod+s` still reads as the chord it is.
     if (!altGraph && (event.ctrlKey || event.metaKey)) return false;
+    if (!altGraph && event.altKey && !isApple) return false;
     // Both are the start of composed text and both precede `isComposing`.
     if (event.key === "Dead" || event.key === "Process") return true;
     // One CODE POINT, not one code unit: an astral character is a single letter written as two
@@ -464,6 +478,14 @@ export function createShortcutManager(
     invoke: boolean
   ): "fired" | "pending" | "blocked" | "none" {
     for (const layer of ordered()) {
+      // Only the layer that opened a sequence may complete it.
+      if (
+        pressed.length > 1 &&
+        pendingLayer !== null &&
+        layer !== pendingLayer
+      ) {
+        continue;
+      }
       // Exact matches are resolved across the WHOLE layer before any prefix is considered.
       // Scanning in registration order instead makes one of `g` and `g d` unreachable purely by
       // which was registered first: `g` fires and clears the sequence, or `g d` returns pending
@@ -481,6 +503,7 @@ export function createShortcutManager(
         if (depth === "prefix") prefixed = true;
       }
       if (prefixed) {
+        pendingLayer = layer;
         // A sequence in progress must swallow its own keystroke, or the `g` of `g d` would be
         // typed into the page while the sequence waits for `d`.
         event.preventDefault();
@@ -597,6 +620,12 @@ export function createShortcutManager(
         return true;
       }
       const repeated = offer([event], event, typing, false);
+      if (repeated === "blocked" && !insertsText(event, typing)) {
+        // A key can begin repeating BEFORE the layer that grabs the keyboard appears, so this is
+        // the first time the manager sees it and there is no earlier press to inherit from.
+        // Without this the browser keeps scrolling underneath the grab.
+        event.preventDefault();
+      }
       return repeated !== "none";
     }
 
@@ -663,9 +692,12 @@ export function createShortcutManager(
           // The React hook registers empty and supplies its real bindings here, so a diagnostic
           // that only ran at `register` would never see the bindings anyone actually writes.
           warnOnPrefixConflicts(layer.bindings, nextOptions.name);
+          // The bindings that made the pending promise are gone.
+          if (pendingLayer === layer) abandonSequence();
         },
         dispose() {
           layers.delete(layer);
+          if (pendingLayer === layer) abandonSequence();
         },
       };
     },

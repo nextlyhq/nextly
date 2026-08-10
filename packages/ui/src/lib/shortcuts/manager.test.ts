@@ -1233,7 +1233,7 @@ describe("text that arrives with a modifier held", () => {
     // Option is a TEXT modifier on macOS: Option+5 types a character outright. The key reported
     // is the character itself, never the base letter, so rejecting anything with altKey set
     // stopped those characters being typed under a grab.
-    const manager = managerFor();
+    const manager = managerFor(true);
     manager.register([binding("Escape", vi.fn())], {
       name: "modal",
       depth: 1,
@@ -1391,5 +1391,139 @@ describe("an outcome that is still tentative", () => {
 
     expect(cancel).toHaveBeenCalledTimes(1);
     expect(escape.defaultPrevented).toBe(false);
+  });
+});
+
+describe("Alt means different things on different platforms", () => {
+  it("suppresses an Alt accelerator under a grab on a non-Apple platform", () => {
+    // Alt+F opens a menu on Windows and Linux; it types nothing. Letting it through because it
+    // LOOKS like a single character would hand the browser a key the grab claimed to own.
+    const manager = managerFor(false);
+    manager.register([binding("Escape", vi.fn())], {
+      name: "modal",
+      depth: 1,
+      blocking: true,
+    });
+    const field = document.createElement("input");
+    document.body.append(field);
+    const detach = manager.attach(document);
+    const event = press("f", { altKey: true });
+    field.dispatchEvent(event);
+    detach();
+    field.remove();
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("keeps AltGraph portable across platforms", () => {
+    // AltGraph is text entry everywhere it exists, so it must not be gated on the platform the
+    // way plain Alt is.
+    const manager = managerFor(false);
+    manager.register([binding("Escape", vi.fn())], {
+      name: "modal",
+      depth: 1,
+      blocking: true,
+    });
+    const field = document.createElement("input");
+    document.body.append(field);
+    const detach = manager.attach(document);
+    const event = press("@", { ctrlKey: true, altKey: true });
+    Object.defineProperty(event, "getModifierState", {
+      value: (k: string) => k === "AltGraph",
+    });
+    field.dispatchEvent(event);
+    detach();
+    field.remove();
+    expect(event.defaultPrevented).toBe(false);
+  });
+});
+
+describe("a key already repeating when the grab appears", () => {
+  it("suppresses it, having never seen its first press", () => {
+    // A drag can begin while an arrow key is already held, so the manager's first sight of that
+    // key is a repeat with no earlier press to inherit a policy from. Left alone, the browser
+    // carries on scrolling underneath the grab.
+    const manager = managerFor();
+    manager.register([binding("Escape", vi.fn())], {
+      name: "drag",
+      depth: 1,
+      blocking: true,
+    });
+    const repeat = press("ArrowDown", { repeat: true });
+    manager.handle(repeat);
+    expect(repeat.defaultPrevented).toBe(true);
+  });
+});
+
+describe("a sequence belongs to the layer that opened it", () => {
+  it("does not let a lower layer complete a prefix it never received", () => {
+    // The top layer claimed `g`. Disabling it before the next keystroke handed `d` to a lower
+    // layer's `g d`, which had never seen the `g` at all.
+    const lower = vi.fn();
+    const manager = managerFor();
+    manager.register([binding("g d", lower)], { name: "shell", depth: 0 });
+    const top = manager.register([binding("g x", vi.fn())], {
+      name: "panel",
+      depth: 1,
+    });
+
+    manager.handle(press("g"));
+    top.dispose();
+    manager.handle(press("d"));
+
+    expect(lower).not.toHaveBeenCalled();
+  });
+
+  it("does not let a layer mounted mid-sequence inherit the prefix", () => {
+    // The prefix was typed before this layer existed, so it cannot be the one that promised it.
+    const late = vi.fn();
+    const manager = managerFor();
+    const top = manager.register([binding("g x", vi.fn())], {
+      name: "panel",
+      depth: 1,
+    });
+    void top;
+
+    manager.handle(press("g"));
+    manager.register([binding("g d", late)], { name: "late", depth: 2 });
+    manager.handle(press("d"));
+
+    expect(late).not.toHaveBeenCalled();
+  });
+});
+
+describe("a focused colour input", () => {
+  it("keeps the keys that open its picker", () => {
+    // Space and Enter both open the native colour picker, and this product puts focusable colour
+    // inputs on screen in the page builder's colour and gradient controls.
+    const run = vi.fn();
+    const manager = managerFor();
+    manager.register([binding("Space", run)], { name: "shell", depth: 0 });
+    const swatch = document.createElement("input");
+    swatch.type = "color";
+    document.body.append(swatch);
+    const detach = manager.attach(document);
+    swatch.dispatchEvent(press(" "));
+    detach();
+    swatch.remove();
+    expect(run).not.toHaveBeenCalled();
+  });
+});
+
+describe("a layer whose bindings are replaced mid-sequence", () => {
+  it("cannot complete a prefix its previous bindings claimed", () => {
+    // Distinct from disposal: the layer still EXISTS and still outranks everything, so the
+    // ownership check alone would let its new bindings answer for a promise the old ones made.
+    const replaced = vi.fn();
+    const manager = managerFor();
+    const layer = manager.register([binding("g x", vi.fn())], {
+      name: "panel",
+      depth: 1,
+    });
+
+    manager.handle(press("g"));
+    layer.update([binding("g d", replaced)], { name: "panel", depth: 1 });
+    manager.handle(press("d"));
+
+    expect(replaced).not.toHaveBeenCalled();
   });
 });
