@@ -108,8 +108,10 @@ describe("supportsToControls", () => {
     // one list, so this asserts they still are — a hand-written list reintroduced here is what it
     // catches, not a value-by-value comparison, which the shared source already makes impossible.
     //
-    // It cannot be a type-level assertion: this package excludes `**/*.test.ts` from `tsc`, so a
-    // type error written in a test is never reported by anything.
+    // It cannot be a type-level assertion HERE: this package's `check-types` runs `tsc` against a
+    // config that excludes `**/*.test.ts*`, and unlike `nextly` and `blocks-react` it has no
+    // second pass over a config that includes them — so a type error written in this file is
+    // reported by nothing.
     const optionsFor = (key: string) =>
       supportsToControls({ dimensions: { overflow: true, objectFit: true } })
         .flatMap(g => g.controls)
