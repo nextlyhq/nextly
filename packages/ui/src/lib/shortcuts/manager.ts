@@ -194,9 +194,16 @@ export interface ActiveShortcut {
 
 const DEFAULT_SEQUENCE_TIMEOUT_MS = 1000;
 
-/** Identifies a physical keystroke, for matching a repeat back to the press that began it. */
+/**
+ * Identifies the physical press, for matching a repeat back to the keystroke that began it.
+ *
+ * `code` rather than `key` and the modifier flags, because those CHANGE while a key is held:
+ * press Ctrl+S, then add Shift, and the repeats arrive as `S` with a different modifier set. A
+ * signature built from them stops matching mid-hold, the repeat is reported unhandled, and the
+ * browser takes it. The physical key does not move, so the physical key is what is remembered.
+ */
 function signature(event: KeyboardEvent): string {
-  return `${event.key}\u0000${event.ctrlKey}${event.metaKey}${event.altKey}${event.shiftKey}`;
+  return event.code || event.key;
 }
 
 /**
@@ -476,12 +483,28 @@ export function createShortcutManager(
       // these still matches first; only UNBOUND combinations reach here.
       const letter =
         event.key.length === 1 ? event.key.toLowerCase() : event.key;
-      if (letter === REDO_LETTER) return !isApple;
+      // Redo is the one editing command spelled WITH shift on Apple platforms; everywhere else
+      // it is Ctrl+Y. Both are the field's.
+      if (letter === "z" && event.shiftKey) return !event.altKey;
+      if (letter === REDO_LETTER)
+        return !isApple && !event.shiftKey && !event.altKey;
+      // Every other editing chord is the plain modifier plus one key. Allowing arbitrary
+      // modified variants let Ctrl+Shift+A — the browser's tab search — pass as though it were
+      // select-all, escaping the grab entirely.
+      if (event.shiftKey || event.altKey) return false;
       return EDITING_LETTERS.has(letter) || EDITING_NAVIGATION.has(event.key);
     }
     // Option turns caret keys into their by-word forms on macOS, and is a text modifier there;
     // on Windows and Linux, Alt with a named key is a menu accelerator.
     if (!altGraph && event.altKey) {
+      // A native select opens and closes its option popup with Alt and the vertical arrows, so
+      // the control's own claim is checked before the key is written off as an accelerator.
+      if (
+        (event.key === "ArrowDown" || event.key === "ArrowUp") &&
+        asElement(eventTarget(event))?.tagName === "SELECT"
+      ) {
+        return true;
+      }
       if (!isApple) return false;
       if (EDITING_NAVIGATION.has(event.key)) return true;
     }
@@ -806,9 +829,8 @@ const MODIFIER_KEYS = new Set(["Control", "Meta", "Alt", "Shift"]);
 /**
  * Keys a focused field consumes itself: caret movement and the edits that carry no character.
  *
- * Tab is deliberately absent. It moves focus rather than editing text, so letting it through
- * would carry focus straight out of the drag or modal that claimed the keyboard. A focus trap
- * that wants Tab claims it before the manager, which the `defaultPrevented` check then honours.
+ * Tab is here because a focus trap needs it: it only cancels the wrap at the first and last
+ * tabbable element, and relies on the browser default for every move in between.
  *
  * Used to decide what a blocking layer may suppress while the user is typing. A key outside this
  * set and not a character belongs to the browser, not the field.
@@ -896,4 +918,10 @@ const FIELD_KEYS = new Set([
   // Shift+Insert pastes and carries no ctrl or meta, so it arrives here rather than at the
   // chord branch where Ctrl+Insert is recognised.
   "Insert",
+  // Tab moves focus, and a blocking layer must NOT take it. The documented case for blocking is
+  // a modal, whose focus trap only calls `preventDefault()` at the first and last tabbable
+  // element — ordinary moves between the controls inside it rely on the browser default.
+  // Suppressing every Tab therefore pinned focus to one control in exactly the situation
+  // blocking exists to serve. A layer that genuinely wants Tab binds it.
+  "Tab",
 ]);

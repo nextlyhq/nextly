@@ -73,6 +73,24 @@ interface ShortcutContextValue {
 
 const ShortcutContext = React.createContext<ShortcutContextValue | null>(null);
 
+/** A target this kit is already listening on, and how many providers rely on that listener. */
+interface TargetOwner {
+  manager: ShortcutManager;
+  providers: number;
+  detach?: () => void;
+}
+
+/**
+ * The manager already listening on each target.
+ *
+ * Keyed by the target rather than carried in context, because "one listener per target" is a
+ * fact about the DOM and not about the React tree. Two sibling subtrees — or two independent
+ * roots on one page — each render a provider with no shortcut ancestor between them, so a
+ * context check sees nothing and both would attach. This registry is what makes the guarantee
+ * hold across them.
+ */
+const ownersByTarget = new WeakMap<object, TargetOwner>();
+
 /**
  * Props for {@link ShortcutProvider}.
  *
@@ -118,6 +136,26 @@ export function ShortcutProvider({
     parent !== null &&
     resolvedTarget !== null &&
     parent.target === resolvedTarget;
+  // Options are read once, when the manager is built. Re-creating it on a changed option would
+  // drop every layer registered by a child, since registrations live on the manager instance.
+  const optionsRef = React.useRef(managerOptions);
+  const detached = React.useMemo(
+    () => createShortcutManager(optionsRef.current),
+    []
+  );
+
+  // Looked up during render, because two sibling providers both need the same manager before
+  // either one's effect has run. The lookup is idempotent and keyed by the target, so a repeated
+  // render finds the entry it made rather than making a second one; the reference COUNT is kept
+  // in the effect below, where React guarantees a matching cleanup.
+  let owner =
+    resolvedTarget === null ? null : ownersByTarget.get(resolvedTarget);
+  if (resolvedTarget !== null && !owner) {
+    owner = { manager: detached, providers: 0 };
+    ownersByTarget.set(resolvedTarget, owner);
+  }
+  const manager = owner ? owner.manager : detached;
+
   devWarnOnce(
     !nestedOnSameTarget,
     "ShortcutProvider: a provider is already mounted above this one. The inner one is being " +
@@ -125,23 +163,28 @@ export function ShortcutProvider({
       "key. Render one provider at the root, and use ShortcutScope to raise precedence inside it."
   );
 
-  // Options are read once, when the manager is built. Re-creating it on a changed option would
-  // drop every layer registered by a child, since registrations live on the manager instance.
-  const optionsRef = React.useRef(managerOptions);
-  const own = React.useMemo(
-    () => createShortcutManager(optionsRef.current),
-    []
-  );
-  const manager = nestedOnSameTarget && parent ? parent.manager : own;
-
   React.useEffect(() => {
-    // `target === null` is an explicit "attach nothing", for tests and for a host that drives
-    // `handle` itself. An omitted target falls back to the document.
-    // The outer provider already owns this target's listener, and `null` is an explicit
-    // "attach nothing" for tests and for a host that drives `handle` itself.
-    if (resolvedTarget === null || nestedOnSameTarget) return;
-    return manager.attach(resolvedTarget);
-  }, [manager, resolvedTarget, nestedOnSameTarget]);
+    // `null` is an explicit "attach nothing", for tests and for a host that drives `handle`
+    // itself.
+    if (resolvedTarget === null) return;
+    const entry = ownersByTarget.get(resolvedTarget);
+    if (!entry) return;
+    entry.providers += 1;
+    // The first provider to arrive installs the listener; the rest share it. Ownership is a
+    // property of the target rather than of the tree, so this holds for sibling subtrees and
+    // independent React roots, which have no common context to consult.
+    if (entry.providers === 1) {
+      entry.detach = entry.manager.attach(resolvedTarget);
+    }
+    return () => {
+      entry.providers -= 1;
+      if (entry.providers === 0) {
+        entry.detach?.();
+        entry.detach = undefined;
+        ownersByTarget.delete(resolvedTarget);
+      }
+    };
+  }, [resolvedTarget]);
 
   // Depth continues from the parent rather than restarting, so a scope inside an ignored nested
   // provider still outranks what surrounds it.

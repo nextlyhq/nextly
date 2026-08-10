@@ -40,9 +40,16 @@ export interface KeyChord {
  */
 export type KeySequence = readonly KeyChord[];
 
-/** Named keys are compared exactly; single characters are compared case-insensitively. */
+/**
+ * Named keys are compared exactly; single characters are compared case-insensitively.
+ *
+ * "Single character" is counted in CODE POINTS, matching the text-insertion path. A letter from
+ * a supplementary plane occupies two UTF-16 units, so a length check on the string treats it as a
+ * named key and skips the lowercasing — leaving its upper and lower case forms unable to match
+ * each other, in a grammar that documents case-insensitive letters.
+ */
 function normalizeKey(key: string): string {
-  return key.length === 1 ? key.toLowerCase() : key;
+  return [...key].length === 1 ? key.toLowerCase() : key;
 }
 
 /**

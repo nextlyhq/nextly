@@ -1145,9 +1145,12 @@ describe("keystrokes claimed while an IME is composing", () => {
 });
 
 describe("a grab that actually holds the keyboard", () => {
-  it("suppresses Tab so focus cannot leave the layer that owns the keyboard", () => {
-    // Tab moves focus rather than editing text, so permitting it carried focus straight out of
-    // the drag or modal that had claimed the keyboard.
+  it("leaves Tab to the focus trap that owns the modal", () => {
+    // This reverses an earlier decision here, which suppressed Tab on the reasoning that a grab
+    // letting focus leave is not a grab. That was wrong for the case blocking exists to serve: a
+    // focus trap only cancels the WRAP at the first and last tabbable element and relies on the
+    // browser default for every move in between, so suppressing every Tab pinned focus to a
+    // single control inside the modal. A layer that genuinely wants Tab binds it.
     const manager = managerFor();
     manager.register([binding("Escape", vi.fn())], {
       name: "modal",
@@ -1161,7 +1164,7 @@ describe("a grab that actually holds the keyboard", () => {
     field.dispatchEvent(event);
     detach();
     field.remove();
-    expect(event.defaultPrevented).toBe(true);
+    expect(event.defaultPrevented).toBe(false);
   });
 
   it("still lets the caret keys through", () => {
@@ -1990,5 +1993,102 @@ describe("a prefix conflict that eligibility can separate", () => {
     warn.mockRestore();
     expect(said).toContain("prefix");
     expect(manager).toBeDefined();
+  });
+});
+
+describe("modified variants of an editing letter", () => {
+  it("suppresses a browser accelerator that merely looks like one", () => {
+    // Ctrl+Shift+A is the browser's tab search. Lowercasing the key made it read as select-all,
+    // so it passed as field editing and escaped the grab entirely.
+    const manager = managerFor(false);
+    manager.register([binding("Escape", vi.fn())], {
+      name: "modal",
+      depth: 1,
+      blocking: true,
+    });
+    const field = document.createElement("input");
+    document.body.append(field);
+    const detach = manager.attach(document);
+    const event = press("A", { ctrlKey: true, shiftKey: true });
+    field.dispatchEvent(event);
+    detach();
+    field.remove();
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("still leaves shift+z redo to the field", () => {
+    // The one editing command genuinely spelled with shift, so a blanket rejection of modified
+    // variants would take redo away from every field inside a modal.
+    const manager = managerFor(true);
+    manager.register([binding("Escape", vi.fn())], {
+      name: "modal",
+      depth: 1,
+      blocking: true,
+    });
+    const field = document.createElement("input");
+    document.body.append(field);
+    const detach = manager.attach(document);
+    const event = press("Z", { metaKey: true, shiftKey: true });
+    field.dispatchEvent(event);
+    detach();
+    field.remove();
+    expect(event.defaultPrevented).toBe(false);
+  });
+});
+
+describe("a select's own popup keys", () => {
+  it("leaves Alt+ArrowDown to a focused native select", () => {
+    // Alt with the vertical arrows opens and closes the option popup, so writing every plain-Alt
+    // named key off as an accelerator took a standard interaction away inside a modal.
+    const manager = managerFor(false);
+    manager.register([binding("Escape", vi.fn())], {
+      name: "modal",
+      depth: 1,
+      blocking: true,
+    });
+    const select = document.createElement("select");
+    document.body.append(select);
+    const detach = manager.attach(document);
+    const event = press("ArrowDown", { altKey: true });
+    select.dispatchEvent(event);
+    detach();
+    select.remove();
+    expect(event.defaultPrevented).toBe(false);
+  });
+});
+
+describe("a held key whose modifiers change", () => {
+  it("stays consumed when shift is added mid-hold", () => {
+    // Repeats carry the CURRENT modifiers, and the key itself changes case, so a signature built
+    // from them stopped matching mid-hold: after mod+s was handled, adding shift let the next
+    // repeat fall through to the browser's Save As.
+    const run = vi.fn();
+    const manager = managerFor(false);
+    manager.register([binding("mod+s", run)], { name: "shell", depth: 0 });
+
+    manager.handle(press("s", { ctrlKey: true, code: "KeyS" }));
+    const later = press("S", {
+      ctrlKey: true,
+      shiftKey: true,
+      repeat: true,
+      code: "KeyS",
+    });
+    manager.handle(later);
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(later.defaultPrevented).toBe(true);
+  });
+});
+
+describe("a letter outside the basic plane", () => {
+  it("matches case-insensitively, as the grammar documents", () => {
+    // A Deseret letter is one character in two UTF-16 units, so a length check on the string
+    // classified it as a NAMED key and skipped the lowercasing that every other letter gets —
+    // leaving its upper and lower case forms unable to match each other.
+    const run = vi.fn();
+    const manager = managerFor();
+    manager.register([binding("\u{10400}", run)], { name: "shell", depth: 0 });
+    manager.handle(press("\u{10428}"));
+    expect(run).toHaveBeenCalledTimes(1);
   });
 });

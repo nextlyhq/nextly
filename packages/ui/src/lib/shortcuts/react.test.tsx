@@ -419,3 +419,84 @@ describe("two providers naming the same target differently", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("providers that are siblings rather than nested", () => {
+  it("shares one listener between two independent subtrees", () => {
+    // Neither has a shortcut ancestor, so a context check sees nothing and both would attach.
+    // Ownership is a property of the TARGET, not of the React tree.
+    const run = vi.fn();
+
+    function Keys(): React.JSX.Element | null {
+      useShortcuts(
+        [{ keys: "mod+k", description: "Open", run, preventDefault: false }],
+        { name: "keys" }
+      );
+      return null;
+    }
+
+    const first = render(
+      <ShortcutProvider isApple={false}>
+        <Keys />
+      </ShortcutProvider>
+    );
+    const second = render(
+      <ShortcutProvider isApple={false}>
+        <Keys />
+      </ShortcutProvider>
+    );
+
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "k",
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      })
+    );
+    first.unmount();
+    second.unmount();
+
+    // Two layers, one manager, one listener: the deeper-registered layer wins and runs once.
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps listening while any provider remains, and stops when the last leaves", () => {
+    // The reference count is the part that makes sharing safe: the first provider to unmount
+    // must not remove the listener the second is still relying on.
+    const run = vi.fn();
+
+    function Keys(): React.JSX.Element | null {
+      useShortcuts([{ keys: "mod+j", description: "Go", run }], { name: "k" });
+      return null;
+    }
+
+    const first = render(<ShortcutProvider isApple={false} />);
+    const second = render(
+      <ShortcutProvider isApple={false}>
+        <Keys />
+      </ShortcutProvider>
+    );
+    first.unmount();
+
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "j",
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      })
+    );
+    expect(run).toHaveBeenCalledTimes(1);
+
+    second.unmount();
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "j",
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      })
+    );
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+});
