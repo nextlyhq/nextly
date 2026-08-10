@@ -199,9 +199,19 @@ const Slider = React.forwardRef<
     const ariaFor = (index: number): SliderThumbProps => {
       const supplied = thumbs?.[index] ?? {};
       if (count !== 1) return supplied;
+      // The two naming attributes are ALTERNATIVES, not independent slots, so
+      // the fallback is all-or-nothing. Filling each one separately can emit a
+      // thumb `aria-label` alongside a root `aria-labelledby`, and since
+      // accessible-name computation prefers `aria-labelledby`, the caller's
+      // explicit per-thumb name would lose to the root's without saying so.
+      const namesItself =
+        supplied["aria-label"] !== undefined ||
+        supplied["aria-labelledby"] !== undefined;
       return {
-        "aria-label": supplied["aria-label"] ?? ariaLabel,
-        "aria-labelledby": supplied["aria-labelledby"] ?? ariaLabelledBy,
+        "aria-label": namesItself ? supplied["aria-label"] : ariaLabel,
+        "aria-labelledby": namesItself
+          ? supplied["aria-labelledby"]
+          : ariaLabelledBy,
         "aria-valuetext": supplied["aria-valuetext"],
         "aria-describedby": supplied["aria-describedby"],
       };

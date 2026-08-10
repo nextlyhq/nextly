@@ -230,4 +230,39 @@ describe("Slider", () => {
       warn.mockRestore();
     }
   });
+
+  it("does not let a root labelledby outrank a thumb's own label", () => {
+    // The two naming attributes are alternatives, and `aria-labelledby` WINS
+    // name computation. Emitting the root's labelledby beside the thumb's own
+    // label would silently discard the caller's explicit name — and the
+    // same-attribute override test passes either way, so it cannot catch this.
+    const { container } = render(
+      <Slider
+        aria-labelledby="size-heading"
+        value={[40]}
+        onValueChange={() => {}}
+        thumbs={[{ "aria-label": "Opacity" }]}
+      />
+    );
+    const thumb = thumbsIn(container)[0];
+    expect(thumb.getAttribute("aria-label")).toBe("Opacity");
+    expect(thumb.hasAttribute("aria-labelledby")).toBe(false);
+  });
+
+  it("still falls back to the root when the thumb names itself in no way", () => {
+    // The positive control for the rule above: an all-or-nothing fallback that
+    // never fell back would pass the case above and break the documented
+    // single-thumb API.
+    const { container } = render(
+      <Slider
+        aria-labelledby="size-heading"
+        value={[40]}
+        onValueChange={() => {}}
+        thumbs={[{ "aria-valuetext": "40 percent" }]}
+      />
+    );
+    const thumb = thumbsIn(container)[0];
+    expect(thumb.getAttribute("aria-labelledby")).toBe("size-heading");
+    expect(thumb.getAttribute("aria-valuetext")).toBe("40 percent");
+  });
 });
