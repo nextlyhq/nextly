@@ -307,6 +307,21 @@ describe("deriveSeoFromDocument", () => {
     expect(derived.title).toBe("Public");
   });
 
+  it("keeps a later image's candidates after an earlier one", () => {
+    // Whether a candidate yields a picture is decided AFTER this walk, so a
+    // first image offering only a deleted media id must not end the search.
+    const derived = deriveSeoFromDocument(
+      doc([
+        node("1", "core/image", { mediaId: "deleted" }),
+        node("2", "core/image", { mediaId: "live" }),
+      ]),
+      definitions(),
+      visible
+    );
+
+    expect(derived.image).toEqual(["deleted", "live"]);
+  });
+
   it("returns nothing for an empty document", () => {
     expect(deriveSeoFromDocument(doc([]), definitions(), visible)).toEqual({});
   });

@@ -14,10 +14,8 @@
  * @module next
  */
 import {
-  DEFAULT_LIMITS,
   deriveSeoFromDocument,
   DOCUMENT_FORMAT_VERSION,
-  migrateDocument,
 } from "@nextlyhq/blocks-engine";
 import type {
   BlockDocument,
@@ -40,11 +38,11 @@ import { createElement } from "react";
 import { createStandaloneContext } from "./context";
 import type { BlocksDataProvider, PageContext, ResolvedMedia } from "./context";
 import { PageRenderer } from "./page-renderer";
-import { migrationSourceFor, registeredBlocks } from "./resolver";
+import { prepareDocumentForRead } from "./prepare-document";
+import { registeredBlocks } from "./resolver";
 import type { BlockResolver } from "./resolver";
-import { sanitizeDocument } from "./sanitize";
 import type { PageStyles } from "./styles";
-import { isUnconditional, pruneHiddenNodes } from "./visibility";
+import { isUnconditional } from "./visibility";
 
 /**
  * Marker for the subpath's existence and its build wiring.
@@ -222,34 +220,26 @@ async function derivePageSeo(
   blocks: BlockResolver | undefined,
   resolveMedia: (id: string) => Promise<ResolvedMedia | null>,
   slug: string,
-  limits: DocumentLimits | undefined
+  limits: DocumentLimits | undefined,
+  styleContext: StyleCompileContext | undefined
 ): Promise<DerivedPageSeo> {
   const resolver = blocks ?? registeredBlocks();
   const canonical = `/${slug}`;
 
-  // The SAME three passes the renderer runs, in the same order, before reading
-  // anything out of the document. Metadata that described a different tree than
-  // the page would be wrong in three separate ways:
-  //
-  // - a stored row can predate validation or be hand-edited, and walking one
-  //   unrepaired throws INSIDE `generateMetadata`, which fails the route rather
-  //   than rendering the placeholder the render path would have shown;
-  // - a node behind its definition's schema version would have its current
-  //   `seo` hook called with the old prop shape, so metadata silently takes a
-  //   stale value or none;
-  // - a node hidden by `visibility.conditions` is deliberately absent from the
-  //   HTML, and deriving from it would publish the withheld content as the
-  //   page's title or preview image — the same leak PB-D25 closed for CSS.
-  const prepared = pruneHiddenNodes(
-    migrateDocument(sanitizeDocument(document, limits ?? DEFAULT_LIMITS), {
-      ...migrationSourceFor(resolver),
-    }).doc
-  );
+  // One authoritative preparation, shared with the renderer rather than
+  // restated here. Hand-copying the passes is what let metadata describe a
+  // different page than the HTML: the copy drifted on the format guard, the
+  // configured caps, duplicate-id repair and placeholder subtrees, each a
+  // separate way to publish content the page withholds.
+  const prepared = prepareDocumentForRead(document, {
+    resolver,
+    limits,
+    styleContext,
+  });
+  // Nothing readable means nothing to describe. The page renders a placeholder,
+  // and metadata claiming a title it does not show would be worse than silence.
+  if (prepared === null) return { canonical };
 
-  // The same predicate the pruning pass uses, passed rather than re-decided.
-  // Belt and braces with the prune above — the tree here is already pruned —
-  // but the deriver requires it precisely so that a caller reaching it by
-  // another route cannot skip the question.
   const { image: imageCandidates, ...text } = deriveSeoFromDocument(
     prepared,
     type => resolver.get(type),
@@ -499,7 +489,8 @@ export function createBlocksPage(
               blocks,
               mediaResolver(config, context.reader),
               context.slug,
-              limits
+              limits,
+              styleContext
             );
             return metadata(entry, context, derived);
           },

@@ -7,7 +7,10 @@
  * and what the render hands the block renderer. Mocking `createContentRoute`
  * itself would assert only that this file calls a function.
  */
-import { DOCUMENT_FORMAT_VERSION } from "@nextlyhq/blocks-engine";
+import {
+  DEFAULT_LIMITS,
+  DOCUMENT_FORMAT_VERSION,
+} from "@nextlyhq/blocks-engine";
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -612,6 +615,107 @@ describe("createBlocksPage", () => {
     await expect(
       props.context?.resolveEntryPath("posts", "p9")
     ).resolves.toBeNull();
+  });
+
+  it("describes nothing when the stored format is unsupported", async () => {
+    // The renderer shows only its unsupported-format placeholder, so a title
+    // derived from the nodes inside would describe content never displayed.
+    const route = createBlocksPage({
+      collections: ["pages"],
+      field: "content",
+      blocks: coreResolver(),
+      nextly: reader({
+        slug: "about",
+        content: {
+          formatVersion: 999,
+          kind: "page",
+          nodes: [
+            {
+              id: "1",
+              type: "core/heading",
+              version: 1,
+              props: { text: "Hi" },
+            },
+          ],
+        },
+      }),
+      metadata: (_e, _c, derived) => ({ title: derived.title ?? "none" }),
+    });
+
+    await expect(
+      route.generateMetadata({ params: { slug: ["about"] } })
+    ).resolves.toEqual({ title: "none" });
+  });
+
+  it("falls back to a later image when the first cannot be resolved", async () => {
+    const page: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        { id: "1", type: "core/image", version: 1, props: { mediaId: "gone" } },
+        { id: "2", type: "core/image", version: 1, props: { mediaId: "live" } },
+      ],
+    };
+    let seen: DerivedPageSeo | undefined;
+    const route = createBlocksPage({
+      collections: ["pages"],
+      field: "content",
+      blocks: coreResolver(),
+      nextly: reader(
+        { slug: "about", content: page },
+        { live: { url: "/second.png" } }
+      ),
+      metadata: (_e, _c, derived) => {
+        seen = derived;
+        return {};
+      },
+    });
+
+    await route.generateMetadata({ params: { slug: ["about"] } });
+
+    expect(seen?.image).toBe("/second.png");
+  });
+
+  it("sanitizes with the caps the style context carries", async () => {
+    // The renderer uses `limits ?? styleContext.limits ?? DEFAULT`. Omitting the
+    // styleContext fallback derived metadata from a DIFFERENT tree than the one
+    // rendered — so this pins that the styleContext value is the one applied.
+    //
+    // A cap of 1 makes the two answers differ: under it only the first node
+    // survives and there is no title, while under the default both survive and
+    // the second node supplies one. A cap that changed nothing would pass
+    // whether or not the fallback is consulted.
+    let seen: DerivedPageSeo | undefined;
+    const route = createBlocksPage({
+      collections: ["pages"],
+      field: "content",
+      blocks: coreResolver(),
+      styleContext: { limits: { ...DEFAULT_LIMITS, maxNodes: 1 } } as never,
+      nextly: reader({
+        slug: "about",
+        content: {
+          formatVersion: DOCUMENT_FORMAT_VERSION,
+          kind: "page",
+          nodes: [
+            { id: "a", type: "core/box", version: 1, props: {} },
+            {
+              id: "b",
+              type: "core/heading",
+              version: 1,
+              props: { text: "Beyond the cap" },
+            },
+          ],
+        },
+      }),
+      metadata: (_e, _c, derived) => {
+        seen = derived;
+        return {};
+      },
+    });
+
+    await route.generateMetadata({ params: { slug: ["about"] } });
+
+    expect(seen?.title).toBeUndefined();
   });
 
   it("passes the stored stylesheet through for the resolved entry", async () => {

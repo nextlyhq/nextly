@@ -115,10 +115,7 @@ export function deriveSeoFromDocument(
 ): DerivedSeo {
   const derived: DerivedSeo = {};
 
-  const filled = (): boolean =>
-    derived.title !== undefined &&
-    derived.description !== undefined &&
-    derived.image !== undefined;
+  const images: string[] = [];
 
   // Walked here rather than through `walkNodes`, which descends into every
   // slot unconditionally. A gated node takes its whole SUBTREE out of the
@@ -127,21 +124,27 @@ export function deriveSeoFromDocument(
   // that. An ancestor check at each node would be the same rule paid for
   // repeatedly, and one that only looked at the immediate parent would miss a
   // gated grandparent entirely.
+  // Walked to the end rather than stopping once the text fields are filled.
+  // Whether an image candidate yields a picture is only decided AFTER this
+  // walk, by the caller resolving them in order, so a first image offering a
+  // deleted media id must not end the search — a later block may hold the one
+  // that renders. The tree is bounded by the document's own caps, so this is a
+  // walk over one page rather than an open-ended scan.
   const visit = (nodes: BlockNode[]): void => {
     for (const node of nodes) {
-      // Cheap exit once nothing is left to learn. The tree is bounded by the
-      // document's own caps, but a long page still walks every node otherwise.
-      if (filled()) return;
       if (!isVisible(node)) continue;
 
       const offer = offerOf(node, definitions);
       if (offer) {
         derived.title ??= usable(offer.title);
         derived.description ??= usable(offer.description);
-        if (derived.image === undefined) {
-          const offered = candidates(offer.image);
-          if (offered.length > 0) derived.image = offered;
-        }
+        // Appended rather than claimed by the first block that offers one.
+        // Resolution happens AFTER this walk, so a first image whose only
+        // candidate is a deleted media id would otherwise consume the slot and
+        // leave the page with no picture even though a later image renders
+        // fine. Order is preserved, so the earliest block that actually
+        // resolves still wins.
+        images.push(...candidates(offer.image));
       }
 
       if (node.slots) {
@@ -150,6 +153,7 @@ export function deriveSeoFromDocument(
     }
   };
   visit(document.nodes);
+  if (images.length > 0) derived.image = images;
 
   // `??=` assigns `undefined` when the offer had nothing, which would leave the
   // key present and defeat spreading over a caller's fallbacks. Dropped here
