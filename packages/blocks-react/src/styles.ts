@@ -142,10 +142,24 @@ function documentNodeIds(document: BlockDocument): string[] {
  * unstyled instead of not at all — and the CSS is dropped with them, since a
  * stylesheet written against classes nobody now carries would match nothing.
  */
+interface NormalizedStyles {
+  styles: PageStyles;
+  /**
+   * Whether the artifact's own classes were unusable and had to be rebuilt.
+   *
+   * Carried explicitly rather than inferred from an empty `css`, because the two
+   * are different states that happen to look alike. A page whose only styled
+   * node is condition-gated compiles to a legitimately EMPTY main sheet with all
+   * its rules in `gated` — reading that emptiness as a refusal would discard the
+   * one thing that page's styling consists of.
+   */
+  refused: boolean;
+}
+
 function normalizeStoredStyles(
   styles: PageStyles,
   document: BlockDocument
-): PageStyles {
+): NormalizedStyles {
   // Usable means more than "is an object". A stylesheet whose map is empty,
   // missing a node, or holding a non-string value leaves that node with only
   // its block-type class while the stale CSS still ships — every node-specific
@@ -162,12 +176,18 @@ function normalizeStoredStyles(
       return typeof value === "string" && value.length > 0;
     });
   if (classesUsable) {
-    return typeof styles.css === "string" ? styles : { ...styles, css: "" };
+    return {
+      styles: typeof styles.css === "string" ? styles : { ...styles, css: "" },
+      refused: false,
+    };
   }
   return {
-    css: "",
-    classes: Object.fromEntries(nodeClassNames(documentNodeIds(document))),
-    ...(styles.scope === undefined ? {} : { scope: styles.scope }),
+    styles: {
+      css: "",
+      classes: Object.fromEntries(nodeClassNames(documentNodeIds(document))),
+      ...(styles.scope === undefined ? {} : { scope: styles.scope }),
+    },
+    refused: true,
   };
 }
 
@@ -195,21 +215,36 @@ function withGatedRules(
   styles: PageStyles,
   document: BlockDocument
 ): PageStyles {
-  const { gated } = styles;
-  if (gated === undefined) return styles;
-  // An empty sheet is one `normalizeStoredStyles` refused, and its classes were
-  // rebuilt from the document. Appending rules keyed to the OLD classes would
-  // ship selectors matching nothing at best, and the artifact was already
-  // judged unusable.
-  if (styles.css === "") return styles;
+  // The artifact is a database record, so the field can arrive as null, an
+  // array, or a string. `!== undefined` is not enough of a check: indexing a
+  // null here throws while assembling the page's styles, BEFORE any block
+  // boundary exists, so one malformed row takes down the whole page rather than
+  // one block. Anything unreadable is treated as absent, which routes the caller
+  // back to recompile-or-withhold exactly as an older artifact does.
+  const gated: unknown = styles.gated;
+  if (
+    typeof gated !== "object" ||
+    gated === null ||
+    Array.isArray(gated) ||
+    styles.css === undefined
+  ) {
+    return styles;
+  }
 
+  const entries = gated as Record<string, unknown>;
   const appended: string[] = [];
   for (const id of documentNodeIds(document)) {
-    const rules = gated[id];
+    const rules = entries[id];
     if (typeof rules === "string" && rules !== "") appended.push(rules);
   }
   if (appended.length === 0) return styles;
-  return { ...styles, css: [styles.css, ...appended].join("\n") };
+  // An empty main sheet is joined without a leading newline. `css` is legitimately
+  // empty whenever every styled node was gated — a page whose only styling lives
+  // on a conditioned block compiles to exactly that — so emptiness cannot be read
+  // as a refusal here. The refusal is decided by `normalizeStoredStyles`, which
+  // rebuilds the classes; this only ever sees what that returned.
+  const parts = styles.css === "" ? appended : [styles.css, ...appended];
+  return { ...styles, css: parts.join("\n") };
 }
 
 export function resolvePageStyles(
@@ -239,10 +274,17 @@ export function resolvePageStyles(
    */
   repairedDocument = false
 ): PageStyles {
-  if (styles && !repairedDocument)
-    return withGatedRules(normalizeStoredStyles(styles, document), document);
+  if (styles && !repairedDocument) {
+    const normalized = normalizeStoredStyles(styles, document);
+    // A refused artifact had its classes rebuilt, so the gated rules — written
+    // against the classes it USED to carry — would select nothing. Nothing is
+    // appended, which is the same answer the sheet itself got.
+    return normalized.refused
+      ? normalized.styles
+      : withGatedRules(normalized.styles, document);
+  }
   if (styles && styleContext === undefined) {
-    return { ...normalizeStoredStyles(styles, document), css: "" };
+    return { ...normalizeStoredStyles(styles, document).styles, css: "" };
   }
   if (styleContext) {
     const context: StyleCompileContext =

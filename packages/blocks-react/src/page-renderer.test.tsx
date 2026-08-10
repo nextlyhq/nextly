@@ -2942,6 +2942,37 @@ describe("PageRenderer", () => {
       expect(html).not.toContain("rebeccapurple");
     });
 
+    it("still withholds when the stored document had a duplicate id the prune hid", async () => {
+      // `dup` appears twice and one copy is gated. Pruning removes the gated copy, so the tree that
+      // renders has no collision left and nothing after the prune can see there was one — while the
+      // stored sheet, compiled when both were present, carries no rules for EITHER, because nodes
+      // sharing an id cannot be styled apart. Trusting the artifact here serves the survivor
+      // unstyled.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("dup", "test/text", {
+              props: { value: "gated twin" },
+              visibility: {
+                conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+              },
+            }),
+            node("dup", "test/text", { props: { value: "surviving twin" } })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+          styles={{
+            css: ".nx-dup { color: teal }",
+            classes: { dup: "nx-dup" },
+            gated: { dup: ".nx-dup { color: rebeccapurple }" },
+          }}
+        />
+      );
+
+      expect(html).not.toContain("gated twin");
+      expect(html).not.toContain("color: teal");
+      expect(html).not.toContain("rebeccapurple");
+    });
+
     it("recompiles rather than withholding when it can", async () => {
       // With a compile context present there is no need to lose the styling:
       // the sheet is rebuilt from the pruned document, so the visible nodes keep

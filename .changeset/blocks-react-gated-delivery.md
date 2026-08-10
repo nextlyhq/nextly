@@ -23,4 +23,4 @@
 "@nextlyhq/tsconfig": patch
 ---
 
-Keep a page styled when one of its blocks is hidden by a condition. The stored stylesheet now carries each conditioned block's own rules separately, so the renderer appends the ones whose blocks were shown instead of rebuilding the whole sheet or serving the page unstyled.
+Keep a page styled when one of its blocks is hidden by a condition, and stop publishing a hidden block's styles. A conditioned block and everything inside it now has its rules held separately from the page's stylesheet, so the renderer serves exactly the rules of the blocks it showed instead of rebuilding the whole sheet, dropping it entirely, or leaking the styling of a block nobody was served.

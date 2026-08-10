@@ -627,23 +627,6 @@ function envelopeRules(
   return rules;
 }
 
-/**
- * Whether a node's styling can be pruned from the page after the sheet is written.
- *
- * True only for a node that DECLARES entry-field conditions. `devices` is not the same thing and
- * must not be conflated with it: per-breakpoint hiding is presentation, decided by CSS on a node
- * that is always in the markup, while a condition decides whether the node is served at all.
- *
- * Delegates to {@link isConditionGated}, the engine's single definition, which the renderer calls
- * for the same node to decide whether its markup is served. A second derivation here is what let
- * the two disagree, and they disagreed in both directions: gating what the renderer served
- * published a node with its styling silently missing, and NOT gating what the renderer withheld
- * left that node's rules in a sheet served to everyone.
- */
-function declaresConditions(node: BlockNode): boolean {
-  return isConditionGated(node);
-}
-
 /** Split declarations by the descendant they attach to, root first. */
 function groupByDescendant(
   declarations: readonly Declaration[]
@@ -815,10 +798,19 @@ function boundedAtRule(
   return `${feature} ${upper}(width > ${lowerBound}px)`;
 }
 
-/** One node and the pointer that resolves to it inside the document. */
+/** One node, the pointer that resolves to it, and whether anything gates it. */
 interface PlacedNode {
   node: BlockNode;
   path: string;
+  /**
+   * Whether this node is condition-gated, by its OWN conditions or an ancestor's.
+   *
+   * Inherited down the walk because a reader prunes whole SUBTREES: a conditioned container takes
+   * its children with it. A node judged only by its own conditions therefore leaves an
+   * unconditional child's rules in the main sheet while that child's markup is withheld —
+   * publishing the colours, fonts and `url(...)` of an element nobody was served.
+   */
+  gated: boolean;
 }
 
 /**
@@ -843,8 +835,12 @@ function documentNodes(
   // overflow the stack and fail the request with a RangeError instead of
   // returning a stylesheet. Validation walks the same adversarial shape the
   // same way.
-  const queue: { nodes: readonly BlockNode[]; base: string; depth: number }[] =
-    [{ nodes: doc.nodes, base: "/nodes", depth: 1 }];
+  const queue: {
+    nodes: readonly BlockNode[];
+    base: string;
+    depth: number;
+    gated: boolean;
+  }[] = [{ nodes: doc.nodes, base: "/nodes", depth: 1, gated: false }];
   // Iterating instead of recursing keeps a deep document from overflowing the
   // stack; it does not keep one from exhausting memory. Every queued level
   // retains the cumulative pointer to it, so a chain nested as deep as the byte
@@ -893,7 +889,10 @@ function documentNodes(
       const node = level.nodes[index];
       if (!isPlainRecord(node) || typeof node.id !== "string") continue;
       const path = pointer(level.base, index);
-      placed.push({ node, path });
+      // Once gated, gated for the whole subtree: a descendant cannot be served when the ancestor
+      // carrying it is not.
+      const gated = level.gated || isConditionGated(node);
+      placed.push({ node, path, gated });
       if (!isPlainRecord(node.slots)) continue;
       // Sorted, so two documents whose slots were written in a different order
       // still compile to the same bytes.
@@ -904,6 +903,7 @@ function documentNodes(
           nodes: children,
           base: pointer(pointer(path, "slots"), slot),
           depth: level.depth + 1,
+          gated,
         });
       }
     }
@@ -1180,7 +1180,7 @@ export function compilePageCss(
   // Each node's own values, in document order so the stylesheet reads the way
   // the page does.
   const reportedDuplicates = new Set<string>();
-  for (const { node, path } of nodes) {
+  for (const { node, path, gated: nodeGated } of nodes) {
     const className = classes.get(node.id);
     if (className === undefined) continue;
     if (duplicateIds.has(node.id)) {
@@ -1226,7 +1226,7 @@ export function compilePageCss(
     // without reading what came before. Appending is safe because every node carries its own
     // hashed class: two nodes' local rules never collide, and tier order is preserved inside
     // each entry.
-    if (declaresConditions(node)) {
+    if (nodeGated) {
       gated[node.id] = serializeRules(nodeRules);
       continue;
     }

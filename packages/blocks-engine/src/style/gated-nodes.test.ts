@@ -254,3 +254,42 @@ describe("appending a gated entry to the sheet", () => {
     expect(gated?.n1).toContain("color: red");
   });
 });
+
+describe("a node under a gated ancestor", () => {
+  const conditions = [[{ field: "tier", op: "eq", value: "vip" }]];
+
+  const nested = (parentConditioned: boolean) =>
+    page([
+      {
+        ...node({
+          styles: styles({ color: "red" }),
+          slots: {
+            default: [node({ styles: styles({ color: "blue" }) }, "child")],
+          },
+        }),
+        ...(parentConditioned ? { visibility: { conditions } } : {}),
+      },
+    ]);
+
+  it("POSITIVE CONTROL: an unconditioned parent leaves both in the sheet", () => {
+    // Without this row the assertions below would pass against a compiler that emitted no
+    // descendant rules at all, which is the way this exact measurement first went wrong.
+    const { css, gated } = compile(nested(false));
+
+    expect(css).toContain("color: red");
+    expect(css).toContain("color: blue");
+    expect(gated).toBeUndefined();
+  });
+
+  it("holds the DESCENDANT's rules out of the sheet too", () => {
+    // A reader prunes whole subtrees: a conditioned container takes its children with it. Judging
+    // each node by its own conditions leaves the child's rules — and any `url(...)` in them — in a
+    // sheet served to everyone while the child's markup is withheld.
+    const { css, gated } = compile(nested(true));
+
+    expect(css).not.toContain("color: red");
+    expect(css).not.toContain("color: blue");
+    expect(gated?.n1).toContain("color: red");
+    expect(gated?.child).toContain("color: blue");
+  });
+});

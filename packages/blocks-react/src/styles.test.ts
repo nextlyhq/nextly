@@ -113,6 +113,47 @@ describe("a stored artifact carrying gated rules", () => {
     expect(styles.css).toBe(".nx-a { color: teal }");
   });
 
+  it("appends to a legitimately EMPTY main sheet", () => {
+    // A page whose only styled node is conditioned compiles to `css: ""` with every rule in
+    // `gated` — verified against the compiler, not assumed. Treating that emptiness as a refusal
+    // would discard the entire styling of exactly the page this split exists for.
+    const styles = resolvePageStyles(
+      doc(node("a")),
+      {
+        css: "",
+        classes: { a: "nx-a" },
+        gated: { a: ".nx-a { color: rebeccapurple }" },
+      },
+      undefined,
+      blocks
+    );
+
+    expect(styles.css).toBe(".nx-a { color: rebeccapurple }");
+  });
+
+  it.each([
+    ["null", null],
+    ["an array", []],
+    ["a string", "nope"],
+  ])("treats a gated map that is %s as absent", (_label, gated) => {
+    // The artifact is database input. Indexing a null here throws while assembling the page's
+    // styles, BEFORE any block boundary exists, so one malformed row would take down the whole
+    // page rather than one block.
+    const call = () =>
+      resolvePageStyles(
+        doc(node("a")),
+        {
+          ...stored(),
+          gated: gated as unknown as Record<string, string>,
+        },
+        undefined,
+        blocks
+      );
+
+    expect(call).not.toThrow();
+    expect(call().css).toBe(".nx-a { color: teal }");
+  });
+
   it("appends nothing to an artifact whose sheet was refused", () => {
     // A missing class entry makes `normalizeStoredStyles` rebuild the classes and drop the CSS.
     // The gated rules are written against the OLD classes, so appending them would ship selectors

@@ -3,6 +3,7 @@ import {
   DOCUMENT_FORMAT_VERSION,
   PAGE_ROOT_CLASS,
   migrateDocument,
+  walkNodes,
   type BlockDocument,
   type BlockNode,
   type DocumentLimits,
@@ -82,6 +83,23 @@ function rendersOwnMarkup(node: BlockNode, resolver: BlockResolver): boolean {
   const definition = resolver.get(node.type);
   if (definition === undefined) return false;
   return node.version <= definition.version;
+}
+
+/**
+ * Whether any id appears on more than one node.
+ *
+ * The compiler suppresses the node-local rules of every node sharing an id, so a stored sheet
+ * compiled from such a document is missing them — and stays missing them after a prune removes the
+ * duplicate that made the collision visible.
+ */
+function hasDuplicateNodeIds(document: BlockDocument): boolean {
+  const seen = new Set<string>();
+  let duplicate = false;
+  walkNodes(document.nodes, node => {
+    if (seen.has(node.id)) duplicate = true;
+    seen.add(node.id);
+  });
+  return duplicate;
 }
 
 /**
@@ -267,7 +285,16 @@ export function PageRenderer({
   // withholding it. A MISSING map is not the same as an empty one — it means the
   // sheet was compiled before the split existed and knows nothing about gating —
   // so only a present map licenses skipping the recompile.
-  const gatingCoveredByArtifact = pruned !== doc && styles?.gated !== undefined;
+  //
+  // Duplicate ids in the STORED document disqualify it, even when pruning makes
+  // them disappear. The compiler writes no node-local rules at all for an id more
+  // than one node carries, since they cannot be styled apart; if one of the pair
+  // was the gated one, pruning removes it and the collision is gone from the tree
+  // that renders — `visible === pruned`, nothing to repair — while the stored
+  // sheet is still missing the SURVIVOR's rules. The pre-prune document is the
+  // only place that evidence still exists.
+  const gatingCoveredByArtifact =
+    pruned !== doc && styles?.gated !== undefined && !hasDuplicateNodeIds(doc);
 
   const repairedDocument =
     sanitized !== document ||
