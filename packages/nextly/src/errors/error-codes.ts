@@ -20,6 +20,10 @@ export const NEXTLY_ERROR_STATUS = {
   RATE_LIMITED: 429,
   PAYLOAD_TOO_LARGE: 413,
   UNSUPPORTED_MEDIA_TYPE: 415,
+  // 422: understood, well-formed, and refused on a rule the caller can act on.
+  // Deliberately NOT added to CANONICAL_CODE_FOR_STATUS -- that list drives the
+  // status -> code direction, where 422 stays mapped to INVALID_INPUT.
+  BUSINESS_RULE_VIOLATION: 422,
   INTERNAL_ERROR: 500,
   DATABASE_ERROR: 500,
   EXTERNAL_SERVICE_ERROR: 502,

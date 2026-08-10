@@ -26,7 +26,14 @@
  * const type: EmailProviderType = 'resend';
  * ```
  */
-export type EmailProviderType = "smtp" | "resend" | "sendlayer";
+export type EmailProviderType =
+  | "smtp"
+  | "resend"
+  | "sendlayer"
+  // Any type a plugin registers. `(string & {})` rather than plain `string`
+  // so the literals above still autocomplete: widening to `string` alone
+  // collapses the union and silently drops that affordance.
+  | (string & {});
 
 // ============================================================
 // Email Provider Insert Type

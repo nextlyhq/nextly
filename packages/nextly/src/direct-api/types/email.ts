@@ -8,6 +8,7 @@
  */
 
 import type { EmailAttachmentInput } from "../../domains/email/types";
+import type { EmailProviderType } from "../../schemas/email-providers/types";
 
 import type { DirectAPIConfig } from "./shared";
 
@@ -42,7 +43,7 @@ export interface CreateEmailProviderArgs extends DirectAPIConfig {
     /** Display name */
     name: string;
     /** Provider type */
-    type: "smtp" | "resend" | "sendlayer";
+    type: EmailProviderType;
     /** From email address */
     fromEmail: string;
     /** From display name */
@@ -88,6 +89,13 @@ export interface TestEmailProviderArgs extends DirectAPIConfig {
   id: string;
   /** Recipient email address (required) */
   to: string;
+  /**
+   * `"send"` (default) dispatches a real message to `to`, which is what the
+   * admin's Send Test button promises. `"connection"` asks the provider's own
+   * probe and sends nothing — available only where the descriptor reports
+   * `capabilities.connectionTest`, and `to` is then ignored.
+   */
+  mode?: "send" | "connection";
 }
 
 /**

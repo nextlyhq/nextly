@@ -22,40 +22,38 @@ import { CORE_BLOCK_STRUCTURES, declaredSlotsOf } from "../block-structure";
 import { defaultBlockRegistry } from "../registry";
 import "../../render/blocks";
 
-/** Every registered definition that can hold children, by type. */
-function slotDeclaringTypes(): string[] {
-  return defaultBlockRegistry
-    .all()
-    .filter(def => (def.slots?.length ?? 0) > 0)
-    .map(def => def.type)
-    .sort();
-}
-
 describe("the structure source against the real catalogue", () => {
-  it("covers every definition that declares a slot", () => {
-    const fromDefinitions = slotDeclaringTypes();
+  it("covers EVERY registered definition, not only the slot-declaring ones", () => {
+    const everyType = defaultBlockRegistry.all().map(def => def.type);
 
     // Positive control: the registry is actually populated here. Without the side-effect import
     // above this list would be empty and every assertion below would hold vacuously — which is
     // exactly how the write-path check came to look like it worked while being inert.
-    expect(fromDefinitions.length).toBeGreaterThan(0);
+    expect(everyType.length).toBeGreaterThan(40);
 
-    const missing = fromDefinitions.filter(
+    // A type with no structure is one the validator leaves to `allowUnknown`, so a new block that
+    // skips the structure source opts itself out of the slot check silently. Coverage has to be
+    // total for the check to mean anything.
+    const missing = everyType.filter(
       type => declaredSlotsOf(type) === undefined
     );
     expect(missing).toEqual([]);
   });
 
-  it("declares the SAME slot names the definition does", () => {
+  it("declares the SAME slot names the definition does — including none", () => {
     // Covering the type is not enough: a structure naming different slots than its definition
     // would let the validator accept a name the renderer never places, or reject one it does.
+    // The empty case is compared too, deliberately: skipping slotless definitions left a
+    // structure that INVENTED a slot on a plain block invisible to this file, and the only test
+    // that caught it was the hand-maintained list — which someone editing both sides would edit
+    // together.
     for (const def of defaultBlockRegistry.all()) {
-      const declared = def.slots?.map(s => s.name).sort();
-      if (!declared?.length) continue;
+      const declared = (def.slots ?? []).map(s => s.name).sort();
       expect(
         declaredSlotsOf(def.type)
           ?.map(s => s.name)
-          .sort()
+          .sort(),
+        `slot names for ${def.type}`
       ).toEqual(declared);
     }
   });

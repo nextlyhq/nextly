@@ -6,7 +6,7 @@ import type {
 } from "../collections/fields/catalog";
 import type { AuthorableFieldConfig } from "../collections/fields/types/plugin-field";
 import type { GeneratedTypes } from "../direct-api/types/shared";
-import type { EmailProviderAdapter } from "../domains/email/types";
+import type { RegisteredEmailProvider } from "../domains/email/provider-definition";
 import type { FieldGroupConfig } from "../field-groups/config/types";
 import type { SingleConfig } from "../singles/config/types";
 
@@ -84,16 +84,43 @@ export interface ScheduledTask {
 }
 
 /**
- * @experimental A plugin-contributed email provider. Registers a new
- * provider `type` whose adapter is built from the (decrypted) provider config an
- * admin stores. Replaces the need to fork core's hardcoded provider switch.
+ * @experimental A plugin-contributed email provider.
+ *
+ * The value produced by `defineEmailProvider(...)`, not the definition literal.
+ * That indirection is what keeps a plugin's own config type usable: a
+ * definition typed to its own shape is NOT assignable to one typed to
+ * `Record<string, unknown>`, because `createAdapter` accepts the narrower type
+ * and function parameters are checked contravariantly. Authors would have had
+ * to widen every adapter to `Record<string, unknown>` and re-narrow inside,
+ * which is exactly the guard the definition contract exists to remove.
+ *
+ * `defineEmailProvider` erases the type at the boundary instead, so the author
+ * keeps full checking on the shape they wrote and core receives something it
+ * can store beside every other provider.
+ *
+ * @example
+ * ```ts
+ * import { defineEmailProvider } from "@nextlyhq/plugin-sdk";
+ *
+ * interface PostmarkConfig { serverToken: string }
+ *
+ * contributes: {
+ *   emailProviders: [
+ *     defineEmailProvider<PostmarkConfig>({
+ *       type: "postmark",
+ *       label: "Postmark",
+ *       configFields: [
+ *         { name: "serverToken", label: "Server Token", kind: "password", required: true, secret: true },
+ *       ],
+ *       parseConfig: (input) => postmarkSchema.parse(input),
+ *       // `config` is PostmarkConfig here, not a widened record.
+ *       createAdapter: (config) => createPostmarkAdapter(config),
+ *     }),
+ *   ],
+ * }
+ * ```
  */
-export interface PluginEmailProvider {
-  /** Provider type id (e.g. `'mailgun'`). Must not collide with a built-in. */
-  type: string;
-  /** Build the adapter from the stored, decrypted provider configuration. */
-  createAdapter: (config: Record<string, unknown>) => EmailProviderAdapter;
-}
+export type PluginEmailProvider = RegisteredEmailProvider;
 
 /**
  * @experimental A plugin-contributed email template, seeded into the

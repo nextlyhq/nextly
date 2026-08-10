@@ -27,28 +27,19 @@ import { emailProvidersSqlite } from "../../../schemas/email-providers/sqlite";
 import type {
   EmailProviderInsert,
   EmailProviderRecord,
+  EmailProviderType,
 } from "../../../schemas/email-providers/types";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import { encrypt, decrypt } from "../../../utils/encryption";
 // Pull adapter type into a normal `import type` declaration so the return
 // signature on createAdapterFromProvider satisfies consistent-type-imports.
+import { describeProviderFailure } from "../provider-definition";
 import type { EmailProviderAdapter } from "../types";
 
 import { getEmailProviderRegistry } from "./email-provider-registry";
 
 const MASKED_VALUE = "••••••••";
-
-const SENSITIVE_CONFIG_KEYS = [
-  "apikey",
-  "api_key",
-  "password",
-  "pass",
-  "secret",
-  "token",
-  "clientsecret",
-  "client_secret",
-];
 
 // ============================================================
 // Input Types
@@ -63,11 +54,13 @@ export type CreateEmailProviderInput = EmailProviderInsert;
 /**
  * Input for updating an existing email provider.
  * All fields are optional — only provided fields are updated.
- * Note: `type` cannot be changed after creation.
+ * Note: `type` may be changed; the admin supports switching provider on
+ * edit. A change re-validates the stored configuration against the new
+ * provider, because the rules that accepted it belonged to the old one.
  */
 export interface UpdateEmailProviderInput {
   name?: string;
-  type?: "smtp" | "resend" | "sendlayer";
+  type?: EmailProviderType;
   fromEmail?: string;
   fromName?: string | null;
   configuration?: Record<string, unknown>;
@@ -177,33 +170,87 @@ export class EmailProviderService extends BaseService {
   }
 
   /**
-   * Mask a configuration object, replacing all values with `"••••••••"`.
-   * Returns a flat object with the same keys but masked values.
+   * The dotted paths a provider declared as secret, e.g. `auth.pass`.
+   *
+   * Returns null when the type is not registered — an uninstalled plugin
+   * leaves rows behind, and those must still be readable and still masked.
+   */
+  private declaredSecretPaths(type: string): ReadonlySet<string> | null {
+    const registry = getEmailProviderRegistry();
+    if (!registry.has(type)) return null;
+
+    const fields = registry.get(type).configFields;
+    // No declared fields is not the same as declaring nothing secret. It is an
+    // absence of information, and a provider can still store configuration
+    // without describing it -- so treat it like a missing definition and mask
+    // everything, rather than reading an empty list as permission.
+    if (fields.length === 0) return null;
+
+    return new Set(
+      fields.filter(field => field.secret === true).map(field => field.name)
+    );
+  }
+
+  /** Every path the provider describes, secret or not. */
+  private declaredConfigPaths(type: string): ReadonlySet<string> {
+    const registry = getEmailProviderRegistry();
+    if (!registry.has(type)) return new Set();
+    return new Set(registry.get(type).configFields.map(field => field.name));
+  }
+
+  /**
+   * Mask a configuration object for a public read.
+   *
+   * Which values are secret is DECLARED by the provider, not guessed from key
+   * names. The name heuristic below cannot know that `credential` holds one and
+   * that a field merely containing `token` may not, and it can only ever be
+   * right about names core has seen before — which is none of a plugin's.
+   *
+   * When no definition is available — the provider's package was uninstalled,
+   * or it shipped no field metadata — EVERY leaf is masked rather than guessed
+   * at. The key-name heuristic cannot reconstruct what the definition declared,
+   * so a field the provider correctly marked secret (`credential`, say) would
+   * come back in the clear precisely when the plugin that knew better is gone.
+   * Absence of information has to mask more, not less; an over-masked read is
+   * recoverable by reinstalling the package, a leaked credential is not.
    */
   private maskConfiguration(
-    config: Record<string, unknown>
+    config: Record<string, unknown>,
+    secretPaths: ReadonlySet<string> | null,
+    declaredPaths: ReadonlySet<string>,
+    pathPrefix = ""
   ): Record<string, unknown> {
     const masked: Record<string, unknown> = {};
     for (const key of Object.keys(config)) {
       const value = config[key];
+      const path = pathPrefix ? `${pathPrefix}.${key}` : key;
+
       if (
         value !== null &&
         typeof value === "object" &&
         !Array.isArray(value)
       ) {
-        masked[key] = this.maskConfiguration(value as Record<string, unknown>);
-      } else {
-        masked[key] = this.isSensitiveConfigKey(key) ? MASKED_VALUE : value;
+        masked[key] = this.maskConfiguration(
+          value as Record<string, unknown>,
+          secretPaths,
+          declaredPaths,
+          path
+        );
+        continue;
       }
+
+      // Three states, not two. `null` means no usable definition, so nothing is
+      // known and everything is masked. Otherwise a path is revealed ONLY if the
+      // provider declared it and did not mark it secret: a key the definition
+      // does not mention at all -- a credential left behind by a plugin upgrade,
+      // say -- is unknown rather than public, and the parsers strip unknown keys
+      // for adapter construction without removing them from storage.
+      const declared = secretPaths !== null && declaredPaths.has(path);
+      const isSecret =
+        secretPaths === null || !declared || secretPaths.has(path);
+      masked[key] = isSecret ? MASKED_VALUE : value;
     }
     return masked;
-  }
-
-  private isSensitiveConfigKey(key: string): boolean {
-    const normalized = key.toLowerCase().replace(/[\s-]/g, "");
-    return SENSITIVE_CONFIG_KEYS.some(sensitive =>
-      normalized.includes(sensitive.replace(/[_-]/g, ""))
-    );
   }
 
   private isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -256,7 +303,11 @@ export class EmailProviderService extends BaseService {
     const config = this.decryptConfiguration(row.configuration);
     return {
       ...row,
-      configuration: this.maskConfiguration(config),
+      configuration: this.maskConfiguration(
+        config,
+        this.declaredSecretPaths(row.type),
+        this.declaredConfigPaths(row.type)
+      ),
     };
   }
 
@@ -284,6 +335,14 @@ export class EmailProviderService extends BaseService {
   async createProvider(
     data: CreateEmailProviderInput
   ): Promise<EmailProviderRecord> {
+    // Reject an unregistered type and an unusable configuration BEFORE the
+    // insert. Without this a row stores happily and fails only when something
+    // tries to send through it, inside a catch that reports `{ success: false }`
+    // -- so the operator learns at the worst moment and with the least detail.
+    getEmailProviderRegistry()
+      .get(data.type)
+      .validateConfig(data.configuration);
+
     const id = randomUUID();
     const now = new Date();
 
@@ -353,7 +412,9 @@ export class EmailProviderService extends BaseService {
    * Update an existing email provider.
    * Configuration is encrypted before storage.
    *
-   * Provider `type` cannot be changed after creation.
+   * Provider `type` may be changed. The stored configuration is
+   * re-validated against the new provider, since the rules that accepted it
+   * belonged to the old one.
    *
    * @throws NextlyError NOT_FOUND if provider doesn't exist
    */
@@ -368,6 +429,36 @@ export class EmailProviderService extends BaseService {
       updatedAt: now,
     };
 
+    // The type this row will have once the update lands. A type change with no
+    // configuration alongside it still has to name a registered provider,
+    // otherwise the row survives as one nothing can build an adapter for.
+    const effectiveType = data.type ?? currentRow.type;
+    const typeChanged =
+      data.type !== undefined && data.type !== currentRow.type;
+    if (typeChanged) {
+      // A type change REPLACES the provider-specific configuration rather than
+      // merging it: the two providers have different shapes, and an SMTP host
+      // carried into a Resend config is not a partial edit, it is leftover.
+      // Validating the OLD configuration here would fail every real switch,
+      // because the submitted API key is exactly what the old shape lacks.
+      const submitted =
+        data.configuration !== undefined
+          ? this.stripMaskedConfigValues(data.configuration)
+          : {};
+      getEmailProviderRegistry()
+        .get(data.type as string)
+        .validateConfig(submitted);
+
+      // Persist the replacement even when the update carried no configuration.
+      // Validating `{}` and then not writing it leaves the PREVIOUS provider's
+      // encrypted configuration under the new type -- so a permissive target
+      // parser would receive stale credentials, which is exactly what
+      // "a type change replaces rather than merges" is supposed to prevent.
+      if (data.configuration === undefined) {
+        updateData.configuration = this.encryptConfiguration(submitted);
+      }
+    }
+
     if (data.name !== undefined) updateData.name = data.name;
     if (data.type !== undefined) updateData.type = data.type;
     if (data.fromEmail !== undefined) updateData.fromEmail = data.fromEmail;
@@ -377,7 +468,25 @@ export class EmailProviderService extends BaseService {
         currentRow.configuration
       );
       const incomingConfig = this.stripMaskedConfigValues(data.configuration);
-      const mergedConfig = this.deepMergeConfig(existingConfig, incomingConfig);
+      // Across a type change the stored configuration belongs to the previous
+      // provider, so it is discarded rather than merged into the new shape.
+      const mergedConfig = typeChanged
+        ? incomingConfig
+        : this.deepMergeConfig(existingConfig, incomingConfig);
+
+      // Validate the MERGED result, not the incoming patch: an update usually
+      // carries only the fields that changed, and the masked values it omits
+      // are supplied by the merge. Checking the patch alone would reject every
+      // partial edit for missing required fields it was never meant to send.
+      //
+      // Validated against the type this update RESULTS IN, not the stored one.
+      // `data.type` is applied a few lines above, so a change from smtp to
+      // resend would otherwise have its configuration checked by the SMTP
+      // parser and stored under resend -- accepted here and unusable at send.
+      getEmailProviderRegistry()
+        .get(effectiveType)
+        .validateConfig(mergedConfig);
+
       updateData.configuration = this.encryptConfiguration(mergedConfig);
     }
     if (data.isActive !== undefined) updateData.isActive = data.isActive;
@@ -510,7 +619,15 @@ export class EmailProviderService extends BaseService {
    */
   async testProvider(
     id: string,
-    testEmail?: string
+    testEmail?: string,
+    /**
+     * `"send"` dispatches a real message, which is what the REST route and the
+     * admin's Send Test button promise. `"connection"` asks the provider's own
+     * probe instead and sends nothing — available only where the descriptor
+     * reports `capabilities.connectionTest`. Defaulted so every existing caller
+     * keeps the contract it was written against.
+     */
+    mode: "send" | "connection" | undefined = "send"
   ): Promise<{ success: boolean; error?: string }> {
     const provider = await this.getProviderDecrypted(id);
 
@@ -521,7 +638,56 @@ export class EmailProviderService extends BaseService {
       };
     }
 
+    // An unrecognised mode is refused rather than treated as the default.
+    // This argument decides whether a real message leaves the building, and a
+    // TypeScript union does not constrain a JavaScript caller or a wrapper that
+    // forwards a request body: a misspelled `"connecton"` would otherwise fall
+    // through and send mail the caller was explicitly trying not to send.
+    if (mode !== "send" && mode !== "connection") {
+      throw new NextlyError({
+        code: "BUSINESS_RULE_VIOLATION",
+        publicMessage: `Unknown email provider test mode. Use "send" to dispatch a message or "connection" to probe without sending.`,
+        logContext: { providerId: id, mode: String(mode) },
+      });
+    }
+
     try {
+      // Only when the caller explicitly asked to probe. Substituting a probe
+      // for the send would have been silent and wrong: `api/email-providers-test.ts`
+      // reports a dispatched message and the admin tells the operator to check
+      // that inbox, so an SMTP user would have seen success with nothing sent.
+      if (mode === "connection") {
+        const registry = getEmailProviderRegistry();
+        const probe = registry.has(provider.type)
+          ? registry.get(provider.type).testConnectionFrom
+          : undefined;
+        if (!probe) {
+          return {
+            success: false,
+            error: "This provider cannot be tested without sending a message.",
+          };
+        }
+        const result = await probe(provider.configuration);
+        if (result.ok) return { success: true };
+
+        // The probe's own `detail` is NOT returned. It is written by the
+        // provider, which received decrypted configuration, so a message like
+        // `Invalid key ${config.apiKey}` would hand a credential to anyone who
+        // pressed Test — the same disclosure the thrown path normalises, and
+        // returning rather than throwing must not be the way around it.
+        // Operators keep the detail: it goes to the server log.
+        this.logger.warn("Email provider connection test failed", {
+          providerId: id,
+          providerType: provider.type,
+          detail: result.detail,
+        });
+        return {
+          success: false,
+          error:
+            "Connection test failed. The provider's reason is in the server log.",
+        };
+      }
+
       const adapter = this.createAdapterFromProvider(provider);
       const from = provider.fromName
         ? `${provider.fromName} <${provider.fromEmail}>`
@@ -542,9 +708,29 @@ export class EmailProviderService extends BaseService {
         error: result.success ? undefined : "Send returned unsuccessful",
       };
     } catch (error) {
+      // Logged HERE, with the cause. Attaching an original error to a
+      // NextlyError does not record it anywhere: this catch converts the error
+      // into a result and the request ends, so a provider's actual diagnostic
+      // was retained and then dropped — while the message told the operator to
+      // go and read it. A promise about a log entry has to be made true by
+      // something writing one.
+      this.logger.error("Email provider test failed", {
+        providerId: id,
+        providerType: provider.type,
+        mode,
+        // Shared with the ordinary send path so the two cannot come to
+        // disagree about how far down a `cause` chain to look.
+        ...describeProviderFailure(error),
+      });
+
+      // A NextlyError's publicMessage is a decision about what may be shown.
+      // Anything else is a message the throw site happened to interpolate, and
+      // a contributed adapter throws with decrypted configuration in scope.
       return {
         success: false,
-        error: error instanceof Error ? error.message : String(error),
+        error: NextlyError.is(error)
+          ? error.publicMessage
+          : "The test failed. The reason is in the server log.",
       };
     }
   }
