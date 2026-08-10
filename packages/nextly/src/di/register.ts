@@ -2601,10 +2601,9 @@ async function initializePlugins(
 
     // Register contributed email providers (C2/D65) — fail-fast on type collision.
     for (const provider of plugin.contributes?.emailProviders ?? []) {
-      getEmailProviderRegistry().register(
-        provider.type,
-        provider.createAdapter
-      );
+      // Already erased by defineEmailProvider at the plugin's own boundary, so
+      // a contributed provider is indistinguishable from a shipped one here.
+      getEmailProviderRegistry().register(provider);
     }
 
     // Register custom event names this plugin declares (D9) so its emits

@@ -11,6 +11,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+import { smtpDefinition } from "../services/providers/built-in-definitions";
 import { createSmtpProvider } from "../services/providers/smtp-provider";
 
 // ── Hoist mock fns so they're available before any imports ────────────────
@@ -97,11 +98,78 @@ describe("createSmtpProvider", () => {
       host: "smtp.example.com",
       port: 587,
       secure: false,
+      // Port 587 starts in the clear and upgrades. Without requireTLS
+      // nodemailer upgrades only if the server ADVERTISES STARTTLS and
+      // otherwise authenticates in plaintext, so a misconfigured or
+      // intercepted server could collect these credentials. Forcing it makes
+      // the connection fail instead, which is the right outcome for a link
+      // that cannot be secured.
+      requireTLS: true,
       auth: {
         user: "user@example.com",
         pass: "test-password",
       },
     });
+  });
+
+  it("sends no auth block when credentials are empty", async () => {
+    // The documented Mailpit setup leaves SMTP_USER and SMTP_PASS empty.
+    // nodemailer attempts an AUTH exchange whenever the key is present, so a
+    // blank auth object is not the same as none -- a local sink expecting no
+    // credentials should not be asked to negotiate them.
+    mockSendMail.mockResolvedValueOnce({ messageId: "<msg-noauth>" });
+
+    const adapter = createSmtpProvider({
+      host: "localhost",
+      port: 1025,
+      secure: false,
+      auth: { user: "", pass: "" },
+    });
+    await adapter.send(BASE_OPTIONS);
+
+    // Asserted through the matcher rather than by indexing the mock's call
+    // tuple, which vitest types as empty for an untyped mock.
+    expect(mockCreateTransport).toHaveBeenCalledWith(
+      expect.not.objectContaining({ auth: expect.anything() })
+    );
+  });
+
+  it("does not force STARTTLS against a loopback sink", async () => {
+    // Mailpit and MailHog speak plaintext by design and advertise no STARTTLS.
+    // The safety guard deliberately permits plaintext-on-loopback, and this
+    // repository ships Mailpit in its own docker-compose, so forcing an upgrade
+    // here would break the documented local development path.
+    mockSendMail.mockResolvedValueOnce({ messageId: "<msg-local>" });
+
+    const adapter = createSmtpProvider({
+      host: "localhost",
+      port: 1025,
+      secure: false,
+      auth: { user: "dev", pass: "dev" },
+    });
+    await adapter.send(BASE_OPTIONS);
+
+    expect(mockCreateTransport).toHaveBeenCalledWith(
+      expect.objectContaining({ secure: false, requireTLS: false })
+    );
+  });
+
+  it("does not force an upgrade when the connection is already implicitly TLS", async () => {
+    // secure: true (port 465) needs no STARTTLS negotiation, so requiring one
+    // would be meaningless rather than safer.
+    mockSendMail.mockResolvedValueOnce({ messageId: "<msg-tls>" });
+
+    const adapter = createSmtpProvider({
+      host: "smtp.example.com",
+      port: 465,
+      secure: true,
+      auth: { user: "user@example.com", pass: "test-password" },
+    });
+    await adapter.send(BASE_OPTIONS);
+
+    expect(mockCreateTransport).toHaveBeenCalledWith(
+      expect.objectContaining({ secure: true, requireTLS: false })
+    );
   });
 
   it("defaults secure to true when config.secure is undefined", async () => {
@@ -169,5 +237,55 @@ describe("createSmtpProvider", () => {
     await adapter.send(BASE_OPTIONS);
 
     expect(mockCreateTransport).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("the SMTP descriptor agrees with the SMTP parser", () => {
+  // The descriptor is what a catalog-driven client validates against, and
+  // `parseConfig` is what the server enforces. Where they disagree the failure
+  // has no visible cause: the client refuses input the server would have taken,
+  // and the refusal names a rule the server does not hold.
+  const credentialFields = ["auth.user", "auth.pass"];
+
+  it("does not declare conditionally-required credentials as required", () => {
+    for (const name of credentialFields) {
+      const field = smtpDefinition.configFields.find(
+        entry => entry.name === name
+      );
+      // `required` can only state an ABSOLUTE rule. These credentials are
+      // demanded for a remote host and accepted empty for a loopback one, so
+      // declaring them required would encode the stricter half as if it were
+      // the whole rule.
+      expect({ name, required: field?.required }).toEqual({
+        name,
+        required: undefined,
+      });
+    }
+  });
+
+  it("accepts the documented loopback setup with empty credentials", () => {
+    // docs/guides/email.mdx configures Mailpit with SMTP_USER= and SMTP_PASS=
+    // empty. A client validating from the descriptor must be able to submit it.
+    expect(() =>
+      smtpDefinition.validateConfig({
+        host: "localhost",
+        port: 1025,
+        secure: false,
+        auth: { user: "", pass: "" },
+      })
+    ).not.toThrow();
+  });
+
+  it("still refuses empty credentials against a remote host", () => {
+    // The positive control for the test above: loosening the descriptor must
+    // not loosen the rule, only move where it is stated.
+    expect(() =>
+      smtpDefinition.validateConfig({
+        host: "smtp.example.com",
+        port: 587,
+        secure: false,
+        auth: { user: "", pass: "" },
+      })
+    ).toThrow();
   });
 });

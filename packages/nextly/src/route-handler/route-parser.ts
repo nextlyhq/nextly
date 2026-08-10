@@ -1452,6 +1452,7 @@ function parseFormsRoutes(
  * - PATCH /api/email-providers/[id] → update provider
  * - DELETE /api/email-providers/[id] → delete provider
  * - PATCH /api/email-providers/[id]/default → set as default
+ * - GET /api/email-providers/types → registered provider catalog
  * - POST /api/email-providers/[id]/test → send test email
  */
 function parseEmailProviderRoutes(
@@ -1460,6 +1461,18 @@ function parseEmailProviderRoutes(
   httpMethod: string,
   routeParams: Record<string, string>
 ): ParsedRoute | null {
+  // GET /api/email-providers/types → the registered provider catalog.
+  // Matched BEFORE the by-id branch, which would otherwise read "types" as a
+  // provider id and answer 404 for a route that has nothing to do with one.
+  if (id === "types" && !subresource && httpMethod === "GET") {
+    return {
+      service: "emailProviders",
+      operation: "list",
+      method: "listProviderTypes",
+      routeParams,
+    };
+  }
+
   // GET /api/email-providers → list all providers
   if (!id && httpMethod === "GET") {
     return {
