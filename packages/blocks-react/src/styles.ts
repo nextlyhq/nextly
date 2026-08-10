@@ -36,6 +36,22 @@ export interface PageStyles {
    * silently matches nothing. Travelling with the CSS makes that unstateable.
    */
   scope?: string;
+  /**
+   * The node-local rules of every condition-gated node, keyed by node id, held
+   * OUT of `css` so a reader appends only the ones whose nodes survived.
+   *
+   * The sheet is compiled when the document is SAVED and a condition is decided
+   * when the page is READ, so one pre-compiled string otherwise carries rules
+   * for nodes the reader removes — publishing the colours, fonts and `url(...)`
+   * of a block whose markup is withheld.
+   *
+   * An ABSENT field means "compiled before this split existed", NOT "nothing was
+   * gated". The two are indistinguishable from the artifact alone, and reading
+   * absence as "nothing gated" would trust a sheet that predates gating
+   * entirely. So gating must still force a recompile when this is missing; only
+   * a present map licenses skipping it.
+   */
+  gated?: Readonly<Record<string, string>>;
 }
 
 /** The compiler's output in the storable shape. */
@@ -47,7 +63,14 @@ export function toPageStyles(
     css: compiled.css,
     classes: Object.fromEntries(compiled.classes),
   };
-  return scope === undefined ? styles : { ...styles, scope };
+  // Carried through because THIS is the shape that gets stored: a compiler that
+  // splits the sheet and a writer that drops half of it leave the gated rules
+  // nowhere, and the page renders those nodes unstyled with nothing to say why.
+  const withGated =
+    compiled.gated === undefined
+      ? styles
+      : { ...styles, gated: compiled.gated };
+  return scope === undefined ? withGated : { ...withGated, scope };
 }
 
 /**
@@ -119,10 +142,51 @@ function documentNodeIds(document: BlockDocument): string[] {
  * unstyled instead of not at all — and the CSS is dropped with them, since a
  * stylesheet written against classes nobody now carries would match nothing.
  */
+interface NormalizedStyles {
+  styles: PageStyles;
+  /**
+   * Whether the artifact's own classes were unusable and had to be rebuilt.
+   *
+   * Carried explicitly rather than inferred from an empty `css`, because the two
+   * are different states that happen to look alike. A page whose only styled
+   * node is condition-gated compiles to a legitimately EMPTY main sheet with all
+   * its rules in `gated` — reading that emptiness as a refusal would discard the
+   * one thing that page's styling consists of.
+   */
+  refused: boolean;
+}
+
+/**
+ * Whether the artifact describes nodes this document does not hold AND cannot account for them.
+ *
+ * `normalizeStoredStyles` checks the other direction — every node needs a class. This catches the
+ * artifact describing MORE than it was handed, which is the signature of a tree since pruned.
+ *
+ * An absent node is only a problem when the artifact does NOT carry its rules separately. When it
+ * does, the split has already done its job: those rules were never in `css`, so serving `css` and
+ * appending only the survivors is correct and this must not fire. The rule is therefore the same
+ * one the renderer applies — every missing node needs a usable gated entry — rather than a second,
+ * blunter one that would withhold the sheet on exactly the pages the split exists for.
+ */
+function artifactDescribesUnaccountedNodes(
+  styles: PageStyles,
+  document: BlockDocument
+): boolean {
+  const map: unknown = styles.classes;
+  if (typeof map !== "object" || map === null || Array.isArray(map)) {
+    return false;
+  }
+  const gated = readableGatedRules(styles);
+  const present = new Set(documentNodeIds(document));
+  return Object.keys(map).some(
+    id => !present.has(id) && !isRecordedGatedEntry(gated?.[id])
+  );
+}
+
 function normalizeStoredStyles(
   styles: PageStyles,
   document: BlockDocument
-): PageStyles {
+): NormalizedStyles {
   // Usable means more than "is an object". A stylesheet whose map is empty,
   // missing a node, or holding a non-string value leaves that node with only
   // its block-type class while the stale CSS still ships — every node-specific
@@ -139,15 +203,125 @@ function normalizeStoredStyles(
       return typeof value === "string" && value.length > 0;
     });
   if (classesUsable) {
-    return typeof styles.css === "string" ? styles : { ...styles, css: "" };
+    return {
+      styles: typeof styles.css === "string" ? styles : { ...styles, css: "" },
+      refused: false,
+    };
   }
   return {
-    css: "",
-    classes: Object.fromEntries(nodeClassNames(documentNodeIds(document))),
-    ...(styles.scope === undefined ? {} : { scope: styles.scope }),
+    styles: {
+      css: "",
+      classes: Object.fromEntries(nodeClassNames(documentNodeIds(document))),
+      ...(styles.scope === undefined ? {} : { scope: styles.scope }),
+    },
+    refused: true,
   };
 }
 
+/**
+ * A stored sheet with the gated rules of the nodes that SURVIVED appended.
+ *
+ * The stored `css` is always incomplete when `gated` is present, so this is
+ * delivery rather than repair: the survivors are appended whether or not
+ * anything about the document was repaired. Making it conditional on repair
+ * would work only for as long as every conditioned node is pruned — the moment
+ * one survives, nothing is repaired, the incomplete sheet ships unchanged and
+ * that node renders unstyled.
+ *
+ * The set is taken from the document being RENDERED, never from re-reading
+ * `visibility.conditions`. Walking the surviving nodes means the rules appended
+ * are definitionally the rules of the nodes that rendered; a second derivation
+ * of the pruning rule is exactly how a sheet and its markup come apart.
+ *
+ * Appending AFTER the main sheet is safe. Each node's local rules are written
+ * against its own hashed class, so two nodes' entries can never target the same
+ * element; only tier order matters, and each entry preserves its own tiers
+ * internally.
+ */
+/**
+ * The gated rules a stored artifact carries, or `undefined` when it carries none it can be read.
+ *
+ * ONE definition, because two places ask this question: the renderer, deciding whether the artifact
+ * covers gating well enough to skip the repair, and the delivery below, deciding whether to append.
+ * When they disagreed the artifact counted as coverage while its map went unread, so the repair was
+ * skipped and the stale sheet shipped with the hidden node's rules still in it — the leak, arrived
+ * at through two readings of one fact.
+ *
+ * The artifact is a database record, so `gated` can be null, an array, or a string. Anything not a
+ * plain record is treated as ABSENT, which is the safe direction: absent means the sheet predates
+ * the split, and gating then forces the recompile-or-withhold path.
+ */
+/**
+ * Whether the compiler RECORDED this node — the coverage question.
+ *
+ * An empty string is a legitimate record, not a missing one. A gated node with no node-local or
+ * device rules of its own compiles to `serializeRules([])`, which is `""`, and a gated ancestor's
+ * unstyled child does the same. Rejecting it would classify a perfectly fresh artifact as
+ * uncovered, forcing the repair — and on the ordinary stored-artifact path with no compile context
+ * that clears the WHOLE sheet, so every visible sibling loses its styling because one hidden node
+ * happened to carry no rules.
+ *
+ * Deliberately different from {@link isUsableGatedEntry}, which answers a different question. The
+ * two were briefly one function and that is what produced this defect: coverage asks whether the
+ * node was accounted for, delivery asks whether there is anything to append, and `""` answers yes
+ * to the first and no to the second.
+ */
+export function isRecordedGatedEntry(value: unknown): value is string {
+  return typeof value === "string";
+}
+
+/**
+ * Whether a gated entry carries rules worth appending — the DELIVERY question.
+ *
+ * Non-empty, because appending `""` would add a blank line to the sheet for every gated node that
+ * styles nothing and make an otherwise byte-identical page differ.
+ */
+export function isUsableGatedEntry(value: unknown): value is string {
+  return typeof value === "string" && value !== "";
+}
+
+export function readableGatedRules(
+  styles: PageStyles | undefined
+): Readonly<Record<string, unknown>> | undefined {
+  const gated: unknown = styles?.gated;
+  if (typeof gated !== "object" || gated === null || Array.isArray(gated)) {
+    return undefined;
+  }
+  return gated as Readonly<Record<string, unknown>>;
+}
+
+function withGatedRules(
+  styles: PageStyles,
+  document: BlockDocument
+): PageStyles {
+  const entries = readableGatedRules(styles);
+  if (entries === undefined || styles.css === undefined) return styles;
+  const appended: string[] = [];
+  for (const id of documentNodeIds(document)) {
+    const rules = entries[id];
+    if (isUsableGatedEntry(rules)) appended.push(rules);
+  }
+  if (appended.length === 0) return styles;
+  // An empty main sheet is joined without a leading newline. `css` is legitimately
+  // empty whenever every styled node was gated — a page whose only styling lives
+  // on a conditioned block compiles to exactly that — so emptiness cannot be read
+  // as a refusal here. The refusal is decided by `normalizeStoredStyles`, which
+  // rebuilds the classes; this only ever sees what that returned.
+  const parts = styles.css === "" ? appended : [styles.css, ...appended];
+  return { ...styles, css: parts.join("\n") };
+}
+
+/**
+ * PRECONDITION: `document` is the tree that will RENDER, with condition-gated nodes already
+ * removed by {@link pruneHiddenNodes}.
+ *
+ * Stated on the signature because this is exported and the unsafe call is the natural-looking one.
+ * Handed a RAW document, every gated node counts as surviving, so its rules are appended from the
+ * artifact and its markup is withheld by the renderer — publishing the colours, fonts and
+ * `url(...)` of a block nobody was served. `PageRenderer` runs the pass itself, so the ordinary
+ * path cannot get this wrong; a consumer assembling styles by hand can, which is why the prune is
+ * exported alongside this.
+ */
 export function resolvePageStyles(
   document: BlockDocument,
   styles: PageStyles | undefined,
@@ -168,16 +342,37 @@ export function resolvePageStyles(
    * styled one breaks it. Classes are kept either way, so blocks still carry
    * the names the rest of the system expects.
    *
-   * The complete fix is not available from this package: it needs the artifact
-   * to carry its rules per node so a reader can drop the ones it prunes,
-   * which is a change to what the compiler emits.
+   * An artifact carrying `gated` no longer needs either. Its rules travel per
+   * node, so the caller can leave gating out of this flag and let
+   * {@link withGatedRules} append exactly the survivors. The other repair
+   * causes still belong here: none of them is fixed by a per-node split.
    */
   repairedDocument = false
 ): PageStyles {
-  if (styles && !repairedDocument)
-    return normalizeStoredStyles(styles, document);
-  if (styles && styleContext === undefined) {
-    return { ...normalizeStoredStyles(styles, document), css: "" };
+  // An artifact naming classes for nodes this document does not contain was compiled from a
+  // DIFFERENT, larger tree — which is exactly what pruning produces. Its `css` may carry those
+  // nodes' rules and asset URLs while their markup is withheld, so it cannot be trusted however
+  // the caller filled in `repairedDocument`. Checked here rather than left to the flag because
+  // this function is exported and the documented direct-caller flow is prune-then-resolve, where
+  // the flag defaults to false and nothing else would notice.
+  const compiledFromAnotherTree =
+    styles !== undefined && artifactDescribesUnaccountedNodes(styles, document);
+
+  if (styles && !repairedDocument && !compiledFromAnotherTree) {
+    const normalized = normalizeStoredStyles(styles, document);
+    // A refused artifact had its classes rebuilt, so the gated rules — written
+    // against the classes it USED to carry — would select nothing. Nothing is
+    // appended, which is the same answer the sheet itself got.
+    return normalized.refused
+      ? normalized.styles
+      : withGatedRules(normalized.styles, document);
+  }
+  if (
+    styles &&
+    (repairedDocument || compiledFromAnotherTree) &&
+    styleContext === undefined
+  ) {
+    return { ...normalizeStoredStyles(styles, document).styles, css: "" };
   }
   if (styleContext) {
     const context: StyleCompileContext =

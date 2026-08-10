@@ -36,6 +36,7 @@ import { DEFAULT_LIMITS } from "../limits";
 import type { DocumentLimits } from "../limits";
 import { isPlainRecord } from "../plain-record";
 import type { ValidationIssue } from "../validation";
+import { isConditionGated } from "../visibility";
 
 import { BREAKPOINT_AXES } from "./breakpoint-axes";
 import type { BreakpointAxis } from "./breakpoint-axes";
@@ -626,22 +627,6 @@ function envelopeRules(
   return rules;
 }
 
-/**
- * Whether a node's styling can be pruned from the page after the sheet is written.
- *
- * True only for a node that DECLARES entry-field conditions. `devices` is not the same thing and
- * must not be conflated with it: per-breakpoint hiding is presentation, decided by CSS on a node
- * that is always in the markup, while a condition decides whether the node is served at all.
- *
- * Read defensively, because a document reaches this compiler whether or not anything validated
- * it. An empty array declares nothing, and neither does a value that is not an array.
- */
-function declaresConditions(node: BlockNode): boolean {
-  const conditions = (node as { visibility?: { conditions?: unknown } })
-    .visibility?.conditions;
-  return Array.isArray(conditions) && conditions.length > 0;
-}
-
 /** Split declarations by the descendant they attach to, root first. */
 function groupByDescendant(
   declarations: readonly Declaration[]
@@ -813,10 +798,19 @@ function boundedAtRule(
   return `${feature} ${upper}(width > ${lowerBound}px)`;
 }
 
-/** One node and the pointer that resolves to it inside the document. */
+/** One node, the pointer that resolves to it, and whether anything gates it. */
 interface PlacedNode {
   node: BlockNode;
   path: string;
+  /**
+   * Whether this node is condition-gated, by its OWN conditions or an ancestor's.
+   *
+   * Inherited down the walk because a reader prunes whole SUBTREES: a conditioned container takes
+   * its children with it. A node judged only by its own conditions therefore leaves an
+   * unconditional child's rules in the main sheet while that child's markup is withheld —
+   * publishing the colours, fonts and `url(...)` of an element nobody was served.
+   */
+  gated: boolean;
 }
 
 /**
@@ -841,8 +835,12 @@ function documentNodes(
   // overflow the stack and fail the request with a RangeError instead of
   // returning a stylesheet. Validation walks the same adversarial shape the
   // same way.
-  const queue: { nodes: readonly BlockNode[]; base: string; depth: number }[] =
-    [{ nodes: doc.nodes, base: "/nodes", depth: 1 }];
+  const queue: {
+    nodes: readonly BlockNode[];
+    base: string;
+    depth: number;
+    gated: boolean;
+  }[] = [{ nodes: doc.nodes, base: "/nodes", depth: 1, gated: false }];
   // Iterating instead of recursing keeps a deep document from overflowing the
   // stack; it does not keep one from exhausting memory. Every queued level
   // retains the cumulative pointer to it, so a chain nested as deep as the byte
@@ -891,7 +889,10 @@ function documentNodes(
       const node = level.nodes[index];
       if (!isPlainRecord(node) || typeof node.id !== "string") continue;
       const path = pointer(level.base, index);
-      placed.push({ node, path });
+      // Once gated, gated for the whole subtree: a descendant cannot be served when the ancestor
+      // carrying it is not.
+      const gated = level.gated || isConditionGated(node);
+      placed.push({ node, path, gated });
       if (!isPlainRecord(node.slots)) continue;
       // Sorted, so two documents whose slots were written in a different order
       // still compile to the same bytes.
@@ -902,6 +903,7 @@ function documentNodes(
           nodes: children,
           base: pointer(pointer(path, "slots"), slot),
           depth: level.depth + 1,
+          gated,
         });
       }
     }
@@ -959,7 +961,16 @@ export function compilePageCss(
   }
 
   const rules: CssRule[] = [];
-  const gated: Record<string, string> = {};
+  // A null-prototype record, because a node id is author data and `__proto__` is a legal one.
+  // Assigning it on an ordinary object runs the inherited setter instead of creating an own
+  // property, so the entry vanishes: `Object.keys` stays empty, the field is omitted as though the
+  // page gated nothing, and a reader then treats a fresh artifact as one compiled before the split
+  // and withholds the WHOLE sheet — every visible sibling losing its styling because one node was
+  // named `__proto__`.
+  const gated: Record<string, string> = Object.create(null) as Record<
+    string,
+    string
+  >;
   // One array for the whole compile, appended to in emission order by every tier below.
   const trace: StyleTraceEntry[] | undefined =
     ctx.trace === true ? [] : undefined;
@@ -1178,7 +1189,7 @@ export function compilePageCss(
   // Each node's own values, in document order so the stylesheet reads the way
   // the page does.
   const reportedDuplicates = new Set<string>();
-  for (const { node, path } of nodes) {
+  for (const { node, path, gated: nodeGated } of nodes) {
     const className = classes.get(node.id);
     if (className === undefined) continue;
     if (duplicateIds.has(node.id)) {
@@ -1197,6 +1208,7 @@ export function compilePageCss(
       continue;
     }
     const selector = `${pageRoot} .${className}`;
+    const traceBeforeNode = trace?.length ?? 0;
     const nodeRules = [
       ...envelopeRules(
         node.styles,
@@ -1224,8 +1236,15 @@ export function compilePageCss(
     // without reading what came before. Appending is safe because every node carries its own
     // hashed class: two nodes' local rules never collide, and tier order is preserved inside
     // each entry.
-    if (declaresConditions(node)) {
+    if (nodeGated) {
       gated[node.id] = serializeRules(nodeRules);
+      // The trace has to describe the sheet that was RETURNED. `envelopeRules` appended this
+      // node's declarations while building them, and they are now leaving `css` — so left in
+      // place they would report declarations the browser never received, at an interleaved
+      // position the appended entry does not occupy either. Rolled back to where this node
+      // started rather than filtered afterwards, because the entries carry no marker saying
+      // which node produced them.
+      if (trace !== undefined) trace.length = traceBeforeNode;
       continue;
     }
     rules.push(...nodeRules);

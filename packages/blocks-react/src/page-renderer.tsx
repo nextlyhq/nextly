@@ -3,6 +3,7 @@ import {
   DOCUMENT_FORMAT_VERSION,
   PAGE_ROOT_CLASS,
   migrateDocument,
+  walkNodes,
   type BlockDocument,
   type BlockNode,
   type DocumentLimits,
@@ -20,6 +21,8 @@ import {
 } from "./resolver";
 import { dedupeNodeIds, sanitizeDocument } from "./sanitize";
 import {
+  isRecordedGatedEntry,
+  readableGatedRules,
   resolvePageStyles,
   styleTextForInjection,
   type PageStyles,
@@ -82,6 +85,64 @@ function rendersOwnMarkup(node: BlockNode, resolver: BlockResolver): boolean {
   const definition = resolver.get(node.type);
   if (definition === undefined) return false;
   return node.version <= definition.version;
+}
+
+/**
+ * Whether the artifact's gated map accounts for every node the prune removed.
+ *
+ * "A map is present" is not coverage. A stored artifact can be stale relative to the document it
+ * is rendered with — compiled when one node was unconditional, so its rules are in `css`, while a
+ * different node was already gated and has an entry. The map exists, but it does not cover the
+ * node that was actually pruned, and serving the stored sheet publishes that node's rules and
+ * asset URLs.
+ *
+ * The compiler writes an entry for EVERY gated node, including one with no styles of its own, so
+ * an id missing from the map means the artifact was compiled when that node was not gated. That
+ * makes presence-per-removed-id an exact test rather than a heuristic.
+ *
+ * The ENTRY has to be usable, not merely present. A key whose value the delivery refuses to read
+ * certifies coverage that never reaches the sheet, which is the same divergence one value deeper.
+ */
+function gatedMapCoversPrunedNodes(
+  before: BlockDocument,
+  after: BlockDocument,
+  gated: Readonly<Record<string, unknown>>
+): boolean {
+  const surviving = new Set<string>();
+  const survivingTypes = new Set<string>();
+  walkNodes(after.nodes, node => {
+    surviving.add(node.id);
+    survivingTypes.add(node.type);
+  });
+  let covered = true;
+  walkNodes(before.nodes, node => {
+    if (surviving.has(node.id)) return;
+    if (!isRecordedGatedEntry(gated[node.id])) covered = false;
+    // The map holds a node's OWN rules. A block type's defaults are shared, emitted once per type
+    // into the main sheet, and stay there — so when pruning removes the last instance of a type,
+    // the stored sheet still publishes that type's defaults, and any `url(...)` in them, for a
+    // block nobody was served. Only a recompile can drop a type-level rule, so the artifact cannot
+    // cover this case and must not claim to.
+    if (!survivingTypes.has(node.type)) covered = false;
+  });
+  return covered;
+}
+
+/**
+ * Whether any id appears on more than one node.
+ *
+ * The compiler suppresses the node-local rules of every node sharing an id, so a stored sheet
+ * compiled from such a document is missing them — and stays missing them after a prune removes the
+ * duplicate that made the collision visible.
+ */
+function hasDuplicateNodeIds(document: BlockDocument): boolean {
+  const seen = new Set<string>();
+  let duplicate = false;
+  walkNodes(document.nodes, node => {
+    if (seen.has(node.id)) duplicate = true;
+    seen.add(node.id);
+  });
+  return duplicate;
 }
 
 /**
@@ -268,9 +329,32 @@ export function PageRenderer({
   // render keeps them so their placeholders still appear.
   const styleInput = pruneKnownPlaceholders(visible, resolver);
 
+  // Gating is the one repair cause a stored artifact can answer on its own: an
+  // artifact carrying `gated` holds each conditioned node's rules separately, so
+  // the reader appends the survivors instead of recompiling the whole sheet or
+  // withholding it. A MISSING map is not the same as an empty one — it means the
+  // sheet was compiled before the split existed and knows nothing about gating —
+  // so only a READABLE map licenses skipping the recompile. Read through the same
+  // helper the delivery uses: a malformed map counting as coverage here while the
+  // delivery refuses to read it is how the stale sheet shipped.
+  //
+  // Duplicate ids in the STORED document disqualify it, even when pruning makes
+  // them disappear. The compiler writes no node-local rules at all for an id more
+  // than one node carries, since they cannot be styled apart; if one of the pair
+  // was the gated one, pruning removes it and the collision is gone from the tree
+  // that renders — `visible === pruned`, nothing to repair — while the stored
+  // sheet is still missing the SURVIVOR's rules. The pre-prune document is the
+  // only place that evidence still exists.
+  const gatedRules = readableGatedRules(styles);
+  const gatingCoveredByArtifact =
+    pruned !== doc &&
+    gatedRules !== undefined &&
+    gatedMapCoversPrunedNodes(doc, pruned, gatedRules) &&
+    !hasDuplicateNodeIds(doc);
+
   const repairedDocument =
     sanitized !== document ||
-    pruned !== doc ||
+    (pruned !== doc && !gatingCoveredByArtifact) ||
     visible !== pruned ||
     styleInput !== visible;
 

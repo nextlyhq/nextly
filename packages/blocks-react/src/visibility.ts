@@ -1,4 +1,8 @@
-import type { BlockDocument, BlockNode } from "@nextlyhq/blocks-engine";
+import {
+  isConditionGated,
+  type BlockDocument,
+  type BlockNode,
+} from "@nextlyhq/blocks-engine";
 
 /**
  * Whether a node is shown regardless of the entry it renders against.
@@ -14,29 +18,17 @@ import type { BlockDocument, BlockNode } from "@nextlyhq/blocks-engine";
  * that cannot be taken back; content missing from a page is visible and
  * reportable. When the evaluator arrives this becomes a call into it.
  *
- * Two shapes are NOT gates. No groups at all is no restriction, and neither is
- * a group with no predicates: the storage is OR-of-AND, and an AND of nothing
- * is satisfied, so a node whose only group was emptied by removing its last
- * predicate is visible again.
+ * The predicate itself lives in the engine and is NOT restated here. The style
+ * compiler asks the same question about the same node — whether to hold its
+ * rules out of the sheet — and while the two derived it separately they
+ * disagreed in both directions: on `conditions: [[]]` this served a node whose
+ * rules the compiler had withheld, and on an unreadable shape this withheld a
+ * node whose rules the compiler left in a sheet served to everyone. The second
+ * published the assets of a block deliberately hidden, which is the leak the
+ * gate exists to prevent. One function cannot disagree with itself.
  */
 export function isUnconditional(node: BlockNode): boolean {
-  const envelope: unknown = node.visibility;
-  if (envelope === undefined || envelope === null) return true;
-  // The envelope has to be readable before the field inside it means anything.
-  // `visibility: "hidden"` and `visibility: ["tier"]` both answer `undefined`
-  // to a property read, and `undefined` here reads as "no gate" — the one
-  // answer a shape this renderer cannot understand must never produce.
-  if (typeof envelope !== "object" || Array.isArray(envelope)) return false;
-
-  const groups = (envelope as { conditions?: unknown }).conditions;
-  if (groups === undefined || groups === null) return true;
-  // A malformed value — a flat list of predicates from an older writer, an
-  // object, a string — is still an author saying this node is restricted, and a
-  // shape this renderer cannot read is the last thing to resolve in favour of
-  // showing it.
-  if (!Array.isArray(groups)) return false;
-  if (groups.length === 0) return true;
-  return groups.some(group => Array.isArray(group) && group.length === 0);
+  return !isConditionGated(node);
 }
 
 /**

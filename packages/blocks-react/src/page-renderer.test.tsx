@@ -126,6 +126,16 @@ const text = defineBlock<{ value: string }>({
   render: ({ props, className }) => <p className={className}>{props.value}</p>,
 });
 
+/** A second type, so a document can lose every instance of one and keep the other. */
+const onlyHidden = defineBlock<{ value: string }>({
+  name: "test/only-hidden",
+  version: 1,
+  description: "Renders its value.",
+  example: { props: { value: "hi" } },
+  defaultProps: { value: "" },
+  render: ({ props, className }) => <p className={className}>{props.value}</p>,
+});
+
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
@@ -2896,6 +2906,296 @@ describe("PageRenderer", () => {
       // The page still renders, and blocks still carry their classes.
       expect(html).toContain("public body");
       expect(html).toContain("nx-b");
+    });
+
+    it("keeps a stored stylesheet when the artifact carries the gated rules", async () => {
+      // An artifact with `gated` holds the conditioned node's rules SEPARATELY, so the sheet it
+      // ships never contained them. There is nothing stale to withhold: the visible nodes keep
+      // their styling and the gated node contributes nothing, with no recompile and no compile
+      // context needed.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", {
+              props: { value: "gated body" },
+              visibility: {
+                conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+              },
+            }),
+            node("b", "test/text", { props: { value: "public body" } })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+          styles={{
+            css: ".nx-b { color: teal }",
+            classes: { a: "nx-a", b: "nx-b" },
+            gated: { a: ".nx-a { background-image: url(/gated-asset.png) }" },
+          }}
+        />
+      );
+
+      expect(html).not.toContain("gated body");
+      // The leak the split exists to stop: the withheld node's asset stays out.
+      expect(html).not.toContain("gated-asset.png");
+      // ...and, unlike the withholding path above, the sheet SURVIVES.
+      expect(html).toContain("color: teal");
+      expect(html).toContain("public body");
+    });
+
+    it("still withholds when the artifact has no gated map at all", async () => {
+      // A missing map means the sheet was compiled before the split existed, not that nothing was
+      // gated — the two are indistinguishable from the artifact alone. Reading absence as "nothing
+      // gated" would trust a sheet that predates gating entirely.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", {
+              props: { value: "gated body" },
+              visibility: {
+                conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+              },
+            }),
+            node("b", "test/text", { props: { value: "public body" } })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+          styles={{
+            css: ".nx-b { color: teal }",
+            classes: { a: "nx-a", b: "nx-b" },
+          }}
+        />
+      );
+
+      expect(html).not.toContain("gated body");
+      expect(html).not.toContain("color: teal");
+      expect(html).toContain("public body");
+    });
+
+    it("still withholds when a repair other than gating is also needed", async () => {
+      // `gated` answers ONE of the four repair causes. Here two nodes share an id, so the class map
+      // is rebuilt — a staleness the per-node split cannot fix — and the sheet must still go.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", {
+              props: { value: "gated body" },
+              visibility: {
+                conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+              },
+            }),
+            node("dup", "test/text", { props: { value: "first body" } }),
+            node("dup", "test/text", { props: { value: "second body" } })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+          styles={{
+            css: ".nx-b { color: teal }",
+            classes: { a: "nx-a", dup: "nx-dup" },
+            gated: { a: ".nx-a { color: rebeccapurple }" },
+          }}
+        />
+      );
+
+      expect(html).not.toContain("gated body");
+      expect(html).not.toContain("color: teal");
+      expect(html).not.toContain("rebeccapurple");
+    });
+
+    it("still withholds when the stored document had a duplicate id the prune hid", async () => {
+      // `dup` appears twice and one copy is gated. Pruning removes the gated copy, so the tree that
+      // renders has no collision left and nothing after the prune can see there was one — while the
+      // stored sheet, compiled when both were present, carries no rules for EITHER, because nodes
+      // sharing an id cannot be styled apart. Trusting the artifact here serves the survivor
+      // unstyled.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("dup", "test/text", {
+              props: { value: "gated twin" },
+              visibility: {
+                conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+              },
+            }),
+            node("dup", "test/text", { props: { value: "surviving twin" } })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+          styles={{
+            css: ".nx-dup { color: teal }",
+            classes: { dup: "nx-dup" },
+            gated: { dup: ".nx-dup { color: rebeccapurple }" },
+          }}
+        />
+      );
+
+      expect(html).not.toContain("gated twin");
+      expect(html).not.toContain("color: teal");
+      expect(html).not.toContain("rebeccapurple");
+    });
+
+    it.each([
+      ["null", null],
+      ["an array", []],
+      ["a string", "nope"],
+    ])(
+      "still withholds when the stored gated map is %s",
+      async (_label, malformed) => {
+        // A malformed map is not a map. Counting it as coverage skips the repair while the
+        // delivery half correctly refuses to read it, so the stale main sheet ships with the
+        // hidden node's rules and asset URLs still in it.
+        const html = await renderToHtml(
+          <PageRenderer
+            document={doc(
+              node("a", "test/text", {
+                props: { value: "gated body" },
+                visibility: {
+                  conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+                },
+              }),
+              node("b", "test/text", { props: { value: "public body" } })
+            )}
+            blocks={createBlockResolver([text as AnyBlockDefinition])}
+            styles={{
+              css: ".nx-a { background-image: url(/gated-asset.png) }",
+              classes: { a: "nx-a", b: "nx-b" },
+              gated: malformed as unknown as Record<string, string>,
+            }}
+          />
+        );
+
+        expect(html).not.toContain("gated body");
+        expect(html).not.toContain("gated-asset.png");
+        expect(html).toContain("public body");
+      }
+    );
+
+    it("still withholds when the gated map does not cover every pruned node", async () => {
+      // A stored artifact can be stale relative to the document it is rendered with: compiled when
+      // `a` was unconditional, so `a`'s rules are in `css`, while `b` was already gated and has an
+      // entry. If `a` later gains conditions, it is pruned — and a coverage test that only asks
+      // whether a map EXISTS sees `b`'s entry, calls gating covered, and serves the stored sheet
+      // with `a`'s asset still in it.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", {
+              props: { value: "newly gated body" },
+              visibility: {
+                conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+              },
+            }),
+            node("b", "test/text", {
+              props: { value: "long gated body" },
+              visibility: {
+                conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+              },
+            }),
+            node("c", "test/text", { props: { value: "public body" } })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+          styles={{
+            css: ".nx-a { background-image: url(/stale-asset.png) }",
+            classes: { a: "nx-a", b: "nx-b", c: "nx-c" },
+            // Covers `b` only. `a` was compiled into `css` before it was gated.
+            gated: { b: ".nx-b { color: teal }" },
+          }}
+        />
+      );
+
+      expect(html).not.toContain("newly gated body");
+      expect(html).not.toContain("stale-asset.png");
+      expect(html).toContain("public body");
+    });
+
+    it("still withholds when a covering entry is not a usable rule string", async () => {
+      // Coverage that only asks whether the KEY exists certifies a node whose entry the delivery
+      // then refuses to read. The repair is skipped and the stale sheet ships with that node's
+      // asset in it.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", {
+              props: { value: "gated body" },
+              visibility: {
+                conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+              },
+            }),
+            node("b", "test/text", { props: { value: "public body" } })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+          styles={{
+            // `a` is deliberately ABSENT from `classes`: naming it would make the artifact
+            // describe a node the document lacks, and the unaccounted-nodes guard would refuse
+            // the sheet before the coverage check under test ran.
+            css: ".nx-a { background-image: url(/gated-asset.png) }",
+            classes: { b: "nx-b" },
+            gated: { a: null } as unknown as Record<string, string>,
+          }}
+        />
+      );
+
+      expect(html).not.toContain("gated body");
+      expect(html).not.toContain("gated-asset.png");
+      expect(html).toContain("public body");
+    });
+
+    it("still withholds when pruning removes the last node of a block type", async () => {
+      // A block type's defaults are emitted ONCE into the main sheet, shared by every instance, so
+      // no per-node entry can account for them. When the last instance of a type is pruned, the
+      // stored sheet keeps publishing that type's defaults for a block nobody was served.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/only-hidden", {
+              props: { value: "gated body" },
+              visibility: {
+                conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+              },
+            }),
+            node("b", "test/text", { props: { value: "public body" } })
+          )}
+          blocks={createBlockResolver([
+            text as AnyBlockDefinition,
+            onlyHidden as AnyBlockDefinition,
+          ])}
+          styles={{
+            css: ".nx-bt-test--only-hidden { background-image: url(/type-default.png) }",
+            classes: { a: "nx-a", b: "nx-b" },
+            gated: { a: "" },
+          }}
+        />
+      );
+
+      expect(html).not.toContain("gated body");
+      expect(html).not.toContain("type-default.png");
+      expect(html).toContain("public body");
+    });
+
+    it("keeps the sheet when a gated node's entry is legitimately empty", async () => {
+      // A gated node with no node-local rules of its own compiles to `serializeRules([])`, which
+      // is `""`. That is the compiler RECORDING the node, not failing to. Reading it as uncovered
+      // forces the repair, and on this path — stored artifact, no compile context — the repair
+      // clears the whole sheet, so a visible sibling loses its styling because a hidden node
+      // happened to carry no rules.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", {
+              props: { value: "gated body" },
+              visibility: {
+                conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+              },
+            }),
+            node("b", "test/text", { props: { value: "public body" } })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+          styles={{
+            css: ".nx-b { color: teal }",
+            classes: { a: "nx-a", b: "nx-b" },
+            gated: { a: "" },
+          }}
+        />
+      );
+
+      expect(html).not.toContain("gated body");
+      expect(html).toContain("public body");
+      expect(html).toContain("color: teal");
     });
 
     it("recompiles rather than withholding when it can", async () => {

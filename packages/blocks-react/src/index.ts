@@ -51,3 +51,14 @@ export {
   toPageStyles,
 } from "./styles";
 export type { PageStyles } from "./styles";
+
+/**
+ * Exported because `resolvePageStyles` has a precondition a caller could not otherwise meet.
+ *
+ * That helper expects the document it is handed to be the one that will RENDER — condition-gated
+ * nodes already removed. Called with a raw document it emits rules for nodes a reader withholds,
+ * publishing the colours, fonts and `url(...)` of a block nobody was served. `PageRenderer` runs
+ * this pass itself, so the ordinary path is safe; a consumer assembling styles directly had the
+ * unsafe path available and no safe one.
+ */
+export { pruneHiddenNodes } from "./visibility";
