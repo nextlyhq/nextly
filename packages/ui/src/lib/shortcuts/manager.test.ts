@@ -983,3 +983,139 @@ describe("layouts that build characters from more than one keystroke", () => {
     expect(event.defaultPrevented).toBe(false);
   });
 });
+
+describe("a repeat inherits the policy of the press it belongs to", () => {
+  it("keeps letting a permitted key repeat under a blocking layer", () => {
+    // Consumed is not the same as suppressed. A blocking layer deliberately lets text through,
+    // so unconditionally preventing repeats made a held Backspace delete one character and stop.
+    const manager = managerFor();
+    manager.register([binding("Escape", vi.fn())], {
+      name: "modal",
+      depth: 1,
+      blocking: true,
+    });
+    const field = document.createElement("input");
+    document.body.append(field);
+    const detach = manager.attach(document);
+
+    field.dispatchEvent(press("Backspace"));
+    const repeat = press("Backspace", { repeat: true });
+    field.dispatchEvent(repeat);
+    detach();
+    field.remove();
+
+    expect(repeat.defaultPrevented).toBe(false);
+  });
+
+  it("keeps suppressing the repeats of a press that WAS suppressed", () => {
+    // The positive control: inheriting the policy must not become "never suppress".
+    const manager = managerFor();
+    manager.register([binding("mod+s", vi.fn())], { name: "shell", depth: 0 });
+    manager.handle(press("s", { ctrlKey: true }));
+    const repeat = press("s", { ctrlKey: true, repeat: true });
+    manager.handle(repeat);
+    expect(repeat.defaultPrevented).toBe(true);
+  });
+});
+
+describe("keys that act without inserting anything", () => {
+  it("suppresses Enter in a single-line input under a blocking layer", () => {
+    // Enter inserts no text there; it submits the form. Letting it through means application
+    // behaviour running underneath the advertised grab.
+    const manager = managerFor();
+    manager.register([binding("Escape", vi.fn())], {
+      name: "drag",
+      depth: 1,
+      blocking: true,
+    });
+    const field = document.createElement("input");
+    document.body.append(field);
+    const detach = manager.attach(document);
+    const event = press("Enter");
+    field.dispatchEvent(event);
+    detach();
+    field.remove();
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("leaves Enter alone in a textarea, where it makes a newline", () => {
+    // The control: Enter IS field input where it inserts one, and suppressing it there would
+    // stop the user typing a paragraph.
+    const manager = managerFor();
+    manager.register([binding("Escape", vi.fn())], {
+      name: "drag",
+      depth: 1,
+      blocking: true,
+    });
+    const area = document.createElement("textarea");
+    document.body.append(area);
+    const detach = manager.attach(document);
+    const event = press("Enter");
+    area.dispatchEvent(event);
+    detach();
+    area.remove();
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("lets a focused reset button keep Space", () => {
+    // Reset is button-like and is already classified as a non-text input, so a global Space
+    // binding was firing instead of activating it.
+    const run = vi.fn();
+    const manager = managerFor();
+    manager.register([binding("Space", run)], { name: "shell", depth: 0 });
+    const reset = document.createElement("input");
+    reset.type = "reset";
+    document.body.append(reset);
+    const detach = manager.attach(document);
+    reset.dispatchEvent(press(" "));
+    detach();
+    reset.remove();
+    expect(run).not.toHaveBeenCalled();
+  });
+});
+
+describe("targets from another realm", () => {
+  it("recognises a control belonging to a different document", () => {
+    // `instanceof HTMLElement` is per-realm, and the manager documents a custom target. Checking
+    // against the outer window's constructor rejected every control in an iframe or pop-out —
+    // the exact case the option exists to serve — so bare shortcuts fired while typing there.
+    const run = vi.fn();
+    const manager = managerFor();
+    manager.register([binding("n", run)], { name: "shell", depth: 0 });
+
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    const inner = frame.contentDocument;
+    if (!inner) throw new Error("iframe document unavailable");
+    const field = inner.createElement("input");
+    inner.body.append(field);
+
+    const detach = manager.attach(inner);
+    field.dispatchEvent(
+      new (inner.defaultView ?? window).KeyboardEvent("keydown", {
+        key: "n",
+        bubbles: true,
+      })
+    );
+    detach();
+    frame.remove();
+
+    expect(run).not.toHaveBeenCalled();
+  });
+});
+
+describe("composition interrupting a sequence", () => {
+  it("abandons a pending sequence when composition happens in between", () => {
+    const run = vi.fn();
+    const manager = managerFor();
+    manager.register([binding("mod+k c", run)], { name: "shell", depth: 0 });
+
+    manager.handle(press("k", { ctrlKey: true }));
+    const composing = press("x");
+    Object.defineProperty(composing, "isComposing", { value: true });
+    manager.handle(composing);
+    manager.handle(press("c"));
+
+    expect(run).not.toHaveBeenCalled();
+  });
+});

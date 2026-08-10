@@ -198,6 +198,35 @@ function signature(event: KeyboardEvent): string {
 }
 
 /**
+ * The shape this module reads off an event target.
+ *
+ * Structural rather than `HTMLElement`, because `instanceof` is per-realm: a document inside an
+ * iframe or a pop-out window has its OWN `HTMLElement`, and the manager documents a custom
+ * `target`, so checking against the outer window's constructor rejects every control in exactly
+ * the case the option exists to support. `nodeType === 1` identifies an element in any realm.
+ */
+interface ElementLike {
+  tagName: string;
+  isContentEditable: boolean;
+  getAttribute: (name: string) => string | null;
+}
+
+/** The event target as an element, whichever document it came from. */
+function asElement(target: EventTarget | null): ElementLike | null {
+  if (target === null || typeof target !== "object") return null;
+  const node = target as { nodeType?: unknown; tagName?: unknown };
+  if (node.nodeType !== 1 || typeof node.tagName !== "string") return null;
+  return target as unknown as ElementLike;
+}
+
+/** The `type` of an input element, or "" for anything else. */
+function inputType(element: ElementLike): string {
+  if (element.tagName !== "INPUT") return "";
+  const value = (element as { type?: unknown }).type;
+  return typeof value === "string" ? value.toLowerCase() : "";
+}
+
+/**
  * Whether a focused native control owns this key itself.
  *
  * A checkbox is not a typing target, so bare-letter shortcuts should still fire over it — but
@@ -210,17 +239,17 @@ function controlOwnsKey(
   event: KeyboardEvent
 ): boolean {
   if (event.ctrlKey || event.metaKey || event.altKey) return false;
+  const element = asElement(target);
+  if (!element) return false;
+  const tag = element.tagName;
+  const type = inputType(element);
+  // `reset` belongs with the other button types: it is not a text field, and Space activates it.
   if (
-    !target ||
-    typeof HTMLElement === "undefined" ||
-    !(target instanceof HTMLElement)
+    tag === "BUTTON" ||
+    type === "button" ||
+    type === "submit" ||
+    type === "reset"
   ) {
-    return false;
-  }
-  const tag = target.tagName;
-  const type =
-    tag === "INPUT" ? (target as HTMLInputElement).type.toLowerCase() : "";
-  if (tag === "BUTTON" || type === "button" || type === "submit") {
     return event.key === " " || event.key === "Enter";
   }
   if (type === "checkbox") return event.key === " ";
@@ -232,15 +261,10 @@ function controlOwnsKey(
 
 /** Whether a keystroke is going into something the user is typing into. */
 function isTypingTarget(target: EventTarget | null): boolean {
-  if (
-    !target ||
-    typeof HTMLElement === "undefined" ||
-    !(target instanceof HTMLElement)
-  ) {
-    return false;
-  }
-  if (target.isContentEditable) return true;
-  const tag = target.tagName;
+  const element = asElement(target);
+  if (!element) return false;
+  if (element.isContentEditable) return true;
+  const tag = element.tagName;
   if (tag === "TEXTAREA") return true;
   // A native select does type-ahead on bare letters, so a single-key shortcut firing over it
   // would both act and suppress the control's own behaviour.
@@ -248,15 +272,14 @@ function isTypingTarget(target: EventTarget | null): boolean {
   if (tag === "INPUT") {
     // Only the text-bearing input types capture letters. A checkbox or a button is an input
     // element that a bare-letter shortcut should still fire over.
-    const type = (target as HTMLInputElement).type.toLowerCase();
-    return !NON_TEXT_INPUT_TYPES.has(type);
+    return !NON_TEXT_INPUT_TYPES.has(inputType(element));
   }
   // A custom widget that reports itself as taking text does, even when it is a div. `combobox`
   // and `listbox` are here for type-ahead rather than text entry: Radix's Select renders a
   // button with `role="combobox"` and jumps between options on bare letters without stopping
   // propagation, so a single-key shortcut would fire on top of the value it just changed. This
   // kit's own `Select` wraps that trigger, so the case is reachable from our own components.
-  const role = target.getAttribute("role");
+  const role = element.getAttribute("role");
   return role !== null && TYPE_AHEAD_ROLES.has(role);
 }
 
@@ -314,7 +337,7 @@ export function createShortcutManager(
    * Identifies the physical press rather than the binding that answered it: by the time a repeat
    * arrives, the binding may have made itself ineligible.
    */
-  let consumedPress: string | null = null;
+  let consumedPress: { signature: string; prevented: boolean } | null = null;
 
   function prepare(bindings: readonly ShortcutBinding[]): PreparedBinding[] {
     return bindings.map(binding => ({
@@ -385,6 +408,15 @@ export function createShortcutManager(
     // the composition guard never covers them. Suppressing either stops accented input being
     // begun at all.
     if (event.key === "Dead" || event.key === "Process") return true;
+    // Enter is field input only where it inserts a newline. In a single-line input it submits
+    // the form instead, which is application behaviour running underneath the advertised grab.
+    if (event.key === "Enter") {
+      const element = asElement(event.target);
+      return (
+        element !== null &&
+        (element.tagName === "TEXTAREA" || element.isContentEditable)
+      );
+    }
     return event.key.length === 1 || FIELD_KEYS.has(event.key);
   }
 
@@ -473,7 +505,14 @@ export function createShortcutManager(
     // An IME turns keystrokes into composition input, and Escape there means "abandon what I am
     // composing". Acting on it would cancel the composition AND dismiss whatever the application
     // binds Escape to — a keystroke the user never aimed at the application at all.
-    if (event.isComposing) return false;
+    if (event.isComposing) {
+      // Composition interrupts a sequence for the same reason a dismissal or a control-owned key
+      // does: real keystrokes happened in between. Otherwise a `c` typed after composing could
+      // still complete a `mod+k c` begun before it.
+      pendingAt = null;
+      pressedEvents.length = 0;
+      return false;
+    }
     // Something closer to the keystroke has already claimed it. Radix's DismissableLayer, which
     // every Dialog and Sheet in this kit is built on, listens on `document` in the CAPTURE phase,
     // calls `preventDefault()` to dismiss, and does not stop propagation — so without this check
@@ -516,8 +555,14 @@ export function createShortcutManager(
       // `mod+s` saving and clearing the dirty flag — is no longer eligible by the second
       // keydown, so the repeat would be reported unhandled and the browser would take it. What
       // was consumed is a PRESS, not a match, so the press is what gets remembered.
-      if (consumedPress !== null && consumedPress === signature(event)) {
-        event.preventDefault();
+      if (
+        consumedPress !== null &&
+        consumedPress.signature === signature(event)
+      ) {
+        // Consumed does not imply suppressed. A binding may set `preventDefault: false`, and a
+        // blocking layer deliberately lets text through — so unconditionally preventing repeats
+        // would let a held Backspace delete one character and then stop.
+        if (consumedPress.prevented) event.preventDefault();
         return true;
       }
       const repeated = offer([event], event, typing, false);
@@ -550,14 +595,19 @@ export function createShortcutManager(
 
     if (outcome === "pending") {
       pendingAt = now();
-      consumedPress = signature(event);
+      consumedPress = {
+        signature: signature(event),
+        prevented: event.defaultPrevented,
+      };
       return true;
     }
 
     pendingAt = null;
     pressedEvents.length = 0;
     const consumed = outcome === "fired" || outcome === "blocked";
-    consumedPress = consumed ? signature(event) : null;
+    consumedPress = consumed
+      ? { signature: signature(event), prevented: event.defaultPrevented }
+      : null;
     return consumed;
   }
 
@@ -635,7 +685,6 @@ const TYPE_AHEAD_ROLES = new Set([
 const FIELD_KEYS = new Set([
   "Backspace",
   "Delete",
-  "Enter",
   "Tab",
   "ArrowUp",
   "ArrowDown",
