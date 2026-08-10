@@ -316,6 +316,16 @@ export function slugToStaticParam(value: unknown): { slug: string[] } | null {
   // Percent-encoding does not help: the URL standard treats `%2e` as a dot for
   // exactly this purpose, so `%2E%2E` resolves away too.
   if (segments.some(isDotSegment)) return null;
+  // A slug NORMALIZATION changed is a slug that cannot be served. The route
+  // matches the joined incoming segments against the stored column, so an entry
+  // stored as `a//b` is fetched at `/a/b` and looked up as `a/b` — which it does
+  // not have. Pre-rendering that path builds a page the lookup can never find,
+  // and any URL derived from it names one the route answers with `notFound()`.
+  //
+  // The normalization above still happens, because a reserved path must not be
+  // smuggled past the check by a leading slash. What changes is the ANSWER:
+  // normalization is used to decide, never to rewrite.
+  if (segments.join("/") !== value) return null;
   return { slug: segments };
 }
 

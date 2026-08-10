@@ -594,6 +594,36 @@ describe("deriveSeoFromDocument", () => {
     await new Promise(resolve => setTimeout(resolve, 0));
   });
 
+  it("survives an offer whose `then` getter throws", () => {
+    // The containment promise has to hold for the INSPECTION too: `then` may be
+    // a getter, and one that throws would escape a check made after the guard —
+    // failing the route on the way to preventing exactly that.
+    const hostile: Record<string, unknown> = {};
+    Object.defineProperty(hostile, "then", {
+      get() {
+        throw new Error("boom");
+      },
+    });
+    const map: Record<string, unknown> = {
+      "plugin/hostile": { seo: () => hostile },
+      "core/heading": {
+        seo: (p: never) => ({ title: (p as { text?: string }).text }),
+      },
+    };
+    const source = ((type: string) => map[type]) as SeoDefinitionSource;
+
+    const derived = deriveSeoFromDocument(
+      doc([
+        node("1", "plugin/hostile", {}),
+        node("2", "core/heading", { text: "Still here" }),
+      ]),
+      source,
+      visible
+    );
+
+    expect(derived.title).toBe("Still here");
+  });
+
   it("returns nothing for an empty document", () => {
     expect(deriveSeoFromDocument(doc([]), definitions(), visible)).toEqual({});
   });

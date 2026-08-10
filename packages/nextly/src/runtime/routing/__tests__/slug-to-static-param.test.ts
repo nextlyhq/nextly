@@ -28,14 +28,19 @@ describe("slugToStaticParam", () => {
     expect(slugToStaticParam("api/keys")).toBeNull();
   });
 
-  it("normalizes redundant slashes and still rejects a slash-prefixed reserved slug", () => {
-    // A leading slash must not smuggle a reserved path past the check.
+  it("normalizes to CHECK, and refuses what normalization changed", () => {
+    // A leading slash must not smuggle a reserved path past the check, so the
+    // normalization still happens. What it must not do is rewrite: the route
+    // matches the joined incoming segments against the STORED column, so an
+    // entry stored as `a//b` is fetched at `/a/b` and looked up as `a/b` —
+    // which it does not have. Pre-rendering that builds a page the lookup can
+    // never find, and any URL derived from it names one the route 404s.
     expect(slugToStaticParam("/admin")).toBeNull();
-    // Edge/duplicate slashes collapse to clean segments.
-    expect(slugToStaticParam("/blog/post/")).toEqual({
-      slug: ["blog", "post"],
-    });
-    expect(slugToStaticParam("a//b")).toEqual({ slug: ["a", "b"] });
+    expect(slugToStaticParam("/blog/post/")).toBeNull();
+    expect(slugToStaticParam("a//b")).toBeNull();
+    // A slug needing no normalization is unaffected, which is the control that
+    // stops the above passing for a function that refuses everything.
+    expect(slugToStaticParam("blog/post")).toEqual({ slug: ["blog", "post"] });
   });
 
   it("rejects a slug holding a segment URL resolution removes", () => {

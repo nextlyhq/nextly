@@ -208,14 +208,6 @@ function emitPath(slug: string): string | null {
   const param = slugToStaticParam(slug);
   if (param === null) return null;
   if (param.slug.length === 0) return "/";
-  // Normalization CHANGED the slug, so the path it yields is not the slug the
-  // route will look up. `resolveContent` matches the stored column against the
-  // joined incoming segments, and Next answers `/a//b` with a 308 to `/a/b` — so
-  // the request arrives asking for `a/b`, which this entry does not have.
-  // Emitting the normalized path would name a page the route answers with
-  // `notFound()`; emitting the raw one would name a path that redirects away
-  // from it. Neither is a destination, so there is none to give.
-  if (param.slug.join("/") !== slug) return null;
   // Encoded per segment: Next hands this route DECODED segments while the
   // request used their encoded form, so `faq?all` emitted raw is read as a path
   // plus a query.
@@ -600,7 +592,12 @@ function mediaResolver(
         await mediaByQuery(reader, {
           collection: config.mediaCollection,
           id,
-          status: config.status ?? "published",
+          // The SAME scope the entry and reference reads use, not a second
+          // opinion. A route configured `draft: true` widens its entry reads,
+          // and a preview referencing a never-published image would otherwise
+          // render no picture on a page explicitly serving drafts.
+          status:
+            config.status ?? (config.draft === true ? "all" : "published"),
           overrideAccess: true,
           disableErrors: true,
           // Cleared for the same reason the entry and reference reads clear it:

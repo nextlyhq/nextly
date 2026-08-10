@@ -137,8 +137,14 @@ function offerOf(
   const definition = definitions(node.type);
   if (!definition?.seo) return undefined;
   let offer: BlockSeoContribution | undefined;
+  let deferred = false;
   try {
     offer = definition.seo(node.props as never);
+    // Inspected INSIDE the guard. `then` may be a getter, and a getter that
+    // throws would escape a check made after the `try` — so the containment
+    // this function promises would fail on the way to enforcing itself.
+    deferred =
+      typeof (offer as { then?: unknown } | undefined)?.then === "function";
   } catch {
     return undefined;
   }
@@ -152,8 +158,7 @@ function offerOf(
   // The value is discarded either way: this contract is synchronous, so a
   // promise is a malformed offer whether it settles or not. Attaching the
   // handler is only about who owns the rejection.
-  const thenable = (offer as { then?: unknown } | undefined)?.then;
-  if (typeof thenable === "function") {
+  if (deferred) {
     void Promise.resolve(offer).catch(() => undefined);
     return undefined;
   }
@@ -175,8 +180,13 @@ function drawsNothing(
   const predicate = definitions(node.type)?.rendersNothing;
   if (typeof predicate !== "function") return false;
   let answer: unknown;
+  let deferred = false;
   try {
     answer = predicate(node.props as never);
+    // Inside the guard, for the same reason as `offerOf`: a throwing `then`
+    // getter would otherwise escape the containment on its way to being caught.
+    deferred =
+      typeof (answer as { then?: unknown } | undefined)?.then === "function";
   } catch {
     return false;
   }
@@ -185,7 +195,7 @@ function drawsNothing(
   // `catch` never sees one. Node reports that as an unhandled rejection and can
   // end the process — the whole page lost because a block was asked about
   // itself. The same containment the `seo` hook needed, for the same reason.
-  if (typeof (answer as { then?: unknown } | undefined)?.then === "function") {
+  if (deferred) {
     void Promise.resolve(answer).catch(() => undefined);
     return false;
   }

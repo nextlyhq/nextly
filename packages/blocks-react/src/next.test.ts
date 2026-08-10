@@ -1502,6 +1502,32 @@ describe("createBlocksPage", () => {
     await expect(props.context?.resolveMedia(blank)).resolves.toBeNull();
   });
 
+  it("widens the named media scope on a draft-serving route", async () => {
+    // The route widens its ENTRY reads when `draft: true`, so a preview page
+    // referencing a never-published image must not render no picture on a page
+    // explicitly configured to serve drafts.
+    const instance = reader({
+      slug: "about",
+      content: document,
+    }) as unknown as {
+      find: ReturnType<typeof vi.fn>;
+    };
+
+    const props = await render({
+      collections: ["pages"],
+      field: "content",
+      nextly: instance as never,
+      mediaCollection: "photos",
+      draft: true,
+    });
+    instance.find.mockClear();
+    await props.context?.resolveMedia("66666666-6666-4666-8666-666666666666");
+
+    expect(instance.find).toHaveBeenCalledWith(
+      expect.objectContaining({ collection: "photos", status: "all" })
+    );
+  });
+
   it("reads a named media collection in the route's locale", async () => {
     // A named collection is an ordinary collection, so its URL and alt fields
     // can be localized. Omitting the locale reads the DEFAULT locale's record
