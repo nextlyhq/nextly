@@ -55,7 +55,22 @@ export async function renderImage({
   if (src === undefined) return null;
 
   const decorative = flag(props.decorative);
-  const alt = decorative ? "" : text(props.alt, resolved?.alt ?? "");
+  // The block's default `alt` is the EMPTY STRING, and `text()` treats that as
+  // a value rather than a missing one — so passing the media's alt as its
+  // fallback never reached a freshly created image, and it emitted `alt=""`
+  // while the record held usable text. Empty is checked explicitly instead.
+  //
+  // Order matters and is deliberate: `decorative` wins outright, because an
+  // author marking an image decorative means `alt=""` even when the media has
+  // text; an author's own alt beats the record's, because it was written for
+  // this placement; and the record's is the fallback that keeps a screen reader
+  // from being handed nothing.
+  const authored = text(props.alt);
+  const alt = decorative
+    ? ""
+    : authored !== ""
+      ? authored
+      : (resolved?.alt ?? "");
   const caption = text(props.caption);
 
   const image = (
@@ -101,12 +116,11 @@ export const image = defineBlock<ImageProps, PageContext>({
     caption: { type: "text" },
   },
   defaultProps: { alt: "", loading: "lazy" },
-  // The media id when there is one, so the caller resolves it through the same
-  // path the rendered image uses; a directly-held `src` otherwise.
   // Both candidates, in the order the render prefers them: the resolved media
-  // first, the directly-typed URL as the fallback the renderer itself uses
-  // when the media record is missing.
-  // Each candidate says WHICH KIND it is, because only this block knows: the
+  // first, the directly-typed URL as the fallback the render itself falls back
+  // to when the record is missing.
+  //
+  // Each says WHICH KIND it is, because only this block knows: the
   // id came from `mediaId` and the address from `src`, and no inspection of the
   // text can tell them apart — a UUID is a valid relative URL and a bare word
   // is a valid src.

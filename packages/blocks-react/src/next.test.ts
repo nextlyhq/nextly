@@ -1064,6 +1064,25 @@ describe("createBlocksPage", () => {
     ).resolves.toBeNull();
   });
 
+  it("gives no path for a slug that would leave the site", async () => {
+    // A slug is stored TEXT, so it can begin with `/`. `//evil.example`
+    // interpolates to `///evil.example`, which browsers read as a
+    // protocol-relative URL to another host — an "internal" reference that
+    // navigates off-site.
+    const props = await render({
+      collections: ["pages"],
+      field: "content",
+      nextly: reader(
+        { slug: "about", content: document },
+        { evil: { slug: "//evil.example" } }
+      ),
+    });
+
+    await expect(
+      props.context?.resolveEntryPath("pages", "evil")
+    ).resolves.toBeNull();
+  });
+
   it("passes the stored stylesheet through for the resolved entry", async () => {
     const styles = { css: ".a{color:red}", classes: { n1: "a" } };
     const props = await render({

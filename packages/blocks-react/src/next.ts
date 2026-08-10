@@ -469,6 +469,14 @@ function entryPathResolver(
     const slug = record[slugField];
     if (typeof slug !== "string") return null;
 
+    // A slug is stored TEXT, so it can start with `/` — and `//evil.example`
+    // interpolates to `///evil.example`, which every browser reads as a
+    // protocol-relative URL to another host. An "internal" entry reference then
+    // navigates off-site. Refused rather than stripped: a slug shaped like an
+    // address is not a path this route serves under any reading, and silently
+    // rewriting it would invent a destination the author never wrote.
+    if (slug.startsWith("/")) return null;
+
     // Reserved paths are refused by `ContentPage` before it resolves anything,
     // so a slug like `admin` or `robots.txt` can never be served here — and may
     // instead lead into a route the application owns.
