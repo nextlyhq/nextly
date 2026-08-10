@@ -15,7 +15,15 @@
  * - Network exception → re-throws with provider prefix
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  vi,
+  beforeEach,
+  afterEach,
+  afterAll,
+} from "vitest";
 
 import { createResendProvider } from "../services/providers/resend-provider";
 
@@ -41,6 +49,27 @@ function okResponse(id = "msg_abc123") {
     json: async () => ({ id }),
   } as unknown as Response;
 }
+
+// Both variables are read by the provider, so ANY test in this file that
+// asserts a URL or headers depends on them being absent unless it sets them.
+// Isolated at file level rather than per-describe: a developer or CI with
+// RESEND_BASE_URL exported would otherwise fail the default-endpoint
+// assertions in the first describe, which never opted into the variable and
+// cannot see why it broke.
+const ORIGINAL_BASE_URL = process.env.RESEND_BASE_URL;
+const ORIGINAL_USER_AGENT = process.env.RESEND_USER_AGENT;
+
+beforeEach(() => {
+  delete process.env.RESEND_BASE_URL;
+  delete process.env.RESEND_USER_AGENT;
+});
+
+afterAll(() => {
+  if (ORIGINAL_BASE_URL === undefined) delete process.env.RESEND_BASE_URL;
+  else process.env.RESEND_BASE_URL = ORIGINAL_BASE_URL;
+  if (ORIGINAL_USER_AGENT === undefined) delete process.env.RESEND_USER_AGENT;
+  else process.env.RESEND_USER_AGENT = ORIGINAL_USER_AGENT;
+});
 
 describe("createResendProvider", () => {
   beforeEach(() => {
@@ -199,21 +228,13 @@ describe("createResendProvider", () => {
 });
 
 describe("Resend adapter — endpoint resolution", () => {
-  const ORIGINAL_BASE = process.env.RESEND_BASE_URL;
-  const ORIGINAL_UA = process.env.RESEND_USER_AGENT;
-
+  // Env isolation is file-level; this only needs the fetch stub.
   beforeEach(() => {
     vi.stubGlobal("fetch", vi.fn());
-    delete process.env.RESEND_BASE_URL;
-    delete process.env.RESEND_USER_AGENT;
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
-    if (ORIGINAL_BASE === undefined) delete process.env.RESEND_BASE_URL;
-    else process.env.RESEND_BASE_URL = ORIGINAL_BASE;
-    if (ORIGINAL_UA === undefined) delete process.env.RESEND_USER_AGENT;
-    else process.env.RESEND_USER_AGENT = ORIGINAL_UA;
   });
 
   async function sendOnce() {
