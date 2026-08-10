@@ -95,5 +95,40 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(row?.migrationStatus).toBe("applied");
       expect(await current.adapter.tableExists(`comp_${viaDirect}`)).toBe(true);
     });
+
+    it("refuses a create whose slug names a table another field group owns", async () => {
+      current = await createTestNextly({ dialect });
+
+      // Two DIFFERENT slugs naming ONE physical table, which is the case a slug-keyed check cannot
+      // see: a slug is normalised on its way to a table name, so these two are `comp_<...>_held`
+      // alike while looking like two free slugs.
+      const held = `fg_${dialect.slice(0, 2)}_held`;
+      const collides = held.replace(/_held$/, "-held");
+
+      await dispatchComponents(
+        "createComponent",
+        {},
+        { slug: held, label: "Holds the table", fields: FIELDS }
+      );
+
+      // Rejected for the reason that is true — a table conflict — rather than by whatever the
+      // database says when the unique index on `table_name` stops the insert. The distinction is
+      // the whole point: reaching the insert means the DDL and the runtime re-registration have
+      // already run, and the second of those rebinds the EXISTING field group to this request's
+      // fields.
+      await expect(
+        current.nextly.fieldGroups.create({
+          slug: collides,
+          label: "Wants the same table",
+          fields: [{ name: "different", type: "text" }],
+        })
+      ).rejects.toMatchObject({ code: "DUPLICATE" });
+
+      // The field group that owns the table is untouched, which is what a refusal before the DDL
+      // buys. Its own fields still describe it.
+      const row = await registryRow(current, held);
+      expect(row?.migrationStatus).toBe("applied");
+      expect(await current.adapter.tableExists(`comp_${held}`)).toBe(true);
+    });
   });
 }

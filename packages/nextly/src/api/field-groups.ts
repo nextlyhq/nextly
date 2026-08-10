@@ -29,6 +29,7 @@ import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
 import { resolveComponentTableName } from "../domains/schema/utils/resolve-table-name";
 import { getCachedNextly } from "../init";
 import type { FieldGroupRegistryService } from "../services/field-groups/field-group-registry-service";
+import { MAX_SLUG_LENGTH } from "../shared/base-validator";
 import { requireBuilderEnabled } from "../shared/builder-access";
 
 import { assertValidFieldsPayload } from "./fields-payload";
@@ -58,7 +59,11 @@ const createComponentSchema = z.object({
   slug: z
     .string()
     .min(1, "Slug is required")
-    .max(255, "Slug must be 255 characters or less")
+    // The bound the rest of the product validates against, not the column width. A slug longer than
+    // this becomes a `comp_<slug>` identifier that PostgreSQL truncates and MySQL rejects, so a
+    // request accepted here would provision a table under a name it cannot then verify, record the
+    // field group as failed, and still answer 201.
+    .max(MAX_SLUG_LENGTH, `Slug must be ${MAX_SLUG_LENGTH} characters or less`)
     .regex(
       /^[a-z][a-z0-9-]*$/,
       "Slug must start with a letter and contain only lowercase letters, numbers, and hyphens"

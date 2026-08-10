@@ -105,4 +105,51 @@ describe("the field-group create route", () => {
     expect(body.message).not.toBe("Field group created.");
     expect(body.message).toContain("could not be provisioned");
   });
+
+  it("refuses a slug too long to survive becoming a table name", async () => {
+    // 51 characters: one past the bound the rest of the product validates against. `comp_` + this
+    // is 56, still inside what the engines accept — the bound is not the engine's, it is the
+    // product's, and it exists so a slug plus every prefix and companion suffix stays clear of the
+    // 63-byte ceiling where PostgreSQL stops rejecting and starts silently TRUNCATING.
+    const { POST } = await import("../field-groups");
+
+    const response = await POST(
+      new Request("http://localhost/api/field-groups", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          slug: `a${"b".repeat(50)}`,
+          label: "Too long",
+          fields: [{ name: "heading", type: "text" }],
+        }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    // The point is WHERE it is refused. Accepted here, it reaches the DDL, provisions a table the
+    // verification then cannot find under the name it asked for, records the field group as failed,
+    // and still answers 201 for input the route declared valid.
+    expect(createFieldGroup).not.toHaveBeenCalled();
+  });
+
+  it("accepts a slug at the bound", async () => {
+    // The positive control. Without it, a rule that rejected everything would satisfy the case
+    // above while breaking every real create.
+    const { POST } = await import("../field-groups");
+
+    const response = await POST(
+      new Request("http://localhost/api/field-groups", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          slug: `a${"b".repeat(49)}`,
+          label: "At the bound",
+          fields: [{ name: "heading", type: "text" }],
+        }),
+      })
+    );
+
+    expect(response.status).toBe(201);
+    expect(createFieldGroup).toHaveBeenCalledTimes(1);
+  });
 });

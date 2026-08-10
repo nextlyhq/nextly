@@ -32,6 +32,7 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { NextlyError } from "../../../errors";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type {
   DynamicFieldGroupInsert,
@@ -101,12 +102,14 @@ export class FieldGroupMetadataService {
   /**
    * Create a field group's table and its registry row.
    *
-   * The caller has already validated the input and established that no other field group owns this
-   * table name.
+   * The caller has already validated the input's shape.
    */
   async createFieldGroup(
     input: CreateFieldGroupInput
   ): Promise<CreateFieldGroupResult> {
+    // 0. REFUSE a table another field group owns, before anything is executed.
+    await this.assertTableUnowned(input);
+
     // 1. PLAN, before anything is persisted or executed. The generator validates as well as
     // renders, so a request it refuses leaves nothing behind at all.
     const migrationSQL = await this.planCreate(input);
@@ -121,6 +124,43 @@ export class FieldGroupMetadataService {
     });
 
     return { record, migrationStatus };
+  }
+
+  /**
+   * Refuse a create whose table another field group already owns.
+   *
+   * Keyed on the TABLE NAME rather than the slug, because the two are not the same key: a slug is
+   * normalised on its way to a table name, so `foo-bar` and `foo_bar` name one physical table while
+   * looking like two free slugs.
+   *
+   * It has to run before the DDL rather than after. `CREATE TABLE IF NOT EXISTS` reports success
+   * against a table that already exists, the runtime registration that follows then rebinds that
+   * table to THIS request's fields, and only afterwards does the registry reject the duplicate — so
+   * a refused create would leave the existing field group reading through a schema that does not
+   * describe it, until the process restarts.
+   *
+   * Here rather than in a request handler because all three create transports need it and only one
+   * of them had it. The same reason the DDL itself moved into this service.
+   *
+   * Two callers racing can still both pass this check; the registry table declares `table_name`
+   * unique, so the second insert is rejected by the database rather than by this.
+   */
+  private async assertTableUnowned(
+    input: CreateFieldGroupInput
+  ): Promise<void> {
+    const owner = (await this.registry.getAllComponents()).find(
+      existing => existing.tableName === input.tableName
+    );
+    if (!owner) return;
+
+    throw NextlyError.duplicate({
+      logContext: {
+        reason: "component-table-conflict",
+        slug: input.slug,
+        tableName: input.tableName,
+        ownedBy: owner.slug,
+      },
+    });
   }
 
   /** Render the DDL. Separated from the apply because this half is allowed to reject the request. */
@@ -158,24 +198,29 @@ export class FieldGroupMetadataService {
     const isLocalized = input.localized === true;
     const fields = input.fields as unknown as FieldDefinition[];
 
+    // The verification shares the statements' catch rather than following it. `tableExists`
+    // re-raises the query failures it meets, and left outside this it would reject the whole apply
+    // — breaking the one promise this method makes, that a schema change which fails is RECORDED
+    // rather than raised. A transient failure there would take the registry write with it and leave
+    // the table that was just created with nothing describing it.
     try {
       const { applyMigrationStatements } = await import(
         "../../schema/services/apply-migration-statements"
       );
       await applyMigrationStatements(adapter, migrationSQL);
+
+      // Observed, not assumed. "Applied" has to mean the table is there.
+      if (!(await adapter.tableExists(input.tableName))) {
+        this.logger.error(
+          `[FieldGroups] Table "${input.tableName}" was not created after migration`
+        );
+        return "failed";
+      }
     } catch (error) {
       this.logger.error(
         `[FieldGroups] Migration execution failed for "${input.tableName}": ${
           error instanceof Error ? error.message : String(error)
         }`
-      );
-      return "failed";
-    }
-
-    // Observed, not assumed. "Applied" has to mean the table is there.
-    if (!(await adapter.tableExists(input.tableName))) {
-      this.logger.error(
-        `[FieldGroups] Table "${input.tableName}" was not created after migration`
       );
       return "failed";
     }

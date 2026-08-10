@@ -26,7 +26,13 @@ describe("fieldGroups.create derives its table name", () => {
       warn: vi.fn(),
       error: vi.fn(),
     };
-    const registry = { registerComponent };
+    // Answers "no field group owns any table", which is the state a create starts from. The service
+    // refuses a table another field group already holds before it renders any DDL, so a double
+    // without this method describes a registry the create can no longer be performed against.
+    const registry = {
+      registerComponent,
+      getAllComponents: vi.fn().mockResolvedValue([]),
+    };
     const ctx = {
       fieldGroupRegistryService: registry,
       // The REAL service, with no adapter: the create then generates its statements and runs none,
