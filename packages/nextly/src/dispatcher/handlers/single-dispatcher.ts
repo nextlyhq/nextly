@@ -725,27 +725,12 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
 
       // The storage drop and the registry delete are one operation, so they are issued as one. Held
       // apart, a failure between them loses the row that makes the tables findable.
-      const tableName = single.tableName;
-      const metadata = getSingleMetadataServiceFromDI();
-      try {
-        if (metadata) {
-          await metadata.deleteSingle(slug, tableName);
-        } else {
-          await svc.registry.deleteSingle(slug, { force: true });
-        }
-      } catch (deleteError) {
-        const message =
-          deleteError instanceof Error
-            ? deleteError.message
-            : String(deleteError);
-        if (message.includes("not found")) {
-          console.log(
-            `[deleteSingle] Metadata already deleted for "${slug}", treating as success`
-          );
-        } else {
-          throw deleteError;
-        }
-      }
+      // No fallback and no catch. `dispatchSingles` refuses to run any method without a metadata
+      // service, so there is no path here where one is absent, and the service already treats a
+      // registry row another request took as the outcome asked for. Everything else it raises —
+      // storage that would not go away — is a failed delete and has to reach the caller, whatever
+      // words the driver chose for it.
+      await svc.metadata.deleteSingle(slug, single.tableName);
 
       // Spec divergence: spec §5.1 / §7.4 strictly maps delete to
       // respondMutation, but registry.deleteSingle returns void (no

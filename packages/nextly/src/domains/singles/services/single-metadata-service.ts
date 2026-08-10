@@ -44,6 +44,7 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { NextlyError } from "../../../errors";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type {
   DynamicSingleInsert,
@@ -198,19 +199,31 @@ export class SingleMetadataService {
       );
       await teardownEntityI18n({ adapter, slug, tableName, kind: "single" });
 
-      const dialect = adapter.getCapabilities().dialect;
-      const quoted =
-        dialect === "mysql" ? `\`${tableName}\`` : `"${tableName}"`;
       // PostgreSQL needs CASCADE to drop dependent objects: the companion's foreign key makes the
-      // main table a target, and a non-cascading drop raises rather than proceeding.
-      await adapter.executeQuery(
-        dialect === "postgresql"
-          ? `DROP TABLE IF EXISTS ${quoted} CASCADE`
-          : `DROP TABLE IF EXISTS ${quoted}`
-      );
+      // main table a target, and a non-cascading drop raises rather than proceeding. The other two
+      // dialects reject the keyword, so it is asked for only where it means something.
+      //
+      // The adapter renders this rather than a SQL string built here, because it already owns the
+      // two things such a string has to get right on every dialect: quoting the identifier, and
+      // turning a driver failure into the normalised database error the callers above expect.
+      await adapter.dropTable(tableName, {
+        ifExists: true,
+        cascade: adapter.getCapabilities().dialect === "postgresql",
+      });
     }
 
-    await this.registry.deleteSingle(slug, { force: true });
+    // A row a concurrent delete already took is the state this method exists to reach, so it
+    // completes rather than failing.
+    //
+    // The tolerance covers this one call and nothing above it. A teardown or a drop that fails has
+    // to surface even when its message mentions something missing, because answering "deleted" to
+    // it would leave the registry row present and the storage half removed — the exact state the
+    // ordering above is arranged to prevent.
+    try {
+      await this.registry.deleteSingle(slug, { force: true });
+    } catch (error) {
+      if (!NextlyError.isNotFound(error)) throw error;
+    }
   }
 
   /**
