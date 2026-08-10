@@ -23,7 +23,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import type { PageContext } from "./context";
-import { defineBlock } from "./context";
+import { createStandaloneContext, defineBlock } from "./context";
 import { PageRenderer } from "./page-renderer";
 import { createBlockResolver } from "./resolver";
 
@@ -3694,6 +3694,249 @@ describe("PageRenderer", () => {
       // page is worse than the block being absent.
       expect(html).toContain("hidden");
       expect(html).not.toContain("No block is registered");
+    });
+  });
+
+  describe("host policy", () => {
+    const container = defineBlock({
+      name: "test/policy-box",
+      version: 1,
+      description: "Renders one slot.",
+      example: { props: {} },
+      slots: { children: {} },
+      render: ({ className, renderSlot }) => (
+        <div className={className}>{renderSlot("children")}</div>
+      ),
+    });
+
+    const reader = defineBlock({
+      name: "test/policy-reader",
+      version: 1,
+      description: "Reports what policy reached it.",
+      example: { props: {} },
+      render: ({ hostPolicy }) => (
+        <p>{(hostPolicy?.trustedFrameOrigins ?? []).join(",") || "none"}</p>
+      ),
+    });
+
+    const blocks = createBlockResolver([
+      container as AnyBlockDefinition,
+      reader as AnyBlockDefinition,
+    ]);
+
+    it("reaches a block nested inside a slot", async () => {
+      // The prop is the seam that matters. A policy that only reached top-level
+      // blocks would be one a nested block silently rendered without, which is
+      // the failure a security default exists to prevent.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/policy-box", {
+              slots: { children: [node("b", "test/policy-reader")] },
+            })
+          )}
+          blocks={blocks}
+          hostPolicy={{ trustedFrameOrigins: ["https://player.example.com"] }}
+        />
+      );
+
+      expect(html).toContain("https://player.example.com");
+    });
+
+    it("gives a block no policy when the host configured none", async () => {
+      // Absent must read as absent rather than as anything permissive.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(node("a", "test/policy-reader"))}
+          blocks={blocks}
+        />
+      );
+
+      expect(html).toContain("none");
+    });
+
+    it("leaves the host's own context object untouched", async () => {
+      // The policy travels beside the context, never on it. Copying a host's
+      // context to add a field cannot be done faithfully: a spread drops the
+      // prototype methods of a class-based context, and even a
+      // prototype-preserving clone fails a method that reads a private field,
+      // because the clone is not branded with it.
+      const supplied = createStandaloneContext();
+      const before = Object.keys(supplied).sort();
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(node("a", "test/policy-reader"))}
+          blocks={blocks}
+          context={supplied}
+          hostPolicy={{ trustedFrameOrigins: ["https://current.example"] }}
+        />
+      );
+
+      expect(html).toContain("https://current.example");
+      expect(Object.keys(supplied).sort()).toEqual(before);
+      expect("hostPolicy" in supplied).toBe(false);
+    });
+
+    it("reaches a slot whose container replaced the context", async () => {
+      // A repeater replaces the context to set `item` per iteration. The policy
+      // is the HOST's, not the block's, so it has to survive that replacement —
+      // otherwise an allowlisted embed loses its grant for being nested.
+      const replacing = defineBlock({
+        name: "test/policy-replacer",
+        version: 1,
+        description: "Renders its slot under a context of its own making.",
+        example: { props: {} },
+        slots: { children: {} },
+        // BUILT, not spread. A container that spreads the context it was given
+        // carries the policy along by accident, so a fixture written that way
+        // passes whether or not the renderer reapplies anything. This is the
+        // shape that actually loses it.
+        render: ({ ctx, renderSlot }) =>
+          renderSlot("children", {
+            entry: ctx.entry,
+            item: { id: "1" },
+            resolveMedia: ctx.resolveMedia,
+            resolveEntryPath: ctx.resolveEntryPath,
+          }) as ReactElement,
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/policy-replacer", {
+              slots: { children: [node("b", "test/policy-reader")] },
+            })
+          )}
+          blocks={createBlockResolver([
+            replacing as AnyBlockDefinition,
+            reader as AnyBlockDefinition,
+          ])}
+          hostPolicy={{ trustedFrameOrigins: ["https://player.example.com"] }}
+        />
+      );
+
+      expect(html).toContain("https://player.example.com");
+    });
+
+    it("does not let a block grant itself a policy through a slot", async () => {
+      // The other direction, and the one that matters more. A block hands
+      // `renderSlot` a context it built, so a block able to leave a `hostPolicy`
+      // on it would be issuing itself permissions the site operator declined.
+      const forging = defineBlock({
+        name: "test/policy-forger",
+        version: 1,
+        description: "Tries to widen the policy for its children.",
+        example: { props: {} },
+        slots: { children: {} },
+        render: ({ ctx, renderSlot }) =>
+          renderSlot("children", {
+            ...ctx,
+            // Not a field a context has, so this is the closest a block can get
+            // to fabricating one. It must reach the child as nothing.
+            ...{
+              hostPolicy: { trustedFrameOrigins: ["https://attacker.example"] },
+            },
+          } as PageContext) as ReactElement,
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/policy-forger", {
+              slots: { children: [node("b", "test/policy-reader")] },
+            })
+          )}
+          blocks={createBlockResolver([
+            forging as AnyBlockDefinition,
+            reader as AnyBlockDefinition,
+          ])}
+        />
+      );
+
+      expect(html).not.toContain("attacker.example");
+      expect(html).toContain("none");
+    });
+
+    it("keeps a host's prototype methods when applying the policy", async () => {
+      // A host may implement the context with a class, where `resolveMedia` and
+      // `resolveEntryPath` live on the prototype. A spread copies only own
+      // enumerable properties, so it would drop them — and only for hosts that
+      // supplied a policy, which is the worst way to find out.
+      // The private field is the point. A prototype-preserving clone keeps
+      // method LOOKUP working, so a class without one would pass even against a
+      // clone; a method reading `#paths` throws on any object not branded with
+      // it, which is what proves the host's own instance is the receiver.
+      class HostContext implements PageContext {
+        entry = null;
+        #paths = new Map([["posts:1", "/resolved"]]);
+        resolveMedia(): Promise<null> {
+          return Promise.resolve(null);
+        }
+        resolveEntryPath(collection: string, id: string): Promise<string> {
+          return Promise.resolve(this.#paths.get(`${collection}:${id}`) ?? "");
+        }
+      }
+
+      const caller = defineBlock({
+        name: "test/policy-resolver-caller",
+        version: 1,
+        description: "Calls a context method that lives on the prototype.",
+        example: { props: {} },
+        render: async ({ ctx }) => (
+          <p>{await ctx.resolveEntryPath("posts", "1")}</p>
+        ),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(node("a", "test/policy-resolver-caller"))}
+          blocks={createBlockResolver([caller as AnyBlockDefinition])}
+          context={new HostContext()}
+          hostPolicy={{ trustedFrameOrigins: ["https://player.example.com"] }}
+        />
+      );
+
+      // The method still resolved, rather than the block being replaced by a
+      // render-error placeholder for calling something the copy no longer had.
+      expect(placeholderReasons(html)).toEqual([]);
+      expect(html).toContain("/resolved");
+    });
+
+    it("keeps a class-based context usable with no policy at all", async () => {
+      // The control for the case above: the class path has to work whether or
+      // not a policy is supplied, since the original defect appeared ONLY when
+      // one was, which is the worst way for a host to discover it.
+      class HostContext implements PageContext {
+        entry = null;
+        resolveMedia(): Promise<null> {
+          return Promise.resolve(null);
+        }
+        resolveEntryPath(): Promise<string> {
+          return Promise.resolve("/resolved");
+        }
+      }
+
+      const caller = defineBlock({
+        name: "test/policy-absent-caller",
+        version: 1,
+        description: "Calls a prototype method with no policy configured.",
+        example: { props: {} },
+        render: async ({ ctx }) => (
+          <p>{await ctx.resolveEntryPath("posts", "1")}</p>
+        ),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(node("a", "test/policy-absent-caller"))}
+          blocks={createBlockResolver([caller as AnyBlockDefinition])}
+          context={new HostContext()}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual([]);
+      expect(html).toContain("/resolved");
     });
   });
 
