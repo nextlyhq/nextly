@@ -133,6 +133,50 @@ describe("a slot the definition does not declare", () => {
     expect(html).not.toContain("stale-asset.png");
   });
 
+  it("keeps the children of a type this runtime has not loaded", () => {
+    // "This process has not loaded that plugin" and "that block declares no such slot" are
+    // different statements, and only the second justifies dropping anything. A page rendered while
+    // a plugin is unloaded would otherwise lose the children of every block it owns — and since the
+    // pruned tree is what would be saved next, it would lose them permanently.
+    const unloaded: BlockNode = {
+      ...makeNode("acme/not-loaded", {}),
+      slots: {
+        default: [
+          makeNode("core/heading", { text: "Author's work", level: "h2" }),
+        ],
+      },
+    };
+
+    const pruned = pruneUndeclaredSlots(unloaded, defaultBlockRegistry);
+
+    expect(pruned.slots?.default).toHaveLength(1);
+    // Positive control: the registry really does not know this type, so the assertion above is
+    // about the unknown-type branch and not about a type that happens to declare `default`.
+    expect(defaultBlockRegistry.get("acme/not-loaded")).toBeUndefined();
+  });
+
+  it("still refuses to SAVE a known block's undeclared slot, and permits an unknown one", () => {
+    // The write path draws the same line: a known container is held to its declaration, and a type
+    // this runtime cannot see is left to the caller's `allowUnknown`, which is what that option is
+    // for. Read and write disagreeing about which nodes are suspect is how one of them corrupts
+    // what the other accepted.
+    const unloaded = {
+      ...makeNode("acme/not-loaded", {}),
+      slots: {
+        default: [makeNode("core/heading", { text: "x", level: "h2" })],
+      },
+    };
+
+    expect(
+      validateDocument(doc(unloaded), defaultBlockRegistry, {
+        allowUnknown: true,
+      })
+    ).toBe(true);
+    expect(
+      validateDocument(doc(withStaleSlot()), defaultBlockRegistry)
+    ).toContain("legacy");
+  });
+
   it("returns the SAME node when a document has nothing to prune", () => {
     // A document with no stale slot is not rebuilt, so callers comparing by identity — and React
     // reconciling on it — are unaffected by a pass that had nothing to do.

@@ -10,26 +10,13 @@
  * about what can live there. A slot the definition does not declare has no allowlist at all, so
  * every child in it was unchecked — and the containment was retroactively wrong too: the day a
  * definition declares that name again, children that were never checked become live.
+ *
+ * A block type this runtime has NOT loaded is a different case and keeps everything it holds. The
+ * two look alike from the lookup — both give no spec — and only one is a statement about the
+ * document.
  */
 import type { BlockRegistry } from "./registry";
 import type { BlockNode } from "./types";
-
-/**
- * Whether a node's definition declares this slot name.
- *
- * An UNREGISTERED block type is treated as declaring nothing. That is deliberate and matches the
- * write side: a document may legitimately hold types this runtime has not loaded, and the honest
- * answer for one is "this reader cannot say what belongs here", which reads the same as an
- * undeclared slot. The permissive direction is the one a caller opts into with `allowUnknown`.
- */
-export function declaresSlot(
-  node: BlockNode,
-  slotName: string,
-  registry: BlockRegistry
-): boolean {
-  const def = registry.get(node.type);
-  return !!def?.slots?.some(spec => spec.name === slotName);
-}
 
 /**
  * The entries of `node.slots` the node's definition actually declares, in DECLARED order.
@@ -45,9 +32,17 @@ export function declaredSlotEntries(
   const stored = node.slots;
   if (!stored) return [];
   const def = registry.get(node.type);
-  if (!def?.slots) return [];
+  // An UNREGISTERED type keeps everything it holds. "This runtime has not loaded that plugin" and
+  // "that block declares no such slot" are different statements, and only the second is a reason to
+  // drop anything: a page rendered while a plugin is unloaded would otherwise lose the children of
+  // every block that plugin owns — and because the pruned tree is what an editor would save next,
+  // it would lose them permanently. `blocks-react` keeps the node and draws its unknown-block
+  // placeholder for the same reason, so the two packages agree.
+  //
+  // Stored order is the only order available here; there is no declaration to take one from.
+  if (!def) return Object.entries(stored);
   const entries: [string, BlockNode[]][] = [];
-  for (const spec of def.slots) {
+  for (const spec of def.slots ?? []) {
     const children = stored[spec.name];
     if (children) entries.push([spec.name, children]);
   }
