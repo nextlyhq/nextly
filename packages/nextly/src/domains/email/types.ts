@@ -151,6 +151,19 @@ export type EmailTemplateFn = (data: {
   attachments?: EmailAttachmentInput[];
 };
 
+/**
+ * Configuration for a provider registered by a plugin.
+ *
+ * `provider` names a registered type; everything else is that provider's own
+ * configuration, which its `parseConfig` validates. Deliberately open — core
+ * cannot know the shape of a provider it was never compiled against, and the
+ * registered definition is what checks it.
+ */
+export interface RegisteredProviderConfig {
+  provider: string;
+  [key: string]: unknown;
+}
+
 // ============================================================
 // Email Configuration
 // ============================================================
@@ -180,11 +193,21 @@ export type EmailTemplateFn = (data: {
  */
 export interface EmailConfig {
   /**
-   * Provider configuration. SMTP, Resend, or SendLayer.
-   * This is the code-first fallback — database-managed providers
-   * take precedence when configured via admin UI.
+   * Provider configuration. This is the code-first fallback — database-managed
+   * providers take precedence when configured via the admin UI.
+   *
+   * The three built-in shapes are named so they keep full checking and
+   * autocomplete. `RegisteredProviderConfig` admits any type a plugin
+   * registered: the resolver builds every provider through the registry, so
+   * restricting this to the built-ins would have made a contributed provider
+   * usable from the database and rejected by the compiler in `defineConfig` —
+   * the same provider working or not depending on where it was configured.
    */
-  providerConfig: SmtpConfig | ResendConfig | SendLayerConfig;
+  providerConfig:
+    | SmtpConfig
+    | ResendConfig
+    | SendLayerConfig
+    | RegisteredProviderConfig;
 
   /**
    * Default "from" address for all emails.

@@ -8,7 +8,17 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { getEmailProviderRegistry } from "../../domains/email/services/email-provider-registry";
+import {
+  defineEmailProvider,
+  toDescriptor,
+} from "../../domains/email/provider-definition";
 import { NextlyError } from "../../errors";
+
+/** The plugin's own config shape, which must survive into createAdapter. */
+interface FakeMailerConfig {
+  apiKey: string;
+  token?: string;
+}
 import { runPostInitTasks } from "../../init/post-init-tasks";
 import { definePlugin } from "../plugin-context";
 import { createTestNextly, type TestNextly } from "../test-nextly";
@@ -28,7 +38,7 @@ const emailPlugin = () =>
     nextly: ">=0.0.0",
     contributes: {
       emailProviders: [
-        {
+        defineEmailProvider<FakeMailerConfig>({
           type: "fake-mailer",
           label: "Fake Mailer",
           description: "A provider that exists only in this test.",
@@ -50,7 +60,7 @@ const emailPlugin = () =>
               kind: "text",
             },
           ],
-          parseConfig: (input: unknown) => {
+          parseConfig: (input: unknown): FakeMailerConfig => {
             const config = input as { apiKey?: unknown; token?: unknown };
             if (typeof config.apiKey !== "string" || config.apiKey === "") {
               throw NextlyError.validation({
@@ -63,15 +73,21 @@ const emailPlugin = () =>
                 ],
               });
             }
-            return { apiKey: config.apiKey, token: config.token };
+            return {
+              apiKey: config.apiKey,
+              token:
+                typeof config.token === "string" ? config.token : undefined,
+            };
           },
-          createAdapter: () => ({
+          // `config` is FakeMailerConfig here, not a widened record -- which
+          // is the whole point of authoring through defineEmailProvider.
+          createAdapter: (config: FakeMailerConfig) => ({
             send: async (opts: { to: string; subject: string }) => {
               sent.push({ to: opts.to, subject: opts.subject });
-              return { success: true, messageId: "fake-1" };
+              return { success: true, messageId: `fake-${config.apiKey}` };
             },
           }),
-        },
+        }),
       ],
       emailTemplates: [
         {
@@ -133,6 +149,86 @@ describe("plugin email providers + templates", () => {
         },
       })
     ).rejects.toThrow();
+  });
+
+  it("appears in the registry's descriptors, with its fields and no functions", async () => {
+    // What the admin will fetch. A definition that never reaches a descriptor
+    // is a provider an operator cannot select, which is the state this contract
+    // exists to end -- so the descriptor is part of the feature, not a detail.
+    current = await createTestNextly({ plugins: [emailPlugin()] });
+
+    const descriptor = getEmailProviderRegistry()
+      .list()
+      .map(toDescriptor)
+      .find(d => d.type === "fake-mailer");
+
+    expect(descriptor).toBeDefined();
+    expect(descriptor?.label).toBe("Fake Mailer");
+    expect(descriptor?.configFields.map(f => f.name)).toEqual([
+      "apiKey",
+      "token",
+    ]);
+    // Nothing callable may cross to a browser.
+    expect(JSON.stringify(descriptor)).not.toContain("function");
+    expect(descriptor).not.toHaveProperty("parseConfig");
+    expect(descriptor).not.toHaveProperty("createAdapter");
+  });
+
+  it("does not advertise a connection test it cannot perform", async () => {
+    // The fake provider declares no testConnection, so the descriptor must not
+    // offer one. Echoing a claimed capability would put a button in the admin
+    // that nothing answers.
+    current = await createTestNextly({ plugins: [emailPlugin()] });
+
+    const descriptor = getEmailProviderRegistry()
+      .list()
+      .map(toDescriptor)
+      .find(d => d.type === "fake-mailer");
+
+    expect(descriptor?.capabilities.connectionTest).toBe(false);
+  });
+
+  it("rejects a provider type too long for the narrowest dialect column", () => {
+    // Postgres and MySQL store the type in varchar(50) while SQLite does not
+    // bound it, so an over-long id would register, work on SQLite, and fail or
+    // truncate elsewhere -- leaving a stored type no registered provider matches.
+    expect(() =>
+      defineEmailProvider<FakeMailerConfig>({
+        type: "x".repeat(51),
+        label: "Too Long",
+        configFields: [],
+        parseConfig: () => ({ apiKey: "k" }),
+        createAdapter: () => ({
+          send: async () => ({ success: true }),
+        }),
+      })
+    ).toThrow();
+  });
+
+  it("reports a third-party parser failure as validation, not as a server fault", async () => {
+    // A provider validating with its own library throws that library's error.
+    // Unrecognised errors are classified as internal, so without normalisation
+    // a caller's malformed configuration returns 500 rather than the validation
+    // failure it is.
+    const provider = defineEmailProvider<{ apiKey: string }>({
+      type: "throws-raw",
+      label: "Throws Raw",
+      configFields: [],
+      parseConfig: () => {
+        throw new TypeError("expected string, received number");
+      },
+      createAdapter: () => ({ send: async () => ({ success: true }) }),
+    });
+
+    let caught: unknown;
+    try {
+      provider.validateConfig({});
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(NextlyError);
+    expect((caught as NextlyError).statusCode).toBe(400);
   });
 
   it("rejects a type no plugin registered", async () => {

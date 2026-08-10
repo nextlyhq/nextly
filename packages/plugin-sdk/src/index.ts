@@ -252,3 +252,12 @@ export type {
  *   is solid but unexercised (see STABILITY.md).
  */
 export { Secret, secret, isSecret } from "./secret";
+
+/**
+ * Build a contributable email provider.
+ *
+ * A value export, not a type: an author calls this so their own config type is
+ * checked at the point they write the definition and erased only at the
+ * boundary core stores it behind.
+ */
+export { defineEmailProvider, MAX_EMAIL_PROVIDER_TYPE_LENGTH } from "nextly";

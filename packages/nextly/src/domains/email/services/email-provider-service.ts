@@ -40,17 +40,6 @@ import { getEmailProviderRegistry } from "./email-provider-registry";
 
 const MASKED_VALUE = "••••••••";
 
-const SENSITIVE_CONFIG_KEYS = [
-  "apikey",
-  "api_key",
-  "password",
-  "pass",
-  "secret",
-  "token",
-  "clientsecret",
-  "client_secret",
-];
-
 // ============================================================
 // Input Types
 // ============================================================
@@ -202,10 +191,13 @@ export class EmailProviderService extends BaseService {
    * that a field merely containing `token` may not, and it can only ever be
    * right about names core has seen before — which is none of a plugin's.
    *
-   * The heuristic stays as a fallback for two cases where nothing is declared:
-   * a provider whose package has been uninstalled, and one that shipped no
-   * field metadata. Losing a mask is worse than adding one, so absence of
-   * information masks more rather than less.
+   * When no definition is available — the provider's package was uninstalled,
+   * or it shipped no field metadata — EVERY leaf is masked rather than guessed
+   * at. The key-name heuristic cannot reconstruct what the definition declared,
+   * so a field the provider correctly marked secret (`credential`, say) would
+   * come back in the clear precisely when the plugin that knew better is gone.
+   * Absence of information has to mask more, not less; an over-masked read is
+   * recoverable by reinstalling the package, a leaked credential is not.
    */
   private maskConfiguration(
     config: Record<string, unknown>,
@@ -230,19 +222,12 @@ export class EmailProviderService extends BaseService {
         continue;
       }
 
-      const isSecret = secretPaths
-        ? secretPaths.has(path)
-        : this.isSensitiveConfigKey(key);
+      // `null` means no definition: mask unconditionally rather than fall back
+      // to a heuristic that can only be right about names it already knows.
+      const isSecret = secretPaths === null ? true : secretPaths.has(path);
       masked[key] = isSecret ? MASKED_VALUE : value;
     }
     return masked;
-  }
-
-  private isSensitiveConfigKey(key: string): boolean {
-    const normalized = key.toLowerCase().replace(/[\s-]/g, "");
-    return SENSITIVE_CONFIG_KEYS.some(sensitive =>
-      normalized.includes(sensitive.replace(/[_-]/g, ""))
-    );
   }
 
   private isPlainObject(value: unknown): value is Record<string, unknown> {

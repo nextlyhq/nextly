@@ -13,7 +13,23 @@
  * @module domains/email/provider-definition
  */
 
+import { NextlyError } from "../../errors";
+
 import type { EmailProviderAdapter } from "./types";
+
+/**
+ * Longest provider type id that every dialect can store.
+ *
+ * Postgres and MySQL declare `email_providers.type` as `varchar(50)` while
+ * SQLite is unbounded text, so a longer namespaced id registers fine, works on
+ * SQLite, and is rejected or silently truncated on the other two. Truncation is
+ * the worse half: the stored type would no longer match any registered
+ * provider, leaving a row nothing can build an adapter for.
+ *
+ * Enforced at registration so the failure names the plugin at boot, rather than
+ * appearing as a database error the first time someone saves a provider.
+ */
+export const MAX_EMAIL_PROVIDER_TYPE_LENGTH = 50;
 
 /**
  * How one configuration value is entered and treated.
@@ -154,10 +170,52 @@ export interface RegisteredEmailProvider {
 export function defineEmailProvider<TConfig>(
   definition: EmailProviderDefinition<TConfig>
 ): RegisteredEmailProvider {
+  if (definition.type.length > MAX_EMAIL_PROVIDER_TYPE_LENGTH) {
+    throw NextlyError.internal({
+      logContext: {
+        reason: "email-provider-type-too-long",
+        type: definition.type,
+        max: MAX_EMAIL_PROVIDER_TYPE_LENGTH,
+        remedy: `Email provider type ids are limited to ${MAX_EMAIL_PROVIDER_TYPE_LENGTH} characters, the width of the column every dialect stores them in.`,
+      },
+    });
+  }
+
   // Captured so the branch below narrows: an optional read off the object
   // inside a closure does not stay narrowed, and asserting it would hide a
   // definition that removed the probe after registration.
   const probe = definition.testConnection;
+
+  /**
+   * Parse, turning any failure into one the API boundary can report.
+   *
+   * A provider is free to validate with whatever library it likes, and the
+   * documented example uses `schema.parse(input)` — which throws that library's
+   * own error. Unrecognised errors are classified as internal, so a caller's
+   * malformed configuration would come back as a 500 rather than as the
+   * validation failure it is. A deliberately thrown `NextlyError` passes
+   * through untouched, so a provider that wants specific field paths keeps them.
+   */
+  const parse = (input: unknown): TConfig => {
+    try {
+      return definition.parseConfig(input);
+    } catch (error) {
+      if (error instanceof NextlyError) throw error;
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "configuration",
+            code: "INVALID_PROVIDER_CONFIG",
+            message:
+              error instanceof Error
+                ? error.message
+                : "Provider configuration is invalid.",
+          },
+        ],
+        logContext: { providerType: definition.type },
+      });
+    }
+  };
 
   return {
     type: definition.type,
@@ -167,12 +225,12 @@ export function defineEmailProvider<TConfig>(
     capabilities: definition.capabilities,
     configFields: definition.configFields,
     validateConfig: (input: unknown): void => {
-      definition.parseConfig(input);
+      parse(input);
     },
     createAdapterFrom: (input: unknown): EmailProviderAdapter =>
-      definition.createAdapter(definition.parseConfig(input)),
+      definition.createAdapter(parse(input)),
     testConnectionFrom: probe
-      ? (input: unknown) => probe(definition.parseConfig(input))
+      ? (input: unknown) => probe(parse(input))
       : undefined,
     hasConnectionTest: typeof probe === "function",
   };
