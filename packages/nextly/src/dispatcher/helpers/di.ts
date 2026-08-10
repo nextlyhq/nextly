@@ -12,6 +12,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SchemaRegistry } from "../../database/schema-registry";
 import { container } from "../../di/container";
 import type { NextlyServiceConfig } from "../../di/register";
+import type { FieldGroupMetadataService } from "../../domains/field-groups/services/field-group-metadata-service";
 import type { DrizzleMigrationJournal } from "../../domains/schema/journal/migration-journal";
 import type { SingleEntryService } from "../../domains/singles/services/single-entry-service";
 import type { SingleMetadataService } from "../../domains/singles/services/single-metadata-service";
@@ -78,6 +79,21 @@ export function getSingleMetadataServiceFromDI():
   try {
     if (container.has("singleMetadataService")) {
       return container.get<SingleMetadataService>("singleMetadataService");
+    }
+  } catch {
+    // DI not initialized
+  }
+  return undefined;
+}
+
+export function getFieldGroupMetadataServiceFromDI():
+  | FieldGroupMetadataService
+  | undefined {
+  try {
+    if (container.has("fieldGroupMetadataService")) {
+      return container.get<FieldGroupMetadataService>(
+        "fieldGroupMetadataService"
+      );
     }
   } catch {
     // DI not initialized

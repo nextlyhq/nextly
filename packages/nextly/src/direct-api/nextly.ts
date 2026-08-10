@@ -57,6 +57,7 @@ import { PermissionService } from "../domains/auth/services/permission-service";
 import type { RBACAccessControlService } from "../domains/auth/services/rbac-access-control-service";
 import { RolePermissionService } from "../domains/auth/services/role-permission-service";
 import { RoleService } from "../domains/auth/services/role-service";
+import type { FieldGroupMetadataService } from "../domains/field-groups/services/field-group-metadata-service";
 import { NextlyError } from "../errors/nextly-error";
 import { buildPluginServicesNamespace } from "../plugins/services/plugin-services-registry";
 import type { CollectionsHandler } from "../services/collections-handler";
@@ -370,6 +371,13 @@ export class Nextly implements NextlyContext {
   public get fieldGroupRegistryService(): FieldGroupRegistryService {
     return container.get<FieldGroupRegistryService>(
       "fieldGroupRegistryService"
+    );
+  }
+
+  /** @internal */
+  public get fieldGroupMetadataService(): FieldGroupMetadataService {
+    return container.get<FieldGroupMetadataService>(
+      "fieldGroupMetadataService"
     );
   }
 

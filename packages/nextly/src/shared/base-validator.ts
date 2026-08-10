@@ -146,6 +146,21 @@ export function isSQLKeyword(
 // ============================================================
 
 /**
+ * Longest slug the product accepts, for every resource that becomes a table.
+ *
+ * Bounded well below what the databases allow rather than at it. A slug is prefixed on its way to a
+ * physical name (`dc_`, `single_`, `comp_`) and a companion suffix can be appended after that, so
+ * the identifier that finally reaches the engine is longer than the slug by an amount the caller
+ * never sees. PostgreSQL silently TRUNCATES identifiers past 63 bytes and MySQL rejects past 64,
+ * and truncation is the worse of the two: the table is created under a name that no longer matches
+ * the one the caller asked about.
+ *
+ * Exported so the value is stated once. A route that re-declares its own bound is how an input this
+ * rejects reaches the DDL anyway.
+ */
+export const MAX_SLUG_LENGTH = 50;
+
+/**
  * Validate a slug against the standard Nextly rules: required, string,
  * length 1-50, pattern-conformant, not reserved, not a SQL keyword.
  *
@@ -187,10 +202,10 @@ export function validateSlugShared(
     });
   }
 
-  if (slug.length > 50) {
+  if (slug.length > MAX_SLUG_LENGTH) {
     errors.push({
       path,
-      message: `${ctx.entityLabel} slug must be at most 50 characters`,
+      message: `${ctx.entityLabel} slug must be at most ${MAX_SLUG_LENGTH} characters`,
       code: "SLUG_TOO_LONG",
     });
   }

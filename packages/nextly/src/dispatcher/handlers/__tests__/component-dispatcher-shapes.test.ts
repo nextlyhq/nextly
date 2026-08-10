@@ -12,6 +12,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../helpers/di", () => ({
   getComponentRegistryFromDI: vi.fn(),
+  getFieldGroupMetadataServiceFromDI: vi.fn(),
   getAdapterFromDI: vi.fn(),
 }));
 
@@ -22,7 +23,13 @@ vi.mock("../../../di/container", () => ({
   },
 }));
 
-import { getAdapterFromDI, getComponentRegistryFromDI } from "../../helpers/di";
+import { FieldGroupMetadataService } from "../../../domains/field-groups/services/field-group-metadata-service";
+import type { FieldGroupRegistryService } from "../../../services/field-groups/field-group-registry-service";
+import {
+  getAdapterFromDI,
+  getComponentRegistryFromDI,
+  getFieldGroupMetadataServiceFromDI,
+} from "../../helpers/di";
 import { dispatchComponents } from "../component-dispatcher";
 
 type Registry = {
@@ -57,6 +64,14 @@ function makeRegistry(overrides: Partial<Registry> = {}): Registry {
 function wireRegistry(registry: Registry) {
   vi.mocked(getComponentRegistryFromDI).mockReturnValue(
     registry as unknown as ReturnType<typeof getComponentRegistryFromDI>
+  );
+  // The real service with NO adapter, which is this suite's own premise: the create generates its
+  // statements and runs none, so these stay tests of the response shape rather than of DDL.
+  vi.mocked(getFieldGroupMetadataServiceFromDI).mockReturnValue(
+    new FieldGroupMetadataService(
+      registry as unknown as FieldGroupRegistryService,
+      { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }
+    )
   );
 }
 

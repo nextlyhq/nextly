@@ -106,6 +106,12 @@ export async function renderCollectionLoop({
       ...(typeof props.sort === "string" && props.sort !== ""
         ? { sort: props.sort }
         : {}),
+      // The locale the page is being rendered in. Without it the provider reads
+      // the default one, so a French page embeds English rows — the surrounding
+      // blocks translate and the looped content silently does not. Taken from
+      // the context rather than from a prop: which locale a page is in is the
+      // route's decision, not a per-block one an editor could contradict.
+      ...(ctx.locale === undefined ? {} : { locale: ctx.locale }),
     });
     items = Array.isArray(result.items) ? result.items : [];
   } catch {
@@ -162,5 +168,10 @@ export const collectionLoop = defineBlock<CollectionLoopProps, PageContext>({
     position: true,
     container: true,
   },
+  // The children are drawn once per entry, so a query returning nothing draws
+  // them ZERO times. A reader of the stored document sees the template either
+  // way and cannot tell which happened without running the query, so it is told
+  // here instead — otherwise an empty loop's heading speaks for the page.
+  conditionalSlots: ["children"],
   render: renderCollectionLoop,
 });

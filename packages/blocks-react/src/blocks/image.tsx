@@ -17,7 +17,7 @@ import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
 
-import { flag, oneOf, text, url } from "./props";
+import { flag, isAuthoredText, oneOf, text, url } from "./props";
 
 /** How the browser should schedule the image. */
 export const IMAGE_LOADING = ["lazy", "eager"] as const;
@@ -55,7 +55,23 @@ export async function renderImage({
   if (src === undefined) return null;
 
   const decorative = flag(props.decorative);
-  const alt = decorative ? "" : text(props.alt, resolved?.alt ?? "");
+  // Three states, not two, and `text()` collapses two of them: it answers `""`
+  // for a MISSING alt and for an explicitly empty one, which here mean opposite
+  // things. An explicit `""` is this block's documented way to say "decorative"
+  // and is emitted as written; a missing alt is nobody having said anything,
+  // and falling back to the record's text is what keeps a screen reader from
+  // being handed the file name.
+  //
+  // Order is deliberate: `decorative` wins outright, because an author marking
+  // an image decorative means `alt=""` even when the record holds text; an
+  // author's own alt beats the record's, because it was written for THIS
+  // placement; and the record's is the fallback for a placement that says
+  // nothing.
+  const alt = decorative
+    ? ""
+    : isAuthoredText(props.alt)
+      ? text(props.alt)
+      : (resolved?.alt ?? "");
   const caption = text(props.caption);
 
   const image = (
@@ -101,6 +117,24 @@ export const image = defineBlock<ImageProps, PageContext>({
     caption: { type: "text" },
   },
   defaultProps: { alt: "", loading: "lazy" },
+  // Both candidates, in the order the render prefers them: the resolved media
+  // first, the directly-typed URL as the fallback the render itself falls back
+  // to when the record is missing.
+  //
+  // Each says WHICH KIND it is, because only this block knows: the
+  // id came from `mediaId` and the address from `src`, and no inspection of the
+  // text can tell them apart — a UUID is a valid relative URL and a bare word
+  // is a valid src.
+  seo: props => {
+    const mediaId = text(props.mediaId);
+    const src = url(props.src) ?? "";
+    return {
+      image: [
+        ...(mediaId === "" ? [] : [{ media: mediaId }]),
+        ...(src === "" ? [] : [{ url: src }]),
+      ],
+    };
+  },
   example: { props: { src: "/example.jpg", alt: "An example image" } },
   supports: {
     spacing: true,
@@ -110,4 +144,11 @@ export const image = defineBlock<ImageProps, PageContext>({
     position: true,
   },
   render: renderImage,
+  // A media id may still resolve to nothing, and that is settled by a call to
+  // the host — so only the case decidable from the props alone is claimed here:
+  // no id AND no usable direct url means there is nothing to draw and nothing
+  // to ask about. An id that fails to resolve falls back to drawing nothing at
+  // render time, which the boundary already treats as a deliberate decision.
+  rendersNothing: props =>
+    text(props.mediaId) === "" && url(props.src) === undefined,
 });

@@ -19,6 +19,7 @@ import {
   generateMigration,
   type MinimalConfigEntity,
 } from "../generate";
+import { buildInverseOperations } from "../down-generator";
 import { writeSnapshot } from "../snapshot-io";
 
 const NOW = new Date("2026-04-29T15:45:00.123Z");
@@ -452,6 +453,310 @@ describe("applyRenameDecisions (rename collapsing)", () => {
     const out = applyRenameDecisionsForTest(ops, decisions);
     expect(out).toHaveLength(1);
     expect(out[0].type).toBe("rename_column");
+  });
+
+  it("carries the type change when the rename crosses types", () => {
+    // 🔴 A generated migration used to receive the rename ALONE. A rename moves the column without
+    // changing what it is, so the committed UP left `text` where the snapshot and the runtime expect
+    // JSON, and its DOWN omitted the reverse — a file that passes review and diverges at apply time.
+    const ops = [
+      {
+        type: "drop_column" as const,
+        tableName: "dc_posts",
+        columnName: "_body",
+        columnType: "text",
+      },
+      {
+        type: "add_column" as const,
+        tableName: "dc_posts",
+        column: { name: "body", type: "jsonb", nullable: true },
+      },
+    ];
+    const decisions = [
+      {
+        candidate: {
+          tableName: "dc_posts",
+          fromColumn: "_body",
+          toColumn: "body",
+          fromType: "text",
+          toType: "jsonb",
+          typesCompatible: true,
+          defaultSuggestion: "rename" as const,
+        },
+        accepted: true,
+      },
+    ];
+
+    const out = applyRenameDecisionsForTest(ops, decisions, "postgresql");
+
+    // Three, in this order. The DROP DEFAULT is not decoration: `ALTER COLUMN … TYPE jsonb USING …`
+    // converts stored ROWS and leaves the DEFAULT expression alone, so a text default on a column
+    // becoming JSON makes PostgreSQL reject the whole statement — every row can be valid JSON and
+    // the conversion still fails.
+    expect(out.map(o => o.type)).toEqual([
+      "rename_column",
+      "change_column_default",
+      "change_column_type",
+    ]);
+    expect(out[1]).toMatchObject({
+      columnName: "body",
+      toDefault: undefined,
+    });
+    // Against the NEW name: the conversion follows the rename, so the column no longer answers to
+    // the one it had.
+    expect(out[2]).toMatchObject({
+      tableName: "dc_posts",
+      columnName: "body",
+      toType: "jsonb",
+    });
+  });
+
+  it("keeps the target default and records the source one for rollback", () => {
+    // 🔴 The collapsed add_column is the ONLY statement of what the column must END UP being, and
+    // the previous snapshot is the only record of what it WAS. Discarding either leaves a generated
+    // migration whose UP drops a default the snapshot still declares, and whose DOWN emits a second
+    // DROP DEFAULT instead of putting the original back.
+    const ops = [
+      {
+        type: "drop_column" as const,
+        tableName: "dc_posts",
+        columnName: "_body",
+        columnType: "text",
+      },
+      {
+        type: "add_column" as const,
+        tableName: "dc_posts",
+        column: {
+          name: "body",
+          type: "jsonb",
+          nullable: false,
+          default: "'{}'::jsonb",
+        },
+      },
+    ];
+    const decisions = [
+      {
+        candidate: {
+          tableName: "dc_posts",
+          fromColumn: "_body",
+          toColumn: "body",
+          fromType: "text",
+          toType: "jsonb",
+          typesCompatible: true,
+          defaultSuggestion: "rename" as const,
+        },
+        accepted: true,
+      },
+    ];
+    const previous = {
+      tables: [
+        {
+          name: "dc_posts",
+          columns: [
+            { name: "_body", type: "text", nullable: true, default: "'{}'" },
+          ],
+          indexes: [],
+        },
+      ],
+    };
+
+    const out = applyRenameDecisionsForTest(
+      ops,
+      decisions,
+      "postgresql",
+      previous as never
+    );
+
+    expect(out.map(o => o.type)).toEqual([
+      "rename_column",
+      "change_column_default",
+      "change_column_type",
+      "change_column_default",
+    ]);
+    // The old default is RECORDED on the drop, because buildInverseOperations inverts a default
+    // change by assigning `toDefault: op.fromDefault`. Left undefined, the rollback would drop the
+    // default a second time rather than restore it.
+    expect(out[1]).toMatchObject({ fromDefault: "'{}'", toDefault: undefined });
+    // And the desired default goes back on once the type is right.
+    expect(out[3]).toMatchObject({ toDefault: "'{}'::jsonb" });
+  });
+
+  it("returns a MySQL column to its original definition on rollback", () => {
+    // 🔴 The DOWN is where MySQL's MODIFY bites a second time. The inverse converts the type back,
+    // and restates the whole column while doing it — so a rollback that carried only the types would
+    // return the column to `text` while silently dropping the NOT NULL and default it originally
+    // had. Asserted through buildInverseOperations rather than by reading the forward op, because
+    // the forward op looking right is exactly what made this invisible.
+    const ops = [
+      {
+        type: "drop_column" as const,
+        tableName: "dc_posts",
+        columnName: "_body",
+        columnType: "text",
+      },
+      {
+        type: "add_column" as const,
+        tableName: "dc_posts",
+        column: { name: "body", type: "json", nullable: false },
+      },
+    ];
+    const decisions = [
+      {
+        candidate: {
+          tableName: "dc_posts",
+          fromColumn: "_body",
+          toColumn: "body",
+          fromType: "text",
+          toType: "json",
+          typesCompatible: true,
+          defaultSuggestion: "rename" as const,
+        },
+        accepted: true,
+      },
+    ];
+    const previous = {
+      tables: [
+        {
+          name: "dc_posts",
+          columns: [
+            { name: "_body", type: "text", nullable: false, default: "'{}'" },
+          ],
+          indexes: [],
+        },
+      ],
+    };
+
+    const forward = applyRenameDecisionsForTest(
+      ops,
+      decisions,
+      "mysql",
+      previous as never
+    );
+    const inverse = buildInverseOperations(forward, previous as never);
+
+    const back = inverse.find(o => o.type === "change_column_type");
+    expect(back).toMatchObject({
+      toType: "text",
+      // The definition the column is being returned TO, restated because MySQL deletes what a
+      // MODIFY omits.
+      nullable: false,
+      columnDefault: "'{}'",
+    });
+  });
+
+  it("carries requiredness into the MySQL conversion", () => {
+    // MySQL spells the type change `MODIFY COLUMN <name> <type>`, which RESTATES the whole
+    // definition — so a required column becomes nullable unless its nullability travels with the
+    // type. There is no second statement that could put it back: change_column_nullable cannot be
+    // rendered for MySQL at all.
+    const ops = [
+      {
+        type: "drop_column" as const,
+        tableName: "dc_posts",
+        columnName: "_body",
+        columnType: "text",
+      },
+      {
+        type: "add_column" as const,
+        tableName: "dc_posts",
+        column: { name: "body", type: "json", nullable: false },
+      },
+    ];
+    const decisions = [
+      {
+        candidate: {
+          tableName: "dc_posts",
+          fromColumn: "_body",
+          toColumn: "body",
+          fromType: "text",
+          toType: "json",
+          typesCompatible: true,
+          defaultSuggestion: "rename" as const,
+        },
+        accepted: true,
+      },
+    ];
+
+    const out = applyRenameDecisionsForTest(ops, decisions, "mysql");
+
+    expect(out.map(o => o.type)).toEqual([
+      "rename_column",
+      "change_column_type",
+    ]);
+    expect(out[1]).toMatchObject({ nullable: false });
+  });
+
+  it("emits no type change when the rename keeps the type", () => {
+    // The positive control. Without it, appending a conversion unconditionally would satisfy the
+    // case above while adding a pointless ALTER to every ordinary rename.
+    const ops = [
+      {
+        type: "drop_column" as const,
+        tableName: "dc_posts",
+        columnName: "_body",
+        columnType: "text",
+      },
+      {
+        type: "add_column" as const,
+        tableName: "dc_posts",
+        column: { name: "body", type: "text", nullable: true },
+      },
+    ];
+    const decisions = [
+      {
+        candidate: {
+          tableName: "dc_posts",
+          fromColumn: "_body",
+          toColumn: "body",
+          fromType: "text",
+          toType: "text",
+          typesCompatible: true,
+          defaultSuggestion: "rename" as const,
+        },
+        accepted: true,
+      },
+    ];
+
+    expect(
+      applyRenameDecisionsForTest(ops, decisions, "postgresql").map(o => o.type)
+    ).toEqual(["rename_column"]);
+  });
+
+  it("emits no type change on SQLite, which stores JSON as text", () => {
+    // Not an omission: SQLite has no ALTER that changes a column's type, and needs none here — the
+    // two sides of the one convertible change name the same storage. Asking for one would raise
+    // for a column that is already correct.
+    const ops = [
+      {
+        type: "drop_column" as const,
+        tableName: "dc_posts",
+        columnName: "_body",
+        columnType: "text",
+      },
+      {
+        type: "add_column" as const,
+        tableName: "dc_posts",
+        column: { name: "body", type: "jsonb", nullable: true },
+      },
+    ];
+    const decisions = [
+      {
+        candidate: {
+          tableName: "dc_posts",
+          fromColumn: "_body",
+          toColumn: "body",
+          fromType: "text",
+          toType: "jsonb",
+          typesCompatible: true,
+          defaultSuggestion: "rename" as const,
+        },
+        accepted: true,
+      },
+    ];
+
+    expect(
+      applyRenameDecisionsForTest(ops, decisions, "sqlite").map(o => o.type)
+    ).toEqual(["rename_column"]);
   });
 
   it("leaves drop+add intact on decline", () => {

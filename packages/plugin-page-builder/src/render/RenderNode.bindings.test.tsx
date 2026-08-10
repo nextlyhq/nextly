@@ -2,7 +2,12 @@ import { describe, it, expect } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { defaultBlockRegistry } from "../core/registry";
-import { nodeClass } from "../core/style-compiler";
+import {
+  documentNodeClasses,
+  documentKey,
+  nodeClass,
+  refNodeClass,
+} from "../core/style-compiler";
 import { makeNode } from "../core/tree";
 
 import { RenderNode } from "./RenderNode";
@@ -25,8 +30,8 @@ describe("RenderNode node classes", () => {
         registry={defaultBlockRegistry}
         classes={
           new Map([
-            [container.id, "nx-pb-outer-from-map"],
-            [heading.id, "nx-pb-inner-from-map"],
+            [documentKey(container.id), "nx-pb-outer-from-map"],
+            [documentKey(heading.id), "nx-pb-inner-from-map"],
           ])
         }
       />
@@ -35,44 +40,43 @@ describe("RenderNode node classes", () => {
     expect(html).toContain("nx-pb-inner-from-map");
   });
 
-  it("does not carry the document's map into a referenced subtree", () => {
-    // A stored subtree can hold an id the document also holds — a block made
-    // reusable from a node that stayed put is the ordinary way. The map is keyed
-    // by id, so carrying it across the boundary hands the referenced node a
-    // class disambiguated for the OTHER node of that id, compiled from styles
-    // that are not its own. Outside the walk means outside the map.
+  it("names a referenced node apart from a document node sharing its id", () => {
+    // A block made reusable from a node that stayed put is the ordinary way to make one, so a
+    // library subtree very often holds an id the document also holds. Naming both from the id
+    // alone gave them the SAME class — and the referenced node silently wore the document node's
+    // styles. Withholding the map did not fix that: for an id with no hash collision the plain
+    // class and the map's entry are the same string.
     const shared = "pb-shared-id";
     const target = {
       ...makeNode("core/heading", { text: "Reused", level: "h2" }),
       id: shared,
     };
+    const twin = {
+      ...makeNode("core/heading", { text: "Original", level: "h2" }),
+      id: shared,
+    };
     const refNode = makeNode("core/ref", { refId: "r1" });
     const root = makeNode("core/container", {}, undefined, {
-      default: [refNode],
+      default: [twin, refNode],
     });
+    const refs = { r1: target };
     const html = renderToStaticMarkup(
       <RenderNode
         node={root}
         registry={defaultBlockRegistry}
-        refs={{ r1: target }}
-        classes={
-          new Map([
-            [root.id, "nx-pb-root-from-map"],
-            [refNode.id, "nx-pb-refnode-from-map"],
-            [shared, "nx-pb-collided-0"],
-          ])
-        }
+        refs={refs}
+        classes={documentNodeClasses({ root } as never, refs)}
       />
     );
-    // A resolved ref renders its target IN ITS PLACE and emits no element of
-    // its own, so the ref node's own class is not in the output at all — it is
-    // reached only by the missing-target placeholder.
-    expect(html).not.toContain("nx-pb-refnode-from-map");
-    // The target must not borrow the entry that its id happens to have here.
-    expect(html).not.toContain("nx-pb-collided-0");
-    expect(html).toContain(nodeClass(shared));
-    // The document's own nodes are still named from the map.
-    expect(html).toContain("nx-pb-root-from-map");
+    const markup = html.replace(/<style[\s\S]*?<\/style>/g, "");
+
+    // Positive control: the document's own node of that id IS named, so a fixture that reached
+    // nothing could not satisfy the assertion below.
+    expect(markup).toContain(nodeClass(shared));
+    // The referenced node is named from its ref, not from the bare id.
+    expect(markup).toContain(refNodeClass("r1", shared));
+    // And the two names differ, which is the whole point.
+    expect(refNodeClass("r1", shared)).not.toBe(nodeClass(shared));
   });
 
   it("falls back to the plain class for a node the map does not hold", () => {

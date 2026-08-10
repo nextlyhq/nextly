@@ -74,17 +74,22 @@ export function PageRenderer({
   // One map for the whole render: the stylesheet below and the markup beneath
   // it must name each node identically, and a hash collision is only visible —
   // and only resolvable the same way twice — from the whole id set at once.
-  const classes = documentNodeClasses(document);
+  // The library is part of the name set, not an extra pass over it. A reusable block's nodes are
+  // named from the ref they belong to, and the disambiguating suffix depends on every name at
+  // once, so the document and the library have to be handed to this together or the two halves
+  // can each be told a colliding key was unique.
+  const classes = documentNodeClasses(document, refs);
   const css = [
     compileTokensCss(scope, tokens),
-    compileDocumentMotionCss(document),
+    compileDocumentMotionCss(document, refs),
     compileDocumentCss(document, {
       breakpoints,
       remotePatterns,
       scope,
       classes,
+      refs,
     }),
-    compileDocumentBlockCss(document, classes),
+    compileDocumentBlockCss(document, classes, refs, scope),
     // `.css` alone: the sanitizer also returns what it removed, and this path
     // renders rather than edits, so there is nowhere to show a warning. The
     // editor reads the same result and displays them.

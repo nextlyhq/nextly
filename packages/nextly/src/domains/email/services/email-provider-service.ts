@@ -123,19 +123,42 @@ export class EmailProviderService extends BaseService {
 
   /**
    * Encrypt a configuration JSON object for storage.
-   * Returns the encrypted string, or the original object if no secret is configured.
+   *
+   * Refuses rather than degrading. A provider's configuration holds SMTP
+   * passwords and API keys, so with no secret to encrypt them under the only
+   * alternative is to write the credential readable to anyone with database
+   * access. `domains/webhooks/secret.ts` already refuses for the same threat;
+   * this keeps the two consistent instead of leaving the higher-value
+   * credential on the weaker policy.
+   *
+   * The message names the variable because the operator is one environment
+   * setting away from working, and a variable name is not itself a secret.
    */
-  private encryptConfiguration(
-    config: Record<string, unknown>
-  ): Record<string, unknown> | string {
+  private encryptConfiguration(config: Record<string, unknown>): string {
     if (!this.encryptionSecret) {
-      return config;
+      throw new NextlyError({
+        code: "BUSINESS_RULE_VIOLATION",
+        publicMessage:
+          "Email provider credentials cannot be saved because NEXTLY_SECRET is not set. " +
+          "Set it in the environment and restart — provider passwords and API keys are " +
+          "encrypted under it, and without it they would be stored readable.",
+        statusCode: 422,
+        logContext: { reason: "email-provider-no-encryption-key" },
+      });
     }
     return encrypt(JSON.stringify(config), this.encryptionSecret);
   }
 
   /**
    * Decrypt a stored configuration value back to a JSON object.
+   *
+   * Deliberately more permissive than its write counterpart: it still accepts a
+   * non-string stored value, which is what an install that wrote configuration
+   * before the write path refused would have. Refusing to read those rows would
+   * turn a credential stored in the clear into a provider nobody can open,
+   * rotate, or delete — hiding exactly the records an operator needs to find.
+   * The public read path masks them like any other, so tightening this would
+   * cost recoverability and buy no confidentiality.
    */
   private decryptConfiguration(
     stored: Record<string, unknown> | string

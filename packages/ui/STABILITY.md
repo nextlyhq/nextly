@@ -84,8 +84,15 @@ the published type advertised less than the component actually promised.
 Everything else the barrel exports, including: `Accordion`, `Alert`, `AlertDialog`,
 `Avatar`, `Card`, `Collapsible`, `Command`, `ContextMenu` and its family, `Popover`,
 `Progress`, `ResizablePanelGroup`/`ResizablePanel`/`ResizableHandle`, `Separator`,
-`Skeleton`, `Spinner`, `Table` and its family, `TableSearch`, `TableSkeleton`, `TreeView`, the
-table state components, the layout primitives (`Stack`, `Grid`, `Stat`) and `Toaster`.
+`Skeleton`, `Slider`, `Spinner`, `Table` and its family, `TableSearch`, `TableSkeleton`,
+`TreeView`, the table state components, the layout primitives (`Stack`, `Grid`, `Stat`) and
+`Toaster`.
+
+`Slider` (with `SliderThumbProps`) joins them for the inspector: a bounded numeric property — opacity, blur radius,
+letter spacing, a colour's alpha — is the single most repeated control in an editing surface,
+and a hand-rolled one gets pointer capture, step rounding and the per-thumb ARIA pattern wrong
+quietly. Its `value` is an array even for one thumb, which is what makes a range slider the
+same component rather than a second one.
 
 The context menu and the resizable split are the editor-shell primitives: an editor needs
 a right-click menu and draggable regions, and both belong in the kit rather than inside

@@ -1,7 +1,7 @@
 import { blockTypeClassName, type BlockNode } from "@nextlyhq/blocks-engine";
 import { Suspense, cloneElement, isValidElement, type ReactNode } from "react";
 
-import type { PageContext } from "./context";
+import type { BlockHostPolicy, PageContext } from "./context";
 import { BlockPlaceholder } from "./placeholder";
 import { describeThrown, isThenable, normalizeRenderable } from "./renderable";
 import type { BlockResolver } from "./resolver";
@@ -16,6 +16,13 @@ export interface BlockBoundaryProps {
   classes: Record<string, string>;
   /** Shown while an async block is still producing output. */
   fallback?: ReactNode;
+  /**
+   * Site-operator decisions the block enforces.
+   *
+   * Threaded down the tree rather than carried on the context, so the host's
+   * own object is never rewritten and no block can supply its own.
+   */
+  hostPolicy?: BlockHostPolicy;
 }
 
 /**
@@ -309,6 +316,7 @@ export function BlockBoundary({
   blocks,
   classes,
   fallback,
+  hostPolicy,
 }: BlockBoundaryProps): ReactNode {
   // A node the migration pass could not bring to its block's current version
   // keeps its last-good props, which the current render would misread. The
@@ -359,6 +367,9 @@ export function BlockBoundary({
       node,
       className,
       ctx: context,
+      // The renderer's, not the context's. A block may replace the context its
+      // slot children see; it can neither drop nor forge this.
+      ...(hostPolicy === undefined ? {} : { hostPolicy }),
       // Synchronous by contract: it returns an element describing what to
       // render, not the rendered result. That is what lets a block call it
       // inside its own JSX, and what lets a slot that is never shown never run
@@ -367,10 +378,15 @@ export function BlockBoundary({
       renderSlot: (name: string, slotContext?: PageContext) => (
         <BlockList
           nodes={slotNodes(node, name)}
+          // A block may replace the context its slot children see — that is how
+          // a repeater sets `item` per iteration — and the policy travels
+          // beside it either way, so a nested block cannot lose the grant by
+          // being nested nor gain one by rebuilding the context.
           context={slotContext ?? context}
           blocks={blocks}
           classes={classes}
           fallback={fallback}
+          {...(hostPolicy === undefined ? {} : { hostPolicy })}
         />
       ),
     });
@@ -409,6 +425,7 @@ export interface BlockListProps {
   blocks: BlockResolver;
   classes: Record<string, string>;
   fallback?: ReactNode;
+  hostPolicy?: BlockHostPolicy;
 }
 
 /**
@@ -424,6 +441,7 @@ export function BlockList({
   blocks,
   classes,
   fallback,
+  hostPolicy,
 }: BlockListProps): ReactNode {
   return nodes
     .filter(isUnconditional)
@@ -435,6 +453,7 @@ export function BlockList({
         blocks={blocks}
         classes={classes}
         fallback={fallback}
+        {...(hostPolicy === undefined ? {} : { hostPolicy })}
       />
     ));
 }

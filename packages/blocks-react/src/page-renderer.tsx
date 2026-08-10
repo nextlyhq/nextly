@@ -3,6 +3,7 @@ import {
   DOCUMENT_FORMAT_VERSION,
   PAGE_ROOT_CLASS,
   migrateDocument,
+  walkNodes,
   type BlockDocument,
   type BlockNode,
   type DocumentLimits,
@@ -11,7 +12,11 @@ import {
 import type { ReactElement, ReactNode } from "react";
 
 import { BlockList } from "./block-boundary";
-import { createStandaloneContext, type PageContext } from "./context";
+import {
+  createStandaloneContext,
+  type BlockHostPolicy,
+  type PageContext,
+} from "./context";
 import { BlockPlaceholder } from "./placeholder";
 import {
   registeredBlocks,
@@ -20,6 +25,8 @@ import {
 } from "./resolver";
 import { dedupeNodeIds, sanitizeDocument } from "./sanitize";
 import {
+  isRecordedGatedEntry,
+  readableGatedRules,
   resolvePageStyles,
   styleTextForInjection,
   type PageStyles,
@@ -56,6 +63,18 @@ export interface PageRendererProps {
    * limits, then to the engine defaults.
    */
   limits?: DocumentLimits;
+  /**
+   * Site-operator decisions the blocks enforce. See {@link BlockHostPolicy}.
+   *
+   * THE ONLY place a policy is configured. It is not read from `context`, which
+   * carries no such field: the policy is the renderer's and reaches each block
+   * as a render argument, so the host's context object is passed through
+   * untouched rather than copied to carry it.
+   *
+   * Omitted means the host configured nothing, and every policy then takes its
+   * closed default.
+   */
+  hostPolicy?: BlockHostPolicy;
 }
 
 /**
@@ -70,6 +89,21 @@ export interface PageRendererProps {
  * stored ahead of the definition that would render it. All three are pure
  * comparisons.
  *
+ * A block can now DECLARE that its props draw nothing (`rendersNothing`), and
+ * `core/image` with no source says so. That answer is deliberately NOT consumed
+ * here yet. Removing such a node from the style input marks the document
+ * repaired, and on the ordinary published path — a stored stylesheet with no
+ * compile context — a repaired document has its whole sheet withheld. Blanking
+ * every rule on the page because one image is waiting for its picture trades a
+ * few unused bytes for an unstyled site, and an image without a picture yet is
+ * an ordinary authoring state rather than the exceptional one the other prune
+ * cases describe.
+ *
+ * Wiring it needs the stored artifact to be able to drop ONE node's rules,
+ * which is what `CompiledPageCss.gated` already does for condition-gated nodes.
+ * Until a draws-nothing node can travel that path, the declaration is carried
+ * by the contract and read by nothing here.
+ *
  * The rest are NOT knowable here, and deliberately so: whether a block throws,
  * returns something unrenderable, or renders a given slot at all is only
  * settled by calling it, which happens inside the boundary further down. A node
@@ -82,6 +116,64 @@ function rendersOwnMarkup(node: BlockNode, resolver: BlockResolver): boolean {
   const definition = resolver.get(node.type);
   if (definition === undefined) return false;
   return node.version <= definition.version;
+}
+
+/**
+ * Whether the artifact's gated map accounts for every node the prune removed.
+ *
+ * "A map is present" is not coverage. A stored artifact can be stale relative to the document it
+ * is rendered with — compiled when one node was unconditional, so its rules are in `css`, while a
+ * different node was already gated and has an entry. The map exists, but it does not cover the
+ * node that was actually pruned, and serving the stored sheet publishes that node's rules and
+ * asset URLs.
+ *
+ * The compiler writes an entry for EVERY gated node, including one with no styles of its own, so
+ * an id missing from the map means the artifact was compiled when that node was not gated. That
+ * makes presence-per-removed-id an exact test rather than a heuristic.
+ *
+ * The ENTRY has to be usable, not merely present. A key whose value the delivery refuses to read
+ * certifies coverage that never reaches the sheet, which is the same divergence one value deeper.
+ */
+function gatedMapCoversPrunedNodes(
+  before: BlockDocument,
+  after: BlockDocument,
+  gated: Readonly<Record<string, unknown>>
+): boolean {
+  const surviving = new Set<string>();
+  const survivingTypes = new Set<string>();
+  walkNodes(after.nodes, node => {
+    surviving.add(node.id);
+    survivingTypes.add(node.type);
+  });
+  let covered = true;
+  walkNodes(before.nodes, node => {
+    if (surviving.has(node.id)) return;
+    if (!isRecordedGatedEntry(gated[node.id])) covered = false;
+    // The map holds a node's OWN rules. A block type's defaults are shared, emitted once per type
+    // into the main sheet, and stay there — so when pruning removes the last instance of a type,
+    // the stored sheet still publishes that type's defaults, and any `url(...)` in them, for a
+    // block nobody was served. Only a recompile can drop a type-level rule, so the artifact cannot
+    // cover this case and must not claim to.
+    if (!survivingTypes.has(node.type)) covered = false;
+  });
+  return covered;
+}
+
+/**
+ * Whether any id appears on more than one node.
+ *
+ * The compiler suppresses the node-local rules of every node sharing an id, so a stored sheet
+ * compiled from such a document is missing them — and stays missing them after a prune removes the
+ * duplicate that made the collision visible.
+ */
+function hasDuplicateNodeIds(document: BlockDocument): boolean {
+  const seen = new Set<string>();
+  let duplicate = false;
+  walkNodes(document.nodes, node => {
+    if (seen.has(node.id)) duplicate = true;
+    seen.add(node.id);
+  });
+  return duplicate;
 }
 
 /**
@@ -169,8 +261,13 @@ export function PageRenderer({
   styleContext,
   blockFallback,
   limits,
+  hostPolicy,
 }: PageRendererProps): ReactElement {
   const resolver = blocks ?? registeredBlocks();
+  // Passed through untouched. The policy travels beside the context rather than
+  // on it, so a host's own object is never copied — and no copy of it is
+  // faithful, since a class-based context loses prototype methods to a spread
+  // and native private fields to any clone at all.
   const pageContext = context ?? createStandaloneContext();
 
   // Migrated against the SAME resolver that will render, so the versions nodes
@@ -237,7 +334,14 @@ export function PageRenderer({
   // take that address from a visible node for nothing: the visible one would be
   // dropped or stripped of its anchor, and the node it collided with would then
   // be pruned anyway.
-  const visible = dedupeNodeIds(pruned);
+  //
+  // The children of a node that is already known to placeholder are in the same
+  // position. The node itself still renders its marker and still needs a key,
+  // but a placeholder replaces the node entirely, so nothing below it reaches
+  // the page and nothing below it should hold an address.
+  const visible = dedupeNodeIds(pruned, node =>
+    rendersOwnMarkup(node, resolver)
+  );
 
   // Whether the tree that renders is the tree the stored stylesheet was
   // compiled from. Each pass returns its input unchanged when it had nothing to
@@ -261,9 +365,32 @@ export function PageRenderer({
   // render keeps them so their placeholders still appear.
   const styleInput = pruneKnownPlaceholders(visible, resolver);
 
+  // Gating is the one repair cause a stored artifact can answer on its own: an
+  // artifact carrying `gated` holds each conditioned node's rules separately, so
+  // the reader appends the survivors instead of recompiling the whole sheet or
+  // withholding it. A MISSING map is not the same as an empty one — it means the
+  // sheet was compiled before the split existed and knows nothing about gating —
+  // so only a READABLE map licenses skipping the recompile. Read through the same
+  // helper the delivery uses: a malformed map counting as coverage here while the
+  // delivery refuses to read it is how the stale sheet shipped.
+  //
+  // Duplicate ids in the STORED document disqualify it, even when pruning makes
+  // them disappear. The compiler writes no node-local rules at all for an id more
+  // than one node carries, since they cannot be styled apart; if one of the pair
+  // was the gated one, pruning removes it and the collision is gone from the tree
+  // that renders — `visible === pruned`, nothing to repair — while the stored
+  // sheet is still missing the SURVIVOR's rules. The pre-prune document is the
+  // only place that evidence still exists.
+  const gatedRules = readableGatedRules(styles);
+  const gatingCoveredByArtifact =
+    pruned !== doc &&
+    gatedRules !== undefined &&
+    gatedMapCoversPrunedNodes(doc, pruned, gatedRules) &&
+    !hasDuplicateNodeIds(doc);
+
   const repairedDocument =
     sanitized !== document ||
-    pruned !== doc ||
+    (pruned !== doc && !gatingCoveredByArtifact) ||
     visible !== pruned ||
     styleInput !== visible;
 
@@ -316,6 +443,7 @@ export function PageRenderer({
         blocks={resolver}
         classes={classes}
         fallback={blockFallback}
+        {...(hostPolicy === undefined ? {} : { hostPolicy })}
       />
     </div>
   );

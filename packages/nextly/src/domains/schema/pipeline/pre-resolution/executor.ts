@@ -32,6 +32,7 @@ import { isPreResolutionOp, type Operation } from "../diff/types";
 // module (pipeline/sql-templates/) so both the apply pipeline (renames +
 // drops) and migrate:create (all op types) consume the same per-dialect
 // templates. Eliminates the byte-identical-SQL drift risk.
+import { conversionForRename } from "../rename-conversion";
 import { generateSQL } from "../sql-templates/index";
 
 interface AsyncExecuteHandle {
@@ -61,6 +62,26 @@ export async function executePreResolutionOps(
   for (const op of ordered) {
     const sqlString = sqlForOp(op, dialect);
     await runRaw(txOrDb, sqlString, dialect);
+  }
+
+  // A rename moves the column; it does not change what the column IS. When the two sides differ, the
+  // rename alone leaves the old type in place under the new name, so the schema the runtime reads
+  // through and the column it actually reads disagree from that moment on.
+  //
+  // 🔴 Issued as a pass AFTER every ordered op rather than beside each rename, and the ordering is
+  // the point. MySQL refuses to convert an indexed text column to JSON, and the index that covers it
+  // is dropped in a LATER bucket than the rename — so a conversion emitted next to its own rename
+  // runs while the index is still there and fails. Nothing in the buckets that follow can invalidate
+  // a conversion: the column's own table survives the rename by definition, and the drops target
+  // other objects.
+  //
+  // What to convert is decided by `conversionForRename`, which `migrate:create` also asks, so a
+  // repair applied here and one written to a migration file cannot disagree about it.
+  for (const op of ordered) {
+    if (op.type !== "rename_column") continue;
+    for (const conversion of conversionForRename(op, dialect)) {
+      await runRaw(txOrDb, generateSQL(conversion, dialect), dialect);
+    }
   }
 
   return ordered.length;

@@ -108,12 +108,24 @@ describe("a preview grant that names an entry", () => {
     expect(entry._isWorkingDraft).toBe(true);
   });
 
+  // Both fall-through cases carry `aaa-shadow`: a never-published row sharing
+  // the requested slug and sorting AHEAD of the published one under `sort: "id"`.
+  //
+  // It is the only shape where the two lifecycle scopes disagree, so it is what
+  // makes these tests capable of failing at all. Without it the fixture returns
+  // the same row whether the fall-through reads `published` or `all`, and the
+  // guarantee the fall-through exists for — that a grant which did not answer
+  // this path cannot surface a row it never named — is asserted in prose and
+  // nowhere in code.
+  const SHADOW: Row = { id: "aaa-shadow", slug: "a", status: "draft" };
+
   it("does not serve the granted entry at a path it does not live at", async () => {
     // The trap this design exists to avoid. Resolving by the granted id alone
     // would render that entry at EVERY url for the life of the session, which
     // is worse than the duplicate-slug bug it fixes.
     const { reader } = stubReader([
       { id: "elsewhere", slug: "somewhere-else", status: "draft" },
+      SHADOW,
       { id: "here", slug: "a", status: "published" },
     ]);
 
@@ -129,6 +141,7 @@ describe("a preview grant that names an entry", () => {
     // A preview link outlives what it points at. Failing here would make a
     // stale-but-valid link distinguishable from a forged one.
     const { reader } = stubReader([
+      SHADOW,
       { id: "here", slug: "a", status: "published" },
     ]);
 
@@ -138,6 +151,20 @@ describe("a preview grant that names an entry", () => {
 
     expect(entry.id).toBe("here");
     expect(entry._isWorkingDraft).toBeUndefined();
+  });
+
+  it("reads the fall-through with the published scope, not the widened one", async () => {
+    // Stated directly rather than only inferred from which row came back, so
+    // the guarantee survives a future fixture change that stops distinguishing
+    // the two scopes.
+    const { reader, calls } = stubReader([
+      SHADOW,
+      { id: "here", slug: "a", status: "published" },
+    ]);
+
+    await routeFor(reader, "gone").ContentPage(params);
+
+    expect(calls.at(-1)?.status).toBe("published");
   });
 
   it("still opens the draft when a hook rewrites the entry's id", async () => {
