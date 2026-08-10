@@ -251,6 +251,7 @@ export interface BlockDefinition<
    * its own props to sit in a registry of many prop shapes.
    */
   rendersNothing?(this: void, props: P): boolean;
+  /**
    * What this block contributes to the page's metadata when the entry's own
    * SEO fields are blank.
    *
