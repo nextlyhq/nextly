@@ -690,17 +690,14 @@
   --nx-page-background: oklch(0.97 0 0);
   /* #f9f9f9 for page content area */
   --nx-foreground: oklch(0 0 0);
-  /* slate-900 */
 
   /* Component colors */
   --nx-card: oklch(1 0 0);
   /* pure white for cards to pop on off-white bg */
   --nx-card-foreground: oklch(0 0 0);
-  /* slate-900 */
   --nx-popover: oklch(0.99 0 0);
   /* white */
   --nx-popover-foreground: oklch(0 0 0);
-  /* slate-900 */
   /* Table headers, table footers and the pagination bar. A surface, so it lives
      with the other surfaces: declared next to the component that paints it, a
      palette change would move everything around it and leave it behind. */
@@ -716,7 +713,6 @@
   --nx-secondary: oklch(0.94 0 0);
   /* slate-100 */
   --nx-secondary-foreground: oklch(0 0 0);
-  /* slate-900 */
 
   /* Utility colors */
   --nx-muted: oklch(0.97 0 0);
@@ -726,7 +722,6 @@
      `--nx-accent-foreground` as the only thing meant to be read on it. */
   --nx-accent: oklch(0.94 0 0);
   --nx-accent-foreground: oklch(0 0 0);
-  /* white */
 
   /* State colors - WCAG 2.2 AA Compliant.
    * Each status has two roles kept as separate tokens, the industry-standard
@@ -819,7 +814,6 @@
   /* Chart colors for data visualization */
   --nx-chart-1: var(--nx-primary);
   --nx-chart-2: oklch(0.7399 0.1277 209.34);
-  /* cyan-500 */
   --nx-chart-3: oklch(0.6273 0.17 149.2);
   /* green-600 */
   --nx-chart-4: oklch(0.7686 0.1646 70.11);
@@ -851,18 +845,14 @@
    * used one value for both, which leaves the fill carrying the whole signal
    * -- and the fill is the part a low-contrast surface weakens first. */
   --nx-sidebar-foreground: oklch(0.44 0 0);
-  /* slate-700 */
   --nx-sidebar-primary: oklch(0 0 0);
-  /* slate-900 */
   --nx-sidebar-primary-foreground: oklch(1 0 0);
   /* slate-50 */
   --nx-sidebar-accent: oklch(0.94 0 0);
   /* slate-100 */
   --nx-sidebar-accent-foreground: oklch(0 0 0);
-  /* slate-900 */
   /* Darkened so the sidebar border clears WCAG 3:1 on its surface (was 1.23:1). */
   --nx-sidebar-border: oklch(0.63 0 0);
-  /* slate-200 */
   --nx-sidebar-ring: var(--nx-primary);
 
   /* Data table specific colors */
@@ -891,7 +881,6 @@
    * placed on a popover clear their WCAG minimums (border was 2.85:1, input
    * 1.73:1); the surface was too light for its own contents. */
   --nx-popover: oklch(0.18 0 0);
-  /* slate-800 */
   --nx-popover-foreground: oklch(1 0 0);
   /* slate-50 */
   /* A step above the card beneath it, carrying no chroma of its own: a hue here
@@ -901,7 +890,6 @@
   /* Brand colors - Blue-Cyan Professional Palette (Dark Mode) */
   --nx-primary: oklch(1 0 0); /* High contrast White for dark mode */
   --nx-primary-foreground: oklch(0 0 0);
-  /* slate-900 */
 
   /* Secondary colors - using slate-800 for dark backgrounds */
   --nx-secondary: oklch(0.25 0 0);
@@ -911,9 +899,7 @@
 
   /* Utility colors */
   --nx-muted: oklch(0.23 0 0);
-  /* slate-800 */
   --nx-muted-foreground: oklch(0.72 0 0);
-  /* slate-400 */
   --nx-accent: oklch(0.32 0 0); /* Slate-500 per user request #64748b */
   --nx-accent-foreground: oklch(1 0 0);
   /* white */
@@ -929,7 +915,6 @@
   /* Darker red fill so white on-color button text clears 4.5:1. */
   --nx-destructive-solid: oklch(0.69 0.2 23.91);
   --nx-destructive-foreground: oklch(0 0 0);
-  /* white */
   /* Lightened green so it reads as text at WCAG 4.5:1 on the dark page and on
    * the lighter popover surface (was 4.17:1 on the page, 4.29:1 on a popover). */
   --nx-success: oklch(0.6 0.1921 149.58);
@@ -996,7 +981,6 @@
   /* Chart colors for data visualization (same as light mode) */
   --nx-chart-1: var(--nx-primary);
   --nx-chart-2: oklch(0.7399 0.1277 209.34);
-  /* cyan-500 */
   --nx-chart-3: oklch(0.7229 0.1921 149.58);
   /* green-500 */
   --nx-chart-4: oklch(0.7686 0.1646 70.11);
@@ -1017,9 +1001,7 @@
   --nx-sidebar-primary: oklch(1 0 0);
   /* slate-50 */
   --nx-sidebar-primary-foreground: oklch(0 0 0);
-  /* slate-900 */
   --nx-sidebar-accent: oklch(0.32 0 0);
-  /* slate-800 */
   --nx-sidebar-accent-foreground: oklch(1 0 0);
   /* slate-50 */
   /* Lightened so the sidebar border clears WCAG 3:1 on its surface (was 1.19:1). */
@@ -1028,7 +1010,6 @@
 
   /* Data table specific colors - dark mode */
   --nx-table-row-hover: oklch(0.23 0 0);
-  /* slate-800 */
   --nx-table-row-selected: var(--nx-primary);
   --nx-table-border: var(--nx-border);
   /* inherit the retuned white-alpha border (was a fixed faint slate) */
