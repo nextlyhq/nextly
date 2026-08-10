@@ -1,17 +1,14 @@
 import { blockTypeClassName, type BlockNode } from "@nextlyhq/blocks-engine";
-import {
-  Fragment,
-  Profiler,
-  StrictMode,
-  Suspense,
-  cloneElement,
-  isValidElement,
-  type ReactNode,
-} from "react";
+import { Suspense, cloneElement, isValidElement, type ReactNode } from "react";
 
 import type { PageContext } from "./context";
 import { BlockPlaceholder } from "./placeholder";
-import { describeThrown, isThenable, normalizeRenderable } from "./renderable";
+import {
+  describeThrown,
+  isThenable,
+  normalizeRenderable,
+  rendersChildrenTransparently,
+} from "./renderable";
 import type { BlockResolver } from "./resolver";
 import { isUnconditional } from "./visibility";
 
@@ -216,15 +213,13 @@ function rendersNothing(output: unknown, budget = { left: 10_000 }): boolean {
  * Taken from React's own exports rather than a symbol list, so it cannot drift
  * from what this React actually treats as transparent.
  *
- * `Suspense` is deliberately absent: it renders a fallback while its children
- * are pending, so empty children do not mean empty output. A context provider
- * is absent too, for the conservative reason rather than a technical one — an
- * empty one does draw nothing, but every wrapper added here is a chance to
- * withhold a diagnostic that should have appeared, and that error is the one a
- * reader never sees.
+ * Delegated to the normalizer, which already decides which wrappers it walks to
+ * validate their children. Keeping one answer for "does React draw this by
+ * drawing its children" is what stops a wrapper being inspected for safety in
+ * one place and misreported as output in the other.
  */
 function isTransparentWrapper(type: unknown): boolean {
-  return type === Fragment || type === StrictMode || type === Profiler;
+  return rendersChildrenTransparently(type);
 }
 
 /**

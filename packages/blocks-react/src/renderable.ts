@@ -137,6 +137,37 @@ const PROVIDER_TAGS: ReadonlySet<symbol> = new Set([
   Symbol.for("react.context"),
 ]);
 
+/**
+ * Whether React draws this element type by drawing its children and nothing
+ * else of its own.
+ *
+ * Exported because two questions need it and must not answer differently: this
+ * module walks such a wrapper's children to VALIDATE them, and the boundary
+ * walks them to decide whether the block drew anything. A second list would let
+ * a wrapper be inspected for safety and then misreported as output.
+ *
+ * `Suspense` belongs here despite its `fallback`: the fallback is drawn only
+ * while the children are pending, and children that are structurally empty
+ * cannot suspend. A child that CAN suspend is not empty, so the recursion that
+ * uses this already answers that case correctly.
+ *
+ * A context provider belongs for the same reason it is walked below — it wraps
+ * a value around children it renders directly.
+ */
+export function rendersChildrenTransparently(type: unknown): boolean {
+  if (type === FRAGMENT_TYPE || type === STRICT_MODE_TYPE) return true;
+  if (type === PROFILER_TYPE || type === SUSPENSE_TYPE) return true;
+  if (type === ACTIVITY_TYPE) return true;
+  const tag = reactTag(type);
+  return tag !== null && PROVIDER_TAGS.has(tag);
+}
+
+/** The built-in wrapper types, by the symbols React identifies them with. */
+const FRAGMENT_TYPE = Symbol.for("react.fragment");
+const STRICT_MODE_TYPE = Symbol.for("react.strict_mode");
+const PROFILER_TYPE = Symbol.for("react.profiler");
+const ACTIVITY_TYPE = Symbol.for("react.activity");
+
 /** The context consumer tag, whose single child must be a function. */
 const CONSUMER_TAG = Symbol.for("react.consumer");
 
