@@ -256,6 +256,12 @@ describe("the blocks entry", () => {
 
 describe("the next entry", () => {
   it("exports exactly these values", () => {
-    expect(Object.keys(nextEntry).sort()).toEqual(["BLOCKS_REACT_NEXT_ENTRY"]);
+    // The route helper joins the entry marker here. Types are erased, so
+    // `BlocksPageConfig` and `DerivedPageSeo` never appear in this list — the
+    // guard is about what a consumer can CALL.
+    expect(Object.keys(nextEntry).sort()).toEqual([
+      "BLOCKS_REACT_NEXT_ENTRY",
+      "createBlocksPage",
+    ]);
   });
 });
