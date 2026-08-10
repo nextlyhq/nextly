@@ -7,8 +7,10 @@
 export interface PublishedEntry {
   /** The export key, such as `.` or `./color`. */
   subpath: string;
-  /** The built file's base name, such as `index` or `color`. */
-  name: string;
+  /** The declaration files it resolves to, ESM then CJS. */
+  declarations: string[];
+  /** The JavaScript files it resolves to, ESM then CJS. */
+  artifacts: string[];
   /** Whether it is importable from server code. */
   serverSafe: boolean;
 }

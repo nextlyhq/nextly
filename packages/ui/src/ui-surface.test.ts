@@ -36,11 +36,14 @@ const PKG_ROOT = path.join(SRC, "..");
  * map by a completeness check below, so an entry point cannot be published without one.
  */
 const ENTRY_POINTS = [
-  "index.ts",
-  "lib/utils.ts",
-  "tailwind-preset.ts",
-  "lib/color/index.ts",
-];
+  { subpath: ".", source: "index.ts" },
+  { subpath: "./utils", source: "lib/utils.ts" },
+  { subpath: "./tailwind-preset", source: "tailwind-preset.ts" },
+  { subpath: "./color", source: "lib/color/index.ts" },
+] as const;
+
+/** Just the source paths, for the checks that read files rather than compare identities. */
+const ENTRY_SOURCES = ENTRY_POINTS.map(entry => entry.source);
 
 /**
  * Strip comments before any structural check. Doc comments here legitimately
@@ -172,24 +175,29 @@ function documentedPublic(): { names: string[]; files: string[] } {
 
 describe("ui public export surface", () => {
   it("has a source barrel for every published entry point", () => {
-    // The one guard whose list cannot be derived, tied to the same source of truth by counting.
-    // Without this, publishing a subpath and forgetting to add its source here leaves its export
-    // names and value-versus-type kinds outside the snapshot, and every assertion stays green.
+    // Compared by IDENTITY rather than by count. A change that renames or replaces one subpath
+    // leaves the total unchanged, so a count alone would keep passing while the new entry's
+    // exports and value-versus-type kinds sat outside the snapshots — which is the coverage gap
+    // this check exists to close.
     expect(
-      ENTRY_POINTS.length,
-      `package.json publishes ${publishedEntries().length} JavaScript entry points and ` +
-        `ENTRY_POINTS lists ${ENTRY_POINTS.length}. Add the new one's SOURCE barrel here.`
-    ).toBe(publishedEntries().length);
+      ENTRY_POINTS.map(entry => entry.subpath).sort(),
+      "the source barrels listed here and the subpaths package.json publishes have diverged; " +
+        "add or update the SOURCE barrel for the entry that changed"
+    ).toEqual(
+      publishedEntries()
+        .map(entry => entry.subpath)
+        .sort()
+    );
   });
 
-  it.each(ENTRY_POINTS)("%s surface is unchanged", file => {
+  it.each(ENTRY_SOURCES)("%s surface is unchanged", file => {
     expect(exportedNames(file)).toMatchSnapshot();
   });
 
   // The name/kind extractor cannot see through `export *` re-exports, so a star
   // export would add names to the public surface that the snapshots never
   // record. Fail loudly if one is introduced, so the guard stays complete.
-  it.each(ENTRY_POINTS)("%s uses only named exports (no `export *`)", file => {
+  it.each(ENTRY_SOURCES)("%s uses only named exports (no `export *`)", file => {
     expect(sourceOf(file)).not.toMatch(/export\s+\*/);
   });
 });

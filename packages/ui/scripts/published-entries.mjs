@@ -3,15 +3,14 @@
  *
  * ## Why this exists
  *
- * Three separate guards protect a published entry point, and each held its own hand-written list:
- * the built declarations must carry a release tag, the source barrel must match a surface
- * snapshot, and a server-safe entry must not carry a client banner. Every one of those lists is
- * correct and every one is opt-in, so **a newly published subpath was unprotected by default in
- * all three at once** — and each omission was found separately, in a different review round.
+ * Three guards protect a published entry point: its built declarations must carry a release tag,
+ * its source barrel must match a surface snapshot, and a server-safe entry must not carry a
+ * client banner. Each guard reads a list of what to check, and a list written by hand is opt-in —
+ * so a newly published subpath is absent from it, every assertion stays green, and nothing
+ * reports that the new entry point is unchecked.
  *
- * The export map in `package.json` is the one place that already knows what ships. Deriving the
- * lists from it means adding an entry point enrols it in every check, so there is nothing left to
- * remember and nothing to keep in step.
+ * The export map is the one place that already knows what ships. Deriving the lists from it makes
+ * enrolment automatic, so there is no step to remember and no two lists to keep in step.
  *
  * @module scripts/published-entries
  */
@@ -26,7 +25,8 @@ const pkgRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
  *
  * @typedef {object} PublishedEntry
  * @property {string} subpath The export key, such as `.` or `./color`.
- * @property {string} name The built file's base name, such as `index` or `color`.
+ * @property {string[]} declarations The declaration files it resolves to, ESM then CJS.
+ * @property {string[]} artifacts The JavaScript files it resolves to, ESM then CJS.
  * @property {boolean} serverSafe Whether it is importable from server code.
  */
 
@@ -51,17 +51,33 @@ export function publishedEntries() {
     // A stylesheet maps straight to a string; a JavaScript entry maps to conditions.
     if (typeof target !== "object" || target === null) continue;
 
-    const types = target.import?.types;
-    if (typeof types !== "string") {
-      throw new Error(
-        `The export "${subpath}" has no import.types condition, so its declarations cannot be ` +
-          "checked. Give it one, or exclude it from the export map."
-      );
+    // Every condition's OWN target is kept. Synthesising the other three from one basename
+    // assumes they share it, and a map is free not to: the guards would then inspect files that
+    // are emitted but never selected, while the ones `import` and `require` actually resolve to
+    // go unchecked.
+    const paths = {
+      importTypes: target.import?.types,
+      requireTypes: target.require?.types,
+      importDefault: target.import?.default,
+      requireDefault: target.require?.default,
+    };
+
+    for (const [condition, value] of Object.entries(paths)) {
+      if (typeof value !== "string") {
+        throw new Error(
+          `The export "${subpath}" has no ${condition} target, so the file a consumer resolves ` +
+            "to cannot be checked. Give it one, or exclude the entry from the export map."
+        );
+      }
     }
 
-    // `./dist/color.d.ts` -> `color`
-    const name = types.replace(/^\.\/dist\//, "").replace(/\.d\.ts$/, "");
-    entries.push({ subpath, name, serverSafe: subpath !== "." });
+    const file = value => value.replace(/^\.\//, "").replace(/^dist\//, "");
+    entries.push({
+      subpath,
+      declarations: [file(paths.importTypes), file(paths.requireTypes)],
+      artifacts: [file(paths.importDefault), file(paths.requireDefault)],
+      serverSafe: subpath !== ".",
+    });
   }
 
   if (entries.length === 0) {
@@ -84,10 +100,7 @@ export function publishedEntries() {
  * @returns {string[]}
  */
 export function declarationFiles() {
-  return publishedEntries().flatMap(({ name }) => [
-    `${name}.d.ts`,
-    `${name}.d.cts`,
-  ]);
+  return publishedEntries().flatMap(entry => entry.declarations);
 }
 
 /**
@@ -98,5 +111,5 @@ export function declarationFiles() {
 export function serverSafeArtifacts() {
   return publishedEntries()
     .filter(entry => entry.serverSafe)
-    .flatMap(({ name }) => [`${name}.mjs`, `${name}.cjs`]);
+    .flatMap(entry => entry.artifacts);
 }
