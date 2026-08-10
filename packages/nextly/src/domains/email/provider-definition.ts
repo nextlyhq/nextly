@@ -239,6 +239,38 @@ export function defineEmailProvider<TConfig>(
     }
   };
 
+  /**
+   * Keep a provider's own failure out of a response.
+   *
+   * `createAdapter` and `testConnection` receive DECRYPTED configuration, and
+   * `testProvider` reports a caught error's `message` to the caller. A provider
+   * that writes its configuration into a diagnostic — `Invalid key ${apiKey}`
+   * is an easy thing to write — would therefore hand a credential back to any
+   * authenticated caller who pressed Test, which is the exact leak the parse
+   * wrapper already closes for `parseConfig`.
+   *
+   * A deliberately thrown `NextlyError` passes through, for the same reason it
+   * does there: its `publicMessage` is an authoring decision about what is safe
+   * to show, while a bare `Error`'s message is whatever the throw site
+   * happened to interpolate.
+   */
+  const normalizeCallbackFailure = (
+    error: unknown,
+    stage: "createAdapter" | "testConnection"
+  ): unknown => {
+    if (NextlyError.is(error)) return error;
+    // Constructed rather than `NextlyError.internal()`, which fixes its own
+    // public sentence: naming the provider is what tells an operator which of
+    // several configured providers failed, and the type comes from the
+    // install's own code rather than from a request.
+    return new NextlyError({
+      code: "INTERNAL_ERROR",
+      publicMessage: `The "${definition.type}" email provider failed. Check the server logs for the reason.`,
+      cause: error instanceof Error ? error : undefined,
+      logContext: { providerType: definition.type, stage },
+    });
+  };
+
   return {
     type: definition.type,
     label: definition.label,
@@ -249,10 +281,25 @@ export function defineEmailProvider<TConfig>(
     validateConfig: (input: unknown): void => {
       parse(input);
     },
-    createAdapterFrom: (input: unknown): EmailProviderAdapter =>
-      definition.createAdapter(parse(input)),
+    createAdapterFrom: (input: unknown): EmailProviderAdapter => {
+      const config = parse(input);
+      try {
+        return definition.createAdapter(config);
+      } catch (error) {
+        throw normalizeCallbackFailure(error, "createAdapter");
+      }
+    },
     testConnectionFrom: probe
-      ? (input: unknown) => probe(parse(input))
+      ? async (input: unknown) => {
+          // Awaited inside the try so a rejected promise is normalized too —
+          // returning it unawaited would leave the async half of exactly the
+          // same leak open.
+          try {
+            return await probe(parse(input));
+          } catch (error) {
+            throw normalizeCallbackFailure(error, "testConnection");
+          }
+        }
       : undefined,
     hasConnectionTest: typeof probe === "function",
   };
