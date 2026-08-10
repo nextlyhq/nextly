@@ -165,10 +165,22 @@ function nodeRootReason(output: ReactNode, node: BlockNode): string | null {
       ([name, value]) => isAllowedAttribute(name) && typeof value === "string"
     );
   if (!hasCssId && !hasAttributes) return null;
+  // Rendering NOTHING is a decision, not a failure, and the two must not share
+  // an answer. `core/image` with no usable source returns null on purpose —
+  // an `<img>` with no `src` re-requests the current page in some browsers —
+  // and an author who set an anchor on it has lost the anchor either way. The
+  // difference is that a placeholder ALSO reports a working block as broken,
+  // and in production that is an invisible marker nobody ever sees.
+  //
+  // So a block may legitimately render nothing. That is a contract for every
+  // block, including ones written outside this package, rather than a special
+  // case for the two here that need it today.
+  if (output === null || output === undefined) return null;
   const named = hasCssId ? "`cssId`" : "attributes";
-  // A primitive or a list has no root at all, which loses the fields exactly as
-  // a wrapper root does — silently, and with the same broken anchors. The
-  // format says a block renders a single element for these to target.
+  // A primitive or a list, on the other hand, is output that HAS a root and
+  // loses the fields anyway — silently, and with the same broken anchors as a
+  // wrapper root. The format says a block renders a single element for these to
+  // target.
   if (!isValidElement(output)) {
     return `a node carrying ${named} whose block returned no element, so there is no DOM root to put them on`;
   }
