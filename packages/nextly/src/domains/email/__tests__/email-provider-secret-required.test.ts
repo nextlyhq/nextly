@@ -19,7 +19,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 import { NextlyError } from "../../../errors";
 import { emailProvidersSqlite } from "../../../schemas/email-providers/sqlite";
+import { getCoreSchema } from "../../../schemas";
 import type { Logger } from "../../../services/shared";
+import { createTableBody } from "../../schema/pipeline/sql-templates/create-table-body";
 import { EmailProviderService } from "../services/email-provider-service";
 
 // The whole point of this file: no secret is configured.
@@ -51,22 +53,28 @@ const logger: Logger = {
   debug: vi.fn(),
 };
 
+/**
+ * Render `email_providers` from the same core schema the product ships, rather
+ * than hand-copying a CREATE TABLE. A security regression suite is exactly the
+ * one that must not certify a shape production no longer has: a fixture written
+ * by hand keeps passing after the real column list moves, and reports safety it
+ * never re-checked.
+ */
+function createEmailProvidersTable(sqlite: Database.Database): void {
+  const { tables } = getCoreSchema("sqlite");
+  const spec = tables.find(t => t.name === "email_providers");
+  if (!spec) {
+    throw new Error(
+      "email_providers is absent from the core schema — the fixture can no longer be derived from it."
+    );
+  }
+  const body = createTableBody(spec, (id: string) => `"${id}"`);
+  sqlite.exec(`CREATE TABLE "email_providers" (\n${body}\n)`);
+}
+
 function createInMemoryDb() {
   const sqlite = new Database(":memory:");
-  sqlite.exec(`
-    CREATE TABLE IF NOT EXISTS email_providers (
-      id            TEXT    PRIMARY KEY,
-      name          TEXT    NOT NULL,
-      type          TEXT    NOT NULL,
-      from_email    TEXT    NOT NULL,
-      from_name     TEXT,
-      configuration TEXT    NOT NULL,
-      is_default    INTEGER NOT NULL DEFAULT 0,
-      is_active     INTEGER NOT NULL DEFAULT 1,
-      created_at    INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000),
-      updated_at    INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000)
-    );
-  `);
+  createEmailProvidersTable(sqlite);
   // No `schema`/`relations` option: these tests only use `db.select()`, never
   // the relational query API that a schema map exists to type.
   const db = drizzle({ client: sqlite });
@@ -145,13 +153,17 @@ describe("EmailProviderService without NEXTLY_SECRET", () => {
   it("refuses to update a provider's configuration for the same reason", async () => {
     // Update re-encrypts a merged config, so it is a second write path to the
     // same column and needs its own guard, not merely the one on create.
-    sqlite
-      .prepare(
-        `INSERT INTO email_providers
-           (id, name, type, from_email, configuration, is_default, is_active)
-         VALUES (?, ?, ?, ?, ?, 0, 1)`
-      )
-      .run("p1", "SMTP", "smtp", "noreply@example.com", JSON.stringify({}));
+    await db.insert(emailProvidersSqlite).values({
+      id: "p1",
+      name: "SMTP",
+      type: "smtp",
+      fromEmail: "noreply@example.com",
+      configuration: {},
+      isDefault: false,
+      isActive: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
 
     await expect(
       service.updateProvider("p1", {
@@ -164,19 +176,19 @@ describe("EmailProviderService without NEXTLY_SECRET", () => {
     // Installs that already wrote plaintext must stay readable. Refusing to
     // decrypt them would convert an old security bug into new data loss, and
     // would hide the very rows an operator needs to find and rotate.
-    sqlite
-      .prepare(
-        `INSERT INTO email_providers
-           (id, name, type, from_email, configuration, is_default, is_active)
-         VALUES (?, ?, ?, ?, ?, 0, 1)`
-      )
-      .run(
-        "legacy",
-        "Legacy",
-        "resend",
-        "old@example.com",
-        JSON.stringify({ apiKey: "re_stored_in_the_clear" })
-      );
+    await db.insert(emailProvidersSqlite).values({
+      id: "legacy",
+      name: "Legacy",
+      type: "resend",
+      fromEmail: "old@example.com",
+      // The shape an install that wrote before the guard would hold: the
+      // configuration object itself, not a ciphertext string.
+      configuration: { apiKey: "re_stored_in_the_clear" },
+      isDefault: false,
+      isActive: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
 
     const provider = await service.getProvider("legacy");
     expect(provider.id).toBe("legacy");
