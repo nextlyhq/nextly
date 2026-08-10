@@ -4436,6 +4436,44 @@ describe("PageRenderer", () => {
       expect(html).not.toContain("#ff0000");
     });
 
+    it("recompiles a real breakpoint's rules without the placeholder's", async () => {
+      // Every other `styleContext` fixture declares empty breakpoint lists, so
+      // the recompile-after-prune path had never run with a breakpoint at all:
+      // a responsive rule belonging to a pruned node could have shipped inside
+      // its media query and no test would have looked there.
+      const ahead = doc(
+        node("a", "test/text", {
+          version: 9,
+          props: { value: "ahead" },
+          styles: { base: { narrow: { color: "#ff0000" } } },
+        }),
+        node("b", "test/text", {
+          props: { value: "healthy" },
+          styles: { base: { narrow: { color: "#00ff00" } } },
+        })
+      );
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={ahead}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+          styleContext={{
+            breakpoints: {
+              viewport: [{ id: "narrow", label: "Narrow", maxWidth: 600 }],
+              container: [],
+            },
+            limits: DEFAULT_LIMITS,
+          }}
+        />
+      );
+
+      // The breakpoint really compiled, so the assertions below are about the
+      // prune rather than about a query that was never emitted.
+      expect(html).toContain("max-width: 600px");
+      expect(html).toContain("#00ff00");
+      expect(html).not.toContain("#ff0000");
+    });
+
     it("does not trust a stored stylesheet when a node becomes a placeholder", async () => {
       // A knowable placeholder emits only a hidden marker, so a sheet compiled
       // for the markup it WOULD have rendered ships rules for content that is
