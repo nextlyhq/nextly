@@ -21,6 +21,7 @@ import {
 } from "./resolver";
 import { dedupeNodeIds, sanitizeDocument } from "./sanitize";
 import {
+  isUsableGatedEntry,
   readableGatedRules,
   resolvePageStyles,
   styleTextForInjection,
@@ -98,6 +99,9 @@ function rendersOwnMarkup(node: BlockNode, resolver: BlockResolver): boolean {
  * The compiler writes an entry for EVERY gated node, including one with no styles of its own, so
  * an id missing from the map means the artifact was compiled when that node was not gated. That
  * makes presence-per-removed-id an exact test rather than a heuristic.
+ *
+ * The ENTRY has to be usable, not merely present. A key whose value the delivery refuses to read
+ * certifies coverage that never reaches the sheet, which is the same divergence one value deeper.
  */
 function gatedMapCoversPrunedNodes(
   before: BlockDocument,
@@ -111,7 +115,7 @@ function gatedMapCoversPrunedNodes(
   let covered = true;
   walkNodes(before.nodes, node => {
     if (surviving.has(node.id)) return;
-    if (!Object.prototype.hasOwnProperty.call(gated, node.id)) covered = false;
+    if (!isUsableGatedEntry(gated[node.id])) covered = false;
   });
   return covered;
 }

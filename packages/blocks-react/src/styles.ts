@@ -156,6 +156,33 @@ interface NormalizedStyles {
   refused: boolean;
 }
 
+/**
+ * Whether the artifact describes nodes this document does not hold AND cannot account for them.
+ *
+ * `normalizeStoredStyles` checks the other direction — every node needs a class. This catches the
+ * artifact describing MORE than it was handed, which is the signature of a tree since pruned.
+ *
+ * An absent node is only a problem when the artifact does NOT carry its rules separately. When it
+ * does, the split has already done its job: those rules were never in `css`, so serving `css` and
+ * appending only the survivors is correct and this must not fire. The rule is therefore the same
+ * one the renderer applies — every missing node needs a usable gated entry — rather than a second,
+ * blunter one that would withhold the sheet on exactly the pages the split exists for.
+ */
+function artifactDescribesUnaccountedNodes(
+  styles: PageStyles,
+  document: BlockDocument
+): boolean {
+  const map: unknown = styles.classes;
+  if (typeof map !== "object" || map === null || Array.isArray(map)) {
+    return false;
+  }
+  const gated = readableGatedRules(styles);
+  const present = new Set(documentNodeIds(document));
+  return Object.keys(map).some(
+    id => !present.has(id) && !isUsableGatedEntry(gated?.[id])
+  );
+}
+
 function normalizeStoredStyles(
   styles: PageStyles,
   document: BlockDocument
@@ -224,6 +251,17 @@ function normalizeStoredStyles(
  * plain record is treated as ABSENT, which is the safe direction: absent means the sheet predates
  * the split, and gating then forces the recompile-or-withhold path.
  */
+/**
+ * Whether a gated entry is a rule string a reader can actually append.
+ *
+ * Shared with the coverage test, because certifying a node as covered by an entry the delivery
+ * then refuses to read is the same divergence one value deeper: the repair is skipped on the
+ * strength of a key whose value never reaches the sheet.
+ */
+export function isUsableGatedEntry(value: unknown): value is string {
+  return typeof value === "string" && value !== "";
+}
+
 export function readableGatedRules(
   styles: PageStyles | undefined
 ): Readonly<Record<string, unknown>> | undefined {
@@ -243,7 +281,7 @@ function withGatedRules(
   const appended: string[] = [];
   for (const id of documentNodeIds(document)) {
     const rules = entries[id];
-    if (typeof rules === "string" && rules !== "") appended.push(rules);
+    if (isUsableGatedEntry(rules)) appended.push(rules);
   }
   if (appended.length === 0) return styles;
   // An empty main sheet is joined without a leading newline. `css` is legitimately
@@ -293,7 +331,16 @@ export function resolvePageStyles(
    */
   repairedDocument = false
 ): PageStyles {
-  if (styles && !repairedDocument) {
+  // An artifact naming classes for nodes this document does not contain was compiled from a
+  // DIFFERENT, larger tree — which is exactly what pruning produces. Its `css` may carry those
+  // nodes' rules and asset URLs while their markup is withheld, so it cannot be trusted however
+  // the caller filled in `repairedDocument`. Checked here rather than left to the flag because
+  // this function is exported and the documented direct-caller flow is prune-then-resolve, where
+  // the flag defaults to false and nothing else would notice.
+  const compiledFromAnotherTree =
+    styles !== undefined && artifactDescribesUnaccountedNodes(styles, document);
+
+  if (styles && !repairedDocument && !compiledFromAnotherTree) {
     const normalized = normalizeStoredStyles(styles, document);
     // A refused artifact had its classes rebuilt, so the gated rules — written
     // against the classes it USED to carry — would select nothing. Nothing is
@@ -302,7 +349,11 @@ export function resolvePageStyles(
       ? normalized.styles
       : withGatedRules(normalized.styles, document);
   }
-  if (styles && styleContext === undefined) {
+  if (
+    styles &&
+    (repairedDocument || compiledFromAnotherTree) &&
+    styleContext === undefined
+  ) {
     return { ...normalizeStoredStyles(styles, document).styles, css: "" };
   }
   if (styleContext) {

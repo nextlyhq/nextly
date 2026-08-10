@@ -3049,6 +3049,38 @@ describe("PageRenderer", () => {
       expect(html).toContain("public body");
     });
 
+    it("still withholds when a covering entry is not a usable rule string", async () => {
+      // Coverage that only asks whether the KEY exists certifies a node whose entry the delivery
+      // then refuses to read. The repair is skipped and the stale sheet ships with that node's
+      // asset in it.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", {
+              props: { value: "gated body" },
+              visibility: {
+                conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+              },
+            }),
+            node("b", "test/text", { props: { value: "public body" } })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+          styles={{
+            // `a` is deliberately ABSENT from `classes`: naming it would make the artifact
+            // describe a node the document lacks, and the unaccounted-nodes guard would refuse
+            // the sheet before the coverage check under test ran.
+            css: ".nx-a { background-image: url(/gated-asset.png) }",
+            classes: { b: "nx-b" },
+            gated: { a: null } as unknown as Record<string, string>,
+          }}
+        />
+      );
+
+      expect(html).not.toContain("gated body");
+      expect(html).not.toContain("gated-asset.png");
+      expect(html).toContain("public body");
+    });
+
     it("recompiles rather than withholding when it can", async () => {
       // With a compile context present there is no need to lose the styling:
       // the sheet is rebuilt from the pruned document, so the visible nodes keep

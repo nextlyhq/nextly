@@ -293,3 +293,33 @@ describe("a node under a gated ancestor", () => {
     expect(gated?.child).toContain("color: blue");
   });
 });
+
+describe("a node id that collides with an object's own prototype", () => {
+  it("still gets its own entry", () => {
+    // A node id is author data and `__proto__` is a legal one. Assigning it on an ordinary object
+    // runs the inherited setter instead of creating an own property, so the entry vanishes,
+    // `Object.keys` stays empty, and the field is omitted as though the page gated nothing — a
+    // reader then treats a fresh artifact as one compiled before the split and withholds the WHOLE
+    // sheet, so every visible sibling loses its styling too.
+    const { css, gated } = compile(
+      page([
+        node(
+          {
+            visibility: {
+              conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+            },
+            styles: styles({ color: "red" }),
+          },
+          "__proto__"
+        ),
+        node({ styles: styles({ color: "blue" }) }, "sibling"),
+      ])
+    );
+
+    expect(Object.keys(gated ?? {})).toEqual(["__proto__"]);
+    expect(gated?.["__proto__"]).toContain("color: red");
+    expect(css).not.toContain("color: red");
+    // The sibling is unaffected, which is what the omitted field would have cost it.
+    expect(css).toContain("color: blue");
+  });
+});

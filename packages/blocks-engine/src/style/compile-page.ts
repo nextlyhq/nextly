@@ -961,7 +961,16 @@ export function compilePageCss(
   }
 
   const rules: CssRule[] = [];
-  const gated: Record<string, string> = {};
+  // A null-prototype record, because a node id is author data and `__proto__` is a legal one.
+  // Assigning it on an ordinary object runs the inherited setter instead of creating an own
+  // property, so the entry vanishes: `Object.keys` stays empty, the field is omitted as though the
+  // page gated nothing, and a reader then treats a fresh artifact as one compiled before the split
+  // and withholds the WHOLE sheet — every visible sibling losing its styling because one node was
+  // named `__proto__`.
+  const gated: Record<string, string> = Object.create(null) as Record<
+    string,
+    string
+  >;
   // One array for the whole compile, appended to in emission order by every tier below.
   const trace: StyleTraceEntry[] | undefined =
     ctx.trace === true ? [] : undefined;

@@ -86,9 +86,11 @@ describe("a stored artifact carrying gated rules", () => {
 
   it("appends nothing when the map holds no surviving node", () => {
     // Distinct from having no map at all: the sheet is returned untouched rather than gaining a
-    // trailing separator, so a page that gates nothing is byte-identical.
+    // trailing separator, so a page that gates nothing is byte-identical. Both nodes are present,
+    // so the artifact accounts for everything it names and the sheet stays trusted — this test is
+    // about the EMPTY map, not about a stale artifact.
     const styles = resolvePageStyles(
-      doc(node("a")),
+      doc(node("a"), node("b")),
       stored({}),
       undefined,
       blocks
@@ -141,7 +143,8 @@ describe("a stored artifact carrying gated rules", () => {
     // page rather than one block.
     const call = () =>
       resolvePageStyles(
-        doc(node("a")),
+        // Both nodes present, so the only thing under test is the malformed MAP.
+        doc(node("a"), node("b")),
         {
           ...stored(),
           gated: gated as unknown as Record<string, string>,
@@ -152,6 +155,25 @@ describe("a stored artifact carrying gated rules", () => {
 
     expect(call).not.toThrow();
     expect(call().css).toBe(".nx-a { color: teal }");
+  });
+
+  it("does not trust a sheet compiled from a LARGER tree than it was handed", () => {
+    // The documented direct-caller flow is `pruneHiddenNodes` then this. Without the repair flag
+    // the pruned tree looks unrepaired, so a legacy artifact carrying the removed node's rules —
+    // and any asset URL in them — would be served as-is while its markup is withheld. An artifact
+    // holding classes for nodes that are not in this document was compiled from a different tree
+    // and cannot be trusted whatever the caller says.
+    const styles = resolvePageStyles(
+      doc(node("a")),
+      {
+        css: ".nx-a { color: teal } .nx-gone { background-image: url(/pruned-asset.png) }",
+        classes: { a: "nx-a", gone: "nx-gone" },
+      },
+      undefined,
+      blocks
+    );
+
+    expect(styles.css).not.toContain("pruned-asset.png");
   });
 
   it("appends nothing to an artifact whose sheet was refused", () => {
