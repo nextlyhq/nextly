@@ -9,7 +9,10 @@
 import { describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../../errors";
-import { defineEmailProvider } from "../provider-definition";
+import {
+  defineEmailProvider,
+  describeProviderFailure,
+} from "../provider-definition";
 
 const SECRET = "sk_live_a_real_looking_key";
 
@@ -183,5 +186,53 @@ describe("the adapter returned by createAdapterFrom", () => {
         html: "<p>Hi</p>",
       })
     ).resolves.toEqual({ success: true, messageId: "<abc@x>" });
+  });
+});
+
+describe("describing a provider failure for a log", () => {
+  it("separates the shown sentence from the reason", () => {
+    const cause = new Error("535 5.7.8 Authentication credentials invalid");
+    const wrapped = new NextlyError({
+      code: "INTERNAL_ERROR",
+      publicMessage:
+        "The provider failed. Check the server logs for the reason.",
+      cause,
+    });
+
+    // Without this split, a log reading only `message` records the sentence
+    // that points AT the log — the operator is told to read what they are
+    // reading, and the SMTP status line is nowhere.
+    expect(describeProviderFailure(wrapped)).toEqual({
+      message: "The provider failed. Check the server logs for the reason.",
+      cause: "535 5.7.8 Authentication credentials invalid",
+    });
+  });
+
+  it("walks a wrapped chain rather than reading one level", () => {
+    const root = new Error("ECONNREFUSED");
+    const middle = new Error("transport could not connect", { cause: root });
+    const outer = new Error("send failed", { cause: middle });
+
+    expect(describeProviderFailure(outer).cause).toBe(
+      "transport could not connect: ECONNREFUSED"
+    );
+  });
+
+  it("terminates on a cyclic chain", () => {
+    // A cycle would otherwise hang the log call that exists to describe a
+    // failure, turning a diagnostic into an outage.
+    const first = new Error("first");
+    const second = new Error("second", { cause: first });
+    Object.defineProperty(first, "cause", { value: second });
+
+    expect(describeProviderFailure(first).cause?.split(": ")).toHaveLength(5);
+  });
+
+  it("reports no cause when there is none", () => {
+    // The control: a plain error must not grow an empty `cause` key that a
+    // log would then print as undefined.
+    expect(describeProviderFailure(new Error("plain"))).toEqual({
+      message: "plain",
+    });
   });
 });

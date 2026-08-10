@@ -181,6 +181,38 @@ export interface RegisteredEmailProvider {
 }
 
 /**
+ * A provider failure, split into what may be shown and what must be logged.
+ *
+ * Normalising a provider's own error moves the useful half onto `cause`, where
+ * a log line reading `error.message` no longer sees it — so the operator gets
+ * "the reason is in the server log" and a log containing that same sentence.
+ * Shared by every site that reports one, because two sites deciding separately
+ * how deep to look is how one of them ends up looking one level short.
+ *
+ * The chain is walked rather than read once: a provider may wrap its own error
+ * before throwing, and the sentence worth having is at the bottom.
+ */
+export function describeProviderFailure(error: unknown): {
+  message: string;
+  cause?: string;
+} {
+  const message = error instanceof Error ? error.message : String(error);
+
+  const causes: string[] = [];
+  let current: unknown = error instanceof Error ? error.cause : undefined;
+  // Bounded: a cycle in a `cause` chain would otherwise hang the log call that
+  // was meant to describe a failure.
+  for (let depth = 0; current instanceof Error && depth < 5; depth += 1) {
+    causes.push(current.message);
+    current = current.cause;
+  }
+
+  return causes.length > 0
+    ? { message, cause: causes.join(": ") }
+    : { message };
+}
+
+/**
  * Register a provider, erasing its config type.
  *
  * This is the function a provider package calls. Its argument stays fully

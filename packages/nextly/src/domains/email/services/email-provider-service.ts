@@ -34,6 +34,7 @@ import { BaseService } from "../../../shared/base-service";
 import { encrypt, decrypt } from "../../../utils/encryption";
 // Pull adapter type into a normal `import type` declaration so the return
 // signature on createAdapterFromProvider satisfies consistent-type-imports.
+import { describeProviderFailure } from "../provider-definition";
 import type { EmailProviderAdapter } from "../types";
 
 import { getEmailProviderRegistry } from "./email-provider-registry";
@@ -717,11 +718,9 @@ export class EmailProviderService extends BaseService {
         providerId: id,
         providerType: provider.type,
         mode,
-        message: error instanceof Error ? error.message : String(error),
-        cause:
-          error instanceof Error && error.cause instanceof Error
-            ? error.cause.message
-            : undefined,
+        // Shared with the ordinary send path so the two cannot come to
+        // disagree about how far down a `cause` chain to look.
+        ...describeProviderFailure(error),
       });
 
       // A NextlyError's publicMessage is a decision about what may be shown.

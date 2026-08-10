@@ -26,6 +26,7 @@ import type { EmailTemplateRecord } from "../../../schemas/email-templates/types
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import { EmailErrorCode } from "../errors";
+import { describeProviderFailure } from "../provider-definition";
 import type {
   EmailAttachmentInput,
   EmailConfig,
@@ -429,7 +430,11 @@ export class EmailService extends BaseService {
         event: "email.failed",
         provider: providerType,
         durationMs: Date.now() - startedAt,
-        error: error instanceof Error ? error.message : String(error),
+        // The cause too, not just the message. A provider's own diagnostic --
+        // an SMTP status line, an API error code -- is moved onto `cause` when
+        // its failure is normalised, so a log reading only `message` records
+        // the generic sentence and loses the one fact worth having.
+        ...describeProviderFailure(error),
       });
       return { success: false };
     }
