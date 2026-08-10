@@ -537,3 +537,105 @@ describe("under Strict Mode", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("a provider mounting after the last one left", () => {
+  it("uses its own options rather than the departed provider's", () => {
+    // The owner kept for Strict Mode is a shell once its providers have gone. Adopting its
+    // manager would silently give the new provider someone else's platform, so `mod` would mean
+    // Control for a provider that asked for Command.
+    const run = vi.fn();
+
+    function Keys(): React.JSX.Element | null {
+      useShortcuts([{ keys: "mod+k", description: "Open", run }], {
+        name: "shell",
+      });
+      return null;
+    }
+
+    const first = render(
+      <ShortcutProvider isApple={false}>
+        <Keys />
+      </ShortcutProvider>
+    );
+    first.unmount();
+
+    const second = render(
+      <ShortcutProvider isApple={true}>
+        <Keys />
+      </ShortcutProvider>
+    );
+    // Command, because THIS provider said so.
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "k",
+        metaKey: true,
+        bubbles: true,
+        cancelable: true,
+      })
+    );
+    second.unmount();
+
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("a provider that leaves a target its sibling still uses", () => {
+  it("does not carry the shared manager to the new target", () => {
+    // The provider that created the owner may move to another document while a sibling is still
+    // using its manager. Registering one manager for two targets would let either tree's
+    // shortcuts fire on either document.
+    const onDocument = vi.fn();
+    const onFrame = vi.fn();
+
+    function Keys({ run }: { run: () => void }): React.JSX.Element | null {
+      useShortcuts([{ keys: "mod+k", description: "Open", run }], {
+        name: "keys",
+      });
+      return null;
+    }
+
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    const inner = frame.contentDocument;
+    if (!inner) throw new Error("iframe document unavailable");
+
+    // The provider that MOVES has to be the one that created the owner, because the manager it
+    // would wrongly carry away is its own — the sibling merely adopted it. Rendering these the
+    // other way round exercises nothing.
+    const moving = render(
+      <ShortcutProvider isApple={false}>
+        <Keys run={onFrame} />
+      </ShortcutProvider>
+    );
+    const staying = render(
+      <ShortcutProvider isApple={false}>
+        <Keys run={onDocument} />
+      </ShortcutProvider>
+    );
+    // The second provider moves to the iframe's document, taking its own bindings with it.
+    moving.rerender(
+      <ShortcutProvider isApple={false} target={inner}>
+        <Keys run={onFrame} />
+      </ShortcutProvider>
+    );
+
+    // Dispatched on the IFRAME, which is the direction that shows the aliasing: one manager
+    // attached to both documents would run the binding belonging to the tree that stayed behind.
+    const view = inner.defaultView ?? window;
+    inner.body.dispatchEvent(
+      new view.KeyboardEvent("keydown", {
+        key: "k",
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      })
+    );
+
+    staying.unmount();
+    moving.unmount();
+    frame.remove();
+
+    expect(onFrame).toHaveBeenCalledTimes(1);
+    expect(onDocument).not.toHaveBeenCalled();
+  });
+});

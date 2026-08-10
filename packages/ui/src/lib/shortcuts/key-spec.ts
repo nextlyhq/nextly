@@ -62,7 +62,7 @@ function normalizeKey(key: string): string {
  *
  * The dividing line is whether the character itself already encodes the shift.
  */
-function shiftIsMeaningful(key: string): boolean {
+export function shiftIsMeaningful(key: string): boolean {
   if (key.length > 1) return true;
   // Space is a single character that shift does NOT produce, so Shift+Space is a distinct
   // keystroke and a plain `"Space"` binding must not answer for it.

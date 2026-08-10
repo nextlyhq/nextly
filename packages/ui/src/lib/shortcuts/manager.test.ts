@@ -2114,3 +2114,109 @@ describe("a keystroke the IME is composing with", () => {
     expect(event.defaultPrevented).toBe(false);
   });
 });
+
+describe("extending a selection inside a modal", () => {
+  it.each([
+    ["ArrowLeft", { ctrlKey: true, shiftKey: true }],
+    ["Home", { ctrlKey: true, shiftKey: true }],
+  ])("leaves shift+%s to the field", (key, mods) => {
+    // Shift is how a selection is extended, so rejecting every shifted chord took select-by-word
+    // and select-to-boundary away from every field inside a blocking layer.
+    const manager = managerFor(false);
+    manager.register([binding("Escape", vi.fn())], {
+      name: "modal",
+      depth: 1,
+      blocking: true,
+    });
+    const field = document.createElement("input");
+    document.body.append(field);
+    const detach = manager.attach(document);
+    const event = press(key, mods);
+    field.dispatchEvent(event);
+    detach();
+    field.remove();
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("still suppresses a shifted letter accelerator", () => {
+    // The control: shift belongs to navigation, not to letters. Ctrl+Shift+A is browser tab
+    // search and must not pass as select-all.
+    const manager = managerFor(false);
+    manager.register([binding("Escape", vi.fn())], {
+      name: "modal",
+      depth: 1,
+      blocking: true,
+    });
+    const field = document.createElement("input");
+    document.body.append(field);
+    const detach = manager.attach(document);
+    const event = press("A", { ctrlKey: true, shiftKey: true });
+    field.dispatchEvent(event);
+    detach();
+    field.remove();
+    expect(event.defaultPrevented).toBe(true);
+  });
+});
+
+describe("a permitted key whose modifiers change mid-hold", () => {
+  it("stops permitting it once it becomes an accelerator", () => {
+    // Hold `w` in a field under a grab and it is text. Add Ctrl and the next repeat is a Ctrl+W
+    // the browser closes the tab on — the same physical press, no longer the same keystroke.
+    const manager = managerFor(false);
+    manager.register([binding("Escape", vi.fn())], {
+      name: "modal",
+      depth: 1,
+      blocking: true,
+    });
+    const field = document.createElement("input");
+    document.body.append(field);
+    const detach = manager.attach(document);
+
+    field.dispatchEvent(press("w", { code: "KeyW" }));
+    const accelerator = press("w", {
+      code: "KeyW",
+      ctrlKey: true,
+      repeat: true,
+    });
+    field.dispatchEvent(accelerator);
+    detach();
+    field.remove();
+
+    expect(accelerator.defaultPrevented).toBe(true);
+  });
+});
+
+describe("a keyboard with a dedicated AltGraph key", () => {
+  it("does not abandon a sequence when AltGraph is pressed", () => {
+    // AltGraph reports its own keydown before the character-producing one, so treating it as a
+    // keystroke abandoned the sequence before the character that would complete it arrived.
+    const run = vi.fn();
+    const manager = managerFor(false);
+    manager.register([binding("g d", run)], { name: "shell", depth: 0 });
+
+    manager.handle(press("g"));
+    manager.handle(press("AltGraph"));
+    manager.handle(press("d"));
+
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("a prefix conflict hidden behind a shift glyph", () => {
+  it("reports `?` against `shift+? x`", () => {
+    // The matcher ignores the shift flag for punctuation whose glyph already encodes it, so both
+    // answer the same physical keydown — but the diagnostic compared the raw flag and stayed
+    // silent while one of the two bindings was unreachable.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    resetDevWarnings();
+    const manager = managerFor(false);
+    manager.register([binding("?", vi.fn()), binding("shift+? x", vi.fn())], {
+      name: "shell",
+      depth: 0,
+    });
+    const said = warn.mock.calls.map(c => String(c[0])).join(" ");
+    warn.mockRestore();
+    expect(said).toContain("prefix");
+    expect(manager).toBeDefined();
+  });
+});

@@ -53,6 +53,7 @@ import {
   chordMatches,
   detectApplePlatform,
   parseKeys,
+  shiftIsMeaningful,
   type KeyChord,
   type KeySequence,
 } from "./key-spec";
@@ -204,6 +205,18 @@ const DEFAULT_SEQUENCE_TIMEOUT_MS = 1000;
  */
 function signature(event: KeyboardEvent): string {
   return event.code || event.key;
+}
+
+/**
+ * The modifier state a permitted keystroke was permitted UNDER.
+ *
+ * A press is identified by its physical key, which does not move when the modifiers around it do.
+ * Whether it was allowed through, however, depends entirely on them: hold `w`, then press Ctrl,
+ * and the next repeat is a Ctrl+W the browser closes the tab on. So the decision is re-made when
+ * the modifiers change, even though the press is the same one.
+ */
+function modifierState(event: KeyboardEvent): string {
+  return `${event.ctrlKey}${event.metaKey}${event.altKey}${event.shiftKey}`;
 }
 
 /**
@@ -385,7 +398,11 @@ export function createShortcutManager(
    * Identifies the physical press rather than the binding that answered it: by the time a repeat
    * arrives, the binding may have made itself ineligible.
    */
-  let consumedPress: { signature: string; prevented: boolean } | null = null;
+  let consumedPress: {
+    signature: string;
+    prevented: boolean;
+    modifiers: string;
+  } | null = null;
 
   /**
    * Forget a partially typed sequence.
@@ -488,11 +505,13 @@ export function createShortcutManager(
       if (letter === "z" && event.shiftKey) return !event.altKey;
       if (letter === REDO_LETTER)
         return !isApple && !event.shiftKey && !event.altKey;
-      // Every other editing chord is the plain modifier plus one key. Allowing arbitrary
-      // modified variants let Ctrl+Shift+A — the browser's tab search — pass as though it were
-      // select-all, escaping the grab entirely.
+      // Shift is how a selection is EXTENDED: mod+shift+arrow selects by word and
+      // mod+shift+Home to a boundary, so navigation keeps it. Letters do not — allowing
+      // arbitrary modified variants let Ctrl+Shift+A, the browser's tab search, pass as though
+      // it were select-all and escape the grab entirely.
+      if (EDITING_NAVIGATION.has(event.key)) return !event.altKey || isApple;
       if (event.shiftKey || event.altKey) return false;
-      return EDITING_LETTERS.has(letter) || EDITING_NAVIGATION.has(event.key);
+      return EDITING_LETTERS.has(letter);
     }
     // Option turns caret keys into their by-word forms on macOS, and is a text modifier there;
     // on Windows and Linux, Alt with a named key is a menu accelerator.
@@ -589,7 +608,11 @@ export function createShortcutManager(
     const resolved = (chord: KeyChord): string => {
       const ctrl = chord.ctrl || (chord.mod && !isApple);
       const meta = chord.meta || (chord.mod && isApple);
-      return `${chord.key}\u0000${ctrl}${meta}${chord.alt}${chord.shift}`;
+      // Shift is normalised the way the MATCHER treats it. For punctuation whose glyph already
+      // encodes shift, the matcher ignores the flag, so `?` and `shift+?` are one chord to it —
+      // and a diagnostic that called them different stayed silent about a genuine conflict.
+      const shift = shiftIsMeaningful(chord.key) ? chord.shift : false;
+      return `${chord.key}\u0000${ctrl}${meta}${chord.alt}${shift}`;
     };
     const sameChord = (a: KeyChord, b: KeyChord): boolean =>
       resolved(a) === resolved(b);
@@ -693,10 +716,21 @@ export function createShortcutManager(
         consumedPress !== null &&
         consumedPress.signature === signature(event)
       ) {
-        // Consumed does not imply suppressed. A binding may set `preventDefault: false`, and a
-        // blocking layer deliberately lets text through — so unconditionally preventing repeats
-        // would let a held Backspace delete one character and then stop.
-        if (consumedPress.prevented) event.preventDefault();
+        // Two different questions about one held key, and they have different answers.
+        //
+        // CONSUMED belongs to the physical press: it does not move when the modifiers around it
+        // do, so the repeats of a keystroke this manager answered stay its own.
+        //
+        // SUPPRESSED is a property of the keystroke, and modifiers change what that is. A press
+        // that was prevented stays prevented — adding shift to a held `mod+s` must not hand the
+        // browser a Save As. A press that was PERMITTED, though, was permitted because it was
+        // text: add Ctrl to a held `w` and it becomes the accelerator that closes the tab, so the
+        // decision is re-made rather than inherited.
+        if (consumedPress.prevented) {
+          event.preventDefault();
+        } else if (consumedPress.modifiers !== modifierState(event)) {
+          if (!insertsText(event, typing)) event.preventDefault();
+        }
         return true;
       }
       const repeated = offer([event], event, typing, false);
@@ -736,6 +770,7 @@ export function createShortcutManager(
       consumedPress = {
         signature: signature(event),
         prevented: event.defaultPrevented,
+        modifiers: modifierState(event),
       };
       return true;
     }
@@ -751,7 +786,11 @@ export function createShortcutManager(
     }
     const consumed = outcome === "fired" || outcome === "blocked";
     consumedPress = consumed
-      ? { signature: signature(event), prevented: event.defaultPrevented }
+      ? {
+          signature: signature(event),
+          prevented: event.defaultPrevented,
+          modifiers: modifierState(event),
+        }
       : null;
     return consumed;
   }
@@ -828,7 +867,16 @@ export function createShortcutManager(
   };
 }
 
-const MODIFIER_KEYS = new Set(["Control", "Meta", "Alt", "Shift"]);
+const MODIFIER_KEYS = new Set([
+  "Control",
+  "Meta",
+  "Alt",
+  "Shift",
+  // A dedicated AltGraph key reports its own keydown before the character-producing one. Without
+  // it here, pressing AltGraph mid-sequence abandons the sequence before the character that would
+  // have completed it ever arrives.
+  "AltGraph",
+]);
 
 /**
  * Keys a focused field consumes itself: caret movement and the edits that carry no character.

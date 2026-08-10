@@ -91,6 +91,9 @@ interface TargetOwner {
  */
 const ownersByTarget = new WeakMap<object, TargetOwner>();
 
+/** Stands in for "no target", so a detached provider still gets a manager of its own. */
+const DETACHED = Object.freeze({});
+
 /**
  * Props for {@link ShortcutProvider}.
  *
@@ -139,10 +142,21 @@ export function ShortcutProvider({
   // Options are read once, when the manager is built. Re-creating it on a changed option would
   // drop every layer registered by a child, since registrations live on the manager instance.
   const optionsRef = React.useRef(managerOptions);
-  const detached = React.useMemo(
-    () => createShortcutManager(optionsRef.current),
-    []
-  );
+  // One manager per target this provider has served, rather than one for the provider.
+  //
+  // A single memoised manager becomes shared the moment a sibling adopts it, and then following
+  // this provider to a new target would register that same manager for two documents — every
+  // tree's shortcuts firing on both. Keyed by target, the manager this provider offers to a new
+  // owner is one no other owner is using.
+  const ownManagers = React.useRef(new Map<object, ShortcutManager>());
+  const detached = React.useMemo(() => {
+    const key = resolvedTarget ?? DETACHED;
+    const existing = ownManagers.current.get(key);
+    if (existing) return existing;
+    const created = createShortcutManager(optionsRef.current);
+    ownManagers.current.set(key, created);
+    return created;
+  }, [resolvedTarget]);
 
   // Looked up during render, because two sibling providers both need the same manager before
   // either one's effect has run. The lookup is idempotent and keyed by the target, so a repeated
@@ -150,7 +164,10 @@ export function ShortcutProvider({
   // in the effect below, where React guarantees a matching cleanup.
   let owner =
     resolvedTarget === null ? null : ownersByTarget.get(resolvedTarget);
-  if (resolvedTarget !== null && !owner) {
+  // An owner with no providers left is a shell, kept only so a Strict Mode replay can find it.
+  // Its manager was configured by a provider that has since gone, and adopting it would silently
+  // give this one someone else's `isApple`, `sequenceTimeoutMs` and clock.
+  if (resolvedTarget !== null && (!owner || owner.providers === 0)) {
     owner = { manager: detached, providers: 0 };
     ownersByTarget.set(resolvedTarget, owner);
   }
