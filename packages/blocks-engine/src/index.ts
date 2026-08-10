@@ -6,7 +6,7 @@
  * created, inspected, and transformed from any JavaScript environment.
  */
 export { deriveSeoFromDocument } from "./derive-seo";
-export type { SeoDefinitionSource } from "./derive-seo";
+export type { SeoDefinitionSource, SeoImageCandidate } from "./derive-seo";
 
 export {
   DOCUMENT_FORMAT_VERSION,
@@ -89,6 +89,7 @@ export type {
   BlockEditorMeta,
   BlockExample,
   BlockSeoContribution,
+  BlockSeoImage,
   BlockRenderArgs,
   BlockRenderResult,
   BlockSupports,

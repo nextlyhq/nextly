@@ -21,6 +21,7 @@ import type {
   BlockDocument,
   BlockSeoContribution,
   DocumentLimits,
+  SeoImageCandidate,
   StyleCompileContext,
 } from "@nextlyhq/blocks-engine";
 import type { Metadata } from "next";
@@ -205,24 +206,6 @@ export interface DerivedPageSeo extends Omit<BlockSeoContribution, "image"> {
 }
 
 /**
- * A media id, as the ids this system mints are actually shaped.
- *
- * Decided by matching the ID rather than by guessing at URLs, which is the
- * inversion that mattered: the renderer accepts a relative reference with no
- * scheme, slash, dot or extension — a bare `hero` is a valid `<img src>` — so
- * every "is this a URL" heuristic classified some renderable source as an id,
- * sent it to the media reader, missed, and dropped the preview image. Anything
- * that is not this shape is passed through as a URL, which is what the renderer
- * does with it.
- */
-const MEDIA_ID =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-function looksLikeMediaId(value: string): boolean {
-  return MEDIA_ID.test(value);
-}
-
-/**
  * The document's own metadata, with any media id resolved to a URL.
  *
  * The image arrives as a media id because a block cannot resolve one — the
@@ -296,7 +279,7 @@ async function derivePageSeo(
 const MEDIA_LOOKUP_BATCH = 5;
 
 async function firstUsableImage(
-  candidates: string[] | undefined,
+  candidates: SeoImageCandidate[] | undefined,
   resolveMedia: (id: string) => Promise<ResolvedMedia | null>
 ): Promise<string | undefined> {
   const list = candidates ?? [];
@@ -307,8 +290,10 @@ async function firstUsableImage(
     // A candidate that is not a media id needs no lookup, and it is a usable
     // answer the moment it is reached — so an earlier one settles the whole
     // question before any request is issued for the ids after it.
-    const direct = batch.findIndex(c => !looksLikeMediaId(c));
-    const lookups = direct === -1 ? batch : batch.slice(0, direct);
+    const direct = batch.findIndex(c => c.kind === "url");
+    const lookups = (direct === -1 ? batch : batch.slice(0, direct)).map(
+      c => c.value
+    );
 
     // Resolved together rather than one at a time. Serially, a page whose
     // first images all reference deleted media paid a round trip each before
@@ -325,7 +310,7 @@ async function firstUsableImage(
     // the page displays — silently, and only under load.
     const hit = resolved.findIndex(media => media !== null);
     if (hit !== -1) return resolved[hit]?.url;
-    if (direct !== -1) return batch[direct];
+    if (direct !== -1) return batch[direct]?.value;
   }
   return undefined;
 }

@@ -106,11 +106,20 @@ export const image = defineBlock<ImageProps, PageContext>({
   // Both candidates, in the order the render prefers them: the resolved media
   // first, the directly-typed URL as the fallback the renderer itself uses
   // when the media record is missing.
-  seo: props => ({
-    image: [text(props.mediaId), url(props.src) ?? ""].filter(
-      (candidate): candidate is string => candidate !== ""
-    ),
-  }),
+  // Each candidate says WHICH KIND it is, because only this block knows: the
+  // id came from `mediaId` and the address from `src`, and no inspection of the
+  // text can tell them apart — a UUID is a valid relative URL and a bare word
+  // is a valid src.
+  seo: props => {
+    const mediaId = text(props.mediaId);
+    const src = url(props.src) ?? "";
+    return {
+      image: [
+        ...(mediaId === "" ? [] : [{ media: mediaId }]),
+        ...(src === "" ? [] : [{ url: src }]),
+      ],
+    };
+  },
   example: { props: { src: "/example.jpg", alt: "An example image" } },
   supports: {
     spacing: true,

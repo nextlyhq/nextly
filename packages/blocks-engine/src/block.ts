@@ -290,13 +290,30 @@ export interface BlockSeoContribution {
    * A list because a block can hold more than one answer and they are not
    * equally good: an image block carries a media id AND a directly-typed URL,
    * renders the resolved media when it can and falls back to the URL when it
-   * cannot. Offering only the first would make a link preview disagree with
-   * the page whenever the media record is missing; offering only the last
-   * would ignore the resolved one. Each entry is a media id or a URL, and the
-   * caller takes the first that resolves.
+   * cannot. Offering only the first makes a link preview disagree with the
+   * page whenever the media record is missing; offering only the last ignores
+   * the resolved one.
    */
-  image?: string | readonly string[];
+  image?: BlockSeoImage | readonly BlockSeoImage[];
 }
+
+/**
+ * One place a page's picture may come from, saying WHICH KIND it is.
+ *
+ * Tagged rather than left as a bare string, because the kind cannot be
+ * recovered from the text. A media id is a UUID and a URL is anything a
+ * renderer will accept as a source — which includes a bare word, a relative
+ * path, and a UUID. Every predicate that tried to tell them apart was wrong
+ * about some value a block renders perfectly well: it sent a renderable source
+ * to a media lookup that missed, or passed a real id through unresolved.
+ *
+ * The block already knows, because it read the value out of a `mediaId` prop or
+ * a `src` prop. Saying so costs nothing and removes the guess entirely.
+ *
+ * A plain string means a URL — the safe reading, since a wrong URL renders a
+ * broken image while a wrong media lookup silently drops the picture.
+ */
+export type BlockSeoImage = string | { media: string } | { url: string };
 
 /**
  * Declare a block type. Returns the definition unchanged — its job is to bind

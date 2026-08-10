@@ -873,6 +873,43 @@ describe("createBlocksPage", () => {
     ).resolves.toBeNull();
   });
 
+  it("keeps a UUID-shaped direct src instead of looking it up", async () => {
+    // No shape predicate can get this right, which is why provenance travels:
+    // the block read this out of `src`, so it is an address however it looks.
+    const uuidLikeSrc = "550e8400-e29b-41d4-a716-446655440000";
+    const page: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        {
+          id: "1",
+          type: "core/image",
+          version: 1,
+          props: { src: uuidLikeSrc },
+        },
+      ],
+    };
+    let seen: DerivedPageSeo | undefined;
+    const instance = reader({ slug: "about", content: page }) as unknown as {
+      media: { findByID: ReturnType<typeof vi.fn> };
+    };
+    const route = createBlocksPage({
+      collections: ["pages"],
+      field: "content",
+      blocks: coreResolver(),
+      nextly: instance as never,
+      metadata: (_e, _c, derived) => {
+        seen = derived;
+        return {};
+      },
+    });
+
+    await route.generateMetadata({ params: { slug: ["about"] } });
+
+    expect(seen?.image).toBe(uuidLikeSrc);
+    expect(instance.media.findByID).not.toHaveBeenCalled();
+  });
+
   it("keeps an extensionless relative image source", async () => {
     // The renderer accepts a bare `hero` as an <img src>, so classifying it as
     // a media id sent it to the media reader, missed, and dropped the preview.

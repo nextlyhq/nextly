@@ -15,7 +15,7 @@
  *
  * @module derive-seo
  */
-import type { BlockSeoContribution } from "./block";
+import type { BlockSeoContribution, BlockSeoImage } from "./block";
 import type { BlockDocument, BlockNode } from "./document";
 
 /**
@@ -27,7 +27,7 @@ import type { BlockDocument, BlockNode } from "./document";
 export interface DerivedSeo {
   title?: string;
   description?: string;
-  image?: string[];
+  image?: SeoImageCandidate[];
 }
 
 /**
@@ -66,19 +66,49 @@ function usable(value: string | undefined): string | undefined {
 }
 
 /**
+ * One image candidate, normalized so a caller never re-derives its kind.
+ *
+ * `media` needs resolving through the host's media reader; `url` is already an
+ * address and is used as written.
+ */
+export type SeoImageCandidate =
+  | { kind: "media"; value: string }
+  | { kind: "url"; value: string };
+
+/** Normalize one offer entry, or `undefined` when it says nothing. */
+function toCandidate(entry: BlockSeoImage): SeoImageCandidate | undefined {
+  if (typeof entry === "string") {
+    const value = usable(entry);
+    return value === undefined ? undefined : { kind: "url", value };
+  }
+  if ("media" in entry) {
+    const value = usable(entry.media);
+    return value === undefined ? undefined : { kind: "media", value };
+  }
+  const value = usable(entry.url);
+  return value === undefined ? undefined : { kind: "url", value };
+}
+
+/**
  * An offer's image candidates, best first, with the empty ones dropped.
  *
  * A block may answer with one value or an ordered list, and both collapse to
- * the same thing here so the caller resolves a single shape. Normalizing at
- * the boundary rather than at each use is what keeps "the first that resolves"
- * from having to know which form it was given.
+ * the same shape here so the caller resolves one thing. Normalizing at the
+ * boundary is also what carries the KIND through: the block knew whether it was
+ * holding a media id or an address, and every attempt to recover that from the
+ * text alone was wrong about some value a block renders fine.
  */
-function candidates(value: string | readonly string[] | undefined): string[] {
+function candidates(
+  value: BlockSeoImage | readonly BlockSeoImage[] | undefined
+): SeoImageCandidate[] {
   if (value === undefined) return [];
-  const list = typeof value === "string" ? [value] : value;
+  const list =
+    typeof value === "string" || !Array.isArray(value)
+      ? [value as BlockSeoImage]
+      : value;
   return list
-    .map(entry => usable(entry))
-    .filter((entry): entry is string => entry !== undefined);
+    .map(entry => toCandidate(entry))
+    .filter((entry): entry is SeoImageCandidate => entry !== undefined);
 }
 
 /**
@@ -117,7 +147,7 @@ export function deriveSeoFromDocument(
 ): DerivedSeo {
   const derived: DerivedSeo = {};
 
-  const images: string[] = [];
+  const images: SeoImageCandidate[] = [];
 
   // Walked here rather than through `walkNodes`, which descends into every
   // slot unconditionally. A gated node takes its whole SUBTREE out of the

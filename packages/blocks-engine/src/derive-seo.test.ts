@@ -45,7 +45,9 @@ function definitions(
       seo: (p: never) => ({ description: (p as { text?: string }).text }),
     },
     "core/image": {
-      seo: (p: never) => ({ image: (p as { mediaId?: string }).mediaId }),
+      seo: (p: never) => ({
+        image: { media: (p as { mediaId?: string }).mediaId ?? "" },
+      }),
     },
     "core/box": { slots: { children: {} } },
     "plugin/two": { slots: { first: {}, second: {} } },
@@ -74,7 +76,7 @@ describe("deriveSeoFromDocument", () => {
     expect(derived).toEqual({
       title: "Pricing",
       description: "Plans for every team.",
-      image: ["m1"],
+      image: [{ kind: "media", value: "m1" }],
     });
   });
 
@@ -91,7 +93,10 @@ describe("deriveSeoFromDocument", () => {
       visible
     );
 
-    expect(derived).toEqual({ title: "About", image: ["hero"] });
+    expect(derived).toEqual({
+      title: "About",
+      image: [{ kind: "media", value: "hero" }],
+    });
   });
 
   it("keeps the FIRST of a repeated field, not the last", () => {
@@ -218,7 +223,7 @@ describe("deriveSeoFromDocument", () => {
       visible
     );
 
-    expect(derived.image).toEqual(["m1"]);
+    expect(derived.image).toEqual([{ kind: "media", value: "m1" }]);
   });
 
   it("keeps a block's image candidates in the order it offered them", () => {
@@ -227,12 +232,17 @@ describe("deriveSeoFromDocument", () => {
     const derived = deriveSeoFromDocument(
       doc([node("1", "plugin/pic", {})]),
       definitions({
-        "plugin/pic": () => ({ image: ["m1", "/fallback.png"] }),
+        "plugin/pic": () => ({
+          image: [{ media: "m1" }, { url: "/fallback.png" }],
+        }),
       }),
       visible
     );
 
-    expect(derived.image).toEqual(["m1", "/fallback.png"]);
+    expect(derived.image).toEqual([
+      { kind: "media", value: "m1" },
+      { kind: "url", value: "/fallback.png" },
+    ]);
   });
 
   it("drops blank entries from a candidate list", () => {
@@ -244,7 +254,9 @@ describe("deriveSeoFromDocument", () => {
       visible
     );
 
-    expect(derived.image).toEqual(["/real.png"]);
+    // A bare string means a URL: the safe reading, since a wrong URL renders a
+    // broken image while a wrong media lookup silently drops the picture.
+    expect(derived.image).toEqual([{ kind: "url", value: "/real.png" }]);
   });
 
   it("ignores a block offering only blank candidates", () => {
@@ -257,7 +269,7 @@ describe("deriveSeoFromDocument", () => {
       visible
     );
 
-    expect(derived.image).toEqual(["m2"]);
+    expect(derived.image).toEqual([{ kind: "media", value: "m2" }]);
   });
 
   it("takes nothing from a gated node", () => {
@@ -323,7 +335,10 @@ describe("deriveSeoFromDocument", () => {
       visible
     );
 
-    expect(derived.image).toEqual(["deleted", "live"]);
+    expect(derived.image).toEqual([
+      { kind: "media", value: "deleted" },
+      { kind: "media", value: "live" },
+    ]);
   });
 
   it("reads slots in the order the definition declares them", () => {
@@ -348,6 +363,42 @@ describe("deriveSeoFromDocument", () => {
     );
 
     expect(derived.title).toBe("First");
+  });
+
+  it("keeps a UUID-shaped direct src as a URL", () => {
+    // The failure no string test could avoid: a `src` that happens to be
+    // UUID-shaped renders fine, and any shape-based guess sends it to a media
+    // lookup that misses. Only the block knows which prop it came from.
+    const derived = deriveSeoFromDocument(
+      doc([node("1", "plugin/pic", {})]),
+      definitions({
+        "plugin/pic": () => ({
+          image: { url: "550e8400-e29b-41d4-a716-446655440000" },
+        }),
+      }),
+      visible
+    );
+
+    expect(derived.image).toEqual([
+      { kind: "url", value: "550e8400-e29b-41d4-a716-446655440000" },
+    ]);
+  });
+
+  it("keeps a media id a URL heuristic would misread", () => {
+    // The mirror case, chosen so no text-based guess can pass it: this id
+    // carries a slash and a dot, so every "looks like a URL" test calls it an
+    // address. Only the block's own provenance says otherwise.
+    const derived = deriveSeoFromDocument(
+      doc([node("1", "plugin/pic", {})]),
+      definitions({
+        "plugin/pic": () => ({ image: { media: "library/asset.42" } }),
+      }),
+      visible
+    );
+
+    expect(derived.image).toEqual([
+      { kind: "media", value: "library/asset.42" },
+    ]);
   });
 
   it("returns nothing for an empty document", () => {
