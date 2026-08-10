@@ -146,3 +146,24 @@ blockSupports({ spacing: true, spaceing: true });
 // The same check without the helper, for an author who prefers it.
 const viaSatisfies = { spacing: true } satisfies BlockSupports;
 void viaSatisfies;
+
+// `conditionalSlots` is reserved for core while the Block API freeze decides
+// what a block author should write. It is withheld by NAMING it in the SDK's
+// `Omit`, because an `@internal` tag removes nothing from a published type and
+// that `Omit` inherits every property it does not name — the field was on this
+// surface for a whole review round while a string search of this package
+// reported it absent.
+//
+// So the reservation is asserted at the TYPE level, which is the only place it
+// is true or false. Widening the `Omit` again would make this compile, and the
+// suite would go green with the field quietly public.
+defineBlock<{ text: string }>({
+  name: "test/reserved-field",
+  version: 1,
+  description: "Cannot declare a field reserved for the core library.",
+  props: { text: { type: "text" } },
+  example: { props: { text: "hi" } },
+  // @ts-expect-error `conditionalSlots` is not part of the authoring surface.
+  conditionalSlots: ["children"],
+  render: () => null,
+});
