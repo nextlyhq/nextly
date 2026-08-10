@@ -10,6 +10,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
+import { resetDevWarnings } from "../dev-warn";
 import { createShortcutManager, type ShortcutBinding } from "./manager";
 
 /** A manager with a fixed platform, so `mod` means the same thing on every machine running CI. */
@@ -596,5 +597,161 @@ describe("sequences that end somewhere else", () => {
     detach();
     field.remove();
     expect(run).not.toHaveBeenCalled();
+  });
+});
+
+describe("keys another owner already claimed", () => {
+  it("stands down when a lower-level owner has already handled the key", () => {
+    // Radix's DismissableLayer — which every Dialog and Sheet in this kit is built on — listens
+    // on document in the CAPTURE phase, calls preventDefault() to dismiss, and does NOT stop
+    // propagation. Without this, one Escape closes the modal and runs the shell's Escape
+    // binding underneath it: the double action this module exists to remove, arriving through
+    // our own components.
+    const run = vi.fn();
+    const manager = managerFor();
+    manager.register([binding("Escape", run)], { name: "shell", depth: 0 });
+
+    const detach = manager.attach(document);
+    // Stands in for Radix: capture phase on document, preventDefault, no stopPropagation.
+    const dismiss = (e: Event): void => {
+      e.preventDefault();
+    };
+    document.addEventListener("keydown", dismiss, { capture: true });
+    document.body.dispatchEvent(press("Escape"));
+    document.removeEventListener("keydown", dismiss, { capture: true });
+    detach();
+
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("still acts on a key nobody claimed", () => {
+    // The positive control: the guard above must key off defaultPrevented, not silence the
+    // manager whenever a capture listener happens to exist.
+    const run = vi.fn();
+    const manager = managerFor();
+    manager.register([binding("Escape", run)], { name: "shell", depth: 0 });
+    const detach = manager.attach(document);
+    document.body.dispatchEvent(press("Escape"));
+    detach();
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops a consumed key reaching a window-level listener", () => {
+    // preventDefault suppresses the browser, not other JavaScript. During a staged migration
+    // some owners still listen on window, and both halves of the double action would run.
+    const run = vi.fn();
+    const onWindow = vi.fn();
+    const manager = managerFor();
+    manager.register([binding("mod+k", run)], { name: "shell", depth: 0 });
+    const detach = manager.attach(document);
+    window.addEventListener("keydown", onWindow);
+    document.body.dispatchEvent(press("k", { ctrlKey: true }));
+    window.removeEventListener("keydown", onWindow);
+    detach();
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(onWindow).not.toHaveBeenCalled();
+  });
+});
+
+describe("what a blocking layer may suppress while typing", () => {
+  it("suppresses a browser key that carries no text", () => {
+    // "Unmodified" is not the same question as "is text": F1 opens browser help and inserts
+    // nothing, so a grab reporting it as consumed while the browser acted would be a lie.
+    const manager = managerFor();
+    manager.register([binding("Escape", vi.fn())], {
+      name: "drag",
+      depth: 1,
+      blocking: true,
+    });
+    const field = document.createElement("input");
+    document.body.append(field);
+    const detach = manager.attach(document);
+    const event = press("F1");
+    field.dispatchEvent(event);
+    detach();
+    field.remove();
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("leaves the caret keys to the field", () => {
+    // The positive control for the rule above: navigation and editing keys belong to the field,
+    // and suppressing them would break the input as surely as swallowing its letters.
+    const manager = managerFor();
+    manager.register([binding("Escape", vi.fn())], {
+      name: "drag",
+      depth: 1,
+      blocking: true,
+    });
+    const field = document.createElement("input");
+    document.body.append(field);
+    const detach = manager.attach(document);
+    const event = press("ArrowLeft");
+    field.dispatchEvent(event);
+    detach();
+    field.remove();
+    expect(event.defaultPrevented).toBe(false);
+  });
+});
+
+describe("type-ahead widgets that are not text fields", () => {
+  it("leaves an ARIA combobox's type-ahead alone", () => {
+    // This kit's own Select wraps a Radix trigger that renders role="combobox" and jumps between
+    // options on bare letters without stopping propagation, so the case is reachable from our
+    // own components rather than only from a consumer's custom widget.
+    const run = vi.fn();
+    const manager = managerFor();
+    manager.register([binding("n", run)], { name: "shell", depth: 0 });
+    const trigger = document.createElement("button");
+    trigger.setAttribute("role", "combobox");
+    document.body.append(trigger);
+    const detach = manager.attach(document);
+    trigger.dispatchEvent(press("n"));
+    detach();
+    trigger.remove();
+    expect(run).not.toHaveBeenCalled();
+  });
+});
+
+describe("a binding that shares another's prefix", () => {
+  it("fires the exact binding whichever order they were registered in", () => {
+    // Registering `g d` before `g` returned "pending" before the exact `g` was ever examined, so
+    // which binding existed came down to the order of an array.
+    const single = vi.fn();
+    const manager = managerFor();
+    manager.register([binding("g d", vi.fn()), binding("g", single)], {
+      name: "shell",
+      depth: 0,
+    });
+    manager.handle(press("g"));
+    expect(single).toHaveBeenCalledTimes(1);
+  });
+
+  it("tells the developer the longer binding is unreachable", () => {
+    // Determinism alone would hide the problem: one of the two can never fire, and the only
+    // useful response is to say so rather than pick a winner silently.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    resetDevWarnings();
+    const manager = managerFor();
+    manager.register([binding("g", vi.fn()), binding("g d", vi.fn())], {
+      name: "shell",
+      depth: 0,
+    });
+    const said = warn.mock.calls.map(c => String(c[0])).join(" ");
+    warn.mockRestore();
+    expect(said).toContain("prefix");
+    expect(manager).toBeDefined();
+  });
+});
+
+describe("the plus key", () => {
+  it("can be bound with a modifier, as zoom-in is written everywhere", () => {
+    // `mod++` split on `+` left a chord with modifiers and no key at all, and `mod+shift+=` is
+    // not a substitute because the browser reports that keystroke as `key: "+"`.
+    const run = vi.fn();
+    const manager = managerFor();
+    manager.register([binding("mod++", run)], { name: "canvas", depth: 0 });
+    manager.handle(press("+", { ctrlKey: true }));
+    expect(run).toHaveBeenCalledTimes(1);
   });
 });

@@ -481,6 +481,8 @@ export { Slider } from "./components/slider";
  * so they cannot be passed through the root.
  */
 export type { SliderProps, SliderThumbProps } from "./components/slider";
+
+/**
  * @experimental The application's single owner of keyboard shortcuts.
  *
  * Replaces per-component `document` listeners, which cannot decide who owns a key:

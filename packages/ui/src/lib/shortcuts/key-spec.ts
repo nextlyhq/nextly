@@ -80,8 +80,13 @@ export function parseKeys(spec: string): KeySequence {
 }
 
 function parseChord(step: string, spec: string): KeyChord {
-  // A lone `+` is the key itself rather than a separator, so it is not split on.
-  const parts = step === "+" ? ["+"] : step.split("+").filter(Boolean);
+  // A `+` is both this grammar's separator and a key people bind. A LONE `+` is the key, and a
+  // TRAILING one is too: `mod++` is the usual zoom-in shortcut, and splitting it naively leaves
+  // a chord carrying modifiers and no key at all. Spelling it `mod+shift+=` is not a substitute,
+  // because the browser reports that keystroke as `key: "+"`.
+  const trailingPlusIsKey = step.length > 1 && step.endsWith("+");
+  const body = trailingPlusIsKey ? step.slice(0, -1) : step;
+  const parts = step === "+" ? ["+"] : body.split("+").filter(Boolean);
   let mod = false;
   let ctrl = false;
   let meta = false;
@@ -125,6 +130,15 @@ function parseChord(step: string, spec: string): KeyChord {
         }
         key = raw;
     }
+  }
+
+  if (trailingPlusIsKey) {
+    if (key !== undefined) {
+      throw new Error(
+        `Shortcut step has more than one key: ${JSON.stringify(step)} in ${JSON.stringify(spec)}`
+      );
+    }
+    key = "+";
   }
 
   if (key === undefined) {

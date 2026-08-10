@@ -40,10 +40,13 @@
  * @module lib/shortcuts/manager
  */
 
+import { devWarnOnce } from "../dev-warn";
+
 import {
   chordMatches,
   detectApplePlatform,
   parseKeys,
+  type KeyChord,
   type KeySequence,
 } from "./key-spec";
 
@@ -198,8 +201,13 @@ function isTypingTarget(target: EventTarget | null): boolean {
     const type = (target as HTMLInputElement).type.toLowerCase();
     return !NON_TEXT_INPUT_TYPES.has(type);
   }
-  // A custom widget that reports itself as a text box takes text even when it is a div.
-  return target.getAttribute("role") === "textbox";
+  // A custom widget that reports itself as taking text does, even when it is a div. `combobox`
+  // and `listbox` are here for type-ahead rather than text entry: Radix's Select renders a
+  // button with `role="combobox"` and jumps between options on bare letters without stopping
+  // propagation, so a single-key shortcut would fire on top of the value it just changed. This
+  // kit's own `Select` wraps that trigger, so the case is reachable from our own components.
+  const role = target.getAttribute("role");
+  return role === "textbox" || role === "combobox" || role === "listbox";
 }
 
 const NON_TEXT_INPUT_TYPES = new Set([
@@ -303,7 +311,12 @@ export function createShortcutManager(
    * or the grab is only half of one: the application stops acting while the BROWSER still does.
    */
   function insertsText(event: KeyboardEvent, typing: boolean): boolean {
-    return typing && !event.ctrlKey && !event.metaKey && !event.altKey;
+    if (!typing || event.ctrlKey || event.metaKey || event.altKey) return false;
+    // A single character is text. Everything else has to be named, because "unmodified" is not
+    // the same question: F1, Escape and the function keys carry no text and reach the browser,
+    // so treating them as editing would let a blocking layer report a key as consumed while the
+    // browser still opened its help window.
+    return event.key.length === 1 || FIELD_KEYS.has(event.key);
   }
 
   /**
@@ -320,6 +333,12 @@ export function createShortcutManager(
     invoke: boolean
   ): "fired" | "pending" | "blocked" | "none" {
     for (const layer of ordered()) {
+      // Exact matches are resolved across the WHOLE layer before any prefix is considered.
+      // Scanning in registration order instead makes one of `g` and `g d` unreachable purely by
+      // which was registered first: `g` fires and clears the sequence, or `g d` returns pending
+      // and the exact `g` is never examined. Order of registration should not decide which
+      // binding exists.
+      let prefixed = false;
       for (const prepared of layer.bindings) {
         if (typing && !firesWhileTyping(prepared)) continue;
         if (prepared.binding.when && !prepared.binding.when()) continue;
@@ -328,12 +347,13 @@ export function createShortcutManager(
           fire(prepared, event, invoke);
           return "fired";
         }
-        if (depth === "prefix") {
-          // A sequence in progress must swallow its own keystroke, or the `g` of `g d` would be
-          // typed into the page while the sequence waits for `d`.
-          event.preventDefault();
-          return "pending";
-        }
+        if (depth === "prefix") prefixed = true;
+      }
+      if (prefixed) {
+        // A sequence in progress must swallow its own keystroke, or the `g` of `g d` would be
+        // typed into the page while the sequence waits for `d`.
+        event.preventDefault();
+        return "pending";
       }
       if (layer.options.blocking) {
         // A grab that leaves the browser default in place is not a grab: mid-drag, `mod+s`
@@ -345,6 +365,39 @@ export function createShortcutManager(
     return "none";
   }
 
+  /**
+   * Warn when one binding's sequence is a strict prefix of another's in the same layer.
+   *
+   * `g` and `g d` cannot both be reachable: the first keystroke either acts or waits, and
+   * whichever answer the matcher gives, the other binding is dead. Resolving it by registration
+   * order would make the outcome depend on the order of an array, so the matcher is
+   * deterministic (exact wins) and the ambiguity is reported instead of hidden.
+   */
+  function warnOnPrefixConflicts(
+    prepared: readonly PreparedBinding[],
+    layerName: string
+  ): void {
+    const sameChord = (a: KeyChord, b: KeyChord): boolean =>
+      a.key === b.key &&
+      a.mod === b.mod &&
+      a.ctrl === b.ctrl &&
+      a.meta === b.meta &&
+      a.alt === b.alt &&
+      a.shift === b.shift;
+    for (const short of prepared) {
+      for (const long of prepared) {
+        if (short === long || short.keys.length >= long.keys.length) continue;
+        if (short.keys.every((chord, i) => sameChord(chord, long.keys[i]))) {
+          devWarnOnce(
+            false,
+            `shortcuts: in layer "${layerName}", "${short.binding.keys}" is a prefix of ` +
+              `"${long.binding.keys}", so the longer one can never fire. Bind one or the other.`
+          );
+        }
+      }
+    }
+  }
+
   const pressedEvents: KeyboardEvent[] = [];
 
   function handle(event: KeyboardEvent): boolean {
@@ -352,6 +405,13 @@ export function createShortcutManager(
     // composing". Acting on it would cancel the composition AND dismiss whatever the application
     // binds Escape to — a keystroke the user never aimed at the application at all.
     if (event.isComposing) return false;
+    // Something closer to the keystroke has already claimed it. Radix's DismissableLayer, which
+    // every Dialog and Sheet in this kit is built on, listens on `document` in the CAPTURE phase,
+    // calls `preventDefault()` to dismiss, and does not stop propagation — so without this check
+    // one Escape closes the modal AND runs the shell's Escape binding underneath it. That is
+    // precisely the double action this manager exists to remove, arriving through our own
+    // components.
+    if (event.defaultPrevented) return false;
     // Pressing a modifier on its own is not a keystroke to match, and treating it as one would
     // clear any sequence in progress the moment the user reached for Shift.
     if (MODIFIER_KEYS.has(event.key)) return false;
@@ -407,6 +467,7 @@ export function createShortcutManager(
         bindings: prepare(bindings),
         sequence: nextSequence++,
       };
+      warnOnPrefixConflicts(layer.bindings, layerOptions.name);
       layers.add(layer);
       return {
         update(nextBindings, nextOptions) {
@@ -421,7 +482,11 @@ export function createShortcutManager(
     handle,
     attach(target) {
       const listener = (event: Event): void => {
-        handle(event as KeyboardEvent);
+        // `preventDefault` suppresses the BROWSER, not other JavaScript listeners. A consumed
+        // key must also stop bubbling, or a window-level owner runs the second half of the
+        // double action this manager exists to remove — which is the state of the tree during a
+        // staged migration, when some owners have moved over and some have not.
+        if (handle(event as KeyboardEvent)) event.stopPropagation();
       };
       target.addEventListener("keydown", listener);
       return () => target.removeEventListener("keydown", listener);
@@ -439,3 +504,24 @@ export function createShortcutManager(
 }
 
 const MODIFIER_KEYS = new Set(["Control", "Meta", "Alt", "Shift"]);
+
+/**
+ * Keys a focused field consumes itself: caret movement and the edits that carry no character.
+ *
+ * Used to decide what a blocking layer may suppress while the user is typing. A key outside this
+ * set and not a character belongs to the browser, not the field.
+ */
+const FIELD_KEYS = new Set([
+  "Backspace",
+  "Delete",
+  "Enter",
+  "Tab",
+  "ArrowUp",
+  "ArrowDown",
+  "ArrowLeft",
+  "ArrowRight",
+  "Home",
+  "End",
+  "PageUp",
+  "PageDown",
+]);
