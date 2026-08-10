@@ -45,9 +45,9 @@ export function validateDocument(
     // none: a caller supplying its own definition is stating what its own renderer exposes, and
     // letting a built-in's structure fill the gap would admit children that renderer never draws.
     //
-    // Structure answers only when no definition is registered. That is the ordinary case for the
-    // config and server paths, where the registry is empty because populating it requires a
-    // side-effect import of the renderer that those paths do not perform.
+    // Structure answers when no definition is registered — the ordinary case for the config and
+    // server paths, where the registry is empty because populating it requires a side-effect
+    // import of the renderer that those paths do not perform.
     const structuralSlots = declaredSlotsOf(n.type);
     const declaredSlots = def ? (def.slots ?? []) : structuralSlots;
     const structural = def !== undefined || structuralSlots !== undefined;
