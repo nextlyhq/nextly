@@ -19,6 +19,8 @@ import type { Logger } from "../../../services/shared";
 import { SYSTEM_CONTEXT } from "../../../shared/types";
 import { createTableBody } from "../../schema/pipeline/sql-templates/create-table-body";
 import { EMAIL_PROVIDER_ACTIVITY_COLLECTION } from "../provider-activity";
+import { defineEmailProvider } from "../provider-definition";
+import { getEmailProviderRegistry } from "../services/email-provider-registry";
 import { EmailProviderService } from "../services/email-provider-service";
 
 vi.mock("../../../lib/env", () => ({
@@ -89,6 +91,20 @@ describe("email provider activity", () => {
   let service: EmailProviderService;
 
   beforeEach(() => {
+    // A provider that accepts anything, including nothing. Registered so a
+    // type change can legitimately land with no configuration of its own.
+    getEmailProviderRegistry().register(
+      defineEmailProvider({
+        type: "permissive",
+        label: "Permissive",
+        configFields: [],
+        parseConfig: input => (input ?? {}) as Record<string, unknown>,
+        createAdapter: () => ({
+          send: () => Promise.resolve({ success: true, messageId: "x" }),
+        }),
+      })
+    );
+
     sqlite = new Database(":memory:");
     createEmailProvidersTable(sqlite);
     service = new EmailProviderService(
@@ -107,6 +123,7 @@ describe("email provider activity", () => {
   });
 
   afterEach(() => {
+    getEmailProviderRegistry().reset();
     sqlite.close();
     // No per-key removal on the container; this file registers nothing else.
     container.clear();
@@ -292,6 +309,68 @@ describe("email provider activity", () => {
       entryId: created.id,
       entryTitle: "Production SMTP",
     });
+  });
+
+  it("reports the configuration a type change silently discarded", async () => {
+    // A type change with no configuration REPLACES the stored one with an
+    // empty object. The diff only ran when the caller sent a configuration, so
+    // the entry said "type" and nothing else — a record that reads as harmless
+    // over a change that discarded the credentials.
+    const created = await service.createProvider(INPUT, ACTOR);
+    logged.length = 0;
+
+    // The target must ACCEPT an empty configuration, or the update is refused
+    // before it can discard anything and the test passes on the wrong path.
+    // Resend requires an api key, so a permissive fixture is the only shape
+    // that reaches the branch this is about.
+    await service.updateProvider(created.id, { type: "permissive" }, ACTOR);
+
+    expect(logged[0]?.metadata).toEqual({
+      providerType: "permissive",
+      changedFields: ["type", "configuration"],
+    });
+  });
+
+  it("does not claim a promotion changed anything when it did not", async () => {
+    // A client retry promotes a provider that is already the default. The
+    // final state is identical, and the update path beside this one already
+    // reports nothing for a value that did not move.
+    const created = await service.createProvider(
+      { ...INPUT, isDefault: true },
+      ACTOR
+    );
+    logged.length = 0;
+
+    await service.setDefault(created.id, ACTOR);
+
+    expect(logged[0]?.metadata).toEqual({ providerType: "smtp" });
+  });
+
+  it("records a promotion that did change something", async () => {
+    // The control: the guard must not silence a real promotion.
+    const created = await service.createProvider(INPUT, ACTOR);
+    logged.length = 0;
+
+    await service.setDefault(created.id, ACTOR);
+
+    expect(logged[0]?.metadata).toMatchObject({
+      changedFields: ["isDefault"],
+    });
+  });
+
+  it("records one deletion when two deletes race", async () => {
+    // Both callers read the row before either statement runs. The second
+    // affects nothing, and attributing a deletion to whoever sent it would be
+    // an event that never happened.
+    const created = await service.createProvider(INPUT, ACTOR);
+    logged.length = 0;
+
+    await Promise.all([
+      service.deleteProvider(created.id, ACTOR),
+      service.deleteProvider(created.id, ACTOR),
+    ]);
+
+    expect(logged.filter(entry => entry.action === "delete")).toHaveLength(1);
   });
 
   it("records nothing for a write with no signed-in actor", async () => {

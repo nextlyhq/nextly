@@ -35,6 +35,7 @@ import { BaseService } from "../../../shared/base-service";
 import { encrypt, decrypt } from "../../../utils/encryption";
 // Pull adapter type into a normal `import type` declaration so the return
 // signature on createAdapterFromProvider satisfies consistent-type-imports.
+import { affectedRowCount } from "../../auth/services/auth-service";
 import {
   changedProviderFields,
   recordProviderActivity,
@@ -635,6 +636,15 @@ export class EmailProviderService extends BaseService {
       // "a type change replaces rather than merges" is supposed to prevent.
       if (data.configuration === undefined) {
         updateData.configuration = this.encryptConfiguration(submitted);
+        // This branch REPLACES the stored configuration without the caller
+        // having sent one, so the diff below -- which only runs when
+        // `data.configuration` is present -- would have reported a type change
+        // and nothing else. An entry that says "type" while the credentials
+        // beneath it were discarded is worse than no entry: it is a record
+        // that reads as harmless.
+        configurationChanged =
+          Object.keys(this.decryptConfiguration(currentRow.configuration))
+            .length > 0;
       }
     }
 
@@ -807,9 +817,16 @@ export class EmailProviderService extends BaseService {
       });
     }
 
-    await this.db
+    const result = await this.db
       .delete(this.emailProviders)
       .where(eq(this.emailProviders.id, id));
+
+    // Two deletes of the same provider can both read the row before either
+    // statement runs; the second affects nothing and must not attribute a
+    // deletion to whoever sent it. The method stays idempotent -- both callers
+    // still succeed -- but only the one that actually removed the row is
+    // recorded as having done so.
+    if (affectedRowCount(result, this.dialect) === 0) return;
 
     // Recorded from the row read before the delete, because after it there is
     // nothing left to name. A deleted provider's entry is the one whose
@@ -860,7 +877,11 @@ export class EmailProviderService extends BaseService {
       providerId: id,
       providerName: row.name,
       providerType: row.type,
-      changedFields: ["isDefault"],
+      // A client retry promotes a provider that is already the default. The
+      // final state is identical, so claiming `isDefault` changed manufactures
+      // an audit event out of a no-op -- and the update path beside this one
+      // already reports nothing for a value that did not move.
+      changedFields: row.isDefault ? [] : ["isDefault"],
       actor,
     });
 
