@@ -27,8 +27,10 @@ import "../../render/blocks";
 import {
   compileDocumentBlockCss,
   compileDocumentCss,
+  documentKey,
   documentNodeClasses,
   nodeClass,
+  refScopedKey,
 } from "../style-compiler";
 import { makeNode } from "../tree";
 
@@ -191,5 +193,71 @@ describe("what the sheet writes and what the markup carries", () => {
     expect(libClass).toBeDefined();
     // Both placements carry it, so one rule serves both.
     expect(markup.split(libClass).length - 1).toBe(2);
+  });
+});
+
+describe("boundaries the key space and the sheet have to hold", () => {
+  const doc = (root: BlockNode) => ({ root }) as never;
+
+  it("keeps a document id shaped like a ref key from colliding with one", () => {
+    // A node id is any non-empty string, so a document can literally carry the string a ref key
+    // generates. Prefixing only the ref side would put both in the key set as one entry, and
+    // nodeClassNames would hand them a single class.
+    const generated = refScopedKey("r1", "same");
+    const root = container("root", [
+      styled(generated, "Doc", "#cc0001"),
+      ref("p1", "r1"),
+    ]);
+    const refs = { r1: styled("same", "Lib", "#cc0002") };
+    const classes = documentNodeClasses(doc(root), refs);
+
+    // Two distinct entries, not one.
+    expect(classes.get(documentKey(generated))).toBeDefined();
+    expect(classes.get(generated)).toBeDefined();
+    expect(classes.get(documentKey(generated))).not.toBe(
+      classes.get(generated)
+    );
+  });
+
+  it("emits no CSS for a library block the document never places", () => {
+    // The whole library is in the KEY set so names stay stable across pages, but a page should
+    // ship only the rules it can use — otherwise every page carries the whole library's CSS.
+    const root = container("root", [styled("doc", "Doc", "#cc0003")]);
+    const refs = { unused: styled("never", "Never", "#cc0004") };
+    const css = compileDocumentCss(doc(root), {
+      classes: documentNodeClasses(doc(root), refs),
+      refs,
+    });
+
+    expect(css).toContain("#cc0003");
+    expect(css).not.toContain("#cc0004");
+  });
+
+  it("nests a block's custom CSS under the document scope when there is one", () => {
+    // A node class is a hash of a key, not of a document, so the same reusable block on two pages
+    // resolves to the same node class. Without the document class in front, the later stylesheet
+    // restyles both.
+    const withCss: BlockNode = {
+      ...styled("doc", "Doc", "#cc0005"),
+      customCss: "selector { color: red }",
+    };
+    const root = container("root", [withCss]);
+    const scoped = compileDocumentBlockCss(
+      doc(root),
+      documentNodeClasses(doc(root)),
+      undefined,
+      "nx-pb-d-abc"
+    );
+    const unscoped = compileDocumentBlockCss(
+      doc(root),
+      documentNodeClasses(doc(root))
+    );
+
+    expect(scoped).toContain(".nx-pb-d-abc");
+    // Nested, not substituted: the block boundary still has to be there.
+    expect(scoped).toContain(nodeClass("doc"));
+    // Positive control: without a scope the rule is emitted, just unnested.
+    expect(unscoped).toContain(nodeClass("doc"));
+    expect(unscoped).not.toContain(".nx-pb-d-abc");
   });
 });

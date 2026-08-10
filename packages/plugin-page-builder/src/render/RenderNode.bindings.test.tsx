@@ -4,8 +4,9 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { defaultBlockRegistry } from "../core/registry";
 import {
   documentNodeClasses,
+  documentKey,
   nodeClass,
-  refScopedKey,
+  refNodeClass,
 } from "../core/style-compiler";
 import { makeNode } from "../core/tree";
 
@@ -29,8 +30,8 @@ describe("RenderNode node classes", () => {
         registry={defaultBlockRegistry}
         classes={
           new Map([
-            [container.id, "nx-pb-outer-from-map"],
-            [heading.id, "nx-pb-inner-from-map"],
+            [documentKey(container.id), "nx-pb-outer-from-map"],
+            [documentKey(heading.id), "nx-pb-inner-from-map"],
           ])
         }
       />
@@ -73,9 +74,9 @@ describe("RenderNode node classes", () => {
     // nothing could not satisfy the assertion below.
     expect(markup).toContain(nodeClass(shared));
     // The referenced node is named from its ref, not from the bare id.
-    expect(markup).toContain(nodeClass(refScopedKey("r1", shared)));
+    expect(markup).toContain(refNodeClass("r1", shared));
     // And the two names differ, which is the whole point.
-    expect(nodeClass(refScopedKey("r1", shared))).not.toBe(nodeClass(shared));
+    expect(refNodeClass("r1", shared)).not.toBe(nodeClass(shared));
   });
 
   it("falls back to the plain class for a node the map does not hold", () => {
