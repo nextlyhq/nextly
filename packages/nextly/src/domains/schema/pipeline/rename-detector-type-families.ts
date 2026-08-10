@@ -158,13 +158,46 @@ export function typeFamilyOf(
 export function isTypesCompatible(
   fromType: string,
   toType: string,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  /**
+   * The columns the pair would move between, when the caller knows them.
+   *
+   * Only a CROSS-family answer depends on this, and only one such answer exists. Same-family
+   * compatibility is a property of the types alone and is unaffected. Omitting this therefore never
+   * widens what is accepted — it narrows it, which is the safe direction for a caller that cannot
+   * say which columns it is asking about.
+   */
+  columns?: { from: string; to: string }
 ): boolean {
   const fromFamily = typeFamilyOf(fromType, dialect);
   const toFamily = typeFamilyOf(toType, dialect);
   if (fromFamily === null || toFamily === null) return false;
   if (fromFamily === toFamily) return true;
-  return isConvertibleFamilyChange(fromFamily, toFamily);
+  if (!columns) return false;
+  return (
+    isConvertibleFamilyChange(fromFamily, toFamily) &&
+    isLegacyUnderscoreRepair(columns.from, columns.to)
+  );
+}
+
+/**
+ * Whether a pair is the legacy column the text-to-JSON conversion exists to repair.
+ *
+ * 🔴 The conversion is offered for a NAMED defect, not for text-to-JSON in general. A table created
+ * before the column-name fix holds `_items` where everything else addresses `items`, and for a
+ * repeater or a group it holds `text` where the descriptor asks for JSON. That pair is known to
+ * contain serialized JSON, because the old builder is what wrote it.
+ *
+ * Any other edit that happens to drop a text column and add a JSON one is not that: its text is
+ * whatever a user typed. Offering the rename there defaults the operator into a conversion that
+ * fails on the first row of ordinary prose — and on MySQL the rename has already auto-committed by
+ * then, leaving a half-changed schema no transaction can take back.
+ *
+ * So the shape is the evidence. Recognising it is what separates "this column is JSON that was
+ * stored as text" from "these two columns are both on this table".
+ */
+function isLegacyUnderscoreRepair(from: string, to: string): boolean {
+  return from === `_${to}`;
 }
 
 /**

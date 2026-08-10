@@ -454,6 +454,135 @@ describe("applyRenameDecisions (rename collapsing)", () => {
     expect(out[0].type).toBe("rename_column");
   });
 
+  it("carries the type change when the rename crosses types", () => {
+    // 🔴 A generated migration used to receive the rename ALONE. A rename moves the column without
+    // changing what it is, so the committed UP left `text` where the snapshot and the runtime expect
+    // JSON, and its DOWN omitted the reverse — a file that passes review and diverges at apply time.
+    const ops = [
+      {
+        type: "drop_column" as const,
+        tableName: "dc_posts",
+        columnName: "_body",
+        columnType: "text",
+      },
+      {
+        type: "add_column" as const,
+        tableName: "dc_posts",
+        column: { name: "body", type: "jsonb", nullable: true },
+      },
+    ];
+    const decisions = [
+      {
+        candidate: {
+          tableName: "dc_posts",
+          fromColumn: "_body",
+          toColumn: "body",
+          fromType: "text",
+          toType: "jsonb",
+          typesCompatible: true,
+          defaultSuggestion: "rename" as const,
+        },
+        accepted: true,
+      },
+    ];
+
+    const out = applyRenameDecisionsForTest(ops, decisions, "postgresql");
+
+    // Three, in this order. The DROP DEFAULT is not decoration: `ALTER COLUMN … TYPE jsonb USING …`
+    // converts stored ROWS and leaves the DEFAULT expression alone, so a text default on a column
+    // becoming JSON makes PostgreSQL reject the whole statement — every row can be valid JSON and
+    // the conversion still fails.
+    expect(out.map(o => o.type)).toEqual([
+      "rename_column",
+      "change_column_default",
+      "change_column_type",
+    ]);
+    expect(out[1]).toMatchObject({
+      columnName: "body",
+      toDefault: undefined,
+    });
+    // Against the NEW name: the conversion follows the rename, so the column no longer answers to
+    // the one it had.
+    expect(out[2]).toMatchObject({
+      tableName: "dc_posts",
+      columnName: "body",
+      toType: "jsonb",
+    });
+  });
+
+  it("emits no type change when the rename keeps the type", () => {
+    // The positive control. Without it, appending a conversion unconditionally would satisfy the
+    // case above while adding a pointless ALTER to every ordinary rename.
+    const ops = [
+      {
+        type: "drop_column" as const,
+        tableName: "dc_posts",
+        columnName: "_body",
+        columnType: "text",
+      },
+      {
+        type: "add_column" as const,
+        tableName: "dc_posts",
+        column: { name: "body", type: "text", nullable: true },
+      },
+    ];
+    const decisions = [
+      {
+        candidate: {
+          tableName: "dc_posts",
+          fromColumn: "_body",
+          toColumn: "body",
+          fromType: "text",
+          toType: "text",
+          typesCompatible: true,
+          defaultSuggestion: "rename" as const,
+        },
+        accepted: true,
+      },
+    ];
+
+    expect(
+      applyRenameDecisionsForTest(ops, decisions, "postgresql").map(o => o.type)
+    ).toEqual(["rename_column"]);
+  });
+
+  it("emits no type change on SQLite, which stores JSON as text", () => {
+    // Not an omission: SQLite has no ALTER that changes a column's type, and needs none here — the
+    // two sides of the one convertible change name the same storage. Asking for one would raise
+    // for a column that is already correct.
+    const ops = [
+      {
+        type: "drop_column" as const,
+        tableName: "dc_posts",
+        columnName: "_body",
+        columnType: "text",
+      },
+      {
+        type: "add_column" as const,
+        tableName: "dc_posts",
+        column: { name: "body", type: "jsonb", nullable: true },
+      },
+    ];
+    const decisions = [
+      {
+        candidate: {
+          tableName: "dc_posts",
+          fromColumn: "_body",
+          toColumn: "body",
+          fromType: "text",
+          toType: "jsonb",
+          typesCompatible: true,
+          defaultSuggestion: "rename" as const,
+        },
+        accepted: true,
+      },
+    ];
+
+    expect(
+      applyRenameDecisionsForTest(ops, decisions, "sqlite").map(o => o.type)
+    ).toEqual(["rename_column"]);
+  });
+
   it("leaves drop+add intact on decline", () => {
     const ops = [
       {

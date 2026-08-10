@@ -32,6 +32,7 @@ import { isPreResolutionOp, type Operation } from "../diff/types";
 // module (pipeline/sql-templates/) so both the apply pipeline (renames +
 // drops) and migrate:create (all op types) consume the same per-dialect
 // templates. Eliminates the byte-identical-SQL drift risk.
+import { conversionForRename } from "../rename-conversion";
 import { generateSQL } from "../sql-templates/index";
 
 interface AsyncExecuteHandle {
@@ -61,46 +62,29 @@ export async function executePreResolutionOps(
   for (const op of ordered) {
     const sqlString = sqlForOp(op, dialect);
     await runRaw(txOrDb, sqlString, dialect);
+  }
 
-    // A rename moves the column; it does not change what the column IS. When the two sides differ,
-    // the rename alone leaves the old type in place under the new name, so the schema the runtime
-    // reads through and the column it actually reads disagree from that moment on. The conversion
-    // is issued here, immediately after the rename and against the new name, because this is the
-    // only point that knows both the rename happened and which dialect has to carry it out.
-    const conversion = conversionAfterRename(op, dialect);
-    if (conversion) await runRaw(txOrDb, conversion, dialect);
+  // A rename moves the column; it does not change what the column IS. When the two sides differ, the
+  // rename alone leaves the old type in place under the new name, so the schema the runtime reads
+  // through and the column it actually reads disagree from that moment on.
+  //
+  // 🔴 Issued as a pass AFTER every ordered op rather than beside each rename, and the ordering is
+  // the point. MySQL refuses to convert an indexed text column to JSON, and the index that covers it
+  // is dropped in a LATER bucket than the rename — so a conversion emitted next to its own rename
+  // runs while the index is still there and fails. Nothing in the buckets that follow can invalidate
+  // a conversion: the column's own table survives the rename by definition, and the drops target
+  // other objects.
+  //
+  // What to convert is decided by `conversionForRename`, which `migrate:create` also asks, so a
+  // repair applied here and one written to a migration file cannot disagree about it.
+  for (const op of ordered) {
+    if (op.type !== "rename_column") continue;
+    for (const conversion of conversionForRename(op, dialect)) {
+      await runRaw(txOrDb, generateSQL(conversion, dialect), dialect);
+    }
   }
 
   return ordered.length;
-}
-
-/**
- * The statement that finishes a rename whose type changed, or null when there is nothing to finish.
- *
- * Returns null for SQLite on purpose rather than by omission: it has no ALTER that changes a
- * column's type, and it needs none here, because it stores JSON as text and so the two sides of the
- * one convertible change name the same storage. Asking for a conversion there would raise
- * `SqliteUnsupportedOperationError` for a column that is already correct.
- */
-function conversionAfterRename(
-  op: Operation,
-  dialect: SupportedDialect
-): string | null {
-  if (op.type !== "rename_column") return null;
-  if (dialect === "sqlite") return null;
-  if (!op.fromType || !op.toType) return null;
-  if (op.fromType === op.toType) return null;
-
-  return generateSQL(
-    {
-      type: "change_column_type",
-      tableName: op.tableName,
-      columnName: op.toColumn,
-      fromType: op.fromType,
-      toType: op.toType,
-    },
-    dialect
-  );
 }
 
 // Returns ops sorted into the execution-safe order described above.

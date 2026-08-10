@@ -49,6 +49,7 @@ import type {
   TableSpec,
 } from "../pipeline/diff/types";
 import type { RenameCandidate } from "../pipeline/pushschema-pipeline-interfaces";
+import { conversionForRename } from "../pipeline/rename-conversion";
 import { RegexRenameDetector } from "../pipeline/rename-detector";
 import { generateSQL } from "../pipeline/sql-templates/index";
 
@@ -229,7 +230,7 @@ export async function generateMigration(
       nonInteractive: args.nonInteractive,
       autoAccept: args.autoAcceptRenames,
     });
-    operations = applyRenameDecisions(operations, decisions);
+    operations = applyRenameDecisions(operations, decisions, args.dialect);
   }
   if (operations.length === 0 && !hasCompanions) {
     return null;
@@ -660,7 +661,8 @@ export function buildDesiredSnapshotFromConfig(
  */
 function applyRenameDecisions(
   ops: Operation[],
-  decisions: RenameDecision[]
+  decisions: RenameDecision[],
+  dialect: SupportedDialect
 ): Operation[] {
   const accepted = decisions.filter(d => d.accepted);
   if (accepted.length === 0) return ops;
@@ -701,7 +703,18 @@ function applyRenameDecisions(
     remaining.push(op);
   }
 
-  // Append rename_column ops for each effective acceptance.
+  // Append rename_column ops for each effective acceptance, each followed by the type change it
+  // needs.
+  //
+  // 🔴 The conversion belongs here rather than only in the apply pipeline. A rename moves the column
+  // without changing what it is, so a generated migration carrying the rename alone leaves the old
+  // type under the new name — the UP writes `text` where the snapshot and the runtime expect JSON,
+  // and the DOWN omits the reverse. Emitted as an OPERATION rather than as SQL because everything
+  // downstream already understands one: `generateSQL` renders it for the dialect, and
+  // `buildInverseOperations` inverts it for the DOWN.
+  //
+  // `conversionForRename` is the same function the apply pipeline asks, so a repair written to a
+  // file and one applied against a live database cannot disagree about what the column becomes.
   const renames: Operation[] = [];
   for (const d of effectiveAccepts) {
     const c = d.candidate;
@@ -714,6 +727,8 @@ function applyRenameDecisions(
       toType: c.toType,
     };
     renames.push(renameOp);
+
+    renames.push(...conversionForRename(renameOp, dialect));
   }
 
   // Nothing was collapsed, so the diff's own ordering already holds and the
@@ -749,9 +764,10 @@ function applyRenameDecisions(
  */
 export function applyRenameDecisionsForTest(
   ops: Operation[],
-  decisions: RenameDecision[]
+  decisions: RenameDecision[],
+  dialect: SupportedDialect = "postgresql"
 ): Operation[] {
-  return applyRenameDecisions(ops, decisions);
+  return applyRenameDecisions(ops, decisions, dialect);
 }
 
 /**

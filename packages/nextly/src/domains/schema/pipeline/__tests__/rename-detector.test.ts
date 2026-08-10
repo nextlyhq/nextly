@@ -443,3 +443,52 @@ describe("RegexRenameDetector - the legacy column reached through the diff", () 
     }).toEqual({ drops: 1, adds: 1, others: 0 });
   });
 });
+
+describe("the text-to-JSON exception is scoped to the shape it repairs", () => {
+  const detector = new RegexRenameDetector();
+
+  it("offers the rename for the legacy underscore column", () => {
+    // The positive control, and the only shape the conversion has evidence for: a table built before
+    // the column-name fix holds `_body` where everything else addresses `body`, and the old builder
+    // is what wrote the JSON into it.
+    const candidates = detector.detect(
+      [
+        drop("dc_posts", "_body", "text"),
+        add("dc_posts", "body", "jsonb"),
+      ] as Operation[],
+      "postgresql"
+    );
+
+    expect(candidates[0]?.defaultSuggestion).toBe("rename");
+  });
+
+  it("does not offer it for two columns that merely share a table", () => {
+    // 🔴 The same two TYPES, and the answer has to differ. Nothing says this column holds serialized
+    // JSON — its text is whatever a user typed. Defaulting the operator into a conversion here fails
+    // on the first row of ordinary prose, and on MySQL the rename has already auto-committed by
+    // then, leaving a half-changed schema no transaction can take back.
+    const candidates = detector.detect(
+      [
+        drop("dc_posts", "summary", "text"),
+        add("dc_posts", "metadata", "jsonb"),
+      ] as Operation[],
+      "postgresql"
+    );
+
+    expect(candidates[0]?.defaultSuggestion).toBe("drop_and_add");
+  });
+
+  it("does not offer it when only the prefix is missing", () => {
+    // `body` -> `body_json` is not `_body` -> `body`. A rule keyed on "one name contains the other"
+    // would accept this; the rule is the exact underscore shape.
+    const candidates = detector.detect(
+      [
+        drop("dc_posts", "body", "text"),
+        add("dc_posts", "body_json", "jsonb"),
+      ] as Operation[],
+      "postgresql"
+    );
+
+    expect(candidates[0]?.defaultSuggestion).toBe("drop_and_add");
+  });
+});
