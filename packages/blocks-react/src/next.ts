@@ -45,9 +45,6 @@ import type { PageStyles } from "./styles";
  */
 export const BLOCKS_REACT_NEXT_ENTRY = "@nextlyhq/blocks-react/next";
 
-/** The collection media ids resolve against unless the site names another. */
-const DEFAULT_MEDIA_COLLECTION = "media";
-
 /**
  * Keys the CMS sets on the row it returns.
  *
@@ -93,7 +90,14 @@ export interface BlocksPageConfig
    * artifact yet. Ignored for an entry whose `styles` produced a sheet.
    */
   styleContext?: StyleCompileContext;
-  /** The collection media ids resolve against (default `"media"`). */
+  /**
+   * A dynamic collection to resolve media ids against, for a site storing its
+   * images in one of its own.
+   *
+   * Omit it for ordinary Nextly media: those live in a system table with its
+   * own reader, not in a dynamic collection, so the default path asks the
+   * media namespace rather than naming a collection at all.
+   */
   mediaCollection?: string;
   /** Resolve a media id yourself, instead of reading the media collection. */
   resolveMedia?: (id: string) => Promise<ResolvedMedia | null>;
@@ -157,18 +161,50 @@ function stringField(entry: ContentEntry, key: string): string | undefined {
  * renders — the entry's own read has settled whether the page may be seen, and
  * a second anonymous check here would blank the images on a page that passed it.
  */
+/** The media surface the default resolver reads through. */
+interface MediaReader {
+  findByID(args: { id: string }): Promise<Record<string, unknown> | null>;
+}
+
+/**
+ * The instance's media reader, when it has one.
+ *
+ * Media is a SYSTEM table with its own namespace, not a dynamic collection, so
+ * `findByID({ collection: "media" })` goes through the collections handler and
+ * finds nothing — the image block then catches the rejection and renders no
+ * image, which is a default resolver that cannot resolve the default case.
+ *
+ * Detected structurally rather than by widening `NextlyContentReader`, which is
+ * `Pick<Nextly, "find" | "findByID">` and shared with `resolveContent`: adding a
+ * member there would oblige every caller injecting a stand-in — including tests
+ * that legitimately have no media — to supply one.
+ */
+function mediaNamespaceOf(
+  reader: NextlyContentReader
+): MediaReader | undefined {
+  const candidate = (reader as { media?: unknown }).media;
+  if (typeof candidate !== "object" || candidate === null) return undefined;
+  const findByID = (candidate as { findByID?: unknown }).findByID;
+  return typeof findByID === "function"
+    ? (candidate as MediaReader)
+    : undefined;
+}
+
 function mediaResolver(
   config: BlocksPageConfig,
   reader: NextlyContentReader
 ): (id: string) => Promise<ResolvedMedia | null> {
   if (config.resolveMedia) return config.resolveMedia;
-  const collection = config.mediaCollection ?? DEFAULT_MEDIA_COLLECTION;
   return async (id: string) => {
-    const record = await reader.findByID({
-      collection,
-      id,
-      overrideAccess: true,
-    });
+    const record = config.mediaCollection
+      ? // An explicitly named collection IS a dynamic collection — a site
+        // storing its images somewhere of its own — so it reads as one.
+        await reader.findByID({
+          collection: config.mediaCollection,
+          id,
+          overrideAccess: true,
+        })
+      : await mediaNamespaceOf(reader)?.findByID({ id });
     if (!record) return null;
     const { url, altText, width, height } = record;
     if (typeof url !== "string") return null;
@@ -195,13 +231,32 @@ function entryPathResolver(
   if (config.resolveEntryPath) return config.resolveEntryPath;
   const slugField = config.slugField ?? "slug";
   return async (collection: string, id: string) => {
+    // Read under the ROUTE's own policy, not with access overridden. A link is
+    // only useful if the path it names resolves, and this route resolves
+    // published entries anonymously by default — so a reference to an
+    // unpublished or restricted entry would otherwise emit an href that the
+    // same route answers with `notFound()`. No path is a better answer than a
+    // broken one, and it also stops a restricted entry's slug from being
+    // published to anyone who loads the page.
     const record = await reader.findByID({
       collection,
       id,
-      overrideAccess: true,
+      overrideAccess: config.overrideAccess ?? false,
     });
-    const slug = record ? record[slugField] : undefined;
-    return typeof slug === "string" && slug.length > 0 ? `/${slug}` : null;
+    if (!record) return null;
+    // `findByID` carries no lifecycle scope, so the route's own is applied
+    // here. A no-op on a status-less collection, which has no such field.
+    const scope = config.status ?? "published";
+    const status = record.status;
+    if (scope !== "all" && typeof status === "string" && status !== scope) {
+      return null;
+    }
+    const slug = record[slugField];
+    if (typeof slug !== "string") return null;
+    // An empty slug is the HOMEPAGE, which the content route resolves at `/`
+    // and pre-renders as `{ slug: [] }`. Treating it as missing would strip the
+    // destination from every button pointing at the site root.
+    return slug === "" ? "/" : `/${slug}`;
   };
 }
 

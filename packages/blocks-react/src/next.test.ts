@@ -29,6 +29,12 @@ function reader(
   return {
     find: vi.fn(async () => ({ items: [entry], meta: {} })),
     findByID: vi.fn(async ({ id }: { id: string }) => records[id] ?? null),
+    // A real instance exposes media as its OWN namespace, not as a dynamic
+    // collection, so the double has to as well or it certifies a path that
+    // fails against the product.
+    media: {
+      findByID: vi.fn(async ({ id }: { id: string }) => records[id] ?? null),
+    },
   } as never;
 }
 
@@ -185,7 +191,7 @@ describe("createBlocksPage", () => {
     const instance = reader(
       { slug: "about", content: document },
       { "media-1": { url: "/a.png" } }
-    ) as unknown as { findByID: ReturnType<typeof vi.fn> };
+    ) as unknown as { media: { findByID: ReturnType<typeof vi.fn> } };
 
     const props = await render({
       collections: ["pages"],
@@ -194,9 +200,93 @@ describe("createBlocksPage", () => {
     });
     await props.context?.resolveMedia("media-1");
 
+    expect(instance.media.findByID).toHaveBeenCalledWith({ id: "media-1" });
+  });
+
+  it("reads default media through the media namespace, not as a collection", async () => {
+    // Media is a system table with its own reader. Going through the generic
+    // collection path finds nothing on a standard install, so the advertised
+    // default resolver would never resolve an ordinary Nextly media record.
+    const instance = reader(
+      { slug: "about", content: document },
+      { "media-1": { url: "/a.png", altText: "A" } }
+    ) as unknown as {
+      findByID: ReturnType<typeof vi.fn>;
+      media: { findByID: ReturnType<typeof vi.fn> };
+    };
+
+    const props = await render({
+      collections: ["pages"],
+      field: "content",
+      nextly: instance as never,
+    });
+    await expect(props.context?.resolveMedia("media-1")).resolves.toEqual({
+      url: "/a.png",
+      alt: "A",
+    });
+
+    expect(instance.media.findByID).toHaveBeenCalledWith({ id: "media-1" });
+    expect(instance.findByID).not.toHaveBeenCalled();
+  });
+
+  it("reads a NAMED media collection as a collection", async () => {
+    // An explicitly named one IS a dynamic collection — a site storing images
+    // of its own — so it must not be sent to the media namespace.
+    const instance = reader(
+      { slug: "about", content: document },
+      { p1: { url: "/own.png" } }
+    ) as unknown as {
+      findByID: ReturnType<typeof vi.fn>;
+      media: { findByID: ReturnType<typeof vi.fn> };
+    };
+
+    const props = await render({
+      collections: ["pages"],
+      field: "content",
+      nextly: instance as never,
+      mediaCollection: "photos",
+    });
+    await props.context?.resolveMedia("p1");
+
     expect(instance.findByID).toHaveBeenCalledWith(
-      expect.objectContaining({ collection: "media", id: "media-1" })
+      expect.objectContaining({ collection: "photos", id: "p1" })
     );
+    expect(instance.media.findByID).not.toHaveBeenCalled();
+  });
+
+  it("resolves a homepage reference to the site root", async () => {
+    // The content route resolves an empty slug at `/`. Treating it as missing
+    // strips the destination from every button pointing at the site root.
+    const props = await render({
+      collections: ["pages"],
+      field: "content",
+      nextly: reader(
+        { slug: "about", content: document },
+        { home: { slug: "" } }
+      ),
+    });
+
+    await expect(
+      props.context?.resolveEntryPath("pages", "home")
+    ).resolves.toBe("/");
+  });
+
+  it("gives no path for an entry this route would not serve", async () => {
+    // A link is only useful if the path resolves. Emitting an href the same
+    // route answers with notFound() is worse than emitting none — and it
+    // publishes a restricted entry's slug to everyone who loads the page.
+    const props = await render({
+      collections: ["pages"],
+      field: "content",
+      nextly: reader(
+        { slug: "about", content: document },
+        { secret: { slug: "unreleased", status: "draft" } }
+      ),
+    });
+
+    await expect(
+      props.context?.resolveEntryPath("pages", "secret")
+    ).resolves.toBeNull();
   });
 
   it("passes the stored stylesheet through for the resolved entry", async () => {
