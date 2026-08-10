@@ -488,6 +488,10 @@ export function createShortcutManager(
    * or the grab is only half of one: the application stops acting while the BROWSER still does.
    */
   function insertsText(event: KeyboardEvent, typing: boolean): boolean {
+    // Tab first, and regardless of what has focus. A modal's focus trap only cancels the WRAP at
+    // its first and last tabbable element and relies on the browser default in between, so every
+    // control inside it needs Tab to pass — a button and a checkbox just as much as a field.
+    if (event.key === "Tab") return true;
     if (!typing) return false;
     // AltGraph arrives as ctrl+alt on the layouts that use it, so it must be unwrapped before
     // either modifier is read as a chord.
@@ -625,7 +629,12 @@ export function createShortcutManager(
         // the sequence does become reachable, and telling the developer to delete one of them
         // would be wrong.
         if (short.binding.when !== undefined) continue;
-        if (firesWhileTyping(short) !== firesWhileTyping(long)) continue;
+        // Only ONE direction makes the longer binding reachable. A typing-disabled shorter
+        // binding paired with a typing-enabled longer one is genuinely separable: inside a field
+        // the short one is out of play and the sequence can run. The reverse is not — outside a
+        // field both are eligible and the exact match wins, inside it only the short one is — so
+        // the longer binding is dead either way and the warning belongs.
+        if (!firesWhileTyping(short) && firesWhileTyping(long)) continue;
         if (short.keys.every((chord, i) => sameChord(chord, long.keys[i]))) {
           devWarnOnce(
             false,

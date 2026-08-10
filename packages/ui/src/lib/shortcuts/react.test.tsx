@@ -639,3 +639,50 @@ describe("a provider that leaves a target its sibling still uses", () => {
     expect(onDocument).not.toHaveBeenCalled();
   });
 });
+
+describe("sibling providers mounted in one render", () => {
+  it("keeps both subtrees' shortcuts working", () => {
+    // Both render before either effect runs, so the entry the first reserved still has no
+    // providers. Treating that as a shell let the second replace it, and the first subtree's
+    // bindings stayed on a manager that was never attached.
+    const first = vi.fn();
+    const second = vi.fn();
+
+    function Keys({
+      keys,
+      run,
+    }: {
+      keys: string;
+      run: () => void;
+    }): React.JSX.Element | null {
+      useShortcuts([{ keys, description: "x", run }], { name: keys });
+      return null;
+    }
+
+    const view = render(
+      <>
+        <ShortcutProvider isApple={false}>
+          <Keys keys="mod+k" run={first} />
+        </ShortcutProvider>
+        <ShortcutProvider isApple={false}>
+          <Keys keys="mod+j" run={second} />
+        </ShortcutProvider>
+      </>
+    );
+
+    for (const key of ["k", "j"]) {
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key,
+          ctrlKey: true,
+          bubbles: true,
+          cancelable: true,
+        })
+      );
+    }
+    view.unmount();
+
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).toHaveBeenCalledTimes(1);
+  });
+});

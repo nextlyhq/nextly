@@ -2220,3 +2220,76 @@ describe("a prefix conflict hidden behind a shift glyph", () => {
     expect(manager).toBeDefined();
   });
 });
+
+describe("Tab from any control inside a modal", () => {
+  it.each([
+    ["button", (d: Document) => d.createElement("button")],
+    [
+      "checkbox",
+      (d: Document) => {
+        const box = d.createElement("input");
+        box.type = "checkbox";
+        return box;
+      },
+    ],
+  ])("lets focus advance from a %s", (_name, make) => {
+    // The earlier fix was tested with an input, where the typing path made it pass. From a
+    // button or a checkbox the same Tab was still suppressed, so focus could not move between
+    // the very controls a dialog is made of.
+    const manager = managerFor();
+    manager.register([binding("Escape", vi.fn())], {
+      name: "modal",
+      depth: 1,
+      blocking: true,
+    });
+    const control = make(document);
+    document.body.append(control);
+    const detach = manager.attach(document);
+    const event = press("Tab");
+    control.dispatchEvent(event);
+    detach();
+    control.remove();
+    expect(event.defaultPrevented).toBe(false);
+  });
+});
+
+describe("a prefix conflict that only looks separable", () => {
+  it("warns when the shorter binding is the typing-enabled one", () => {
+    // Asymmetric: outside a field both are eligible and the exact match wins; inside one, only
+    // the short binding is eligible. The longer one is dead in both places, so the warning that
+    // an earlier fix suppressed for BOTH directions belongs here.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    resetDevWarnings();
+    const manager = managerFor();
+    manager.register(
+      [
+        { keys: "g", description: "short", run: vi.fn(), whenTyping: true },
+        { keys: "g d", description: "long", run: vi.fn(), whenTyping: false },
+      ],
+      { name: "shell", depth: 0 }
+    );
+    const said = warn.mock.calls.map(c => String(c[0])).join(" ");
+    warn.mockRestore();
+    expect(said).toContain("prefix");
+    expect(manager).toBeDefined();
+  });
+
+  it("stays quiet in the direction that IS separable", () => {
+    // The control: a typing-disabled shorter binding leaves the sequence genuinely reachable
+    // inside a field, so the warning would be false there.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    resetDevWarnings();
+    const manager = managerFor();
+    manager.register(
+      [
+        { keys: "g", description: "short", run: vi.fn(), whenTyping: false },
+        { keys: "g d", description: "long", run: vi.fn(), whenTyping: true },
+      ],
+      { name: "shell", depth: 0 }
+    );
+    const said = warn.mock.calls.map(c => String(c[0])).join(" ");
+    warn.mockRestore();
+    expect(said).not.toContain("prefix");
+    expect(manager).toBeDefined();
+  });
+});

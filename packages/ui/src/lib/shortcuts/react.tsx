@@ -78,6 +78,15 @@ interface TargetOwner {
   manager: ShortcutManager;
   providers: number;
   detach?: () => void;
+  /**
+   * Whether every provider that used this owner has since unmounted.
+   *
+   * Distinguishes a shell left behind, whose manager was configured by a provider that has gone,
+   * from an entry a sibling RESERVED during the same render and has not mounted yet. Both have no
+   * providers, and replacing the second discards the manager that sibling already registered its
+   * bindings on.
+   */
+  retired: boolean;
 }
 
 /**
@@ -164,11 +173,13 @@ export function ShortcutProvider({
   // in the effect below, where React guarantees a matching cleanup.
   let owner =
     resolvedTarget === null ? null : ownersByTarget.get(resolvedTarget);
-  // An owner with no providers left is a shell, kept only so a Strict Mode replay can find it.
-  // Its manager was configured by a provider that has since gone, and adopting it would silently
-  // give this one someone else's `isApple`, `sequenceTimeoutMs` and clock.
-  if (resolvedTarget !== null && (!owner || owner.providers === 0)) {
-    owner = { manager: detached, providers: 0 };
+  // A RETIRED owner is a shell, kept only so a Strict Mode replay can find it. Its manager was
+  // configured by a provider that has since gone, and adopting it would silently give this one
+  // someone else's `isApple`, `sequenceTimeoutMs` and clock. An owner merely awaiting its first
+  // effect is a different thing: a sibling rendered in the same pass has already taken its
+  // manager and registered bindings on it, and replacing it would strand them.
+  if (resolvedTarget !== null && (!owner || owner.retired)) {
+    owner = { manager: detached, providers: 0, retired: false };
     ownersByTarget.set(resolvedTarget, owner);
   }
   const manager = owner ? owner.manager : detached;
@@ -190,11 +201,12 @@ export function ShortcutProvider({
       // render would find nothing on the replayed setup, so nothing would reattach and every
       // shortcut would be dead for the rest of the mount — in development only, which is the
       // worst place for it to hide.
-      entry = { manager, providers: 0 };
+      entry = { manager, providers: 0, retired: false };
       ownersByTarget.set(resolvedTarget, entry);
     }
     const owned = entry;
     owned.providers += 1;
+    owned.retired = false;
     // The first provider to arrive installs the listener; the rest share it. Ownership is a
     // property of the target rather than of the tree, so this holds for sibling subtrees and
     // independent React roots, which have no common context to consult.
@@ -206,6 +218,7 @@ export function ShortcutProvider({
       if (owned.providers === 0) {
         owned.detach?.();
         owned.detach = undefined;
+        owned.retired = true;
         // The entry itself is KEPT. It is weakly keyed by the target, so it cannot outlive one,
         // and removing it is what made a Strict Mode replay lose the listener. An unused manager
         // holds no layers, since each layer is disposed by the hook that registered it.
