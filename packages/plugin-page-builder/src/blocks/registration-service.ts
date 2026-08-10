@@ -16,13 +16,18 @@
  *
  * **What registration buys today, and what it does not.** A registered block is
  * known to `@nextlyhq/blocks-engine`: validation stops calling its type unknown,
- * and generation, manifests and tooling can see it. It is NOT yet rendered. The
- * renderer and the editor canvas resolve definitions from this package's own
- * earlier registry, which holds none of these, so a page containing a
- * registered type still draws the unknown-block placeholder. Bridging the two
- * is the renderer rewrite, not a line here — and registering blocks into the
- * engine before that bridge exists is deliberate, because validation and
- * tooling are worth having first.
+ * and generation, manifests and tooling can see it. It is also RENDERED on a
+ * published page — `PageRenderer` resolves through `registeredBlocks()`, which
+ * reads the engine registry this service writes to, so no bridging step stands
+ * between registering a block and it appearing.
+ *
+ * What it does not buy is the EDITOR. The canvas resolves definitions from this
+ * package's own `defaultBlockRegistry`, which holds none of these, so a
+ * contributed block cannot yet be inserted or drawn while editing. That half is
+ * the editor's own work, not a line here.
+ *
+ * So the seam runs between the published page and the canvas, not between
+ * registration and rendering.
  *
  * @module blocks/registration-service
  */
