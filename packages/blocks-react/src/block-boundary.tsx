@@ -208,13 +208,22 @@ function rendersNothing(
       // A hidden `Activity` serialises as nothing WHATEVER it contains, so its
       // children do not decide the answer and must not be consulted. Checked
       // before the recursion rather than inside it, because the question here is
-      // about the wrapper's own mode and not about what it wraps.
+      // about the wrapper's own mode and not about what it wraps. Its own `mode`
+      // has just been read under this containment, and React reads nothing else
+      // of a subtree it draws as nothing.
       if (isHiddenActivity(output.type, props)) return true;
       // Unusable rather than empty. A forged element can pass `isValidElement`
       // with null props, and calling it empty withholds the placeholder and
       // hands it to React, which reads `props.ref` and throws — taking the page,
       // not the block. Answering false sends it to the diagnostic below.
       if (typeof props !== "object" || props === null) return false;
+      // Calling a wrapper empty hands it to React, which still renders the
+      // WRAPPER and reads props this check never looks at: a provider's `value`,
+      // a `Profiler`'s `onRender`. Building the array is what performs those
+      // reads, and it moves a read React was going to make anyway inside this
+      // containment — so a getter that raises becomes this block's placeholder
+      // instead of the page's error. The array itself is discarded.
+      Object.values(props);
       if (!("children" in props)) return true;
       children = props.children;
     } catch {
@@ -229,18 +238,16 @@ function rendersNothing(
   if (isWalkableIterable(output)) {
     // Emptiness is only trusted when it is read the way React will read it.
     //
-    // An array is indexed off the very object React indexes, and a `Set` answers
-    // from an internal slot, so neither answer can drift from the one React
-    // acts on. Any OTHER borrowed iterable answers by running the block's own
-    // `Symbol.iterator` again — a third call, after the normalizer's and before
-    // React's — and an iterable that yields differently each time can read empty
-    // here and yield an element to React, which then reaches the DOM without the
-    // `cssId` the node asked for. Treating it as drawing keeps the diagnostic,
-    // which is the direction that fails where someone can see it.
-    if (borrowed && !Array.isArray(output)) {
-      const size = setSize(output);
-      return size === null ? false : size === 0;
-    }
+    // An array is indexed off the very object React indexes, and an untouched
+    // `Set` answers from an internal slot the iterator React uses reads too, so
+    // neither answer can drift from the one React acts on. Any OTHER borrowed
+    // iterable answers by running the block's own `Symbol.iterator` again — a
+    // third call, after the normalizer's and before React's — and an iterable
+    // that yields differently each time can read empty here and yield an element
+    // to React, which then reaches the DOM without the `cssId` the node asked
+    // for. Treating it as drawing keeps the diagnostic, which is the direction
+    // that fails where someone can see it.
+    if (borrowed && !Array.isArray(output)) return isEmptyBuiltinSet(output);
     try {
       for (const item of output) {
         // Refusing when the budget runs out answers "it draws", which is the
@@ -295,22 +302,31 @@ function isHiddenActivity(type: unknown, props: unknown): boolean {
 /** React's `Activity`, by the symbol this React identifies it with. */
 const ACTIVITY_TYPE = Symbol.for("react.activity");
 
+/** The iterator React uses to read a `Set`, so a shadowed one can be told apart. */
+const SET_ITERATOR: unknown = Set.prototype[Symbol.iterator];
+
 /**
- * How many members a `Set` holds, or `null` for anything that is not one.
+ * Whether this is an empty `Set` that React will read the way this check did.
  *
- * Read through `Set.prototype`'s own getter rather than as `value.size`, so a
- * subclass or a look-alike that defines its own `size` answers from the internal
- * slot or not at all. That matters because the answer is TRUSTED: it is taken
- * instead of iterating, which is the only reason a `Set` may be judged empty
- * without a pass React cannot see. Anything without the slot raises, and is
- * reported as not-a-Set rather than as empty.
+ * Both halves are load-bearing, and neither is sufficient alone.
+ *
+ * The size is read through `Set.prototype`'s own getter rather than as
+ * `value.size`, so a subclass that shadows the property still answers from the
+ * internal slot or not at all. But the slot only describes what React will draw
+ * while React reaches the members the ordinary way: a `Set` may define its OWN
+ * `Symbol.iterator`, and one that yields nothing now and an element when React
+ * renders would be declared empty on a slot that never changed, dropping the
+ * node's fields with no diagnostic. So the iterator must be the built-in one.
+ *
+ * Anything else — a look-alike without the slot, a customised iterator, a proxy
+ * whose traps raise — answers false and keeps the diagnostic.
  */
-function setSize(value: unknown): number | null {
+function isEmptyBuiltinSet(value: unknown): boolean {
   try {
-    const size: unknown = Reflect.get(Set.prototype, "size", value);
-    return typeof size === "number" ? size : null;
+    if (Reflect.get(Set.prototype, "size", value) !== 0) return false;
+    return Reflect.get(value as object, Symbol.iterator) === SET_ITERATOR;
   } catch {
-    return null;
+    return false;
   }
 }
 

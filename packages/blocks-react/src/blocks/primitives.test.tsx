@@ -872,6 +872,53 @@ describe("through the boundary", () => {
     expect(reads).toBeLessThan(QUIET_READS);
   });
 
+  it("keeps the diagnostic for a Set that iterates its own way", async () => {
+    // A real `Set` may define its OWN `Symbol.iterator`. Its internal slot stays
+    // empty however that iterator behaves, so reading the size alone would
+    // declare this empty while React draws whatever the iterator yields — the
+    // node's `cssId` dropped with nothing said. Only the built-in iterator can
+    // vouch for the slot.
+    const shifting = new Set<unknown>();
+    let reads = 0;
+    Object.defineProperty(shifting, Symbol.iterator, {
+      value() {
+        const quiet = reads++ < 3;
+        return (quiet ? [] : [<span key="late">late</span>])[Symbol.iterator]();
+      },
+    });
+
+    const html = await renderReturning(
+      <>{shifting}</>,
+      "test/shifting-set-own"
+    );
+
+    expect(html).toContain('data-nx-block-placeholder="invalid-output"');
+    expect(html).not.toContain("late");
+    // The size never stopped saying zero, so a check that trusted it alone would
+    // have called this empty no matter how the iterator behaved.
+    expect(shifting.size).toBe(0);
+  });
+
+  it("refuses an empty provider whose value cannot be read", async () => {
+    // Calling a wrapper empty hands the WRAPPER to React, which reads props this
+    // check does not: a provider's `value` is read after the boundary has
+    // returned, so a getter that raises there costs the page rather than the
+    // block.
+    const forged = {
+      ...(<TestContext.Provider value="v">{null}</TestContext.Provider>),
+      props: {
+        get value(): string {
+          throw new Error("hostile value");
+        },
+        children: null,
+      },
+    };
+
+    const html = await renderReturning(forged, "test/forged-provider");
+
+    expect(html).toContain('data-nx-block-placeholder="invalid-output"');
+  });
+
   it("still refuses a single-use iterator inside a fragment", async () => {
     // Not an emptiness question, and the distinction matters: React does not
     // support a single-use iterator as a JSX child at all, so the normalizer
