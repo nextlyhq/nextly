@@ -37,6 +37,22 @@ export function indexNameForColumn(tableName: string, column: string): string {
 export const MAX_INDEX_NAME_LENGTH = 63;
 
 /**
+ * The name of the UNIQUE index on a column.
+ *
+ * Derived from `indexNameForColumn` rather than composed, so it inherits the length bound and the
+ * disambiguating hash. Composing `uq_${table}_${column}` directly looks equivalent and is not: for
+ * names near their limits it exceeds 63 characters, which MySQL refuses outright and PostgreSQL
+ * truncates — leaving the created index under a name that disagrees with the one the desired schema
+ * declares, which is the disagreement this naming exists to prevent.
+ */
+export function uniqueIndexNameForColumn(
+  tableName: string,
+  column: string
+): string {
+  return indexNameForColumn(tableName, column).replace(/^idx_/, "uq_");
+}
+
+/**
  * Whether the dialect can index a column of this type at all.
  *
  * MySQL cannot index a JSON column: it answers that indexing is supported "only via generated
