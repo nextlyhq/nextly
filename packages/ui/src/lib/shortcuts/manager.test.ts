@@ -1684,3 +1684,101 @@ describe("a focused summary", () => {
     expect(run).not.toHaveBeenCalled();
   });
 });
+
+describe("controls that open something on activation", () => {
+  it("leaves a file input its chooser keys", () => {
+    // Reachable without anyone writing a raw element: the public `Input` accepts every native
+    // type, so a global Space binding would stop file selection anywhere one is rendered.
+    const run = vi.fn();
+    const manager = managerFor();
+    manager.register([binding("Space", run)], { name: "shell", depth: 0 });
+    const chooser = document.createElement("input");
+    chooser.type = "file";
+    document.body.append(chooser);
+    const detach = manager.attach(document);
+    chooser.dispatchEvent(press(" "));
+    detach();
+    chooser.remove();
+    expect(run).not.toHaveBeenCalled();
+  });
+});
+
+describe("an option inside an open listbox", () => {
+  it("keeps its type-ahead", () => {
+    // Radix focuses the OPTION, and that is what the event reports — the listbox is only an
+    // ancestor, so a check that reads the target's own role alone never sees it.
+    const run = vi.fn();
+    const manager = managerFor();
+    manager.register([binding("n", run)], { name: "shell", depth: 0 });
+    const list = document.createElement("div");
+    list.setAttribute("role", "listbox");
+    const option = document.createElement("div");
+    option.setAttribute("role", "option");
+    list.append(option);
+    document.body.append(list);
+    const detach = manager.attach(document);
+    option.dispatchEvent(press("n"));
+    detach();
+    list.remove();
+    expect(run).not.toHaveBeenCalled();
+  });
+});
+
+describe("a handler that throws", () => {
+  it("still stops the key reaching a window listener", () => {
+    // Dispatch continues to later listeners after an exception is reported. Leaving the event
+    // unstopped hands the same keystroke to a window-level owner — running a fallback as though
+    // nothing had happened, at the exact moment something did.
+    const onWindow = vi.fn();
+    const manager = managerFor();
+    manager.register(
+      [
+        {
+          keys: "mod+k",
+          description: "Throws",
+          run: () => {
+            throw new Error("handler failed");
+          },
+        },
+      ],
+      { name: "shell", depth: 0 }
+    );
+
+    const detach = manager.attach(document);
+    window.addEventListener("keydown", onWindow);
+    // The throw is the point of the test, and jsdom reports a listener exception as an `error`
+    // event rather than propagating it out of `dispatchEvent`. Claiming it here keeps a
+    // deliberate failure from being reported as an unhandled one.
+    const swallow = (e: Event): void => {
+      e.preventDefault();
+    };
+    window.addEventListener("error", swallow);
+    document.body.dispatchEvent(press("k", { ctrlKey: true }));
+    window.removeEventListener("error", swallow);
+    window.removeEventListener("keydown", onWindow);
+    detach();
+
+    expect(onWindow).not.toHaveBeenCalled();
+  });
+
+  it("still lets the error surface to the caller", () => {
+    // The control: stopping propagation must not swallow the failure, or a broken handler
+    // becomes invisible.
+    const manager = managerFor();
+    manager.register(
+      [
+        {
+          keys: "mod+k",
+          description: "Throws",
+          run: () => {
+            throw new Error("handler failed");
+          },
+        },
+      ],
+      { name: "shell", depth: 0 }
+    );
+    expect(() => manager.handle(press("k", { ctrlKey: true }))).toThrow(
+      "handler failed"
+    );
+  });
+});

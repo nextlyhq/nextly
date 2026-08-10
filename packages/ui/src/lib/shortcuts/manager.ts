@@ -277,6 +277,9 @@ function controlOwnsKey(
   // A colour input opens its native picker on either key, and this product puts focusable ones
   // on screen in the page builder's colour and gradient controls.
   if (type === "color") return event.key === " " || event.key === "Enter";
+  // A file input opens its chooser the same way, and the public `Input` accepts every native
+  // type, so this is reachable without anyone writing a raw input element.
+  if (type === "file") return event.key === " " || event.key === "Enter";
   // A range input is a slider: the arrows, Home/End and PageUp/PageDown are how its value moves.
   if (type === "range") {
     return event.key.startsWith("Arrow") || RANGE_KEYS.has(event.key);
@@ -747,7 +750,16 @@ export function createShortcutManager(
         // key must also stop bubbling, or a window-level owner runs the second half of the
         // double action this manager exists to remove — which is the state of the tree during a
         // staged migration, when some owners have moved over and some have not.
-        if (handle(event as KeyboardEvent)) event.stopPropagation();
+        try {
+          if (handle(event as KeyboardEvent)) event.stopPropagation();
+        } catch (error) {
+          // A binding whose callback threw still CLAIMED the key. Dispatch continues to later
+          // listeners after an exception is reported, so leaving the event unstopped would hand
+          // the same keystroke to a window-level owner and recreate the double action — with a
+          // failed handler, which is the worst moment to run a fallback as though nothing had.
+          event.stopPropagation();
+          throw error;
+        }
       };
       target.addEventListener("keydown", listener);
       return () => target.removeEventListener("keydown", listener);
@@ -787,6 +799,9 @@ const TYPE_AHEAD_ROLES = new Set([
   "textbox",
   "combobox",
   "listbox",
+  // The focused element inside an open listbox is the OPTION, and it is what the event reports;
+  // the listbox itself is only its ancestor.
+  "option",
   "menu",
   "menuitem",
   "menuitemcheckbox",
