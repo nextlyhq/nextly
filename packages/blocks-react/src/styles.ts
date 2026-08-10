@@ -356,38 +356,77 @@ function withGatedRules(
  * order are the same policy, and a label that disagreed would recompile every
  * stored sheet on a cosmetic reordering.
  *
- * The parts are joined with separators that cannot occur inside a hostname or a
- * glob, so two different policies cannot collide by running their fields
- * together — `{hostname: "a", pathname: "b"}` and `{hostname: "a|b"}` have to
- * stay distinguishable.
+ * Written as JSON, for two reasons that are both about being WRONG in a way
+ * nobody would see.
+ *
+ * It has to survive storage. This label is persisted inside the stylesheet
+ * artifact, and that artifact is written to a JSON column — which on PostgreSQL
+ * cannot hold a NUL byte at all. A separator chosen for being impossible in a
+ * hostname is exactly the kind that is also impossible to store, and the failure
+ * would be a save that errors only once a site turns the policy on.
+ *
+ * It has to keep ABSENT and EMPTY apart. `isAllowedRemoteUrl` reads an omitted
+ * `port` as "any port" and `port: ""` as "the default port only", so a policy
+ * tightened from one to the other is a different policy. Joining fields into a
+ * string collapses that difference, and a stylesheet compiled under the broader
+ * rule would go on being served under the narrower one. `JSON.stringify` drops
+ * an undefined field and keeps an empty one, which is precisely the distinction.
  */
 export function fetchPolicyLabel(
   patterns: readonly RemotePatternInput[] | undefined
 ): string | undefined {
   if (patterns === undefined) return undefined;
-  const parts = patterns.map(pattern =>
-    pattern instanceof URL
-      ? [
-          // A `URL` keeps the trailing colon on `protocol`; the object form does
-          // not. Stripped so the same policy written either way labels the same.
-          pattern.protocol.replace(/:$/, ""),
-          pattern.hostname,
-          pattern.port,
-          pattern.pathname,
-          pattern.search,
-        ].join("\u0000")
-      : [
-          pattern.protocol ?? "",
-          pattern.hostname,
-          pattern.port ?? "",
-          pattern.pathname ?? "",
-          pattern.search ?? "",
-        ].join("\u0000")
-  );
+  const parts = patterns.map(pattern => {
+    // A `URL` keeps the trailing colon on `protocol` and answers "" for the
+    // fields it has none of; the object form omits them. Normalised to the
+    // object's spelling so the same policy written either way labels the same.
+    const fields =
+      pattern instanceof URL
+        ? {
+            protocol: pattern.protocol.replace(/:$/, ""),
+            hostname: pattern.hostname,
+            port: pattern.port,
+            pathname: pattern.pathname,
+            search: pattern.search,
+          }
+        : {
+            protocol: pattern.protocol,
+            hostname: pattern.hostname,
+            port: pattern.port,
+            pathname: pattern.pathname,
+            search: pattern.search,
+          };
+    // Key order is fixed by writing the members out, so two equal patterns
+    // cannot label differently because they were built in a different order.
+    return JSON.stringify([
+      fields.protocol ?? null,
+      fields.hostname,
+      fields.port ?? null,
+      fields.pathname ?? null,
+      fields.search ?? null,
+    ]);
+  });
   // An EMPTY list is a real policy — it allows no remote host at all — and must
-  // not label the same as having no policy, which asks nothing.
-  return `v1\u0001${parts.sort().join("\u0001")}`;
+  // not label the same as having no policy, which asks nothing. The version
+  // prefix means a later change to this encoding invalidates old stamps rather
+  // than silently matching them.
+  return JSON.stringify(["v1", ...parts.sort()]);
 }
+
+/**
+ * The identity of a fetch policy that declines to identify itself.
+ *
+ * A plain word, and deliberately not valid `fetchPolicyLabel` output: every
+ * label this module produces is a JSON array, so no stored stamp can ever equal
+ * this. That makes "a custom predicate with no stated identity" mean recompile
+ * every time — the slow answer and the correct one, since the alternative is
+ * serving CSS whose URLs were admitted by a function that has since changed.
+ *
+ * Storage-safe on purpose. It can be STAMPED onto a recompiled artifact and
+ * written to a JSON column, so it must not carry the control characters an
+ * impossible-looking sentinel invites.
+ */
+export const UNIDENTIFIED_FETCH_POLICY = "unidentified-fetch-policy";
 
 /** Caller-supplied policy for one style resolution. */
 export interface ResolveStyleOptions {

@@ -26,6 +26,7 @@ import {
 } from "./resolver";
 import { dedupeNodeIds, sanitizeDocument } from "./sanitize";
 import {
+  UNIDENTIFIED_FETCH_POLICY,
   fetchPolicyLabel,
   isRecordedGatedEntry,
   readableGatedRules,
@@ -418,7 +419,19 @@ export function PageRenderer({
   // checked against. Derived from the patterns themselves so it changes exactly
   // when they do: an editor who adds a host gets every stored sheet recompiled
   // once, with nothing to remember to invalidate.
-  const fetchPolicyId = fetchPolicyLabel(patterns);
+  //
+  // A caller's OWN predicate is authoritative and opaque. It can encode rules no
+  // pattern list describes, and nothing here can tell one such function from
+  // another, so no label can describe it — and reusing a stored sheet across a
+  // change to it would serve CSS whose URLs were admitted by rules that no
+  // longer hold. A caller wanting its sheets cached states which policy its
+  // predicate IS, through `fetchPolicyId` on the style context. One that does
+  // not gets the safe answer rather than the fast one: an identity no artifact
+  // can carry, so every stored sheet reads as compiled under another policy.
+  const fetchPolicyId =
+    styleContext?.mayFetchUrl === undefined
+      ? fetchPolicyLabel(patterns)
+      : (styleContext.fetchPolicyId ?? UNIDENTIFIED_FETCH_POLICY);
   const compileContext =
     styleContext === undefined
       ? undefined

@@ -291,3 +291,119 @@ describe("a stored stylesheet records the policy that compiled it", () => {
     expect(fetchPolicyLabel(undefined)).toBeUndefined();
   });
 });
+
+describe("the policy label as a stored value", () => {
+  it("carries no character a JSON column cannot hold", () => {
+    // The label is persisted INSIDE the stylesheet artifact, and that artifact
+    // is written to a JSON column. PostgreSQL's text-backed JSON types cannot
+    // represent a NUL at all, so a separator picked for being impossible in a
+    // hostname is also impossible to store — and the failure would be a save
+    // that only errors once a site turns the policy on.
+    const label = fetchPolicyLabel([
+      { protocol: "https", hostname: "cdn.example", pathname: "/img/**" },
+      { protocol: "http", hostname: "*.other.test" },
+    ]);
+    expect(label).toBeDefined();
+    for (const character of label ?? "") {
+      expect(character.codePointAt(0)).toBeGreaterThan(0x1f);
+    }
+    // It has to survive the round trip it will actually make.
+    expect(JSON.parse(JSON.stringify({ label })).label).toBe(label);
+  });
+
+  it("keeps an omitted field apart from an empty one", () => {
+    // `isAllowedRemoteUrl` reads an omitted `port` as "any port" and `port: ""`
+    // as "the default port only". Those are different policies, and a label
+    // that collapsed them would keep serving a sheet compiled under the broader
+    // one after a site tightened to the narrower.
+    const anyPort = fetchPolicyLabel([
+      { protocol: "https", hostname: "cdn.example" },
+    ]);
+    const defaultPortOnly = fetchPolicyLabel([
+      { protocol: "https", hostname: "cdn.example", port: "" },
+    ]);
+    expect(anyPort).not.toBe(defaultPortOnly);
+
+    const anyPath = fetchPolicyLabel([
+      { protocol: "https", hostname: "a.test" },
+    ]);
+    const emptyPath = fetchPolicyLabel([
+      { protocol: "https", hostname: "a.test", pathname: "" },
+    ]);
+    expect(anyPath).not.toBe(emptyPath);
+  });
+
+  it("does not claim a URL pattern equals the object spelling of it", () => {
+    // Written as an assertion of DIFFERENCE, because the difference is real and
+    // easy to assume away. `new URL("https://cdn.example/img/**")` answers `""`
+    // for both `port` and `search`, and the matcher reads a stated `port` as an
+    // exact requirement — so a URL pattern pins the default port and an empty
+    // query, while the object without those fields accepts any of either.
+    //
+    // The label must therefore keep them apart, for exactly the reason it keeps
+    // an omitted port apart from an empty one.
+    const asObject = fetchPolicyLabel([
+      { protocol: "https", hostname: "cdn.example", pathname: "/img/**" },
+    ]);
+    const asUrl = fetchPolicyLabel([new URL("https://cdn.example/img/**")]);
+    expect(asObject).not.toBe(asUrl);
+
+    // The spelling that DOES mean the same labels the same, which is what shows
+    // the difference above is about the fields and not about the input type.
+    const explicit = fetchPolicyLabel([
+      {
+        protocol: "https",
+        hostname: "cdn.example",
+        port: "",
+        pathname: "/img/**",
+        search: "",
+      },
+    ]);
+    expect(explicit).toBe(asUrl);
+  });
+});
+
+describe("a caller's own fetch predicate", () => {
+  const doc = styledDocument("https://cdn.other.test/a.png");
+  const stored: PageStyles = {
+    css: ".nx-n1{color:rebeccapurple}",
+    classes: { n1: "nx-n1" },
+  };
+
+  it("never reuses a stored sheet when the predicate is unidentified", () => {
+    // A predicate is opaque: nothing can tell one function from another, so a
+    // stored sheet cannot be shown to have been compiled under this one. The
+    // safe answer is to recompile, and it must not depend on the pattern list
+    // happening to be absent on both sides.
+    const markup = renderToStaticMarkup(
+      <PageRenderer
+        document={doc}
+        blocks={createBlockResolver(coreBlocks)}
+        styles={stored}
+        styleContext={{
+          breakpoints: { viewport: [], container: [] },
+          mayFetchUrl: () => true,
+        }}
+      />
+    );
+    expect(markup).not.toContain("rebeccapurple");
+  });
+
+  it("reuses one when the caller states which policy its predicate is", () => {
+    // The control, and the reason the escape hatch exists: a caller that CAN
+    // name its policy keeps its sheets cached.
+    const markup = renderToStaticMarkup(
+      <PageRenderer
+        document={doc}
+        blocks={createBlockResolver(coreBlocks)}
+        styles={{ ...stored, fetchPolicyId: "mine-v3" }}
+        styleContext={{
+          breakpoints: { viewport: [], container: [] },
+          mayFetchUrl: () => true,
+          fetchPolicyId: "mine-v3",
+        }}
+      />
+    );
+    expect(markup).toContain("rebeccapurple");
+  });
+});
