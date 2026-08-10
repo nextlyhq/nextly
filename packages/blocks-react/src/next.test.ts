@@ -108,11 +108,15 @@ describe("createBlocksPage", () => {
     expect(props.context?.entry).toMatchObject({ slug: "about" });
   });
 
-  it("reads the locale the row was resolved in", async () => {
+  it("reports the locale the ROUTE read in, not one inferred from the row", async () => {
+    // The companion overlay copies localized values onto the entry without
+    // stamping which locale produced them, so a row-derived locale is absent on
+    // exactly the localized pages that need it.
     const props = await render({
       collections: ["pages"],
       field: "content",
-      nextly: reader({ slug: "about", content: document, _locale: "fr" }),
+      locale: "fr",
+      nextly: reader({ slug: "about", content: document }),
     });
 
     expect(props.context?.locale).toBe("fr");

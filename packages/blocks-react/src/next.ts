@@ -26,7 +26,7 @@ import type {
   StyleCompileContext,
 } from "@nextlyhq/blocks-engine";
 import type { Metadata } from "next";
-import { createContentRoute } from "nextly/runtime";
+import { createContentRoute, nextlyTags } from "nextly/runtime";
 import type {
   ContentEntry,
   ContentRoute,
@@ -64,7 +64,9 @@ export const BLOCKS_REACT_NEXT_ENTRY = "@nextlyhq/blocks-react/next";
  * guess at something it was already told.
  */
 const WORKING_DRAFT_KEY = "_isWorkingDraft";
-const LOCALE_KEY = "_locale";
+
+/** What ordinary Nextly media is tagged under for cache invalidation. */
+const MEDIA_TAG_COLLECTION = "media";
 
 /**
  * Config for {@link createBlocksPage}.
@@ -279,12 +281,6 @@ async function firstUsableImage(
   return undefined;
 }
 
-/** A string property of the row, when it is one. */
-function stringField(entry: ContentEntry, key: string): string | undefined {
-  const value = entry[key];
-  return typeof value === "string" ? value : undefined;
-}
-
 /**
  * Read a media record and describe it the way a block expects.
  *
@@ -440,6 +436,18 @@ export function createBlocksPage(
 
   return createContentRoute<ReactElement>({
     ...routeConfig,
+    // The page is tagged for the records its BLOCKS read, not only for the
+    // collection it was resolved from. The media and entry-path resolvers read
+    // through plain `findByID`, which contributes no tag, so without this a
+    // page cached under `overrideAccess` kept a stale image URL or alt text
+    // until something else invalidated it. A site whose blocks reference OTHER
+    // collections adds those tags itself through `tags`, which is why these are
+    // merged rather than replacing what the caller passed.
+    tags: [
+      ...(routeConfig.tags ?? []),
+      ...nextlyTags(config.mediaCollection ?? MEDIA_TAG_COLLECTION),
+      ...routeConfig.collections.flatMap(collection => nextlyTags(collection)),
+    ],
     // Supplied only when asked for, so a route without it keeps whatever
     // `buildMetadata` the caller passed straight through to the content route.
     ...(metadata
@@ -472,7 +480,11 @@ export function createBlocksPage(
       // has to be told which one it got.
       const pageContext: PageContext = createStandaloneContext({
         entry,
-        locale: stringField(entry, LOCALE_KEY),
+        // Reported by the route, not read off the row: the companion overlay
+        // copies localized values onto the entry without stamping which locale
+        // produced them, so inferring it here finds nothing on exactly the
+        // localized pages that need it.
+        locale: context.locale,
         isWorkingDraft: entry[WORKING_DRAFT_KEY] === true,
         data,
         resolveMedia,

@@ -62,6 +62,17 @@ export interface ResolvedContext {
 export interface RenderContext extends ResolvedContext {
   /** The instance this route resolved the entry through. */
   reader: NextlyContentReader;
+  /**
+   * The locale this route read in, when it was configured for one.
+   *
+   * Carried explicitly rather than read back off the row: the companion
+   * overlay copies localized values ONTO the entry without stamping which
+   * locale they came from, so a render inferring it from the row would find
+   * nothing on exactly the localized pages that need it — and a block or data
+   * provider reading in a different language than the page around it is a
+   * mismatch nothing surfaces as an error.
+   */
+  locale?: string;
 }
 
 /**
@@ -144,6 +155,11 @@ export interface ContentRouteConfig<TNode> {
   draft?:
     | boolean
     | ((context: ResolvedContext) => DraftGrant | Promise<DraftGrant>);
+  /**
+   * Read this locale on localized collections, and report it to `render` and
+   * `buildMetadata` as `context.locale`. Omit for the default locale.
+   */
+  locale?: string;
   /** Relation depth for the resolved read (default `1`). */
   depth?: number;
   /** A booted Nextly instance (defaults to `getNextly()`). */
@@ -313,6 +329,7 @@ export function createContentRoute<TNode>(
       const entry = await resolveContent(collection, slug, {
         nextly: config.nextly,
         slugField,
+        ...(config.locale ? { locale: config.locale } : {}),
         // `status` is left to widen itself when a draft is asked for, so a
         // route cannot end up previewing with only one of the two draft layers
         // switched on.
@@ -339,7 +356,15 @@ export function createContentRoute<TNode>(
       // compares a POST-`afterRead` document, so a collection that reshapes its
       // public read would fail a valid grant and send the editor to live
       // content.
-      return { entry, context: { collection, slug, reader: getInstance() } };
+      return {
+        entry,
+        context: {
+          collection,
+          slug,
+          reader: getInstance(),
+          ...(config.locale ? { locale: config.locale } : {}),
+        },
+      };
     }
     return null;
   }
