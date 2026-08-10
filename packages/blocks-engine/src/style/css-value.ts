@@ -32,10 +32,21 @@ export type CssValueRejection =
   | "unsafe-characters"
   | "unsafe-url-scheme"
   | "unsafe-url-characters"
+  | "url-host-not-allowed"
   | "too-deeply-nested"
   | "too-long"
   | "not-a-length"
   | "not-a-color";
+
+/**
+ * Whether this site will fetch a URL, asked of every URL a stylesheet emits.
+ *
+ * A PREDICATE rather than a list of patterns, so the engine stays free of the
+ * matching rules and the caller keeps one answer for every channel it owns. It
+ * is optional everywhere it appears: a caller with no host policy asks nothing
+ * and gets the scheme allowlist alone.
+ */
+export type MayFetchUrl = (url: string) => boolean;
 
 /**
  * Characters that must never reach a declaration, even inside a value that
@@ -56,8 +67,12 @@ const COMMENT_DELIMITERS = /\/\*|\*\//;
 /**
  * URL schemes allowed inside `url()`. An allowlist rather than a blocklist:
  * a blocklist has to predict every dangerous scheme, and misses the next one.
- * Relative paths, absolute paths and protocol-relative URLs carry no scheme and
- * are allowed by having none to reject.
+ *
+ * Having no scheme is not the same as naming no host. A relative or absolute
+ * path resolves against the page's own origin, but `//cdn.example/a.png` carries
+ * no scheme and still reaches ANOTHER host, inheriting only the page's protocol.
+ * This list cannot tell those apart, so which hosts may be reached is a separate
+ * question, asked of `mayFetchUrl` below.
  */
 const ALLOWED_URL_SCHEMES: readonly string[] = ["http", "https"];
 
@@ -994,9 +1009,12 @@ function unquotedUrlText(children: Iterable<CssNode>): string | null {
  * validator. Failing closed costs a value that was already at the limit; the
  * alternative turns a document write into a server error.
  */
-function nestedUrlRejection(ast: CssNode): CssValueRejection | null {
+function nestedUrlRejection(
+  ast: CssNode,
+  mayFetchUrl: MayFetchUrl | undefined
+): CssValueRejection | null {
   try {
-    return walkForUrlRejection(ast);
+    return walkForUrlRejection(ast, mayFetchUrl);
   } catch {
     return "too-deeply-nested";
   }
@@ -1004,17 +1022,23 @@ function nestedUrlRejection(ast: CssNode): CssValueRejection | null {
 
 function walkForUrlRejection(
   node: CssNode,
+  // Before the two defaulted parameters on purpose: a caller that slots an
+  // argument wrongly gets a type error rather than a predicate silently dropped,
+  // which would leave every URL in the value unasked about.
+  mayFetchUrl: MayFetchUrl | undefined,
   urlContext = false,
   depth = 0
 ): CssValueRejection | null {
   switch (node.type) {
     case "Url":
-      return checkUrlValue(node.value, "quoted");
+      return checkUrlValue(node.value, "quoted", mayFetchUrl);
     case "String":
       // A quoted string is a URL only where the function around it loads one.
       // The same string is a font family somewhere else, so the surrounding
       // context decides, not the node.
-      return urlContext ? checkUrlValue(node.value, "quoted") : null;
+      return urlContext
+        ? checkUrlValue(node.value, "quoted", mayFetchUrl)
+        : null;
     case "Raw": {
       // A custom property's fallback is kept unparsed, so it has to be read
       // back or `var(--x, url("javascript:…"))` reaches the page whenever the
@@ -1027,7 +1051,7 @@ function walkForUrlRejection(
       const parsed = parseValue(node.value);
       return parsed === null
         ? null
-        : walkForUrlRejection(parsed, urlContext, depth + 1);
+        : walkForUrlRejection(parsed, mayFetchUrl, urlContext, depth + 1);
     }
     default:
       break;
@@ -1047,7 +1071,7 @@ function walkForUrlRejection(
         const text = unquotedUrlText(node.children);
         return text === null
           ? "unsafe-url-characters"
-          : checkUrlValue(text, "raw");
+          : checkUrlValue(text, "raw", mayFetchUrl);
       }
     } else if (name !== "var" && name !== "env") {
       // A reference passes its context through to whatever stands in for it;
@@ -1057,7 +1081,7 @@ function walkForUrlRejection(
     }
   }
   for (const child of node.children) {
-    const rejection = walkForUrlRejection(child, inner, depth);
+    const rejection = walkForUrlRejection(child, mayFetchUrl, inner, depth);
     if (rejection !== null) return rejection;
   }
   return null;
@@ -1138,7 +1162,10 @@ function nestingDepth(value: string): number {
  * Check a CSS value for parseability and unsafe characters. Returns `null` when
  * the value is safe to emit.
  */
-export function checkCssValue(value: string): CssValueRejection | null {
+export function checkCssValue(
+  value: string,
+  mayFetchUrl?: MayFetchUrl
+): CssValueRejection | null {
   // The size cap goes first because it is the only constant-time check here:
   // trimming an oversized string scans and copies all of it before anything
   // decides the value was never going to be read.
@@ -1155,7 +1182,7 @@ export function checkCssValue(value: string): CssValueRejection | null {
   // the PARSED node rather than the raw text because the parser decodes CSS
   // escapes: `url("\6a avascript:...")` arrives here as `javascript:...`, which
   // a scan of the original string would not recognise.
-  return nestedUrlRejection(ast);
+  return nestedUrlRejection(ast, mayFetchUrl);
 }
 
 /**
@@ -1655,7 +1682,11 @@ type UrlContext = "raw" | "quoted";
  */
 export function checkUrlValue(
   value: string,
-  context: UrlContext = "raw"
+  context: UrlContext = "raw",
+  // Which hosts this site will fetch from, when the caller has an answer. A
+  // string is passed rather than a parsed URL because the emitted declaration
+  // carries the string, and re-serialising a parse would let the two differ.
+  mayFetchUrl?: MayFetchUrl
 ): CssValueRejection | null {
   // A dedicated URL property does not pass through the free-form value check,
   // so without this its own cap is the document byte limit: one stored value
@@ -1678,11 +1709,17 @@ export function checkUrlValue(
   }
   // Checked against the raw value, not a trimmed copy: trimming first would
   // quietly discard a trailing newline rather than refuse it, and the value
-  // emitted is the one stored, not the trimmed one. No scheme at all is a
-  // relative, absolute, or protocol-relative path, which resolves against the
-  // page's own origin and needs no allowlisting.
+  // emitted is the one stored, not the trimmed one.
   const unsafe =
     context === "quoted" ? UNSAFE_QUOTED_URL_CHARS : UNSAFE_URL_CHARS;
   if (unsafe.test(value)) return "unsafe-url-characters";
+  // Asked LAST, of a value already known to be well formed, so the host rule is
+  // never the reason given for a value that was going to be refused anyway. A
+  // caller with no host policy leaves this undefined and nothing changes: the
+  // scheme allowlist above is then the only limit, which is what every caller
+  // outside a configured site gets today.
+  if (mayFetchUrl !== undefined && !mayFetchUrl(value)) {
+    return "url-host-not-allowed";
+  }
   return null;
 }
