@@ -21,6 +21,7 @@
 "@nextlyhq/prettier-config": patch
 "@nextlyhq/telemetry": patch
 "@nextlyhq/tsconfig": patch
+"@nextlyhq/builder": patch
 ---
 
 Add the @nextlyhq/builder package. It contains no features yet: the visual editor is built on top of it in the phase that follows.
