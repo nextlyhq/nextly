@@ -127,10 +127,15 @@ describe("the blocks entry", () => {
     // without adding it to `coreBlocks` fails here. Naming one member instead
     // would leave the other eleven unchecked, which is the exact hole this
     // guard exists to close.
-    const exported = Object.values(blocksEntry)
-      .filter(isBlockDefinition)
-      .map(block => block.name)
-      .sort();
+    // Widened to `unknown` before the guard runs: the entry's values are a
+    // heterogeneous union (definitions, a readonly tag list, a class name, the
+    // array itself), and a predicate cannot narrow out of that union directly.
+    const exported: string[] = [];
+    for (const value of Object.values(blocksEntry)) {
+      const candidate: unknown = value;
+      if (isBlockDefinition(candidate)) exported.push(candidate.name);
+    }
+    exported.sort();
     const registered = blocksEntry.coreBlocks.map(block => block.name).sort();
 
     expect(exported.length).toBeGreaterThan(0);
