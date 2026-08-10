@@ -3009,6 +3009,44 @@ describe("PageRenderer", () => {
       }
     );
 
+    it("still withholds when the gated map does not cover every pruned node", async () => {
+      // A stored artifact can be stale relative to the document it is rendered with: compiled when
+      // `a` was unconditional, so `a`'s rules are in `css`, while `b` was already gated and has an
+      // entry. If `a` later gains conditions, it is pruned — and a coverage test that only asks
+      // whether a map EXISTS sees `b`'s entry, calls gating covered, and serves the stored sheet
+      // with `a`'s asset still in it.
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", {
+              props: { value: "newly gated body" },
+              visibility: {
+                conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+              },
+            }),
+            node("b", "test/text", {
+              props: { value: "long gated body" },
+              visibility: {
+                conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+              },
+            }),
+            node("c", "test/text", { props: { value: "public body" } })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+          styles={{
+            css: ".nx-a { background-image: url(/stale-asset.png) }",
+            classes: { a: "nx-a", b: "nx-b", c: "nx-c" },
+            // Covers `b` only. `a` was compiled into `css` before it was gated.
+            gated: { b: ".nx-b { color: teal }" },
+          }}
+        />
+      );
+
+      expect(html).not.toContain("newly gated body");
+      expect(html).not.toContain("stale-asset.png");
+      expect(html).toContain("public body");
+    });
+
     it("recompiles rather than withholding when it can", async () => {
       // With a compile context present there is no need to lose the styling:
       // the sheet is rebuilt from the pruned document, so the visible nodes keep

@@ -87,6 +87,36 @@ function rendersOwnMarkup(node: BlockNode, resolver: BlockResolver): boolean {
 }
 
 /**
+ * Whether the artifact's gated map accounts for every node the prune removed.
+ *
+ * "A map is present" is not coverage. A stored artifact can be stale relative to the document it
+ * is rendered with — compiled when one node was unconditional, so its rules are in `css`, while a
+ * different node was already gated and has an entry. The map exists, but it does not cover the
+ * node that was actually pruned, and serving the stored sheet publishes that node's rules and
+ * asset URLs.
+ *
+ * The compiler writes an entry for EVERY gated node, including one with no styles of its own, so
+ * an id missing from the map means the artifact was compiled when that node was not gated. That
+ * makes presence-per-removed-id an exact test rather than a heuristic.
+ */
+function gatedMapCoversPrunedNodes(
+  before: BlockDocument,
+  after: BlockDocument,
+  gated: Readonly<Record<string, unknown>>
+): boolean {
+  const surviving = new Set<string>();
+  walkNodes(after.nodes, node => {
+    surviving.add(node.id);
+  });
+  let covered = true;
+  walkNodes(before.nodes, node => {
+    if (surviving.has(node.id)) return;
+    if (!Object.prototype.hasOwnProperty.call(gated, node.id)) covered = false;
+  });
+  return covered;
+}
+
+/**
  * Whether any id appears on more than one node.
  *
  * The compiler suppresses the node-local rules of every node sharing an id, so a stored sheet
@@ -296,9 +326,11 @@ export function PageRenderer({
   // that renders — `visible === pruned`, nothing to repair — while the stored
   // sheet is still missing the SURVIVOR's rules. The pre-prune document is the
   // only place that evidence still exists.
+  const gatedRules = readableGatedRules(styles);
   const gatingCoveredByArtifact =
     pruned !== doc &&
-    readableGatedRules(styles) !== undefined &&
+    gatedRules !== undefined &&
+    gatedMapCoversPrunedNodes(doc, pruned, gatedRules) &&
     !hasDuplicateNodeIds(doc);
 
   const repairedDocument =
