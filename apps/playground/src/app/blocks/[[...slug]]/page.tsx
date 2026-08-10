@@ -1,8 +1,8 @@
 /**
  * Public route for the code-first blocks renderer.
  *
- * The whole route is `createBlocksPage` plus the three re-exports Next wants —
- * there is no per-request wiring here, which is the point of the helper.
+ * The whole route is `createBlocksPage` plus the re-exports Next wants — there
+ * is no per-request wiring here, which is the point of the helper.
  *
  * The document this renders is a `@nextlyhq/blocks-engine` `BlockDocument`, NOT
  * the page builder's `BlockNode`. They are different shapes (`styles` and a
