@@ -61,6 +61,8 @@ export interface EmailProviderCapabilities {
   attachments?: boolean;
   connectionTest?: boolean;
   replyTo?: boolean;
+  /** Only accepts a sender on a domain verified with the provider. */
+  requiresVerifiedSender?: boolean;
 }
 
 /**

@@ -101,6 +101,19 @@ export interface EmailProviderCapabilities {
   connectionTest?: boolean;
   /** Honours a Reply-To address. */
   replyTo?: boolean;
+  /**
+   * Only accepts a sender on a domain verified with the provider.
+   *
+   * Declared rather than inferred. A hosted API provider generally requires it
+   * and a self-hosted relay does not, but nothing else in the descriptor
+   * distinguishes them — using the presence of `docsUrl` as the signal reads as
+   * a rule and is a coincidence, and it silently drops the warning for any
+   * provider that documents itself elsewhere.
+   *
+   * The consequence of getting it wrong is quiet: a provider saves cleanly with
+   * an unusable sender and fails at the first send.
+   */
+  requiresVerifiedSender?: boolean;
 }
 
 /**
@@ -145,6 +158,34 @@ export interface EmailProviderDefinition<TConfig = Record<string, unknown>> {
   testConnection?: (
     config: TConfig
   ) => Promise<{ ok: boolean; detail?: string }>;
+}
+
+/**
+ * The control kinds a credential may be entered with.
+ *
+ * A secret is masked on read, which means the value a client holds for it is a
+ * STRING that stands for the stored one. Only a textual control can carry that:
+ * a switch has nowhere to put a mask, a select would have to list it as an
+ * option, and a number input rejects it outright. A provider declaring `secret`
+ * on any of those describes a field that cannot be edited without being
+ * replaced, so it is refused where the definition is written rather than
+ * discovered when someone tries to save one.
+ */
+const SECRET_CAPABLE_KINDS: ReadonlyArray<EmailProviderConfigField["kind"]> = [
+  "text",
+  "password",
+];
+
+/** The single error for a credential declared on a control that cannot hold one. */
+export function secretFieldMustBeTextual(
+  type: string,
+  field: EmailProviderConfigField
+): NextlyError {
+  return new NextlyError({
+    code: "BUSINESS_RULE_VIOLATION",
+    publicMessage: `Email provider "${type}" marks the ${field.kind} field "${field.name}" as secret. A credential is masked on read, so it can only be declared on a text or password field. Change the kind, or drop \`secret\`.`,
+    logContext: { type, field: field.name, kind: field.kind },
+  });
 }
 
 /**
@@ -224,6 +265,12 @@ export function defineEmailProvider<TConfig>(
 ): RegisteredEmailProvider {
   if (definition.type.length > MAX_EMAIL_PROVIDER_TYPE_LENGTH) {
     throw emailProviderTypeTooLong(definition.type);
+  }
+
+  for (const field of definition.configFields) {
+    if (field.secret === true && !SECRET_CAPABLE_KINDS.includes(field.kind)) {
+      throw secretFieldMustBeTextual(definition.type, field);
+    }
   }
 
   // Captured so the branch below narrows: an optional read off the object

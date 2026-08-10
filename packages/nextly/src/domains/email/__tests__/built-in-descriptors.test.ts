@@ -14,7 +14,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { toDescriptor } from "../provider-definition";
+import { defineEmailProvider, toDescriptor } from "../provider-definition";
 import {
   BUILT_IN_EMAIL_PROVIDERS,
   resendDefinition,
@@ -91,6 +91,25 @@ describe("built-in provider descriptors", () => {
     }
   });
 
+  it("declares a verified-sender requirement rather than implying it", () => {
+    // The admin warns about this, and it used to infer it from `docsUrl` being
+    // present -- true of the built-ins by coincidence and of nothing in
+    // general, so a provider documenting itself elsewhere lost the warning and
+    // could be saved with a sender it can never send from.
+    expect(
+      toDescriptor(resendDefinition).capabilities.requiresVerifiedSender
+    ).toBe(true);
+    expect(
+      toDescriptor(sendLayerDefinition).capabilities.requiresVerifiedSender
+    ).toBe(true);
+    // The negative control. A relay the operator runs accepts whatever sender
+    // it is configured to accept, so asserting the flag on all three would
+    // pass without the distinction meaning anything.
+    expect(
+      toDescriptor(smtpDefinition).capabilities.requiresVerifiedSender
+    ).toBeUndefined();
+  });
+
   it("advertises a connection test only where a probe exists", () => {
     // SMTP can open a session and authenticate; a REST provider cannot check
     // anything short of sending, so offering the button would be a lie.
@@ -142,6 +161,62 @@ describe("descriptor constraints are honoured by the parser", () => {
     ).toThrow();
     expect(() =>
       smtpDefinition.validateConfig({ ...config, port: 465 })
+    ).not.toThrow();
+  });
+});
+
+describe("a credential can only be declared on a control that can hold one", () => {
+  // A secret is masked on read, so the value a client holds for it is a string
+  // standing in for the stored one. A switch has nowhere to put that, a select
+  // would have to list it as an option, and a number input rejects it. Refused
+  // where the definition is written, so the failure names the plugin at boot
+  // instead of appearing as a form nobody can submit.
+  const base = {
+    type: "fixture",
+    label: "Fixture",
+    parseConfig: (input: unknown) => input as Record<string, unknown>,
+    createAdapter: () => ({
+      send: () => Promise.resolve({ success: true, messageId: "x" }),
+    }),
+  };
+
+  it.each(["boolean", "number", "select"] as const)(
+    "refuses a secret %s field",
+    kind => {
+      expect(() =>
+        defineEmailProvider({
+          ...base,
+          configFields: [
+            { name: "credential", label: "Credential", kind, secret: true },
+          ],
+        })
+      ).toThrow(/can only be declared on a text or password field/);
+    }
+  );
+
+  it.each(["text", "password"] as const)("accepts a secret %s field", kind => {
+    expect(() =>
+      defineEmailProvider({
+        ...base,
+        configFields: [
+          { name: "credential", label: "Credential", kind, secret: true },
+        ],
+      })
+    ).not.toThrow();
+  });
+
+  it("leaves a non-secret field of any kind alone", () => {
+    // The positive control for the rule's scope: it is `secret` that is
+    // restricted, not the kinds themselves.
+    expect(() =>
+      defineEmailProvider({
+        ...base,
+        configFields: [
+          { name: "sandbox", label: "Sandbox", kind: "boolean" },
+          { name: "retries", label: "Retries", kind: "number" },
+          { name: "region", label: "Region", kind: "select", options: [] },
+        ],
+      })
     ).not.toThrow();
   });
 });

@@ -189,7 +189,14 @@ export const resendDefinition: RegisteredEmailProvider = defineEmailProvider({
   label: "Resend",
   description: "Send through the Resend API.",
   docsUrl: "https://resend.com/docs/api-reference/emails/send-email",
-  capabilities: { attachments: true, replyTo: true },
+  // A hosted API that only accepts senders on a domain verified in the account.
+  // Declared, because nothing else in the descriptor distinguishes a hosted
+  // provider from a relay the operator runs themselves.
+  capabilities: {
+    attachments: true,
+    replyTo: true,
+    requiresVerifiedSender: true,
+  },
   configFields: [
     {
       name: "apiKey",
@@ -210,7 +217,12 @@ export const sendLayerDefinition: RegisteredEmailProvider = defineEmailProvider(
     type: "sendlayer",
     label: "SendLayer",
     description: "Send through the SendLayer API.",
-    capabilities: { attachments: true, replyTo: true },
+    docsUrl: "https://sendlayer.com/docs/",
+    capabilities: {
+      attachments: true,
+      replyTo: true,
+      requiresVerifiedSender: true,
+    },
     configFields: [
       {
         name: "apiKey",

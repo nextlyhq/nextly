@@ -155,8 +155,13 @@ describe("configuration assembly", () => {
 
 describe("untouched credentials", () => {
   it("drops the mask from the payload so the stored secret is kept", () => {
-    const values = providerToFormValues(record(), smtpDescriptor);
-    const payload = formValuesToPayload(values);
+    const stored = record();
+    const values = providerToFormValues(stored, smtpDescriptor);
+    const payload = formValuesToPayload(
+      values,
+      smtpDescriptor,
+      stored.configuration
+    );
 
     // Absent, not empty: the server merges what it receives over the stored
     // configuration, so an omitted credential keeps its value while an empty
@@ -170,7 +175,8 @@ describe("untouched credentials", () => {
   });
 
   it("sends a credential the user actually typed", () => {
-    const values = providerToFormValues(record(), smtpDescriptor);
+    const stored = record();
+    const values = providerToFormValues(stored, smtpDescriptor);
     const edited: ProviderFormValues = {
       ...values,
       configuration: {
@@ -179,9 +185,66 @@ describe("untouched credentials", () => {
       },
     };
 
-    expect(formValuesToPayload(edited).configuration).toMatchObject({
+    expect(
+      formValuesToPayload(edited, smtpDescriptor, stored.configuration)
+        .configuration
+    ).toMatchObject({
       auth: { user: "postmaster", pass: "a-new-password" },
     });
+  });
+
+  it("sends a credential the user typed OUT OF MASK CHARACTERS", () => {
+    // Nothing about a value's characters makes it a mask. Deciding by pattern
+    // discarded a password like this one: the create failed as though the
+    // field were blank, and the update reported success while keeping the old
+    // secret. Deciding by comparison against what the server actually sent
+    // cannot make that mistake.
+    const stored = record();
+    const values = providerToFormValues(stored, smtpDescriptor);
+    const edited: ProviderFormValues = {
+      ...values,
+      configuration: {
+        ...values.configuration,
+        auth: { user: "postmaster", pass: "••••••••••••" },
+      },
+    };
+
+    expect(
+      formValuesToPayload(edited, smtpDescriptor, stored.configuration)
+        .configuration
+    ).toMatchObject({ auth: { pass: "••••••••••••" } });
+  });
+
+  it("keeps a NON-secret field whose value looks like a mask", () => {
+    // `token` is not declared secret, so its value is nobody's business but
+    // the provider's -- including when it happens to be a row of asterisks.
+    const values: ProviderFormValues = {
+      ...defaultFormValues(contributedDescriptor),
+      configuration: { region: "eu", token: "***" },
+    };
+
+    expect(
+      formValuesToPayload(values, contributedDescriptor, {
+        region: "eu",
+        token: "old",
+      }).configuration
+    ).toEqual({ region: "eu", token: "***" });
+  });
+
+  it("sends everything when creating, since nothing is stored to compare", () => {
+    const values: ProviderFormValues = {
+      ...defaultFormValues(smtpDescriptor),
+      configuration: {
+        host: "smtp.example.com",
+        port: 587,
+        secure: false,
+        auth: { user: "u", pass: "••••••••" },
+      },
+    };
+
+    expect(
+      formValuesToPayload(values, smtpDescriptor).configuration
+    ).toMatchObject({ auth: { pass: "••••••••" } });
   });
 
   it("treats older asterisk masks as untouched too", () => {
@@ -336,7 +399,12 @@ describe("a field named like a credential", () => {
 
     // The case that proves metadata beat the key-name heuristic: `token` is
     // not a secret here, so it must survive the strip that removes masks.
-    expect(formValuesToPayload(values).configuration).toEqual({
+    expect(
+      formValuesToPayload(values, contributedDescriptor, {
+        region: "eu",
+        token: "previous",
+      }).configuration
+    ).toEqual({
       region: "eu",
       token: "public-token-value",
     });

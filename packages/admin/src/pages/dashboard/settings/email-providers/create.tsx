@@ -6,8 +6,7 @@ import { useCallback } from "react";
 import {
   EMAIL_PROVIDER_FORM_ID,
   EmailProviderForm,
-  formValuesToPayload,
-  type ProviderFormValues,
+  type EmailProviderPayload,
 } from "@admin/components/features/settings/EmailProviderForm";
 import { SettingsLayout } from "@admin/components/features/settings/SettingsLayout";
 import { Loader2 } from "@admin/components/icons";
@@ -36,13 +35,11 @@ export default function CreateEmailProviderPage() {
   } = useEmailProviderTypes();
 
   const handleSubmit = useCallback(
-    (values: ProviderFormValues) => {
-      const payload = formValuesToPayload(values);
-
+    (payload: EmailProviderPayload) => {
       createProvider(payload, {
         onSuccess: () => {
           toast.success("Provider created", {
-            description: `${values.name} has been created successfully.`,
+            description: `${payload.name} has been created successfully.`,
           });
           navigateTo(ROUTES.SETTINGS_EMAIL_PROVIDERS);
         },

@@ -386,30 +386,86 @@ export function providerToFormValues(
   };
 }
 
+/** Remove a value at a dotted path, pruning any branch it leaves empty. */
+function deleteAtPath(config: Record<string, unknown>, path: string[]): void {
+  const [head, ...rest] = path;
+  if (rest.length === 0) {
+    delete config[head];
+    return;
+  }
+  const branch = config[head];
+  if (branch === null || typeof branch !== "object") return;
+  const nested = branch as Record<string, unknown>;
+  deleteAtPath(nested, rest);
+  // An emptied branch is dropped rather than sent as `{}`: the server merges
+  // what it receives, and a bare object says nothing the omission does not.
+  if (Object.keys(nested).length === 0) delete config[head];
+}
+
 /**
- * Drop the values the user did not touch.
+ * Drop the credentials the user did not touch.
  *
- * An untouched credential is the mask, and sending it back is harmless — the
- * server strips it before merging — but omitting it keeps the request honest
- * about what changed and keeps the mask out of request logs.
+ * Decided by two facts and no pattern: the DESCRIPTOR says which fields are
+ * credentials, and the value the server sent for that field says what
+ * "untouched" looks like for it. A field is omitted only when both agree.
+ *
+ * The pattern this replaces — treating any run of bullets or asterisks as a
+ * mask — was wrong in two directions at once. It stripped a NON-secret field
+ * whose value happened to look like one, silently discarding real
+ * configuration; and it stripped a credential the user had deliberately typed
+ * out of those characters, so a create failed as though the field were blank
+ * and an update reported success while keeping the old secret.
+ *
+ * Creating has no stored configuration to compare against, so nothing is
+ * dropped: every value the user entered is theirs and is sent.
  */
-function withoutMaskedSecrets(
-  config: Record<string, unknown>
+function withoutUntouchedSecrets(
+  configuration: Record<string, unknown>,
+  descriptor?: EmailProviderDescriptor,
+  stored?: Record<string, unknown>
 ): Record<string, unknown> {
-  const cleaned: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(config)) {
-    if (isMaskedSecret(value)) continue;
-    if (value !== null && typeof value === "object" && !Array.isArray(value)) {
-      cleaned[key] = withoutMaskedSecrets(value as Record<string, unknown>);
-    } else {
-      cleaned[key] = value;
+  const cleaned = structuredClone(configuration);
+  if (!descriptor || !stored) return cleaned;
+
+  for (const field of descriptor.configFields) {
+    if (field.secret !== true) continue;
+    const path = field.name.split(".");
+    const current = readAtPath(cleaned, path);
+    const asStored = readAtPath(stored, path);
+    // Identical to what the server sent for this credential, which is its
+    // mask. Indistinguishable from a user who retyped that exact string, and
+    // that is fine: for a masked field the two mean the same thing.
+    if (typeof current === "string" && current === asStored) {
+      deleteAtPath(cleaned, path);
     }
   }
+
   return cleaned;
 }
 
-/** The create/update payload for these form values. */
-export function formValuesToPayload(values: ProviderFormValues) {
+/** The create/update payload these form values produce. */
+export interface EmailProviderPayload {
+  name: string;
+  type: string;
+  fromEmail: string;
+  fromName: string | null;
+  isDefault: boolean;
+  isActive: boolean;
+  configuration: Record<string, unknown>;
+}
+
+/**
+ * The create/update payload for these form values.
+ *
+ * `descriptor` and `stored` are what make an untouched credential detectable;
+ * without them every value is sent, which is correct for a create and for a
+ * provider whose descriptor this server no longer publishes.
+ */
+export function formValuesToPayload(
+  values: ProviderFormValues,
+  descriptor?: EmailProviderDescriptor,
+  stored?: Record<string, unknown>
+): EmailProviderPayload {
   return {
     name: values.name,
     type: values.type,
@@ -417,6 +473,10 @@ export function formValuesToPayload(values: ProviderFormValues) {
     fromName: values.fromName || null,
     isDefault: values.isDefault,
     isActive: values.isActive,
-    configuration: withoutMaskedSecrets(values.configuration ?? {}),
+    configuration: withoutUntouchedSecrets(
+      values.configuration ?? {},
+      descriptor,
+      stored
+    ),
   };
 }

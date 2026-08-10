@@ -27,7 +27,9 @@ import {
   buildProviderSchema,
   defaultFormValues,
   emptyConfiguration,
+  formValuesToPayload,
   providerToFormValues,
+  type EmailProviderPayload,
   type ProviderFormValues,
 } from "./schemas/emailProviderSchema";
 
@@ -50,7 +52,15 @@ export interface EmailProviderFormProps {
   descriptorsLoading?: boolean;
   descriptorsError?: Error | null;
   isPending: boolean;
-  onSubmit: (values: ProviderFormValues) => void;
+  /**
+   * Receives the finished payload, not raw form values.
+   *
+   * Deciding which credentials to omit needs the descriptor and the stored
+   * configuration, and this component is the one that holds both. Handing that
+   * job to each page would put the same provider-shaped logic back in two
+   * places — which is what the hardcoded form did.
+   */
+  onSubmit: (payload: EmailProviderPayload) => void;
 }
 
 /**
@@ -142,6 +152,20 @@ export function EmailProviderForm({
   // providers have different shapes, so carrying values across is leftover
   // rather than a partial edit — and the server discards them for the same
   // reason.
+  const handleValidSubmit = useCallback(
+    (values: ProviderFormValues) => {
+      // The stored configuration is only a fair comparison while the type is
+      // unchanged. Across a type change it belongs to the previous provider,
+      // and the server replaces it wholesale for the same reason.
+      const stored =
+        provider && provider.type === values.type
+          ? provider.configuration
+          : undefined;
+      onSubmit(formValuesToPayload(values, selectedDescriptor, stored));
+    },
+    [onSubmit, provider, selectedDescriptor]
+  );
+
   const handleTypeChange = useCallback(
     (type: string) => {
       const next = descriptors.find(entry => entry.type === type);
@@ -186,7 +210,7 @@ export function EmailProviderForm({
       <form
         id={EMAIL_PROVIDER_FORM_ID}
         onSubmit={e => {
-          void form.handleSubmit(onSubmit)(e);
+          void form.handleSubmit(handleValidSubmit)(e);
         }}
         className="space-y-6"
         aria-busy={isPending}
@@ -282,27 +306,33 @@ export function EmailProviderForm({
                 <SettingsRow
                   label="From Email"
                   description={
-                    // Every hosted API provider requires a verified sending
-                    // domain, and a descriptor cannot say so without turning
-                    // itself into a copywriting surface. The warning is shown
-                    // for any provider that publishes documentation to send
-                    // people to, and suppressed for a self-hosted server, where
-                    // the sender is whatever the operator's own relay accepts.
-                    selectedDescriptor?.docsUrl ? (
+                    // Driven by the provider's own declaration, not by whether
+                    // it happens to publish a docs link: the two coincide for
+                    // the built-ins and mean nothing to each other, and a
+                    // provider that documents itself elsewhere would lose the
+                    // warning. The sentence stays here so the descriptor
+                    // carries the fact rather than the copy.
+                    selectedDescriptor?.capabilities?.requiresVerifiedSender ? (
                       <span className="flex items-start gap-1.5">
                         <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0 text-warning-600 dark:text-warning-500" />
                         <span>
                           Must be an address on a{" "}
                           <strong>verified domain</strong> in your{" "}
                           {selectedDescriptor.label} account.{" "}
-                          <a
-                            href={selectedDescriptor.docsUrl}
-                            target="_blank"
-                            rel="noreferrer noopener"
-                            className="underline underline-offset-2"
-                          >
-                            Provider documentation
-                          </a>
+                          {/* The link is separate from the warning: a provider
+                              can require a verified sender without publishing
+                              documentation, and the warning is the part that
+                              prevents an unusable configuration. */}
+                          {selectedDescriptor.docsUrl && (
+                            <a
+                              href={selectedDescriptor.docsUrl}
+                              target="_blank"
+                              rel="noreferrer noopener"
+                              className="underline underline-offset-2"
+                            >
+                              Provider documentation
+                            </a>
+                          )}
                         </span>
                       </span>
                     ) : (

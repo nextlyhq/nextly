@@ -6,8 +6,7 @@ import { useCallback } from "react";
 import {
   EMAIL_PROVIDER_FORM_ID,
   EmailProviderForm,
-  formValuesToPayload,
-  type ProviderFormValues,
+  type EmailProviderPayload,
 } from "@admin/components/features/settings/EmailProviderForm";
 import { SettingsLayout } from "@admin/components/features/settings/SettingsLayout";
 import { Loader2 } from "@admin/components/icons";
@@ -58,15 +57,14 @@ export default function EditEmailProviderPage() {
   const { mutate: updateProvider, isPending } = useUpdateEmailProvider();
 
   const handleSubmit = useCallback(
-    (values: ProviderFormValues) => {
+    (payload: EmailProviderPayload) => {
       if (!providerId) return;
 
-      // `formValuesToPayload` has already dropped the credentials the user did
-      // not touch, using the descriptor's own `secret` flags rather than a list
-      // of provider names kept here. The server merges what remains over the
-      // stored configuration, so an omitted credential keeps its stored value.
-      const payload = formValuesToPayload(values);
-
+      // The form has already dropped the credentials the user did not touch,
+      // deciding from the descriptor's own `secret` flags and the stored value
+      // rather than from a list of provider names kept here. The server merges
+      // what remains over the stored configuration, so an omitted credential
+      // keeps its value.
       updateProvider(
         {
           id: providerId,
@@ -75,7 +73,7 @@ export default function EditEmailProviderPage() {
         {
           onSuccess: () => {
             toast.success("Provider updated", {
-              description: `${values.name} has been updated successfully.`,
+              description: `${payload.name} has been updated successfully.`,
             });
             navigateTo(ROUTES.SETTINGS_EMAIL_PROVIDERS);
           },
