@@ -142,8 +142,16 @@ function withNodeAttributes(output: ReactNode, node: BlockNode): ReactNode {
  * conditional form `enabled && <div />` yields when disabled, and an empty
  * string is what a cleared text value becomes. `0` is deliberately absent —
  * React renders it as the character zero, so it is output with a root.
+ *
+ * A list counts when every member does, which includes the empty list.
+ * `normalizeRenderable` materialises any iterable root into an array, so
+ * `items.map(...)` over an empty collection arrives here as `[]` and a list of
+ * conditionals as `[false, false]`. Those are the list-shaped spelling of the
+ * same intent, and answering only for the scalars would apply the contract to
+ * one shape of a pair.
  */
 function rendersNothing(output: ReactNode): boolean {
+  if (Array.isArray(output)) return output.every(rendersNothing);
   return (
     output === null ||
     output === undefined ||

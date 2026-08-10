@@ -46,13 +46,19 @@ export async function renderImage({
   // A resolver that throws must not take the page with it: media lives behind
   // a network call for a signed-URL host, and one unreachable image is not a
   // reason to lose the article around it.
-  const resolved =
+  const record =
     mediaId === "" ? null : await ctx.resolveMedia(mediaId).catch(() => null);
 
   // BOTH branches go through the scheme filter. A host's resolver is trusted
   // code, but the value it returns came from a media record a person filled in,
   // so it is input in the same sense the direct prop is. Checking one and not
   // the other leaves the module's own rule applied at one position of a pair.
+  //
+  // A record whose url the filter refused is dropped WHOLE, not just for its
+  // url. Its alt text and intrinsic size describe the asset that was rejected,
+  // so keeping them beside the fallback url would announce one image and
+  // reserve space for another.
+  const resolved = url(record?.url) === undefined ? null : record;
   const src = url(resolved?.url) ?? url(props.src);
   // Nothing to show. An `<img>` with no `src` still requests the current page
   // in some browsers, so render nothing rather than a broken element.
