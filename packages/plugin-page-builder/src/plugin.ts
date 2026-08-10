@@ -33,17 +33,45 @@ export interface PageBuilderOptions {
    * only on `PageRenderer` because the canvas runs in the browser, where a
    * component prop from the host's server config cannot reach it.
    *
-   * Set the SAME value on `PageRenderer.remotePatterns`. These are two
-   * assignments, not one: this configures the editor, and `PageRenderer` reads
-   * only its own prop. Setting one alone produces a mismatch in whichever
-   * direction you set it, so a shared constant in the host is what keeps them
-   * equal.
+   * Set the SAME value on `PageRenderer.remotePatterns` from
+   * `@nextlyhq/plugin-page-builder/render`, and pass it to `cspDirectives()` or
+   * `cspHeaderValue()`. Three assignments: each surface reads only what it was
+   * handed, and the CSP helpers default to an empty list.
    *
-   * Object patterns only, unlike `PageRenderer`, which also accepts a `URL`.
-   * This value is serialized to the browser and a `URL` does not survive that:
-   * it would arrive as a string. Converting one here would mean deciding what
-   * its default `pathname` of `"/"` means as a glob, and guessing at that in a
-   * security control is worse than declining the input.
+   * Even then the three are not identical. CSP cannot express a `pathname` or
+   * `search` constraint, so `cspDirectives()` omits such a host rather than
+   * widening the policy to its whole origin; `unexpressibleHosts()` reports what
+   * it refused so the host can write that source itself.
+   *
+   * **Enforced for** the built-in block renderers and structured style values,
+   * through `isFetchableUrl`; the embed HTML sanitizer; the editor canvas. A
+   * CUSTOM block is handed the patterns and must apply them itself — `RenderNode`
+   * passes them in and cannot inspect the element a block returns.
+   *
+   * **Not custom CSS.** `sanitizeCustomCss` takes no patterns and drops every
+   * url naming a host, whether by scheme — including `https://site.example/a.png`,
+   * the site's own origin, since compilation has no document origin to compare
+   * against — or by the scheme-less `//cdn.example/a.png`. What survives is a
+   * path naming no host: `/a.png`, `a.png`. That is a property of the stored
+   * TEXT, not of the eventual request — a cross-origin `<base href>` on the
+   * host document re-points every such path at another origin, which is a
+   * surface a parser cannot reach and one reason `cspDirectives()` emits
+   * `base-uri`. That surface is stricter than this value, not governed by it.
+   *
+   * **Not `@nextlyhq/blocks-react`**, which has no way to bound what a page
+   * fetches. Its checks are about schemes: the engine's CSS compiler limits an
+   * EXPLICIT scheme to `http`/`https` and leaves a scheme-less value alone, so
+   * `//cdn.example/a.png` passes; a block's attribute props reject
+   * `javascript:`, `vbscript:` and `data:` and admit every other scheme. It does
+   * compare hosts in one place — `hostPolicy.trustedFrameOrigins` decides
+   * whether an embed keeps its own origin — but that governs a sandbox
+   * permission, not whether the frame is loaded.
+   *
+   * Object patterns only. This value is serialized to the browser and a `URL`
+   * does not survive that: it would arrive as a string. Converting one here
+   * would mean deciding what its default `pathname` of `"/"` means as a glob,
+   * and guessing at that in a security control is worse than declining the
+   * input.
    */
   remotePatterns?: readonly RemotePattern[];
 }
