@@ -3781,8 +3781,17 @@ describe("PageRenderer", () => {
         description: "Renders its slot under a context of its own making.",
         example: { props: {} },
         slots: { children: {} },
+        // BUILT, not spread. A container that spreads the context it was given
+        // carries the policy along by accident, so a fixture written that way
+        // passes whether or not the renderer reapplies anything. This is the
+        // shape that actually loses it.
         render: ({ ctx, renderSlot }) =>
-          renderSlot("children", { ...ctx, item: { id: "1" } }) as ReactElement,
+          renderSlot("children", {
+            entry: ctx.entry,
+            item: { id: "1" },
+            resolveMedia: ctx.resolveMedia,
+            resolveEntryPath: ctx.resolveEntryPath,
+          }) as ReactElement,
       });
 
       const html = await renderToHtml(

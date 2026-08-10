@@ -126,7 +126,21 @@ export interface BlockHostPolicy {
    * A relative URL never matches, deliberately. It resolves to the host's OWN
    * origin, where `allow-same-origin` would let the frame script the page
    * around it; that is the most dangerous grant of all, and it must be asked
-   * for by naming the origin rather than arrived at by writing `/player`.
+   * for by naming the origin rather than arrived at by writing `/player`. The
+   * same refusal covers `https:player.example.com`, which a URL parser reads as
+   * an absolute URL while a browser resolves it against the document.
+   *
+   * **What this cannot do.** Sandbox permissions belong to the frame, not to
+   * one navigation, so they survive a redirect: an allowlisted origin that
+   * exposes an open redirect can send the frame somewhere unlisted and the
+   * grant travels with it. The renderer sees only the URL it writes and cannot
+   * constrain where the browser goes next.
+   *
+   * So an origin listed here is trusted for everything it can redirect to, and
+   * a site that needs that bounded should pair this with a `frame-src` content
+   * security policy, which is enforced on every navigation rather than only the
+   * first. Listing an origin whose redirect behaviour you do not control is the
+   * case to avoid.
    */
   trustedFrameOrigins?: readonly string[];
 }

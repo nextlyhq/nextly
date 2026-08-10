@@ -14,6 +14,10 @@
  * now an origin allowlist the site operator sets once, so the grant belongs to
  * a named origin rather than to a node.
  *
+ * The grant follows the frame, not the URL: sandbox permissions survive a
+ * redirect, so an allowlisted origin is trusted for wherever it forwards to.
+ * See `BlockHostPolicy.trustedFrameOrigins` for what to pair this with.
+ *
  * A `title` is emitted always. An iframe without one is announced only as
  * "frame", which tells a screen-reader user nothing about whether to enter it.
  *

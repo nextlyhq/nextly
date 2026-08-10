@@ -29,6 +29,10 @@ Let a site operator, rather than a page editor, decide which embeds may keep the
 
 `core/embed`'s `allowSameOrigin` was exactly that — a checkbox any page editor could tick against any URL, granting a frame the one permission that lets it remove its own sandbox. It is replaced by `hostPolicy.trustedFrameOrigins`, an allowlist compared as full origins through the URL parser: scheme, host and port together. A different scheme, a different port, a subdomain, and a suffix lookalike such as `player.example.com.evil.test` are all refused, as is a relative URL, which resolves to the host's own origin and is the one grant that would let a frame reach the page around it.
 
+The comparison requires an explicit authority, so `https:player.example.com` is refused as well: a URL parser reads that as an absolute URL while a browser resolves it against the document, which would have granted same-origin to a frame loading the host's own origin. The grant does not, and cannot, survive scrutiny of a later navigation: sandbox permissions belong to the frame rather than to one request, so an allowlisted origin is trusted for anything it redirects to, and a site that needs that bounded should pair the allowlist with a `frame-src` content security policy.
+
+The policy is reapplied whenever a block hands its slot a context of its own making, in both directions: a container that rebuilds the context does not lose the grant, and a block cannot award itself one the site operator declined. Applying it also preserves the context's prototype, so a host that implements the context with a class keeps the methods that live there.
+
 Documents that still carry `allowSameOrigin` are unaffected in the safe direction: the value is ignored and the frame stays sandboxed. An unparseable entry in the allowlist is skipped rather than throwing, so a typo in configuration cannot take down every page holding an embed.
 
 Every policy field is optional and every default is the closed one, so a host that configures nothing keeps the restrictive behaviour.
