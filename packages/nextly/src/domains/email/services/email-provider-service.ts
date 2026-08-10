@@ -601,6 +601,9 @@ export class EmailProviderService extends BaseService {
     const currentRow = await this.getRawProvider(id);
 
     const now = new Date();
+    // Whether the merged configuration differs from the stored one, decided
+    // before encryption where the two are comparable.
+    let configurationChanged = false;
     const updateData: Record<string, unknown> = {
       updatedAt: now,
     };
@@ -674,6 +677,19 @@ export class EmailProviderService extends BaseService {
         .get(effectiveType)
         .validateConfig(mergedConfig);
 
+      // Compared BEFORE encryption. Encryption is randomised -- a fresh salt
+      // and IV per call -- so two encryptions of identical configuration never
+      // match, and comparing ciphertexts reported a credential change on every
+      // save the form made, including one that touched nothing but the name.
+      // A false credential-change alert is worse in an audit trail than no
+      // entry: it is noise on the one signal the trail exists for.
+      //
+      // Nothing is decrypted for this. Both values are already in memory --
+      // `existingConfig` two statements above and `mergedConfig` beside it --
+      // because the update path had to read one and build the other.
+      configurationChanged =
+        JSON.stringify(existingConfig) !== JSON.stringify(mergedConfig);
+
       updateData.configuration = this.encryptConfiguration(mergedConfig);
     }
     if (data.isActive !== undefined) updateData.isActive = data.isActive;
@@ -715,27 +731,37 @@ export class EmailProviderService extends BaseService {
       providerId: id,
       providerName: data.name ?? currentRow.name,
       providerType: effectiveType,
-      changedFields: changedProviderFields(
-        {
-          name: currentRow.name,
-          type: currentRow.type,
-          fromEmail: currentRow.fromEmail,
-          fromName: currentRow.fromName,
-          isDefault: currentRow.isDefault,
-          isActive: currentRow.isActive,
-          // Compared as the ENCRYPTED stored value against the encrypted
-          // replacement. Neither is read, and decrypting to diff would put
-          // credentials in memory for the benefit of a row that records no
-          // values.
-          configuration: currentRow.configuration,
-        },
-        {
-          ...data,
-          ...(updateData.configuration !== undefined
-            ? { configuration: updateData.configuration }
-            : {}),
-        }
-      ),
+      changedFields: [
+        // Built from the fields this service RECOGNISES, never by spreading
+        // the request body. `data` is a cast over parsed JSON, so an unknown
+        // key -- `{"notAProviderField": true}` -- is ignored by every write
+        // above and would otherwise be reported as a changed field, putting a
+        // request-controlled string into a widely readable audit row and
+        // claiming a change that never happened.
+        ...changedProviderFields(
+          {
+            name: currentRow.name,
+            type: currentRow.type,
+            fromEmail: currentRow.fromEmail,
+            fromName: currentRow.fromName,
+            isDefault: currentRow.isDefault,
+            isActive: currentRow.isActive,
+          },
+          {
+            ...(data.name !== undefined ? { name: data.name } : {}),
+            ...(data.type !== undefined ? { type: data.type } : {}),
+            ...(data.fromEmail !== undefined
+              ? { fromEmail: data.fromEmail }
+              : {}),
+            ...(data.fromName !== undefined ? { fromName: data.fromName } : {}),
+            ...(data.isDefault !== undefined
+              ? { isDefault: data.isDefault }
+              : {}),
+            ...(data.isActive !== undefined ? { isActive: data.isActive } : {}),
+          }
+        ),
+        ...(configurationChanged ? ["configuration"] : []),
+      ],
       actor,
     });
 

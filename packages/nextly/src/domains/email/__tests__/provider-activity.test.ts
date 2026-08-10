@@ -194,6 +194,68 @@ describe("email provider activity", () => {
     });
   });
 
+  it("does not report a credential change when the credential did not change", async () => {
+    // The form always sends `configuration`, even when only the name was
+    // edited. Encryption is randomised — a fresh salt and IV per call — so
+    // comparing the new ciphertext with the stored one made every save look
+    // like a credential change. A false alarm on the one signal the trail
+    // exists for is worse than no entry.
+    const created = await service.createProvider(INPUT, ACTOR);
+    logged.length = 0;
+
+    await service.updateProvider(
+      created.id,
+      { name: "Renamed", configuration: INPUT.configuration },
+      ACTOR
+    );
+
+    expect(logged[0]?.metadata).toEqual({
+      providerType: "smtp",
+      changedFields: ["name"],
+    });
+  });
+
+  it("does report one when the credential actually changes", async () => {
+    // The control: exempting an identical configuration must not exempt a
+    // real rotation, which is the event the trail is for.
+    const created = await service.createProvider(INPUT, ACTOR);
+    logged.length = 0;
+
+    await service.updateProvider(
+      created.id,
+      {
+        configuration: {
+          ...INPUT.configuration,
+          auth: { user: "postmaster", pass: "rotated" },
+        },
+      },
+      ACTOR
+    );
+
+    expect(logged[0]?.metadata).toEqual({
+      providerType: "smtp",
+      changedFields: ["configuration"],
+    });
+  });
+
+  it("ignores a request key the service does not recognise", async () => {
+    // The update body is a cast over parsed JSON. An unknown key is ignored by
+    // every write, so reporting it would claim a change that never happened —
+    // and put a request-controlled string into a widely readable row.
+    const created = await service.createProvider(INPUT, ACTOR);
+    logged.length = 0;
+
+    await service.updateProvider(
+      created.id,
+      { notAProviderField: true } as unknown as Parameters<
+        typeof service.updateProvider
+      >[1],
+      ACTOR
+    );
+
+    expect(logged[0]?.metadata).toEqual({ providerType: "smtp" });
+  });
+
   it("reports nothing changed when an update changes nothing", async () => {
     const created = await service.createProvider(INPUT, ACTOR);
     logged.length = 0;

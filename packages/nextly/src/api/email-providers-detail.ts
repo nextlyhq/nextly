@@ -19,6 +19,7 @@
  * @module api/email-providers-detail
  */
 
+import { actorFromAuthContext } from "../auth/request-actor";
 import { container } from "../di";
 import { getCachedNextly } from "../init";
 import type { EmailProviderService } from "../services/email/email-provider-service";
@@ -91,7 +92,12 @@ export const GET = withErrorHandler(
  */
 export const PATCH = withErrorHandler(
   async (request: Request, context: RouteContext): Promise<Response> => {
-    await requireRouteAnyPermission(request, [
+    // The permission check already RESOLVES the caller; this handler discarded
+    // it. These standalone handlers are a published surface an app may mount
+    // instead of the catch-all dispatcher, so without the actor every provider
+    // mutation through them recorded nothing -- the trail would have covered
+    // one supported REST surface and not the other.
+    const auth = await requireRouteAnyPermission(request, [
       { action: "update", resource: "email-providers" },
       { action: "manage", resource: "email-providers" },
     ]);
@@ -117,7 +123,11 @@ export const PATCH = withErrorHandler(
     if (body.isActive !== undefined) updateData.isActive = body.isActive;
 
     const service = await getEmailProviderService();
-    const provider = await service.updateProvider(id, updateData);
+    const provider = await service.updateProvider(
+      id,
+      updateData,
+      actorFromAuthContext(auth)
+    );
 
     return respondMutation("Email provider updated.", provider);
   }
@@ -140,7 +150,12 @@ export const PATCH = withErrorHandler(
  */
 export const DELETE = withErrorHandler(
   async (request: Request, context: RouteContext): Promise<Response> => {
-    await requireRouteAnyPermission(request, [
+    // The permission check already RESOLVES the caller; this handler discarded
+    // it. These standalone handlers are a published surface an app may mount
+    // instead of the catch-all dispatcher, so without the actor every provider
+    // mutation through them recorded nothing -- the trail would have covered
+    // one supported REST surface and not the other.
+    const auth = await requireRouteAnyPermission(request, [
       { action: "delete", resource: "email-providers" },
       { action: "manage", resource: "email-providers" },
     ]);
@@ -148,7 +163,7 @@ export const DELETE = withErrorHandler(
     const { id } = await context.params;
     const service = await getEmailProviderService();
 
-    await service.deleteProvider(id);
+    await service.deleteProvider(id, actorFromAuthContext(auth));
 
     // Service returns void. Echo the deleted id (named `providerId` to
     // match the dispatcher route's wire shape) so the admin can prune

@@ -22,6 +22,7 @@
 
 import { z } from "zod";
 
+import { actorFromAuthContext } from "../auth/request-actor";
 import { container } from "../di";
 import { getCachedNextly } from "../init";
 import type { EmailProviderService } from "../services/email/email-provider-service";
@@ -112,7 +113,12 @@ export const GET = withErrorHandler(
  */
 export const POST = withErrorHandler(
   async (request: Request): Promise<Response> => {
-    await requireRouteAnyPermission(request, [
+    // The permission check already RESOLVES the caller; this handler discarded
+    // it. These standalone handlers are a published surface an app may mount
+    // instead of the catch-all dispatcher, so without the actor every provider
+    // mutation through them recorded nothing -- the trail would have covered
+    // one supported REST surface and not the other.
+    const auth = await requireRouteAnyPermission(request, [
       { action: "create", resource: "email-providers" },
       { action: "manage", resource: "email-providers" },
     ]);
@@ -128,7 +134,10 @@ export const POST = withErrorHandler(
     }
 
     const service = await getEmailProviderService();
-    const provider = await service.createProvider(validated);
+    const provider = await service.createProvider(
+      validated,
+      actorFromAuthContext(auth)
+    );
 
     return respondMutation("Email provider created.", provider, {
       status: 201,
