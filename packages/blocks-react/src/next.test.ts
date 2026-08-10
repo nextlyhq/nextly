@@ -74,19 +74,32 @@ function reader(
           };
         }
 
-        // Any other equality is a lookup BY SLUG — the route resolving its own
-        // path, or the reference resolver asking which entry a slug opens. A
-        // real reader answers from the stored rows, so this does too; answering
-        // it with the route's page regardless of the value would certify a
-        // resolver that never checks the slug it was handed.
-        const [field, condition] = Object.entries(where ?? {})[0] ?? [];
-        if (field !== undefined) {
-          const match = rows.find(
-            row => row[field] === condition?.equals && !hidden(row, status)
-          );
-          if (match) return { items: [match], meta: {} };
-        }
-        return { items: collection === "pages" ? [entry] : [], meta: {} };
+        // Anything else is a stored-column query — the route resolving its own
+        // path, or an ownership probe. A real reader ANDs every key and
+        // understands each operator, so this does too: a double that read only
+        // the first key would confirm an ownership question it never asked, and
+        // one that answered with the route's page regardless of the value would
+        // certify a resolver that never checks what it was handed.
+        const clauses = Object.entries(where ?? {});
+        const matches = (row: Record<string, unknown>): boolean =>
+          clauses.every(([field, condition]) => {
+            const test = condition as Record<string, unknown> | undefined;
+            if (test && "equals" in test) return row[field] === test.equals;
+            if (test && "less_than" in test) {
+              return String(row[field]) < String(test.less_than);
+            }
+            return false;
+          });
+
+        const match = rows.find(row => matches(row) && !hidden(row, status));
+        if (match) return { items: [match], meta: {} };
+        // The route's own page answers a SINGLE-key lookup only. A compound
+        // probe that found nothing means nothing matched, and falling through
+        // to the entry would answer "yes" to a question about another row.
+        return {
+          items: clauses.length === 1 && collection === "pages" ? [entry] : [],
+          meta: {},
+        };
       }
     ),
     findByID: vi.fn(async ({ id }: { id: string }) => records[id] ?? null),
@@ -97,6 +110,49 @@ function reader(
       findByID: vi.fn(async ({ id }: { id: string }) => records[id] ?? null),
     },
   } as never;
+}
+
+/**
+ * A reader over STORED rows, with an `afterRead` hook applied to what it hands
+ * back.
+ *
+ * The distinction the ownership probes depend on: queries match the stored
+ * columns, and the hook only reshapes the returned row. A double that applied
+ * the hook before matching would be modelling a database that does not exist,
+ * and would certify a resolver that reads identity out of hook output.
+ */
+function compoundReader(
+  stored: Record<string, unknown>[],
+  afterRead: (row: Record<string, unknown>) => Record<string, unknown>
+) {
+  const matches = (
+    row: Record<string, unknown>,
+    where: Record<string, unknown> | undefined
+  ): boolean =>
+    Object.entries(where ?? {}).every(([field, condition]) => {
+      const test = condition as Record<string, unknown> | undefined;
+      if (test && "equals" in test) return row[field] === test.equals;
+      if (test && "less_than" in test) {
+        return String(row[field]) < String(test.less_than);
+      }
+      return false;
+    });
+
+  return {
+    find: vi.fn(async ({ where }: { where?: Record<string, unknown> }) => {
+      // Sorted by stored id, which is how the route settles a duplicate slug.
+      const hits = stored
+        .filter(row => matches(row, where))
+        .sort((left, right) => String(left.id).localeCompare(String(right.id)));
+      const first = hits[0];
+      return {
+        items: first ? [afterRead({ content: document, ...first })] : [],
+        meta: {},
+      };
+    }),
+    findByID: vi.fn(async () => null),
+    media: { findByID: vi.fn(async () => null) },
+  };
 }
 
 /** Drive the route the way the App Router does. */
@@ -822,41 +878,22 @@ describe("createBlocksPage", () => {
   it("keeps a link from a status-less collection holding a `status` field", async () => {
     // Nextly supports an ordinary string field named `status`. Judging it as
     // the lifecycle column made the route drop links to entries it happily
-    // serves — so lifecycle filtering belongs to the reader, not to us.
-    const instance = reader(
-      { slug: "about", content: document },
-      { a1: { slug: "archive", status: "archived" } }
-    ) as unknown as { find: ReturnType<typeof vi.fn> };
-    // A status-LESS collection: the reader's scope is a no-op, so it answers
-    // regardless of what the row's own `status` field happens to say.
-    instance.find = vi.fn(
-      async ({ where }: { where?: Record<string, { equals?: unknown }> }) => {
-        const archived = { id: "a1", slug: "archive", status: "archived" };
-        // Answers by id AND by slug, because the product asks both ways — and
-        // answers both regardless of the requested lifecycle scope, which is
-        // exactly what a status-LESS collection does.
-        if (where?.id?.equals === "a1") return { items: [archived], meta: {} };
-        if (where?.slug?.equals === "archive") {
-          return { items: [archived], meta: {} };
-        }
-        return {
-          items: [{ id: "p1", slug: "about", content: document }],
-          meta: {},
-        };
-      }
-    );
-
+    // serves — so lifecycle filtering belongs to the reader, not to us. A
+    // status-LESS collection answers regardless of the scope requested.
     const props = await render({
       collections: ["pages"],
       field: "content",
-      nextly: instance as never,
+      nextly: reader(
+        { slug: "about", content: document },
+        { a1: { slug: "archive", status: "archived" } }
+      ),
+      status: "all",
     });
 
     await expect(props.context?.resolveEntryPath("pages", "a1")).resolves.toBe(
       "/archive"
     );
   });
-
   it("gives no path for a reserved route path", async () => {
     // `ContentPage` refuses these before resolving anything, and they may lead
     // into a route the application owns.
@@ -1102,32 +1139,18 @@ describe("createBlocksPage", () => {
     expect(seen?.image).toBe("/later.png");
   });
 
-  it("keeps a link when a hook rewrote the ids it reads back", async () => {
-    // Both rows come back through `afterRead`, so a hook rewriting `id`
-    // rewrites it on each of them alike — while the id this resolver was HANDED
-    // is the stored value the hook never saw. Comparing those two spellings
-    // made every internal link on such a site disappear.
-    const instance = reader({
-      slug: "about",
-      content: document,
-    }) as unknown as {
-      find: ReturnType<typeof vi.fn>;
-    };
-    instance.find = vi.fn(
-      async ({ where }: { where?: Record<string, { equals?: unknown }> }) => {
-        // The hook prefixes every id it returns.
-        if (where?.id?.equals === "p9") {
-          return { items: [{ id: "hook:p9", slug: "contact" }], meta: {} };
-        }
-        if (where?.slug?.equals === "contact") {
-          return { items: [{ id: "hook:p9", slug: "contact" }], meta: {} };
-        }
-        return {
-          items: [{ id: "hook:p1", slug: "about", content: document }],
-          meta: {},
-        };
-      }
-    );
+  it("keeps a link when a hook rewrites the ids it returns", async () => {
+    // Ownership is settled on STORED columns, so what `afterRead` does to the
+    // `id` it RETURNS cannot reach the decision. This double rewrites every
+    // returned id and the link still resolves.
+    const stored = [
+      { id: "home", slug: "about" },
+      { id: "p9", slug: "contact" },
+    ];
+    const instance = compoundReader(stored, row => ({
+      ...row,
+      id: `hook:${String(row.id)}`,
+    })) as unknown as { find: ReturnType<typeof vi.fn> };
 
     const props = await render({
       collections: ["pages"],
@@ -1139,31 +1162,20 @@ describe("createBlocksPage", () => {
       "/contact"
     );
   });
-
-  it("gives no path when a hook dropped the id entirely", async () => {
-    // Two rows would then compare equal on `undefined`, letting a shadowing
-    // entry claim this link. Identity that cannot be established is not
-    // identity.
-    const instance = reader({
-      slug: "about",
-      content: document,
-    }) as unknown as {
-      find: ReturnType<typeof vi.fn>;
-    };
-    instance.find = vi.fn(
-      async ({ where }: { where?: Record<string, { equals?: unknown }> }) => {
-        if (where?.id?.equals === "p9") {
-          return { items: [{ slug: "contact" }], meta: {} };
-        }
-        if (where?.slug?.equals === "contact") {
-          return { items: [{ slug: "contact" }], meta: {} };
-        }
-        return {
-          items: [{ slug: "about", content: document }],
-          meta: {},
-        };
-      }
-    );
+  it("is not fooled by a hook that maps different rows onto one id", async () => {
+    // The case that defeats comparing two POST-hook identities: a non-injective
+    // rewrite makes two DIFFERENT stored rows compare equal, so a reference to
+    // the losing duplicate would emit an href that opens the winner. Asking the
+    // database about the stored id instead cannot be fooled by it.
+    const stored = [
+      { id: "home", slug: "about" },
+      { id: "aaa", slug: "shared" },
+      { id: "bbb", slug: "shared" },
+    ];
+    const instance = compoundReader(stored, row => ({
+      ...row,
+      id: "same-for-everyone",
+    })) as unknown as { find: ReturnType<typeof vi.fn> };
 
     const props = await render({
       collections: ["pages"],
@@ -1171,11 +1183,15 @@ describe("createBlocksPage", () => {
       nextly: instance as never,
     });
 
+    // `aaa` is the row the route serves for this slug, so it keeps its link.
+    await expect(props.context?.resolveEntryPath("pages", "aaa")).resolves.toBe(
+      "/shared"
+    );
+    // `bbb` is the duplicate the route would NOT serve.
     await expect(
-      props.context?.resolveEntryPath("pages", "p9")
+      props.context?.resolveEntryPath("pages", "bbb")
     ).resolves.toBeNull();
   });
-
   it("gives a routed page a finite query budget", async () => {
     // `core/collection-loop` claims from `ctx.queries` before each read and its
     // check is `ctx.queries?.take() === false`, so an ABSENT budget reads as
@@ -1260,53 +1276,27 @@ describe("createBlocksPage", () => {
     await expect(props.context?.resolveMedia("any-id")).resolves.toBeNull();
   });
 
-  it("probes a shadowing collection the way the route resolves it", async () => {
+  it("refuses a link to the losing row of a duplicated slug", async () => {
     // Two entries in one collection may share a slug, and `resolveContent`
-    // settles which the URL opens by sorting on `id`. An unsorted `limit: 1`
-    // probe may answer with either row, so the link could be emitted for the
-    // entry the route does NOT serve.
-    const instance = reader({
-      slug: "about",
-      content: document,
-    }) as unknown as {
-      find: ReturnType<typeof vi.fn>;
-    };
-    const sortSeen: unknown[] = [];
-    instance.find = vi.fn(
-      async ({
-        where,
-        sort,
-      }: {
-        where?: Record<string, { equals?: unknown }>;
-        sort?: unknown;
-      }) => {
-        if (where?.id?.equals === "dup2") {
-          return { items: [{ id: "dup2", slug: "shared" }], meta: {} };
-        }
-        if (where?.slug?.equals === "shared") {
-          sortSeen.push(sort);
-          // The row the ROUTE would serve: the lower id.
-          return { items: [{ id: "dup1", slug: "shared" }], meta: {} };
-        }
-        return {
-          items: [{ id: "p1", slug: "about", content: document }],
-          meta: {},
-        };
-      }
-    );
-
+    // settles which the URL opens by sorting on `id`. The probe asks the same
+    // question as a range over the stored column — is there a lower id at this
+    // slug — rather than by comparing rows the hooks have already touched.
     const props = await render({
       collections: ["pages"],
       field: "content",
-      nextly: instance as never,
+      nextly: reader(
+        { slug: "about", content: document },
+        { dup1: { slug: "shared" }, dup2: { slug: "shared" } }
+      ),
     });
 
     await expect(
       props.context?.resolveEntryPath("pages", "dup2")
     ).resolves.toBeNull();
-    expect(sortSeen).toEqual(["id"]);
+    await expect(
+      props.context?.resolveEntryPath("pages", "dup1")
+    ).resolves.toBe("/shared");
   });
-
   it("gives no path for a referenced slug holding a dot segment", async () => {
     // A link may simply be omitted, so it is refused rather than encoded: no
     // link beats one a browser resolves to `/admin`. The reserved-path check
@@ -1326,33 +1316,15 @@ describe("createBlocksPage", () => {
   });
 
   it("gives no path when a hook rewrote the slug the route matches on", async () => {
-    // `resolveContent` matches the STORED column, while this read returns the
+    // `resolveContent` matches the STORED column while the read returns the
     // post-`afterRead` value. A hook rewriting `about` to `public/about` would
     // otherwise emit `/public/about`, which this same route answers with
-    // `notFound()`.
-    const instance = reader({
-      slug: "about",
-      content: document,
-    }) as unknown as {
-      find: ReturnType<typeof vi.fn>;
-    };
-    instance.find = vi.fn(
-      async ({ where }: { where?: Record<string, { equals?: unknown }> }) => {
-        // By id: the hook has already run, so the slug reads as rewritten.
-        if (where?.id?.equals === "p9") {
-          return { items: [{ id: "p9", slug: "public/about" }], meta: {} };
-        }
-        // By slug: the STORED column still says `about`, so nothing answers to
-        // the rewritten value.
-        if (where?.slug?.equals === "about") {
-          return {
-            items: [{ id: "p9", slug: "about", content: document }],
-            meta: {},
-          };
-        }
-        return { items: [], meta: {} };
-      }
-    );
+    // `notFound()`. The stored row is asked for directly instead.
+    const stored = [{ id: "p9", slug: "about" }];
+    const instance = compoundReader(stored, row => ({
+      ...row,
+      slug: `public/${String(row.slug)}`,
+    })) as unknown as { find: ReturnType<typeof vi.fn> };
 
     const props = await render({
       collections: ["pages"],
@@ -1364,7 +1336,6 @@ describe("createBlocksPage", () => {
       props.context?.resolveEntryPath("pages", "p9")
     ).resolves.toBeNull();
   });
-
   it("treats a blank media URL as unresolved", async () => {
     // A record with an empty URL would otherwise be PREFERRED over the block's
     // own `src`, and `<img src="">` re-requests the current page in some

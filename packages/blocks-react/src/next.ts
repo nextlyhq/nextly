@@ -429,19 +429,25 @@ async function firstUsableImage(
     // reaching a usable one, inside metadata generation — enough of them and
     // the page times out instead of rendering with a later, perfectly good
     // image.
-    const resolved = await Promise.all(
-      lookups.map(id => resolveMedia(id).catch(() => null))
-    );
+    const pending = lookups.map(id => resolveMedia(id).catch(() => null));
 
     // Scanned in DOCUMENT order, not completion order. The earliest usable
     // candidate is the one the renderer would show, and picking whichever
     // request happened to finish first would publish a different picture than
     // the page displays — silently, and only under load.
-    // The resolver already applies `usableMedia`, so this re-check is about the
-    // batch's own contract rather than the record's: a rejected lookup arrives
-    // as `null` and must not end the search.
-    const hit = resolved.findIndex(media => media !== null);
-    if (hit !== -1) return resolved[hit]?.url;
+    // Awaited IN ORDER though started together. The batch exists to stop the
+    // round trips being serial, and `Promise.all` turned that into a dependency
+    // the other way: a first candidate that resolved immediately still waited on
+    // a fourth that hung, inside `generateMetadata`, so a page could time out
+    // with its preview image already in hand. Awaiting one at a time returns as
+    // soon as the earliest usable candidate settles and never waits on the ones
+    // after it, while still picking in DOCUMENT order rather than completion
+    // order — the renderer shows the earliest usable image, and metadata that
+    // took whichever finished first would describe a different picture.
+    for (const lookup of pending) {
+      const media = await lookup;
+      if (media !== null) return media.url;
+    }
     if (direct !== -1) return batch[direct]?.value;
   }
   return undefined;
@@ -646,76 +652,78 @@ function entryPathResolver(
     const path = emitPath(slug);
     if (path === null) return null;
 
-    // The referenced row's identity AS THE PROBE WILL SEE IT — read back off the
-    // row rather than taken from the argument, so both sides of the comparison
-    // below have been through the same `afterRead`.
+    // Which entry a URL opens is settled entirely on STORED columns from here
+    // down. Every read on this path returns rows through `afterRead`, so any
+    // answer derived from a returned `id` is an answer about the hook's output
+    // rather than about the database: a hook that rewrites ids breaks the
+    // comparison, one that drops them makes two rows identical, and one that
+    // maps several rows onto a single public value makes two DIFFERENT rows
+    // compare equal. The argument `id` is the stored value the block recorded,
+    // so asking the database about it directly is immune to all three.
     //
-    // Refused when it is not a usable value, which is what a hook DROPPING `id`
-    // produces: two rows would then compare equal on `undefined` and a
-    // shadowing entry could claim this link. Identity that cannot be
-    // established is not identity, and no link beats a link to the wrong page.
-    const referenceIdValue = record.id;
-    if (
-      typeof referenceIdValue !== "string" &&
-      typeof referenceIdValue !== "number"
-    ) {
-      return null;
-    }
-    const referenceId = String(referenceIdValue);
-
-    // The route serves the FIRST entry whose STORED slug matches, searching its
-    // collections in order — so that is the question to ask, rather than
-    // whether some earlier collection happens to shadow this one. Asking it
-    // this way answers both failures with one lookup per collection:
-    //
-    // - an earlier collection owns the slug, so the link would open a different
-    //   document under this URL;
-    // - the slug does not find this record AT ALL, which is what an `afterRead`
-    //   hook rewriting the slug field produces. `resolveContent` matches the
-    //   stored column while the read above returns the hook's value, so a
-    //   rewritten slug names a path this same route answers with `notFound()`.
-    for (const candidate of routeCollections) {
-      // Same lifecycle scope and access semantics the route resolves with, so
-      // a draft-only row cannot suppress a valid link on a published route.
-      // An access denial is treated as "no such entry", which is how
-      // `resolveContent` reads one — a probe that threw would take down a link
-      // whose own read succeeded.
-      const match = await reader
+    // A shared probe: same lifecycle scope and access semantics the route
+    // resolves with, so a draft-only row cannot suppress a valid link on a
+    // published route. An access denial reads as "no such entry", which is how
+    // `resolveContent` treats one — a probe that threw would take down a link
+    // whose own read succeeded.
+    const probe = async (
+      collectionName: string,
+      // Taken from the reader's own signature rather than restated, so a filter
+      // this package builds cannot drift from the one the reader accepts.
+      where: NonNullable<Parameters<NextlyContentReader["find"]>[0]["where"]>
+    ): Promise<boolean> => {
+      const found = await reader
         .find({
-          collection: candidate,
-          where: { [slugField]: { equals: slug } },
+          collection: collectionName,
+          where,
           limit: 1,
-          // Nextly permits two entries in one collection to share a slug, and
-          // `resolveContent` settles which one the URL opens by sorting on `id`.
-          // An unsorted `limit: 1` may return either row, so without this the
-          // probe can answer with the referenced entry while the route serves
-          // the other — a link that opens a different document than it names.
-          sort: "id",
           status: scope,
           overrideAccess,
           user: undefined,
           ...(config.locale ? { locale: config.locale } : {}),
         })
         .catch(() => ({ items: [] as Record<string, unknown>[] }));
-      const first = match.items[0];
-      if (!first) continue;
-      // The first collection that answers this slug decides what the URL opens.
-      // This link is honest only when that is this very record — same
-      // collection, same row. A duplicate slug inside the collection lands here
-      // too, and is refused for the same reason.
-      //
-      // Compared against the REFERENCED ROW's identity rather than the id this
-      // resolver was handed. Both rows here come back through `afterRead`, so a
-      // hook that rewrites `id` rewrites it on each of them alike, while the
-      // argument is the stored value the hook never saw. Comparing those two
-      // spellings made every link on such a site disappear.
-      return candidate === collection && String(first.id) === referenceId
-        ? path
-        : null;
+      return found.items.length > 0;
+    };
+
+    // 1. This row really is stored at this slug. It is the returned slug that
+    //    was read above, and an `afterRead` hook may have produced it — while
+    //    `resolveContent` matches the stored column. Asking for both together
+    //    settles it without trusting either value alone.
+    if (
+      !(await probe(collection, {
+        [slugField]: { equals: slug },
+        id: { equals: id },
+      }))
+    ) {
+      return null;
     }
 
-    // No collection serves this slug, so there is no path to offer.
-    return null;
+    // 2. No row in this collection shares the slug with a LOWER id. That is
+    //    exactly the row `resolveContent` would serve instead, since it settles
+    //    duplicates with `sort: "id"` — asked as a range over the stored column
+    //    rather than by comparing identities the hooks have already touched.
+    if (
+      await probe(collection, {
+        [slugField]: { equals: slug },
+        id: { less_than: id },
+      })
+    ) {
+      return null;
+    }
+
+    // 3. No EARLIER collection carries the slug. The route searches its
+    //    collections in order and serves the first match, so a slug an earlier
+    //    one owns belongs to that one, and this link would navigate to a
+    //    different document under the same URL.
+    for (const earlier of routeCollections.slice(
+      0,
+      routeCollections.indexOf(collection)
+    )) {
+      if (await probe(earlier, { [slugField]: { equals: slug } })) return null;
+    }
+
+    return path;
   };
 }
 

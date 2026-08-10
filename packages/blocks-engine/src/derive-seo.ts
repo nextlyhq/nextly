@@ -132,11 +132,28 @@ function offerOf(
 ): BlockSeoContribution | undefined {
   const definition = definitions(node.type);
   if (!definition?.seo) return undefined;
+  let offer: BlockSeoContribution | undefined;
   try {
-    return definition.seo(node.props as never);
+    offer = definition.seo(node.props as never);
   } catch {
     return undefined;
   }
+  // A `try` around a synchronous call cannot contain an ASYNC one: a block
+  // mistakenly declared `async seo()` returns a pending promise, the `try`
+  // completes, and a later rejection has no handler. Node reports that as an
+  // unhandled rejection and can end the process — the whole page lost to a
+  // block being asked a question, which is exactly what the guard above exists
+  // to prevent.
+  //
+  // The value is discarded either way: this contract is synchronous, so a
+  // promise is a malformed offer whether it settles or not. Attaching the
+  // handler is only about who owns the rejection.
+  const thenable = (offer as { then?: unknown } | undefined)?.then;
+  if (typeof thenable === "function") {
+    void Promise.resolve(offer).catch(() => undefined);
+    return undefined;
+  }
+  return offer;
 }
 
 /**

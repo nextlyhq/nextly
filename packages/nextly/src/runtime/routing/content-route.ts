@@ -277,6 +277,44 @@ function isDotSegment(segment: string): boolean {
   return segment === "." || segment === "..";
 }
 
+/**
+ * The instance, bound to the access policy this route resolved the entry with.
+ *
+ * The Direct API is a TRUSTED server surface: its documented default is
+ * `overrideAccess: true`, because the ordinary caller is application code that
+ * has already decided who is asking. A route is the opposite — it answers
+ * whoever holds the URL — and it resolves its own entry with access enforced
+ * and no user.
+ *
+ * Handing a render or metadata callback the raw instance therefore offers a
+ * reader whose defaults are the inverse of the page's. A callback doing the
+ * obvious thing — `context.reader.find({ collection: "authors" })` to name the
+ * author of the post it is rendering — would read PAST the access rules that
+ * governed the post itself, and publish restricted rows in a public response.
+ *
+ * So the defaults are restated to match the route: access enforced unless this
+ * route resolved with it overridden, and no identity, because the route
+ * resolves anonymously. A caller that genuinely wants the trusted surface can
+ * still pass `overrideAccess: true` explicitly — the arguments win, since they
+ * are spread over these defaults. What changes is which way the DEFAULT points,
+ * and that is the direction a caller cannot see.
+ */
+function routeScopedReader(
+  instance: NextlyContentReader,
+  overrideAccess: boolean
+): NextlyContentReader {
+  const scoped: NextlyContentReader = {
+    find: args => instance.find({ overrideAccess, user: undefined, ...args }),
+    findByID: args =>
+      instance.findByID({ overrideAccess, user: undefined, ...args }),
+  };
+  // The media namespace travels with it. It is a system reader rather than a
+  // dynamic collection, so it is forwarded as-is rather than re-scoped; losing
+  // it would break every consumer that resolves a media id off this reader.
+  const media = (instance as { media?: unknown }).media;
+  return media === undefined ? scoped : Object.assign(scoped, { media });
+}
+
 export function slugToStaticParam(value: unknown): { slug: string[] } | null {
   if (typeof value !== "string") return null;
   if (value === "") return isReservedPath("/") ? null : { slug: [] };
@@ -383,7 +421,7 @@ export function createContentRoute<TNode>(
         context: {
           collection,
           slug,
-          reader: getInstance(),
+          reader: routeScopedReader(getInstance(), overrideAccess || draft),
           ...(config.locale ? { locale: config.locale } : {}),
         },
       };
