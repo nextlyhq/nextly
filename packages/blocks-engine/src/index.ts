@@ -5,6 +5,9 @@
  * it. It never imports React or Nextly at runtime, so documents can be
  * created, inspected, and transformed from any JavaScript environment.
  */
+export { deriveSeoFromDocument } from "./derive-seo";
+export type { SeoDefinitionSource, SeoImageCandidate } from "./derive-seo";
+
 export {
   DOCUMENT_FORMAT_VERSION,
   DOCUMENT_KINDS,
@@ -85,6 +88,8 @@ export type {
   BlockDefinition,
   BlockEditorMeta,
   BlockExample,
+  BlockSeoContribution,
+  BlockSeoImage,
   BlockRenderArgs,
   BlockRenderResult,
   BlockSupports,

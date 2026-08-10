@@ -57,6 +57,19 @@ const NEXT_ONLY_IMPORTS = [
   "next/cache",
   "next/headers",
   "next/navigation",
+  // The CMS, for `createBlocksPage`. Promise 2 above says the renderer must not
+  // import the CMS runtime, and this does not weaken it: that promise is about
+  // the RENDERER, which runs in the user's application where no CMS exists, and
+  // the root entry still may not reach either module.
+  //
+  // A route is a different thing from a renderer. Turning documents into pages
+  // means resolving a path to an entry, and resolving media and links means
+  // reading records; all three are the CMS's work, and a helper that did them
+  // without it would be reimplementing the CMS beside the CMS. Declared as an
+  // OPTIONAL peer dependency, so a consumer using only the root entry installs
+  // nothing extra and gets no unmet-peer warning.
+  "nextly",
+  "nextly/runtime",
 ];
 
 /** Files that are test harness rather than shipped code. */
@@ -392,25 +405,56 @@ describe("the package's layering contract", () => {
     // these, but naming them makes the failure message say what rule was
     // broken instead of only that something unlisted appeared.
     const forbidden = [
-      "nextly",
       "@nextlyhq/admin",
       "@nextlyhq/plugin-sdk",
       "@nextlyhq/plugin-page-builder",
       "@nextlyhq/ui",
     ];
+    // Permitted inside the `/next` graph and refused everywhere else, on the
+    // same footing as `next/*`. A route helper has to read content, and the
+    // subpath is the boundary that keeps that away from the renderer; the
+    // per-file check below is what makes "away" mean something.
+    const nextSideOnly = ["nextly"];
     const violations: string[] = [];
 
     for (const file of files) {
+      const isNextSide = nextGraph.has(file);
       for (const specifier of runtimeImports(file)) {
         const root = specifier.startsWith("@")
           ? specifier.split("/").slice(0, 2).join("/")
           : specifier.split("/")[0];
-        if (root && forbidden.includes(root)) {
+        if (!root) continue;
+        if (forbidden.includes(root)) {
+          violations.push(`${relative(SRC_DIR, file)}: ${specifier}`);
+          continue;
+        }
+        if (nextSideOnly.includes(root) && !isNextSide) {
           violations.push(`${relative(SRC_DIR, file)}: ${specifier}`);
         }
       }
     }
 
     expect(violations, violations.join("\n")).toEqual([]);
+  });
+
+  it("keeps the CMS out of the root's module graph", () => {
+    // The promise the optional peer dependency rests on. `nextly` is declared
+    // optional so that a consumer rendering documents standalone installs
+    // nothing extra — which is only true while no chain from `index.ts` reaches
+    // it. A per-file check cannot see that: every individual file could be
+    // clean while the root re-exported the one that is not.
+    const rootGraph = reachableFrom(join(SRC_DIR, "index.ts"));
+    const leaks: string[] = [];
+
+    for (const file of rootGraph) {
+      for (const specifier of runtimeImports(file)) {
+        const root = specifier.split("/")[0];
+        if (root === "nextly") {
+          leaks.push(`${relative(SRC_DIR, file)}: ${specifier}`);
+        }
+      }
+    }
+
+    expect(leaks, leaks.join("\n")).toEqual([]);
   });
 });

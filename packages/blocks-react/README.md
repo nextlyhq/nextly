@@ -11,20 +11,33 @@ into it.
 
 ## Two entries, and why
 
-| Entry                         | Contains                              | Exported today                           |
-| ----------------------------- | ------------------------------------- | ---------------------------------------- |
-| `@nextlyhq/blocks-react`      | the renderer and the context contract | context types, `createStandaloneContext` |
-| `@nextlyhq/blocks-react/next` | everything that needs `next/*`        | entry marker only                        |
+| Entry                         | Contains                              | Exported today                                                                                    |
+| ----------------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `@nextlyhq/blocks-react`      | the renderer and the context contract | `PageRenderer`, `BlockBoundary`, the core block library, context types, `createStandaloneContext` |
+| `@nextlyhq/blocks-react/next` | everything that needs `next/*`        | `createBlocksPage`                                                                                |
 
-**Alpha:** the boundary and the context contract ship now. The renderer and the
-Next route helpers land on top of them, so these names describe the shape they
-will take rather than code that resolves today:
+Render a document anywhere:
 
 ```ts
-// Planned, not yet exported:
-// import { PageRenderer } from "@nextlyhq/blocks-react";
-// import { createBlocksPage } from "@nextlyhq/blocks-react/next";
+import { PageRenderer } from "@nextlyhq/blocks-react";
 ```
+
+Or turn a collection of documents into pages, in `app/[[...slug]]/page.tsx`:
+
+```tsx
+import { createBlocksPage } from "@nextlyhq/blocks-react/next";
+
+const { ContentPage, generateMetadata, generateStaticParams } =
+  createBlocksPage({ collections: ["pages"], field: "content" });
+
+export { generateMetadata, generateStaticParams };
+export default ContentPage;
+```
+
+The route resolves each path to an entry, renders its document, and wires media
+ids and entry references to the CMS so images and internal links work without
+being wired by hand. `nextly` is an OPTIONAL peer dependency, needed only for
+this entry.
 
 The root entry imports **no `next/*`, no admin code and no CMS runtime**. You
 can render a document from a plain React app, a test, or a script with nothing
@@ -59,5 +72,6 @@ fixtures. The editor canvas supplies its own. One seam, four consumers.
 
 ## Status
 
-Alpha. What ships today is the package boundary, its layering guarantees, and
-the `PageContext` contract. `PageRenderer` follows.
+Alpha. `PageRenderer`, the core block library and `createBlocksPage` all ship,
+alongside the package boundary, its layering guarantees and the `PageContext`
+contract. The editor surfaces follow.

@@ -26,6 +26,7 @@ import * as blocksEntry from "./blocks/index";
 import * as contextModule from "./context";
 import * as pageRendererModule from "./page-renderer";
 import * as placeholderModule from "./placeholder";
+import * as prepareModule from "./prepare-document";
 import * as resolverModule from "./resolver";
 import * as stylesModule from "./styles";
 import * as visibilityModule from "./visibility";
@@ -108,6 +109,7 @@ const SOURCE_MODULES: ReadonlyArray<{
   },
   { name: "placeholder", module: placeholderModule, internal: [] },
   { name: "page-renderer", module: pageRendererModule, internal: [] },
+  { name: "prepare-document", module: prepareModule, internal: [] },
   {
     name: "block-boundary",
     module: boundaryModule,
@@ -129,6 +131,7 @@ describe("the root entry", () => {
       "defineBlock",
       "emptyDataProvider",
       "migrationSourceFor",
+      "prepareDocumentForRead",
       "pruneHiddenNodes",
       "registeredBlocks",
       "resolvePageStyles",
@@ -256,6 +259,13 @@ describe("the blocks entry", () => {
 
 describe("the next entry", () => {
   it("exports exactly these values", () => {
-    expect(Object.keys(nextEntry).sort()).toEqual(["BLOCKS_REACT_NEXT_ENTRY"]);
+    // The route helper joins the entry marker here. Types are erased, so
+    // `BlocksPageConfig` and `DerivedPageSeo` never appear in this list — the
+    // guard is about what a consumer can CALL.
+    expect(Object.keys(nextEntry).sort()).toEqual([
+      "BLOCKS_REACT_NEXT_ENTRY",
+      "DEFAULT_MAX_QUERIES",
+      "createBlocksPage",
+    ]);
   });
 });
