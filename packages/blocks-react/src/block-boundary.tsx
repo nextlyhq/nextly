@@ -1,5 +1,11 @@
 import { blockTypeClassName, type BlockNode } from "@nextlyhq/blocks-engine";
-import { Suspense, cloneElement, isValidElement, type ReactNode } from "react";
+import {
+  Fragment,
+  Suspense,
+  cloneElement,
+  isValidElement,
+  type ReactNode,
+} from "react";
 
 import type { PageContext } from "./context";
 import { BlockPlaceholder } from "./placeholder";
@@ -149,9 +155,24 @@ function withNodeAttributes(output: ReactNode, node: BlockNode): ReactNode {
  * conditionals as `[false, false]`. Those are the list-shaped spelling of the
  * same intent, and answering only for the scalars would apply the contract to
  * one shape of a pair.
+ *
+ * A FRAGMENT counts when its children do, for the same reason one level up:
+ * `<>{items.map(...)}</>` draws no element of its own, so an empty one is the
+ * third spelling of the same decision. Only a fragment is opened. React hands a
+ * COMPONENT its children as an ordinary prop, which it may ignore or render
+ * around, so judging those would call a working block empty on the strength of
+ * a prop it never used.
+ *
+ * Takes `unknown` rather than `ReactNode` so a fragment's children can be read
+ * off an element's props and passed straight back in without a cast.
  */
-function rendersNothing(output: ReactNode): boolean {
+function rendersNothing(output: unknown): boolean {
   if (Array.isArray(output)) return output.every(rendersNothing);
+  if (isValidElement(output) && output.type === Fragment) {
+    const props: unknown = output.props;
+    if (typeof props !== "object" || props === null) return true;
+    return !("children" in props) || rendersNothing(props.children);
+  }
   return (
     output === null ||
     output === undefined ||
