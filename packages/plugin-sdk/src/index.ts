@@ -261,3 +261,10 @@ export { Secret, secret, isSecret } from "./secret";
  * boundary core stores it behind.
  */
 export { defineEmailProvider, MAX_EMAIL_PROVIDER_TYPE_LENGTH } from "nextly";
+export type {
+  EmailProviderDefinition,
+  EmailProviderConfigField,
+  EmailProviderCapabilities,
+  EmailProviderDescriptor,
+  RegisteredEmailProvider,
+} from "nextly";

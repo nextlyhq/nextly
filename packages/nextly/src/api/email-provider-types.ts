@@ -45,5 +45,10 @@ export const GET = withErrorHandler(async (request: Request) => {
   await getCachedNextly();
 
   const types = getEmailProviderRegistry().list().map(toDescriptor);
+
+  // Non-paginated list; wrap in a named field for the canonical respondData
+  // shape (spec §5.1 rule 3), matching the providers list endpoint. The
+  // registry is a fixed in-memory set, so `{ items, meta }` would mean
+  // manufacturing pagination that describes nothing.
   return respondData({ types });
 });

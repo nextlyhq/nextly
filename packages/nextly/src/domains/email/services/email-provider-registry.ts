@@ -14,7 +14,10 @@
  */
 
 import { NextlyError } from "../../../errors/nextly-error";
-import type { RegisteredEmailProvider } from "../provider-definition";
+import {
+  MAX_EMAIL_PROVIDER_TYPE_LENGTH,
+  type RegisteredEmailProvider,
+} from "../provider-definition";
 import type { EmailProviderAdapter } from "../types";
 
 import { BUILT_IN_EMAIL_PROVIDERS } from "./providers/built-in-definitions";
@@ -34,6 +37,15 @@ class EmailProviderRegistry {
 
   /** Register a provider type. Throws if the type is already registered. */
   register(provider: RegisteredEmailProvider): void {
+    // Enforced here as well as in defineEmailProvider, because this is the
+    // boundary every provider actually crosses: RegisteredEmailProvider is a
+    // structural type, so a JavaScript plugin or a hand-built object reaches
+    // registration without passing through the authoring helper.
+    if (provider.type.length > MAX_EMAIL_PROVIDER_TYPE_LENGTH) {
+      throw new Error(
+        `NEXTLY_EMAIL_PROVIDER_TYPE_TOO_LONG: email provider type "${provider.type}" exceeds ${MAX_EMAIL_PROVIDER_TYPE_LENGTH} characters, the width of the column every dialect stores it in.`
+      );
+    }
     if (this.providers.has(provider.type)) {
       throw new Error(
         `NEXTLY_EMAIL_PROVIDER_COLLISION: email provider type "${provider.type}" is already registered (built-in or another plugin).`

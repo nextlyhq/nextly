@@ -231,6 +231,27 @@ describe("plugin email providers + templates", () => {
     expect((caught as NextlyError).statusCode).toBe(400);
   });
 
+  it("rejects an over-long type at the registry, not only at the helper", async () => {
+    // defineEmailProvider is not the only way in: RegisteredEmailProvider is a
+    // structural type, so a JavaScript plugin or a hand-built object reaches
+    // register() directly. The invariant has to hold at the boundary every
+    // provider actually crosses.
+    current = await createTestNextly({ plugins: [emailPlugin()] });
+
+    expect(() =>
+      getEmailProviderRegistry().register({
+        type: "y".repeat(51),
+        label: "Hand Built",
+        configFields: [],
+        validateConfig: () => undefined,
+        createAdapterFrom: () => ({
+          send: async () => ({ success: true }),
+        }),
+        hasConnectionTest: false,
+      })
+    ).toThrow(/TYPE_TOO_LONG/);
+  });
+
   it("rejects a type no plugin registered", async () => {
     current = await createTestNextly({ plugins: [emailPlugin()] });
 

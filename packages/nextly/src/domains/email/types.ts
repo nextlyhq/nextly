@@ -156,10 +156,29 @@ export type EmailTemplateFn = (data: {
  *
  * `provider` names a registered type; everything else is that provider's own
  * configuration, which its `parseConfig` validates. Deliberately open — core
- * cannot know the shape of a provider it was never compiled against, and the
- * registered definition is what checks it.
+ * cannot know the shape of a provider it was never compiled against.
+ *
+ * `custom: true` is a required discriminant, not decoration. Without it this
+ * branch is structurally `{ provider: string, ...anything }`, which also
+ * matches a MALFORMED built-in: `{ provider: "smtp" }` with no host, port or
+ * auth would satisfy the union and defer to a runtime failure an error the
+ * compiler used to catch. The literal keeps the built-in shapes fully checked
+ * while still admitting a provider core has never seen.
+ *
+ * @example
+ * ```ts
+ * email: {
+ *   providerConfig: {
+ *     custom: true,
+ *     provider: "postmark",
+ *     serverToken: process.env.POSTMARK_TOKEN!,
+ *   },
+ *   from: "Acme <noreply@example.com>",
+ * }
+ * ```
  */
 export interface RegisteredProviderConfig {
+  custom: true;
   provider: string;
   [key: string]: unknown;
 }

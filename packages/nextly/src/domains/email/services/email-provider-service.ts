@@ -567,6 +567,23 @@ export class EmailProviderService extends BaseService {
     }
 
     try {
+      // A provider that supplies a probe is asked rather than mailed. The
+      // descriptor advertises `connectionTest` for exactly these, and offering
+      // that while still sending would make "test" mean two different things --
+      // and put a real message in someone's inbox for a connectivity check.
+      const registry = getEmailProviderRegistry();
+      const registered = registry.has(provider.type)
+        ? registry.get(provider.type)
+        : undefined;
+      const probe = registered?.testConnectionFrom;
+      if (probe) {
+        const result = await probe(provider.configuration);
+        return {
+          success: result.ok,
+          error: result.ok ? undefined : (result.detail ?? "Connection failed"),
+        };
+      }
+
       const adapter = this.createAdapterFromProvider(provider);
       const from = provider.fromName
         ? `${provider.fromName} <${provider.fromEmail}>`

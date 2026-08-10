@@ -741,7 +741,18 @@ export class EmailService extends BaseService {
     //
     // `provider` names the type; the rest of the object is its configuration,
     // which the registered provider validates before building anything.
-    const { provider, ...configuration } = providerConfig;
+    // `custom` is the union's discriminant, present only on the plugin branch
+    // and never part of a provider's own configuration, so it is dropped before
+    // parseConfig sees it. Narrowed rather than destructured off the union,
+    // since the built-in shapes do not carry the key at all.
+    const { provider, ...rest } = providerConfig;
+    const configuration =
+      "custom" in providerConfig
+        ? Object.fromEntries(
+            Object.entries(rest).filter(([key]) => key !== "custom")
+          )
+        : rest;
+
     return getEmailProviderRegistry().create(provider, configuration);
   }
 
