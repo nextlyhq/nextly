@@ -38,7 +38,14 @@ export interface PageBuilderOptions {
    * `cspHeaderValue()`. Three assignments, not one: each reads only what it was
    * given, and the CSP helpers default to an empty list, so a host that sets
    * this alone emits a self-only policy that blocks the CDN the editor and the
-   * renderer both accept. A shared constant in the host is what keeps them equal.
+   * renderer both accept.
+   *
+   * A shared constant aligns them as far as CSP can go, which is not all the
+   * way. A pattern constraining `pathname` or `search` is accepted here and by
+   * the renderer, but `cspDirectives()` omits its host rather than widening the
+   * policy to the whole origin — CSP cannot express a path constraint. Read
+   * `unexpressibleHosts()` to see what was refused and write that source
+   * yourself.
    *
    * **What reads it.** Structured style values and block props, through
    * `isFetchableUrl`; the embed HTML sanitizer; the editor canvas.
@@ -50,11 +57,13 @@ export interface PageBuilderOptions {
    * governed by it, and allowlisting a CDN here does not make it usable there.
    *
    * **`@nextlyhq/blocks-react` does not read it either**, and has no equivalent.
-   * Its two URL checks are narrower and unrelated to hosts: the engine's CSS
-   * compiler allows only `http` and `https` inside `url()`, while a block's
-   * attribute props reject `javascript:`, `vbscript:` and `data:` and admit any
-   * other scheme. Neither compares a host, so a page rendered through it is not
-   * bounded by this value.
+   * Its two URL checks are narrower and unrelated to hosts. The engine's CSS
+   * compiler limits an EXPLICIT scheme to `http` or `https`, and leaves a
+   * scheme-less value alone — so `//cdn.example/a.png`, which a browser fetches
+   * from `cdn.example`, passes. A block's attribute props reject `javascript:`,
+   * `vbscript:` and `data:` and admit every other scheme, including `blob:`.
+   * Neither compares a host, so a page rendered through it is not bounded by
+   * this value.
    *
    * Object patterns only. This value is serialized to the browser and a `URL`
    * does not survive that: it would arrive as a string. Converting one here
