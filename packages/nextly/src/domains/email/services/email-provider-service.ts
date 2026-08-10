@@ -705,6 +705,7 @@ export class EmailProviderService extends BaseService {
     if (data.isActive !== undefined) updateData.isActive = data.isActive;
     if (data.isDefault !== undefined) updateData.isDefault = data.isDefault;
 
+    let updatedRows: number;
     try {
       if (data.isDefault === true) {
         // Unset any existing default first, then apply all updates to this provider
@@ -713,17 +714,13 @@ export class EmailProviderService extends BaseService {
           .update(this.emailProviders)
           .set({ isDefault: false, updatedAt: now })
           .where(eq(this.emailProviders.isDefault, true));
-
-        await this.db
-          .update(this.emailProviders)
-          .set(updateData)
-          .where(eq(this.emailProviders.id, id));
-      } else {
-        await this.db
-          .update(this.emailProviders)
-          .set(updateData)
-          .where(eq(this.emailProviders.id, id));
       }
+
+      const result = await this.db
+        .update(this.emailProviders)
+        .set(updateData)
+        .where(eq(this.emailProviders.id, id));
+      updatedRows = affectedRowCount(result, this.dialect);
     } catch (error) {
       // DbError → NextlyError; spec §13.8 keeps the public message generic and
       // tucks the dialect-specific code into logContext via fromDatabaseError.
@@ -731,6 +728,14 @@ export class EmailProviderService extends BaseService {
       // is preserved (otherwise PG 23505 collapses to INTERNAL_ERROR).
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
+
+    // A delete can land between the read above and this statement, and the
+    // update then matches nothing. Recording the requested fields anyway would
+    // leave a durable entry claiming a change to a row that no longer exists,
+    // moments before `getProvider` reports it absent. Every dialect counts
+    // MATCHED rows here, not modified ones, so a request that genuinely
+    // rewrites nothing still reaches the trail.
+    if (updatedRows === 0) return this.getProvider(id);
 
     // Field NAMES only, and `configuration` counted as one name rather than by
     // its inner paths: naming `auth.pass` in a widely-readable row says which
@@ -863,10 +868,18 @@ export class EmailProviderService extends BaseService {
       .set({ isDefault: false, updatedAt: now })
       .where(eq(this.emailProviders.isDefault, true));
 
-    await this.db
+    const promotion = await this.db
       .update(this.emailProviders)
       .set({ isDefault: true, updatedAt: now })
       .where(eq(this.emailProviders.id, id));
+
+    // The provider can be deleted between the read above and this statement,
+    // in which case nothing was promoted. Recording it anyway would put a
+    // promotion in the trail for a provider that never became the default --
+    // the one claim this entry exists to make.
+    if (affectedRowCount(promotion, this.dialect) === 0) {
+      return this.getProvider(id);
+    }
 
     // An `update` touching `isDefault`, because that is what it is. Promotion
     // decides which provider sends every unrouted message, so it is the change

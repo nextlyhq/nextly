@@ -373,6 +373,56 @@ describe("email provider activity", () => {
     expect(logged.filter(entry => entry.action === "delete")).toHaveLength(1);
   });
 
+  /**
+   * Delete the row the moment the mutation has read it.
+   *
+   * Deleting it beforehand would not reach the mechanism at all: both methods
+   * start by reading the provider and would fail there, leaving the guard
+   * after the write untested. The window that matters is between that read and
+   * the statement, so the fixture opens it on the read itself.
+   */
+  function deleteAfterTheMutationReadsIt(id: string): void {
+    const target = service as unknown as {
+      getRawProvider: (id: string) => Promise<unknown>;
+    };
+    const original = target.getRawProvider.bind(target);
+    target.getRawProvider = async (wanted: string) => {
+      const row = await original(wanted);
+      sqlite.prepare("delete from email_providers where id = ?").run(id);
+      return row;
+    };
+  }
+
+  it("records no update when a delete wins the race", async () => {
+    // The delete lands after the read, so the update matches nothing. An entry
+    // naming the fields it meant to change would describe a row that no longer
+    // exists — an audit event for a change the database never made.
+    const created = await service.createProvider(INPUT, ACTOR);
+    deleteAfterTheMutationReadsIt(created.id);
+    logged.length = 0;
+
+    await expect(
+      service.updateProvider(created.id, { name: "Renamed" }, ACTOR)
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+
+    expect(logged).toHaveLength(0);
+  });
+
+  it("records no promotion when a delete wins the race", async () => {
+    // Same race against `setDefault`. Promotion decides which provider sends
+    // every unrouted message, so a promotion recorded for a provider that was
+    // never promoted is the most misleading entry this trail can hold.
+    const created = await service.createProvider(INPUT, ACTOR);
+    deleteAfterTheMutationReadsIt(created.id);
+    logged.length = 0;
+
+    await expect(service.setDefault(created.id, ACTOR)).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+
+    expect(logged).toHaveLength(0);
+  });
+
   it("records nothing for a write with no signed-in actor", async () => {
     // A seed, a migration or an API key carries no account. The actor column is
     // a user reference whose erasure state is answered against the accounts
