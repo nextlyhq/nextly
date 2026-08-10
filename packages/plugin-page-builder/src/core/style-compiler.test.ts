@@ -506,8 +506,80 @@ describe("compileNodeCss — width alignment + link colors", () => {
         { base: { linkColor: "#f00", linkColorHover: "#0f0" } }
       )
     );
-    expect(css).toMatch(/\.nx-pb-[a-z0-9]+ a \{ color: #f00; \}/);
-    expect(css).toMatch(/\.nx-pb-[a-z0-9]+ a:hover \{ color: #0f0; \}/);
+    // Both selectors: the links inside the block, and the block itself when its root IS a link.
+    expect(css).toMatch(
+      /\.nx-pb-([a-z0-9]+) a, a\.nx-pb-\1 \{ color: #f00; \}/
+    );
+    expect(css).toMatch(
+      /\.nx-pb-([a-z0-9]+) a:hover, a\.nx-pb-\1:hover \{ color: #0f0; \}/
+    );
+  });
+
+  it("emits link colors per breakpoint, not only from base", () => {
+    // The inspector offers the Link controls whatever device is selected, and writes the value
+    // under that device — so reading only `base` stored the tablet and mobile values and compiled
+    // nothing from them.
+    const css = compileNodeCss(
+      makeNode(
+        "core/container",
+        {},
+        {
+          base: { linkColor: "#f00" },
+          mobile: { linkColor: "#00f", linkColorHover: "#0ff" },
+        }
+      )
+    );
+
+    // Positive control: the base value still compiles, so this is about the breakpoint values.
+    expect(css).toMatch(
+      /\.nx-pb-([a-z0-9]+) a, a\.nx-pb-\1 \{ color: #f00; \}/
+    );
+    expect(css).toMatch(
+      /@media \(max-width: 640px\) \{ \.nx-pb-([a-z0-9]+) a, a\.nx-pb-\1 \{ color: #00f; \} \}/
+    );
+    expect(css).toMatch(
+      /@media \(max-width: 640px\) \{ \.nx-pb-([a-z0-9]+) a:hover, a\.nx-pb-\1:hover \{ color: #0ff; \} \}/
+    );
+  });
+
+  it("ignores a placement band this compilation does not know", () => {
+    // `placementOverrides` is a public option, so `hiddenBands` can name a band that is not in the
+    // configured breakpoints. The band query for an unknown name is indistinguishable from the one
+    // for "every width", so without the guard an unrecognised band would hide the element at EVERY
+    // width rather than at none.
+    const css = compileNodeCss(
+      { ...makeNode("core/container", {}), visibility: { mobile: false } },
+      {
+        placementOverrides: [
+          { className: "nx-pb-known", hiddenBands: ["mobile"] },
+          { className: "nx-pb-bogus", hiddenBands: ["not-a-breakpoint"] },
+        ],
+      }
+    );
+
+    // Positive control: a band that IS configured still produces its rule.
+    expect(css).toContain(".nx-pb-known { display: none; }");
+    expect(css).not.toContain("nx-pb-bogus { display: none; }");
+  });
+
+  it("emits link colors set in Hover mode", () => {
+    // The Style tab writes every control under whichever mode is selected, and the generic hover
+    // pass compiles declarations rather than these descendant rules — so a link color set in Hover
+    // mode was stored and compiled by nobody.
+    const css = compileNodeCss({
+      ...makeNode("core/container", {}),
+      styleHover: {
+        base: { linkColor: "#f0f" },
+        mobile: { linkColor: "#ff0" },
+      },
+    });
+
+    expect(css).toMatch(
+      /\.nx-pb-([a-z0-9]+):hover a, a\.nx-pb-\1:hover \{ color: #f0f; \}/
+    );
+    expect(css).toMatch(
+      /@media \(max-width: 640px\) \{ \.nx-pb-([a-z0-9]+):hover a, a\.nx-pb-\1:hover \{ color: #ff0; \} \}/
+    );
   });
 });
 
