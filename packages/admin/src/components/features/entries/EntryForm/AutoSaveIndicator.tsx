@@ -107,7 +107,9 @@ export function AutoSaveIndicator({
       label = "Unsaved changes";
       tooltipContent = `Draft saved ${timeAgo}. New changes pending...`;
     } else {
-      icon = <Check className="h-4 w-4 text-success dark:text-success-500" />;
+      // No dark variant: `success` is tuned to read in both modes, and
+      // `success-500` aliases it, so the override said nothing.
+      icon = <Check className="h-4 w-4 text-success" />;
       label = "Saved";
       tooltipContent = `All changes saved ${timeAgo}`;
     }
