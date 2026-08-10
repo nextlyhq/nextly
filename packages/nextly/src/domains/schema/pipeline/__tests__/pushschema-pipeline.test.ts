@@ -21,6 +21,7 @@ import {
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { NextlyError } from "../../../../errors";
 import {
   clearCachedSnapshot,
   clearLiveSnapshots,
@@ -1152,6 +1153,58 @@ describe("PushSchemaPipeline (Option E flow) - error paths", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.code).toBe("DDL_EXECUTION_FAILED");
+  });
+
+  it("returns a refused precondition as its own outcome, carrying the column", async () => {
+    // The pipeline builds its failure RESULT itself rather than going through `classifyError`, so
+    // teaching that function about preconditions is not enough on its own — this path had the right
+    // code and still reported the generic public message with the raw error as details.
+    //
+    // Both halves are asserted because either alone is satisfiable while the operator still cannot
+    // act: a correct code with no subject, or a subject under a code that says a statement failed.
+    const executePreResImpl = vi
+      .fn<
+        (
+          txOrDb: unknown,
+          ops: Operation[],
+          dialect: SupportedDialect
+        ) => Promise<number>
+      >()
+      .mockRejectedValue(
+        NextlyError.validation({
+          errors: [
+            {
+              path: "dc_posts._body",
+              code: "COLUMN_NOT_CONVERTIBLE",
+              message:
+                'Column "_body" on "dc_posts" holds values that are not valid JSON.',
+            },
+          ],
+        })
+      );
+
+    const { pipeline } = makePipeline({ executePreResImpl });
+
+    const result = await pipeline.apply({
+      desired: onePostsCollection,
+      db: {},
+      dialect: "postgresql",
+      source: "code",
+      promptChannel: "terminal",
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.code, "not a failed statement").toBe(
+      "PRECONDITION_FAILED"
+    );
+    expect(result.error?.message, "names the column").toContain("_body");
+    expect(
+      result.error?.message,
+      "and is not the generic public message"
+    ).not.toBe("Validation failed.");
+    expect(result.error?.details, "payload a caller can render").toMatchObject({
+      errors: [expect.objectContaining({ code: "COLUMN_NOT_CONVERTIBLE" })],
+    });
   });
 
   it("journals failure with success: false", async () => {
