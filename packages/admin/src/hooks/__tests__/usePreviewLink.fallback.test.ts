@@ -15,7 +15,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const { toast, mint } = vi.hoisted(() => ({
   toast: {
     success: vi.fn(),
-    info: vi.fn(() => "toast-id"),
+    // Typed with its parameters: a bare `() => id` infers a zero-argument
+    // signature, and reading `calls[0][1]` off it is a compile error.
+    info: vi.fn((_message: string, _options?: unknown) => "toast-id"),
     error: vi.fn(),
     dismiss: vi.fn(),
   },
