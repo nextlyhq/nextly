@@ -1,0 +1,228 @@
+/**
+ * The code-first blocks renderer, served by a real route to a real browser.
+ *
+ * Everything about `createBlocksPage` was previously checked against intent —
+ * unit tests over the read pipeline, the SEO deriver and the resolvers, with a
+ * mocked CMS on the other side. Nothing had drawn a page. This boots the
+ * playground, writes a `@nextlyhq/blocks-engine` document through the ordinary
+ * write path, asks for the URL, and reads what came back.
+ *
+ * Four properties, in the order they can fail:
+ *
+ * 1. The document renders at all — the blocks reach markup, not the
+ *    unknown-block placeholder. The placeholder is asserted ABSENT because a
+ *    resolver that finds nothing still produces a page, and a test looking only
+ *    for "the route answered 200" passes against a page of placeholders.
+ * 2. A condition-gated node does not ship. `blocks-react` fails closed, and
+ *    this is the first time that has been observed in a browser rather than in
+ *    a tree filter. The assertion is over the response BODY, not over what is
+ *    visible: a node hidden by CSS is still served, and the whole point of the
+ *    conditions tier is that the markup never leaves the server.
+ * 3. The route's lifecycle scope holds — an unpublished entry 404s.
+ * 4. The metadata the blocks declared reaches the document head, including a
+ *    canonical carrying this route's mount point.
+ *
+ * Safe to write against: the suite owns its database and empties it before
+ * every run.
+ */
+import { expect, test, type APIResponse } from "@playwright/test";
+
+test.describe.configure({ mode: "serial" });
+
+const ENTRIES = "/admin/api/collections/block-pages/entries";
+
+const PUBLISHED_SLUG = "dogfood";
+const DRAFT_SLUG = "dogfood-draft";
+
+const PAGE_HEADING = "Rendered by blocks-react";
+const BUTTON_LABEL = "Read the docs";
+
+/**
+ * The first paragraph's text, which is also the page description.
+ *
+ * One value rather than two because `core/text` contributes its text as the
+ * description through `BlockDefinition.seo`. Asserting the same string in the
+ * body and in the head is what shows the block DECLARED the metadata, rather
+ * than something copying it off a field of the entry.
+ */
+const LEAD_PARAGRAPH = "A page assembled from core blocks.";
+
+/**
+ * Text that must never reach the client.
+ *
+ * Carried by a node whose `visibility.conditions` are set, which is the tier
+ * that omits a node from server output entirely (as opposed to `devices`, which
+ * hides a node that WAS served). Distinctive enough to be searched for in the
+ * raw HTML without matching anything else on the page.
+ */
+const GATED_TEXT = "vip-only-marker-8f21";
+
+/** A node id. Stable per fixture so a failure names the same node every run. */
+const id = (suffix: string) => `00000000-0000-4000-8000-0000000000${suffix}`;
+
+/**
+ * The fixture document.
+ *
+ * Written as the stored shape rather than built through a helper, because what
+ * this test is for is the path from STORED JSON to markup. A builder would
+ * assert that the builder and the renderer agree, which is a different and
+ * weaker claim.
+ */
+const DOCUMENT = {
+  formatVersion: 1,
+  kind: "page",
+  nodes: [
+    {
+      id: id("01"),
+      type: "core/section",
+      version: 1,
+      props: { as: "section", contained: true },
+      slots: {
+        children: [
+          {
+            id: id("02"),
+            type: "core/heading",
+            version: 1,
+            props: { text: PAGE_HEADING, level: "h1" },
+          },
+          {
+            id: id("03"),
+            type: "core/text",
+            version: 1,
+            props: { text: LEAD_PARAGRAPH },
+          },
+          {
+            id: id("04"),
+            type: "core/list",
+            version: 1,
+            props: {
+              kind: "unordered",
+              items: ["Schema in TypeScript", "Blocks in code"],
+            },
+          },
+          { id: id("05"), type: "core/divider", version: 1, props: {} },
+          {
+            id: id("06"),
+            type: "core/button",
+            version: 1,
+            props: { label: BUTTON_LABEL, href: "/blocks" },
+          },
+          {
+            id: id("07"),
+            type: "core/text",
+            version: 1,
+            props: { text: GATED_TEXT },
+            visibility: {
+              conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
+            },
+          },
+        ],
+      },
+    },
+  ],
+};
+
+/** Fail with the server's message rather than with a bare status code. */
+async function expectCreated(response: APIResponse): Promise<void> {
+  if (!response.ok()) {
+    throw new Error(
+      `seed failed: ${response.status()} ${await response.text()}`
+    );
+  }
+}
+
+test("seeds a published and an unpublished block page", async ({ request }) => {
+  await expectCreated(
+    await request.post(ENTRIES, {
+      data: {
+        title: "Dogfood",
+        slug: PUBLISHED_SLUG,
+        content: DOCUMENT,
+        status: "published",
+      },
+    })
+  );
+
+  await expectCreated(
+    await request.post(ENTRIES, {
+      data: {
+        title: "Dogfood draft",
+        slug: DRAFT_SLUG,
+        content: DOCUMENT,
+        status: "draft",
+      },
+    })
+  );
+});
+
+test("renders every block in the document", async ({ page }) => {
+  const failed: string[] = [];
+  page.on("requestfailed", request =>
+    failed.push(`${request.method()} ${request.url()}`)
+  );
+
+  const response = await page.goto(`/blocks/${PUBLISHED_SLUG}`);
+  expect(response?.status()).toBe(200);
+
+  // One assertion per block type, so a failure names which block stopped
+  // rendering instead of reporting that "the page" is wrong.
+  await expect(page.getByRole("heading", { name: PAGE_HEADING })).toBeVisible();
+  await expect(page.getByText(LEAD_PARAGRAPH)).toBeVisible();
+  await expect(page.getByRole("listitem")).toHaveCount(2);
+  await expect(page.getByRole("link", { name: BUTTON_LABEL })).toBeVisible();
+  await expect(page.locator("hr")).toHaveCount(1);
+
+  // The container reached markup as a landmark and the blocks are INSIDE it —
+  // asserted as containment rather than as a count of `<section>` on the page,
+  // which would also pass if the section rendered empty beside its children.
+  await expect(
+    page.locator("section").getByRole("heading", { name: PAGE_HEADING })
+  ).toBeVisible();
+
+  // A resolver that resolves nothing still renders a page. Without this, every
+  // assertion above could be satisfied by placeholders carrying the same text.
+  await expect(page.getByText(/unknown block/i)).toHaveCount(0);
+
+  expect(failed).toEqual([]);
+});
+
+test("a condition-gated node is never sent to the client", async ({
+  request,
+}) => {
+  // Read as raw HTML rather than through the page: a node the renderer removed
+  // and a node CSS is hiding look identical to a visibility assertion, and only
+  // one of them is the guarantee conditions make.
+  const response = await request.get(`/blocks/${PUBLISHED_SLUG}`);
+  expect(response.status()).toBe(200);
+
+  const html = await response.text();
+  // The positive control. Without it, a fixture that failed to store its
+  // document at all satisfies "the gated text is absent" by serving an empty
+  // page, and reports clean.
+  expect(html).toContain(PAGE_HEADING);
+  expect(html).not.toContain(GATED_TEXT);
+});
+
+test("an unpublished entry is not served", async ({ page }) => {
+  const response = await page.goto(`/blocks/${DRAFT_SLUG}`);
+  expect(response?.status()).toBe(404);
+});
+
+test("block-declared metadata reaches the head", async ({ page }) => {
+  await page.goto(`/blocks/${PUBLISHED_SLUG}`);
+
+  // `core/heading` declares the title through its `seo` hook.
+  await expect(page).toHaveTitle(PAGE_HEADING);
+
+  await expect(page.locator('meta[name="description"]')).toHaveAttribute(
+    "content",
+    LEAD_PARAGRAPH
+  );
+
+  // The mount point is the host's to add: the helper resolves slugs within a
+  // collection and does not know which segment of the app it was wired under.
+  await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
+    "href",
+    new RegExp(`/blocks/${PUBLISHED_SLUG}$`)
+  );
+});

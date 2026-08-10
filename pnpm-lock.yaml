@@ -147,6 +147,9 @@ importers:
       '@nextlyhq/admin':
         specifier: workspace:^
         version: link:../../packages/admin
+      '@nextlyhq/blocks-react':
+        specifier: workspace:^
+        version: link:../../packages/blocks-react
       '@nextlyhq/plugin-form-builder':
         specifier: workspace:^
         version: link:../../packages/plugin-form-builder
