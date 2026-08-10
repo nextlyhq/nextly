@@ -1,6 +1,8 @@
 import { blockTypeClassName, type BlockNode } from "@nextlyhq/blocks-engine";
 import {
   Fragment,
+  Profiler,
+  StrictMode,
   Suspense,
   cloneElement,
   isValidElement,
@@ -163,20 +165,25 @@ function withNodeAttributes(output: ReactNode, node: BlockNode): ReactNode {
  * is bounded for the same reason the normalizer bounds its own: a borrowed
  * iterable is not obliged to end.
  *
- * A FRAGMENT counts when its children do, for the same reason one level up:
+ * A TRANSPARENT WRAPPER counts when its children do, for the same reason one
+ * level up:
  * `<>{items.map(...)}</>` draws no element of its own, so an empty one is the
  * third spelling of the same decision. Only a fragment is opened. React hands a
  * COMPONENT its children as an ordinary prop, which it may ignore or render
  * around, so judging those would call a working block empty on the strength of
- * a prop it never used.
+ * a prop it never used, and `Suspense` is excluded because it draws a fallback.
  *
  * Takes `unknown` rather than `ReactNode` so a fragment's children can be read
  * off an element's props and passed straight back in without a cast.
  */
 function rendersNothing(output: unknown, budget = { left: 10_000 }): boolean {
-  if (isValidElement(output) && output.type === Fragment) {
+  if (isValidElement(output) && isTransparentWrapper(output.type)) {
     const props: unknown = output.props;
-    if (typeof props !== "object" || props === null) return true;
+    // Unusable rather than empty. A forged element can pass `isValidElement`
+    // with null props, and calling it empty withholds the placeholder and hands
+    // it to React, which reads `props.ref` and throws — taking the page, not the
+    // block. Answering false sends it to the diagnostic below, where it belongs.
+    if (typeof props !== "object" || props === null) return false;
     return !("children" in props) || rendersNothing(props.children, budget);
   }
   // A string is iterable and must not be walked character by character: a
@@ -201,6 +208,23 @@ function rendersNothing(output: unknown, budget = { left: 10_000 }): boolean {
     typeof output === "boolean" ||
     output === ""
   );
+}
+
+/**
+ * Wrappers React draws by drawing their children and nothing else.
+ *
+ * Taken from React's own exports rather than a symbol list, so it cannot drift
+ * from what this React actually treats as transparent.
+ *
+ * `Suspense` is deliberately absent: it renders a fallback while its children
+ * are pending, so empty children do not mean empty output. A context provider
+ * is absent too, for the conservative reason rather than a technical one — an
+ * empty one does draw nothing, but every wrapper added here is a chance to
+ * withhold a diagnostic that should have appeared, and that error is the one a
+ * reader never sees.
+ */
+function isTransparentWrapper(type: unknown): boolean {
+  return type === Fragment || type === StrictMode || type === Profiler;
 }
 
 /**
