@@ -66,11 +66,13 @@ export interface PageRendererProps {
   /**
    * Site-operator decisions the blocks enforce. See {@link BlockHostPolicy}.
    *
-   * Offered here as well as on the context because this is where a host app
-   * already configures a render, and a policy is the kind of thing a host sets
-   * beside `limits` rather than something it builds a context to carry. When
-   * both are supplied this prop wins, since it is the more specific of the two
-   * and the one written at the call site the reader is looking at.
+   * THE ONLY place a policy is configured. It is not read from `context`, which
+   * carries no such field: the policy is the renderer's and reaches each block
+   * as a render argument, so the host's context object is passed through
+   * untouched rather than copied to carry it.
+   *
+   * Omitted means the host configured nothing, and every policy then takes its
+   * closed default.
    */
   hostPolicy?: BlockHostPolicy;
 }
