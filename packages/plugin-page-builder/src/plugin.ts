@@ -51,8 +51,12 @@ export interface PageBuilderOptions {
    * **Not custom CSS.** `sanitizeCustomCss` takes no patterns and drops every
    * url naming a host, whether by scheme — including `https://site.example/a.png`,
    * the site's own origin, since compilation has no document origin to compare
-   * against — or by the scheme-less `//cdn.example/a.png`. Same-origin paths
-   * survive. That surface is stricter than this value, not governed by it.
+   * against — or by the scheme-less `//cdn.example/a.png`. What survives is a
+   * path naming no host: `/a.png`, `a.png`. That is a property of the stored
+   * TEXT, not of the eventual request — a cross-origin `<base href>` on the
+   * host document re-points every such path at another origin, which is a
+   * surface a parser cannot reach and one reason `cspDirectives()` emits
+   * `base-uri`. That surface is stricter than this value, not governed by it.
    *
    * **Not `@nextlyhq/blocks-react`**, which has no way to bound what a page
    * fetches. Its checks are about schemes: the engine's CSS compiler limits an
