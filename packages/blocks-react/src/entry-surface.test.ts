@@ -80,7 +80,12 @@ const SOURCE_MODULES: ReadonlyArray<{
   /** Values that exist for this package's own use, and why. */
   internal: readonly string[];
 }> = [
-  { name: "context", module: contextModule, internal: [] },
+  // `withHostPolicy` is how the renderer carries policy across a context it
+  // did not build. It is exported for `page-renderer` and `block-boundary` to
+  // share, not for a host: a host supplies the policy through the prop, and
+  // publishing the derivation would invite callers to construct contexts the
+  // renderer then overwrites.
+  { name: "context", module: contextModule, internal: ["withHostPolicy"] },
   { name: "resolver", module: resolverModule, internal: [] },
   {
     name: "styles",

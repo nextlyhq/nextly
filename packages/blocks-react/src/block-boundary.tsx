@@ -1,7 +1,7 @@
 import { blockTypeClassName, type BlockNode } from "@nextlyhq/blocks-engine";
 import { Suspense, cloneElement, isValidElement, type ReactNode } from "react";
 
-import type { PageContext } from "./context";
+import { withHostPolicy, type PageContext } from "./context";
 import { BlockPlaceholder } from "./placeholder";
 import { describeThrown, isThenable, normalizeRenderable } from "./renderable";
 import type { BlockResolver } from "./resolver";
@@ -367,7 +367,18 @@ export function BlockBoundary({
       renderSlot: (name: string, slotContext?: PageContext) => (
         <BlockList
           nodes={slotNodes(node, name)}
-          context={slotContext ?? context}
+          // A block may replace the context its slot children see — that is how
+          // a repeater sets `item` per iteration. What it may NOT do is change
+          // the host's policy, in either direction: a replacement that dropped
+          // it would leave an allowlisted embed sandboxed for being nested, and
+          // one that carried its own would let a block grant itself permissions
+          // the site operator declined. So the renderer's policy is reapplied
+          // over whatever came back, including when the host set none.
+          context={
+            slotContext === undefined
+              ? context
+              : withHostPolicy(slotContext, context.hostPolicy)
+          }
           blocks={blocks}
           classes={classes}
           fallback={fallback}

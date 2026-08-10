@@ -3771,6 +3771,113 @@ describe("PageRenderer", () => {
       expect(html).not.toContain("stale.example");
     });
 
+    it("reaches a slot whose container replaced the context", async () => {
+      // A repeater replaces the context to set `item` per iteration. The policy
+      // is the HOST's, not the block's, so it has to survive that replacement —
+      // otherwise an allowlisted embed loses its grant for being nested.
+      const replacing = defineBlock({
+        name: "test/policy-replacer",
+        version: 1,
+        description: "Renders its slot under a context of its own making.",
+        example: { props: {} },
+        slots: { children: {} },
+        render: ({ ctx, renderSlot }) =>
+          renderSlot("children", { ...ctx, item: { id: "1" } }) as ReactElement,
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/policy-replacer", {
+              slots: { children: [node("b", "test/policy-reader")] },
+            })
+          )}
+          blocks={createBlockResolver([
+            replacing as AnyBlockDefinition,
+            reader as AnyBlockDefinition,
+          ])}
+          hostPolicy={{ trustedFrameOrigins: ["https://player.example.com"] }}
+        />
+      );
+
+      expect(html).toContain("https://player.example.com");
+    });
+
+    it("does not let a block grant itself a policy through a slot", async () => {
+      // The other direction, and the one that matters more. A block hands
+      // `renderSlot` a context it built, so a block able to leave a `hostPolicy`
+      // on it would be issuing itself permissions the site operator declined.
+      const forging = defineBlock({
+        name: "test/policy-forger",
+        version: 1,
+        description: "Tries to widen the policy for its children.",
+        example: { props: {} },
+        slots: { children: {} },
+        render: ({ ctx, renderSlot }) =>
+          renderSlot("children", {
+            ...ctx,
+            hostPolicy: { trustedFrameOrigins: ["https://attacker.example"] },
+          }) as ReactElement,
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/policy-forger", {
+              slots: { children: [node("b", "test/policy-reader")] },
+            })
+          )}
+          blocks={createBlockResolver([
+            forging as AnyBlockDefinition,
+            reader as AnyBlockDefinition,
+          ])}
+        />
+      );
+
+      expect(html).not.toContain("attacker.example");
+      expect(html).toContain("none");
+    });
+
+    it("keeps a host's prototype methods when applying the policy", async () => {
+      // A host may implement the context with a class, where `resolveMedia` and
+      // `resolveEntryPath` live on the prototype. A spread copies only own
+      // enumerable properties, so it would drop them — and only for hosts that
+      // supplied a policy, which is the worst way to find out.
+      class HostContext implements PageContext {
+        entry = null;
+        resolveMedia(): Promise<null> {
+          return Promise.resolve(null);
+        }
+        resolveEntryPath(): Promise<string> {
+          return Promise.resolve("/resolved");
+        }
+      }
+
+      const caller = defineBlock({
+        name: "test/policy-resolver-caller",
+        version: 1,
+        description: "Calls a context method that lives on the prototype.",
+        example: { props: {} },
+        render: async ({ ctx }) => (
+          <p>{await ctx.resolveEntryPath("posts", "1")}</p>
+        ),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(node("a", "test/policy-resolver-caller"))}
+          blocks={createBlockResolver([caller as AnyBlockDefinition])}
+          context={new HostContext()}
+          hostPolicy={{ trustedFrameOrigins: ["https://player.example.com"] }}
+        />
+      );
+
+      // The method still resolved, rather than the block being replaced by a
+      // render-error placeholder for calling something the copy no longer had.
+      expect(placeholderReasons(html)).toEqual([]);
+      expect(html).toContain("/resolved");
+    });
+
     it("keeps a context's own policy when the prop is absent", async () => {
       // Both are supported surfaces, so omitting one must not erase the other.
       const html = await renderToHtml(

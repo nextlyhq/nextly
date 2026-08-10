@@ -14,6 +14,7 @@ import type { ReactElement, ReactNode } from "react";
 import { BlockList } from "./block-boundary";
 import {
   createStandaloneContext,
+  withHostPolicy,
   type BlockHostPolicy,
   type PageContext,
 } from "./context";
@@ -252,7 +253,8 @@ export function PageRenderer({
   // policy exactly where it reads everything else the host supplies. Copied
   // only when the prop is present, so the ordinary path keeps the caller's own
   // context object and nothing re-renders for a new identity.
-  const pageContext = hostPolicy === undefined ? base : { ...base, hostPolicy };
+  const pageContext =
+    hostPolicy === undefined ? base : withHostPolicy(base, hostPolicy);
 
   // Migrated against the SAME resolver that will render, so the versions nodes
   // are upgraded to are the versions the definitions doing the rendering

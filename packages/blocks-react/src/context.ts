@@ -132,6 +132,38 @@ export interface BlockHostPolicy {
 }
 
 /**
+ * The same context carrying a different host policy.
+ *
+ * Returns the input untouched when the policy already matches, so the ordinary
+ * path allocates nothing and a caller can compare by identity.
+ *
+ * NOT a spread. A host may implement {@link PageContext} with a class, and
+ * `{ ...ctx }` copies only own enumerable properties — `resolveMedia` and
+ * `resolveEntryPath` live on the prototype there, so spreading would drop them
+ * and every media or reference block would fail at runtime, but only for hosts
+ * that supplied a policy. Creating the object against the original's prototype
+ * keeps them reachable.
+ *
+ * The policy is set even when it is `undefined`, which is what stops a block
+ * KEEPING one. A block hands `renderSlot` a context of its own making, and a
+ * block that could leave a `hostPolicy` on it would be granting itself the
+ * permissions the host declined to give.
+ */
+export function withHostPolicy<C extends PageContext>(
+  base: C,
+  policy: BlockHostPolicy | undefined
+): C {
+  if (base.hostPolicy === policy) return base;
+  const next: C = Object.assign(
+    Object.create(Object.getPrototypeOf(base) as object) as C,
+    base
+  );
+  if (policy === undefined) delete next.hostPolicy;
+  else next.hostPolicy = policy;
+  return next;
+}
+
+/**
  * The context every block render receives.
  *
  * Resolver functions rather than raw maps: a host that resolves media through a

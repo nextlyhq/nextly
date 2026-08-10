@@ -127,12 +127,33 @@ export function isTrustedOrigin(
   return trusted.some(entry => originOf(entry) === origin);
 }
 
+/**
+ * An explicit scheme followed by `//`, which is what makes a URL absolute to a
+ * browser and not merely parseable by `new URL`.
+ *
+ * The two disagree, and the disagreement is exploitable. `new URL(x)` with no
+ * base reads `https:player.example.com` as `https://player.example.com/`, while
+ * an `iframe src` resolves it against the DOCUMENT — same scheme means relative
+ * — producing `https://site.example/pages/player.example.com`. Comparing the
+ * parser's answer would then match the allowlist while the browser loaded the
+ * host's OWN origin, which is the one grant that lets a frame script the page
+ * around it. `https:/player.example.com`, with one slash, does the same.
+ *
+ * So the authority has to be written out. This is the same refusal the relative
+ * case already gets, applied to the forms that only LOOK absolute.
+ */
+const EXPLICIT_AUTHORITY = /^[a-z][a-z0-9+.-]*:\/\//i;
+
 /** A URL's origin, or nothing when it has none this comparison can use. */
 function originOf(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
+  // Trimmed for the allowlist's sake: entries are typed into configuration by
+  // hand. The src arrives already trimmed by `url()`.
+  const candidate = value.trim();
+  if (!EXPLICIT_AUTHORITY.test(candidate)) return undefined;
   let parsed;
   try {
-    parsed = new URL(value);
+    parsed = new URL(candidate);
   } catch {
     return undefined;
   }
