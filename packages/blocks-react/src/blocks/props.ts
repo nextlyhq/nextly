@@ -97,6 +97,23 @@ const ALLOWED_SCHEMES: readonly string[] = ["http", "https", "mailto", "tel"];
 const URL_SCHEME = /^([a-z][a-z0-9+.-]*):/i;
 
 /**
+ * Whether a string still holds a control character.
+ *
+ * Scanned by code point rather than matched by a regular expression: a pattern
+ * for these needs a lint suppression, and the rule it would suppress is there
+ * because a literal control character in a pattern is invisible to whoever reads
+ * it next. `0x20` is deliberately excluded — a space is not a control character,
+ * and an interior one belongs to the path.
+ */
+function hasControlCharacter(value: string): boolean {
+  for (const character of value) {
+    const code = character.codePointAt(0) ?? 0;
+    if (code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
+}
+
+/**
  * A URL safe to place in an attribute, or `undefined`.
  *
  * The scheme is read from the value as the BROWSER's parser will read it, using
@@ -127,8 +144,7 @@ export function url(value: unknown): string | undefined {
 
   const normalized = normalizeUrl(trimmed);
   if (normalized === "") return undefined;
-  // eslint-disable-next-line no-control-regex -- the point is to match them
-  if (/[\u0000-\u001f\u007f]/.test(normalized)) return undefined;
+  if (hasControlCharacter(normalized)) return undefined;
 
   const scheme = URL_SCHEME.exec(normalized);
   if (scheme === null) return trimmed;
