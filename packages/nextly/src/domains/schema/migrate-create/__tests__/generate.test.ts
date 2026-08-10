@@ -567,10 +567,14 @@ describe("applyRenameDecisions (rename collapsing)", () => {
       previous as never
     );
 
+    // Five, in this order. The nullability op is here because this fixture's column also becomes
+    // required — PostgreSQL preserves nullability across a type change, so it needs its own
+    // statement.
     expect(out.map(o => o.type)).toEqual([
       "rename_column",
       "change_column_default",
       "change_column_type",
+      "change_column_nullable",
       "change_column_default",
     ]);
     // The old default is RECORDED on the drop, because buildInverseOperations inverts a default
@@ -578,7 +582,121 @@ describe("applyRenameDecisions (rename collapsing)", () => {
     // default a second time rather than restore it.
     expect(out[1]).toMatchObject({ fromDefault: "'{}'", toDefault: undefined });
     // And the desired default goes back on once the type is right.
-    expect(out[3]).toMatchObject({ toDefault: "'{}'::jsonb" });
+    expect(out[4]).toMatchObject({ toDefault: "'{}'::jsonb" });
+  });
+
+  it("changes PostgreSQL nullability when the repair coincides with becoming required", () => {
+    // PostgreSQL PRESERVES nullability across a type change, so nothing about converting the column
+    // makes it required — the UP would contradict the snapshot it was generated from, and the DOWN
+    // could not restore what was there. MySQL needs no equivalent because its MODIFY restates
+    // nullability with the type, which is why the same fact travels differently per dialect.
+    const ops = [
+      {
+        type: "drop_column" as const,
+        tableName: "dc_posts",
+        columnName: "_body",
+        columnType: "text",
+      },
+      {
+        type: "add_column" as const,
+        tableName: "dc_posts",
+        column: { name: "body", type: "jsonb", nullable: false },
+      },
+    ];
+    const decisions = [
+      {
+        candidate: {
+          tableName: "dc_posts",
+          fromColumn: "_body",
+          toColumn: "body",
+          fromType: "text",
+          toType: "jsonb",
+          typesCompatible: true,
+          defaultSuggestion: "rename" as const,
+        },
+        accepted: true,
+      },
+    ];
+    const previous = {
+      tables: [
+        {
+          name: "dc_posts",
+          columns: [{ name: "_body", type: "text", nullable: true }],
+          indexes: [],
+        },
+      ],
+    };
+
+    const out = applyRenameDecisionsForTest(
+      ops,
+      decisions,
+      "postgresql",
+      previous as never
+    );
+
+    const nullability = out.find(o => o.type === "change_column_nullable");
+    expect(nullability).toMatchObject({
+      columnName: "body",
+      fromNullable: true,
+      toNullable: false,
+    });
+
+    // Invertible, which is the point of emitting an operation rather than a statement: the DOWN
+    // restores the original setting rather than leaving the column as the UP left it.
+    const back = buildInverseOperations(out, previous as never).find(
+      o => o.type === "change_column_nullable"
+    );
+    expect(back).toMatchObject({ fromNullable: false, toNullable: true });
+  });
+
+  it("emits no nullability change when requiredness did not move", () => {
+    // The positive control. Emitting one unconditionally would add a pointless ALTER to every
+    // repair, and would assert a setting the snapshot never changed.
+    const ops = [
+      {
+        type: "drop_column" as const,
+        tableName: "dc_posts",
+        columnName: "_body",
+        columnType: "text",
+      },
+      {
+        type: "add_column" as const,
+        tableName: "dc_posts",
+        column: { name: "body", type: "jsonb", nullable: true },
+      },
+    ];
+    const decisions = [
+      {
+        candidate: {
+          tableName: "dc_posts",
+          fromColumn: "_body",
+          toColumn: "body",
+          fromType: "text",
+          toType: "jsonb",
+          typesCompatible: true,
+          defaultSuggestion: "rename" as const,
+        },
+        accepted: true,
+      },
+    ];
+    const previous = {
+      tables: [
+        {
+          name: "dc_posts",
+          columns: [{ name: "_body", type: "text", nullable: true }],
+          indexes: [],
+        },
+      ],
+    };
+
+    expect(
+      applyRenameDecisionsForTest(
+        ops,
+        decisions,
+        "postgresql",
+        previous as never
+      ).map(o => o.type)
+    ).not.toContain("change_column_nullable");
   });
 
   it("returns a MySQL column to its original definition on rollback", () => {
