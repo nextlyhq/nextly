@@ -40,6 +40,15 @@ const SOURCES = {
 };
 
 /**
+ * Direct string targets the guards deliberately have nothing to say about.
+ *
+ * An allow-list of asset extensions rather than a list of JavaScript ones, so the unrecognised
+ * case fails closed. A deny-list would pass an extensionless target such as `./dist/motion`,
+ * which is JavaScript that no condition names — exactly what must not slip through.
+ */
+const ASSET_TARGET = /\.css$/;
+
+/**
  * One published entry point.
  *
  * @typedef {object} PublishedEntry
@@ -69,8 +78,24 @@ export function publishedEntries() {
   const entries = [];
 
   for (const [subpath, target] of Object.entries(pkg.exports ?? {})) {
-    // A stylesheet maps straight to a string; a JavaScript entry maps to conditions.
-    if (typeof target !== "object" || target === null) continue;
+    // A stylesheet maps straight to its file. Every other direct target is refused rather than
+    // skipped: a subpath published as a bare string names no `types` condition and no separate
+    // ESM and CommonJS files, so the guards have nothing to read, and passing over it in silence
+    // would recreate the very gap this module exists to close.
+    if (typeof target === "string") {
+      if (ASSET_TARGET.test(target)) continue;
+      throw new Error(
+        `The export "${subpath}" maps directly to "${target}". A JavaScript entry point must map ` +
+          "to `import` and `require` conditions so its declarations and its client directive can " +
+          "be checked; an asset must carry a recognised extension."
+      );
+    }
+    if (typeof target !== "object" || target === null) {
+      throw new Error(
+        `The export "${subpath}" is neither a conditions object nor a file path, so there is ` +
+          "nothing for the guards to check."
+      );
+    }
 
     // Every condition's OWN target is kept. Synthesising the other three from one basename
     // assumes they share it, and a map is free not to: the guards would then inspect files that
@@ -115,6 +140,20 @@ export function publishedEntries() {
     throw new Error(
       "No published JavaScript entry points were found. The export map has moved or changed " +
         "shape, and every guard reading this would now be passing vacuously."
+    );
+  }
+
+  // Checked in the other direction too. Every consumer derives its list from the published
+  // entries, so a key naming a subpath that is no longer published is dropped before any guard
+  // sees it: the retarget it describes would go unchecked while this map still claimed to
+  // describe it.
+  const unpublished = Object.keys(SOURCES).filter(
+    subpath => !entries.some(entry => entry.subpath === subpath)
+  );
+  if (unpublished.length > 0) {
+    throw new Error(
+      `SOURCES names ${unpublished.join(", ")}, which the export map does not publish. Remove ` +
+        "the stale key, or add the matching export."
     );
   }
 

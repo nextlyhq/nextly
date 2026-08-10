@@ -41,8 +41,17 @@ const ENTRY_POINTS = Object.entries(sourcesBySubpath()).map(
   ([subpath, source]) => ({ subpath, source })
 );
 
-/** Just the source paths, for the checks that read files rather than compare identities. */
-const ENTRY_SOURCES = ENTRY_POINTS.map(entry => entry.source);
+/**
+ * `[subpath, source]` for the per-entry checks.
+ *
+ * Named by the SUBPATH rather than the file, so the snapshot records what a consumer of that
+ * subpath receives. Keyed by file, exchanging two entries' sources kept every snapshot matching
+ * the file it was named for, while the build paired each source with the other's artifact name —
+ * so the two subpaths shipped each other's API and nothing compared unequal.
+ */
+const ENTRY_CASES = ENTRY_POINTS.map(
+  entry => [entry.subpath, entry.source] as const
+);
 
 /**
  * Strip comments before any structural check. Doc comments here legitimately
@@ -197,16 +206,19 @@ describe("ui public export surface", () => {
     );
   });
 
-  it.each(ENTRY_SOURCES)("%s surface is unchanged", file => {
+  it.each(ENTRY_CASES)("%s surface is unchanged", (_subpath, file) => {
     expect(exportedNames(file)).toMatchSnapshot();
   });
 
   // The name/kind extractor cannot see through `export *` re-exports, so a star
   // export would add names to the public surface that the snapshots never
   // record. Fail loudly if one is introduced, so the guard stays complete.
-  it.each(ENTRY_SOURCES)("%s uses only named exports (no `export *`)", file => {
-    expect(sourceOf(file)).not.toMatch(/export\s+\*/);
-  });
+  it.each(ENTRY_CASES)(
+    "%s uses only named exports (no `export *`)",
+    (_subpath, file) => {
+      expect(sourceOf(file)).not.toMatch(/export\s+\*/);
+    }
+  );
 });
 
 describe("ui STABILITY.md ledger", () => {
