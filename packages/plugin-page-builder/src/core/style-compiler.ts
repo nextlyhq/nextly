@@ -104,6 +104,15 @@ export interface CompileOptions {
    * reaches.
    */
   placementOverrides?: readonly PlacementOverride[];
+  /**
+   * Classes of the placements whose visibility has already been resolved into bands.
+   *
+   * Those nodes must not ALSO emit the ordinary open-ended rules. Their class is on the element
+   * their target renders, so both answers would land there at one specificity — and the open-ended
+   * one hides at every width narrower than the breakpoint it names, which is exactly the reading
+   * the band resolution exists to replace.
+   */
+  resolvedPlacements?: ReadonlySet<string>;
 }
 
 /**
@@ -652,20 +661,27 @@ export function compileNodeCss(
   if (motionCss) blocks.push(motionCss);
 
   // Per-breakpoint visibility → display:none media queries.
-  if (node.visibility) {
-    // Every placement that speaks about visibility is taken out of this node's own hide rules and
-    // given its own, because its answer cannot be derived from theirs: a hide declared at a broad
-    // breakpoint is still in force at a narrow one, so exempting a placement from the rule for the
-    // breakpoint it named would leave a broader rule hiding it anyway.
-    const overriding = opts.placementOverrides ?? [];
+  // Every placement that speaks about visibility is taken out of this node's own hide rules and
+  // given its own, because its answer cannot be derived from theirs: a hide declared at a broad
+  // breakpoint is still in force at a narrow one, so exempting a placement from the rule for the
+  // breakpoint it named would leave a broader rule hiding it anyway.
+  const overriding = opts.placementOverrides ?? [];
+  // A node whose visibility was resolved into bands does not also emit the open-ended rules, or the
+  // two answers land on one element and the broader one wins — which is the answer the resolution
+  // exists to replace.
+  const own = opts.resolvedPlacements?.has(cls) ? undefined : node.visibility;
+  // The band rules belong to the placements, not to this node, so they are emitted even when this
+  // node says nothing about visibility itself. Gating them on its own settings is what would make
+  // suppressing a placement's rules fail OPEN.
+  if (own || overriding.length) {
     const exempt = overriding
       .map(({ className }) => `:not(.${className})`)
       .join("");
-    if (node.visibility.base === false) {
+    if (own?.base === false) {
       blocks.push(`${self}${exempt} { display: none; }`);
     }
     for (const bp of bps) {
-      if (node.visibility[bp.id] === false) {
+      if (own?.[bp.id] === false) {
         blocks.push(
           `@media (max-width: ${bp.maxWidth}px) { ${self}${exempt} { display: none; } }`
         );
@@ -810,8 +826,9 @@ function placementOverridesByRef(
   refs: Record<string, BlockNode> | undefined,
   classes: ReadonlyMap<string, string>,
   bps: BreakpointDef[]
-): Map<string, PlacementOverride[]> {
+): { byRef: Map<string, PlacementOverride[]>; resolved: Set<string> } {
   const byRef = new Map<string, PlacementOverride[]>();
+  const resolved = new Set<string>();
   // A library block's own root is not a placement. It renders only because something placed the
   // block it belongs to, so its element always has an outer tier — and one verdict per element is
   // the whole point, since a verdict reached without the outer tier would contradict it on the very
@@ -839,6 +856,7 @@ function placementOverridesByRef(
         ? documentKey(node.id)
         : refScopedKey(refScope, node.id);
     const className = classes.get(key) ?? nodeClassName(key);
+    resolved.add(className);
     for (const [index, id] of chain.entries()) {
       const last = index === chain.length - 1;
       const entry: PlacementOverride = last
@@ -855,7 +873,7 @@ function placementOverridesByRef(
     const target = refs?.[refId];
     if (target) walk(target, n => collect(n, refId));
   }
-  return byRef;
+  return { byRef, resolved };
 }
 
 /** One <style> block worth of CSS for the whole document. */
@@ -866,7 +884,6 @@ export function compileDocumentCss(
   // Resolved once for the document and passed down, so every node in this
   // stylesheet is named by the same map the markup is named by.
   const classes = opts.classes ?? documentNodeClasses(doc, opts.refs);
-  const nodeOpts = { ...opts, classes };
   const parts: string[] = [];
   // The library FIRST, the document after it. Everything here is emitted at one specificity, so
   // precedence is source order and the LATER rule wins — which makes a reusable block's own styles
@@ -875,12 +892,14 @@ export function compileDocumentCss(
   //
   // The order is only observable once a placement's class reaches an element, which is why it went
   // unnoticed while a resolved ref emitted no element of its own.
-  const overrides = placementOverridesByRef(
-    doc,
-    opts.refs,
-    classes,
-    opts.breakpoints ?? DEFAULT_BREAKPOINTS
-  );
+  const { byRef: overrides, resolved: resolvedPlacements } =
+    placementOverridesByRef(
+      doc,
+      opts.refs,
+      classes,
+      opts.breakpoints ?? DEFAULT_BREAKPOINTS
+    );
+  const nodeOpts = { ...opts, classes, resolvedPlacements };
   for (const refId of placedRefIds(doc, opts.refs)) {
     const target = opts.refs?.[refId];
     if (!target) continue;

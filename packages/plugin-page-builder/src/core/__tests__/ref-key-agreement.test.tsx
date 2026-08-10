@@ -678,4 +678,60 @@ describe("styling a core/ref PLACEMENT", () => {
     expect(css).toContain("(min-width: 640.02px)");
     expect(css).not.toContain("(min-width: 641px)");
   });
+
+  it("does not let a placement's own open-ended rule outlive its resolution", () => {
+    // A placement's class is on the element its target renders, so its ordinary rules land there
+    // beside the band rules. `{ base: false, tablet: true }` compiles by the ordinary path to one
+    // unconditional hide and nothing for the `true` — which hides at every width and overrules the
+    // per-band answer the compiler just worked out. Once a placement is resolved into bands, the
+    // bands are its only answer.
+    const root = container("root", [
+      { ...ref("p1", "r1"), visibility: { base: false, tablet: true } },
+    ]);
+    const refs = {
+      r1: { ...styled("lib", "Lib", "#ee0015"), visibility: { mobile: false } },
+    };
+    const classes = documentNodeClasses(doc(root), refs);
+    const css = compileDocumentCss(doc(root), { classes, refs });
+
+    const placement = classes.get(documentKey("p1")) ?? nodeClass("p1");
+    const target = classes.get(refScopedKey("r1", "lib")) as string;
+
+    // Hidden above the widest breakpoint, and at mobile where the target hides it...
+    expect(css).toContain(
+      `@media (min-width: 1024.02px) { .${target}.${placement} { display: none; } }`
+    );
+    expect(css).toContain(
+      `@media (max-width: 640px) { .${target}.${placement} { display: none; } }`
+    );
+    // ...and nowhere unconditionally, which is what would hide it at tablet too.
+    //
+    // Compared line by line, not as a substring: the band rules above compound both classes, so
+    // `.target.placement { display: none; }` CONTAINS the text of the unconditional rule and a
+    // substring check would pass against code that still emits it.
+    expect(css.split("\n")).not.toContain(`.${placement} { display: none; }`);
+  });
+
+  it("still answers a resolved placement when its target says nothing about visibility", () => {
+    // The band rules belong to the placement, not to the target, so gating them on the target's own
+    // settings would drop them entirely — and suppressing the placement's ordinary rules on top of
+    // that leaves nothing hiding it at all. The failure direction is OPEN, so it is the one to pin.
+    const root = container("root", [
+      { ...ref("p1", "r1"), visibility: { base: false, tablet: true } },
+    ]);
+    const refs = { r1: styled("lib", "Lib", "#ee0016") };
+    const classes = documentNodeClasses(doc(root), refs);
+    const css = compileDocumentCss(doc(root), { classes, refs });
+
+    const placement = classes.get(documentKey("p1")) ?? nodeClass("p1");
+    const target = classes.get(refScopedKey("r1", "lib")) as string;
+
+    expect(css).toContain(
+      `@media (min-width: 1024.02px) { .${target}.${placement} { display: none; } }`
+    );
+    // Visible below that, because the placement asked to be seen from tablet down.
+    expect(css).not.toContain(
+      `@media (max-width: 640px) { .${target}.${placement} { display: none; } }`
+    );
+  });
 });
