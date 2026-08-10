@@ -55,48 +55,81 @@ import type {
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import {
   useEmailProviders,
+  useEmailProviderTypes,
   useDeleteEmailProvider,
   useSetDefaultProvider,
   useTestProvider,
 } from "@admin/hooks/queries/useEmailProviders";
 import { formatDateWithAdminTimezone } from "@admin/hooks/useAdminDateFormatter";
 import { navigateTo } from "@admin/lib/navigation";
-import type { EmailProviderRecord } from "@admin/services/emailProviderApi";
+import type {
+  EmailProviderDescriptor,
+  EmailProviderRecord,
+} from "@admin/services/emailProviderApi";
 
 // ============================================================
 // Provider type badge map
 // ============================================================
 
-const PROVIDER_TYPE_CONFIG: Record<
-  EmailProviderRecord["type"],
-  { label: string; variant: "default" | "primary" | "success" }
+/**
+ * Badge colours for the providers this admin ships artwork and copy for.
+ *
+ * Only the colour is looked up here — the LABEL comes from the descriptor, so a
+ * contributed provider is named correctly and merely renders in the neutral
+ * variant. A missing entry is the normal case for a plugin provider, never an
+ * error, which is what the old hardcoded map made it.
+ */
+const PROVIDER_BADGE_VARIANTS: Record<
+  string,
+  "default" | "primary" | "success"
 > = {
-  smtp: { label: "SMTP", variant: "default" },
-  resend: { label: "Resend", variant: "primary" },
-  sendlayer: { label: "SendLayer", variant: "success" },
+  smtp: "default",
+  resend: "primary",
+  sendlayer: "success",
 };
 
-function maskConfiguration(
-  type: EmailProviderRecord["type"],
+/**
+ * A one-line summary of a provider's configuration for the table.
+ *
+ * Built from the descriptor's non-secret fields in declaration order, so it
+ * works for a provider this admin has never heard of and can never print a
+ * credential: a secret field is returned masked by the server, and is skipped
+ * here regardless.
+ */
+function summariseConfiguration(
+  descriptor: EmailProviderDescriptor | undefined,
   config: Record<string, unknown>
 ): string {
-  switch (type) {
-    case "smtp": {
-      const host = (config.host as string | undefined) ?? "unknown";
-      const port = String((config.port as string | number | undefined) ?? "");
-      return `${host}:${port}`;
+  if (!descriptor) return "—";
+
+  const parts: string[] = [];
+  for (const field of descriptor.configFields) {
+    if (field.secret === true) continue;
+    const value = field.name
+      .split(".")
+      .reduce<unknown>(
+        (current, segment) =>
+          current !== null && typeof current === "object"
+            ? (current as Record<string, unknown>)[segment]
+            : undefined,
+        config
+      );
+    // Only primitives are summarised. A nested object under a declared path
+    // means the descriptor and the stored shape disagree, and printing
+    // "[object Object]" in the table is worse than printing nothing.
+    if (
+      typeof value !== "string" &&
+      typeof value !== "number" &&
+      typeof value !== "boolean"
+    ) {
+      continue;
     }
-    case "resend":
-    case "sendlayer": {
-      const apiKey = config.apiKey as string | undefined;
-      if (apiKey && apiKey.length > 8) {
-        return `${apiKey.slice(0, 4)}${"*".repeat(8)}${apiKey.slice(-4)}`;
-      }
-      return "********";
-    }
-    default:
-      return "—";
+    if (value === "") continue;
+    parts.push(String(value));
+    if (parts.length === 2) break;
   }
+
+  return parts.length > 0 ? parts.join(" · ") : "—";
 }
 
 function formatDate(dateValue?: string): string {
@@ -302,6 +335,15 @@ function EmailProviderTable() {
     type,
   });
 
+  // The registry catalog names and describes each type. Without it the table
+  // could only label the providers this admin was compiled against.
+  const { data: descriptorList } = useEmailProviderTypes();
+  const descriptors = useMemo(() => descriptorList ?? [], [descriptorList]);
+  const descriptorsByType = useMemo(
+    () => new Map(descriptors.map(entry => [entry.type, entry])),
+    [descriptors]
+  );
+
   const { mutate: doDelete, isPending: isDeleting } = useDeleteEmailProvider();
   const { mutate: doSetDefault } = useSetDefaultProvider();
   const { mutate: doTest, isPending: isTesting } = useTestProvider();
@@ -428,8 +470,15 @@ function EmailProviderTable() {
         name: "type",
         header: "Type",
         cell: ({ row }) => {
-          const config = PROVIDER_TYPE_CONFIG[row.type];
-          return <Badge variant={config.variant}>{config.label}</Badge>;
+          const descriptor = descriptorsByType.get(row.type);
+          return (
+            <Badge variant={PROVIDER_BADGE_VARIANTS[row.type] ?? "default"}>
+              {/* The registry's label when it has one; otherwise the stored
+                  type, so a provider whose plugin was removed still says what
+                  it is instead of rendering blank. */}
+              {descriptor?.label ?? row.type}
+            </Badge>
+          );
         },
       },
       {
@@ -450,7 +499,10 @@ function EmailProviderTable() {
         hideOnMobile: true,
         cell: ({ row }) => (
           <code className="text-xs bg-muted px-1.5 py-0.5 rounded-sm font-mono">
-            {maskConfiguration(row.type, row.configuration)}
+            {summariseConfiguration(
+              descriptorsByType.get(row.type),
+              row.configuration
+            )}
           </code>
         ),
       },
@@ -476,7 +528,9 @@ function EmailProviderTable() {
         ),
       },
     ],
-    []
+    // Rebuilt when the catalog arrives: the type badge and the configuration
+    // summary both read from it.
+    [descriptorsByType]
   );
 
   const columns = useMemo(
@@ -571,9 +625,13 @@ function EmailProviderTable() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Types</SelectItem>
-              <SelectItem value="smtp">SMTP</SelectItem>
-              <SelectItem value="resend">Resend</SelectItem>
-              <SelectItem value="sendlayer">SendLayer</SelectItem>
+              {/* One entry per registered provider, so the filter can reach a
+                  contributed provider that is genuinely in the table. */}
+              {descriptors.map(descriptor => (
+                <SelectItem key={descriptor.type} value={descriptor.type}>
+                  {descriptor.label}
+                </SelectItem>
+              ))}
             </SelectContent>
           </Select>
         }

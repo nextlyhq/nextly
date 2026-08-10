@@ -17,12 +17,23 @@ import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundar
 import { toast } from "@admin/components/ui";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
-import { useCreateEmailProvider } from "@admin/hooks/queries/useEmailProviders";
+import {
+  useCreateEmailProvider,
+  useEmailProviderTypes,
+} from "@admin/hooks/queries/useEmailProviders";
 import { getErrorMessage } from "@admin/lib/errors/error-types";
 import { navigateTo } from "@admin/lib/navigation";
 
 export default function CreateEmailProviderPage() {
   const { mutate: createProvider, isPending } = useCreateEmailProvider();
+  // The catalog of provider types this server registered. The form renders
+  // from it, so a provider contributed by a plugin appears here without the
+  // admin knowing its name.
+  const {
+    data: descriptors,
+    isLoading: descriptorsLoading,
+    error: descriptorsError,
+  } = useEmailProviderTypes();
 
   const handleSubmit = useCallback(
     (values: ProviderFormValues) => {
@@ -84,6 +95,9 @@ export default function CreateEmailProviderPage() {
         >
           <EmailProviderForm
             mode="create"
+            descriptors={descriptors ?? []}
+            descriptorsLoading={descriptorsLoading}
+            descriptorsError={descriptorsError}
             isPending={isPending}
             onSubmit={handleSubmit}
           />

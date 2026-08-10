@@ -26,6 +26,7 @@ import {
 
 import {
   listProviders,
+  listProviderTypes,
   getProvider,
   createProvider,
   updateProvider,
@@ -33,6 +34,7 @@ import {
   setDefaultProvider,
   testProvider,
   type EmailProviderRecord,
+  type EmailProviderDescriptor,
   type EmailProviderListResponse,
   type CreateEmailProviderPayload,
   type UpdateEmailProviderPayload,
@@ -54,6 +56,11 @@ export const emailProviderKeys = {
   }) => [...emailProviderKeys.lists(), params] as const,
   details: () => [...emailProviderKeys.all(), "detail"] as const,
   detail: (id: string) => [...emailProviderKeys.details(), id] as const,
+  // The registry catalog sits OUTSIDE the record keys on purpose: every
+  // mutation invalidates `all()`, and the set of registered provider types
+  // cannot change because someone saved a provider. Nesting it there would
+  // refetch a fixed server-side list after each write.
+  types: () => ["emailProviderTypes"] as const,
 };
 
 // ============================================================
@@ -81,7 +88,7 @@ export function useEmailProviders(
         page: params.page,
         limit: params.pageSize,
         search: params.search,
-        type: params.type as Parameters<typeof listProviders>[0]["type"],
+        type: params.type,
       }),
     ...options,
   });
@@ -105,6 +112,27 @@ export function useEmailProvider(
       return getProvider(id);
     },
     enabled: !!id,
+    ...options,
+  });
+}
+
+/**
+ * useEmailProviderTypes — the provider catalog this installation can configure.
+ *
+ * Cached for the session rather than refetched per form: the registry is fixed
+ * once the server boots, so the only thing that changes it is a redeploy, which
+ * reloads the admin anyway.
+ */
+export function useEmailProviderTypes(
+  options?: Omit<
+    UseQueryOptions<EmailProviderDescriptor[], Error>,
+    "queryKey" | "queryFn"
+  >
+) {
+  return useQuery<EmailProviderDescriptor[], Error>({
+    queryKey: emailProviderKeys.types(),
+    queryFn: () => listProviderTypes(),
+    staleTime: Infinity,
     ...options,
   });
 }

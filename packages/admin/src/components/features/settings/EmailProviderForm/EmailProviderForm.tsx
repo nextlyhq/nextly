@@ -1,14 +1,9 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Card, CardContent, Input, Switch } from "@nextlyhq/ui";
-import { useCallback, useEffect, useMemo } from "react";
-import {
-  useForm,
-  type Control,
-  type FieldValues,
-  type Resolver,
-} from "react-hook-form";
+import { Alert, AlertDescription, Input, Skeleton, Switch } from "@nextlyhq/ui";
+import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useForm, type Resolver } from "react-hook-form";
 
 import { AlertTriangle } from "@admin/components/icons";
 import {
@@ -18,26 +13,23 @@ import {
   FormItem,
   FormMessage,
 } from "@admin/components/ui/form";
-import { cn } from "@admin/lib/utils";
 import type {
+  EmailProviderDescriptor,
   EmailProviderRecord,
-  EmailProviderType,
 } from "@admin/services/emailProviderApi";
 
-import { ResendLogo } from "../Resend";
-import { SendlayerLogo } from "../Sendlayer";
 import { SettingsRow } from "../SettingsRow";
 import { SettingsSection } from "../SettingsSection";
-import { SMTPLogo } from "../SMTP";
 
-import { ApiKeyConfigFields } from "./ResendProviderFields";
+import { ProviderConfigFields } from "./ProviderConfigFields";
+import { ProviderTypePicker } from "./ProviderTypePicker";
 import {
   buildProviderSchema,
-  DEFAULT_VALUES,
+  defaultFormValues,
+  emptyConfiguration,
   providerToFormValues,
   type ProviderFormValues,
 } from "./schemas/emailProviderSchema";
-import { SmtpConfigFields } from "./SmtpProviderFields";
 
 // ============================================================
 // Form id used by external buttons (e.g. SettingsLayout.actions)
@@ -53,77 +45,141 @@ export const EMAIL_PROVIDER_FORM_ID = "email-provider-form";
 export interface EmailProviderFormProps {
   mode: "create" | "edit";
   provider?: EmailProviderRecord;
+  /** The provider catalog this server registered. */
+  descriptors: EmailProviderDescriptor[];
+  descriptorsLoading?: boolean;
+  descriptorsError?: Error | null;
   isPending: boolean;
   onSubmit: (values: ProviderFormValues) => void;
 }
 
+/**
+ * The email provider form, rendered from server-supplied descriptors.
+ *
+ * It knows about no provider in particular. Which types exist, which fields
+ * each takes, which of those are credentials and what bounds they carry all
+ * arrive from the registry, so a provider contributed by a plugin is
+ * configurable here without this file changing.
+ */
 export function EmailProviderForm({
   mode,
   provider,
+  descriptors,
+  descriptorsLoading,
+  descriptorsError,
   isPending,
   onSubmit,
 }: EmailProviderFormProps) {
   const isEdit = mode === "edit";
 
-  const providers = [
-    {
-      type: "smtp" as const,
-      name: "SMTP",
-      icon: SMTPLogo,
-      description: "Send via your own SMTP server",
-    },
-    {
-      type: "resend" as const,
-      name: "Resend",
-      icon: ResendLogo,
-      description: "Modern email API for developers",
-    },
-    {
-      type: "sendlayer" as const,
-      name: "SendLayer",
-      icon: SendlayerLogo,
-      description: "Reliable email delivery service",
-    },
-  ];
+  // In edit mode the stored type wins, even before the catalog arrives, so the
+  // form never briefly renders as a different provider. In create mode the
+  // first registered type is the initial selection.
+  const initialType = provider?.type ?? descriptors[0]?.type ?? "";
 
-  const initialType = provider?.type;
-  const schema = useMemo(
-    () => buildProviderSchema(mode, initialType),
-    [mode, initialType]
+  const initialDescriptor = useMemo(
+    () => descriptors.find(entry => entry.type === initialType),
+    [descriptors, initialType]
+  );
+
+  // The schema depends on the selected provider, and the selection lives in the
+  // form, so the resolver cannot be a plain value handed to `useForm` — it
+  // would freeze at whichever provider was selected first. Indirecting through
+  // a ref keeps one stable resolver identity that always validates against the
+  // provider currently on screen.
+  const resolverRef = useRef(
+    zodResolver(buildProviderSchema(initialDescriptor))
+  );
+  const resolver = useCallback<Resolver<ProviderFormValues>>(
+    (values, context, options) => resolverRef.current(values, context, options),
+    []
   );
 
   const form = useForm<ProviderFormValues>({
-    resolver: zodResolver(schema) as unknown as Resolver<ProviderFormValues>,
-    defaultValues: provider ? providerToFormValues(provider) : DEFAULT_VALUES,
+    resolver,
+    defaultValues: provider
+      ? providerToFormValues(provider, initialDescriptor)
+      : defaultFormValues(initialDescriptor),
   });
 
   const selectedType = form.watch("type");
+  const selectedDescriptor = useMemo(
+    () => descriptors.find(entry => entry.type === selectedType),
+    [descriptors, selectedType]
+  );
 
-  // Populate form when provider data loads in edit mode
+  // The configuration half of the schema is this provider's and nothing
+  // else's, so it is rebuilt whenever the selection changes.
+  resolverRef.current = useMemo(
+    () => zodResolver(buildProviderSchema(selectedDescriptor)),
+    [selectedDescriptor]
+  );
+
+  // Repopulate once the record or the catalog arrives: both are fetched, and
+  // whichever lands second decides which fields can be filled in.
   useEffect(() => {
     if (provider && isEdit) {
-      form.reset(providerToFormValues(provider));
+      form.reset(
+        providerToFormValues(
+          provider,
+          descriptors.find(entry => entry.type === provider.type)
+        )
+      );
     }
-  }, [provider, isEdit, form]);
+  }, [provider, isEdit, descriptors, form]);
 
-  // Reset type-specific fields when switching provider type
+  // Select the first registered provider once the catalog arrives. The form is
+  // built before the request finishes, so without this a newly added provider
+  // opens with nothing selected and no configuration fields at all. Guarded on
+  // the type still being empty, so it can never overwrite a real choice.
+  useEffect(() => {
+    if (isEdit || descriptors.length === 0) return;
+    if (form.getValues("type") !== "") return;
+    form.reset(defaultFormValues(descriptors[0]));
+  }, [isEdit, descriptors, form]);
+
+  // Replace the configuration when the provider type changes. The two
+  // providers have different shapes, so carrying values across is leftover
+  // rather than a partial edit — and the server discards them for the same
+  // reason.
   const handleTypeChange = useCallback(
-    (value: string) => {
-      const newType = value as EmailProviderType;
-      const current = form.getValues();
+    (type: string) => {
+      const next = descriptors.find(entry => entry.type === type);
       form.reset({
-        ...current,
-        type: newType,
-        smtpHost: "",
-        smtpPort: 587,
-        smtpSecure: false,
-        smtpUsername: "",
-        smtpPassword: "",
-        apiKey: "",
+        ...form.getValues(),
+        type,
+        configuration: emptyConfiguration(next),
       });
     },
-    [form]
+    [descriptors, form]
   );
+
+  if (descriptorsLoading) {
+    return (
+      <div className="space-y-6" aria-busy="true">
+        <Skeleton className="h-12 w-full rounded-md" />
+        <Skeleton className="h-[400px] w-full rounded-lg" />
+      </div>
+    );
+  }
+
+  // A failed catalog fetch is reported rather than rendered as an empty picker,
+  // which would read as "this installation has no email providers".
+  if (descriptorsError) {
+    return (
+      <Alert variant="destructive">
+        <AlertDescription>
+          Could not load the list of available provider types, so this form
+          cannot be shown. Reload the page to try again.
+        </AlertDescription>
+      </Alert>
+    );
+  }
+
+  // A stored provider whose type is no longer registered — its plugin was
+  // removed. The record is kept and readable; editing it would mean rendering
+  // fields nothing can validate, so the form says what happened instead.
+  const isUnknownStoredType = isEdit && provider && !selectedDescriptor;
 
   return (
     <Form {...form}>
@@ -135,6 +191,23 @@ export function EmailProviderForm({
         className="space-y-6"
         aria-busy={isPending}
       >
+        {isUnknownStoredType && (
+          <Alert variant="destructive">
+            <AlertDescription>
+              <span className="flex items-start gap-1.5">
+                <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                <span>
+                  This provider is stored as{" "}
+                  <code className="font-mono">{provider.type}</code>, which is
+                  not registered on this server. Its settings cannot be edited
+                  and it cannot send until the package that provides it is
+                  installed again. Deleting it here is safe.
+                </span>
+              </span>
+            </AlertDescription>
+          </Alert>
+        )}
+
         {/* ── Section: Provider Identity ─────────────────────────── */}
         <SettingsSection label="Provider Identity">
           <FormField
@@ -150,7 +223,7 @@ export function EmailProviderForm({
                     <Input
                       placeholder="e.g. Production SMTP, Resend Primary"
                       autoFocus={!isEdit}
-                      disabled={isPending}
+                      disabled={isPending || isUnknownStoredType}
                       {...field}
                     />
                   </FormControl>
@@ -169,50 +242,20 @@ export function EmailProviderForm({
                   label="Provider Type"
                   description="Select the provider type to match your configuration."
                 >
-                  <div className="flex flex-wrap gap-3">
-                    {providers.map(p => {
-                      const isSelected = field.value === p.type;
-                      return (
-                        <Card
-                          key={p.type}
-                          variant="interactive"
-                          // Full-strength foreground on hover so the border state change is perceivable.
-                          className={cn(
-                            "relative h-20 w-[120px] flex items-center justify-center overflow-hidden cursor-pointer transition-colors",
-                            isSelected
-                              ? "border-foreground bg-primary/[0.04] ring-1 ring-foreground shadow-sm"
-                              : "border-input hover:border-foreground opacity-80 hover:opacity-100"
-                          )}
-                          onClick={() => {
-                            if (!isSelected) {
-                              field.onChange(p.type);
-                              handleTypeChange(p.type);
-                            }
-                          }}
-                          role="button"
-                          tabIndex={0}
-                          onKeyDown={e => {
-                            if (e.key === "Enter" || e.key === " ") {
-                              e.preventDefault();
-                              field.onChange(p.type);
-                              handleTypeChange(p.type);
-                            }
-                          }}
-                          aria-pressed={isSelected}
-                          aria-label={p.name}
-                        >
-                          <CardContent className="p-3 flex items-center justify-center">
-                            <div className="w-full h-full max-w-[90px] max-h-[36px] flex items-center justify-center">
-                              <p.icon
-                                className="max-w-full max-h-full text-foreground"
-                                aria-label={`${p.name} logo`}
-                              />
-                            </div>
-                          </CardContent>
-                        </Card>
-                      );
-                    })}
-                  </div>
+                  <ProviderTypePicker
+                    descriptors={descriptors}
+                    value={field.value}
+                    // Locked along with the rest when the stored type is not
+                    // registered: the notice above says the settings cannot be
+                    // edited, and a live picker would make that false by
+                    // letting an orphaned record be converted while every
+                    // other field stays disabled.
+                    disabled={isPending || isUnknownStoredType}
+                    onChange={type => {
+                      field.onChange(type);
+                      handleTypeChange(type);
+                    }}
+                  />
                   <FormMessage className="mt-1.5" />
                 </SettingsRow>
               </FormItem>
@@ -221,21 +264,11 @@ export function EmailProviderForm({
         </SettingsSection>
 
         {/* ── Section: Provider-specific configuration ───────────── */}
-        {selectedType === "smtp" && (
-          <SmtpConfigFields
-            control={form.control as unknown as Control<FieldValues>}
-          />
-        )}
-        {selectedType === "resend" && (
-          <ApiKeyConfigFields
-            control={form.control as unknown as Control<FieldValues>}
-            providerLabel="Resend"
-          />
-        )}
-        {selectedType === "sendlayer" && (
-          <ApiKeyConfigFields
-            control={form.control as unknown as Control<FieldValues>}
-            providerLabel="SendLayer"
+        {selectedDescriptor && (
+          <ProviderConfigFields
+            descriptor={selectedDescriptor}
+            control={form.control}
+            disabled={isPending}
           />
         )}
 
@@ -249,26 +282,27 @@ export function EmailProviderForm({
                 <SettingsRow
                   label="From Email"
                   description={
-                    selectedType === "resend" ? (
+                    // Every hosted API provider requires a verified sending
+                    // domain, and a descriptor cannot say so without turning
+                    // itself into a copywriting surface. The warning is shown
+                    // for any provider that publishes documentation to send
+                    // people to, and suppressed for a self-hosted server, where
+                    // the sender is whatever the operator's own relay accepts.
+                    selectedDescriptor?.docsUrl ? (
                       <span className="flex items-start gap-1.5">
                         <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0 text-warning-600 dark:text-warning-500" />
                         <span>
-                          Must be an email from a{" "}
-                          <strong>verified domain</strong> in your Resend
-                          account. For testing without a verified domain, use{" "}
-                          <code className="font-mono">
-                            onboarding@resend.dev
-                          </code>{" "}
-                          (sends only to your Resend account email).
-                        </span>
-                      </span>
-                    ) : selectedType === "sendlayer" ? (
-                      <span className="flex items-start gap-1.5">
-                        <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0 text-warning-600 dark:text-warning-500" />
-                        <span>
-                          Must be an email from a{" "}
-                          <strong>verified domain</strong> in your SendLayer
-                          account.
+                          Must be an address on a{" "}
+                          <strong>verified domain</strong> in your{" "}
+                          {selectedDescriptor.label} account.{" "}
+                          <a
+                            href={selectedDescriptor.docsUrl}
+                            target="_blank"
+                            rel="noreferrer noopener"
+                            className="underline underline-offset-2"
+                          >
+                            Provider documentation
+                          </a>
                         </span>
                       </span>
                     ) : (
@@ -279,12 +313,8 @@ export function EmailProviderForm({
                   <FormControl>
                     <Input
                       type="email"
-                      placeholder={
-                        selectedType === "resend"
-                          ? "onboarding@resend.dev"
-                          : "noreply@example.com"
-                      }
-                      disabled={isPending}
+                      placeholder="noreply@example.com"
+                      disabled={isPending || isUnknownStoredType}
                       {...field}
                     />
                   </FormControl>
@@ -306,7 +336,7 @@ export function EmailProviderForm({
                   <FormControl>
                     <Input
                       placeholder="My App"
-                      disabled={isPending}
+                      disabled={isPending || isUnknownStoredType}
                       {...field}
                     />
                   </FormControl>
@@ -332,7 +362,7 @@ export function EmailProviderForm({
                     <Switch
                       checked={field.value}
                       onCheckedChange={field.onChange}
-                      disabled={isPending}
+                      disabled={isPending || isUnknownStoredType}
                     />
                   </FormControl>
                   <FormMessage className="mt-1.5" />
@@ -354,7 +384,7 @@ export function EmailProviderForm({
                     <Switch
                       checked={field.value}
                       onCheckedChange={field.onChange}
-                      disabled={isPending}
+                      disabled={isPending || isUnknownStoredType}
                     />
                   </FormControl>
                   <FormMessage className="mt-1.5" />

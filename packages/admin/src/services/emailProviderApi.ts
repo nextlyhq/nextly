@@ -23,7 +23,60 @@ import type {
 // Types
 // ============================================================
 
-export type EmailProviderType = "smtp" | "resend" | "sendlayer";
+/**
+ * A provider type id, as stored on the record.
+ *
+ * Deliberately not a literal union. The set of providers is decided by the
+ * server's registry at runtime — a plugin can contribute one — so a union
+ * compiled into the admin could only ever describe the built-ins, and would
+ * make every contributed provider a type error at the boundary that receives
+ * it. The built-ins are kept as literals so editors still complete them.
+ */
+export type EmailProviderType = "smtp" | "resend" | "sendlayer" | (string & {});
+
+/**
+ * How one configuration value is entered, as the server describes it.
+ *
+ * Mirrors `EmailProviderConfigField` in core. It is a wire shape rather than a
+ * shared import because the admin is built independently of the core package
+ * and consumes it as JSON.
+ */
+export interface EmailProviderConfigField {
+  /** Dotted path within `configuration`, e.g. `auth.pass`. */
+  name: string;
+  label: string;
+  kind: "text" | "password" | "number" | "boolean" | "select";
+  required?: boolean;
+  default?: string | number | boolean;
+  help?: string;
+  placeholder?: string;
+  options?: Array<{ value: string; label: string }>;
+  /** Credential. Never carries a value; read back masked. */
+  secret?: boolean;
+  constraints?: { min?: number; max?: number; maxLength?: number };
+}
+
+/** What a provider can do, so the UI never offers what it cannot honour. */
+export interface EmailProviderCapabilities {
+  attachments?: boolean;
+  connectionTest?: boolean;
+  replyTo?: boolean;
+}
+
+/**
+ * The browser-safe half of a provider definition.
+ *
+ * Everything the form needs to render a provider the admin was never compiled
+ * against, and nothing else: no stored values, no credentials.
+ */
+export interface EmailProviderDescriptor {
+  type: EmailProviderType;
+  label: string;
+  description?: string;
+  docsUrl?: string;
+  capabilities: EmailProviderCapabilities;
+  configFields: EmailProviderConfigField[];
+}
 
 export interface EmailProviderRecord {
   id: string;
@@ -130,6 +183,22 @@ export async function listProviders(params: {
 }
 
 /**
+ * List the provider types this installation can configure.
+ *
+ * The admin is compiled long before an install picks its plugins, so the set of
+ * providers and the fields each one needs can only come from the server. This
+ * is what lets the provider form render a provider nobody hardcoded.
+ */
+export async function listProviderTypes(): Promise<EmailProviderDescriptor[]> {
+  const result = await fetcher<{ types: EmailProviderDescriptor[] }>(
+    `/email-providers/types`,
+    {},
+    true
+  );
+  return result?.types ?? [];
+}
+
+/**
  * Get a single email provider by ID.
  */
 export async function getProvider(id: string): Promise<EmailProviderRecord> {
@@ -217,6 +286,7 @@ export async function testProvider(
 
 export const emailProviderApi = {
   listProviders,
+  listProviderTypes,
   getProvider,
   createProvider,
   updateProvider,

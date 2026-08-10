@@ -4,4 +4,6 @@ export type { ProviderFormValues } from "./schemas/emailProviderSchema";
 export {
   formValuesToPayload,
   providerToFormValues,
+  isMaskedSecret,
+  MASKED_SECRET,
 } from "./schemas/emailProviderSchema";

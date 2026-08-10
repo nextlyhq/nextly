@@ -19,14 +19,13 @@ import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
 import {
   useEmailProvider,
+  useEmailProviderTypes,
   useUpdateEmailProvider,
 } from "@admin/hooks/queries/useEmailProviders";
 import { useRouter } from "@admin/hooks/useRouter";
 import { getErrorMessage } from "@admin/lib/errors/error-types";
 import { navigateTo } from "@admin/lib/navigation";
 import { validateUUID } from "@admin/lib/validation";
-
-const MASKED_SECRET = "••••••••";
 
 export default function EditEmailProviderPage() {
   const { route } = useRouter();
@@ -46,6 +45,15 @@ export default function EditEmailProviderPage() {
     refetch,
   } = useEmailProvider(providerId || undefined);
 
+  // The provider catalog. The stored record says which type this provider is;
+  // the catalog says what that type's fields are, so both are needed before the
+  // form can render anything editable.
+  const {
+    data: descriptors,
+    isLoading: descriptorsLoading,
+    error: descriptorsError,
+  } = useEmailProviderTypes();
+
   // Update mutation
   const { mutate: updateProvider, isPending } = useUpdateEmailProvider();
 
@@ -53,55 +61,16 @@ export default function EditEmailProviderPage() {
     (values: ProviderFormValues) => {
       if (!providerId) return;
 
+      // `formValuesToPayload` has already dropped the credentials the user did
+      // not touch, using the descriptor's own `secret` flags rather than a list
+      // of provider names kept here. The server merges what remains over the
+      // stored configuration, so an omitted credential keeps its stored value.
       const payload = formValuesToPayload(values);
-
-      // For edit, only send configuration fields that have values
-      // (empty sensitive fields mean "keep existing")
-      const configuration = { ...payload.configuration };
-
-      if (values.type === "smtp") {
-        if (
-          !values.smtpPassword ||
-          values.smtpPassword === MASKED_SECRET ||
-          /^\*+$/.test(values.smtpPassword)
-        ) {
-          const auth = configuration.auth as Record<string, unknown>;
-          delete auth.pass;
-        }
-      } else {
-        if (
-          !values.apiKey ||
-          values.apiKey === MASKED_SECRET ||
-          /^\*+$/.test(values.apiKey)
-        ) {
-          delete configuration.apiKey;
-        }
-      }
-
-      // Only include configuration in the update if it has actual values.
-      // An empty object would overwrite the stored (encrypted) credentials.
-      const dataToUpdate: {
-        name: string;
-        type: ProviderFormValues["type"];
-        fromEmail: string;
-        fromName: string | null;
-        isDefault: boolean;
-        configuration?: Record<string, unknown>;
-      } = {
-        name: payload.name,
-        type: payload.type,
-        fromEmail: payload.fromEmail,
-        fromName: payload.fromName,
-        isDefault: payload.isDefault,
-      };
-      if (Object.keys(configuration).length > 0) {
-        dataToUpdate.configuration = configuration;
-      }
 
       updateProvider(
         {
           id: providerId,
-          data: dataToUpdate,
+          data: payload,
         },
         {
           onSuccess: () => {
@@ -230,6 +199,9 @@ export default function EditEmailProviderPage() {
           <EmailProviderForm
             mode="edit"
             provider={provider}
+            descriptors={descriptors ?? []}
+            descriptorsLoading={descriptorsLoading}
+            descriptorsError={descriptorsError}
             isPending={isPending}
             onSubmit={handleSubmit}
           />
