@@ -4,7 +4,7 @@
  * Internal contributor playground for the Nextly monorepo. NOT a
  * template for end-user projects — see templates/blog for that.
  *
- * Collections Posts, Categories, Tags (defined here) plus Media and
+ * Collections Posts, Categories, Tags, BlockPages (defined here) plus Media and
  * Users (core, registered automatically), three singles (Homepage,
  * LandingPage, SiteSettings) and the Seo field group. SiteSettings and Seo
  * are registered as a pair on purpose: SiteSettings embeds Seo through a
@@ -27,6 +27,7 @@ import { formBuilderPlugin } from "@nextlyhq/plugin-form-builder";
 import { pageBuilder } from "@nextlyhq/plugin-page-builder";
 import { defineConfig } from "nextly/config";
 
+import { BlockPages } from "./src/collections/block-pages";
 import { Categories } from "./src/collections/categories";
 import { Posts } from "./src/collections/posts";
 import { Tags } from "./src/collections/tags";
@@ -77,7 +78,7 @@ export default defineConfig({
     // Untranslated fields fall back to another locale's value on read (default true).
     fallback: true,
   },
-  collections: [Posts, Categories, Tags],
+  collections: [Posts, Categories, Tags, BlockPages],
   singles: [Homepage, LandingPage, SiteSettings],
   fieldGroups: [Seo],
   // Dev-harness plugins: page builder, form builder, and the styling fixture
