@@ -31,12 +31,20 @@ const pkgRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
  * The export map decides what ships; this decides where each shipped thing is built from. The two
  * are checked against each other, so a subpath without a source, or a source without a subpath,
  * is an error rather than a gap.
+ *
+ * `client` says which side of the React boundary the entry belongs to, and is DECLARED because
+ * nothing about a subpath reveals it. Deriving it from "everything except the root is server-safe"
+ * meant a client subpath added later would be built by the server-safe config, which adds no
+ * `"use client"` banner, while the directive guard demanded that same artifact stay unmarked —
+ * three green guards over an entry point React cannot use. Declaring it keeps enrolment automatic
+ * without guessing: a new subpath still cannot be added silently, because a missing entry here is
+ * an error.
  */
 const SOURCES = {
-  ".": "src/index.ts",
-  "./tailwind-preset": "src/tailwind-preset.ts",
-  "./utils": "src/lib/utils.ts",
-  "./color": "src/lib/color/index.ts",
+  ".": { source: "src/index.ts", client: true },
+  "./tailwind-preset": { source: "src/tailwind-preset.ts", client: false },
+  "./utils": { source: "src/lib/utils.ts", client: false },
+  "./color": { source: "src/lib/color/index.ts", client: false },
 };
 
 /**
@@ -61,23 +69,24 @@ const ASSET_TARGET = /\.css$/;
  */
 
 /**
- * Every published entry point that resolves to JavaScript.
+ * The published entry points implied by an export map and a set of declared barrels.
  *
  * Stylesheets are excluded: they are published as plain strings in the export map and none of the
  * three guards has anything to say about them.
  *
- * `serverSafe` is derived rather than listed. The root barrel is the component surface and is
- * published with a `"use client"` banner; every other JavaScript subpath exists precisely because
- * it carries no React runtime, which is the property that makes it importable from a server
- * component. Anything published from the root is client code by construction.
+ * Takes both inputs rather than reading them, so the refusals below can be exercised directly.
+ * Each one describes a map this package does not have yet — a client subpath, a bare JavaScript
+ * target, two subpaths sharing an artifact — and a check that can only ever run against the real
+ * `package.json` proves that today's map is acceptable, not that the check works.
  *
+ * @param {Record<string, unknown>} exportMap The `exports` field to read.
+ * @param {Record<string, {source: string, client: boolean}>} sources The declared barrels.
  * @returns {PublishedEntry[]}
  */
-export function publishedEntries() {
-  const pkg = JSON.parse(readFileSync(join(pkgRoot, "package.json"), "utf8"));
+export function derivePublishedEntries(exportMap, sources) {
   const entries = [];
 
-  for (const [subpath, target] of Object.entries(pkg.exports ?? {})) {
+  for (const [subpath, target] of Object.entries(exportMap ?? {})) {
     // A stylesheet maps straight to its file. Every other direct target is refused rather than
     // skipped: a subpath published as a bare string names no `types` condition and no separate
     // ESM and CommonJS files, so the guards have nothing to read, and passing over it in silence
@@ -118,13 +127,14 @@ export function publishedEntries() {
     }
 
     const file = value => value.replace(/^\.\//, "").replace(/^dist\//, "");
-    const source = SOURCES[subpath];
-    if (source === undefined) {
+    const declared = sources[subpath];
+    if (declared === undefined) {
       throw new Error(
         `The export "${subpath}" has no source barrel. Add one to SOURCES, so the build and the ` +
-          "surface snapshot read the same file."
+          "surface snapshot read the same file, and say whether it is client code."
       );
     }
+    const { source, client } = declared;
     const artifacts = [file(paths.importDefault), file(paths.requireDefault)];
     entries.push({
       subpath,
@@ -132,7 +142,7 @@ export function publishedEntries() {
       name: artifacts[0].replace(/\.[^.]+$/, ""),
       declarations: [file(paths.importTypes), file(paths.requireTypes)],
       artifacts,
-      serverSafe: subpath !== ".",
+      serverSafe: !client,
     });
   }
 
@@ -147,7 +157,7 @@ export function publishedEntries() {
   // entries, so a key naming a subpath that is no longer published is dropped before any guard
   // sees it: the retarget it describes would go unchecked while this map still claimed to
   // describe it.
-  const unpublished = Object.keys(SOURCES).filter(
+  const unpublished = Object.keys(sources).filter(
     subpath => !entries.some(entry => entry.subpath === subpath)
   );
   if (unpublished.length > 0) {
@@ -157,7 +167,35 @@ export function publishedEntries() {
     );
   }
 
+  // Two subpaths may resolve to one artifact only if they are built from one barrel. The build
+  // entries are keyed by artifact name, so a collision between DIFFERENT barrels keeps whichever
+  // came last and silently gives both subpaths its API — while the surface suite went on
+  // snapshotting the two declared sources separately and the file guards inspected the single
+  // shared output twice, leaving every check green.
+  const barrelsByName = new Map();
+  for (const entry of entries) {
+    const seen = barrelsByName.get(entry.name);
+    if (seen && seen.source !== entry.source) {
+      throw new Error(
+        `The exports "${seen.subpath}" and "${entry.subpath}" both resolve to the artifact ` +
+          `"${entry.name}", but are built from "${seen.source}" and "${entry.source}". One of ` +
+          "them would overwrite the other; give them separate artifacts, or one shared barrel."
+      );
+    }
+    if (!seen) barrelsByName.set(entry.name, entry);
+  }
+
   return entries;
+}
+
+/**
+ * Every published entry point that resolves to JavaScript, read from this package.
+ *
+ * @returns {PublishedEntry[]}
+ */
+export function publishedEntries() {
+  const pkg = JSON.parse(readFileSync(join(pkgRoot, "package.json"), "utf8"));
+  return derivePublishedEntries(pkg.exports, SOURCES);
 }
 
 /**

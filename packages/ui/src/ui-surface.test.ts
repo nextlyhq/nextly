@@ -222,6 +222,33 @@ describe("ui public export surface", () => {
 });
 
 describe("ui STABILITY.md ledger", () => {
+  it("classifies entry points the way the ledger promises", () => {
+    // The client/server split is DECLARED, and a declaration nothing checks is a comment. The
+    // ledger names the server-safe subpaths in prose, so the two are compared in both
+    // directions: misclassifying an entry builds it with the wrong config, and the directive
+    // guard then asserts the opposite of what that artifact needs.
+    const start = ledger.indexOf("- **Server components.**");
+    expect(
+      start,
+      "STABILITY.md no longer names the server-safe subpaths"
+    ).toBeGreaterThan(-1);
+    const bullet = ledger.slice(start, ledger.indexOf("\n\n", start));
+    const promised = [...bullet.matchAll(/`@nextlyhq\/ui\/([\w./-]+)`/g)]
+      .map(match => `./${match[1]}`)
+      .sort();
+    expect(
+      promised.length,
+      "the ledger bullet named no subpaths"
+    ).toBeGreaterThan(0);
+
+    expect(
+      publishedEntries()
+        .filter(entry => entry.serverSafe)
+        .map(entry => entry.subpath)
+        .sort()
+    ).toEqual(promised);
+  });
+
   it("promises no export the barrel does not ship", () => {
     const shipped = barrelNames();
     const missing = documentedPublic().names.filter(n => !shipped.has(n));
