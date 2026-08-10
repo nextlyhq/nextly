@@ -89,6 +89,31 @@ export interface BoxSides {
 export type TokenRef = { token: string };
 export type StyleScalar = string | TokenRef;
 
+/**
+ * The values a keyword style key accepts, as DATA the inspector's option lists are built from.
+ *
+ * A hand-written option list beside a hand-written union drifts, and the drift is one-way: the
+ * editor offers a value the exported types reject, so a document the editor produced cannot be
+ * represented by a block author or a consumer without a cast. Deriving both from one list makes
+ * that unrepresentable rather than tested for.
+ */
+export const OBJECT_FIT_VALUES = [
+  "fill",
+  "contain",
+  "cover",
+  "none",
+  "scale-down",
+] as const;
+export const OVERFLOW_VALUES = [
+  "visible",
+  "hidden",
+  "clip",
+  "auto",
+  "scroll",
+] as const;
+export type ObjectFit = (typeof OBJECT_FIT_VALUES)[number];
+export type Overflow = (typeof OVERFLOW_VALUES)[number];
+
 export interface StyleValues {
   margin?: BoxSides;
   padding?: BoxSides;
@@ -118,8 +143,8 @@ export interface StyleValues {
   textShadow?: string;
   // Dimensions (extended)
   minHeight?: StyleScalar;
-  objectFit?: "fill" | "contain" | "cover" | "none" | "scale-down";
-  overflow?: "visible" | "hidden" | "auto" | "scroll";
+  objectFit?: ObjectFit;
+  overflow?: Overflow;
   aspectRatio?: StyleScalar;
   // Border (structured; borderRadius already above)
   border?: { width?: BoxSides; style?: string; color?: StyleScalar };

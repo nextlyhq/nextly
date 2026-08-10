@@ -49,6 +49,14 @@ export interface DimensionsSupport {
   objectFit?: boolean;
   overflow?: boolean;
   aspectRatio?: boolean;
+  /**
+   * The Gutenberg-style Wide / Full preset.
+   *
+   * A sub-flag like the others rather than something every block with any dimension support gets:
+   * its neutral value compiles to no declaration, so a block that shares its element with another
+   * — a reusable placement and the block it places — cannot use it to cancel the other's.
+   */
+  widthAlign?: boolean;
 }
 export interface InteractionsSupport {
   hover?: boolean;
@@ -132,6 +140,7 @@ const DIM_KEYS: (keyof DimensionsSupport)[] = [
   "objectFit",
   "overflow",
   "aspectRatio",
+  "widthAlign",
 ];
 const INTERACT_KEYS: (keyof InteractionsSupport)[] = ["hover", "transition"];
 
@@ -149,6 +158,24 @@ function expand<T extends string>(
   return out;
 }
 
+/**
+ * Width alignment, defaulting ON for any block that declares dimension support.
+ *
+ * Like the other always-available capabilities rather than like the opt-in dimension sub-flags,
+ * because it reached every block with any `dimensions` declaration before it had a flag at all.
+ * Opt-in would silently take the control away from blocks defined outside this repository, whose
+ * declarations cannot be migrated with it.
+ */
+function withWidthAlign(
+  expanded: DimensionsSupport | false,
+  declared: BlockSupports["dimensions"]
+): DimensionsSupport | false {
+  if (expanded === false) return false;
+  const on =
+    typeof declared === "object" ? declared.widthAlign !== false : true;
+  return { ...expanded, widthAlign: on };
+}
+
 export function normalizeSupports(s: BlockSupports = {}): NormalizedSupports {
   return {
     spacing: expand(s.spacing, SPACING_KEYS),
@@ -157,7 +184,7 @@ export function normalizeSupports(s: BlockSupports = {}): NormalizedSupports {
     background: expand(s.background, BG_KEYS),
     border: expand(s.border, BORDER_KEYS),
     shadow: Boolean(s.shadow),
-    dimensions: expand(s.dimensions, DIM_KEYS),
+    dimensions: withWidthAlign(expand(s.dimensions, DIM_KEYS), s.dimensions),
     position: Boolean(s.position),
     opacity: Boolean(s.opacity),
     filters: Boolean(s.filters),

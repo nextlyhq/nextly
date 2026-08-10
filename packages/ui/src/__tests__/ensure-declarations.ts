@@ -71,9 +71,11 @@ export const DECLARATION_ENTRIES = [
   "index.d.ts",
   "utils.d.ts",
   "tailwind-preset.d.ts",
+  "color.d.ts",
   "index.d.cts",
   "utils.d.cts",
   "tailwind-preset.d.cts",
+  "color.d.cts",
 ];
 
 /**

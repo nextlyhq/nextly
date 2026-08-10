@@ -28,7 +28,12 @@ const SRC = path.dirname(fileURLToPath(import.meta.url));
 const PKG_ROOT = path.join(SRC, "..");
 
 /** The entry points named in the package's `exports` map. */
-const ENTRY_POINTS = ["index.ts", "lib/utils.ts", "tailwind-preset.ts"];
+const ENTRY_POINTS = [
+  "index.ts",
+  "lib/utils.ts",
+  "tailwind-preset.ts",
+  "lib/color/index.ts",
+];
 
 /**
  * Strip comments before any structural check. Doc comments here legitimately

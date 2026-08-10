@@ -115,6 +115,27 @@ export function conversionForRename(
     change,
   ];
 
+  // PostgreSQL preserves the column's nullability across a type change, so a repair that coincides
+  // with the field becoming required (or stopping being required) would leave the old setting behind
+  // — the UP contradicting the snapshot it was generated from, and the DOWN unable to restore what
+  // was there. MySQL needs no equivalent: its MODIFY restates nullability with the type, which is
+  // why the same fact travels on the op there and as its own statement here.
+  //
+  // Emitted as `change_column_nullable`, which the inverse builder already knows how to swap.
+  if (
+    context.source?.nullable !== undefined &&
+    context.target?.nullable !== undefined &&
+    context.source.nullable !== context.target.nullable
+  ) {
+    ops.push({
+      type: "change_column_nullable",
+      tableName: rename.tableName,
+      columnName: rename.toColumn,
+      fromNullable: context.source.nullable,
+      toNullable: context.target.nullable,
+    });
+  }
+
   // And the desired default goes back on after the type is right. Omitted when the target declares
   // none — an unconditional SET DEFAULT would invent one the schema never asked for.
   //
