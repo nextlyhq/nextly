@@ -60,12 +60,40 @@ export function number(
 /**
  * Schemes that execute rather than navigate.
  *
- * `javascript:` and `vbscript:` run code in the page's origin, and `data:` can
- * carry an HTML document that then runs its own scripts in some browsers. A
- * stored URL reaches an `href` or an `src` attribute, so this is the one prop
- * type where a bad value is an XSS rather than a broken link.
+ * An ALLOWLIST, not a list of schemes to refuse.
+ *
+ * The refusing shape was tried first and is the wrong one here for the same
+ * reason it is wrong in the style compiler: a blocklist has to predict every
+ * dangerous scheme and misses the next one. `javascript:`, `vbscript:` and
+ * `data:` were named, so `blob:` was not — and a `blob:` document runs in the
+ * origin that created it, which is the page's own. Nor were `filesystem:`,
+ * `about:`, or whatever a browser ships next.
+ *
+ * These four are what an author actually writes in a link or a source:
+ * `http`/`https` for a destination, `mailto`/`tel` for the two that open an
+ * app rather than a page and are the ordinary content of a contact button.
+ * A stored URL reaches an `href` or an `src`, so this is the one prop type
+ * where a bad value is code execution rather than a broken link.
+ *
+ * The SAME four the rich-text sanitizer allows, deliberately. That module
+ * answers this identical question for stored rich text, and two surfaces of one
+ * product disagreeing about which schemes are safe is how a value refused in a
+ * link body becomes acceptable in a button beside it. The admin's link editor
+ * accepts a wider set for what an author may TYPE; that is an input affordance
+ * and not the boundary, which is here.
  */
-const EXECUTABLE_SCHEME = /^(javascript|vbscript|data):/i;
+const ALLOWED_SCHEMES: readonly string[] = ["http", "https", "mailto", "tel"];
+
+/**
+ * Any leading `scheme:`, which is what decides whether the list above applies.
+ *
+ * A value with NO scheme is left alone: `/about`, `a.png` and `#top` resolve
+ * against the page's own origin and name no destination of their own. So does
+ * `//host/x`, which carries no scheme and still reaches another host — bounding
+ * WHICH hosts may be reached is a separate question, asked of the host policy
+ * by the blocks that fetch, not of this list.
+ */
+const URL_SCHEME = /^([a-z][a-z0-9+.-]*):/i;
 
 /**
  * A URL safe to place in an attribute, or `undefined`.
@@ -89,7 +117,11 @@ export function url(value: unknown): string | undefined {
     const code = character.codePointAt(0) ?? 0;
     if (code > 0x20 && code !== 0x7f) collapsed += character;
   }
-  return EXECUTABLE_SCHEME.test(collapsed) ? undefined : trimmed;
+  const scheme = URL_SCHEME.exec(collapsed);
+  if (scheme === null) return trimmed;
+  const name = scheme[1];
+  if (name === undefined) return undefined;
+  return ALLOWED_SCHEMES.includes(name.toLowerCase()) ? trimmed : undefined;
 }
 
 /**
