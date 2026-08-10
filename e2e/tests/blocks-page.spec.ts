@@ -164,6 +164,17 @@ test("renders every block in the document", async ({ page }) => {
   const response = await page.goto(`/blocks/${PUBLISHED_SLUG}`);
   expect(response?.status()).toBe(200);
 
+  // First, because it is what makes every assertion below mean anything: a
+  // resolver that resolves nothing still renders a page, so "the route answered
+  // 200" is not the same claim as "the blocks drew".
+  //
+  // Asserted on the attribute rather than on the placeholder's wording. The
+  // wording exists only in development — a production build renders the
+  // placeholder as an empty `hidden` div carrying the same attribute and no
+  // text at all, so a text assertion would quietly stop covering anything in
+  // exactly the build a performance measurement uses.
+  await expect(page.locator("[data-nx-block-placeholder]")).toHaveCount(0);
+
   // One assertion per block type, so a failure names which block stopped
   // rendering instead of reporting that "the page" is wrong.
   await expect(page.getByRole("heading", { name: PAGE_HEADING })).toBeVisible();
@@ -178,10 +189,6 @@ test("renders every block in the document", async ({ page }) => {
   await expect(
     page.locator("section").getByRole("heading", { name: PAGE_HEADING })
   ).toBeVisible();
-
-  // A resolver that resolves nothing still renders a page. Without this, every
-  // assertion above could be satisfied by placeholders carrying the same text.
-  await expect(page.getByText(/unknown block/i)).toHaveCount(0);
 
   expect(failed).toEqual([]);
 });
