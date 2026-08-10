@@ -2365,3 +2365,74 @@ describe("a key its own control owns", () => {
     expect(onWindow).not.toHaveBeenCalled();
   });
 });
+
+describe("two keys held at once", () => {
+  it("keeps each one's consumption separate", () => {
+    // A single slot was overwritten by the next press: hold mod+s, press mod+k while s is still
+    // down, and the repeats of s matched nothing — so a binding that had made itself ineligible
+    // handed the browser its Save Page.
+    let dirty = true;
+    const manager = managerFor(false);
+    manager.register(
+      [
+        {
+          keys: "mod+s",
+          description: "Save",
+          run: () => {
+            dirty = false;
+          },
+          when: () => dirty,
+        },
+        binding("mod+k", vi.fn()),
+      ],
+      { name: "shell", depth: 0 }
+    );
+
+    manager.handle(press("s", { ctrlKey: true, code: "KeyS" }));
+    manager.handle(press("k", { ctrlKey: true, code: "KeyK" }));
+    const repeat = press("s", { ctrlKey: true, code: "KeyS", repeat: true });
+    manager.handle(repeat);
+
+    expect(repeat.defaultPrevented).toBe(true);
+  });
+});
+
+describe("a character its layout builds with AltGraph", () => {
+  it("matches a binding written for the character itself", () => {
+    // The keydown reports ctrlKey and altKey because AltGraph presents as both. Requiring them to
+    // be declared makes the spec layout-specific: the same character needs no modifiers at all
+    // on a layout that types it directly.
+    const run = vi.fn();
+    const manager = managerFor(false);
+    manager.register([binding("@", run)], { name: "shell", depth: 0 });
+    const event = press("@", { ctrlKey: true, altKey: true });
+    Object.defineProperty(event, "getModifierState", {
+      value: (k: string) => k === "AltGraph",
+    });
+    manager.handle(event);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("still requires a real ctrl+alt chord to declare both", () => {
+    // The control: without AltGraph those flags are a genuine chord and a bare binding must not
+    // answer for it.
+    const run = vi.fn();
+    const manager = managerFor(false);
+    manager.register([binding("@", run)], { name: "shell", depth: 0 });
+    manager.handle(press("@", { ctrlKey: true, altKey: true }));
+    expect(run).not.toHaveBeenCalled();
+  });
+});
+
+describe("a step that names modifiers and no key", () => {
+  it("is rejected rather than read as the plus chord", () => {
+    // `mod++` is a modifier, a separator and the plus key. `mod+` is a modifier and a separator
+    // with nothing after it, and accepting it registered zoom-in for a step naming no key.
+    expect(() =>
+      managerFor().register([binding("mod+", vi.fn())], {
+        name: "shell",
+        depth: 0,
+      })
+    ).toThrow();
+  });
+});

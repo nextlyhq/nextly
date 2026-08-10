@@ -12,6 +12,7 @@ import {
   ShortcutProvider,
   ShortcutScope,
   type UseShortcutsOptions,
+  useActiveShortcuts,
   useShortcutManager,
   useShortcuts,
 } from "./react";
@@ -746,5 +747,40 @@ describe("options that cannot both be honoured", () => {
     second.unmount();
 
     expect(said).toContain("different options");
+  });
+});
+
+describe("a help panel mounted with the shortcuts it lists", () => {
+  it("shows them, rather than the empty list it would read first", () => {
+    // The panel mounts alongside the components that register, so a one-time read runs before
+    // their effects and returns nothing — with no later render to correct it.
+    function Panel(): React.JSX.Element {
+      const active = useActiveShortcuts();
+      return (
+        <ul data-testid="panel">
+          {active.map(a => (
+            <li key={a.keys}>{a.keys}</li>
+          ))}
+        </ul>
+      );
+    }
+
+    function Keys(): React.JSX.Element | null {
+      useShortcuts([{ keys: "mod+k", description: "Open", run: vi.fn() }], {
+        name: "shell",
+      });
+      return null;
+    }
+
+    const view = render(
+      <ShortcutProvider isApple={false} target={null}>
+        <Panel />
+        <Keys />
+      </ShortcutProvider>
+    );
+    const panel = view.getByTestId("panel");
+    view.unmount();
+
+    expect(panel.textContent).toContain("mod+k");
   });
 });

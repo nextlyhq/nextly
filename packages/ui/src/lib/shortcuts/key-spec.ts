@@ -93,7 +93,11 @@ function parseChord(step: string, spec: string): KeyChord {
   // TRAILING one is too: `mod++` is the usual zoom-in shortcut, and splitting it naively leaves
   // a chord carrying modifiers and no key at all. Spelling it `mod+shift+=` is not a substitute,
   // because the browser reports that keystroke as `key: "+"`.
-  const trailingPlusIsKey = step.length > 1 && step.endsWith("+");
+  // The separator has to still be there for the trailing `+` to be a KEY: `mod++` is a modifier,
+  // a separator and the plus key, while `mod+` is a modifier and a separator with nothing after
+  // it. Accepting the second registered the zoom-in chord for a step that names no key at all,
+  // and made the "no key" error unreachable for exactly the steps that need it.
+  const trailingPlusIsKey = step.length > 2 && step.endsWith("++");
   const body = trailingPlusIsKey ? step.slice(0, -1) : step;
   const parts = step === "+" ? ["+"] : body.split("+").filter(Boolean);
   let mod = false;
@@ -168,6 +172,8 @@ export interface ModifierState {
   readonly metaKey: boolean;
   readonly altKey: boolean;
   readonly shiftKey: boolean;
+  /** Optional, so a caller driving the matcher by hand need not synthesise one. */
+  readonly getModifierState?: (key: string) => boolean;
 }
 
 /**
@@ -196,9 +202,17 @@ export function chordMatches(
   const wantsCtrl = chord.ctrl || (chord.mod && !isApple);
   const wantsMeta = chord.meta || (chord.mod && isApple);
 
-  if (state.ctrlKey !== wantsCtrl) return false;
   if (state.metaKey !== wantsMeta) return false;
-  if (state.altKey !== chord.alt) return false;
+  // AltGraph produces a CHARACTER and reports itself as Ctrl+Alt. A binding written for that
+  // character — `@` on a layout that needs AltGraph for it — would never match if those synthetic
+  // flags had to be declared, and declaring them (`ctrl+alt+@`) is layout-specific: the same
+  // character needs no modifiers at all elsewhere. So they are ignored for a character key.
+  const altGraph = state.getModifierState?.("AltGraph") ?? false;
+  const synthetic = altGraph && [...chord.key].length === 1;
+  if (!synthetic) {
+    if (state.ctrlKey !== wantsCtrl) return false;
+    if (state.altKey !== chord.alt) return false;
+  }
   if (shiftIsMeaningful(chord.key) && state.shiftKey !== chord.shift)
     return false;
   return true;

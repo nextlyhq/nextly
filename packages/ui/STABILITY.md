@@ -100,6 +100,11 @@ plugin at all: its whole purpose is to be the only listener, so a plugin shippin
 would recreate the ambiguity it exists to remove. It is a peer dependency of correctness for
 any surface with a keyboard grammar.
 
+Single-listener behaviour is a property a surface OPTS INTO by registering through the manager.
+Existing `document` and `window` handlers keep working and keep competing with each other until
+they adopt it; the manager stands down for a key another owner has already claimed, but it
+cannot arbitrate between two listeners that never told it they exist.
+
 The context menu and the resizable split are the editor-shell primitives: an editor needs
 a right-click menu and draggable regions, and both belong in the kit rather than inside
 one plugin, because every plugin that builds an editing surface needs the same two. They

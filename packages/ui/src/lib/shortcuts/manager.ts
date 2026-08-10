@@ -178,8 +178,20 @@ export interface ShortcutManager {
   attach: (
     target: Pick<EventTarget, "addEventListener" | "removeEventListener">
   ) => () => void;
-  /** Every active binding, most-precedent layer first, for a shortcuts help panel. */
+  /**
+   * Every active binding, most-precedent layer first, for a shortcuts help panel.
+   *
+   * The same array is returned until the layer stack changes, so it is safe to use as an external
+   * store snapshot without re-rendering on every read.
+   */
   activeBindings: () => readonly ActiveShortcut[];
+  /**
+   * Watch for changes to the layer stack.
+   *
+   * A help panel mounting alongside the components that register shortcuts would otherwise read
+   * BEFORE their effects run and show nothing, with no later render to correct it.
+   */
+  subscribe: (onChange: () => void) => () => void;
 }
 
 /**
@@ -398,11 +410,18 @@ export function createShortcutManager(
    * Identifies the physical press rather than the binding that answered it: by the time a repeat
    * arrives, the binding may have made itself ineligible.
    */
-  let consumedPress: {
-    signature: string;
-    prevented: boolean;
-    modifiers: string;
-  } | null = null;
+  /**
+   * What each held key was consumed as, keyed by the physical key.
+   *
+   * A single slot was overwritten by the next press: hold `mod+s`, press `mod+k` while `s` is
+   * still down, and the repeats of `s` no longer matched anything — so a binding that had made
+   * itself ineligible let the browser take them. Several keys are held at once routinely, and the
+   * map is bounded by the number of distinct physical keys on the keyboard.
+   */
+  const consumedPresses = new Map<
+    string,
+    { prevented: boolean; modifiers: string }
+  >();
 
   /**
    * Forget a partially typed sequence.
@@ -651,6 +670,16 @@ export function createShortcutManager(
     }
   }
 
+  const watchers = new Set<() => void>();
+  /** The last computed binding list, so repeated reads return the same array identity. */
+  let snapshot: readonly ActiveShortcut[] | null = null;
+
+  /** Invalidate the snapshot and tell anyone watching that the stack changed. */
+  function changed(): void {
+    snapshot = null;
+    for (const watcher of watchers) watcher();
+  }
+
   const pressedEvents: KeyboardEvent[] = [];
 
   /**
@@ -669,7 +698,7 @@ export function createShortcutManager(
       return offer(pressed, event, typing, true);
     } catch (error) {
       abandonSequence();
-      consumedPress = null;
+      consumedPresses.clear();
       throw error;
     }
   }
@@ -724,20 +753,15 @@ export function createShortcutManager(
       // A repeat of some OTHER key is a real keystroke between the sequence's own. While `x` is
       // held, pressing `g`, receiving another `x` repeat, then pressing `d` must not complete
       // `g d` as though nothing had come between them.
-      if (
-        consumedPress === null ||
-        consumedPress.signature !== signature(event)
-      ) {
+      if (!consumedPresses.has(signature(event))) {
         abandonSequence();
       }
       // Re-offering is not enough on its own. A binding whose action changes its own condition —
       // `mod+s` saving and clearing the dirty flag — is no longer eligible by the second
       // keydown, so the repeat would be reported unhandled and the browser would take it. What
       // was consumed is a PRESS, not a match, so the press is what gets remembered.
-      if (
-        consumedPress !== null &&
-        consumedPress.signature === signature(event)
-      ) {
+      const held = consumedPresses.get(signature(event));
+      if (held) {
         // Two different questions about one held key, and they have different answers.
         //
         // CONSUMED belongs to the physical press: it does not move when the modifiers around it
@@ -748,9 +772,9 @@ export function createShortcutManager(
         // browser a Save As. A press that was PERMITTED, though, was permitted because it was
         // text: add Ctrl to a held `w` and it becomes the accelerator that closes the tab, so the
         // decision is re-made rather than inherited.
-        if (consumedPress.prevented) {
+        if (held.prevented) {
           event.preventDefault();
-        } else if (consumedPress.modifiers !== modifierState(event)) {
+        } else if (held.modifiers !== modifierState(event)) {
           if (!insertsText(event, typing)) event.preventDefault();
         }
         return true;
@@ -789,11 +813,10 @@ export function createShortcutManager(
 
     if (outcome === "pending") {
       pendingAt = now();
-      consumedPress = {
-        signature: signature(event),
+      consumedPresses.set(signature(event), {
         prevented: event.defaultPrevented,
         modifiers: modifierState(event),
-      };
+      });
       return true;
     }
 
@@ -807,13 +830,14 @@ export function createShortcutManager(
       if (!insertsText(event, typing)) event.preventDefault();
     }
     const consumed = outcome === "fired" || outcome === "blocked";
-    consumedPress = consumed
-      ? {
-          signature: signature(event),
-          prevented: event.defaultPrevented,
-          modifiers: modifierState(event),
-        }
-      : null;
+    if (consumed) {
+      consumedPresses.set(signature(event), {
+        prevented: event.defaultPrevented,
+        modifiers: modifierState(event),
+      });
+    } else {
+      consumedPresses.delete(signature(event));
+    }
     return consumed;
   }
 
@@ -828,6 +852,7 @@ export function createShortcutManager(
       };
       warnOnPrefixConflicts(layer.bindings, layerOptions.name);
       layers.add(layer);
+      changed();
       return {
         update(nextBindings, nextOptions) {
           layer.bindings = prepare(nextBindings);
@@ -836,15 +861,17 @@ export function createShortcutManager(
           // that only ran at `register` would never see the bindings anyone actually writes.
           warnOnPrefixConflicts(layer.bindings, nextOptions.name);
           const shape = layerShape(layer.bindings, nextOptions);
-          const changed = shape !== layer.shape;
+          const shapeChanged = shape !== layer.shape;
           layer.shape = shape;
           // Only a change to what this layer MATCHES can invalidate a promise it made. `update`
           // runs after every render, so cancelling unconditionally made a sequence fail whenever
           // an unrelated re-render landed between its two keystrokes.
-          if (changed && pendingLayer === layer) abandonSequence();
+          if (shapeChanged && pendingLayer === layer) abandonSequence();
+          changed();
         },
         dispose() {
           layers.delete(layer);
+          changed();
           if (pendingLayer === layer) abandonSequence();
         },
       };
@@ -874,17 +901,27 @@ export function createShortcutManager(
         // would otherwise let a `g` from the old document be completed by a `d` on the new one,
         // and a repeat inherit consumption state from keystrokes this target never saw.
         abandonSequence();
-        consumedPress = null;
+        consumedPresses.clear();
+      };
+    },
+    subscribe(onChange) {
+      watchers.add(onChange);
+      return () => {
+        watchers.delete(onChange);
       };
     },
     activeBindings() {
-      return ordered().flatMap(layer =>
+      // Cached, because an external store must return a stable identity for an unchanged stack:
+      // a fresh array on every read makes React re-render without end.
+      if (snapshot) return snapshot;
+      snapshot = ordered().flatMap(layer =>
         layer.bindings.map(prepared => ({
           keys: prepared.binding.keys,
           description: prepared.binding.description,
           layer: layer.options.name,
         }))
       );
+      return snapshot;
     },
   };
 }

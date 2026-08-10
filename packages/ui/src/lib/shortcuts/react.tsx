@@ -406,12 +406,21 @@ export function useShortcutManager(): ShortcutManager {
 /**
  * The shortcuts currently in effect, most precedent first.
  *
- * Read at call time rather than subscribed to: this is for a help panel, which opens, reads once
- * and closes, and a subscription would re-render it on every layer change beneath.
+ * SUBSCRIBED rather than read once. A help panel mounting alongside the components that register
+ * shortcuts reads before their effects have run, so a one-time read returns an empty list and no
+ * later render corrects it — the panel simply shows nothing. The same applies whenever a layer is
+ * enabled, disabled or replaced while the panel is open.
+ *
+ * The manager returns the same array until its stack changes, so this re-renders when the
+ * shortcuts change and not on every read.
  *
  * @experimental
  */
 export function useActiveShortcuts(): readonly ActiveShortcut[] {
   const manager = useShortcutManager();
-  return manager.activeBindings();
+  return React.useSyncExternalStore(
+    manager.subscribe,
+    manager.activeBindings,
+    manager.activeBindings
+  );
 }
