@@ -29,6 +29,14 @@
  *    stored version is ahead of its definition emits a placeholder and none of
  *    its content.
  *
+ * Gathering the passes here does not by itself make two readers agree. Each
+ * pass's ARGUMENTS are as much of the contract as the pass and its position:
+ * the same six calls made with a different predicate or different caps is a
+ * COPY of this pipeline rather than a use of it, and it diverges exactly as a
+ * hand-written sequence would. The placeholder predicate handed to the address
+ * repair is the sharp one, because omitting it is silent and changes which
+ * nodes survive.
+ *
  * @module prepare-document
  */
 import {
