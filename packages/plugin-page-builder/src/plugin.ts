@@ -33,22 +33,26 @@ export interface PageBuilderOptions {
    * only on `PageRenderer` because the canvas runs in the browser, where a
    * component prop from the host's server config cannot reach it.
    *
-   * **What this covers, exactly.** It is enforced by this package: the editor
-   * canvas, the style compiler that validates `url()` in custom CSS and style
-   * values, and the embed HTML sanitizer. Those are the surfaces that read it.
+   * Set the SAME value on `PageRenderer.remotePatterns` from
+   * `@nextlyhq/plugin-page-builder/render`. These are two assignments, not one:
+   * this configures the editor, and that renderer reads only its own prop.
+   * Setting one alone produces a mismatch in whichever direction you set it, so
+   * a shared constant in the host is what keeps them equal.
    *
-   * **What it does NOT cover.** `@nextlyhq/blocks-react` — the renderer the
-   * blocks pipeline is moving to — has no remote-host control at all. It
-   * allowlists URL SCHEMES (`http`/`https` only, with control characters and
+   * **What this covers.** Structured style values and block props, through
+   * `isFetchableUrl`; the embed HTML sanitizer; the editor canvas; and the CSP
+   * builder. **Not custom CSS** — `sanitizeCustomCss` takes no patterns and
+   * removes every off-origin URL unconditionally, so a CDN you allowlist here
+   * still disappears from hand-written CSS. That surface is stricter than this
+   * value, not governed by it.
+   *
+   * **What it does NOT reach.** `@nextlyhq/blocks-react`, the renderer the
+   * blocks pipeline is moving to, has no remote-host control and no such prop.
+   * It allowlists URL SCHEMES (`http`/`https`, with control characters and
    * quote-breaking characters refused), which stops a `javascript:` value but
    * not a third-party host: a `background` image pointed at any https origin
-   * compiles and ships. Verified against the engine's compiler, not inferred.
-   *
-   * So a page rendered through that renderer is not restricted by this value,
-   * and there is no second prop to set — an earlier version of this comment
-   * told the reader to mirror it onto `PageRenderer.remotePatterns`, which has
-   * never existed on either renderer. Do not assume a published page is bounded
-   * by what you configure here until that gap is closed.
+   * compiles and ships. Measured against the engine's compiler, not inferred.
+   * A page rendered through THAT renderer is not bounded by this value.
    *
    * Object patterns only. This value is serialized to the browser and a `URL`
    * does not survive that: it would arrive as a string. Converting one here
