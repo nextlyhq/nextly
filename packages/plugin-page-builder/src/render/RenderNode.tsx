@@ -10,11 +10,12 @@
  * at any depth resolves via `resolveBindings`. `core/query-loop` is intercepted and
  * rendered data-driven via `QueryLoop`.
  */
+import { nodeClassName } from "@nextlyhq/blocks-engine";
 import { cloneElement, isValidElement, type ReactNode } from "react";
 
 import { resolveBindings } from "../core/bindings";
 import type { BlockRegistry } from "../core/registry";
-import { nodeClass, refScopedKey } from "../core/style-compiler";
+import { documentKey, refScopedKey } from "../core/style-compiler";
 import type { BlockNode } from "../core/types";
 import type { RemotePatternInput } from "../core/url-policy";
 
@@ -120,9 +121,11 @@ export function RenderNode({
   // The same key the compiler names this node by. Deriving it differently on
   // either side writes a stylesheet against a selector the markup never carries.
   const styleKey =
-    refScope === undefined ? node.id : refScopedKey(refScope, node.id);
+    refScope === undefined || refScope === ""
+      ? documentKey(node.id)
+      : refScopedKey(refScope, node.id);
   const className = [
-    classes?.get(styleKey) ?? nodeClass(styleKey),
+    classes?.get(styleKey) ?? nodeClassName(styleKey),
     node.customClass,
   ]
     .filter(Boolean)
