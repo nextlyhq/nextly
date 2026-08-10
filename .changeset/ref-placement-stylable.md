@@ -23,4 +23,4 @@
 "@nextlyhq/tsconfig": patch
 ---
 
-Let one placement of a reusable block be styled differently from the others. Styles set on a placed reusable block were saved and never reached the page; a placement's own look now applies on top of the shared block, so customising one placement no longer means editing the block everywhere it appears.
+Let one placement of a reusable block be styled differently from the others. Styles set on a placed reusable block were saved and never reached the page, and the Style tab offered no controls to set them; a placement now has its own style options and its look applies on top of the shared block, so customising one placement no longer means editing the block everywhere it appears. Turning a hidden block back on for a single placement works too.

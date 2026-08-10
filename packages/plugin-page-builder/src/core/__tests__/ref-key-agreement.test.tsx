@@ -447,4 +447,116 @@ describe("styling a core/ref PLACEMENT", () => {
     // Exactly one element carries it: the target's root.
     expect(markup.split(placement).length - 1).toBe(1);
   });
+
+  it("emits a nested target before the block that places it", () => {
+    // Library-first is not enough on its own once a reusable block places another one: the inner
+    // block is library too, and ordering the library by ref id would decide which of two library
+    // blocks wins by their names. `outer` places `inner`, so `inner`'s rule has to come first for
+    // the placement inside `outer` to override it — the same reason the document comes last.
+    // The ref ids are chosen so that alphabetical order is the WRONG order: the block doing the
+    // placing sorts first. Names where sorting happens to agree with dependency order would pass
+    // against either implementation.
+    const root = container("root", [ref("p1", "aaa-places")]);
+    const refs = {
+      // The placement of `zzz-placed` lives inside `aaa-places`, and is styled.
+      "aaa-places": container("outerroot", [
+        { ...ref("p2", "zzz-placed"), style: { base: { color: "#ee0005" } } },
+      ]),
+      "zzz-placed": styled("innerroot", "Inner", "#ee0006"),
+    };
+    const css = compileDocumentCss(doc(root), {
+      classes: documentNodeClasses(doc(root), refs),
+      refs,
+    });
+
+    // Positive control: both rules are present, so an ordering assertion is not comparing -1s.
+    expect(css).toContain("#ee0005");
+    expect(css).toContain("#ee0006");
+    expect(css.indexOf("#ee0006")).toBeLessThan(css.indexOf("#ee0005"));
+  });
+
+  it("emits library custom CSS before the document's, like the generated tier", () => {
+    // Custom CSS is anchored at one specificity too, so ordering this tier the other way round
+    // would let the block's own custom CSS beat a placement's while its generated styles lost to
+    // the same placement — two tiers disagreeing about which of them is the override.
+    const root = container("root", [
+      { ...ref("p1", "r1"), customCss: "selector { color: #ee0007 }" },
+    ]);
+    const refs = {
+      r1: {
+        ...styled("lib", "Lib", "#000000"),
+        customCss: "selector { color: #ee0008 }",
+      },
+    };
+    const css = compileDocumentBlockCss(
+      doc(root),
+      documentNodeClasses(doc(root), refs),
+      refs,
+      "nx-pb-scope"
+    );
+
+    expect(css).toContain("#ee0007");
+    expect(css).toContain("#ee0008");
+    expect(css.indexOf("#ee0008")).toBeLessThan(css.indexOf("#ee0007"));
+  });
+
+  it("withholds a target's hide from a placement that turns it back on", () => {
+    // `display: none` is the one thing a later declaration cannot undo: no CSS value means "the
+    // display you would otherwise have had". So the placement is excluded from the hide instead,
+    // which is reachable state — unchecking "Hide on mobile" stores `true` rather than deleting
+    // the key.
+    const root = container("root", [
+      { ...ref("p1", "r1"), visibility: { mobile: true } },
+    ]);
+    const refs = {
+      r1: {
+        ...container("lib", [
+          {
+            ...styled("libchild", "Child", "#ee0009"),
+            visibility: { mobile: false },
+          },
+        ]),
+        visibility: { mobile: false },
+      },
+    };
+    const classes = documentNodeClasses(doc(root), refs);
+    const css = compileDocumentCss(doc(root), { classes, refs });
+
+    const placement = classes.get(documentKey("p1")) ?? nodeClass("p1");
+    const target = classes.get(refScopedKey("r1", "lib")) as string;
+    const child = classes.get(refScopedKey("r1", "libchild")) as string;
+
+    // Positive control: the hide is emitted at all, so the assertion below is about its SHAPE.
+    expect(css).toContain("display: none");
+    expect(css).toContain(`.${target}:not(.${placement})`);
+    // The target's descendants never carry the placement's class, so exempting them would only
+    // add a selector that matches whatever it already matched.
+    expect(css).toContain(`.${child} {`);
+    expect(css).not.toContain(`.${child}:not(`);
+  });
+
+  it("exempts only the placements that asked to see it, at the breakpoint they asked about", () => {
+    // The exclusion is keyed on an explicit `true` at that breakpoint. A placement that also hides
+    // at mobile, and one that spoke about a different breakpoint entirely, both keep the target's
+    // hide — a blanket exclusion would un-hide the block for every placement as soon as one
+    // overrode it.
+    const root = container("root", [
+      { ...ref("p1", "r1"), visibility: { mobile: true } },
+      { ...ref("p2", "r1"), visibility: { mobile: false } },
+      { ...ref("p3", "r1"), visibility: { tablet: true } },
+    ]);
+    const refs = {
+      r1: { ...styled("lib", "Lib", "#ee0010"), visibility: { mobile: false } },
+    };
+    const classes = documentNodeClasses(doc(root), refs);
+    const css = compileDocumentCss(doc(root), { classes, refs });
+
+    const shown = classes.get(documentKey("p1")) ?? nodeClass("p1");
+    const alsoHidden = classes.get(documentKey("p2")) ?? nodeClass("p2");
+    const otherBreakpoint = classes.get(documentKey("p3")) ?? nodeClass("p3");
+
+    expect(css).toContain(`:not(.${shown})`);
+    expect(css).not.toContain(`:not(.${alsoHidden})`);
+    expect(css).not.toContain(`:not(.${otherBreakpoint})`);
+  });
 });

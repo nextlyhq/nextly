@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 
+import { defaultBlockRegistry } from "../../core/registry";
+import "../../render/blocks";
+
 import { supportsToControls } from "./supportsToControls";
 
 describe("supportsToControls", () => {
@@ -48,5 +51,27 @@ describe("supportsToControls", () => {
     expect(shadow.options!.some(o => o.label === "Deep")).toBe(true);
     expect(flat.some(c => c.styleKey === "linkColor")).toBe(true);
     expect(flat.some(c => c.styleKey === "linkColorHover")).toBe(true);
+  });
+
+  it("offers a reusable placement the typed style controls it can actually apply", () => {
+    // A placement's classes are applied to the element its target renders, so these controls reach
+    // a real element. Without them the Style tab reports that the block has no style options and
+    // the capability is only reachable by editing the document by hand.
+    const groups = supportsToControls(
+      defaultBlockRegistry.get("core/ref")?.supports
+    );
+    const flat = groups.flatMap(g => g.controls);
+
+    expect(flat.some(c => c.styleKey === "color")).toBe(true);
+    expect(flat.some(c => c.styleKey === "backgroundColor")).toBe(true);
+    expect(flat.some(c => c.styleKey === "margin")).toBe(true);
+    expect(flat.some(c => c.styleKey === "maxWidth")).toBe(true);
+  });
+
+  it("does not offer a reusable placement a motion control it cannot honour", () => {
+    // An entrance of "none" compiles to no declaration, and the placement shares an element with
+    // its target — so choosing "none" on the placement could not switch off an animation the
+    // target defines. The control would be present and inert.
+    expect(defaultBlockRegistry.get("core/ref")?.supports?.motion).toBeFalsy();
   });
 });

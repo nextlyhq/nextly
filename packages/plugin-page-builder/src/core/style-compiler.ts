@@ -89,6 +89,20 @@ export interface CompileOptions {
    * node from wearing the document node's class — and its styles.
    */
   refScope?: string;
+  /**
+   * Classes of the placements that turn this node back on, keyed by `"base"` or a breakpoint id.
+   *
+   * Hiding is the one thing a placement cannot express by simply outranking its target. Every
+   * other property is overridden by a later declaration of the same property, but `display: none`
+   * is cancelled only by naming the display the element would otherwise have had, and no CSS value
+   * means that: `revert` drops the whole author origin, taking the app's own classes with it, and
+   * `unset` resolves to `inline`. So the hide is withheld from those elements instead of fought,
+   * by compounding `:not()` onto the rule that would hide them.
+   *
+   * Only the target's ROOT can carry these, because that is the only element a placement's class
+   * reaches.
+   */
+  unhiddenBy?: Readonly<Record<string, readonly string[]>>;
 }
 
 /**
@@ -207,6 +221,13 @@ export function documentKey(nodeId: string): string {
  *
  * Cycle-guarded by the visited set, which is what the renderer's `refStack` does for the same
  * reason: a block that references itself must not walk forever here either.
+ *
+ * Returned DEPENDENCY-FIRST: a block appears after every block it places. Emitting in this order
+ * is what lets a placement override the block it places, because a resolved ref renders its target
+ * in its place and both classes land on one element — so precedence is source order and the later
+ * rule wins. An alphabetical order would decide that by ref id, which is not a preference anyone
+ * expressed. A cycle has no dependency-first order at all; the visited set breaks it at the second
+ * visit, and the block the walk reached first is the one that ends up later.
  */
 export function placedRefIds(
   doc: BlockDocument,
@@ -220,12 +241,14 @@ export function placedRefIds(
     if (refId === "" || seen.has(refId)) return;
     const target = refs?.[refId];
     if (!target) return;
+    // Marked before recursing, not after: a block reachable from its own subtree would otherwise
+    // walk forever.
     seen.add(refId);
-    placed.push(refId);
     walk(target, visit);
+    placed.push(refId);
   };
   walk(doc.root, visit);
-  return placed.sort();
+  return placed;
 }
 
 /** Every node id in a document, in document order. */
@@ -589,19 +612,66 @@ export function compileNodeCss(
 
   // Per-breakpoint visibility → display:none media queries.
   if (node.visibility) {
+    // The placements that asked to see this node at this breakpoint, excluded from the hide rather
+    // than overriding it. Compounded onto the node's own class, so the exclusion follows the same
+    // element the placement class is on.
+    const shownAt = (scopeKey: string): string =>
+      (opts.unhiddenBy?.[scopeKey] ?? [])
+        .map(placementClass => `:not(.${placementClass})`)
+        .join("");
     if (node.visibility.base === false) {
-      blocks.push(`${self} { display: none; }`);
+      blocks.push(`${self}${shownAt("base")} { display: none; }`);
     }
     for (const bp of bps) {
       if (node.visibility[bp.id] === false) {
         blocks.push(
-          `@media (max-width: ${bp.maxWidth}px) { ${self} { display: none; } }`
+          `@media (max-width: ${bp.maxWidth}px) { ${self}${shownAt(bp.id)} { display: none; } }`
         );
       }
     }
   }
 
   return blocks.join("\n");
+}
+
+/**
+ * Per reusable block, the placement classes that explicitly turn it back on, keyed by `"base"` or
+ * a breakpoint id.
+ *
+ * Unchecking "Hide on mobile" stores `true`, not an absent key, so a placement of a block that its
+ * own definition hides is a state the inspector can reach — and one no later declaration can undo.
+ * See {@link CompileOptions.unhiddenBy}.
+ */
+function unhiddenPlacements(
+  doc: BlockDocument,
+  refs: Record<string, BlockNode> | undefined,
+  classes: ReadonlyMap<string, string>,
+  bps: BreakpointDef[]
+): Map<string, Record<string, string[]>> {
+  const byRef = new Map<string, Record<string, string[]>>();
+  const scopeKeys = ["base", ...bps.map(bp => bp.id)];
+  const collect = (node: BlockNode, refScope?: string): void => {
+    if (node.type !== "core/ref" || !node.visibility) return;
+    const refId = typeof node.props?.refId === "string" ? node.props.refId : "";
+    if (refId === "" || !refs?.[refId]) return;
+    const key =
+      refScope === undefined || refScope === ""
+        ? documentKey(node.id)
+        : refScopedKey(refScope, node.id);
+    const placementClass = classes.get(key) ?? nodeClassName(key);
+    for (const scopeKey of scopeKeys) {
+      if (node.visibility[scopeKey] !== true) continue;
+      const entry = byRef.get(refId) ?? {};
+      entry[scopeKey] = [...(entry[scopeKey] ?? []), placementClass];
+      byRef.set(refId, entry);
+    }
+  };
+  walk(doc.root, n => collect(n));
+  for (const refId of placedRefIds(doc, refs)) {
+    const target = refs?.[refId];
+    if (target) walk(target, n => collect(n, refId));
+  }
+  return byRef;
 }
 
 /** One <style> block worth of CSS for the whole document. */
@@ -621,11 +691,24 @@ export function compileDocumentCss(
   //
   // The order is only observable once a placement's class reaches an element, which is why it went
   // unnoticed while a resolved ref emitted no element of its own.
+  const unhidden = unhiddenPlacements(
+    doc,
+    opts.refs,
+    classes,
+    opts.breakpoints ?? DEFAULT_BREAKPOINTS
+  );
   for (const refId of placedRefIds(doc, opts.refs)) {
     const target = opts.refs?.[refId];
     if (!target) continue;
+    const exemptions = unhidden.get(refId);
     walk(target, n => {
-      const css = compileNodeCss(n, { ...nodeOpts, refScope: refId });
+      const css = compileNodeCss(n, {
+        ...nodeOpts,
+        refScope: refId,
+        // Only the root: a placement's class is applied to the element its target renders, and the
+        // target's descendants are not that element.
+        unhiddenBy: n.id === target.id ? exemptions : undefined,
+      });
       if (css) parts.push(css);
     });
   }
@@ -694,10 +777,14 @@ export function compileDocumentBlockCss(
     // would push an empty string for every block that has none.
     if (scoped.css) parts.push(scoped.css);
   };
-  walk(doc.root, n => collect(n));
+  // The library first and the document after it, the same order the generated-style tier uses.
+  // Both tiers put a placement's class and its target's class on one element at one specificity,
+  // so ordering one of them the other way round would let a reusable block's custom CSS override
+  // the custom CSS of a single placement of it while its generated styles lost to that placement.
   for (const refId of placedRefIds(doc, refs)) {
     const target = refs?.[refId];
     if (target) walk(target, n => collect(n, refId));
   }
+  walk(doc.root, n => collect(n));
   return parts.join("\n");
 }
