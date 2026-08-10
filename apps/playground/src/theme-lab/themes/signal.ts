@@ -102,6 +102,7 @@ export const SIGNAL: ThemeDefinition = {
     "sidebar-ring": "var(--nx-primary)",
     "table-border": "var(--nx-border)",
     "table-row-hover": "oklch(0.9848 0 0)",
+    "table-header-bg": "var(--nx-card)",
   },
   dark: {
     // Mono's dark neutrals, unchanged for the same reason as light.
@@ -168,5 +169,6 @@ export const SIGNAL: ThemeDefinition = {
     "sidebar-ring": "var(--nx-primary)",
     "table-border": "var(--nx-border)",
     "table-row-hover": "oklch(0.28 0.0369 259.97)",
+    "table-header-bg": "var(--nx-card)",
   },
 };

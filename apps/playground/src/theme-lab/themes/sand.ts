@@ -121,6 +121,7 @@ export const SAND: ThemeDefinition = {
     "sidebar-ring": "var(--nx-primary)",
     "table-border": "var(--nx-border)",
     "table-row-hover": "oklch(0.962 0.013 85)",
+    "table-header-bg": "var(--nx-card)",
   },
   dark: {
     // The same ladder, authored for dark rather than flipped: popover > card >
@@ -196,5 +197,6 @@ export const SAND: ThemeDefinition = {
     "sidebar-ring": "var(--nx-primary)",
     "table-border": "var(--nx-border)",
     "table-row-hover": "oklch(0.245 0.011 72)",
+    "table-header-bg": "var(--nx-card)",
   },
 };

@@ -111,6 +111,11 @@ function derive(src, mode) {
     "border-strong": `color-mix(in srgb, ${src.border}, ${mixToward} 25%)`,
     "shadow-color": src["shadow-color"] ?? "oklch(0 0 0)",
     "table-row-hover": src.muted ?? src.accent,
+    // The header band sits on the card and is separated from it by its own
+    // border, so it follows the card rather than carrying a colour of its own.
+    // Required, so a preset missing it fails generation rather than silently
+    // keeping the shipped neutral while every other surface retints.
+    "table-header-bg": "var(--nx-card)",
     // var() references, not resolved literals, so they keep tracking the
     // theme's own primary/border if a future edit retouches either.
     ring: "var(--nx-primary)",

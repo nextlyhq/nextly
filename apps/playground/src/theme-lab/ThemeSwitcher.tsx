@@ -42,23 +42,28 @@ const GROUPS: { label: string; themes: ThemeDefinition[] }[] = [
 ];
 
 /**
- * Styled entirely with hardcoded inline colors rather than the admin's own
- * design tokens -- an approved, deliberate exception to the project's
- * token-driven styling rule, scoped to this one control. Every other axis
- * this panel exposes changes what the admin's tokens resolve to; a control
- * built from those same tokens would go low-contrast on Calm or turn
- * monospace green on Terminal right as it applied the change, which means
+ * The panel's own palette, fixed rather than tokenised.
+ *
+ * This control is mounted OUTSIDE the admin root -- a sibling of the admin
+ * subtree in `app/admin/[[...params]]/layout.tsx`, never a descendant of
+ * `.nextly-admin` -- so the admin's token-driven styling contract does not
+ * reach it, and `layout-mounting.test.ts` holds it there. That placement is
+ * the mechanism; these constants are only what it buys.
+ *
+ * It has to be fixed. Every axis this panel exposes changes what the admin's
+ * tokens resolve to, so a control built from those tokens would go
+ * low-contrast or change typeface at the exact moment it applied the change --
  * the one piece of UI whose job is to show what just happened would be the
  * first thing to become unreadable doing it.
  *
- * The exception is what makes the swatches trustworthy as well: they are the
- * only theme-coloured thing in the panel, so a swatch that looks wrong is the
- * theme being wrong rather than the panel inheriting it.
+ * It is also what makes the swatches trustworthy: they are the only
+ * theme-coloured thing here, so a swatch that looks wrong is the theme being
+ * wrong rather than the panel inheriting it.
  */
-const PANEL_BG = "#111318";
-const PANEL_FG = "#e8e8ec";
-const PANEL_BORDER = "#3a3d46";
-const CONTROL_BG = "#1c1f26";
+const PANEL_BG = "#111318"; // design-lint-ok: dev-only panel outside .nextly-admin
+const PANEL_FG = "#e8e8ec"; // design-lint-ok: dev-only panel outside .nextly-admin
+const PANEL_BORDER = "#3a3d46"; // design-lint-ok: dev-only panel outside .nextly-admin
+const CONTROL_BG = "#1c1f26"; // design-lint-ok: dev-only panel outside .nextly-admin
 
 const panelStyle: CssVars = {
   position: "fixed",

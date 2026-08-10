@@ -134,6 +134,7 @@ export const CALM: ThemeDefinition = {
     "sidebar-ring": "var(--nx-primary)",
     "table-border": "var(--nx-border)",
     "table-row-hover": "oklch(0.975 0.004 260)",
+    "table-header-bg": "var(--nx-card)",
   },
   dark: {
     // Authored as dusk rather than as an inversion. A soft theme in dark mode
@@ -200,5 +201,6 @@ export const CALM: ThemeDefinition = {
     "sidebar-ring": "var(--nx-primary)",
     "table-border": "var(--nx-border)",
     "table-row-hover": "oklch(0.27 0.009 262)",
+    "table-header-bg": "var(--nx-card)",
   },
 };

@@ -72,6 +72,7 @@ export const MONO: ThemeDefinition = {
     "sidebar-ring": "var(--nx-primary)",
     "table-border": "var(--nx-border)",
     "table-row-hover": "oklch(0.9848 0 0)",
+    "table-header-bg": "var(--nx-card)",
   },
   dark: {
     background: "oklch(0.1358 0.0163 262.71)",
@@ -134,5 +135,6 @@ export const MONO: ThemeDefinition = {
     "sidebar-ring": "var(--nx-primary)",
     "table-border": "var(--nx-border)",
     "table-row-hover": "oklch(0.28 0.0369 259.97)",
+    "table-header-bg": "var(--nx-card)",
   },
 };

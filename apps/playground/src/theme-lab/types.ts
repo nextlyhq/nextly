@@ -100,4 +100,9 @@ export const REQUIRED_TOKENS = [
   "sidebar-ring",
   "table-border",
   "table-row-hover",
+  // The header, footer and pagination band. Required like any other surface:
+  // left out, a theme repaints the page and the cards while the table header
+  // keeps the SHIPPED neutral, and the completeness check cannot see the gap
+  // because the token is not on this list.
+  "table-header-bg",
 ] as const satisfies readonly string[];

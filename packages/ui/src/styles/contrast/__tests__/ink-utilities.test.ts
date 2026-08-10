@@ -64,33 +64,31 @@ const PAGE_SURFACES = [
 const REQUIRED = { text: 4.5, ring: 3 } as const;
 
 /**
- * A utility, with its variant chain, ending at a quote, whitespace, `}` or the
- * end of the string.
+ * One whole class token: an optional variant chain, a property prefix, a role,
+ * an optional opacity modifier and an optional `!`.
  *
- * `|$` is load-bearing: a class string's LAST utility has nothing after it, so
- * a lookahead demanding a delimiter skips it. Every `dark:text-*` written last
- * in its string -- which is where a dark override is conventionally written --
- * went unseen, and the check then measured the light ink it was supposed to
- * replace against the dark surface.
- *
- * An opacity modifier (`text-muted/10`) fails the delimiter and so is excluded:
- * chart tracks and decorative washes are the author saying this carries no
- * meaning, and it is visible in the diff when someone writes one.
+ * Anchored at both ends (`^`/`$`) because it is applied to an ALREADY SPLIT
+ * token rather than scanned across a string. A class attribute is
+ * whitespace-delimited by definition, so splitting first and matching whole
+ * tokens removes every delimiter assumption at once -- and those assumptions
+ * were the bug. A scanning pattern needed a trailing delimiter, which skipped
+ * the LAST utility in every class string; that is exactly where a `dark:`
+ * override is conventionally written, so dark ink went unseen while the light
+ * ink it replaces was scored against the dark surface. Four other
+ * false-positive rounds came from the same family. Tokenising does not fix
+ * that bug so much as make it unrepresentable.
  */
-const INK_UTILITY =
-  /(?:^|[\s"'`])((?:[a-z][a-z0-9-]*:)*)(text|ring|decoration|caret|placeholder)-([a-z][a-z0-9-]*?)!?(?=["'\s`}]|$)/g;
+const CLASS_TOKEN =
+  /^((?:[a-z][a-z0-9-]*:)*)(text|ring|decoration|caret|placeholder|bg)-([a-z][a-z0-9-]*?)(\/(?:\[[0-9.]+%?\]|\d+))?!?$/;
 
-/**
- * `bg-<role>` in the same class string: the fill the ink is painted on.
- *
- * Matches a trailing opacity modifier rather than skipping it. A translucent
- * `dark:bg-warning-950/40` still OVERRIDES the light fill in dark mode even
- * though its composited colour is not knowable statically, and dropping it from
- * the scan left the light fill looking like it still applied -- so dark ink was
- * scored against a light background it is never painted on.
- */
-const FILL_UTILITY =
-  /(?:^|[\s"'`])((?:[a-z][a-z0-9-]*:)*)bg-([a-z][a-z0-9-]*?)(\/(?:\[[0-9.]+%?\]|\d+))?!?(?=["'\s`}]|$)/g;
+/** Properties that paint ink, as opposed to the fill it is painted on. */
+const INK_PREFIXES = new Set([
+  "text",
+  "ring",
+  "decoration",
+  "caret",
+  "placeholder",
+]);
 
 /**
  * Files that apply classes. A module that only DESCRIBES utilities -- a doc
@@ -99,27 +97,6 @@ const FILL_UTILITY =
  * exist.
  */
 const APPLIES_CLASSES = /className|class=|\bcva\(|\bcn\(/;
-
-/**
- * The class string an ink utility sits in, bounded by the nearest quote on
- * either side.
- *
- * A component that names its own fill has already answered the question this
- * check asks: `bg-foreground text-background` is an inverted pill, correct at
- * 20.41:1, and measuring its ink against the PAGE would reject it for being
- * right. Reading the pair out of the class string is the same principle the
- * whole check rests on -- measure what the component renders, not what the
- * theme declares.
- */
-function classStringAround(source: string, index: number): string {
-  const isQuote = (char: string) =>
-    char === '"' || char === "'" || char === "`";
-  let start = index;
-  while (start > 0 && !isQuote(source[start - 1] ?? "")) start--;
-  let end = index;
-  while (end < source.length && !isQuote(source[end] ?? "")) end++;
-  return source.slice(start, end);
-}
 
 function walk(dir: string, found: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
@@ -236,9 +213,10 @@ interface Utility {
   state: string;
   /** A translucent fill composites over what is behind it: not knowable here. */
   translucent: boolean;
+  /** Ink with an opacity modifier: a wash, not something carrying meaning. */
+  decorative: boolean;
   appliesInDark: boolean;
   appliesInLight: boolean;
-  index: number;
 }
 
 /**
@@ -268,65 +246,91 @@ function withModes(found: Utility[]): Utility[] {
   });
 }
 
+/**
+ * Every quoted span in a source, which is where class strings live.
+ *
+ * Spans are taken whole rather than searched for utilities, so the unit of
+ * analysis is the same one the browser gets: a set of classes applied together.
+ * A template literal with an interpolation splits into several spans, which is
+ * harmless -- each piece is still a complete set of whitespace-delimited
+ * tokens.
+ */
+const QUOTED_SPAN = /(["'`])([^"'`]*)\1/g;
+
+/** The utilities in one class string, split on whitespace and matched whole. */
 function parseUtilities(classString: string): Utility[] {
   const found: Utility[] = [];
-  const collect = (pattern: RegExp, fixedPrefix?: string) => {
-    for (const match of classString.matchAll(pattern)) {
-      const variant = match[1] ?? "";
-      const prefix = fixedPrefix ?? match[2] ?? "";
-      const role = (fixedPrefix ? match[2] : match[3]) ?? "";
-      found.push({
-        prefix,
-        role,
-        variant,
-        state: variant
-          .split(":")
-          .filter(part => part && part !== "dark")
-          .join(":"),
-        translucent: Boolean(fixedPrefix && match[3]),
-        appliesInDark: true,
-        appliesInLight: true,
-        index: match.index,
-      });
-    }
-  };
-  collect(INK_UTILITY);
-  collect(FILL_UTILITY, "bg");
+  for (const token of classString.split(/\s+/)) {
+    const match = CLASS_TOKEN.exec(token);
+    if (!match) continue;
+    const [, variant = "", prefix = "", role = "", opacity] = match;
+    found.push({
+      prefix,
+      role,
+      variant,
+      state: variant
+        .split(":")
+        .filter(part => part && part !== "dark")
+        .join(":"),
+      translucent: prefix === "bg" && Boolean(opacity),
+      appliesInDark: true,
+      appliesInLight: true,
+      // An ink utility carrying an opacity modifier is a decorative wash --
+      // a chart track, a tinted overlay -- and is not asserted. Writing one is
+      // how a deliberate exception is expressed, and it is visible in the diff.
+      decorative: INK_PREFIXES.has(prefix) && Boolean(opacity),
+    });
+  }
   return withModes(found);
+}
+
+/**
+ * Every ink utility in the scanned sources, paired with the class string it was
+ * written in and the line it sits on.
+ *
+ * Iterating class strings rather than scanning for utilities is what makes the
+ * fill pairing exact: the fills a component names for itself are, by
+ * construction, the other tokens in the same span.
+ */
+function* inkUsages(): Generator<{
+  path: string;
+  line: number;
+  self: Utility;
+  utilities: Utility[];
+}> {
+  for (const path of sources) {
+    const source = readFileSync(resolve(repo, path), "utf8");
+    if (!APPLIES_CLASSES.test(source)) continue;
+    for (const span of source.matchAll(QUOTED_SPAN)) {
+      const utilities = parseUtilities(span[2] ?? "");
+      if (utilities.length === 0) continue;
+      const line = source.slice(0, span.index).split("\n").length;
+      for (const self of utilities) {
+        if (!INK_PREFIXES.has(self.prefix) || self.decorative) continue;
+        yield { path, line, self, utilities };
+      }
+    }
+  }
 }
 
 const misses: Miss[] = [];
 const resolvedRoles = new Set<string>();
 const unresolvedRoles = new Set<string>();
 
-for (const path of sources) {
-  const source = readFileSync(resolve(repo, path), "utf8");
-  if (!APPLIES_CLASSES.test(source)) continue;
-  for (const match of source.matchAll(INK_UTILITY)) {
-    const [, variant = "", prefix = "", role = ""] = match;
+for (const { path, line, self, utilities } of inkUsages()) {
+  {
+    const { variant, prefix, role } = self;
     const utility = `${variant}${prefix}-${role}`;
     if (isInkOnItsOwnFill(role)) continue;
 
     const required = prefix === "ring" ? REQUIRED.ring : REQUIRED.text;
     let resolvedAny = false;
 
-    const classString = classStringAround(source, match.index);
-    const utilities = parseUtilities(classString);
-    const self = utilities.find(
-      candidate =>
-        candidate.prefix === prefix &&
-        candidate.role === role &&
-        candidate.variant === variant
-    );
-
     for (const [mode, tokens] of [
       ["light", light],
       ["dark", dark],
     ] as const) {
-      if (
-        self &&
-        !(mode === "dark" ? self.appliesInDark : self.appliesInLight)
-      ) {
+      if (!(mode === "dark" ? self.appliesInDark : self.appliesInLight)) {
         continue;
       }
 
@@ -350,9 +354,7 @@ for (const path of sources) {
       // `text-primary` that sits on the page until the pointer arrives. A state
       // with no fill of its own inherits the unprefixed one, which does not
       // change on hover.
-      const sameState = fills.filter(
-        fill => fill.state === (self?.state ?? "")
-      );
+      const sameState = fills.filter(fill => fill.state === self.state);
       const inherited = fills.filter(fill => fill.state === "");
       const effective = sameState.length > 0 ? sameState : inherited;
 
@@ -375,7 +377,6 @@ for (const path of sources) {
       if (named.length > 0 && best >= required) continue;
       for (const [surface, ratio] of measured) {
         if (ratio >= required) continue;
-        const line = source.slice(0, match.index).split("\n").length;
         misses.push({
           utility,
           role,
@@ -397,6 +398,45 @@ describe("ink utilities are readable on the surfaces they land on", () => {
     // directory or a changed utility syntax must fail here first.
     expect(sources.length).toBeGreaterThan(100);
     expect(resolvedRoles.size).toBeGreaterThan(3);
+  });
+
+  it("reads a whole class token, wherever it sits in the string", () => {
+    // Position independence is the property tokenising buys, so it is pinned
+    // rather than assumed: the FIRST and LAST utilities are the two a scanning
+    // pattern gets wrong, and the last one is where `dark:` overrides live.
+    const parsed = parseUtilities(
+      "text-warning-800 bg-warning-100 dark:bg-warning-900 dark:text-warning-100"
+    );
+    expect(
+      parsed.map(
+        utility => `${utility.variant}${utility.prefix}-${utility.role}`
+      )
+    ).toEqual([
+      "text-warning-800",
+      "bg-warning-100",
+      "dark:bg-warning-900",
+      "dark:text-warning-100",
+    ]);
+
+    // And the cascade the parse feeds: each side applies in exactly one mode.
+    const [lightInk, , , darkInk] = parsed;
+    expect([lightInk?.appliesInLight, lightInk?.appliesInDark]).toEqual([
+      true,
+      false,
+    ]);
+    expect([darkInk?.appliesInLight, darkInk?.appliesInDark]).toEqual([
+      false,
+      true,
+    ]);
+
+    // An opacity modifier marks ink decorative and a fill translucent.
+    const washed = parseUtilities("text-muted/10 bg-primary/[0.04]");
+    expect(
+      washed.map(utility => [utility.decorative, utility.translucent])
+    ).toEqual([
+      [true, false],
+      [false, true],
+    ]);
   });
 
   it("proves the measurement would catch a background used as ink", () => {
@@ -438,43 +478,28 @@ describe("ink utilities are readable on the surfaces they land on", () => {
     // `muted` fill, and later on a 5%-primary wash one level down.
     const mismatched: string[] = [];
 
-    for (const path of sources) {
-      const source = readFileSync(resolve(repo, path), "utf8");
-      if (!APPLIES_CLASSES.test(source)) continue;
+    for (const { path, line, self, utilities } of inkUsages()) {
+      const { variant, prefix, role } = self;
+      if (prefix !== "text" || !isInkOnItsOwnFill(role)) continue;
 
-      for (const match of source.matchAll(INK_UTILITY)) {
-        const [, variant = "", prefix = "", role = ""] = match;
-        if (prefix !== "text" || !isInkOnItsOwnFill(role)) continue;
+      const partner = role.slice(0, -"-foreground".length);
+      const fills = utilities.filter(
+        candidate =>
+          candidate.prefix === "bg" &&
+          candidate.state === self.state &&
+          // `transparent` names no surface: the fill comes from an ancestor.
+          candidate.role !== "transparent"
+      );
+      // No fill in this state means the surface comes from an ancestor, which
+      // this cannot see. Only a fill named ALONGSIDE the ink is judged.
+      if (fills.length === 0) continue;
+      const declaredFor = surfacesFor(partner);
+      if (fills.some(fill => declaredFor.includes(fill.role))) continue;
 
-        const partner = role.slice(0, -"-foreground".length);
-        const utilities = parseUtilities(
-          classStringAround(source, match.index)
-        );
-        const self = utilities.find(
-          candidate =>
-            candidate.prefix === "text" &&
-            candidate.role === role &&
-            candidate.variant === variant
-        );
-        const fills = utilities.filter(
-          candidate =>
-            candidate.prefix === "bg" &&
-            candidate.state === (self?.state ?? "") &&
-            // `transparent` names no surface: the fill comes from an ancestor.
-            candidate.role !== "transparent"
-        );
-        // No fill in this state means the surface comes from an ancestor, which
-        // this cannot see. Only a fill named ALONGSIDE the ink is judged.
-        if (fills.length === 0) continue;
-        const declaredFor = surfacesFor(partner);
-        if (fills.some(fill => declaredFor.includes(fill.role))) continue;
-
-        const line = source.slice(0, match.index).split("\n").length;
-        mismatched.push(
-          `${variant}text-${role} is painted on ` +
-            `${fills.map(f => `bg-${f.role}`).join(" / ")} — ${path}:${line}`
-        );
-      }
+      mismatched.push(
+        `${variant}text-${role} is painted on ` +
+          `${fills.map(f => `bg-${f.role}`).join(" / ")} — ${path}:${line}`
+      );
     }
 
     expect(
@@ -493,55 +518,39 @@ describe("ink utilities are readable on the surfaces they land on", () => {
     // over it.
     const failures: string[] = [];
 
-    for (const path of sources) {
-      const source = readFileSync(resolve(repo, path), "utf8");
-      if (!APPLIES_CLASSES.test(source)) continue;
+    for (const { path, line, self, utilities } of inkUsages()) {
+      const { prefix, role } = self;
+      if (prefix !== "text" || !isInkOnItsOwnFill(role)) continue;
+      // Only ink with no state of its own persists across the others. Ink
+      // written for a specific state is judged against that state's fill by
+      // the pairing check above.
+      if (self.state !== "") continue;
 
-      for (const match of source.matchAll(INK_UTILITY)) {
-        const [, variant = "", prefix = "", role = ""] = match;
-        if (prefix !== "text" || !isInkOnItsOwnFill(role)) continue;
+      for (const [mode, tokens] of [
+        ["light", light],
+        ["dark", dark],
+      ] as const) {
+        if (!(mode === "dark" ? self.appliesInDark : self.appliesInLight)) {
+          continue;
+        }
+        const ink = colorOf(role, tokens);
+        if (!ink) continue;
 
-        const utilities = parseUtilities(
-          classStringAround(source, match.index)
-        );
-        const self = utilities.find(
-          candidate =>
-            candidate.prefix === "text" &&
-            candidate.role === role &&
-            candidate.variant === variant
-        );
-        // Only ink with no state of its own persists across the others. Ink
-        // written for a specific state is judged against that state's fill by
-        // the pairing check above.
-        if (self?.state !== "") continue;
-
-        for (const [mode, tokens] of [
-          ["light", light],
-          ["dark", dark],
-        ] as const) {
-          if (!(mode === "dark" ? self.appliesInDark : self.appliesInLight)) {
+        for (const fill of utilities) {
+          if (fill.prefix !== "bg" || fill.translucent) continue;
+          if (fill.role === "transparent") continue;
+          if (!(mode === "dark" ? fill.appliesInDark : fill.appliesInLight)) {
             continue;
           }
-          const ink = colorOf(role, tokens);
-          if (!ink) continue;
-
-          for (const fill of utilities) {
-            if (fill.prefix !== "bg" || fill.translucent) continue;
-            if (fill.role === "transparent") continue;
-            if (!(mode === "dark" ? fill.appliesInDark : fill.appliesInLight)) {
-              continue;
-            }
-            const surface = colorOf(fill.role, tokens);
-            if (!surface) continue;
-            const ratio = contrastRatio(ink, surface);
-            if (ratio >= REQUIRED.text) continue;
-            const line = source.slice(0, match.index).split("\n").length;
-            failures.push(
-              `text-${role} on ${fill.variant}bg-${fill.role} = ` +
-                `${ratio.toFixed(2)}:1 (${mode}), needs ${REQUIRED.text}:1 — ` +
-                `${path}:${line}`
-            );
-          }
+          const surface = colorOf(fill.role, tokens);
+          if (!surface) continue;
+          const ratio = contrastRatio(ink, surface);
+          if (ratio >= REQUIRED.text) continue;
+          failures.push(
+            `text-${role} on ${fill.variant}bg-${fill.role} = ` +
+              `${ratio.toFixed(2)}:1 (${mode}), needs ${REQUIRED.text}:1 — ` +
+              `${path}:${line}`
+          );
         }
       }
     }

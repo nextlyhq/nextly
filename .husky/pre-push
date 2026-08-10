@@ -15,6 +15,14 @@ if [ -n "$CI" ]; then
 fi
 
 set -e
+
+# Design lint first: it runs in under a second and CI gates on it, so a
+# hardcoded colour should cost a local prompt rather than a CI round trip.
+# It is not part of `turbo lint` — knowing it exists was private knowledge
+# until it was wired in here, which is how an `hsl()` literal reached a
+# theme file whose every other token is OKLCH.
+pnpm lint:design
+
 pnpm turbo lint --continue \
   --filter='./packages/*'
 pnpm run build
