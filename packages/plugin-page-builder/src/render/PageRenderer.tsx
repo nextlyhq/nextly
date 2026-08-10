@@ -77,11 +77,16 @@ export function PageRenderer({
     ...stored,
     root: pruneUndeclaredSlots(stored.root, registry),
   };
+  // A falsy library entry is left exactly as it is rather than pruned as a node. The library can be
+  // rebuilt from stored data, and every path downstream already tolerates one — `pageStyleKeys` and
+  // `compileDocumentMotionCss` skip it, `RenderNode` treats it as a missing ref and draws the
+  // placeholder. Dereferencing it here would take down the whole page before that placeholder gets
+  // the chance.
   const refs = storedRefs
     ? Object.fromEntries(
         Object.entries(storedRefs).map(([id, target]) => [
           id,
-          pruneUndeclaredSlots(target, registry),
+          target ? pruneUndeclaredSlots(target, registry) : target,
         ])
       )
     : storedRefs;

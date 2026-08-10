@@ -11,9 +11,10 @@
  * every child in it was unchecked — and the containment was retroactively wrong too: the day a
  * definition declares that name again, children that were never checked become live.
  *
- * A block type this runtime has NOT loaded is a different case and keeps everything it holds. The
- * two look alike from the lookup — both give no spec — and only one is a statement about the
- * document.
+ * A block type this runtime has NOT loaded looks the same from the lookup — no spec either way —
+ * and is a different question. It is answered on the WRITE side, where `validate` rejects only when
+ * a definition is present, so an unloaded plugin can never cost an author their content. On the
+ * read side there is nothing to keep: the placeholder is all that renders.
  */
 import type { BlockRegistry } from "./registry";
 import type { BlockNode } from "./types";
@@ -32,15 +33,15 @@ export function declaredSlotEntries(
   const stored = node.slots;
   if (!stored) return [];
   const def = registry.get(node.type);
-  // An UNREGISTERED type keeps everything it holds. "This runtime has not loaded that plugin" and
-  // "that block declares no such slot" are different statements, and only the second is a reason to
-  // drop anything: a page rendered while a plugin is unloaded would otherwise lose the children of
-  // every block that plugin owns — and because the pruned tree is what an editor would save next,
-  // it would lose them permanently. `blocks-react` keeps the node and draws its unknown-block
-  // placeholder for the same reason, so the two packages agree.
+  // An UNREGISTERED type contributes nothing to a READ. `RenderNode` draws its placeholder and
+  // never traverses its children, so keeping them in the read copy only puts their rules — and any
+  // URL in them — into a stylesheet for markup nobody receives.
   //
-  // Stored order is the only order available here; there is no declaration to take one from.
-  if (!def) return Object.entries(stored);
+  // This does not lose anything: what protects an author's work is that the STORED document is
+  // untouched, which is a property of this returning a copy, not of what the copy contains. The
+  // write path is where the distinction between "unloaded plugin" and "undeclared slot" has to be
+  // drawn, and it draws it — `validate` rejects only when a definition is present.
+  if (!def) return [];
   const entries: [string, BlockNode[]][] = [];
   for (const spec of def.slots ?? []) {
     const children = stored[spec.name];
@@ -59,6 +60,10 @@ export function declaredSlotEntries(
  *
  * Returns the SAME node object when nothing was dropped, so a document with no undeclared slots is
  * not rebuilt and callers comparing by identity keep working.
+ *
+ * 🔴 FOR READING ONLY. The result must never be written back: it is what a page should DISPLAY,
+ * not what it should STORE, and the two differ for any block whose plugin this process has not
+ * loaded. Repairing a stored document is a separate decision with its own author-facing surface.
  */
 export function pruneUndeclaredSlots(
   node: BlockNode,

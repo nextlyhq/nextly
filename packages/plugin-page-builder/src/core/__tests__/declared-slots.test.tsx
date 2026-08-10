@@ -133,12 +133,42 @@ describe("a slot the definition does not declare", () => {
     expect(html).not.toContain("stale-asset.png");
   });
 
-  it("keeps the children of a type this runtime has not loaded", () => {
-    // "This process has not loaded that plugin" and "that block declares no such slot" are
-    // different statements, and only the second justifies dropping anything. A page rendered while
-    // a plugin is unloaded would otherwise lose the children of every block it owns — and since the
-    // pruned tree is what would be saved next, it would lose them permanently.
+  it("leaves an unloaded plugin's children out of the READ copy, and the sheet", () => {
+    // `RenderNode` draws the unknown-block placeholder and never traverses the children, so keeping
+    // them in the read copy only puts their rules — and any URL in them — into a stylesheet for
+    // markup nobody receives.
     const unloaded: BlockNode = {
+      ...makeNode("acme/not-loaded", {}),
+      slots: {
+        default: [
+          {
+            ...makeNode("core/heading", { text: "hidden", level: "h2" }),
+            style: { base: { backgroundImage: "/unknown-child-asset.png" } },
+          },
+        ],
+      },
+    };
+
+    // Positive control: the registry really does not know this type, so this exercises the
+    // unknown-type branch and not a type that happens to declare `default`.
+    expect(defaultBlockRegistry.get("acme/not-loaded")).toBeUndefined();
+
+    const html = renderToStaticMarkup(
+      <PageRenderer
+        document={doc(
+          makeNode("core/container", {}, undefined, { default: [unloaded] })
+        )}
+      />
+    );
+    expect(html).not.toContain("unknown-child-asset.png");
+  });
+
+  it("does not let an unloaded plugin cost an author their content", () => {
+    // The other half, and the reason the read copy may drop them: what protects the stored document
+    // is that pruning returns a COPY and that the WRITE path draws the distinction. `validate`
+    // rejects only when a definition is present, so a save made while a plugin is unloaded is
+    // accepted rather than rejected or stripped.
+    const unloaded = {
       ...makeNode("acme/not-loaded", {}),
       slots: {
         default: [
@@ -147,12 +177,14 @@ describe("a slot the definition does not declare", () => {
       },
     };
 
-    const pruned = pruneUndeclaredSlots(unloaded, defaultBlockRegistry);
-
-    expect(pruned.slots?.default).toHaveLength(1);
-    // Positive control: the registry really does not know this type, so the assertion above is
-    // about the unknown-type branch and not about a type that happens to declare `default`.
-    expect(defaultBlockRegistry.get("acme/not-loaded")).toBeUndefined();
+    expect(
+      validateDocument(doc(unloaded), defaultBlockRegistry, {
+        allowUnknown: true,
+      })
+    ).toBe(true);
+    // And a read does not mutate what it was handed.
+    pruneUndeclaredSlots(unloaded, defaultBlockRegistry);
+    expect(unloaded.slots.default).toHaveLength(1);
   });
 
   it("still refuses to SAVE a known block's undeclared slot, and permits an unknown one", () => {
@@ -175,6 +207,28 @@ describe("a slot the definition does not declare", () => {
     expect(
       validateDocument(doc(withStaleSlot()), defaultBlockRegistry)
     ).toContain("legacy");
+  });
+
+  it("survives a library entry that is not a node", () => {
+    // The library can be rebuilt from stored data. Every path downstream already tolerates a falsy
+    // entry — `pageStyleKeys` and `compileDocumentMotionCss` skip it, `RenderNode` draws the
+    // missing-ref placeholder — so dereferencing it while pruning would take the whole page down
+    // before that placeholder gets the chance.
+    const render = () =>
+      renderToStaticMarkup(
+        <PageRenderer
+          document={doc(
+            makeNode("core/container", {}, undefined, {
+              default: [makeNode("core/ref", { refId: "gone" })],
+            })
+          )}
+          refs={{ gone: null as unknown as BlockNode }}
+        />
+      );
+
+    expect(render).not.toThrow();
+    // Positive control: the page really rendered rather than returning nothing.
+    expect(render()).toContain("<style");
   });
 
   it("returns the SAME node when a document has nothing to prune", () => {
