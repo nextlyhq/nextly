@@ -4,14 +4,20 @@ import { describePreset } from "../../../scripts/tweakcn-description.mjs";
 import { themeToCss } from "../generate-css";
 import { TWEAKCN_THEMES } from "../themes/tweakcn.generated";
 
-// The count is pinned to what scripts/import-tweakcn.mjs currently produces
-// rather than a fixed target: tweakcn is a living third-party registry that
-// has grown since this importer was written, and truncating to an arbitrary
-// older number would silently drop real presets. Re-running the importer
-// after tweakcn publishes more requires bumping this number too.
+// The checked-in file carries the SHORTLIST, not the full registry: the
+// importer still knows every published preset, and re-running it restores
+// any of them, but what ships in the lab is the five under comparison. The
+// ids are pinned individually so a wrong deletion (or an accidental
+// re-import of the full set) fails by name rather than by count alone.
 describe("tweakcn presets", () => {
-  it("imports every published preset", () => {
-    expect(TWEAKCN_THEMES).toHaveLength(42);
+  it("carries exactly the shortlisted presets", () => {
+    expect(TWEAKCN_THEMES.map(theme => theme.id).sort()).toEqual([
+      "tweakcn-claude",
+      "tweakcn-modern-minimal",
+      "tweakcn-twitter",
+      "tweakcn-vercel",
+      "tweakcn-violet-bloom",
+    ]);
   });
 
   it("marks every preset as third-party", () => {
