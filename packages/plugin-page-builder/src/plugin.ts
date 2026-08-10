@@ -34,25 +34,27 @@ export interface PageBuilderOptions {
    * component prop from the host's server config cannot reach it.
    *
    * Set the SAME value on `PageRenderer.remotePatterns` from
-   * `@nextlyhq/plugin-page-builder/render`. These are two assignments, not one:
-   * this configures the editor, and that renderer reads only its own prop.
-   * Setting one alone produces a mismatch in whichever direction you set it, so
-   * a shared constant in the host is what keeps them equal.
+   * `@nextlyhq/plugin-page-builder/render`, and pass it to `cspDirectives()` or
+   * `cspHeaderValue()`. Three assignments, not one: each reads only what it was
+   * given, and the CSP helpers default to an empty list, so a host that sets
+   * this alone emits a self-only policy that blocks the CDN the editor and the
+   * renderer both accept. A shared constant in the host is what keeps them equal.
    *
-   * **What this covers.** Structured style values and block props, through
-   * `isFetchableUrl`; the embed HTML sanitizer; the editor canvas; and the CSP
-   * builder. **Not custom CSS** — `sanitizeCustomCss` takes no patterns and
-   * removes every off-origin URL unconditionally, so a CDN you allowlist here
-   * still disappears from hand-written CSS. That surface is stricter than this
-   * value, not governed by it.
+   * **What reads it.** Structured style values and block props, through
+   * `isFetchableUrl`; the embed HTML sanitizer; the editor canvas.
    *
-   * **What it does NOT reach.** `@nextlyhq/blocks-react`, the renderer the
-   * blocks pipeline is moving to, has no remote-host control and no such prop.
-   * It allowlists URL SCHEMES (`http`/`https`, with control characters and
-   * quote-breaking characters refused), which stops a `javascript:` value but
-   * not a third-party host: a `background` image pointed at any https origin
-   * compiles and ships. Measured against the engine's compiler, not inferred.
-   * A page rendered through THAT renderer is not bounded by this value.
+   * **Custom CSS does not.** `sanitizeCustomCss` takes no patterns and drops
+   * every ABSOLUTE url, including one naming the site's own origin — compilation
+   * has no document origin to compare against, so a scheme is all it can see.
+   * Relative paths survive. That surface is stricter than this value rather than
+   * governed by it, and allowlisting a CDN here does not make it usable there.
+   *
+   * **`@nextlyhq/blocks-react` does not read it either**, and has no equivalent.
+   * Its two URL checks are narrower and unrelated to hosts: the engine's CSS
+   * compiler allows only `http` and `https` inside `url()`, while a block's
+   * attribute props reject `javascript:`, `vbscript:` and `data:` and admit any
+   * other scheme. Neither compares a host, so a page rendered through it is not
+   * bounded by this value.
    *
    * Object patterns only. This value is serialized to the browser and a `URL`
    * does not survive that: it would arrive as a string. Converting one here

@@ -90,10 +90,11 @@ export function EditorProvider({
    * `pageBuilder({ remotePatterns })` gets the same allowlist in the canvas
    * that the editor's compiler enforces.
    *
-   * A caller passing nothing still gets an empty list, and an empty list is
-   * STRICTER than an absent one: the canvas drops remote backgrounds rather
-   * than showing forbidden ones, so the failure costs preview fidelity and not
-   * safety. That is the deliberate direction for a value that did not arrive.
+   * An omitted value is normalised to the empty list here and again by the
+   * compiler, so the two are the same state: nothing remote is allowed. A
+   * caller that supplies none therefore gets a canvas that drops remote
+   * backgrounds rather than one that shows forbidden ones, which costs preview
+   * fidelity and not safety.
    */
   remotePatterns?: readonly RemotePatternInput[];
   /**
