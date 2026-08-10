@@ -1324,6 +1324,50 @@ describe("PageRenderer", () => {
       }
     });
 
+    it("does not reserve a node id for a child that never reaches the page", async () => {
+      // The same rule one level down, for node ids rather than DOM ids. A
+      // placeholder replaces its node ENTIRELY, so the subtree under an unknown
+      // type never renders — but walking into it anyway let a child claim an id
+      // and delete the later visible sibling that shares it.
+      //
+      // `duplicate-node-id` is a write-time validation error, so this arrives
+      // only from a row edited outside the product. What matters is which side
+      // survives when it does: content over a diagnostic for something that was
+      // never going to be drawn.
+      for (const broken of [
+        node("wrapper", "test/missing", {
+          slots: {
+            main: [node("dup", "test/text", { props: { value: "buried" } })],
+          },
+        }),
+        node("wrapper", "test/text", {
+          props: { value: "stale" },
+          migrationFailed: true,
+          slots: {
+            main: [node("dup", "test/text", { props: { value: "buried" } })],
+          },
+        }),
+      ]) {
+        const html = await renderToHtml(
+          <PageRenderer
+            document={doc(
+              broken,
+              node("dup", "test/text", { props: { value: "healthy" } })
+            )}
+            blocks={createBlockResolver([text as AnyBlockDefinition])}
+          />
+        );
+
+        // The point of the test: the visible sibling is still on the page.
+        expect(html).toContain("healthy");
+        // And the child that took its id never was, so nothing was traded away.
+        expect(html).not.toContain("buried");
+        // The broken node still reports itself. Skipping the descent must not
+        // also skip the diagnostic that says why the subtree is gone.
+        expect(placeholderReasons(html)).toHaveLength(1);
+      }
+    });
+
     it("does not let attributes that never render force a placeholder", async () => {
       // The refusal is about DOM fields being LOST. `style` and `onClick` are
       // dropped by the allowlist whatever the root is, so a node carrying only
