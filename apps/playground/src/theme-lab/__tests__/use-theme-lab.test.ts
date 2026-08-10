@@ -203,6 +203,33 @@ describe("theme lab density follow", () => {
     }
   });
 
+  it("leaves the lab's own preview panels unattributed", () => {
+    // A preview wears `nextly-admin` to pick up the ui components' base
+    // styles, but it is not an admin root. Attributed, every preview would
+    // be stamped with the SELECTED theme's density -- so each theme would
+    // be shown at whatever density is currently active rather than its own,
+    // and every preview would shift whenever the selection changed.
+    const shell = document.createElement("div");
+    shell.className = "nextly-admin";
+    const preview = document.createElement("div");
+    preview.className = "nextly-admin";
+    preview.setAttribute("data-theme-preview", "");
+    shell.appendChild(preview);
+    document.body.appendChild(shell);
+
+    const hook = renderThemeLab();
+    try {
+      hook.act(() => hook.current.setTheme("sand"));
+
+      expect(shell.dataset.theme).toBe("sand");
+      expect(preview.dataset.theme).toBeUndefined();
+      expect(preview.dataset.density).toBeUndefined();
+    } finally {
+      hook.unmount();
+      shell.remove();
+    }
+  });
+
   it("attributes every admin root, including the portal container", () => {
     // The two roots the admin renders: the shell, and the container every
     // overlay portals into. Both re-declare the whole token set, so a theme

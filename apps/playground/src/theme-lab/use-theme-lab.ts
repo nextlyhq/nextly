@@ -113,18 +113,26 @@ export function useThemeLab() {
       // first would leave every overlay rendering the shipped defaults. The
       // admin's own ThemeProvider syncs its `dark` class the same way, for
       // the same reason.
-      document.querySelectorAll(".nextly-admin").forEach(root => {
-        if (!(root instanceof HTMLElement)) return;
-        // Only touch attributes that actually changed: the same `apply` runs
-        // from the MutationObserver below on any attribute mutation, and
-        // writing an unchanged value would otherwise retrigger that observer.
-        if (root.dataset.theme !== selection.theme) {
-          root.dataset.theme = selection.theme;
-        }
-        if (root.dataset.density !== selection.density) {
-          root.dataset.density = selection.density;
-        }
-      });
+      // `:not([data-theme-preview])` excludes the theme lab's own preview
+      // panels, which wear `nextly-admin` to pick up the ui components' base
+      // styles but are not admin roots. Attributing them would stamp every
+      // preview with the SELECTED theme's density, so each theme would be
+      // previewed at whatever density is currently active rather than at its
+      // own -- and a preview would change when the selection changed.
+      document
+        .querySelectorAll(".nextly-admin:not([data-theme-preview])")
+        .forEach(root => {
+          if (!(root instanceof HTMLElement)) return;
+          // Only touch attributes that actually changed: the same `apply` runs
+          // from the MutationObserver below on any attribute mutation, and
+          // writing an unchanged value would otherwise retrigger that observer.
+          if (root.dataset.theme !== selection.theme) {
+            root.dataset.theme = selection.theme;
+          }
+          if (root.dataset.density !== selection.density) {
+            root.dataset.density = selection.density;
+          }
+        });
     };
 
     apply();

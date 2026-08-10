@@ -47,8 +47,34 @@ export function themeVars(
   return vars;
 }
 
-/** The component sampler one mode panel shows. */
+/**
+ * The component sampler one mode panel shows.
+ *
+ * The compact form is ONE row, not a shrunken column. Measured: the full
+ * sampler makes a 259px card, of which a corner panel shows 1.5 at a time --
+ * worse for switching than the label rows it replaced, because comparing
+ * means holding two themes in view at once. One row keeps a real preview
+ * (the selected nav state, a checkbox border, an input) at roughly a third
+ * of the height.
+ */
 function Sampler({ compact }: { compact: boolean }) {
+  if (compact) {
+    return (
+      <div className="flex items-center gap-2 px-3 py-2">
+        {/* The selected nav row, which is where a theme's primary colour
+            turns up as a nav background it was never meant to be. */}
+        <span className="rounded bg-[var(--nx-sidebar-accent)] px-2 py-1 text-[11px] text-[var(--nx-sidebar-accent-foreground)]">
+          Pages
+        </span>
+        <Button size="sm" className="h-6 px-2 text-[11px]">
+          Save
+        </Button>
+        <Checkbox aria-label="Example checkbox" defaultChecked={false} />
+        <Input placeholder="Title" className="h-6 flex-1 text-[11px]" />
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-2 p-3">
       {/* A sidebar strip in its three states: idle, selected, and muted --
@@ -79,11 +105,9 @@ function Sampler({ compact }: { compact: boolean }) {
         <Input placeholder="Title" className="h-8" />
       </div>
 
-      {!compact && (
-        <p className="text-xs text-[var(--nx-muted-foreground)]">
-          Secondary text at its real size.
-        </p>
-      )}
+      <p className="text-xs text-[var(--nx-muted-foreground)]">
+        Secondary text at its real size.
+      </p>
     </div>
   );
 }
@@ -172,6 +196,13 @@ export function ThemePreviewCard({
           <div
             key={panelMode}
             data-testid="mode-panel"
+            /* Marks this as a PREVIEW rather than an admin root. It carries
+               `nextly-admin` for the ui components' base styles, which would
+               otherwise make `useThemeLab` attribute it like a real root:
+               the previews would then all be stamped with the selected
+               theme's density, showing every theme at whatever density
+               happens to be active instead of at its own. */
+            data-theme-preview=""
             /* `nextly-admin` brings the ui components' base styles; `dark`
                is what their dark-mode variants key off. The inline vars then
                decide every token those styles read. */
