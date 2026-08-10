@@ -899,3 +899,87 @@ describe("layouts that are not US English", () => {
     expect(run).not.toHaveBeenCalled();
   });
 });
+
+describe("a press stays consumed for as long as it is held", () => {
+  it("keeps consuming a held shortcut whose action disabled its own condition", () => {
+    // `mod+s` saves and clears the dirty flag, so by the second keydown the binding is no longer
+    // eligible. Re-offering alone reported the repeat as unhandled and the browser took it —
+    // opening Save Page while the user was still holding the key they used to save.
+    let dirty = true;
+    const manager = managerFor();
+    manager.register(
+      [
+        {
+          keys: "mod+s",
+          description: "Save",
+          run: () => {
+            dirty = false;
+          },
+          when: () => dirty,
+        },
+      ],
+      { name: "form", depth: 0 }
+    );
+
+    manager.handle(press("s", { ctrlKey: true }));
+    expect(dirty).toBe(false);
+
+    const repeat = press("s", { ctrlKey: true, repeat: true });
+    manager.handle(repeat);
+    expect(repeat.defaultPrevented).toBe(true);
+  });
+
+  it("does not consume a repeat of a key nothing ever claimed", () => {
+    // The positive control: remembering the press must not turn into consuming every repeat,
+    // which would suppress browser defaults for keys the application never bound.
+    const manager = managerFor();
+    manager.register([binding("mod+s", vi.fn())], { name: "form", depth: 0 });
+    manager.handle(press("j"));
+    const repeat = press("j", { repeat: true });
+    manager.handle(repeat);
+    expect(repeat.defaultPrevented).toBe(false);
+  });
+});
+
+describe("more keystrokes that interrupt a sequence", () => {
+  it("abandons a sequence when a focused control takes the next key", () => {
+    // The user pressed Space and watched a checkbox toggle. A later `d` must not complete a
+    // `g d` begun before that.
+    const run = vi.fn();
+    const manager = managerFor();
+    manager.register([binding("g d", run)], { name: "shell", depth: 0 });
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    document.body.append(box);
+    const detach = manager.attach(document);
+
+    document.body.dispatchEvent(press("g"));
+    box.dispatchEvent(press(" "));
+    document.body.dispatchEvent(press("d"));
+    detach();
+    box.remove();
+
+    expect(run).not.toHaveBeenCalled();
+  });
+});
+
+describe("layouts that build characters from more than one keystroke", () => {
+  it("lets a dead key begin an accented character under a blocking layer", () => {
+    // The accent keydown reports `key: "Dead"` and arrives BEFORE composition starts, so
+    // isComposing never covers it. Suppressing it stops accented input being begun at all.
+    const manager = managerFor();
+    manager.register([binding("Escape", vi.fn())], {
+      name: "modal",
+      depth: 1,
+      blocking: true,
+    });
+    const field = document.createElement("input");
+    document.body.append(field);
+    const detach = manager.attach(document);
+    const event = press("Dead");
+    field.dispatchEvent(event);
+    detach();
+    field.remove();
+    expect(event.defaultPrevented).toBe(false);
+  });
+});

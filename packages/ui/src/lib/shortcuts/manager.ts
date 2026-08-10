@@ -20,7 +20,14 @@
  * first, and the first binding that matches consumes it.
  *
  * Precedence is `(depth, sequence)`: the deeper layer wins, and between layers at equal depth the
- * more recently registered wins. Depth comes from how the application nests, so precedence
+ * more recently registered wins.
+ *
+ * Of those two, **depth is declared and sequence is incidental** — and only declared properties
+ * survive a refactor. A layer that unmounts and remounts takes a fresh sequence number, so a
+ * subtree rebuilt for unrelated reasons can change equal-depth ordering. The guidance that falls
+ * out: if relative order matters to you, express it as depth, because depth is the part of the
+ * tuple you control. Equal-depth ordering is for stacking things that arrive in genuine
+ * mount order, such as one dialog over another. Depth comes from how the application nests, so precedence
  * follows the component tree rather than a set of coordinated numbers — the z-index problem,
  * avoided. Equal-depth ordering is what stacks a second dialog above the first.
  *
@@ -70,9 +77,14 @@ export interface ShortcutBinding {
   /**
    * Whether this fires while the user is typing in a field.
    *
-   * Defaults to true for bindings that carry a non-shift modifier or end on Escape, and false
-   * otherwise — the rule nearly every application converges on. `mod+s` must save mid-sentence
-   * and Escape must dismiss, while a bare `n` must be able to be the letter n.
+   * Defaults to true for bindings whose FIRST chord carries a non-shift modifier or is Escape,
+   * and false otherwise — the rule nearly every application converges on. `mod+s` must save
+   * mid-sentence and Escape must dismiss, while a bare `n` must be able to be the letter n.
+   *
+   * The first chord decides because it is the keystroke that has to be taken from the field.
+   * `mod+k c` is a command from its opening chord, so its bare `c` completes it in an input. A
+   * sequence that OPENS on a plain character cannot fire while typing whatever it ends with:
+   * allowing `g Escape` would mean swallowing the `g` of every word containing one.
    */
   whenTyping?: boolean;
   /** Whether to call `preventDefault()` when it fires. Defaults to true. */
@@ -179,6 +191,11 @@ export interface ActiveShortcut {
 }
 
 const DEFAULT_SEQUENCE_TIMEOUT_MS = 1000;
+
+/** Identifies a physical keystroke, for matching a repeat back to the press that began it. */
+function signature(event: KeyboardEvent): string {
+  return `${event.key}\u0000${event.ctrlKey}${event.metaKey}${event.altKey}${event.shiftKey}`;
+}
 
 /**
  * Whether a focused native control owns this key itself.
@@ -291,6 +308,14 @@ export function createShortcutManager(
   // layer completes it, and a per-layer prefix would let two layers each hold half a sequence.
   let pendingAt: number | null = null;
 
+  /**
+   * The keystroke consumed by the most recent fresh press, so its repeats stay consumed.
+   *
+   * Identifies the physical press rather than the binding that answered it: by the time a repeat
+   * arrives, the binding may have made itself ineligible.
+   */
+  let consumedPress: string | null = null;
+
   function prepare(bindings: readonly ShortcutBinding[]): PreparedBinding[] {
     return bindings.map(binding => ({
       binding,
@@ -355,6 +380,11 @@ export function createShortcutManager(
     // the same question: F1, Escape and the function keys carry no text and reach the browser,
     // so treating them as editing would let a blocking layer report a key as consumed while the
     // browser still opened its help window.
+    // `Dead` is the accent key on a dead-key layout and `Process` is a keystroke the IME has
+    // taken: both are the START of text entry, and both arrive BEFORE `isComposing` is true, so
+    // the composition guard never covers them. Suppressing either stops accented input being
+    // begun at all.
+    if (event.key === "Dead" || event.key === "Process") return true;
     return event.key.length === 1 || FIELD_KEYS.has(event.key);
   }
 
@@ -467,7 +497,14 @@ export function createShortcutManager(
     if (MODIFIER_KEYS.has(event.key)) return false;
 
     // A focused native control gets its own activation keys before the shortcut stack sees them.
-    if (controlOwnsKey(event.target, event)) return false;
+    if (controlOwnsKey(event.target, event)) {
+      // And it interrupts a sequence, for the same reason a dismissal does: the user pressed
+      // Space and watched a checkbox toggle, so a later `d` must not complete a `g d` begun
+      // before it.
+      pendingAt = null;
+      pressedEvents.length = 0;
+      return false;
+    }
 
     const typing = isTypingTarget(event.target);
 
@@ -475,6 +512,14 @@ export function createShortcutManager(
     // shortcut that suppressed the browser on the first keydown and then let every repeat
     // through would open the browser's own save dialog while the key was held down.
     if (event.repeat) {
+      // Re-offering is not enough on its own. A binding whose action changes its own condition —
+      // `mod+s` saving and clearing the dirty flag — is no longer eligible by the second
+      // keydown, so the repeat would be reported unhandled and the browser would take it. What
+      // was consumed is a PRESS, not a match, so the press is what gets remembered.
+      if (consumedPress !== null && consumedPress === signature(event)) {
+        event.preventDefault();
+        return true;
+      }
       const repeated = offer([event], event, typing, false);
       return repeated !== "none";
     }
@@ -505,12 +550,15 @@ export function createShortcutManager(
 
     if (outcome === "pending") {
       pendingAt = now();
+      consumedPress = signature(event);
       return true;
     }
 
     pendingAt = null;
     pressedEvents.length = 0;
-    return outcome === "fired" || outcome === "blocked";
+    const consumed = outcome === "fired" || outcome === "blocked";
+    consumedPress = consumed ? signature(event) : null;
+    return consumed;
   }
 
   return {
