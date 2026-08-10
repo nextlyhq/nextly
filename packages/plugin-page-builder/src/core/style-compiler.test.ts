@@ -506,8 +506,13 @@ describe("compileNodeCss — width alignment + link colors", () => {
         { base: { linkColor: "#f00", linkColorHover: "#0f0" } }
       )
     );
-    expect(css).toMatch(/\.nx-pb-[a-z0-9]+ a \{ color: #f00; \}/);
-    expect(css).toMatch(/\.nx-pb-[a-z0-9]+ a:hover \{ color: #0f0; \}/);
+    // Both selectors: the links inside the block, and the block itself when its root IS a link.
+    expect(css).toMatch(
+      /\.nx-pb-([a-z0-9]+) a, a\.nx-pb-\1 \{ color: #f00; \}/
+    );
+    expect(css).toMatch(
+      /\.nx-pb-([a-z0-9]+) a:hover, a\.nx-pb-\1:hover \{ color: #0f0; \}/
+    );
   });
 
   it("emits link colors per breakpoint, not only from base", () => {
@@ -526,12 +531,14 @@ describe("compileNodeCss — width alignment + link colors", () => {
     );
 
     // Positive control: the base value still compiles, so this is about the breakpoint values.
-    expect(css).toMatch(/\.nx-pb-[a-z0-9]+ a \{ color: #f00; \}/);
     expect(css).toMatch(
-      /@media \(max-width: 640px\) \{ \.nx-pb-[a-z0-9]+ a \{ color: #00f; \} \}/
+      /\.nx-pb-([a-z0-9]+) a, a\.nx-pb-\1 \{ color: #f00; \}/
     );
     expect(css).toMatch(
-      /@media \(max-width: 640px\) \{ \.nx-pb-[a-z0-9]+ a:hover \{ color: #0ff; \} \}/
+      /@media \(max-width: 640px\) \{ \.nx-pb-([a-z0-9]+) a, a\.nx-pb-\1 \{ color: #00f; \} \}/
+    );
+    expect(css).toMatch(
+      /@media \(max-width: 640px\) \{ \.nx-pb-([a-z0-9]+) a:hover, a\.nx-pb-\1:hover \{ color: #0ff; \} \}/
     );
   });
 
@@ -567,9 +574,11 @@ describe("compileNodeCss — width alignment + link colors", () => {
       },
     });
 
-    expect(css).toMatch(/\.nx-pb-[a-z0-9]+:hover a \{ color: #f0f; \}/);
     expect(css).toMatch(
-      /@media \(max-width: 640px\) \{ \.nx-pb-[a-z0-9]+:hover a \{ color: #ff0; \} \}/
+      /\.nx-pb-([a-z0-9]+):hover a, a\.nx-pb-\1:hover \{ color: #f0f; \}/
+    );
+    expect(css).toMatch(
+      /@media \(max-width: 640px\) \{ \.nx-pb-([a-z0-9]+):hover a, a\.nx-pb-\1:hover \{ color: #ff0; \} \}/
     );
   });
 });

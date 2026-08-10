@@ -626,12 +626,22 @@ export function compileNodeCss(
   // From `styleHover` as well: the Style tab writes every control under whichever mode is
   // selected, and the generic hover pass compiles declarations rather than these descendant rules,
   // so a link colour set in Hover mode was stored and compiled by nobody.
+  //
+  // Each rule names the element twice: the links INSIDE this block, and this block itself when it
+  // IS a link. A block whose root renders an anchor — a linked button, an uncaptioned linked image
+  // — carries the class on the `<a>`, which a descendant selector cannot reach, and that is exactly
+  // the block a reusable placement is most likely to be styling. The compiler cannot know what
+  // element a definition renders, so it addresses both; for a block whose root is a section the
+  // second selector simply matches nothing.
+  const anchorSelf = (hovered: boolean): string =>
+    `${opts.scope ? `.${opts.scope} ` : ""}a.${cls}${hovered ? ":hover" : ""}`;
   const emitLinkColors = (
     values: StyleValues | undefined,
-    owner: string,
+    hoveredTier: boolean,
     wrap: (rule: string) => string
   ): void => {
     if (!values) return;
+    const owner = hoveredTier ? `${self}:hover` : self;
     for (const [key, suffix] of [
       ["linkColor", " a"],
       ["linkColorHover", " a:hover"],
@@ -639,18 +649,22 @@ export function compileNodeCss(
       const raw = values[key];
       if (raw == null) continue;
       const v = safeValue(resolveScalar(raw), remotePatterns);
-      if (v) blocks.push(wrap(`${owner}${suffix} { color: ${v}; }`));
+      if (!v) continue;
+      const hovered = hoveredTier || key === "linkColorHover";
+      blocks.push(
+        wrap(`${owner}${suffix}, ${anchorSelf(hovered)} { color: ${v}; }`)
+      );
     }
   };
-  for (const [style, owner] of [
-    [node.style, self],
-    [node.styleHover, `${self}:hover`],
+  for (const [style, hoveredTier] of [
+    [node.style, false],
+    [node.styleHover, true],
   ] as const) {
-    emitLinkColors(style?.base, owner, rule => rule);
+    emitLinkColors(style?.base, hoveredTier, rule => rule);
     for (const bp of bps) {
       emitLinkColors(
         style?.[bp.id],
-        owner,
+        hoveredTier,
         rule => `@media (max-width: ${bp.maxWidth}px) { ${rule} }`
       );
     }

@@ -680,6 +680,39 @@ describe("styling a core/ref PLACEMENT", () => {
     expect(css).not.toContain("(min-width: 641px)");
   });
 
+  it("reaches a target whose ROOT is the link", () => {
+    // A linked `core/button` renders an `<a>` as its root, so the placement's class lands ON the
+    // anchor. A descendant selector cannot match the element it is on, so the Link control the
+    // placement now offers would compile a rule matching nothing — on exactly the kind of block
+    // someone places repeatedly.
+    const root = container("root", [
+      { ...ref("p1", "r1"), style: { base: { linkColor: "#ee0022" } } },
+    ]);
+    const refs = {
+      r1: {
+        ...makeNode("core/button", { text: "Go", link: { href: "/x" } }),
+        id: "btn",
+      },
+    };
+    const classes = documentNodeClasses(doc(root), refs);
+    const html = renderToStaticMarkup(
+      <RenderNode
+        node={root}
+        registry={defaultBlockRegistry}
+        refs={refs}
+        classes={classes}
+      />
+    );
+    const css = compileDocumentCss(doc(root), { classes, refs });
+    const placement = classes.get(documentKey("p1")) ?? nodeClass("p1");
+
+    // Positive control: the class really is on an anchor, which is the premise the rule depends on.
+    expect(html.replace(/<style[\s\S]*?<\/style>/g, "")).toMatch(
+      new RegExp(`<a[^>]*class="[^"]*${placement}`)
+    );
+    expect(css).toContain(`a.${placement} { color: #ee0022; }`);
+  });
+
   it("keeps a placement ahead of its target ACROSS the two style tiers", () => {
     // The generated tier and the custom-CSS tier are emitted at the same specificity, so a sheet
     // built by concatenating one tier after the other lets the later TIER decide — and a reusable
