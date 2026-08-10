@@ -308,6 +308,33 @@ describe("plugin email providers + templates", () => {
     );
   });
 
+  it("still SENDS for a test, and only probes when explicitly asked", async () => {
+    // The REST route reports a dispatched message and the admin tells the
+    // operator to check that inbox. Substituting a probe would have returned
+    // success with nothing sent -- a silent change to what "Send Test" means.
+    sent.length = 0;
+    current = await createTestNextly({ plugins: [emailPlugin()] });
+
+    const created = await current.nextly.emailProviders.create({
+      data: {
+        name: "Fake",
+        type: "fake-mailer",
+        fromEmail: "from@example.com",
+        configuration: { apiKey: "k", token: "t" },
+      },
+    });
+
+    await current.nextly.emailProviders.test({
+      id: created.item.id,
+      to: "probe@example.com",
+    });
+
+    expect(sent).toContainEqual({
+      to: "probe@example.com",
+      subject: "Nextly — Test Email",
+    });
+  });
+
   it("rejects a type no plugin registered", async () => {
     current = await createTestNextly({ plugins: [emailPlugin()] });
 

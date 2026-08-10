@@ -606,7 +606,15 @@ export class EmailProviderService extends BaseService {
    */
   async testProvider(
     id: string,
-    testEmail?: string
+    testEmail?: string,
+    /**
+     * `"send"` dispatches a real message, which is what the REST route and the
+     * admin's Send Test button promise. `"connection"` asks the provider's own
+     * probe instead and sends nothing — available only where the descriptor
+     * reports `capabilities.connectionTest`. Defaulted so every existing caller
+     * keeps the contract it was written against.
+     */
+    mode: "send" | "connection" = "send"
   ): Promise<{ success: boolean; error?: string }> {
     const provider = await this.getProviderDecrypted(id);
 
@@ -618,16 +626,21 @@ export class EmailProviderService extends BaseService {
     }
 
     try {
-      // A provider that supplies a probe is asked rather than mailed. The
-      // descriptor advertises `connectionTest` for exactly these, and offering
-      // that while still sending would make "test" mean two different things --
-      // and put a real message in someone's inbox for a connectivity check.
-      const registry = getEmailProviderRegistry();
-      const registered = registry.has(provider.type)
-        ? registry.get(provider.type)
-        : undefined;
-      const probe = registered?.testConnectionFrom;
-      if (probe) {
+      // Only when the caller explicitly asked to probe. Substituting a probe
+      // for the send would have been silent and wrong: `api/email-providers-test.ts`
+      // reports a dispatched message and the admin tells the operator to check
+      // that inbox, so an SMTP user would have seen success with nothing sent.
+      if (mode === "connection") {
+        const registry = getEmailProviderRegistry();
+        const probe = registry.has(provider.type)
+          ? registry.get(provider.type).testConnectionFrom
+          : undefined;
+        if (!probe) {
+          return {
+            success: false,
+            error: "This provider cannot be tested without sending a message.",
+          };
+        }
         const result = await probe(provider.configuration);
         return {
           success: result.ok,

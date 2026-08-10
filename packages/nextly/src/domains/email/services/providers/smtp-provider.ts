@@ -50,14 +50,22 @@ interface SmtpProviderConfig {
  * });
  * ```
  */
-export function createSmtpProvider(
-  config: SmtpProviderConfig
-): EmailProviderAdapter {
-  // Default `secure` to true. Reject obviously insecure setups at
-  // construction time so misconfiguration fails loudly rather than
-  // silently sending plaintext credentials over the network. STARTTLS on port 587 is allowed via secure: false
-  // (nodemailer upgrades implicitly when requireTLS is set, but the
-  // common pattern in the wild is to leave secure: false on 587).
+/**
+ * Refuse a configuration that would put credentials on the wire unprotected.
+ *
+ * Shared by every path that opens a transport. A connection probe authenticates
+ * exactly as a send does, so a probe with its own transport construction would
+ * happily hand credentials to a plaintext remote host the send path refuses —
+ * and then report success, which is worse than failing.
+ *
+ * Returns the resolved `secure` value so callers cannot re-derive it differently.
+ */
+function assertTransportIsSafe(config: SmtpProviderConfig): boolean {
+  // Default `secure` to true. Reject obviously insecure setups at construction
+  // time so misconfiguration fails loudly rather than silently sending
+  // plaintext credentials over the network. STARTTLS on port 587 is allowed via
+  // secure: false (nodemailer upgrades implicitly when requireTLS is set, but
+  // the common pattern in the wild is to leave secure: false on 587).
   const secure = config.secure ?? true;
   const isLocalhost =
     config.host === "localhost" ||
@@ -71,6 +79,18 @@ export function createSmtpProvider(
         `setups. See docs/email/smtp.md.`
     );
   }
+  return secure;
+}
+
+export function createSmtpProvider(
+  config: SmtpProviderConfig
+): EmailProviderAdapter {
+  // Default `secure` to true. Reject obviously insecure setups at
+  // construction time so misconfiguration fails loudly rather than
+  // silently sending plaintext credentials over the network. STARTTLS on port 587 is allowed via secure: false
+  // (nodemailer upgrades implicitly when requireTLS is set, but the
+  // common pattern in the wild is to leave secure: false on 587).
+  const secure = assertTransportIsSafe(config);
   return {
     async send(options) {
       const transport = nodemailer.createTransport({
@@ -128,10 +148,14 @@ export function createSmtpProvider(
 export async function verifySmtpConnection(
   config: SmtpProviderConfig
 ): Promise<{ ok: boolean; detail?: string }> {
+  // Same guard as the send path: a probe authenticates too, so it must not
+  // reach a host the send path would refuse.
+  const secure = assertTransportIsSafe(config);
+
   const transport = nodemailer.createTransport({
     host: config.host,
     port: config.port,
-    secure: config.secure ?? true,
+    secure,
     auth: { user: config.auth.user, pass: config.auth.pass },
   });
 

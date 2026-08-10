@@ -42,8 +42,14 @@ export const GET = withErrorHandler(async (request: Request) => {
   // cold instance and the full set on a warm one.
   await getCachedNextly();
 
+  // `create` is included deliberately: the permissions are seeded
+  // independently, so a role granted only create could authorize a POST and
+  // still be unable to discover the fields a plugin provider requires --
+  // leaving the grant unusable for exactly the providers this catalog exists
+  // to describe. It exposes definitions, never stored provider records.
   await requireRouteAnyPermission(request, [
     { action: "read", resource: "email-providers" },
+    { action: "create", resource: "email-providers" },
     { action: "manage", resource: "email-providers" },
   ]);
 
