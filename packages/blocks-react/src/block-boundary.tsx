@@ -163,12 +163,19 @@ function withNodeAttributes(output: ReactNode, node: BlockNode): ReactNode {
  * iterable is not obliged to end.
  *
  * A TRANSPARENT WRAPPER counts when its children do, for the same reason one
- * level up:
+ * level up. The set is the normalizer's — fragments, `StrictMode`, `Profiler`,
+ * `Activity`, `Suspense` and context providers — shared rather than copied, so
+ * a wrapper cannot be walked to validate its children in one place and
+ * misreported as output in the other. `Suspense` belongs despite its fallback:
+ * the fallback draws only while children are pending, and structurally empty
+ * children cannot suspend, while a child that can suspend is not empty and is
+ * answered by the recursion. A hidden `Activity` is empty whatever it holds.
+ *
  * `<>{items.map(...)}</>` draws no element of its own, so an empty one is the
- * third spelling of the same decision. Only a fragment is opened. React hands a
- * COMPONENT its children as an ordinary prop, which it may ignore or render
- * around, so judging those would call a working block empty on the strength of
- * a prop it never used, and `Suspense` is excluded because it draws a fallback.
+ * third spelling of the same decision. A COMPONENT is never opened: React hands
+ * it children as an ordinary prop, which it may ignore or render around, so
+ * judging those would call a working block empty on the strength of a prop it
+ * never used.
  *
  * Takes `unknown` rather than `ReactNode` so a fragment's children can be read
  * off an element's props and passed straight back in without a cast.
@@ -176,6 +183,11 @@ function withNodeAttributes(output: ReactNode, node: BlockNode): ReactNode {
 function rendersNothing(output: unknown, budget = { left: 10_000 }): boolean {
   if (isValidElement(output) && isTransparentWrapper(output.type)) {
     const props: unknown = output.props;
+    // A hidden `Activity` serialises as nothing WHATEVER it contains, so its
+    // children do not decide the answer and must not be consulted. Checked
+    // before the recursion rather than inside it, because the question here is
+    // about the wrapper's own mode and not about what it wraps.
+    if (isHiddenActivity(output.type, props)) return true;
     // Unusable rather than empty. A forged element can pass `isValidElement`
     // with null props, and calling it empty withholds the placeholder and hands
     // it to React, which reads `props.ref` and throws — taking the page, not the
@@ -221,6 +233,24 @@ function rendersNothing(output: unknown, budget = { left: 10_000 }): boolean {
 function isTransparentWrapper(type: unknown): boolean {
   return rendersChildrenTransparently(type);
 }
+
+/**
+ * Whether this is an `Activity` that is currently hidden.
+ *
+ * `mode="hidden"` is not a styling choice — React serialises the subtree as no
+ * output at all, so a block returning one has drawn nothing however much markup
+ * it handed over. Anything other than the literal `"hidden"` is treated as
+ * visible, which is the direction that keeps a diagnostic rather than
+ * withholding one on a malformed prop.
+ */
+function isHiddenActivity(type: unknown, props: unknown): boolean {
+  if (type !== ACTIVITY_TYPE) return false;
+  if (typeof props !== "object" || props === null) return false;
+  return "mode" in props && props.mode === "hidden";
+}
+
+/** React's `Activity`, by the symbol this React identifies it with. */
+const ACTIVITY_TYPE = Symbol.for("react.activity");
 
 /**
  * Whether a value should be walked as a list of children.
