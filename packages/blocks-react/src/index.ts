@@ -47,11 +47,17 @@ export {
 export type { BlockResolver } from "./resolver";
 
 export {
+  // Public because the WRITE path needs it. A stored stylesheet records which
+  // host-fetch policy compiled it, and a reader refuses a sheet whose stamp is
+  // not the policy now in force. A writer that could not compute the same label
+  // would stamp nothing, every stored sheet would read as stale, and a site
+  // with a policy would recompile its CSS on every render for ever.
+  fetchPolicyLabel,
   resolvePageStyles,
   styleTextForInjection,
   toPageStyles,
 } from "./styles";
-export type { PageStyles } from "./styles";
+export type { PageStyles, ResolveStyleOptions } from "./styles";
 
 /**
  * Exported because `resolvePageStyles` has a precondition a caller could not otherwise meet.

@@ -15,12 +15,14 @@
  */
 import {
   deriveSeoFromDocument,
+  isFetchableUrl,
   DOCUMENT_FORMAT_VERSION,
 } from "@nextlyhq/blocks-engine";
 import type {
   BlockDocument,
   BlockSeoContribution,
   DocumentLimits,
+  RemotePatternInput,
   SeoImageCandidate,
   StyleCompileContext,
 } from "@nextlyhq/blocks-engine";
@@ -312,7 +314,18 @@ async function derivePageSeo(
   resolveMedia: (id: string) => Promise<ResolvedMedia | null>,
   slug: string,
   limits: DocumentLimits | undefined,
-  styleContext: StyleCompileContext | undefined
+  styleContext: StyleCompileContext | undefined,
+  /**
+   * The host's fetch list, applied to the preview image exactly as the renderer
+   * applies it to the picture on the page.
+   *
+   * A link preview is a THIRD fetching channel, and the easiest one to forget:
+   * the image never appears in the document's markup, so a page that correctly
+   * refuses to render an unlisted host would still publish that host in its
+   * Open Graph tags, where every crawler and chat client that unfurls the link
+   * then fetches it.
+   */
+  remotePatterns: readonly RemotePatternInput[] | undefined
 ): Promise<DerivedPageSeo> {
   const resolver = blocks ?? registeredBlocks();
   // Spread rather than assigned, so an unaddressable slug OMITS the key instead
@@ -340,7 +353,11 @@ async function derivePageSeo(
     type => resolver.get(type),
     isUnconditional
   );
-  const image = await firstUsableImage(imageCandidates, resolveMedia);
+  const image = await firstUsableImage(
+    imageCandidates,
+    resolveMedia,
+    remotePatterns
+  );
   return image === undefined
     ? { ...text, ...canonical }
     : { ...text, ...canonical, image };
@@ -426,9 +443,21 @@ function usableMedia(media: ResolvedMedia | null): boolean {
 
 async function firstUsableImage(
   candidates: SeoImageCandidate[] | undefined,
-  resolveMedia: (id: string) => Promise<ResolvedMedia | null>
+  resolveMedia: (id: string) => Promise<ResolvedMedia | null>,
+  remotePatterns: readonly RemotePatternInput[] | undefined
 ): Promise<string | undefined> {
-  const list = candidates ?? [];
+  // A candidate the host would not fetch is not usable, whichever route
+  // produced it: a URL written on the block and a URL a media record resolved
+  // to are the same kind of value here, exactly as they are in `core/image`.
+  const usable = (value: string): boolean =>
+    remotePatterns === undefined || isFetchableUrl(value, remotePatterns);
+  // A refused direct URL is removed from the LIST rather than rejected where it
+  // is reached, so scanning simply continues to the next candidate in document
+  // order. Rejecting it at the point of use would stop the search at a value
+  // that was never going to be published.
+  const list = (candidates ?? []).filter(
+    candidate => candidate.kind !== "url" || usable(candidate.value)
+  );
 
   for (let start = 0; start < list.length; start += MEDIA_LOOKUP_BATCH) {
     const batch = list.slice(start, start + MEDIA_LOOKUP_BATCH);
@@ -463,7 +492,10 @@ async function firstUsableImage(
     // took whichever finished first would describe a different picture.
     for (const lookup of pending) {
       const media = await lookup;
-      if (media !== null) return media.url;
+      // The resolved URL cannot be filtered up front, because nothing knows it
+      // until the record is read. A refused one falls through to the next
+      // candidate exactly as an unresolvable one does.
+      if (media !== null && usable(media.url)) return media.url;
     }
     if (direct !== -1) return batch[direct]?.value;
   }
@@ -909,7 +941,8 @@ export function createBlocksPage(
               ),
               context.slug,
               limits,
-              styleContext
+              styleContext,
+              config.hostPolicy?.remotePatterns
             );
             return metadata(entry, context, derived);
           },
