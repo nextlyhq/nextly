@@ -88,6 +88,14 @@ describe("theme lab selection", () => {
     expect(readSelection().theme).toBe("mono");
   });
 
+  it("falls back to mono for a theme this build no longer ships", () => {
+    // Not hypothetical: every browser that used the 54-theme lab has one of
+    // the pruned ids persisted. `graphite` was a real theme until the task-08
+    // shortlist, which is exactly the shape of id that arrives here.
+    writeSelection({ theme: "graphite", density: "default" });
+    expect(readSelection()).toEqual({ theme: "mono", density: "default" });
+  });
+
   it("falls back to the default density for an unknown one", () => {
     // Densities are validated the same way theme ids are: the stylesheet has
     // no block for an unrecognised one, so applying it would style nothing.
@@ -129,7 +137,7 @@ describe("theme lab selection", () => {
 
 /**
  * The three themes below are picked for their recommendations, not their
- * looks: mono recommends `default` (and is the stored default), graphite also
+ * looks: mono recommends `default` (and is the stored default), signal also
  * recommends `default`, and calm recommends `comfortable`. Between them every
  * case this needs -- a density that agrees with the outgoing theme, one that
  * disagrees, and a switch that leaves the recommendation unchanged -- is
@@ -170,10 +178,10 @@ describe("theme lab density follow", () => {
   it("keeps following after a switch that did not move density", () => {
     const hook = renderThemeLab();
     try {
-      // mono and graphite recommend the same density, so density stays
+      // mono and signal recommend the same density, so density stays
       // "following" rather than being read as a user choice on the next
       // switch -- the case a "user touched this axis" flag would get wrong.
-      hook.act(() => hook.current.setTheme("graphite"));
+      hook.act(() => hook.current.setTheme("signal"));
       expect(hook.current.density).toBe("default");
 
       hook.act(() => hook.current.setTheme("calm"));
@@ -209,11 +217,11 @@ describe("theme lab density follow", () => {
 
     const hook = renderThemeLab();
     try {
-      hook.act(() => hook.current.setTheme("terminal"));
+      hook.act(() => hook.current.setTheme("sand"));
 
       for (const root of [shell, portal]) {
-        expect(root.dataset.theme).toBe("terminal");
-        expect(root.dataset.density).toBe("compact");
+        expect(root.dataset.theme).toBe("sand");
+        expect(root.dataset.density).toBe("comfortable");
       }
     } finally {
       hook.unmount();

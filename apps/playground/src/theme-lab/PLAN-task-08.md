@@ -85,7 +85,7 @@ git commit -m "feat(playground): prune tweakcn presets to the five shortlisted"
 **Interfaces:**
 
 - Produces: `NEXTLY_THEMES = [MONO, SIGNAL, SAND, CALM]` (that order: control first, then by departure size); `EXPECTED_CONTRAST_FAILURES = { calm: 58 }`.
-- Density facts later tasks rely on: mono `default`, signal `comfortable`, sand `default`, calm `comfortable`.
+- Density facts later tasks rely on (measured with filename-bound grep after an unbound grep misattributed them): mono `default`, signal `default`, sand `comfortable`, calm `comfortable`.
 
 - [ ] **Step 1: Retarget the tests (failing first)**
 

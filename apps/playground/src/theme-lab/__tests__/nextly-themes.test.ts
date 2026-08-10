@@ -22,8 +22,8 @@ const source = readFileSync(THEME_CSS, "utf8");
 describe("nextly themes", () => {
   // The set is complete, so the count is asserted: a theme silently dropped
   // from the array would otherwise just shrink the suite and still pass.
-  it("ships twelve themes led by mono as the control", () => {
-    expect(NEXTLY_THEMES).toHaveLength(12);
+  it("ships four themes led by mono as the control", () => {
+    expect(NEXTLY_THEMES).toHaveLength(4);
     expect(NEXTLY_THEMES[0].id).toBe("mono");
   });
 
