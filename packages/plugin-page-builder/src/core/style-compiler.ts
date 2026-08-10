@@ -882,22 +882,51 @@ function placementOverridesByRef(
   return { byRef, resolved };
 }
 
-/** One <style> block worth of CSS for the whole document. */
-export function compileDocumentCss(
+/**
+ * The units a page's styles are emitted in, in the order they must appear.
+ *
+ * Each placed reusable block is a unit and the document is the last one, so a unit's rules all
+ * precede the rules of anything that PLACES it. Ordering the sheet by unit rather than by tier is
+ * what keeps a placement's precedence: a rule from a later unit wins whatever tier it came from,
+ * and a rule from a later TIER would otherwise win whatever unit it came from.
+ */
+function styleUnits(
   doc: BlockDocument,
-  opts: CompileOptions = {}
-): string {
-  // Resolved once for the document and passed down, so every node in this
-  // stylesheet is named by the same map the markup is named by.
-  const classes = opts.classes ?? documentNodeClasses(doc, opts.refs);
+  refs: Record<string, BlockNode> | undefined
+): { refId?: string; root: BlockNode }[] {
+  const units: { refId?: string; root: BlockNode }[] = [];
+  for (const refId of placedRefIds(doc, refs)) {
+    const target = refs?.[refId];
+    if (target) units.push({ refId, root: target });
+  }
+  units.push({ root: doc.root });
+  return units;
+}
+
+/** The generated rules of ONE unit. */
+function generatedUnitCss(
+  unit: { refId?: string; root: BlockNode },
+  nodeOpts: CompileOptions,
+  overrides: Map<string, PlacementOverride[]>
+): string[] {
   const parts: string[] = [];
-  // The library FIRST, the document after it. Everything here is emitted at one specificity, so
-  // precedence is source order and the LATER rule wins — which makes a reusable block's own styles
-  // the tier a placement overrides, not the other way round. A placement customising the block it
-  // places is the point of placing it.
-  //
-  // The order is only observable once a placement's class reaches an element, which is why it went
-  // unnoticed while a resolved ref emitted no element of its own.
+  const placements = unit.refId ? overrides.get(unit.refId) : undefined;
+  walk(unit.root, n => {
+    const css = compileNodeCss(n, {
+      ...nodeOpts,
+      refScope: unit.refId,
+      // Only the root: a placement's class is applied to the element its target renders, and the
+      // target's descendants are not that element.
+      placementOverrides: n.id === unit.root.id ? placements : undefined,
+    });
+    if (css) parts.push(css);
+  });
+  return parts;
+}
+
+/** Everything the generated tier needs, resolved once for the whole document. */
+function styleContextFor(doc: BlockDocument, opts: CompileOptions) {
+  const classes = opts.classes ?? documentNodeClasses(doc, opts.refs);
   const { byRef: overrides, resolved: resolvedPlacements } =
     placementOverridesByRef(
       doc,
@@ -905,27 +934,50 @@ export function compileDocumentCss(
       classes,
       opts.breakpoints ?? DEFAULT_BREAKPOINTS
     );
-  const nodeOpts = { ...opts, classes, resolvedPlacements };
-  for (const refId of placedRefIds(doc, opts.refs)) {
-    const target = opts.refs?.[refId];
-    if (!target) continue;
-    const placements = overrides.get(refId);
-    walk(target, n => {
-      const css = compileNodeCss(n, {
-        ...nodeOpts,
-        refScope: refId,
-        // Only the root: a placement's class is applied to the element its target renders, and the
-        // target's descendants are not that element.
-        placementOverrides: n.id === target.id ? placements : undefined,
-      });
-      if (css) parts.push(css);
-    });
-  }
-  walk(doc.root, n => {
-    const css = compileNodeCss(n, nodeOpts);
-    if (css) parts.push(css);
-  });
-  return parts.join("\n");
+  return {
+    classes,
+    overrides,
+    nodeOpts: { ...opts, classes, resolvedPlacements },
+  };
+}
+
+/**
+ * One <style> block worth of GENERATED CSS for the whole document.
+ *
+ * This is one tier of two. A page also has per-block custom CSS, and the two cannot simply be
+ * concatenated — see {@link compileDocumentStyles}, which is what a renderer should call.
+ */
+export function compileDocumentCss(
+  doc: BlockDocument,
+  opts: CompileOptions = {}
+): string {
+  const { overrides, nodeOpts } = styleContextFor(doc, opts);
+  return styleUnits(doc, opts.refs)
+    .flatMap(unit => generatedUnitCss(unit, nodeOpts, overrides))
+    .join("\n");
+}
+
+/**
+ * Both style tiers for a page, ordered so that a placement outranks the block it places.
+ *
+ * The generated tier and the custom-CSS tier are emitted at the SAME specificity, so concatenating
+ * one after the other makes the later TIER win — and a reusable block's custom CSS would beat a
+ * placement's typed controls, which is the opposite of what placing a block means. Interleaved by
+ * unit, precedence is decided by which block is doing the placing, and a node's own custom CSS
+ * still beats its own generated rules because it follows them within the unit.
+ */
+export function compileDocumentStyles(
+  doc: BlockDocument,
+  opts: CompileOptions = {}
+): string {
+  const { classes, overrides, nodeOpts } = styleContextFor(doc, opts);
+  return styleUnits(doc, opts.refs)
+    .flatMap(unit => [
+      ...generatedUnitCss(unit, nodeOpts, overrides),
+      customUnitCss(unit, classes, opts.scope),
+    ])
+    .filter(Boolean)
+    .join("\n");
 }
 
 /**
@@ -990,10 +1042,31 @@ export function compileDocumentBlockCss(
   // Both tiers put a placement's class and its target's class on one element at one specificity,
   // so ordering one of them the other way round would let a reusable block's custom CSS override
   // the custom CSS of a single placement of it while its generated styles lost to that placement.
-  for (const refId of placedRefIds(doc, refs)) {
-    const target = refs?.[refId];
-    if (target) walk(target, n => collect(n, refId));
+  for (const unit of styleUnits(doc, refs)) {
+    walk(unit.root, n => collect(n, unit.refId));
   }
-  walk(doc.root, n => collect(n));
+  return parts.join("\n");
+}
+
+/** The custom CSS of ONE unit, named through the same map as every other tier. */
+function customUnitCss(
+  unit: { refId?: string; root: BlockNode },
+  classes: ReadonlyMap<string, string>,
+  scope?: string
+): string {
+  const parts: string[] = [];
+  walk(unit.root, n => {
+    if (!n.customCss) return;
+    const key =
+      unit.refId === undefined || unit.refId === ""
+        ? documentKey(n.id)
+        : refScopedKey(unit.refId, n.id);
+    const scoped = sanitizeBlockCss(
+      n.customCss,
+      classes.get(key) ?? nodeClassName(key),
+      scope
+    );
+    if (scoped.css) parts.push(scoped.css);
+  });
   return parts.join("\n");
 }

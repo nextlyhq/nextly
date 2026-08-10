@@ -10,8 +10,7 @@ import type { ReactNode } from "react";
 import { sanitizeCustomCss } from "../core/css-sanitize";
 import { defaultBlockRegistry, type BlockRegistry } from "../core/registry";
 import {
-  compileDocumentBlockCss,
-  compileDocumentCss,
+  compileDocumentStyles,
   compileDocumentMotionCss,
   compileTokensCss,
   documentNodeClasses,
@@ -82,14 +81,16 @@ export function PageRenderer({
   const css = [
     compileTokensCss(scope, tokens),
     compileDocumentMotionCss(document, refs),
-    compileDocumentCss(document, {
+    // Both style tiers together, not one after the other: they are emitted at the same specificity,
+    // so concatenating the tiers would let a reusable block's custom CSS beat the typed controls of
+    // a single placement of it.
+    compileDocumentStyles(document, {
       breakpoints,
       remotePatterns,
       scope,
       classes,
       refs,
     }),
-    compileDocumentBlockCss(document, classes, refs, scope),
     // `.css` alone: the sanitizer also returns what it removed, and this path
     // renders rather than edits, so there is nowhere to show a warning. The
     // editor reads the same result and displays them.

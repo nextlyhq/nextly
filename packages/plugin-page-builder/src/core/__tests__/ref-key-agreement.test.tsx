@@ -27,6 +27,7 @@ import "../../render/blocks";
 import {
   compileDocumentBlockCss,
   compileDocumentCss,
+  compileDocumentStyles,
   documentKey,
   documentNodeClasses,
   nodeClass,
@@ -677,6 +678,53 @@ describe("styling a core/ref PLACEMENT", () => {
 
     expect(css).toContain("(min-width: 640.02px)");
     expect(css).not.toContain("(min-width: 641px)");
+  });
+
+  it("keeps a placement ahead of its target ACROSS the two style tiers", () => {
+    // The generated tier and the custom-CSS tier are emitted at the same specificity, so a sheet
+    // built by concatenating one tier after the other lets the later TIER decide — and a reusable
+    // block's custom CSS would beat the typed controls of a single placement of it. Ordering by
+    // UNIT instead means precedence is decided by which block is doing the placing.
+    const root = container("root", [
+      { ...ref("p1", "r1"), style: { base: { color: "#ee0018" } } },
+    ]);
+    const refs = {
+      r1: {
+        ...styled("lib", "Lib", "#000000"),
+        customCss: "selector { color: #ee0019 }",
+      },
+    };
+    const css = compileDocumentStyles(doc(root), {
+      classes: documentNodeClasses(doc(root), refs),
+      refs,
+      scope: "nx-pb-scope",
+    });
+
+    // Positive control: both rules are in the sheet, so the ordering assertion is not comparing
+    // two -1s — and they are at equal specificity, which is why order is what decides.
+    expect(css).toContain("#ee0018");
+    expect(css).toContain("#ee0019");
+    expect(css.indexOf("#ee0019")).toBeLessThan(css.indexOf("#ee0018"));
+  });
+
+  it("still lets a node's OWN custom CSS beat its OWN generated rules", () => {
+    // The other invariant the interleaving must not break: custom CSS is the escape hatch, so
+    // within one node it still follows the generated rules. Ordering by unit alone would satisfy
+    // the test above while reversing this one if the tiers were swapped inside the unit.
+    const root = container("root", [
+      {
+        ...styled("n1", "Doc", "#ee0020"),
+        customCss: "selector { color: #ee0021 }",
+      },
+    ]);
+    const css = compileDocumentStyles(doc(root), {
+      classes: documentNodeClasses(doc(root), {}),
+      scope: "nx-pb-scope",
+    });
+
+    expect(css).toContain("#ee0020");
+    expect(css).toContain("#ee0021");
+    expect(css.indexOf("#ee0020")).toBeLessThan(css.indexOf("#ee0021"));
   });
 
   it("still hides a resolved placement when no breakpoints are configured", () => {
