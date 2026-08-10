@@ -61,17 +61,37 @@ function syntheticCss(theme: ThemeDefinition): string {
   return [block(":root", theme.light), block(".dark", theme.dark)].join("\n\n");
 }
 
-export function validateTheme(
+/** One pairing's measured result, whether it passed or not. */
+export interface ContrastMeasurement extends ContrastFailure {
+  /** `ratio - required`. Negative is a failure; near zero is a fragile pass. */
+  margin: number;
+}
+
+/**
+ * Every pairing's ratio, passes included.
+ *
+ * A miss COUNT collapses a continuous quantity into a boolean: a theme
+ * clearing every pairing by 0.01 and one clearing by 1.4 both report zero
+ * failures, and they are not the same asset. The first flips back to failing
+ * the moment the contrast source moves, a pairing is restated, or colour
+ * resolution changes by a rounding step -- exactly what the revision stamp on
+ * the generated report exists to detect. Keeping the margins lets a report
+ * say how STABLE a pass is rather than only that it passed.
+ *
+ * `validateTheme` is this function filtered, so the two cannot disagree about
+ * what a failure is.
+ */
+export function measureTheme(
   theme: ThemeDefinition,
   themeCssSource: string
-): ContrastFailure[] {
+): ContrastMeasurement[] {
   const { light, dark } = parseThemeTokens(syntheticCss(theme));
   // The `--color-*` scale is theme-independent text (aliases and color-mix
   // shades); only the `--nx-*` it references change per theme, so it is read
   // once from the shipped stylesheet.
   const scale = parseThemeScale(themeCssSource);
 
-  const failures: ContrastFailure[] = [];
+  const results: ContrastMeasurement[] = [];
 
   for (const mode of [
     { name: "light" as const, tokens: light },
@@ -102,16 +122,23 @@ export function validateTheme(
 
       const ratio = contrastRatio(fg, surface);
       const required = THRESHOLDS[pairing.kind];
-      if (ratio < required) {
-        failures.push({
-          mode: mode.name,
-          label: pairing.label,
-          ratio,
-          required,
-        });
-      }
+      results.push({
+        mode: mode.name,
+        label: pairing.label,
+        ratio,
+        required,
+        margin: ratio - required,
+      });
     }
   }
 
-  return failures;
+  return results;
+}
+
+/** The pairings a theme fails. `measureTheme`, filtered. */
+export function validateTheme(
+  theme: ThemeDefinition,
+  themeCssSource: string
+): ContrastFailure[] {
+  return measureTheme(theme, themeCssSource).filter(r => r.ratio < r.required);
 }

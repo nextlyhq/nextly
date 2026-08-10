@@ -63,20 +63,20 @@ const S = {
 // Each row solves against the STRICTEST surface the token appears on, so one
 // value clears every pairing that token takes part in.
 const rows: [string, number, number, Rgb, number, "darker" | "lighter"][] = [
-  ["light muted-foreground", 0.012, 260, S.lightCard, 4.5, "darker"],
-  ["light code-comment/punct", 0.01, 260, S.lightMuted, 4.5, "darker"],
-  ["light destructive", 0.13, 22, S.lightCard, 4.5, "darker"],
-  ["light success", 0.09, 155, S.lightCard, 4.5, "darker"],
-  ["light warning", 0.1, 75, S.lightCard, 4.5, "darker"],
-  ["light primary (white on it)", 0.06, 250, S.white, 4.5, "darker"],
-  ["light input (3:1 on card)", 0.006, 260, S.lightCard, 3, "darker"],
-  ["light sidebar-border", 0.005, 260, S.lightPage, 3, "darker"],
-  ["dark muted-foreground", 0.012, 262, S.darkMuted, 4.5, "lighter"],
-  ["dark destructive", 0.12, 22, S.darkMuted, 4.5, "lighter"],
-  ["dark success", 0.09, 155, S.darkMuted, 4.5, "lighter"],
-  ["dark primary (fg on it)", 0.07, 250, S.darkFg, 4.5, "darker"],
-  ["dark input (3:1 on popover)", 0.012, 262, S.darkPopover, 3, "lighter"],
-  ["dark sidebar-border", 0.01, 262, S.darkPage, 3, "lighter"],
+  ["light muted-foreground", 0.012, 260, S.lightCard, 5.0, "darker"],
+  ["light code-comment/punct", 0.01, 260, S.lightMuted, 5.0, "darker"],
+  ["light destructive", 0.13, 22, S.lightCard, 5.0, "darker"],
+  ["light success", 0.09, 155, S.lightCard, 5.0, "darker"],
+  ["light warning", 0.1, 75, S.lightCard, 5.0, "darker"],
+  ["light primary (white on it)", 0.06, 250, S.white, 5.0, "darker"],
+  ["light input (3:1 on card)", 0.006, 260, S.lightCard, 3.4, "darker"],
+  ["light sidebar-border", 0.005, 260, S.lightPage, 3.4, "darker"],
+  ["dark muted-foreground", 0.012, 262, S.darkMuted, 5.0, "lighter"],
+  ["dark destructive", 0.12, 22, S.darkMuted, 5.0, "lighter"],
+  ["dark success", 0.09, 155, S.darkMuted, 5.0, "lighter"],
+  ["dark primary (fg on it)", 0.07, 250, S.darkFg, 5.0, "darker"],
+  ["dark input (3:1 on popover)", 0.012, 262, S.darkPopover, 3.4, "lighter"],
+  ["dark sidebar-border", 0.01, 262, S.darkPage, 3.4, "lighter"],
 ];
 
 for (const [label, c, h, bg, target, dir] of rows) {

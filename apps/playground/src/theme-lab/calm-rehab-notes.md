@@ -17,21 +17,54 @@ surface in dark), so one value clears every pairing that token takes part in.
 Hue and chroma were held fixed throughout. Only lightness moved, plus border alpha. Calm's colour
 identity — dusty blue primary, sage highlight, warm-neutral statuses — is unchanged.
 
+### Solved to a MARGIN, not to a pass
+
+The first fit targeted the gate exactly (4.5 text / 3.0 UI) and left Calm's worst pairing at
+**+0.042** — a pass by four hundredths. That is maximally fragile to the very thing the revision
+stamp exists to detect: the next time the contrast source moves, a pairing is restated, or colour
+resolution changes by a rounding step, a theme sitting on the line flips back to failing.
+
+Re-solved at 5.0 / 3.4 so drift has somewhere to go. Because luminance is monotonic in lightness at
+fixed hue and chroma, buying margin costs a small, predictable amount of lightness and nothing else
+about the theme's identity.
+
+**Worst-case margin per theme, measured:**
+
+| Theme                    | Worst margin | Pairing                           |
+| ------------------------ | ------------ | --------------------------------- |
+| Mono (untouched control) | +0.109       | dark destructive text on popover  |
+| Signal (untouched)       | +0.109       | dark destructive text on popover  |
+| Sand (untouched)         | +0.158       | light warning text on page        |
+| **Calm (re-fitted)**     | **+0.238**   | light muted text on muted surface |
+
+Two things follow, and the second is the more useful finding:
+
+1. Calm now has the widest margin of the four, so it is the least likely to regress.
+2. **Thin margins are not an artifact of fitting — they are a property of the whole in-house set.**
+   Mono, the shipped control nobody has tuned to this harness, sits at +0.109 with nine pairings
+   within 0.25 of the gate. Any move in the contrast source threatens Mono before it threatens
+   Calm. That is a standing fragility in today's admin, not something this task introduced.
+
+`measureTheme` (in `validate-contrast.ts`) now returns every pairing's ratio and margin, with
+`validateTheme` defined as its filter — so a miss COUNT can never be the only thing recorded. A
+theme clearing everything by 0.01 and one clearing by 1.4 both report zero failures and are not the
+same asset.
+
 ## What moved
 
 | Token                               | Light: before → after | Dark: before → after               |
 | ----------------------------------- | --------------------- | ---------------------------------- |
-| `muted-foreground`                  | 0.68 → **0.545**      | 0.58 → **0.70**                    |
-| `code-comment` / `code-punctuation` | 0.62 → **0.53**       | 0.62 → **0.70**                    |
-| `destructive`                       | 0.66 → **0.57**       | 0.60 → **0.71**                    |
-| `success`                           | 0.68 → **0.54**       | 0.62 → **0.69**                    |
-| `warning`                           | 0.76 → **0.55**       | unchanged                          |
-| `primary` / `sidebar-primary`       | 0.62 → **0.50**       | 0.68 → **0.78**                    |
+| `muted-foreground`                  | 0.68 → **0.535**      | 0.58 → **0.714**                   |
+| `code-comment` / `code-punctuation` | 0.62 → **0.515**      | 0.62 → **0.714**                   |
+| `destructive`                       | 0.66 → **0.552**      | 0.60 → **0.728**                   |
+| `success`                           | 0.68 → **0.528**      | 0.62 → **0.703**                   |
+| `warning`                           | 0.76 → **0.542**      | unchanged                          |
+| `primary` / `sidebar-primary`       | 0.62 → **0.487**      | 0.68 → **0.80**                    |
 | `primary-foreground`                | unchanged (white)     | 0.99 → **0.21** (dark page colour) |
-| `border` alpha                      | 0.13 → **0.45**       | 0.11 → **0.34**                    |
-| `border-strong` alpha               | 0.22 → **0.70**       | 0.18 → **0.48**                    |
-| `input`                             | 0.88 → **0.65**       | 0.38 → **0.57**                    |
-| `sidebar-border`                    | 0.90 → **0.64**       | 0.30 → **0.52**                    |
+| `border` alpha                      | 0.13 → **0.52**       | 0.11 → **0.40**                    |
+| `border-strong` alpha               | 0.22 → **0.78**       | 0.18 → **0.55**                    |
+| `input`                             | 0.88 → **0.632**      | 0.38 → **0.598**                   |
+| `sidebar-border`                    | 0.90 → **0.614**      | 0.30 → **0.543**                   |
 
 ## The one genuine design change
 
@@ -48,8 +81,8 @@ theme should do anyway. This is the only change here that alters an intent rathe
 
 ## What it cost visually
 
-The quiet register is genuinely less quiet: secondary text at L 0.545 instead of 0.68 in light mode
-is a visible step darker, and the borders are no longer whisper-thin (alpha 0.45 vs 0.13). Surfaces,
+The quiet register is genuinely less quiet: secondary text at L 0.535 instead of 0.68 in light mode
+is a visible step darker, and the borders are no longer whisper-thin (alpha 0.52 vs 0.13). Surfaces,
 radii (16px), spacing and the comfortable density are untouched, so the theme still reads as soft —
 but the "legible only in its loudest layer" property the original Calm was built to demonstrate is
 deliberately gone. That property is now recorded here rather than shipped in a theme.
