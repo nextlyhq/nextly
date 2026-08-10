@@ -1866,3 +1866,129 @@ describe("a different key repeating during a sequence", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("keys whose owner depends on the control", () => {
+  it("leaves PageDown to a focused native select under a grab", () => {
+    // A select pages through its option list with these keys. The earlier rule asked only
+    // whether the target held multiple LINES, which is the wrong question for a control that
+    // pages through options instead.
+    const manager = managerFor();
+    manager.register([binding("Escape", vi.fn())], {
+      name: "modal",
+      depth: 1,
+      blocking: true,
+    });
+    const select = document.createElement("select");
+    document.body.append(select);
+    const detach = manager.attach(document);
+    const event = press("PageDown");
+    select.dispatchEvent(event);
+    detach();
+    select.remove();
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("still suppresses Enter on that same select", () => {
+    // The control, and the reason one answer for all three keys would be wrong: Enter submits
+    // the form rather than editing anything, whatever the target is.
+    const manager = managerFor();
+    manager.register([binding("Escape", vi.fn())], {
+      name: "modal",
+      depth: 1,
+      blocking: true,
+    });
+    const select = document.createElement("select");
+    document.body.append(select);
+    const detach = manager.attach(document);
+    const event = press("Enter");
+    select.dispatchEvent(event);
+    detach();
+    select.remove();
+    expect(event.defaultPrevented).toBe(true);
+  });
+});
+
+describe("the older spelling of copy and paste", () => {
+  it.each([
+    ["Ctrl+Insert", { ctrlKey: true }],
+    ["Shift+Insert", { shiftKey: true }],
+  ])("leaves %s to the field under a grab", (_name, mods) => {
+    // The same two commands the letters cover, in the spelling Windows and Linux have always
+    // had. Suppressing them makes clipboard work unavailable for anyone who uses them.
+    const manager = managerFor();
+    manager.register([binding("Escape", vi.fn())], {
+      name: "modal",
+      depth: 1,
+      blocking: true,
+    });
+    const field = document.createElement("input");
+    document.body.append(field);
+    const detach = manager.attach(document);
+    const event = press("Insert", mods);
+    field.dispatchEvent(event);
+    detach();
+    field.remove();
+    expect(event.defaultPrevented).toBe(false);
+  });
+});
+
+describe("detaching a target", () => {
+  it("does not let one document's prefix be completed on another", () => {
+    // A provider swapping targets reuses the manager, so a `g` from the old document could be
+    // completed by a `d` on the new one, which never saw the prefix.
+    const run = vi.fn();
+    const manager = managerFor();
+    manager.register([binding("g d", run)], { name: "shell", depth: 0 });
+
+    const first = manager.attach(document);
+    document.body.dispatchEvent(press("g"));
+    first();
+
+    const second = manager.attach(document);
+    document.body.dispatchEvent(press("d"));
+    second();
+
+    expect(run).not.toHaveBeenCalled();
+  });
+});
+
+describe("a prefix conflict that eligibility can separate", () => {
+  it("stays quiet when the shorter binding is conditional", () => {
+    // An inactive conditional `g` is skipped at press time and `g d` does become pending, so
+    // telling the developer the longer binding can never fire would simply be false.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    resetDevWarnings();
+    const manager = managerFor();
+    manager.register(
+      [
+        {
+          keys: "g",
+          description: "Sometimes",
+          run: vi.fn(),
+          when: () => false,
+        },
+        binding("g d", vi.fn()),
+      ],
+      { name: "shell", depth: 0 }
+    );
+    const said = warn.mock.calls.map(c => String(c[0])).join(" ");
+    warn.mockRestore();
+    expect(said).not.toContain("prefix");
+    expect(manager).toBeDefined();
+  });
+
+  it("still warns when neither binding is conditional", () => {
+    // The positive control: quietening the false case must not quieten the true one.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    resetDevWarnings();
+    const manager = managerFor();
+    manager.register([binding("g", vi.fn()), binding("g d", vi.fn())], {
+      name: "shell",
+      depth: 0,
+    });
+    const said = warn.mock.calls.map(c => String(c[0])).join(" ");
+    warn.mockRestore();
+    expect(said).toContain("prefix");
+    expect(manager).toBeDefined();
+  });
+});

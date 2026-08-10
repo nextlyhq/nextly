@@ -61,6 +61,14 @@ import {
 interface ShortcutContextValue {
   manager: ShortcutManager;
   depth: number;
+  /**
+   * The target this provider's listener is installed on, already resolved.
+   *
+   * Carried so a nested provider can compare identity rather than props: an omitted target and
+   * an explicit `document` name the same node, and comparing the props would call two providers
+   * different while both attached a listener to it.
+   */
+  target: Pick<EventTarget, "addEventListener" | "removeEventListener"> | null;
 }
 
 const ShortcutContext = React.createContext<ShortcutContextValue | null>(null);
@@ -99,7 +107,17 @@ export function ShortcutProvider({
   // passes the outer one through, so the shortcuts inside it still work and there is still one
   // listener. Nesting with an EXPLICIT target is left alone: a second document, such as an
   // iframe or a pop-out window, genuinely needs its own listener.
-  const nestedOnSameTarget = parent !== null && target === undefined;
+  // Resolved before comparing, because `undefined` and an explicit `document` name the same
+  // node. Comparing the PROPS would call two providers different while both attach a listener to
+  // the same target, which is the arrangement this guard exists to prevent.
+  const resolvedTarget =
+    target === null
+      ? null
+      : (target ?? (typeof document === "undefined" ? null : document));
+  const nestedOnSameTarget =
+    parent !== null &&
+    resolvedTarget !== null &&
+    parent.target === resolvedTarget;
   devWarnOnce(
     !nestedOnSameTarget,
     "ShortcutProvider: a provider is already mounted above this one. The inner one is being " +
@@ -119,19 +137,19 @@ export function ShortcutProvider({
   React.useEffect(() => {
     // `target === null` is an explicit "attach nothing", for tests and for a host that drives
     // `handle` itself. An omitted target falls back to the document.
-    if (target === null) return;
-    // The outer provider already owns this target's listener.
-    if (nestedOnSameTarget) return;
-    const resolved =
-      target ?? (typeof document === "undefined" ? null : document);
-    if (!resolved) return;
-    return manager.attach(resolved);
-  }, [manager, target, nestedOnSameTarget]);
+    // The outer provider already owns this target's listener, and `null` is an explicit
+    // "attach nothing" for tests and for a host that drives `handle` itself.
+    if (resolvedTarget === null || nestedOnSameTarget) return;
+    return manager.attach(resolvedTarget);
+  }, [manager, resolvedTarget, nestedOnSameTarget]);
 
   // Depth continues from the parent rather than restarting, so a scope inside an ignored nested
   // provider still outranks what surrounds it.
   const depth = nestedOnSameTarget && parent ? parent.depth : 0;
-  const value = React.useMemo(() => ({ manager, depth }), [manager, depth]);
+  const value = React.useMemo(
+    () => ({ manager, depth, target: resolvedTarget }),
+    [manager, depth, resolvedTarget]
+  );
   return (
     <ShortcutContext.Provider value={value}>
       {children}
@@ -154,8 +172,12 @@ export function ShortcutScope({
     throw new Error("ShortcutScope must be rendered inside a ShortcutProvider");
   }
   const value = React.useMemo(
-    () => ({ manager: parent.manager, depth: parent.depth + 1 }),
-    [parent.manager, parent.depth]
+    () => ({
+      manager: parent.manager,
+      depth: parent.depth + 1,
+      target: parent.target,
+    }),
+    [parent.manager, parent.depth, parent.target]
   );
   return (
     <ShortcutContext.Provider value={value}>

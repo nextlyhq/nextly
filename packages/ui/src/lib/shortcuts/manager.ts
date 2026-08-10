@@ -493,7 +493,7 @@ export function createShortcutManager(
     // Enter, PageUp and PageDown edit or scroll only where the target owns multiple lines. In a
     // single-line input Enter submits the form and the page keys scroll the document behind it —
     // application behaviour running underneath the grab, not text entry.
-    if (MULTILINE_ONLY_KEYS.has(event.key)) return ownsMultilineText(event);
+    if (AMBIGUOUS_KEYS.has(event.key)) return targetOwnsAmbiguousKey(event);
     return FIELD_KEYS.has(event.key);
   }
 
@@ -573,6 +573,13 @@ export function createShortcutManager(
     for (const short of prepared) {
       for (const long of prepared) {
         if (short === long || short.keys.length >= long.keys.length) continue;
+        // Only claim the longer binding is dead when nothing can separate the two at press time.
+        // A conditional shorter binding is skipped while its `when` is false, and a difference in
+        // typing eligibility means one of them is out of play in a focused field — in both cases
+        // the sequence does become reachable, and telling the developer to delete one of them
+        // would be wrong.
+        if (short.binding.when !== undefined) continue;
+        if (firesWhileTyping(short) !== firesWhileTyping(long)) continue;
         if (short.keys.every((chord, i) => sameChord(chord, long.keys[i]))) {
           devWarnOnce(
             false,
@@ -773,7 +780,14 @@ export function createShortcutManager(
         }
       };
       target.addEventListener("keydown", listener);
-      return () => target.removeEventListener("keydown", listener);
+      return () => {
+        target.removeEventListener("keydown", listener);
+        // A sequence belongs to the event stream that began it. A provider swapping targets
+        // would otherwise let a `g` from the old document be completed by a `d` on the new one,
+        // and a repeat inherit consumption state from keystrokes this target never saw.
+        abandonSequence();
+        consumedPress = null;
+      };
     },
     activeBindings() {
       return ordered().flatMap(layer =>
@@ -841,6 +855,7 @@ const REDO_LETTER = "y";
 
 /** Caret movement and deletion, which a modifier turns into their by-word forms. */
 const EDITING_NAVIGATION = new Set([
+  "Insert",
   "ArrowLeft",
   "ArrowRight",
   "ArrowUp",
@@ -851,16 +866,22 @@ const EDITING_NAVIGATION = new Set([
   "Delete",
 ]);
 
-/** Keys that belong to the target only when it holds more than one line of text. */
-const MULTILINE_ONLY_KEYS = new Set(["Enter", "PageUp", "PageDown"]);
+/** Keys whose owner depends on which control has focus. */
+const AMBIGUOUS_KEYS = new Set(["Enter", "PageUp", "PageDown"]);
 
-/** Whether the keystroke reached something that owns multiple lines of text. */
-function ownsMultilineText(event: KeyboardEvent): boolean {
+/**
+ * Whether the focused target owns this particular ambiguous key.
+ *
+ * Enter, PageUp and PageDown mean different things to different controls, so one answer for all
+ * three would be wrong for at least one of them. Enter inserts a newline only where there are
+ * lines; the page keys page through content, which a native select does with its option list.
+ */
+function targetOwnsAmbiguousKey(event: KeyboardEvent): boolean {
   const element = asElement(eventTarget(event));
-  return (
-    element !== null &&
-    (element.tagName === "TEXTAREA" || element.isContentEditable)
-  );
+  if (element === null) return false;
+  const multiline = element.tagName === "TEXTAREA" || element.isContentEditable;
+  if (event.key === "Enter") return multiline;
+  return multiline || element.tagName === "SELECT";
 }
 
 const FIELD_KEYS = new Set([
@@ -872,4 +893,7 @@ const FIELD_KEYS = new Set([
   "ArrowRight",
   "Home",
   "End",
+  // Shift+Insert pastes and carries no ctrl or meta, so it arrives here rather than at the
+  // chord branch where Ctrl+Insert is recognised.
+  "Insert",
 ]);

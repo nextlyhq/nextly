@@ -379,3 +379,43 @@ describe("a nested provider that attaches a second listener", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("two providers naming the same target differently", () => {
+  it("still installs one listener when both pass document explicitly", () => {
+    // `undefined` and an explicit `document` name the same node, so comparing the PROPS called
+    // these two providers different while both attached a listener to it.
+    const run = vi.fn();
+
+    function Keys(): React.JSX.Element | null {
+      useShortcuts(
+        [{ keys: "mod+k", description: "Open", run, preventDefault: false }],
+        { name: "inner" }
+      );
+      return null;
+    }
+
+    const view = render(
+      <ShortcutProvider isApple={false} target={document}>
+        <Keys />
+        <ShortcutProvider isApple={false} target={document}>
+          <Keys />
+        </ShortcutProvider>
+      </ShortcutProvider>
+    );
+
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "k",
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      })
+    );
+    view.unmount();
+
+    // One binding runs, not one per provider. Bindings on BOTH sides of the boundary is what
+    // makes this observable: with two managers each holding one of them, both listeners match
+    // and precedence between them means nothing, because neither can see the other's layers.
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+});
