@@ -24,7 +24,7 @@ import type {
   StyleCompileContext,
 } from "@nextlyhq/blocks-engine";
 import type { Metadata } from "next";
-import { createContentRoute, nextlyTags } from "nextly/runtime";
+import { createContentRoute, isReservedPath, nextlyTags } from "nextly/runtime";
 import type {
   ContentEntry,
   ContentRoute,
@@ -290,7 +290,10 @@ async function firstUsableImage(
  */
 /** The media surface the default resolver reads through. */
 interface MediaReader {
-  findByID(args: { id: string }): Promise<Record<string, unknown> | null>;
+  findByID(args: {
+    id: string;
+    disableErrors?: boolean;
+  }): Promise<Record<string, unknown> | null>;
 }
 
 /**
@@ -323,6 +326,11 @@ function mediaResolver(
 ): (id: string) => Promise<ResolvedMedia | null> {
   if (config.resolveMedia) return config.resolveMedia;
   return async (id: string) => {
+    // `disableErrors` on both paths, because `PageContext.resolveMedia`
+    // promises `null` for an id it cannot resolve and the readers THROW
+    // not-found otherwise. The core image block happens to catch that, so the
+    // contract looked kept; a custom block reading the same context would get a
+    // rejected promise instead of the documented answer.
     const record = config.mediaCollection
       ? // An explicitly named collection IS a dynamic collection — a site
         // storing its images somewhere of its own — so it reads as one.
@@ -330,8 +338,9 @@ function mediaResolver(
           collection: config.mediaCollection,
           id,
           overrideAccess: true,
+          disableErrors: true,
         })
-      : await mediaNamespaceOf(reader)?.findByID({ id });
+      : await mediaNamespaceOf(reader)?.findByID({ id, disableErrors: true });
     if (!record) return null;
     const { url, altText, width, height } = record;
     if (typeof url !== "string") return null;
@@ -369,6 +378,12 @@ function entryPathResolver(
   const scope = alwaysDraft ? "all" : (config.status ?? "published");
 
   return async (collection: string, id: string) => {
+    // A collection this route does not serve has no path THIS route can
+    // produce: `createContentRoute` searches only its configured collections,
+    // so the href would 404 or open an unrelated entry that happens to share
+    // the slug. Mapping across routes is what `resolveEntryPath` is for.
+    if (!routeCollections.includes(collection)) return null;
+
     // Read under the ROUTE's own policy, not with access overridden. A link is
     // only useful if the path it names resolves, and this route resolves
     // published entries anonymously by default — so a reference to an
@@ -376,25 +391,43 @@ function entryPathResolver(
     // same route answers with `notFound()`. No path is a better answer than a
     // broken one, and it also stops a restricted entry's slug from being
     // published to anyone who loads the page.
-    const record = await reader.findByID({
-      collection,
-      id,
-      overrideAccess,
-      // Passed explicitly, even as `undefined`. `mergeConfig` spreads the
-      // reader's defaults under the call's arguments, so OMITTING this inherits
-      // whatever identity the reader was booted with — and this route resolves
-      // anonymously. `resolveContent` passes it for the same reason.
-      user: undefined,
-    });
+    // `find` rather than `findByID`, because the lifecycle scope has to be
+    // applied BY THE READER. Reading the row and then judging its `status`
+    // property treats an ordinary string field named `status` — which Nextly
+    // explicitly supports on a status-less collection — as the lifecycle
+    // column, so an entry the route happily serves lost its link for holding
+    // `status: "archived"`. Through the reader the scope is a no-op exactly
+    // where it should be.
+    //
+    // Also never throws: a stale reference resolves to no rows rather than a
+    // rejection, which is what `resolveEntryPath` promises its callers.
+    const found = await reader
+      .find({
+        collection,
+        where: { id: { equals: id } },
+        limit: 1,
+        status: scope,
+        overrideAccess,
+        // Passed explicitly, even as `undefined`. `mergeConfig` spreads the
+        // reader's defaults under the call's arguments, so OMITTING this
+        // inherits whatever identity the reader was booted with — and this
+        // route resolves anonymously. `resolveContent` passes it likewise.
+        user: undefined,
+        // A localized slug is read per locale, so omitting this returns the
+        // DEFAULT-locale slug while the route resolves paths in the configured
+        // one — a link to a path this very route cannot find.
+        ...(config.locale ? { locale: config.locale } : {}),
+      })
+      .catch(() => ({ items: [] as Record<string, unknown>[] }));
+    const record = found.items[0];
     if (!record) return null;
-    // `findByID` carries no lifecycle scope, so the route's own is applied
-    // here. A no-op on a status-less collection, which has no such field.
-    const status = record.status;
-    if (scope !== "all" && typeof status === "string" && status !== scope) {
-      return null;
-    }
     const slug = record[slugField];
     if (typeof slug !== "string") return null;
+
+    // Reserved paths are refused by `ContentPage` before it resolves anything,
+    // so a slug like `admin` or `robots.txt` can never be served here — and may
+    // instead lead into a route the application owns.
+    if (isReservedPath(slug === "" ? "/" : `/${slug}`)) return null;
 
     // The route resolves its collections IN ORDER and stops at the first match,
     // so a slug an earlier collection also carries belongs to that one. Linking
@@ -405,13 +438,22 @@ function entryPathResolver(
       routeCollections.indexOf(collection)
     );
     for (const candidate of earlier) {
-      const shadowing = await reader.find({
-        collection: candidate,
-        where: { [slugField]: { equals: slug } },
-        limit: 1,
-        overrideAccess,
-        user: undefined,
-      });
+      // Same lifecycle scope and access semantics the route resolves with, so
+      // a draft-only row cannot suppress a valid link on a published route.
+      // An access denial is treated as "no such entry", which is how
+      // `resolveContent` reads one — a probe that threw would take down a link
+      // whose own read succeeded.
+      const shadowing = await reader
+        .find({
+          collection: candidate,
+          where: { [slugField]: { equals: slug } },
+          limit: 1,
+          status: scope,
+          overrideAccess,
+          user: undefined,
+          ...(config.locale ? { locale: config.locale } : {}),
+        })
+        .catch(() => ({ items: [] as unknown[] }));
       if (shadowing.items.length > 0) return null;
     }
 

@@ -38,13 +38,35 @@ function reader(
   records: Record<string, Record<string, unknown>> = {}
 ) {
   return {
-    find: vi.fn(async ({ collection }: { collection: string }) => ({
-      // Only the route's primary collection holds the page being rendered; a
-      // shadowing probe against another collection finds nothing unless a test
-      // says otherwise.
-      items: collection === "pages" ? [entry] : [],
-      meta: {},
-    })),
+    find: vi.fn(
+      async ({
+        collection,
+        where,
+        status,
+      }: {
+        collection: string;
+        where?: { id?: { equals?: string } };
+        status?: string;
+      }) => {
+        // A lookup BY ID is a reference resolution; anything else is the
+        // route resolving its own path, or a shadowing probe.
+        const byId = where?.id?.equals;
+        if (byId !== undefined) {
+          const found = records[byId];
+          // The reader owns lifecycle filtering now, so the double has to as
+          // well — one that ignored `status` would certify a path the product
+          // filters out.
+          const hidden =
+            found !== undefined &&
+            status !== undefined &&
+            status !== "all" &&
+            typeof found.status === "string" &&
+            found.status !== status;
+          return { items: found && !hidden ? [found] : [], meta: {} };
+        }
+        return { items: collection === "pages" ? [entry] : [], meta: {} };
+      }
+    ),
     findByID: vi.fn(async ({ id }: { id: string }) => records[id] ?? null),
     // A real instance exposes media as its OWN namespace, not as a dynamic
     // collection, so the double has to as well or it certifies a path that
@@ -221,7 +243,9 @@ describe("createBlocksPage", () => {
     });
     await props.context?.resolveMedia("media-1");
 
-    expect(instance.media.findByID).toHaveBeenCalledWith({ id: "media-1" });
+    expect(instance.media.findByID).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "media-1" })
+    );
   });
 
   it("reads default media through the media namespace, not as a collection", async () => {
@@ -246,7 +270,9 @@ describe("createBlocksPage", () => {
       alt: "A",
     });
 
-    expect(instance.media.findByID).toHaveBeenCalledWith({ id: "media-1" });
+    expect(instance.media.findByID).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "media-1" })
+    );
     expect(instance.findByID).not.toHaveBeenCalled();
   });
 
@@ -558,7 +584,7 @@ describe("createBlocksPage", () => {
     const instance = reader(
       { slug: "about", content: document },
       { p1: { slug: "contact" } }
-    ) as unknown as { findByID: ReturnType<typeof vi.fn> };
+    ) as unknown as { find: ReturnType<typeof vi.fn> };
 
     const props = await render({
       collections: ["pages"],
@@ -567,7 +593,7 @@ describe("createBlocksPage", () => {
     });
     await props.context?.resolveEntryPath("pages", "p1");
 
-    expect(instance.findByID).toHaveBeenCalledWith(
+    expect(instance.find).toHaveBeenCalledWith(
       expect.objectContaining({ user: undefined })
     );
   });
@@ -716,6 +742,96 @@ describe("createBlocksPage", () => {
     await route.generateMetadata({ params: { slug: ["about"] } });
 
     expect(seen?.title).toBeUndefined();
+  });
+
+  it("gives no path for a collection this route does not serve", async () => {
+    // The route searches only its configured collections, so the href would
+    // 404 or open an unrelated entry that happens to share the slug.
+    const props = await render({
+      collections: ["pages"],
+      field: "content",
+      nextly: reader(
+        { slug: "about", content: document },
+        { x1: { slug: "elsewhere" } }
+      ),
+    });
+
+    await expect(
+      props.context?.resolveEntryPath("posts", "x1")
+    ).resolves.toBeNull();
+  });
+
+  it("keeps a link from a status-less collection holding a `status` field", async () => {
+    // Nextly supports an ordinary string field named `status`. Judging it as
+    // the lifecycle column made the route drop links to entries it happily
+    // serves — so lifecycle filtering belongs to the reader, not to us.
+    const instance = reader(
+      { slug: "about", content: document },
+      { a1: { slug: "archive", status: "archived" } }
+    ) as unknown as { find: ReturnType<typeof vi.fn> };
+    // A status-LESS collection: the reader's scope is a no-op, so it answers
+    // regardless of what the row's own `status` field happens to say.
+    instance.find = vi.fn(
+      async ({ where }: { where?: { id?: { equals?: string } } }) =>
+        where?.id?.equals === "a1"
+          ? { items: [{ slug: "archive", status: "archived" }], meta: {} }
+          : { items: [{ slug: "about", content: document }], meta: {} }
+    );
+
+    const props = await render({
+      collections: ["pages"],
+      field: "content",
+      nextly: instance as never,
+    });
+
+    await expect(props.context?.resolveEntryPath("pages", "a1")).resolves.toBe(
+      "/archive"
+    );
+  });
+
+  it("gives no path for a reserved route path", async () => {
+    // `ContentPage` refuses these before resolving anything, and they may lead
+    // into a route the application owns.
+    const props = await render({
+      collections: ["pages"],
+      field: "content",
+      nextly: reader(
+        { slug: "about", content: document },
+        { r1: { slug: "robots.txt" } }
+      ),
+    });
+
+    await expect(
+      props.context?.resolveEntryPath("pages", "r1")
+    ).resolves.toBeNull();
+  });
+
+  it("answers null rather than throwing for a stale reference", async () => {
+    // `resolveEntryPath` promises null. The built-in button catches everything,
+    // so a throw looked harmless; a custom block would get a rejected promise.
+    const instance = reader({
+      slug: "about",
+      content: document,
+    }) as unknown as {
+      find: (args: { where?: { id?: unknown } }) => Promise<unknown>;
+    };
+    const base = instance.find.bind(instance);
+    instance.find = async (args: { where?: { id?: unknown } }) => {
+      // Only a reference lookup rejects; the route's own path read must still
+      // succeed, or the test would prove nothing about the reference path.
+      if (args.where?.id !== undefined) throw new Error("NOT_FOUND");
+      return base(args);
+    };
+
+    const props = await render({
+      collections: ["pages"],
+      field: "content",
+      nextly: instance as never,
+    });
+
+    await expect(
+      props.context?.resolveEntryPath("pages", "gone")
+    ).resolves.toBeNull();
   });
 
   it("passes the stored stylesheet through for the resolved entry", async () => {
