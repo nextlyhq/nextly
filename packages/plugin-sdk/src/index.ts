@@ -260,7 +260,12 @@ export { Secret, secret, isSecret } from "./secret";
  * checked at the point they write the definition and erased only at the
  * boundary core stores it behind.
  */
+/**
+ * @experimental Email provider authoring. Unexercised by a first-party plugin,
+ * so it graduates per D55 once one ships — see STABILITY.md.
+ */
 export { defineEmailProvider, MAX_EMAIL_PROVIDER_TYPE_LENGTH } from "nextly";
+/** @experimental See `defineEmailProvider`. */
 export type {
   EmailProviderDefinition,
   EmailProviderConfigField,

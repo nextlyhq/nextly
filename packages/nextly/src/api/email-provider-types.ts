@@ -34,15 +34,18 @@ import { withErrorHandler } from "./with-error-handler";
  * being public.
  */
 export const GET = withErrorHandler(async (request: Request) => {
+  // Boot BEFORE authorising, not after. API-key auth answers 503 when
+  // `apiKeyService` is not registered yet, so on the first request to a cold
+  // serverless instance a valid key would be rejected before this handler ever
+  // reached its own bootstrap. Booting first also means the registry is seeded,
+  // which a read beforehand would miss -- reporting only the built-ins on a
+  // cold instance and the full set on a warm one.
+  await getCachedNextly();
+
   await requireRouteAnyPermission(request, [
     { action: "read", resource: "email-providers" },
     { action: "manage", resource: "email-providers" },
   ]);
-
-  // Boot first: the registry is seeded during initialization, and reading it
-  // beforehand would report only the built-ins on a cold serverless instance
-  // and the full set on a warm one.
-  await getCachedNextly();
 
   const types = getEmailProviderRegistry().list().map(toDescriptor);
 

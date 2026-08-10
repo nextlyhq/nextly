@@ -53,7 +53,9 @@ export type CreateEmailProviderInput = EmailProviderInsert;
 /**
  * Input for updating an existing email provider.
  * All fields are optional — only provided fields are updated.
- * Note: `type` cannot be changed after creation.
+ * Note: `type` may be changed; the admin supports switching provider on
+ * edit. A change re-validates the stored configuration against the new
+ * provider, because the rules that accepted it belonged to the old one.
  */
 export interface UpdateEmailProviderInput {
   name?: string;
@@ -188,6 +190,13 @@ export class EmailProviderService extends BaseService {
     );
   }
 
+  /** Every path the provider describes, secret or not. */
+  private declaredConfigPaths(type: string): ReadonlySet<string> {
+    const registry = getEmailProviderRegistry();
+    if (!registry.has(type)) return new Set();
+    return new Set(registry.get(type).configFields.map(field => field.name));
+  }
+
   /**
    * Mask a configuration object for a public read.
    *
@@ -207,6 +216,7 @@ export class EmailProviderService extends BaseService {
   private maskConfiguration(
     config: Record<string, unknown>,
     secretPaths: ReadonlySet<string> | null,
+    declaredPaths: ReadonlySet<string>,
     pathPrefix = ""
   ): Record<string, unknown> {
     const masked: Record<string, unknown> = {};
@@ -222,14 +232,21 @@ export class EmailProviderService extends BaseService {
         masked[key] = this.maskConfiguration(
           value as Record<string, unknown>,
           secretPaths,
+          declaredPaths,
           path
         );
         continue;
       }
 
-      // `null` means no definition: mask unconditionally rather than fall back
-      // to a heuristic that can only be right about names it already knows.
-      const isSecret = secretPaths === null ? true : secretPaths.has(path);
+      // Three states, not two. `null` means no usable definition, so nothing is
+      // known and everything is masked. Otherwise a path is revealed ONLY if the
+      // provider declared it and did not mark it secret: a key the definition
+      // does not mention at all -- a credential left behind by a plugin upgrade,
+      // say -- is unknown rather than public, and the parsers strip unknown keys
+      // for adapter construction without removing them from storage.
+      const declared = secretPaths !== null && declaredPaths.has(path);
+      const isSecret =
+        secretPaths === null || !declared || secretPaths.has(path);
       masked[key] = isSecret ? MASKED_VALUE : value;
     }
     return masked;
@@ -287,7 +304,8 @@ export class EmailProviderService extends BaseService {
       ...row,
       configuration: this.maskConfiguration(
         config,
-        this.declaredSecretPaths(row.type)
+        this.declaredSecretPaths(row.type),
+        this.declaredConfigPaths(row.type)
       ),
     };
   }
@@ -393,7 +411,9 @@ export class EmailProviderService extends BaseService {
    * Update an existing email provider.
    * Configuration is encrypted before storage.
    *
-   * Provider `type` cannot be changed after creation.
+   * Provider `type` may be changed. The stored configuration is
+   * re-validated against the new provider, since the rules that accepted it
+   * belonged to the old one.
    *
    * @throws NextlyError NOT_FOUND if provider doesn't exist
    */
@@ -412,8 +432,22 @@ export class EmailProviderService extends BaseService {
     // configuration alongside it still has to name a registered provider,
     // otherwise the row survives as one nothing can build an adapter for.
     const effectiveType = data.type ?? currentRow.type;
-    if (data.type !== undefined) {
-      getEmailProviderRegistry().get(effectiveType);
+    if (data.type !== undefined && data.type !== currentRow.type) {
+      // Changing type re-parses the configuration already stored, because the
+      // rules that accepted it belonged to the OLD provider. A type-only
+      // update carries no configuration of its own, so without this an SMTP
+      // configuration survives under `resend` -- accepted here and unusable at
+      // send. The admin supports switching type on edit, so this is a real
+      // path rather than a hypothetical one.
+      const registry = getEmailProviderRegistry();
+      const existingConfig = this.decryptConfiguration(
+        currentRow.configuration
+      );
+      const merged =
+        data.configuration !== undefined
+          ? existingConfig
+          : this.stripMaskedConfigValues(existingConfig);
+      registry.get(data.type).validateConfig(merged);
     }
 
     if (data.name !== undefined) updateData.name = data.name;
