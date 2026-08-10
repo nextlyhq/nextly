@@ -149,12 +149,19 @@ function withNodeAttributes(output: ReactNode, node: BlockNode): ReactNode {
  * string is what a cleared text value becomes. `0` is deliberately absent —
  * React renders it as the character zero, so it is output with a root.
  *
- * A list counts when every member does, which includes the empty list.
- * `normalizeRenderable` materialises any iterable root into an array, so
- * `items.map(...)` over an empty collection arrives here as `[]` and a list of
- * conditionals as `[false, false]`. Those are the list-shaped spelling of the
- * same intent, and answering only for the scalars would apply the contract to
- * one shape of a pair.
+ * A LIST counts when every member does, which includes the empty list, and any
+ * iterable is a list: `normalizeRenderable` materialises an iterable a block
+ * RETURNS, but a fragment's children are borrowed JSX validated where they lie,
+ * so a `Set` or a generator arrives here as itself. React draws an empty one as
+ * nothing either way.
+ *
+ * Walked with a `for...of` inside a try rather than `Array.prototype.every`.
+ * `every` is author-controllable — an array can carry its own — and calling it
+ * would run plugin code at a point OUTSIDE the block render's containment,
+ * where a throw costs the whole page instead of one block. React never calls it
+ * to draw an array, so nothing is lost by not calling it either. The iteration
+ * is bounded for the same reason the normalizer bounds its own: a borrowed
+ * iterable is not obliged to end.
  *
  * A FRAGMENT counts when its children do, for the same reason one level up:
  * `<>{items.map(...)}</>` draws no element of its own, so an empty one is the
@@ -166,12 +173,27 @@ function withNodeAttributes(output: ReactNode, node: BlockNode): ReactNode {
  * Takes `unknown` rather than `ReactNode` so a fragment's children can be read
  * off an element's props and passed straight back in without a cast.
  */
-function rendersNothing(output: unknown): boolean {
-  if (Array.isArray(output)) return output.every(rendersNothing);
+function rendersNothing(output: unknown, budget = { left: 10_000 }): boolean {
   if (isValidElement(output) && output.type === Fragment) {
     const props: unknown = output.props;
     if (typeof props !== "object" || props === null) return true;
-    return !("children" in props) || rendersNothing(props.children);
+    return !("children" in props) || rendersNothing(props.children, budget);
+  }
+  // A string is iterable and must not be walked character by character: a
+  // non-empty one draws, and the empty one is answered below.
+  if (isWalkableIterable(output)) {
+    try {
+      for (const item of output) {
+        // Refusing when the budget runs out answers "it draws", which is the
+        // safe direction: it keeps the node's fields refused rather than
+        // silently accepting output nobody counted.
+        if (budget.left-- <= 0) return false;
+        if (!rendersNothing(item, budget)) return false;
+      }
+      return true;
+    } catch {
+      return false;
+    }
   }
   return (
     output === null ||
@@ -179,6 +201,23 @@ function rendersNothing(output: unknown): boolean {
     typeof output === "boolean" ||
     output === ""
   );
+}
+
+/**
+ * Whether a value should be walked as a list of children.
+ *
+ * Reading `Symbol.iterator` is itself a property access that a getter may make
+ * throw, so it is contained here rather than at the call site. A string is
+ * excluded deliberately: it is iterable, and walking it would turn every word
+ * into a list of characters.
+ */
+function isWalkableIterable(value: unknown): value is Iterable<unknown> {
+  if (typeof value !== "object" || value === null) return false;
+  try {
+    return typeof (value as Iterable<unknown>)[Symbol.iterator] === "function";
+  } catch {
+    return false;
+  }
 }
 
 /**
