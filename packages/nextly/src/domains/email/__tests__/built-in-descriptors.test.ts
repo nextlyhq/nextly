@@ -472,6 +472,83 @@ describe("a select nobody can choose from", () => {
   });
 });
 
+describe("declarations that would break the form outright", () => {
+  const base = {
+    type: "breaker",
+    label: "Breaker",
+    parseConfig: (input: unknown) => input as Record<string, unknown>,
+    createAdapter: () => ({
+      send: () => Promise.resolve({ success: true, messageId: "x" }),
+    }),
+  };
+
+  it("refuses a kind no form can render", () => {
+    // The admin switches over the five kinds exhaustively, which is a
+    // COMPILE-time guarantee and none at all about a JavaScript plugin. An
+    // unknown kind falls off the end of that switch, the field gets no schema,
+    // and building the form recurses into undefined — so one bad field takes
+    // down the whole provider form rather than being skipped.
+    expect(() =>
+      defineEmailProvider({
+        ...base,
+        configFields: [
+          { name: "when", label: "When", kind: "date" as unknown as "text" },
+        ],
+      })
+    ).toThrow(/no form can render/);
+  });
+
+  it("refuses a numeric path segment", () => {
+    // `servers.0.host` registers as `{ servers: [{ host }] }` in the form and
+    // is validated and sent as `{ servers: { "0": { host } } }`.
+    expect(() =>
+      defineEmailProvider({
+        ...base,
+        configFields: [{ name: "servers.0.host", label: "H", kind: "text" }],
+      })
+    ).toThrow(/is a number/);
+  });
+
+  it.each([0, -1])("refuses a maximum length of %i", maxLength => {
+    // A field that can hold at most zero characters is not a field: required,
+    // it rejects the empty string AND every non-empty one.
+    expect(() =>
+      defineEmailProvider({
+        ...base,
+        configFields: [
+          {
+            name: "k",
+            label: "K",
+            kind: "text",
+            required: true,
+            constraints: { maxLength },
+          },
+        ],
+      })
+    ).toThrow(/No value can satisfy that/);
+  });
+
+  it("accepts a length of one, and a segment that merely contains a digit", () => {
+    // The controls that keep both rules at "impossible" and "numeric SEGMENT"
+    // rather than "short" and "contains a digit".
+    expect(() =>
+      defineEmailProvider({
+        ...base,
+        configFields: [
+          {
+            name: "pin",
+            label: "PIN",
+            kind: "text",
+            constraints: { maxLength: 1 },
+          },
+          { name: "oauth2.token", label: "T", kind: "text" },
+          { name: "server1.host", label: "H", kind: "text" },
+        ],
+      })
+    ).not.toThrow();
+  });
+});
+
 describe("two fields claiming one place in the configuration", () => {
   const base = {
     type: "overlap",

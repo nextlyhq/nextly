@@ -235,6 +235,21 @@ function assertFieldNameIsWalkable(
   }
 
   const segments = field.name.split(".");
+
+  // A numeric segment is read as an ARRAY INDEX by the form library and as a
+  // literal key by everything else: `servers.0.host` registers as
+  // `{ servers: [{ host }] }` in the form and is validated and sent as
+  // `{ servers: { "0": { host } } }`. Same declaration, two shapes, and
+  // nothing positioned to notice the disagreement.
+  const numeric = segments.find(segment => /^\d+$/.test(segment));
+  if (numeric !== undefined) {
+    throw new NextlyError({
+      code: "BUSINESS_RULE_VIOLATION",
+      publicMessage: `Email provider "${type}" declares the configuration field "${field.name}", whose segment "${numeric}" is a number. A form library reads a numeric segment as an array index while the rest of the contract reads it as a key, so the value would be stored somewhere other than where it is validated.`,
+      logContext: { type, field: field.name, segment: numeric },
+    });
+  }
+
   const offender = segments.find(
     segment => segment === "" || UNWALKABLE_PATH_SEGMENTS.has(segment)
   );
@@ -379,6 +394,57 @@ function assertSelectIsChoosable(
  */
 const PATH_RESERVED_CHARACTERS = /[[\]"']/;
 
+/**
+ * The control kinds a form knows how to render.
+ *
+ * The admin switches over this union exhaustively, which is a COMPILE-time
+ * guarantee and no guarantee at all about a JavaScript plugin or a hand-built
+ * object. A `kind` outside the set falls off the end of that switch, the field
+ * gets no schema, and building the form recurses into `undefined` — so an
+ * unrenderable kind takes down the whole provider form rather than skipping one
+ * field.
+ */
+const RENDERABLE_KINDS: ReadonlyArray<EmailProviderConfigField["kind"]> = [
+  "text",
+  "password",
+  "number",
+  "boolean",
+  "select",
+];
+
+/** Reject a control nothing can draw. */
+function assertKindIsRenderable(
+  type: string,
+  field: EmailProviderConfigField
+): void {
+  if (RENDERABLE_KINDS.includes(field.kind)) return;
+
+  throw new NextlyError({
+    code: "BUSINESS_RULE_VIOLATION",
+    publicMessage: `Email provider "${type}" declares the field "${field.name}" with kind "${String(field.kind)}", which no form can render. Use one of: ${RENDERABLE_KINDS.join(", ")}.`,
+    logContext: { type, field: field.name, kind: String(field.kind) },
+  });
+}
+
+/** Reject a text length no value can satisfy. */
+function assertTextLengthIsSatisfiable(
+  type: string,
+  field: EmailProviderConfigField
+): void {
+  const maxLength = field.constraints?.maxLength;
+  if (maxLength === undefined || maxLength >= 1) return;
+
+  // A field that can hold at most zero characters is not a field. Required, it
+  // rejects the empty string AND every non-empty one; optional, it permits
+  // exactly nothing. Either way the provider can never be saved through a form
+  // built from this descriptor.
+  throw new NextlyError({
+    code: "BUSINESS_RULE_VIOLATION",
+    publicMessage: `Email provider "${type}" gives the field "${field.name}" a maximum length of ${maxLength}. No value can satisfy that.`,
+    logContext: { type, field: field.name, maxLength },
+  });
+}
+
 /** Reject a numeric range no value can satisfy. */
 function assertNumericBoundsAreSatisfiable(
   type: string,
@@ -408,7 +474,11 @@ export function assertConfigFieldsAreUsable(
   fields: ReadonlyArray<EmailProviderConfigField>
 ): void {
   for (const field of fields) {
+    // Kind first: every rule below reads it, and a rule that switches on an
+    // unrenderable kind would report the wrong problem.
+    assertKindIsRenderable(type, field);
     assertFieldNameIsWalkable(type, field);
+    assertTextLengthIsSatisfiable(type, field);
     assertDefaultMatchesKind(type, field);
     assertSelectIsChoosable(type, field);
     assertNumericBoundsAreSatisfiable(type, field);

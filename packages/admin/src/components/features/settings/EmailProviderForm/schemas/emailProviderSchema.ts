@@ -533,7 +533,9 @@ export function formValuesToPayload(
   descriptor?: EmailProviderDescriptor,
   stored?: Record<string, unknown>
 ): EmailProviderPayload {
-  const configuration = withoutUnselectedOptions(
+  // Untouched credentials are dropped first, so a mask never reaches the
+  // clear check and is never mistaken for an emptied field.
+  const configuration = markClearedOptionalFields(
     withoutUntouchedSecrets(values.configuration ?? {}, descriptor, stored),
     descriptor,
     stored
@@ -551,20 +553,33 @@ export function formValuesToPayload(
 }
 
 /**
- * Drop an optional select nobody has chosen a value for.
+ * Say what an emptied optional field means, in the one way a patch can.
  *
- * A select with no choice made holds `""`, which is not one of its options.
- * Sending it makes a perfectly reasonable parser — `z.enum(options).optional()`
- * — reject the whole request, because an empty string is neither an option nor
- * an absent value, so the provider could not be saved at all until the field
- * was set.
+ * A patch merged over stored configuration has two states on its own: absent
+ * means "leave it" and a value means "set it". Emptying a field produces
+ * neither — an empty string is a value the provider probably rejects, and
+ * omitting it is read as "leave it", which is how an optional field became
+ * permanent the moment it was first saved.
  *
- * Only selects, and only optional ones. An empty TEXT field is a legitimate
- * value that a provider may well accept, and an empty REQUIRED select never
- * reaches here — the generated schema stops it, with a message naming the
- * field, which is a better answer than a silent omission and a server error.
+ * So an emptied field says one of two things depending on whether there was
+ * ever anything there:
+ *
+ * - **Stored, now empty** → `null`, the request to remove the key. The server
+ *   deletes it, and the provider's own parser then sees an absent optional
+ *   field, which is what "optional and unset" means to a parser written as
+ *   `z.enum(options).optional()` or `z.string().min(1).optional()` — both of
+ *   which reject an empty string.
+ * - **Never stored, still empty** → omitted. Nothing happened.
+ *
+ * Applies to EVERY optional field, not only selects. A cleared number
+ * serialises away to nothing, and a cleared optional credential would
+ * otherwise be sent as `""` and refused — three shapes of one bug, and fixing
+ * the one that was reported would have left the other two.
+ *
+ * A required field never reaches here empty: the generated schema stops it,
+ * naming the field, which is a better answer than a silent omission.
  */
-function withoutUnselectedOptions(
+function markClearedOptionalFields(
   configuration: Record<string, unknown>,
   descriptor?: EmailProviderDescriptor,
   stored?: Record<string, unknown>
@@ -573,22 +588,22 @@ function withoutUnselectedOptions(
 
   const cleaned = structuredClone(configuration);
   for (const field of descriptor.configFields) {
-    if (field.kind !== "select" || field.required === true) continue;
+    // A switch always holds a value, so it can never be "cleared".
+    if (field.required === true || field.kind === "boolean") continue;
+
     const path = splitFieldPath(field.name);
     if (path === null) continue;
-    if (readAtPath(cleaned, path) !== "") continue;
 
-    // Empty and it HAD a value: the user cleared it, and that is a change to
-    // send. `null` is the request to remove the key — omitting it would be
-    // read as "leave this alone", which made an optional selection permanent
-    // the moment it was first saved.
+    const current = readAtPath(cleaned, path);
+    // `undefined` as well as `""`: an emptied number is normalised to absent
+    // before it ever becomes a string, so it arrives here as neither.
+    if (current !== "" && current !== undefined) continue;
+
     const hadValue =
       stored !== undefined && readAtPath(stored, path) !== undefined;
     if (hadValue) {
       writeAtPath(cleaned, path, null);
     } else {
-      // Empty and never set: nothing happened, and an empty string is not one
-      // of the provider's options.
       deleteAtPath(cleaned, path);
     }
   }

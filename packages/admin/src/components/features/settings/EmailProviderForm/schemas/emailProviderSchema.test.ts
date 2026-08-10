@@ -473,9 +473,16 @@ describe("an optional select nobody chose a value for", () => {
 
     const { configuration } = formValuesToPayload(values, descriptor);
     expect(configuration).not.toHaveProperty("tier");
-    // The control that keeps the rule narrow: an empty TEXT field is a value a
-    // provider may well accept, so it is still sent.
-    expect(configuration).toHaveProperty("note", "");
+    // An empty optional TEXT field is omitted too, and this assertion used to
+    // say the opposite. When the rule covered only selects, sending `""` for a
+    // blank text field was the conservative choice; generalising it showed the
+    // conservative choice was the wrong one. A parser written as
+    // `z.string().min(1).optional()` accepts absence and rejects `""`, so
+    // sending the empty string refuses a create over a field the user was
+    // never required to fill in. There is also no way for a user to express
+    // "explicitly empty" as distinct from "left blank", so there is nothing to
+    // preserve by sending one.
+    expect(configuration).not.toHaveProperty("note");
   });
 
   it("asks for removal when a stored value is cleared", () => {
@@ -494,6 +501,56 @@ describe("an optional select nobody chose a value for", () => {
     });
 
     expect(configuration).toHaveProperty("tier", null);
+  });
+
+  it("asks for removal when a stored NUMBER is cleared", () => {
+    // A cleared number normalises to absent before it is ever a string, so it
+    // serialises away to nothing and the merge reads the omission as "leave
+    // it" — the number reappears and the save reports success.
+    const numberDescriptor: EmailProviderDescriptor = {
+      type: "acme-mail",
+      label: "Acme Mail",
+      capabilities: {},
+      configFields: [{ name: "retries", label: "Retries", kind: "number" }],
+    };
+    const values: ProviderFormValues = {
+      ...defaultFormValues(numberDescriptor),
+      configuration: { retries: undefined },
+    };
+
+    expect(
+      formValuesToPayload(values, numberDescriptor, { retries: 3 })
+        .configuration
+    ).toHaveProperty("retries", null);
+  });
+
+  it("asks for removal when a stored optional SECRET is cleared", () => {
+    // An optional credential whose parser is `z.string().min(1).optional()`
+    // accepts absence and rejects "", so sending the empty string refuses the
+    // update rather than removing the key.
+    const secretDescriptor: EmailProviderDescriptor = {
+      type: "acme-mail",
+      label: "Acme Mail",
+      capabilities: {},
+      configFields: [
+        {
+          name: "fallbackKey",
+          label: "Fallback Key",
+          kind: "password",
+          secret: true,
+        },
+      ],
+    };
+    const values: ProviderFormValues = {
+      ...defaultFormValues(secretDescriptor),
+      configuration: { fallbackKey: "" },
+    };
+
+    expect(
+      formValuesToPayload(values, secretDescriptor, {
+        fallbackKey: MASKED_SECRET,
+      }).configuration
+    ).toHaveProperty("fallbackKey", null);
   });
 
   it("is sent once it has a value", () => {
