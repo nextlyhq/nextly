@@ -1,0 +1,195 @@
+/**
+ * The compiler and the renderer must name a node the same way.
+ *
+ * Both derive a class from a KEY — a bare node id for the document's own nodes, a ref-scoped key
+ * for anything reached through `core/ref`. Sharing the hash is not proof they agree: the hash is
+ * one step, and the step before it composes the key. A site that composes it unscoped keeps the
+ * old bug while every other site is fixed, and the symptom is not a crash — the node silently
+ * wears another node's class and inherits its styles.
+ *
+ * So this asserts the property directly, over a corpus of ref shapes: **the set of classes the
+ * stylesheet writes is the set of classes the markup carries.** A class in the markup that the
+ * sheet never wrote is an unstyled node; a class in the sheet that no element carries is dead CSS.
+ * Neither is visible from one side alone, and neither shows up in a test that only checks one
+ * nesting depth.
+ *
+ * The two rows that matter most are a library block placed TWICE — which must resolve to one set
+ * of names, because that is what makes editing a reusable block update every placement — and a
+ * ref nested inside a ref, because a key composed from the path rather than from the owning block
+ * would name the same node differently depending on how it was reached.
+ */
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it } from "vitest";
+
+import { defaultBlockRegistry } from "../registry";
+import { RenderNode } from "../../render/RenderNode";
+import "../../render/blocks";
+import {
+  compileDocumentBlockCss,
+  compileDocumentCss,
+  documentNodeClasses,
+  nodeClass,
+} from "../style-compiler";
+import { makeNode } from "../tree";
+
+import type { BlockNode } from "../types";
+
+/** Every `nx-pb-*` class the markup actually carries, with the stylesheet sliced off. */
+function classesInMarkup(html: string): Set<string> {
+  const markup = html.replace(/<style[\s\S]*?<\/style>/g, "");
+  return new Set(
+    [...markup.matchAll(/class="([^"]*)"/g)]
+      .flatMap(match => (match[1] ?? "").split(/\s+/))
+      .filter(name => name.startsWith("nx-pb-") && name !== "nx-pb-page")
+  );
+}
+
+/** Every `nx-pb-*` class the stylesheet writes a rule for. */
+function classesInSheet(css: string): Set<string> {
+  return new Set(
+    [...css.matchAll(/\.(nx-pb-[a-z0-9-]+)/g)]
+      .map(match => match[1] as string)
+      .filter(name => name !== "nx-pb-page")
+  );
+}
+
+const styled = (id: string, text: string, colour: string): BlockNode => ({
+  ...makeNode("core/heading", { text, level: "h2" }),
+  id,
+  style: { base: { color: colour } },
+});
+
+const ref = (id: string, refId: string): BlockNode => ({
+  ...makeNode("core/ref", { refId }),
+  id,
+});
+
+const container = (id: string, children: BlockNode[]): BlockNode => ({
+  ...makeNode("core/container", {}, undefined, { default: children }),
+  id,
+});
+
+/**
+ * Each row declares the keys its STYLED nodes should be named by, written out rather than derived.
+ *
+ * Derived expectations restate the implementation and agree with it by construction — including
+ * when both are wrong. Written out, the row is a claim about what the design SHOULD produce, and a
+ * change in key composition has to be defended here rather than silently absorbed.
+ *
+ * Only styled nodes: an unstyled container legitimately gets no rule, so requiring one for every
+ * class in the markup would fail on correct output.
+ */
+const CORPUS: [
+  string,
+  BlockNode,
+  Record<string, BlockNode>,
+  { placed: readonly string[]; onPage: number },
+][] = [
+  [
+    "one placement of one reusable block",
+    container("root", [styled("doc", "Doc", "#aa0001"), ref("p1", "r1")]),
+    { r1: styled("lib", "Lib", "#aa0002") },
+    { placed: ["doc", "2:r1lib"], onPage: 2 },
+  ],
+  [
+    "the SAME block placed twice",
+    container("root", [ref("p1", "r1"), ref("p2", "r1")]),
+    { r1: styled("lib", "Lib", "#aa0003") },
+    // ONE key for two placements: that is what makes editing the block update both.
+    { placed: ["2:r1lib"], onPage: 1 },
+  ],
+  [
+    "a library node sharing an id with a document node",
+    container("root", [styled("same", "Doc", "#aa0004"), ref("p1", "r1")]),
+    { r1: styled("same", "Lib", "#aa0005") },
+    // Two DIFFERENT keys for one id. This is the collision the scoping exists to close.
+    { placed: ["same", "2:r1same"], onPage: 2 },
+  ],
+  [
+    "a reusable block containing a subtree",
+    container("root", [ref("p1", "r1")]),
+    { r1: container("libroot", [styled("libchild", "Child", "#aa0006")]) },
+    { placed: ["2:r1libchild"], onPage: 1 },
+  ],
+  [
+    "a ref NESTED inside a reusable block",
+    container("root", [ref("p1", "r1")]),
+    {
+      r1: container("outer", [styled("a", "A", "#aa0007"), ref("inner", "r2")]),
+      r2: styled("b", "B", "#aa0008"),
+    },
+    // The nested block is named by the block it LIVES in, not by the path taken to reach it.
+    { placed: ["2:r1a", "2:r2b"], onPage: 2 },
+  ],
+  [
+    "a library block the document never places",
+    container("root", [styled("doc", "Doc", "#aa0009")]),
+    { unused: styled("never", "Never", "#aa0010") },
+    // Compiled but not on the page: its rule may exist, and no element carries it.
+    { placed: ["doc"], onPage: 1 },
+  ],
+];
+
+describe("what the sheet writes and what the markup carries", () => {
+  it.each(CORPUS)("%s", (_label, root, refs, expected) => {
+    const document = { root } as never;
+    const classes = documentNodeClasses(document, refs);
+    const css = [
+      compileDocumentCss(document, { classes, refs }),
+      compileDocumentBlockCss(document, classes, refs),
+    ].join("\n");
+    const html = renderToStaticMarkup(
+      <RenderNode
+        node={root}
+        registry={defaultBlockRegistry}
+        refs={refs}
+        classes={classes}
+      />
+    );
+
+    const inMarkup = classesInMarkup(html);
+    const inSheet = classesInSheet(css);
+
+    // Positive control: a fixture that rendered nothing, or compiled nothing, would satisfy every
+    // comparison below vacuously.
+    expect(inMarkup.size).toBeGreaterThan(0);
+    expect(inSheet.size).toBeGreaterThan(0);
+
+    const expectedClasses = expected.placed.map(
+      key => classes.get(key) ?? nodeClass(key)
+    );
+
+    for (const cls of expectedClasses) {
+      // Written by the compiler...
+      expect(inSheet.has(cls), `sheet never wrote ${cls}`).toBe(true);
+    }
+    // ...and carried by exactly the elements that should carry it. A node whose class the sheet
+    // wrote but the markup does not carry is dead CSS; the reverse is an unstyled node.
+    const onPage = expectedClasses.filter(cls => inMarkup.has(cls));
+    expect(onPage).toHaveLength(expected.onPage);
+  });
+
+  it("gives two placements of one block the SAME class", () => {
+    // This is what makes a reusable block reusable: one rule, every placement. Two classes here
+    // would mean editing the block updates one placement and not the other.
+    const root = container("root", [ref("p1", "r1"), ref("p2", "r1")]);
+    const refs = { r1: styled("lib", "Lib", "#bb0001") };
+    const document = { root } as never;
+    const classes = documentNodeClasses(document, refs);
+    const html = renderToStaticMarkup(
+      <RenderNode
+        node={root}
+        registry={defaultBlockRegistry}
+        refs={refs}
+        classes={classes}
+      />
+    );
+    const markup = html.replace(/<style[\s\S]*?<\/style>/g, "");
+
+    expect(markup.match(/Lib/g)).toHaveLength(2);
+    const libClass = classes.get(`${"r1".length}:r1lib`) as string;
+    expect(libClass).toBeDefined();
+    // Both placements carry it, so one rule serves both.
+    expect(markup.split(libClass).length - 1).toBe(2);
+  });
+});
